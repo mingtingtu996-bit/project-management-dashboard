@@ -317,7 +317,7 @@ export class SupabaseService {
     return data || []
   }
 
-  async createInvitation(invitation: Omit<Invitation, 'id' | 'created_at'>): Promise<Invitation> {
+  async createInvitation(invitation: Omit<Invitation, 'created_at'>): Promise<Invitation> {
     const { data, error } = await this.client
       .from(this.tableNames.invitations)
       .insert(invitation)
