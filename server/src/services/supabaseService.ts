@@ -2,7 +2,7 @@
 // 封装所有数据库操作
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
-import type { Project, Task, Risk, Milestone, ProjectMember, Invitation } from './types/db.js'
+import type { Project, Task, Risk, Milestone, ProjectMember, Invitation } from '../types/db'
 
 export class SupabaseService {
   private client: SupabaseClient
