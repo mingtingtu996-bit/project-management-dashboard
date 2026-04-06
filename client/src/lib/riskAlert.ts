@@ -17,6 +17,7 @@ export type RiskType =
   | 'resource'      // 资源风险
   | 'progress'      // 进度风险
   | 'critical_path' // 关键路径风险
+  | 'milestone'     // 里程碑风险（P1-05新增）
 
 // 风险严重程度
 export type RiskSeverity = 'low' | 'medium' | 'high' | 'critical'
@@ -30,6 +31,8 @@ export interface RiskAlert {
   description: string
   relatedTaskId?: string
   relatedTaskName?: string
+  taskId?: string        // relatedTaskId 的别名，兼容旧代码
+  task?: unknown             // 关联任务对象
   建议?: string
   createdAt?: Date
 }
@@ -169,7 +172,7 @@ function checkDependencyRisks(tasks: Task[], config: RiskAlertConfig): RiskAlert
       if (!depTask || depTask.status === 'completed') return
 
       // 检查依赖任务是否可能延期
-      if (depTask.end_date && depTask.status !== 'completed') {
+      if (depTask.end_date) {
         const depEndDate = new Date(depTask.end_date)
         const taskStartDate = task.start_date ? new Date(task.start_date) : null
 
@@ -276,7 +279,8 @@ export function getRiskStatistics(alerts: RiskAlert[]): {
     dependency: 0,
     resource: 0,
     progress: 0,
-    critical_path: 0
+    critical_path: 0,
+    milestone: 0,
   }
 
   alerts.forEach(alert => {
@@ -328,4 +332,134 @@ export function generateRiskReport(alerts: RiskAlert[]): string {
   }
 
   return report
+}
+
+/**
+ * 里程碑专项预警扫描（P1-05）
+ * 
+ * 扫描所有 is_milestone=true 的任务，根据截止日期生成预警：
+ * - 已逾期：critical
+ * - 3天内到期：high（一级里程碑加权）
+ * - 7天内到期：medium
+ * - 14天内到期（一级里程碑）：low
+ * 
+ * @param tasks - 所有任务（含is_milestone字段）
+ * @param earlyWarningDays - 提前预警天数，默认7天
+ */
+export function scanMilestoneWarnings(
+  tasks: (Task & { is_milestone?: boolean; milestone_level?: number })[],
+  earlyWarningDays = 7
+): RiskAlert[] {
+  const alerts: RiskAlert[] = []
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+
+  // 只处理里程碑任务
+  const milestoneTasks = tasks.filter(t => t.is_milestone === true && t.status !== 'completed')
+
+  milestoneTasks.forEach(task => {
+    if (!task.end_date) return
+
+    const endDate = new Date(task.end_date)
+    endDate.setHours(0, 0, 0, 0)
+    const daysUntilDeadline = Math.ceil((endDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
+
+    const taskName = getTaskName(task)
+    const levelLabel = task.milestone_level === 1 ? '一级里程碑' 
+      : task.milestone_level === 2 ? '二级里程碑' 
+      : task.milestone_level === 3 ? '三级里程碑' 
+      : '里程碑'
+
+    if (daysUntilDeadline < 0) {
+      // 已逾期
+      alerts.push({
+        id: `milestone-overdue-${task.id}`,
+        type: 'milestone',
+        severity: 'critical',
+        title: `${levelLabel}已逾期：${taskName}`,
+        description: `里程碑截止日期已过 ${Math.abs(daysUntilDeadline)} 天，需立即处理`,
+        relatedTaskId: task.id,
+        relatedTaskName: taskName,
+        建议: task.milestone_level === 1 ? '一级里程碑逾期影响整体工期，请立即上报并制定补救方案' : '尽快完成或调整里程碑计划',
+        createdAt: new Date(),
+      })
+    } else if (daysUntilDeadline === 0) {
+      // 今天到期
+      alerts.push({
+        id: `milestone-today-${task.id}`,
+        type: 'milestone',
+        severity: task.milestone_level === 1 ? 'critical' : 'high',
+        title: `${levelLabel}今日到期：${taskName}`,
+        description: '里程碑今天到期，请确认完成状态',
+        relatedTaskId: task.id,
+        relatedTaskName: taskName,
+        建议: '今日必须完成或更新进度',
+        createdAt: new Date(),
+      })
+    } else if (daysUntilDeadline <= 3) {
+      // 3天内
+      const severity = task.milestone_level === 1 ? 'critical' : 'high'
+      alerts.push({
+        id: `milestone-3days-${task.id}`,
+        type: 'milestone',
+        severity,
+        title: `${levelLabel}即将到期（${daysUntilDeadline}天）：${taskName}`,
+        description: `里程碑距截止日期仅剩 ${daysUntilDeadline} 天`,
+        relatedTaskId: task.id,
+        relatedTaskName: taskName,
+        建议: task.milestone_level === 1 ? '优先保障，一级里程碑接近截止日期' : '安排人员跟进，确保按时完成',
+        createdAt: new Date(),
+      })
+    } else if (daysUntilDeadline <= earlyWarningDays) {
+      // earlyWarningDays天内（默认7天）
+      alerts.push({
+        id: `milestone-warning-${task.id}`,
+        type: 'milestone',
+        severity: 'medium',
+        title: `${levelLabel}需关注（${daysUntilDeadline}天）：${taskName}`,
+        description: `里程碑距截止日期还有 ${daysUntilDeadline} 天`,
+        relatedTaskId: task.id,
+        relatedTaskName: taskName,
+        建议: '关注进度，确保前置条件均已满足',
+        createdAt: new Date(),
+      })
+    } else if (daysUntilDeadline <= 14 && task.milestone_level === 1) {
+      // 一级里程碑14天内提前预警
+      alerts.push({
+        id: `milestone-advance-${task.id}`,
+        type: 'milestone',
+        severity: 'low',
+        title: `一级里程碑提前预警（${daysUntilDeadline}天）：${taskName}`,
+        description: `重要里程碑距截止还有 ${daysUntilDeadline} 天，提前关注`,
+        relatedTaskId: task.id,
+        relatedTaskName: taskName,
+        建议: '检查前置条件完成情况，确保按计划推进',
+        createdAt: new Date(),
+      })
+    }
+  })
+
+  // 按严重程度排序
+  const severityOrder: Record<RiskSeverity, number> = { critical: 0, high: 1, medium: 2, low: 3 }
+  return alerts.sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity])
+}
+
+/**
+ * 综合预警扫描（含里程碑）
+ * 在 analyzeRisks 基础上增加里程碑专项预警
+ */
+export function analyzeAllWarnings(
+  tasks: (Task & { is_milestone?: boolean; milestone_level?: number })[],
+  criticalTaskIds: string[] = [],
+  config: Partial<RiskAlertConfig> = {}
+): RiskAlert[] {
+  const taskAlerts = analyzeRisks(tasks, criticalTaskIds, config)
+  const milestoneAlerts = scanMilestoneWarnings(tasks)
+  
+  // 合并，去重（里程碑任务可能同时触发 deadline 和 milestone 两类预警）
+  const allAlerts = [...taskAlerts, ...milestoneAlerts]
+  
+  // 按严重程度排序
+  const severityOrder: Record<RiskSeverity, number> = { critical: 0, high: 1, medium: 2, low: 3 }
+  return allAlerts.sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity])
 }

@@ -1,202 +1,131 @@
-# 部署指南 - 多人协作版本
+# 生产环境部署指南
 
-## 概述
+> 房地产工程管理系统 V4.1 部署手册
+> 最后更新：2026-03-30
 
-本文档说明如何将项目管理系统部署到云端，实现多人协作。
+---
 
-## 架构
+## 1. 环境变量配置
 
-```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   用户浏览器   │ ──> │   Vercel    │ ──> │  Supabase   │
-│  (前端应用)   │     │  (前端+API)  │     │  (数据库)    │
-└─────────────┘     └─────────────┘     └─────────────┘
-```
+### 1.1 后端环境变量 (`server/.env`)
 
-## 部署步骤
-
-### 步骤 1: 创建 Supabase 项目
-
-1. 访问 [supabase.com](https://supabase.com) 注册/登录
-2. 点击 "New Project"
-3. 填写项目信息:
-   - Name: `project-management`
-   - Database Password: 设置密码（记住它）
-   - Region: 选择亚洲区域（如 Tokyo）
-4. 等待项目创建完成
-
-### 步骤 2: 获取 Supabase 凭证
-
-1. 进入 Project Settings → API
-2. 复制以下信息:
-   - `Project URL` - 类似 `https://xxxxx.supabase.co`
-   - `anon public` key - 类似 `eyJhbGciOiJIUzI1NiIs...`
-
-### 步骤 3: 配置数据库表
-
-在 Supabase SQL Editor 中执行以下 SQL:
-
-```sql
--- 创建项目表
-CREATE TABLE projects (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  name TEXT NOT NULL,
-  description TEXT,
-  status TEXT DEFAULT 'active',
-  start_date DATE,
-  end_date DATE,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  version INTEGER DEFAULT 1
-);
-
--- 创建任务表
-CREATE TABLE tasks (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
-  title TEXT NOT NULL,
-  description TEXT,
-  status TEXT DEFAULT 'pending',
-  priority TEXT DEFAULT 'medium',
-  progress INTEGER DEFAULT 0,
-  start_date DATE,
-  end_date DATE,
-  assignee_name TEXT,
-  responsible_unit TEXT,
-  dependencies TEXT[],
-  is_critical BOOLEAN DEFAULT false,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  version INTEGER DEFAULT 1
-);
-
--- 创建风险表
-CREATE TABLE risks (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
-  title TEXT NOT NULL,
-  description TEXT,
-  level TEXT DEFAULT 'medium',
-  status TEXT DEFAULT 'identified',
-  probability INTEGER DEFAULT 50,
-  impact INTEGER DEFAULT 50,
-  mitigation TEXT,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  version INTEGER DEFAULT 1
-);
-
--- 创建里程碑表
-CREATE TABLE milestones (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
-  title TEXT NOT NULL,
-  description TEXT,
-  due_date DATE,
-  status TEXT DEFAULT 'pending',
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  version INTEGER DEFAULT 1
-);
-
--- 启用 RLS
-ALTER TABLE projects ENABLE ROW LEVEL SECURITY;
-ALTER TABLE tasks ENABLE ROW LEVEL SECURITY;
-ALTER TABLE risks ENABLE ROW LEVEL SECURITY;
-ALTER TABLE milestones ENABLE ROW LEVEL SECURITY;
-
--- 创建公开读取策略（生产环境应改为认证后读取）
-CREATE POLICY "Allow public read projects" ON projects FOR SELECT USING (true);
-CREATE POLICY "Allow public read tasks" ON tasks FOR SELECT USING (true);
-CREATE POLICY "Allow public read risks" ON risks FOR SELECT USING (true);
-CREATE POLICY "Allow public read milestones" ON milestones FOR SELECT USING (true);
-
--- 创建写入策略
-CREATE POLICY "Allow public insert projects" ON projects FOR INSERT WITH CHECK (true);
-CREATE POLICY "Allow public update projects" ON projects FOR UPDATE USING (true);
-CREATE POLICY "Allow public delete projects" ON projects FOR DELETE USING (true);
-
-CREATE POLICY "Allow public insert tasks" ON tasks FOR INSERT WITH CHECK (true);
-CREATE POLICY "Allow public update tasks" ON tasks FOR UPDATE USING (true);
-CREATE POLICY "Allow public delete tasks" ON tasks FOR DELETE USING (true);
-
-CREATE POLICY "Allow public insert risks" ON risks FOR INSERT WITH CHECK (true);
-CREATE POLICY "Allow public update risks" ON risks FOR UPDATE USING (true);
-CREATE POLICY "Allow public delete risks" ON risks FOR DELETE USING (true);
-
-CREATE POLICY "Allow public insert milestones" ON milestones FOR INSERT WITH CHECK (true);
-CREATE POLICY "Allow public update milestones" ON milestones FOR UPDATE USING (true);
-CREATE POLICY "Allow public delete milestones" ON milestones FOR DELETE USING (true);
-```
-
-### 步骤 4: 部署前端 (Vercel)
-
-1. 安装 Vercel CLI:
 ```bash
-npm i -g vercel
+# 必填项（生产环境必须修改）
+
+PORT=3001
+NODE_ENV=production
+
+# Supabase - 使用生产环境凭据
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_KEY=your-production-service-key
+SUPABASE_ANON_KEY=your-production-anon-key
+
+# CORS - 改为实际前端域名
+CORS_ORIGIN=https://your-domain.com,https://admin.your-domain.com
+
+# JWT - 使用强随机密钥（已生成）
+JWT_SECRET=<部署时填入生成的密钥>
+
+LOG_LEVEL=warn
 ```
 
-2. 登录 Vercel:
+### 1.2 前端环境变量 (`client/.env.local`)
+
 ```bash
-vercel login
+VITE_STORAGE_MODE=supabase
+VITE_SUPABASE_URL=https://your-project.supabase.co
+VITE_SUPABASE_ANON_KEY=your-production-anon-key
+VITE_APP_ENV=production
+VITE_ENABLE_ANALYTICS=false
+VITE_DEBUG_MODE=false
+VITE_ENABLE_REALTIME=true
 ```
 
-3. 部署:
+### 1.3 生成 JWT 密钥
+
 ```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+```
+
+---
+
+## 2. 腾讯云 CloudBase 部署
+
+### 2.1 运行时配置
+
+已更新为 `Nodejs18.13`（`cloudbaserc.json`）：
+
+```json
+{
+  "runtime": "Nodejs18.13",
+  "memorySize": 512,
+  "timeout": 30
+}
+```
+
+### 2.2 部署步骤
+
+```bash
+# 1. 安装 CloudBase CLI
+npm install -g @cloudbase/cli
+
+# 2. 登录
+tcb login
+
+# 3. 部署云函数
+cd server/functions/api
+tcb fn deploy api
+
+# 4. 部署静态网站（前端）
 cd client
-vercel --prod
+npm run build
+# 上传 dist/ 到 CloudBase 静态托管
 ```
 
-4. 按提示配置:
-   - Which scope? 选择你的 Vercel 账号
-   - Want to override settings? No
-   - 等待部署完成
+---
 
-5. 获取部署的 URL
+## 3. 数据库迁移
 
-### 步骤 5: 配置环境变量
+迁移文件位于 `server/migrations/`，编号 001-035。
 
-在 Vercel Dashboard 中:
-1. 进入项目 → Settings → Environment Variables
-2. 添加以下变量:
-   - `VITE_STORAGE_MODE` = `supabase`
-   - `VITE_SUPABASE_URL` = 你的 Supabase URL
-   - `VITE_SUPABASE_ANON_KEY` = 你的 anon key
+生产环境执行迁移：
 
-3. 重新部署使环境变量生效
+```bash
+# 使用 Supabase Dashboard SQL Editor 执行
+# 按编号顺序执行所有迁移文件
+```
 
-## 部署完成
+---
 
-部署完成后，用户可以通过以下方式访问:
+## 4. 安全清单
 
-1. 打开 Vercel 分配的 URL（或自定义域名）
-2. 选择 "Supabase" 存储模式
-3. 数据会自动同步到云端
+| 项目 | 状态 |
+|------|------|
+| API 认证中间件 | ✅ 6个核心路由已添加 authenticate |
+| JWT 强密钥 | ✅ 32字节 Base64 |
+| 环境变量隔离 | ✅ .gitignore 已排除 .env |
+| CORS 白名单 | ✅ 从环境变量读取 |
+| XSS 防护 | ✅ xssProtection 中间件 |
+| SQL 注入防护 | ✅ 参数化查询 |
+| 速率限制 | ✅ 15分钟/1000次 |
+| Helmet 安全头 | ✅ 已启用 |
+| RLS 策略 | ✅ 17个表已配置 |
 
-## 多人协作
+---
 
-当前部署支持:
-- 多用户同时访问同一数据
-- 数据实时同步
-- 离线操作队列（网络恢复后自动同步）
+## 5. 上线前验证
 
-## 费用
+```bash
+# 1. TypeScript 编译检查
+cd client && npx tsc --noEmit
+cd server && npx tsc --noEmit
 
-| 服务 | 免费额度 |
-|------|----------|
-| Supabase | 500MB 数据库，实时 200MAU |
-| Vercel | 100GB 流量，100GB 带宽 |
+# 2. 构建检查
+cd client && npm run build
 
-基本可以满足小团队免费使用。
+# 3. API 健康检查
+curl https://your-domain.com/api/health
 
-## 故障排除
-
-### 数据不同步
-- 检查浏览器控制台网络请求
-- 确认 Supabase 凭证正确
-- 检查 Supabase 项目状态
-
-### 部署失败
-- 确认 Node.js 版本 (18+)
-- 查看 Vercel 部署日志
-- 检查环境变量配置
+# 4. 认证检查（应返回 401）
+curl https://your-domain.com/api/projects
+```

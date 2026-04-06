@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>测试数据注入工具</title>
+  <style>
+    body { font-family: sans-serif; padding: 20px; background: #f5f5f5; }
+    button { padding: 10px 20px; background: #4f46e5; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 16px; margin: 8px 4px; }
+    button:hover { background: #4338ca; }
+    pre { background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 8px; overflow: auto; font-size: 13px; }
+    .success { background: #d1fae5; padding: 12px; border-radius: 6px; color: #065f46; margin: 10px 0; }
+    .info { background: #dbeafe; padding: 12px; border-radius: 6px; color: #1e40af; margin: 10px 0; }
+    h2 { color: #1e293b; }
+  </style>
+</head>
+<body>
+  <h2>🛠️ 里程碑测试数据注入工具</h2>
+  <div class="info">点击按钮注入测试数据后，刷新应用（ctrl+R）即可查看里程碑列表</div>
+  <button onclick="injectData()">注入里程碑测试数据</button>
+  <button onclick="clearData()">清除所有数据</button>
+  <button onclick="showData()">查看当前数据</button>
+  <div id="result"></div>
+  <pre id="output"></pre>
+
+<script>
+// 固定的测试项目ID
+const PROJECT_ID = 'aaaaaaaa-0001-0001-0001-000000000001';
+
+function uid(n) {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+    const r = Math.random()*16|0, v = c=='x'?r:(r&0x3|0x8);
+    return v.toString(16);
+  });
+}
+
+function now() { return new Date().toISOString(); }
+function daysFromNow(d) { return new Date(Date.now() + d*86400000).toISOString().split('T')[0]; }
+function daysAgo(d) { return new Date(Date.now() - d*86400000).toISOString().split('T')[0]; }
+
+// 里程碑层级 ID
+const m1id = 'bbbbbbbb-0001-0001-0001-000000000001'; // 一级：地基基础工程
+const m2id = 'bbbbbbbb-0002-0002-0002-000000000002'; // 一级：主体结构工程
+const m3id = 'bbbbbbbb-0003-0003-0003-000000000003'; // 一级：装饰装修工程
+
+const m1_1 = 'cccccccc-0001-0001-0001-000000000001'; // 二级：土方开挖
+const m1_2 = 'cccccccc-0002-0002-0002-000000000002'; // 二级：桩基施工
+const m1_3 = 'cccccccc-0003-0003-0003-000000000003'; // 二级：地下室结构
+
+const m2_1 = 'cccccccc-0004-0004-0004-000000000004'; // 二级：1-10层结构
+const m2_2 = 'cccccccc-0005-0005-0005-000000000005'; // 二级：11-20层结构
+const m2_3 = 'cccccccc-0006-0006-0006-000000000006'; // 二级：屋面工程
+
+const m3_1 = 'cccccccc-0007-0007-0007-000000000007'; // 二级：外立面
+const m3_2 = 'cccccccc-0008-0008-0008-000000000008'; // 二级：室内装修
+
+// 三级里程碑
+const t1_1_1 = 'dddddddd-0001-0001-0001-000000000001';
+const t1_2_1 = 'dddddddd-0002-0002-0002-000000000002';
+const t1_3_1 = 'dddddddd-0003-0003-0003-000000000003';
+const t2_1_1 = 'dddddddd-0004-0004-0004-000000000004';
+const t2_2_1 = 'dddddddd-0005-0005-0005-000000000005';
+
+function injectData() {
+  // 1. 注入项目
+  const projects = [{
+    id: PROJECT_ID,
+    name: '城市中心广场项目（二期）',
+    description: '总建筑面积约 12 万平方米，含 2 栋高层住宅、1 栋商业楼及地下停车场',
+    status: 'active',
+    primary_invitation_code: 'TEST001',
+    created_at: now(),
+    updated_at: now(),
+  }];
+  localStorage.setItem('pm_projects', JSON.stringify(projects));
+
+  // 2. 注入里程碑任务（is_milestone=true 的任务节点）
+  const tasks = [
+    // ── 一级里程碑 ──────────────────────────────────────────────
+    {
+      id: m1id, project_id: PROJECT_ID, title: '地基基础工程',
+      description: '包含土方开挖、桩基施工、地下室结构施工',
+      status: 'completed', priority: 'high',
+      start_date: daysAgo(120), end_date: daysAgo(60),
+      progress: 100, assignee: '王建国', assignee_unit: '中建一局',
+      dependencies: [], is_milestone: true, milestone_level: 1, milestone_order: 1,
+      parent_id: null, version: 1, created_at: now(), updated_at: now(),
+    },
+    {
+      id: m2id, project_id: PROJECT_ID, title: '主体结构工程',
+      description: '1-20层主体结构及屋面工程',
+      status: 'in_progress', priority: 'urgent',
+      start_date: daysAgo(55), end_date: daysFromNow(30),
+      progress: 65, assignee: '张明远', assignee_unit: '中建一局',
+      dependencies: [m1id], is_milestone: true, milestone_level: 1, milestone_order: 2,
+      parent_id: null, version: 3, created_at: now(), updated_at: now(),
+    },
+    {
+      id: m3id, project_id: PROJECT_ID, title: '装饰装修工程',
+      description: '外立面幕墙及室内精装修',
+      status: 'todo', priority: 'medium',
+      start_date: daysFromNow(35), end_date: daysFromNow(120),
+      progress: 0, assignee: '李春华', assignee_unit: '华润装饰',
+      dependencies: [m2id], is_milestone: true, milestone_level: 1, milestone_order: 3,
+      parent_id: null, version: 1, created_at: now(), updated_at: now(),
+    },
+
+    // ── 二级里程碑（属于 m1：地基） ────────────────────────────
+    {
+      id: m1_1, project_id: PROJECT_ID, title: '土方开挖完成',
+      description: '基坑开挖至设计标高，验收合格',
+      status: 'completed', priority: 'high',
+      start_date: daysAgo(120), end_date: daysAgo(100),
+      progress: 100, assignee: '刘刚', assignee_unit: '土方分包',
+      dependencies: [], is_milestone: true, milestone_level: 2, milestone_order: 1,
+      parent_id: m1id, version: 1, created_at: now(), updated_at: now(),
+    },
+    {
+      id: m1_2, project_id: PROJECT_ID, title: '桩基施工完成',
+      description: '灌注桩全部完成并通过检测',
+      status: 'completed', priority: 'high',
+      start_date: daysAgo(98), end_date: daysAgo(75),
+      progress: 100, assignee: '刘刚', assignee_unit: '桩基分包',
+      dependencies: [m1_1], is_milestone: true, milestone_level: 2, milestone_order: 2,
+      parent_id: m1id, version: 1, created_at: now(), updated_at: now(),
+    },
+    {
+      id: m1_3, project_id: PROJECT_ID, title: '地下室结构完成',
+      description: '地下 2 层结构施工及防水验收',
+      status: 'completed', priority: 'high',
+      start_date: daysAgo(73), end_date: daysAgo(60),
+      progress: 100, assignee: '王建国', assignee_unit: '中建一局',
+      dependencies: [m1_2], is_milestone: true, milestone_level: 2, milestone_order: 3,
+      parent_id: m1id, version: 1, created_at: now(), updated_at: now(),
+    },
+
+    // ── 二级里程碑（属于 m2：主体结构）────────────────────────
+    {
+      id: m2_1, project_id: PROJECT_ID, title: '1-10层结构完成',
+      description: '1 至 10 层主体结构浇筑及验收',
+      status: 'completed', priority: 'urgent',
+      start_date: daysAgo(55), end_date: daysAgo(20),
+      progress: 100, assignee: '张明远', assignee_unit: '中建一局',
+      dependencies: [m1_3], is_milestone: true, milestone_level: 2, milestone_order: 1,
+      parent_id: m2id, version: 2, created_at: now(), updated_at: now(),
+    },
+    {
+      id: m2_2, project_id: PROJECT_ID, title: '11-20层结构完成',
+      description: '11 至 20 层主体结构施工',
+      status: 'in_progress', priority: 'urgent',
+      start_date: daysAgo(18), end_date: daysFromNow(15),
+      progress: 55, assignee: '张明远', assignee_unit: '中建一局',
+      dependencies: [m2_1], is_milestone: true, milestone_level: 2, milestone_order: 2,
+      parent_id: m2id, version: 3, created_at: now(), updated_at: now(),
+    },
+    {
+      id: m2_3, project_id: PROJECT_ID, title: '屋面防水工程',
+      description: '屋面结构板、防水层及保温施工',
+      status: 'todo', priority: 'high',
+      start_date: daysFromNow(18), end_date: daysFromNow(30),
+      progress: 0, assignee: '赵海军', assignee_unit: '防水分包',
+      dependencies: [m2_2], is_milestone: true, milestone_level: 2, milestone_order: 3,
+      parent_id: m2id, version: 1, created_at: now(), updated_at: now(),
+    },
+
+    // ── 二级里程碑（属于 m3：装修）────────────────────────────
+    {
+      id: m3_1, project_id: PROJECT_ID, title: '外立面幕墙施工',
+      description: '玻璃幕墙及铝板饰面',
+      status: 'todo', priority: 'medium',
+      start_date: daysFromNow(35), end_date: daysFromNow(80),
+      progress: 0, assignee: '孙伟', assignee_unit: '幕墙分包',
+      dependencies: [m2id], is_milestone: true, milestone_level: 2, milestone_order: 1,
+      parent_id: m3id, version: 1, created_at: now(), updated_at: now(),
+    },
+    {
+      id: m3_2, project_id: PROJECT_ID, title: '室内精装修',
+      description: '公区及样板间精装修施工',
+      status: 'todo', priority: 'medium',
+      start_date: daysFromNow(60), end_date: daysFromNow(120),
+      progress: 0, assignee: '李春华', assignee_unit: '华润装饰',
+      dependencies: [m3_1], is_milestone: true, milestone_level: 2, milestone_order: 2,
+      parent_id: m3id, version: 1, created_at: now(), updated_at: now(),
+    },
+
+    // ── 三级里程碑（叶子节点） ─────────────────────────────────
+    {
+      id: t1_1_1, project_id: PROJECT_ID, title: '基坑支护完成',
+      description: '钢板桩支护及止水帷幕验收合格',
+      status: 'completed', priority: 'high',
+      start_date: daysAgo(122), end_date: daysAgo(110),
+      progress: 100, assignee: '陈志平', assignee_unit: '土方分包',
+      dependencies: [], is_milestone: true, milestone_level: 3, milestone_order: 1,
+      parent_id: m1_1, version: 1, created_at: now(), updated_at: now(),
+    },
+    {
+      id: t1_2_1, project_id: PROJECT_ID, title: '桩基承载力检测',
+      description: '静载试验报告通过，合格率 100%',
+      status: 'completed', priority: 'medium',
+      start_date: daysAgo(85), end_date: daysAgo(78),
+      progress: 100, assignee: '刘刚', assignee_unit: '检测机构',
+      dependencies: [], is_milestone: true, milestone_level: 3, milestone_order: 1,
+      parent_id: m1_2, version: 1, created_at: now(), updated_at: now(),
+    },
+    {
+      id: t1_3_1, project_id: PROJECT_ID, title: '防水层验收',
+      description: '蓄水试验 24 小时无渗漏',
+      status: 'completed', priority: 'medium',
+      start_date: daysAgo(65), end_date: daysAgo(63),
+      progress: 100, assignee: '王建国', assignee_unit: '中建一局',
+      dependencies: [], is_milestone: true, milestone_level: 3, milestone_order: 1,
+      parent_id: m1_3, version: 1, created_at: now(), updated_at: now(),
+    },
+    {
+      id: t2_1_1, project_id: PROJECT_ID, title: '10层结构验收',
+      description: '监理单位及质监站联合验收通过',
+      status: 'completed', priority: 'high',
+      start_date: daysAgo(22), end_date: daysAgo(20),
+      progress: 100, assignee: '张明远', assignee_unit: '中建一局',
+      dependencies: [], is_milestone: true, milestone_level: 3, milestone_order: 1,
+      parent_id: m2_1, version: 1, created_at: now(), updated_at: now(),
+    },
+    {
+      id: t2_2_1, project_id: PROJECT_ID, title: '15层结构验收',
+      description: '15层结构浇筑完成，等待验收（已延期 3 天）',
+      status: 'in_progress', priority: 'urgent',
+      start_date: daysAgo(10), end_date: daysAgo(3),   // 已超计划
+      progress: 80, assignee: '张明远', assignee_unit: '中建一局',
+      dependencies: [], is_milestone: true, milestone_level: 3, milestone_order: 2,
+      parent_id: m2_2, version: 2, created_at: now(), updated_at: now(),
+    },
+  ];
+
+  localStorage.setItem('pm_tasks', JSON.stringify(tasks));
+
+  // 3. 注入当前项目到 store（通过写入特定 key）
+  localStorage.setItem('pm_current_project', PROJECT_ID);
+
+  document.getElementById('result').innerHTML = '<div class="success">✅ 测试数据注入成功！共注入 ' + tasks.length + ' 个里程碑节点，1 个项目。<br>现在请在应用中访问里程碑页面查看效果。</div>';
+  document.getElementById('output').textContent = JSON.stringify({
+    project: projects[0].name,
+    milestones: {
+      level1: tasks.filter(t => t.milestone_level===1).map(t => t.title),
+      level2: tasks.filter(t => t.milestone_level===2).map(t => t.title),
+      level3: tasks.filter(t => t.milestone_level===3).map(t => t.title),
+    }
+  }, null, 2);
+}
+
+function clearData() {
+  localStorage.removeItem('pm_projects');
+  localStorage.removeItem('pm_tasks');
+  localStorage.removeItem('pm_risks');
+  localStorage.removeItem('pm_milestones');
+  localStorage.removeItem('pm_current_project');
+  document.getElementById('result').innerHTML = '<div class="success">✅ 数据已清除</div>';
+  document.getElementById('output').textContent = '';
+}
+
+function showData() {
+  const data = {
+    projects: JSON.parse(localStorage.getItem('pm_projects') || '[]').length,
+    tasks: JSON.parse(localStorage.getItem('pm_tasks') || '[]').length,
+    currentProject: localStorage.getItem('pm_current_project'),
+  };
+  document.getElementById('output').textContent = JSON.stringify(data, null, 2);
+}
+</script>
+</body>
+</html>

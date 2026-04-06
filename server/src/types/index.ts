@@ -8,6 +8,15 @@ export interface ApiResponse<T = unknown> {
     message: string
     details?: unknown
   }
+  pagination?: {
+    total: number
+    limit: number
+    offset: number
+    hasMore?: boolean
+    page?: number
+    pageSize?: number
+    totalPages?: number
+  }
   timestamp: string
 }
 
@@ -17,6 +26,9 @@ export interface PaginatedResponse<T> extends ApiResponse<T> {
     pageSize: number
     total: number
     totalPages: number
+    limit: number
+    offset: number
+    hasMore?: boolean
   }
 }
 

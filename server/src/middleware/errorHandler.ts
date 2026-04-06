@@ -38,8 +38,8 @@ export function errorHandler(
     return res.status(400).json(response)
   }
 
-  // 已知错误类型
-  if (err.name === 'VERSION_MISMATCH') {
+  // 已知错误类型（检查 err.name 和 err.message，兼容两种抛出方式）
+  if (err.name === 'VERSION_MISMATCH' || err.message === 'VERSION_MISMATCH') {
     const response: ApiResponse = {
       success: false,
       error: {

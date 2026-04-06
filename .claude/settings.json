@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c ':*)",
+      "Bash(python3 -c \"import os; print\\(os.path.exists\\(r'C:\\\\Users\\\\jjj64\\\\.claude\\\\plans'\\)\\)\")",
+      "Bash(tee /c/Users/jjj64/.claude/plans/frolicking-dazzling-adleman-agent-a0bdf567f5419028d.md)",
+      "Bash(npx vitest:*)",
+      "Bash(where claude:*)",
+      "Bash(command -v claude)",
+      "Read(//c/Users/jjj64/AppData/Local/Programs//**)",
+      "Read(//c/Users/jjj64/AppData/Roaming/npm//**)"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\jjj64\\.claude"
+    ]
+  }
+}

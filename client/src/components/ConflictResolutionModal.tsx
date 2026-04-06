@@ -64,7 +64,7 @@ export function ConflictResolutionModal({
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
       
       {/* 模态框主体 */}
-      <div className="relative bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[80vh] overflow-hidden">
+      <div className="relative bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[80vh] overflow-hidden">
         {/* 头部 */}
         <div className="px-6 py-4 border-b border-gray-200 bg-amber-50">
           <div className="flex items-center justify-between">
@@ -127,7 +127,7 @@ export function ConflictResolutionModal({
                   .map((conflict, idx) => (
                     <div
                       key={idx}
-                      className="p-3 bg-red-50 border border-red-100 rounded-lg"
+                      className="p-3 bg-red-50 border border-red-100 rounded-xl"
                     >
                       <div className="flex items-center justify-between">
                         <span className="font-medium text-red-800">
@@ -140,13 +140,13 @@ export function ConflictResolutionModal({
 
               {/* 数据预览 */}
               <div className="grid grid-cols-2 gap-4">
-                <div className="p-3 bg-blue-50 border border-blue-100 rounded-lg">
+                <div className="p-3 bg-blue-50 border border-blue-100 rounded-xl">
                   <h4 className="font-medium text-blue-800 mb-2">本地版本</h4>
                   <pre className="text-xs text-blue-700 whitespace-pre-wrap">
                     {JSON.stringify(currentConflict.localData, null, 2)}
                   </pre>
                 </div>
-                <div className="p-3 bg-green-50 border border-green-100 rounded-lg">
+                <div className="p-3 bg-green-50 border border-green-100 rounded-xl">
                   <h4 className="font-medium text-green-800 mb-2">服务器版本</h4>
                   <pre className="text-xs text-green-700 whitespace-pre-wrap">
                     {JSON.stringify(currentConflict.serverData, null, 2)}
@@ -184,7 +184,7 @@ export function ConflictResolutionModal({
 
           {/* 智能合并预览 */}
           {showMergePreview && currentConflict && (
-            <div className="mt-4 p-3 bg-purple-50 border border-purple-100 rounded-lg">
+            <div className="mt-4 p-3 bg-purple-50 border border-purple-100 rounded-xl">
               <h4 className="font-medium text-purple-800 mb-2">智能合并预览</h4>
               <pre className="text-xs text-purple-700 whitespace-pre-wrap max-h-32 overflow-y-auto">
                 {JSON.stringify(previewMerge(), null, 2)}

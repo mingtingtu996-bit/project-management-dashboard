@@ -4,12 +4,16 @@ import { Router } from 'express'
 import { SupabaseService } from '../services/supabaseService.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import { validate, validateIdParam, riskSchema, riskUpdateSchema } from '../middleware/validation.js'
+import { authenticate } from '../middleware/auth.js'
 import { logger } from '../middleware/logger.js'
 import type { ApiResponse } from '../types/index.js'
 import type { Risk } from '../types/db.js'
 
 const router = Router()
 const supabase = new SupabaseService()
+
+// 所有路由都需要认证
+router.use(authenticate)
 
 // 获取风险列表
 router.get('/', asyncHandler(async (req, res) => {

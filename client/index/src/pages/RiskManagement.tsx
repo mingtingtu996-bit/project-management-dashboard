@@ -36,8 +36,30 @@ interface Risk {
   probability?: number
   impact?: number
   mitigation?: string
+  risk_category?: string
   created_at: string
   updated_at: string
+}
+
+// 风险类型配置
+const RISK_CATEGORY_OPTIONS = [
+  { value: 'progress', label: '进度风险' },
+  { value: 'quality', label: '质量风险' },
+  { value: 'cost', label: '成本风险' },
+  { value: 'safety', label: '安全风险' },
+  { value: 'contract', label: '合同风险' },
+  { value: 'external', label: '外部风险' },
+  { value: 'other', label: '其他' },
+]
+
+const RISK_CATEGORY_LABEL: Record<string, string> = {
+  progress: '进度风险',
+  quality: '质量风险',
+  cost: '成本风险',
+  safety: '安全风险',
+  contract: '合同风险',
+  external: '外部风险',
+  other: '其他',
 }
 
 const riskLevelColors: Record<string, string> = {
@@ -95,6 +117,7 @@ export default function RiskManagement() {
     probability: 50,
     impact: 50,
     mitigation: '',
+    risk_category: 'progress',
   })
 
   useEffect(() => {
@@ -179,6 +202,7 @@ export default function RiskManagement() {
         probability: risk.probability || 50,
         impact: risk.impact || 50,
         mitigation: risk.mitigation || '',
+        risk_category: risk.risk_category || 'progress',
       })
     } else {
       resetForm()
@@ -196,6 +220,7 @@ export default function RiskManagement() {
       probability: 50,
       impact: 50,
       mitigation: '',
+      risk_category: 'progress',
     })
   }
 
@@ -387,8 +412,13 @@ export default function RiskManagement() {
                     <div className="flex-1">
                       <div className="flex items-center gap-2 mb-1">
                         <span className="font-medium">{risk.title}</span>
+                        {risk.risk_category && risk.risk_category !== 'other' && (
+                          <span className="px-2 py-0.5 rounded text-xs bg-gray-100 text-gray-600">
+                            {RISK_CATEGORY_LABEL[risk.risk_category] || risk.risk_category}
+                          </span>
+                        )}
                         <span className={`px-2 py-0.5 rounded text-xs ${riskLevelColors[risk.level || 'medium']}`}>
-                          {risk.level === 'critical' ? '紧急' : risk.level === 'high' ? '高' : risk.level === 'medium' ? '中' : '低'}
+                          {risk.level === 'critical' ? '严重' : risk.level === 'high' ? '高' : risk.level === 'medium' ? '中' : '低'}
                         </span>
                         <span className={`px-2 py-0.5 rounded text-xs ${riskStatusColors[risk.status || 'identified']}`}>
                           {risk.status === 'identified' ? '已识别' : risk.status === 'monitoring' ? '监控中' : risk.status === 'mitigated' ? '已缓解' : '已发生'}
@@ -427,24 +457,28 @@ export default function RiskManagement() {
           </DialogHeader>
           <div className="space-y-4 py-4">
             <div className="space-y-2">
-              <Label>风险名称</Label>
-              <Input
-                value={formData.title}
-                onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-                placeholder="输入风险名称"
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label>描述</Label>
+              <Label>风险描述 <span className="text-red-500">*</span></Label>
               <Input
                 value={formData.description}
-                onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                placeholder="风险描述"
+                onChange={(e) => setFormData({ ...formData, description: e.target.value, title: e.target.value })}
+                placeholder="简要描述风险内容"
               />
             </div>
 
             <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>风险类型</Label>
+                <Select value={formData.risk_category} onValueChange={(val: any) => setFormData({ ...formData, risk_category: val })}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {RISK_CATEGORY_OPTIONS.map(opt => (
+                      <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
               <div className="space-y-2">
                 <Label>风险等级</Label>
                 <Select value={formData.level} onValueChange={(val: any) => setFormData({ ...formData, level: val })}>
@@ -455,56 +489,10 @@ export default function RiskManagement() {
                     <SelectItem value="low">低</SelectItem>
                     <SelectItem value="medium">中</SelectItem>
                     <SelectItem value="high">高</SelectItem>
-                    <SelectItem value="critical">紧急</SelectItem>
+                    <SelectItem value="critical">严重</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
-              <div className="space-y-2">
-                <Label>状态</Label>
-                <Select value={formData.status} onValueChange={(val: any) => setFormData({ ...formData, status: val })}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="identified">已识别</SelectItem>
-                    <SelectItem value="monitoring">监控中</SelectItem>
-                    <SelectItem value="mitigated">已缓解</SelectItem>
-                    <SelectItem value="occurred">已发生</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>发生概率 ({formData.probability}%)</Label>
-                <Input
-                  type="range"
-                  min="0"
-                  max="100"
-                  value={formData.probability}
-                  onChange={(e) => setFormData({ ...formData, probability: parseInt(e.target.value) })}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>影响程度 ({formData.impact}%)</Label>
-                <Input
-                  type="range"
-                  min="0"
-                  max="100"
-                  value={formData.impact}
-                  onChange={(e) => setFormData({ ...formData, impact: parseInt(e.target.value) })}
-                />
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label>缓解措施</Label>
-              <Input
-                value={formData.mitigation}
-                onChange={(e) => setFormData({ ...formData, mitigation: e.target.value })}
-                placeholder="缓解措施描述"
-              />
             </div>
           </div>
           <DialogFooter>

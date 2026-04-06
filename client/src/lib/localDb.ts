@@ -37,10 +37,31 @@ export const ProjectSchema = z.object({
   name: z.string(),
   description: z.string().optional(),
   status: z.enum(['active', 'archived', 'completed']).default('active'),
-  primary_invitation_code: z.string().optional(),
+  start_date: z.string().optional(),
+  end_date: z.string().optional(),
+  owner_id: z.string().optional(),
   created_at: z.string().datetime(),
   updated_at: z.string().datetime(),
+  version: z.number().optional(),
+  primary_invitation_code: z.string().optional(),
+  created_by: z.string().optional(),
+  project_type: z.string().optional(),
+  building_type: z.string().optional(),
+  structure_type: z.string().optional(),
+  building_count: z.number().optional(),
+  above_ground_floors: z.number().optional(),
+  underground_floors: z.number().optional(),
+  support_method: z.string().optional(),
+  total_area: z.number().optional(),
+  planned_start_date: z.string().optional(),
+  planned_end_date: z.string().optional(),
+  actual_start_date: z.string().optional(),
+  actual_end_date: z.string().optional(),
+  total_investment: z.number().optional(),
+  health_score: z.number().optional(),
+  health_status: z.string().optional(),
 })
+
 
 // 任务 Schema
 export const TaskSchema = z.object({
@@ -57,6 +78,9 @@ export const TaskSchema = z.object({
   assignee_unit: z.string().optional(),
   dependencies: z.array(z.string().uuid()).default([]),
   is_milestone: z.boolean().default(false),
+  milestone_level: z.number().min(1).max(3).optional(),  // 里程碑层级：1=一级(amber)/2=二级(blue)/3=三级(gray)
+  milestone_order: z.number().default(0),  // 同级排序
+  parent_id: z.string().uuid().optional(),  // 父任务ID（WBS树形结构）
   version: z.number().default(1),
   updated_by: z.string().uuid().optional(),
   created_at: z.string().datetime(),
@@ -203,6 +227,11 @@ export const projectDb = {
     return getItems<Project>(STORAGE_KEYS.projects)
   },
 
+  replaceAll: (projects: Project[]): Project[] => {
+    setItems(STORAGE_KEYS.projects, projects)
+    return projects
+  },
+
   getById: (id: string): Project | undefined => {
     const projects = getItems<Project>(STORAGE_KEYS.projects)
     return projects.find(p => p.id === id)
@@ -224,6 +253,19 @@ export const projectDb = {
       return projects[index]
     }
     return null
+  },
+
+  // Upsert：存在则更新，不存在则创建（用于从后端同步时防止重复）
+  upsert: (project: Project): Project => {
+    const projects = getItems<Project>(STORAGE_KEYS.projects)
+    const index = projects.findIndex(p => p.id === project.id)
+    if (index !== -1) {
+      projects[index] = { ...projects[index], ...project }
+    } else {
+      projects.push(project)
+    }
+    setItems(STORAGE_KEYS.projects, projects)
+    return project
   },
 
   delete: (id: string): void => {
@@ -269,6 +311,14 @@ export const taskDb = {
     return task
   },
 
+  replaceByProject: (projectId: string, nextTasks: Task[]): Task[] => {
+    const tasks = getItems<Task>(STORAGE_KEYS.tasks)
+    const filtered = tasks.filter(t => t.project_id !== projectId)
+    const merged = [...filtered, ...nextTasks]
+    setItems(STORAGE_KEYS.tasks, merged)
+    return nextTasks
+  },
+
   update: (id: string, updates: Partial<Task>): Task | null => {
     const tasks = getItems<Task>(STORAGE_KEYS.tasks)
     const index = tasks.findIndex(t => t.id === id)
@@ -291,6 +341,19 @@ export const taskDb = {
     const index = tasks.findIndex(t => t.id === id)
     if (index !== -1) {
       tasks[index].version += 1
+      tasks[index].updated_at = new Date().toISOString()
+      setItems(STORAGE_KEYS.tasks, tasks)
+      return tasks[index]
+    }
+    return null
+  },
+
+  // 强制更新（忽略版本检查，用于冲突解决时保留本地版本）
+  forceUpdate: (id: string, updates: Partial<Task>): Task | null => {
+    const tasks = getItems<Task>(STORAGE_KEYS.tasks)
+    const index = tasks.findIndex(t => t.id === id)
+    if (index !== -1) {
+      tasks[index] = { ...tasks[index], ...updates }
       tasks[index].updated_at = new Date().toISOString()
       setItems(STORAGE_KEYS.tasks, tasks)
       return tasks[index]
@@ -326,6 +389,14 @@ export const riskDb = {
     risks.push(risk)
     setItems(STORAGE_KEYS.risks, risks)
     return risk
+  },
+
+  replaceByProject: (projectId: string, nextRisks: Risk[]): Risk[] => {
+    const risks = getItems<Risk>(STORAGE_KEYS.risks)
+    const filtered = risks.filter(r => r.project_id !== projectId)
+    const merged = [...filtered, ...nextRisks]
+    setItems(STORAGE_KEYS.risks, merged)
+    return nextRisks
   },
 
   update: (id: string, updates: Partial<Risk>): Risk | null => {
@@ -373,6 +444,15 @@ export const milestoneDb = {
     setItems(STORAGE_KEYS.milestones, milestones)
     return milestone
   },
+
+  replaceByProject: (projectId: string, nextMilestones: Milestone[]): Milestone[] => {
+    const milestones = getItems<Milestone>(STORAGE_KEYS.milestones)
+    const filtered = milestones.filter(m => m.project_id !== projectId)
+    const merged = [...filtered, ...nextMilestones]
+    setItems(STORAGE_KEYS.milestones, merged)
+    return nextMilestones
+  },
+
 
   update: (id: string, updates: Partial<Milestone>): Milestone | null => {
     const milestones = getItems<Milestone>(STORAGE_KEYS.milestones)

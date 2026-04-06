@@ -1,76 +1,142 @@
 # 环境配置说明
 
-## 配置文件结构
+## 现在怎么切环境
 
+这个项目已经改成“脚本切换，不再手改多份文件”的模式。
+
+常用命令：
+
+```bash
+npm run env:local
+npm run env:prod -- --origin=https://app.example.com --api=/api
+npm run env:status
 ```
+
+其中：
+- `env:local`：切回本地联调模式
+- `env:prod`：切到上线模式；`--origin` 必填，用来写入后端 `CORS_ORIGIN`
+- `env:status`：查看当前激活的关键环境值
+
+## 脚本会改哪些文件
+
+```text
 project/
 ├── client/
-│   ├── .env              # 当前使用的配置
-│   ├── .env.local        # 本地开发覆盖配置（不提交git）
-│   └── .env.example      # 配置示例
-└── server/
-    ├── .env              # 服务器配置（不提交git）
-    └── .env.example      # 配置示例
+│   ├── .env
+│   ├── .env.local
+│   └── .env.example
+├── server/
+│   ├── .env
+│   └── .env.example
+└── scripts/
+    └── switch-env.mjs
 ```
 
-## 存储模式
+脚本只会改“非敏感字段”，包括：
+- 前端：`VITE_STORAGE_MODE`、`VITE_API_BASE_URL`、`VITE_APP_ENV`、`VITE_DEBUG_MODE`
+- 后端：`NODE_ENV`、`CORS_ORIGIN`
 
-### 模式1：本地存储（当前使用）
+脚本不会碰这些敏感值：
+- `SUPABASE_SERVICE_KEY`
+- `SUPABASE_ANON_KEY`
+- `DB_PASSWORD`
+- `JWT_SECRET`
+
+## 推荐链路
+
+推荐开发和上线都统一走 `backend` 模式：
+
+```text
+浏览器 -> 前端 -> /api 或正式 API 域名 -> 后端 -> Supabase
 ```
-VITE_STORAGE_MODE=local
+
+这样做的好处是：
+- 浏览器不再直连 Supabase，跨域问题更少
+- 本地/线上链路更一致
+- 排查问题时不会出现“页面一部分走后端，一部分直连云端”的分叉
+
+## 两套环境的目标值
+
+### 本地联调模式
+
+前端：
+
+```env
+VITE_STORAGE_MODE=backend
+VITE_API_BASE_URL=/api
+VITE_APP_ENV=development
+VITE_DEBUG_MODE=true
 ```
-- 数据存储在浏览器 LocalStorage
-- 无需网络连接
-- 适合个人使用
 
-### 模式2：Supabase远程同步
+后端：
+
+```env
+NODE_ENV=development
+CORS_ORIGIN=http://localhost:5173,http://127.0.0.1:5173
 ```
-VITE_STORAGE_MODE=supabase
-VITE_SUPABASE_URL=https://xxx.supabase.co
-VITE_SUPABASE_ANON_KEY=xxx
+
+### 上线模式
+
+前端：
+
+```env
+VITE_STORAGE_MODE=backend
+VITE_API_BASE_URL=/api
+VITE_APP_ENV=production
+VITE_DEBUG_MODE=false
 ```
-- 数据存储在 Supabase 云端
-- 支持多设备同步
-- 需要翻墙
 
-## 环境变量优先级
+如果线上不是同域反代，可把 `--api` 改成完整地址，例如：
 
-Vite 环境变量加载优先级（从高到低）：
-1. `.env.local` - 本地覆盖
-2. `.env.production` - 生产环境
-3. `.env.development` - 开发环境
-4. `.env` - 基础配置
-5. `.env.example` - 示例（不自动加载）
-
-## 开发流程
-
-### 1. 首次 setup
 ```bash
-# 客户端
-cp client/.env.example client/.env.local
-
-# 服务器端
-cp server/.env.example server/.env
+npm run env:prod -- --origin=https://app.example.com --api=https://api.example.com/api
 ```
 
-### 2. 修改配置
-根据需要修改 `.env.local` 或 `.env` 中的值
+后端：
 
-### 3. 不提交到 Git
-确保以下文件在 `.gitignore` 中：
-```
-client/.env
-client/.env.local
-server/.env
+```env
+NODE_ENV=production
+CORS_ORIGIN=https://app.example.com
 ```
 
-## 常用配置项
+## 首次初始化建议
 
-| 变量 | 说明 | 示例 |
-|------|------|------|
-| `VITE_STORAGE_MODE` | 存储模式 | `local` / `supabase` |
-| `VITE_SUPABASE_URL` | Supabase项目URL | `https://xxx.supabase.co` |
-| `VITE_SUPABASE_ANON_KEY` | Supabase匿名密钥 | `eyJhbGci...` |
-| `VITE_DEBUG_MODE` | 调试模式 | `true` / `false` |
-| `PORT` | 服务器端口 | `3001` |
-| `NODE_ENV` | 运行环境 | `development` / `production` |
+1. 先按 `.env.example` 补齐 `client/.env.local` 与 `server/.env` 的敏感配置。
+2. 本地开发前执行一次：
+
+```bash
+npm run env:local
+```
+
+3. 上线或预发前执行一次：
+
+```bash
+npm run env:prod -- --origin=https://你的前端域名 --api=/api
+```
+
+4. 切完后用下面命令自检：
+
+```bash
+npm run env:status
+```
+
+## 健康度历史相关补充
+
+这次还顺手补了健康度历史表的执行链路，相关命令如下：
+
+```bash
+npm run migrate:health-history
+npm run health:snapshot
+```
+
+含义：
+- `migrate:health-history`：把 `project_health_history` 表真正建到数据库里
+- `health:snapshot`：迁移后立即补录当月健康度快照，避免公司驾驶舱“较上月变化”接口继续为空或报表缺失
+
+## 建议的日常使用顺序
+
+本地开发时：先 `npm run env:local`，再 `npm run dev`。
+
+准备上线时：先 `npm run env:prod -- --origin=... --api=...`，再做构建、预发验证和正式部署。
+
+这样以后切环境就是命令级操作，不用再来回翻 `.env` 手改。

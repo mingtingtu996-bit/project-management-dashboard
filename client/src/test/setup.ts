@@ -1,17 +1,15 @@
-// 测试环境设置
 import '@testing-library/jest-dom'
-import { cleanup } from '@testing-library/react'
 import { afterEach, vi } from 'vitest'
 
-// 每个测试后清理
+globalThis.IS_REACT_ACT_ENVIRONMENT = true
+
 afterEach(() => {
-  cleanup()
+  document.body.innerHTML = ''
 })
 
-// Mock window.matchMedia
 Object.defineProperty(window, 'matchMedia', {
   writable: true,
-  value: vi.fn().mockImplementation(query => ({
+  value: vi.fn().mockImplementation((query) => ({
     matches: false,
     media: query,
     onchange: null,
@@ -23,16 +21,15 @@ Object.defineProperty(window, 'matchMedia', {
   })),
 })
 
-// Mock localStorage
 const localStorageMock = {
   getItem: vi.fn(),
   setItem: vi.fn(),
   removeItem: vi.fn(),
   clear: vi.fn(),
 }
+
 Object.defineProperty(window, 'localStorage', { value: localStorageMock })
 
-// Mock ResizeObserver
 global.ResizeObserver = vi.fn().mockImplementation(() => ({
   observe: vi.fn(),
   unobserve: vi.fn(),

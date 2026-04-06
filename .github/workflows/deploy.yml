@@ -1,0 +1,172 @@
+name: Deploy Project Management System
+
+on:
+  # 推送到main分支时触发
+  push:
+    branches: [main, master]
+  
+  # 手动触发部署
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: '部署环境'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - preview
+          - staging
+          - production
+
+jobs:
+  # 代码质量检查
+  quality-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: '**/package-lock.json'
+      
+      - name: Install dependencies
+        run: |
+          cd client && npm ci
+          cd ../server && npm ci
+      
+      - name: TypeScript检查
+        run: |
+          cd client && npx tsc --noEmit
+          cd ../server && npx tsc --noEmit
+      
+      - name: Lint检查
+        run: |
+          cd client && npx eslint . --ext .ts,.tsx --max-warnings=0
+          cd ../server && npx eslint . --ext .ts,.tsx --max-warnings=0
+      
+      - name: 运行测试
+        run: |
+          cd client && npm test -- --passWithNoTests
+          cd ../server && npm test -- --passWithNoTests
+
+  # 构建前端
+  build-frontend:
+    runs-on: ubuntu-latest
+    needs: quality-check
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+      
+      - name: 缓存依赖
+        uses: actions/cache@v3
+        with:
+          path: client/node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('client/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+      
+      - name: 安装前端依赖
+        run: cd client && npm ci
+      
+      - name: 构建前端
+        run: cd client && npm run build
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v3
+        with:
+          name: frontend-build
+          path: client/dist
+
+  # 部署到Vercel
+  deploy-vercel:
+    runs-on: ubuntu-latest
+    needs: build-frontend
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: 下载构建产物
+        uses: actions/download-artifact@v3
+        with:
+          name: frontend-build
+          path: client/dist
+      
+      - name: 部署到Vercel
+        uses: amondnet/vercel-action@v20
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          vercel-args: '--prod'
+          working-directory: client
+      
+      - name: 发送部署通知
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          SLACK_CHANNEL: '#deployments'
+          SLACK_COLOR: 'good'
+          SLACK_TITLE: '✅ 房地产工程管理系统已部署'
+          SLACK_MESSAGE: '版本: ${{ github.sha }}\n环境: production\n链接: https://your-app.vercel.app'
+
+  # 部署到腾讯云CloudBase（备用）
+  deploy-cloudbase:
+    runs-on: ubuntu-latest
+    needs: build-frontend
+    if: github.event.inputs.environment == 'staging' || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: 下载构建产物
+        uses: actions/download-artifact@v3
+        with:
+          name: frontend-build
+          path: dist
+      
+      - name: 安装CloudBase CLI
+        run: npm install -g @cloudbase/cli
+      
+      - name: 登录腾讯云
+        run: |
+          echo "${{ secrets.TENCENT_SECRET_ID }}" | tcb login --apiKeyId "${{ secrets.TENCENT_SECRET_ID }}" --apiKey "${{ secrets.TENCENT_SECRET_KEY }}"
+      
+      - name: 部署前端
+        run: tcb hosting:deploy dist --envId ${{ secrets.CLOUDBASE_ENV_ID }}
+      
+      - name: 部署云函数
+        run: |
+          cd server/functions/api
+          npm ci
+          cd ../../..
+          tcb functions:deploy api --envId ${{ secrets.CLOUDBASE_ENV_ID }}
+
+  # 数据库迁移
+  database-migration:
+    runs-on: ubuntu-latest
+    needs: quality-check
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: 执行数据库迁移
+        run: |
+          cd server/migrations
+          # 连接到Supabase执行SQL
+          PGPASSWORD="${{ secrets.SUPABASE_PASSWORD }}" psql -h "${{ secrets.SUPABASE_HOST }}" -U "${{ secrets.SUPABASE_USER }}" -d "${{ secrets.SUPABASE_DATABASE }}" -f 001_initial_schema.sql
+          PGPASSWORD="${{ secrets.SUPABASE_PASSWORD }}" psql -h "${{ secrets.SUPABASE_HOST }}" -U "${{ secrets.SUPABASE_USER }}" -d "${{ secrets.SUPABASE_DATABASE }}" -f 002_phase2_tables.sql
+          PGPASSWORD="${{ secrets.SUPABASE_PASSWORD }}" psql -h "${{ secrets.SUPABASE_HOST }}" -U "${{ secrets.SUPABASE_USER }}" -d "${{ secrets.SUPABASE_DATABASE }}" -f 008_fix_phase36_triggers.sql

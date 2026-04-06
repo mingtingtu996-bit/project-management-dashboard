@@ -1,6 +1,17 @@
+/* Google Fonts — display=swap 防止 FOUT 字体闪烁 (L16) */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* =============================================================================
+   CSS 变量 — 与 V4 设计规范对齐
+   更新日期：2026-03-26
+   核心变更：
+   - --radius 0.5rem → 0.75rem（对齐 V4 rounded-xl 统一圆角）
+   - 新增企业品牌色 CSS 变量 (L15)
+   ============================================================================= */
 
 @layer base {
   :root {
@@ -23,30 +34,17 @@
     --border: 214.3 31.8% 91.4%;
     --input: 214.3 31.8% 91.4%;
     --ring: 221.2 83.2% 53.3%;
-    --radius: 0.5rem;
+    /* V4 对齐：0.5rem(8px) → 0.75rem(12px)，等同于 rounded-xl */
+    --radius: 0.75rem;
+
+    /* ── 企业品牌色 CSS 变量 (L15) ───────────────────────── */
+    /* 使用原生 CSS 变量，方便全站统一替换硬编码蓝色 */
+    --brand-primary:   #3B82F6;   /* blue-500 */
+    --brand-primary-light: #DBEAFE; /* blue-100 */
+    --brand-primary-dark:  #1D4ED8; /* blue-700 */
+    --brand-primary-hover: #2563EB; /* blue-600 */
   }
 
-  .dark {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
-    --card: 222.2 84% 4.9%;
-    --card-foreground: 210 40% 98%;
-    --popover: 222.2 84% 4.9%;
-    --popover-foreground: 210 40% 98%;
-    --primary: 217.2 91.2% 59.8%;
-    --primary-foreground: 222.2 47.4% 11.2%;
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 224.3 76.3% 48%;
-  }
 }
 
 @layer base {
@@ -54,6 +52,182 @@
     @apply border-border;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground antialiased;
+    /* V4 页面背景 gray-50 */
+    background-color: #f6f8fc;
+    color: #0f172a;
+  }
+
+  /* ── heading 全局基础样式（L18/L19） ─────────────────────── */
+  /* 避免浏览器默认 h1~h2 大小不一，统一字重与色彩 */
+  h1 {
+    @apply text-2xl font-bold text-gray-900 leading-tight;
+  }
+  h2 {
+    @apply text-xl font-semibold text-gray-800 leading-snug;
+  }
+  h3 {
+    @apply text-base font-semibold text-gray-700;
+  }
+}
+
+/* =============================================================================
+   V4 复用组件工具类
+   直接用 @apply 组合，减少每个组件重复写长串 Tailwind 类
+   ============================================================================= */
+
+@layer components {
+
+  /* 标准卡片（V4 规范：rounded-xl shadow-sm border-gray-100） */
+  .card-v4 {
+    @apply bg-white rounded-2xl shadow-sm border border-slate-100 p-6
+           transition-all duration-200
+           hover:shadow-md hover:ring-1 hover:ring-blue-100;
+  }
+
+  /* 紧凑卡片（p-4，用于统计卡片） */
+  .card-v4-sm {
+    @apply bg-white rounded-2xl shadow-sm border border-slate-100 p-4
+           transition-all duration-200;
+  }
+
+  /* ── 卡片阴影分层（L10） ─────────────────────────────────── */
+  /* card-l1：基础卡片，大量使用 */
+  .card-l1 {
+    @apply bg-white rounded-2xl border border-slate-100 shadow-sm
+           transition-all duration-200
+           hover:ring-1 hover:ring-blue-100;
+  }
+  /* card-l2：重要信息卡片（如统计指标） */
+  .card-l2 {
+    @apply bg-white rounded-2xl border border-slate-100 shadow
+           transition-all duration-200
+           hover:shadow-md hover:ring-1 hover:ring-blue-100;
+  }
+  /* card-l3：强调卡片（如弹窗内容区、高亮数据） */
+  .card-l3 {
+    @apply bg-white rounded-2xl border border-slate-100 shadow-md
+           transition-all duration-200
+           hover:shadow-lg hover:ring-1 hover:ring-blue-100;
+  }
+
+  /* ── 辅助文本对比度提升（L14）gray-400 → gray-500 ──────── */
+  /* 全站辅助说明文字使用 .text-helper 代替 text-gray-400 */
+  .text-helper {
+    @apply text-gray-500 text-xs;
+  }
+
+  /* 骨架屏占位块 */
+  .skeleton-block {
+    @apply rounded-lg bg-gray-200 animate-skeleton;
+    background-image: linear-gradient(
+      90deg,
+      #e5e7eb 25%,
+      #f3f4f6 50%,
+      #e5e7eb 75%
+    );
+    background-size: 400px 100%;
+  }
+
+  /* 状态徽章 — 通用基础 */
+  .badge-base {
+    @apply inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium;
+  }
+
+  .shell-surface {
+    @apply rounded-2xl border border-slate-100 bg-white shadow-sm;
+  }
+
+  .shell-section-title {
+    @apply text-[28px] font-bold tracking-tight text-slate-900;
+  }
+
+  .shell-subtitle {
+    @apply mt-1 text-sm text-slate-500;
+  }
+
+  /* 进度条容器 */
+  .progress-bar {
+    @apply flex-1 h-2.5 bg-gray-100 rounded-full overflow-hidden;
+  }
+
+  /* 里程碑层级左边框 */
+  .ms-lv1 {
+    border-left: 4px solid #F59E0B; /* amber-500 */
+  }
+  .ms-lv2 {
+    border-left: 3px solid #3B82F6; /* blue-500 */
+  }
+  .ms-lv3 {
+    border-left: 2px solid #9CA3AF; /* gray-400 */
+  }
+
+  /* 风险等级卡片 */
+  .risk-high {
+    @apply bg-red-50 border-l-4 border-red-500;
+  }
+  .risk-mid {
+    @apply bg-orange-50 border-l-4 border-orange-500;
+  }
+  .risk-low {
+    @apply bg-blue-50 border-l-4 border-blue-500;
+  }
+
+  /* ── 进度条颜色统一（L13）─────────────────────────────────── */
+  /* 全站进度条填充色统一使用 emerald-500，通过该类覆盖 */
+  .progress-fill {
+    @apply bg-emerald-500;
+  }
+  .progress-fill-blue {
+    @apply bg-blue-500;
+  }
+  .progress-fill-amber {
+    @apply bg-amber-500;
+  }
+  .progress-fill-red {
+    @apply bg-red-500;
+  }
+
+  /* ── 排版规格统一（L18）─────────────────────────────────── */
+  /* h1：页面主标题 */
+  .heading-1 {
+    @apply text-2xl font-bold text-gray-900;
+  }
+  /* h3：卡片/区块子标题 */
+  .heading-3 {
+    @apply text-lg font-semibold text-gray-900;
+  }
+  /* 正文 */
+  .body-text {
+    @apply text-sm text-gray-700;
+  }
+  /* 辅助/说明文字（WCAG AA 4.5:1，gray-500 替代 gray-400）*/
+  .helper-text {
+    @apply text-xs text-gray-500;
+  }
+
+  /* ── 响应式网格断点统一（L19）─────────────────────────────── */
+  /* 标准三断点网格：移动1列 / 平板2列 / 桌面3列 */
+  .grid-std {
+    @apply grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3;
+  }
+  /* 统计卡片四列网格（L20）：移动2列 / 平板3列 / 桌面4列 */
+  .grid-stats {
+    @apply grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4;
+  }
+
+  /* Tab 下划线激活态 */
+  .tab-active {
+    @apply py-3 text-sm font-medium border-b-2 border-blue-600 text-blue-600
+           flex items-center gap-1.5;
+  }
+  .tab-inactive {
+    @apply py-3 text-sm font-medium text-gray-500
+           flex items-center gap-1.5 hover:text-gray-700;
+  }
+
+  /* 页面淡入 */
+  .page-enter {
+    @apply animate-fade-in;
   }
 }

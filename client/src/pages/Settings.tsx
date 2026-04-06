@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useStore } from '@/hooks/useStore'
+import { Breadcrumb } from '@/components/Breadcrumb'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -104,6 +105,11 @@ export default function Settings() {
 
   return (
     <div className="space-y-6 max-w-2xl">
+      {/* 面包屑导航 */}
+      <Breadcrumb items={[
+        ...(currentProject ? [{ label: currentProject.name, href: `/projects/${currentProject.id}` }] : []),
+        { label: '设置' },
+      ]} showHome={!currentProject} />
       <div>
         <h2 className="text-2xl font-bold">设置</h2>
         <p className="text-muted-foreground">管理您的个人设置</p>

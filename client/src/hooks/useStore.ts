@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { Project, Task, Risk, Milestone, Invitation, ProjectMember, User } from '@/lib/supabase'
+import { Project, Task, Risk, Milestone, Invitation, ProjectMember, User, TaskCondition, TaskObstacle, TaskDelayHistory, AcceptancePlan } from '@/lib/supabase'
 
 interface AppState {
   // 当前用户
@@ -37,6 +37,27 @@ interface AppState {
   addMilestone: (milestone: Milestone) => void
   updateMilestone: (id: string, updates: Partial<Milestone>) => void
 
+  // 卡点管理
+  conditions: TaskCondition[]
+  setConditions: (conditions: TaskCondition[]) => void
+  addCondition: (condition: TaskCondition) => void
+  updateCondition: (id: string, updates: Partial<TaskCondition>) => void
+  deleteCondition: (id: string) => void
+
+  // 阻碍管理
+  obstacles: TaskObstacle[]
+  setObstacles: (obstacles: TaskObstacle[]) => void
+  addObstacle: (obstacle: TaskObstacle) => void
+  updateObstacle: (id: string, updates: Partial<TaskObstacle>) => void
+  deleteObstacle: (id: string) => void
+
+  // 验收计划
+  acceptancePlans: AcceptancePlan[]
+  setAcceptancePlans: (plans: AcceptancePlan[]) => void
+  addAcceptancePlan: (plan: AcceptancePlan) => void
+  updateAcceptancePlan: (id: string, updates: Partial<AcceptancePlan>) => void
+  deleteAcceptancePlan: (id: string) => void
+
   // 邀请码
   invitations: Invitation[]
   setInvitations: (invitations: Invitation[]) => void
@@ -60,7 +81,7 @@ interface AppState {
 export const useStore = create<AppState>((set) => ({
   // 当前用户
   currentUser: null,
-  setCurrentUser: (user) => set({ currentUser: user }),
+  setCurrentUser: (user) => set({ currentUser: user as User | null }),
 
   // 当前项目
   currentProject: null,
@@ -107,6 +128,39 @@ export const useStore = create<AppState>((set) => ({
     milestones: state.milestones.map(m => m.id === id ? { ...m, ...updates } : m)
   })),
 
+  // 卡点管理
+  conditions: [],
+  setConditions: (conditions) => set({ conditions }),
+  addCondition: (condition) => set((state) => ({ conditions: [...state.conditions, condition] })),
+  updateCondition: (id, updates) => set((state) => ({
+    conditions: state.conditions.map(c => c.id === id ? { ...c, ...updates } : c)
+  })),
+  deleteCondition: (id) => set((state) => ({
+    conditions: state.conditions.filter(c => c.id !== id)
+  })),
+
+  // 阻碍管理
+  obstacles: [],
+  setObstacles: (obstacles) => set({ obstacles }),
+  addObstacle: (obstacle) => set((state) => ({ obstacles: [...state.obstacles, obstacle] })),
+  updateObstacle: (id, updates) => set((state) => ({
+    obstacles: state.obstacles.map(o => o.id === id ? { ...o, ...updates } : o)
+  })),
+  deleteObstacle: (id) => set((state) => ({
+    obstacles: state.obstacles.filter(o => o.id !== id)
+  })),
+
+  // 验收计划
+  acceptancePlans: [],
+  setAcceptancePlans: (acceptancePlans) => set({ acceptancePlans }),
+  addAcceptancePlan: (plan) => set((state) => ({ acceptancePlans: [...state.acceptancePlans, plan] })),
+  updateAcceptancePlan: (id, updates) => set((state) => ({
+    acceptancePlans: state.acceptancePlans.map(p => p.id === id ? { ...p, ...updates } : p)
+  })),
+  deleteAcceptancePlan: (id) => set((state) => ({
+    acceptancePlans: state.acceptancePlans.filter(p => p.id !== id)
+  })),
+
   // 邀请码
   invitations: [],
   setInvitations: (invitations) => set({ invitations }),
@@ -128,3 +182,56 @@ export const useStore = create<AppState>((set) => ({
   connectionMode: 'websocket',
   setConnectionMode: (mode) => set({ connectionMode: mode }),
 }))
+
+// ─── 优化：添加选择器函数，避免订阅整个 store ─────────────────────────────────
+// 使用方式：const tasks = useTasks() 代替 const { tasks } = useStore()
+
+export const useCurrentUser = () => useStore(state => state.currentUser)
+export const useSetCurrentUser = () => useStore(state => state.setCurrentUser)
+
+export const useCurrentProject = () => useStore(state => state.currentProject)
+export const useSetCurrentProject = () => useStore(state => state.setCurrentProject)
+
+export const useProjects = () => useStore(state => state.projects)
+export const useSetProjects = () => useStore(state => state.setProjects)
+export const useAddProject = () => useStore(state => state.addProject)
+export const useUpdateProject = () => useStore(state => state.updateProject)
+export const useDeleteProject = () => useStore(state => state.deleteProject)
+
+export const useTasks = () => useStore(state => state.tasks)
+export const useSetTasks = () => useStore(state => state.setTasks)
+export const useAddTask = () => useStore(state => state.addTask)
+export const useUpdateTask = () => useStore(state => state.updateTask)
+export const useDeleteTask = () => useStore(state => state.deleteTask)
+
+export const useRisks = () => useStore(state => state.risks)
+export const useSetRisks = () => useStore(state => state.setRisks)
+export const useAddRisk = () => useStore(state => state.addRisk)
+export const useUpdateRisk = () => useStore(state => state.updateRisk)
+export const useDeleteRisk = () => useStore(state => state.deleteRisk)
+
+export const useMilestones = () => useStore(state => state.milestones)
+export const useSetMilestones = () => useStore(state => state.setMilestones)
+export const useAddMilestone = () => useStore(state => state.addMilestone)
+export const useUpdateMilestone = () => useStore(state => state.updateMilestone)
+
+export const useConditions = () => useStore(state => state.conditions)
+export const useSetConditions = () => useStore(state => state.setConditions)
+
+export const useObstacles = () => useStore(state => state.obstacles)
+export const useSetObstacles = () => useStore(state => state.setObstacles)
+
+export const useAcceptancePlans = () => useStore(state => state.acceptancePlans)
+export const useSetAcceptancePlans = () => useStore(state => state.setAcceptancePlans)
+
+export const useInvitations = () => useStore(state => state.invitations)
+export const useSetInvitations = () => useStore(state => state.setInvitations)
+
+export const useMembers = () => useStore(state => state.members)
+export const useSetMembers = () => useStore(state => state.setMembers)
+
+export const useSidebarOpen = () => useStore(state => state.sidebarOpen)
+export const useSetSidebarOpen = () => useStore(state => state.setSidebarOpen)
+
+export const useConnectionMode = () => useStore(state => state.connectionMode)
+export const useSetConnectionMode = () => useStore(state => state.setConnectionMode)

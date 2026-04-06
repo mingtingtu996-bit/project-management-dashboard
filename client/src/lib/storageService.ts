@@ -1,5 +1,6 @@
 // 混合存储服务 - 统一存储接口
 // 实现本地优先、云端同步的混合存储架构
+// 优化: 整合了 offlineCache.ts 的功能，统一处理离线缓存和同步队列
 
 import { 
   User, Project, Task, Risk, Milestone, ProjectMember, Invitation,
@@ -37,6 +38,26 @@ export interface SyncQueueItem<T = unknown> {
   timestamp: number
   retries: number
   status: 'pending' | 'syncing' | 'failed' | 'completed'
+}
+
+// ============================================
+// 离线操作类型（兼容旧版 offlineCache）
+// ============================================
+export interface PendingOperation {
+  id: string
+  type: 'create' | 'update' | 'delete'
+  table: string
+  data: any
+  timestamp: number
+}
+
+// ============================================
+// 同步状态类型（兼容旧版 offlineCache）
+// ============================================
+export interface SyncStatus {
+  isOnline: boolean
+  lastSyncTime: number | null
+  pendingCount: number
 }
 
 // ============================================
@@ -118,6 +139,7 @@ export const DEFAULT_STORAGE_CONFIG: StorageServiceConfig = {
 
 // ============================================
 // 存储服务类
+// 整合 offlineCache 功能，统一处理离线操作和同步队列
 // ============================================
 class StorageServiceImpl implements StorageAdapter {
   private mode: StorageMode
@@ -125,32 +147,260 @@ class StorageServiceImpl implements StorageAdapter {
   private localAdapter: StorageAdapter
   private cloudAdapter?: StorageAdapter
   private syncQueue: SyncQueueItem[] = []
+  private pendingOps: PendingOperation[] = []  // 兼容旧版 offlineCache
   private isInitialized = false
   private networkStatus: NetworkStatus = navigator.onLine ? NetworkStatus.ONLINE : NetworkStatus.OFFLINE
+  private onlineHandler: () => void
+  private offlineHandler: () => void
+  private syncListeners: Array<(status: SyncStatus) => void> = []  // 兼容旧版 offlineCache
+  private lastSyncTime: number | null = null
 
   constructor(config: Partial<StorageServiceConfig> = {}) {
     this.config = { ...DEFAULT_STORAGE_CONFIG, ...config }
     this.mode = this.config.mode
     this.localAdapter = this.createLocalAdapter()
     
+    // 绑定事件处理器（用于后续清理）
+    this.onlineHandler = () => this.handleOnline()
+    this.offlineHandler = () => this.handleOffline()
+    
     // 监听网络状态变化
     if (typeof window !== 'undefined') {
-      window.addEventListener('online', () => this.handleOnline())
-      window.addEventListener('offline', () => this.handleOffline())
+      window.addEventListener('online', this.onlineHandler)
+      window.addEventListener('offline', this.offlineHandler)
     }
     
-    // 加载同步队列
+    // 加载同步队列和离线操作
     this.loadSyncQueue()
+    this.loadPendingOps()
+  }
+
+  // 清理事件监听器（防止内存泄漏）
+  destroy(): void {
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('online', this.onlineHandler)
+      window.removeEventListener('offline', this.offlineHandler)
+    }
+    this.syncListeners = []  // 清理所有监听器
+    console.log('[StorageService] 已清理事件监听器')
+  }
+
+  // ============================================
+  // 离线操作兼容方法（从 offlineCache 迁移）
+  // ============================================
+
+  /**
+   * 添加待同步操作（兼容旧版 offlineCache API）
+   * @deprecated 请使用 addToSyncQueue() 替代
+   */
+  addOperation(type: PendingOperation['type'], table: string, data: any): string {
+    const operation: PendingOperation = {
+      id: crypto.randomUUID(),
+      type,
+      table,
+      data,
+      timestamp: Date.now()
+    }
+
+    this.pendingOps.push(operation)
+    this.savePendingOps()
+
+    // 如果在线，立即尝试同步
+    if (this.isNetworkOnline()) {
+      this.syncPendingOps()
+    }
+
+    this.notifySyncListeners()
+    return operation.id
+  }
+
+  /**
+   * 同步待处理操作到数据库（兼容旧版 offlineCache）
+   */
+  async syncPendingOps(): Promise<{ success: number; failed: number }> {
+    if (!this.isNetworkOnline() || this.pendingOps.length === 0) {
+      return { success: 0, failed: 0 }
+    }
+
+    console.log(`[StorageService] 开始同步 ${this.pendingOps.length} 个离线操作...`)
+
+    let success = 0
+    let failed = 0
+    const failedOps: PendingOperation[] = []
+
+    // 按时间顺序执行
+    const opsToProcess = [...this.pendingOps].sort((a, b) => a.timestamp - b.timestamp)
+
+    for (const op of opsToProcess) {
+      try {
+        await this.executePendingOperation(op)
+        success++
+      } catch (e) {
+        console.error(`[StorageService] 同步离线操作失败:`, e)
+        failed++
+        failedOps.push(op)
+      }
+    }
+
+    // 更新待同步列表（移除成功的）
+    this.pendingOps = failedOps
+    this.savePendingOps()
+    this.lastSyncTime = Date.now()
+    this.notifySyncListeners()
+
+    console.log(`[StorageService] 离线操作同步完成: 成功 ${success}, 失败 ${failed}`)
+
+    return { success, failed }
+  }
+
+  /**
+   * 执行单个离线操作
+   */
+  private async executePendingOperation(op: PendingOperation): Promise<void> {
+    // 将旧版 table/action 映射到新版 syncQueue 格式
+    const typeMap: Record<string, SyncQueueItem['type']> = {
+      'tasks': 'task',
+      'projects': 'project',
+      'milestones': 'milestone',
+      'risks': 'risk',
+      'members': 'member',
+      'invitations': 'invitation'
+    }
+
+    const type = typeMap[op.table]
+    if (!type) {
+      console.warn(`[StorageService] 未知表: ${op.table}`)
+      return
+    }
+
+    // 使用现有的存储适配器执行操作
+    switch (op.table) {
+      case 'tasks':
+        if (op.type === 'create') await this.createTask(op.data)
+        else if (op.type === 'update') await this.updateTask(op.data.id || op.id, op.data)
+        else if (op.type === 'delete') await this.deleteTask(op.data.id || op.id)
+        break
+      case 'projects':
+        if (op.type === 'create') await this.createProject(op.data)
+        else if (op.type === 'update') await this.updateProject(op.data.id || op.id, op.data)
+        else if (op.type === 'delete') await this.deleteProject(op.data.id || op.id)
+        break
+      case 'milestones':
+        if (op.type === 'create') await this.createMilestone(op.data)
+        else if (op.type === 'update') await this.updateMilestone(op.data.id || op.id, op.data)
+        else if (op.type === 'delete') await this.deleteMilestone(op.data.id || op.id)
+        break
+      case 'risks':
+        if (op.type === 'create') await this.createRisk(op.data)
+        else if (op.type === 'update') await this.updateRisk(op.data.id || op.id, op.data)
+        else if (op.type === 'delete') await this.deleteRisk(op.data.id || op.id)
+        break
+    }
+  }
+
+  /**
+   * 加载本地存储的待同步操作
+   */
+  private loadPendingOps() {
+    try {
+      const stored = localStorage.getItem('pending_sync_ops')
+      if (stored) {
+        this.pendingOps = JSON.parse(stored)
+        console.log(`[StorageService] 加载了 ${this.pendingOps.length} 个离线待同步操作`)
+      }
+    } catch (e) {
+      console.error('[StorageService] 加载离线待同步操作失败:', e)
+      this.pendingOps = []
+    }
+  }
+
+  /**
+   * 保存待同步操作到本地存储
+   */
+  private savePendingOps() {
+    try {
+      localStorage.setItem('pending_sync_ops', JSON.stringify(this.pendingOps))
+    } catch (e) {
+      console.error('[StorageService] 保存离线待同步操作失败:', e)
+    }
+  }
+
+  /**
+   * 获取同步状态（兼容旧版 offlineCache API）
+   */
+  getSyncStatus(): SyncStatus {
+    return {
+      isOnline: this.isNetworkOnline(),
+      lastSyncTime: this.lastSyncTime,
+      pendingCount: this.pendingOps.length + this.syncQueue.filter(i => i.status === 'pending').length
+    }
+  }
+
+  /**
+   * 手动触发同步（兼容旧版 offlineCache API）
+   */
+  async manualSync(): Promise<{ success: number; failed: number }> {
+    // 同时处理离线操作和同步队列
+    const offlineResult = await this.syncPendingOps()
+    await this.processSyncQueue()
+    return offlineResult
+  }
+
+  /**
+   * 清除所有待同步操作（兼容旧版 offlineCache API）
+   */
+  clearPendingOps() {
+    this.pendingOps = []
+    this.savePendingOps()
+    this.syncQueue = this.syncQueue.filter(i => i.status !== 'pending')
+    this.persistSyncQueue()
+    this.notifySyncListeners()
+  }
+
+  /**
+   * 获取待同步操作数量（兼容旧版 offlineCache API）
+   */
+  getPendingCount(): number {
+    return this.pendingOps.length + this.syncQueue.filter(i => i.status === 'pending').length
+  }
+
+  /**
+   * 订阅同步状态变化（兼容旧版 offlineCache API）
+   */
+  subscribe(listener: (status: SyncStatus) => void): () => void {
+    this.syncListeners.push(listener)
+    // 立即通知一次当前状态
+    listener(this.getSyncStatus())
+    return () => {
+      this.syncListeners = this.syncListeners.filter(l => l !== listener)
+    }
+  }
+
+  private notifySyncListeners() {
+    const status = this.getSyncStatus()
+    this.syncListeners.forEach(listener => listener(status))
+  }
+
+  /**
+   * 检查网络是否在线
+   */
+  isNetworkOnline(): boolean {
+    return this.networkStatus !== NetworkStatus.OFFLINE && navigator.onLine
   }
 
   // 网络恢复时触发同步
   private handleOnline() {
     console.log('[StorageService] 网络已恢复在线')
     this.networkStatus = NetworkStatus.ONLINE
-    
+    this.notifySyncListeners()
+
     // 自动同步待处理的队列
-    if (this.config.autoSync && this.syncQueue.length > 0) {
-      this.processSyncQueue()
+    if (this.config.autoSync) {
+      // 同时处理离线操作和同步队列
+      this.syncPendingOps()
+      if (this.syncQueue.length > 0) {
+        this.processSyncQueue()
+      }
     }
   }
 
@@ -158,6 +408,7 @@ class StorageServiceImpl implements StorageAdapter {
   private handleOffline() {
     console.log('[StorageService] 网络已断开')
     this.networkStatus = NetworkStatus.OFFLINE
+    this.notifySyncListeners()
   }
 
   // 获取当前网络状态
@@ -165,18 +416,157 @@ class StorageServiceImpl implements StorageAdapter {
     return this.networkStatus
   }
 
-  // 处理同步队列
+  // 同步队列处理锁，防止并发执行
+  private isProcessingSyncQueue = false
+  private syncQueueAbortController: AbortController | null = null
+
+  // 处理同步队列（带并发控制）
   private async processSyncQueue(): Promise<void> {
-    const pendingItems = this.syncQueue.filter(item => item.status === 'pending')
+    // 如果正在处理，则取消当前操作并重新启动
+    if (this.isProcessingSyncQueue) {
+      console.log('[StorageService] 同步队列正在处理中，取消当前操作')
+      this.syncQueueAbortController?.abort()
+      // 等待一小段时间让之前的操作取消
+      await new Promise(resolve => setTimeout(resolve, 100))
+    }
+
+    this.isProcessingSyncQueue = true
+    this.syncQueueAbortController = new AbortController()
+    const signal = this.syncQueueAbortController.signal
+
+    try {
+      const pendingItems = this.syncQueue.filter(item => item.status === 'pending')
+      
+      for (const item of pendingItems) {
+        // 检查是否被取消
+        if (signal.aborted) {
+          console.log('[StorageService] 同步队列处理被取消')
+          break
+        }
+
+        // 检查项目是否仍存在于队列中（可能被其他标签页处理）
+        const currentItem = this.syncQueue.find(i => i.id === item.id)
+        if (!currentItem || currentItem.status !== 'pending') {
+          continue
+        }
+
+        item.status = 'syncing'
+        this.persistSyncQueue()
+
+        try {
+          // 调用云端API进行同步
+          await this.syncItemToCloud(item, signal)
+          
+          // 检查是否被取消
+          if (signal.aborted) {
+            item.status = 'pending'
+            this.persistSyncQueue()
+            break
+          }
+
+          item.status = 'completed'
+          console.log(`[StorageService] 同步成功: ${item.type} ${item.action}`)
+        } catch (error) {
+          console.error(`[StorageService] 同步失败:`, error)
+          item.retries++
+          if (item.retries >= this.config.maxRetries) {
+            item.status = 'failed'
+            // 触发同步失败通知
+            this.notifySyncFailure(item, error)
+          } else {
+            item.status = 'pending'
+          }
+        }
+        
+        this.persistSyncQueue()
+      }
+    } finally {
+      this.isProcessingSyncQueue = false
+      this.syncQueueAbortController = null
+    }
+  }
+
+  // 同步单个项目到云端
+  private async syncItemToCloud(item: SyncQueueItem, signal: AbortSignal): Promise<void> {
+    if (!this.cloudAdapter) {
+      throw new Error('云端适配器未初始化')
+    }
+
+    const data = item.data as { id: string; [key: string]: unknown }
     
-    for (const item of pendingItems) {
-      item.status = 'syncing'
-      // 这里可以调用云端API进行同步
-      // 简化处理：标记为已完成
-      item.status = 'completed'
+    switch (item.type) {
+      case 'task':
+        if (item.action === 'create') await this.cloudAdapter.createTask(item.data as Task)
+        else if (item.action === 'update') await this.cloudAdapter.updateTask(data.id, item.data as Partial<Task>)
+        else if (item.action === 'delete') await this.cloudAdapter.deleteTask(data.id)
+        break
+      case 'project':
+        if (item.action === 'create') await this.cloudAdapter.createProject(item.data as Project)
+        else if (item.action === 'update') await this.cloudAdapter.updateProject(data.id, item.data as Partial<Project>)
+        else if (item.action === 'delete') await this.cloudAdapter.deleteProject(data.id)
+        break
+      case 'risk':
+        if (item.action === 'create') await this.cloudAdapter.createRisk(item.data as Risk)
+        else if (item.action === 'update') await this.cloudAdapter.updateRisk(data.id, item.data as Partial<Risk>)
+        else if (item.action === 'delete') await this.cloudAdapter.deleteRisk(data.id)
+        break
+      case 'milestone':
+        if (item.action === 'create') await this.cloudAdapter.createMilestone(item.data as Milestone)
+        else if (item.action === 'update') await this.cloudAdapter.updateMilestone(data.id, item.data as Partial<Milestone>)
+        else if (item.action === 'delete') await this.cloudAdapter.deleteMilestone(data.id)
+        break
+      case 'member':
+        if (item.action === 'create') await this.cloudAdapter.createMember(item.data as ProjectMember)
+        else if (item.action === 'update') await this.cloudAdapter.updateMember(data.id, item.data as Partial<ProjectMember>)
+        else if (item.action === 'delete') await this.cloudAdapter.deleteMember(data.id)
+        break
+      case 'invitation':
+        if (item.action === 'create') await this.cloudAdapter.createInvitation(item.data as Invitation)
+        else if (item.action === 'update') await this.cloudAdapter.updateInvitation(data.id, item.data as Partial<Invitation>)
+        else if (item.action === 'delete') await this.cloudAdapter.deleteInvitation(data.id)
+        break
+    }
+
+    // 检查是否被取消
+    if (signal.aborted) {
+      throw new Error('同步被取消')
+    }
+  }
+
+  // 同步失败通知
+  private notifySyncFailure(item: SyncQueueItem, error: unknown): void {
+    const errorMessage = error instanceof Error ? error.message : '未知错误'
+    console.error(`[StorageService] 同步失败通知: ${item.type} ${item.action} - ${errorMessage}`)
+    
+    // 触发全局事件，让UI可以显示同步失败提示
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('storage:sync-failed', {
+        detail: { item, error: errorMessage }
+      }))
+    }
+  }
+
+  // 重试失败的同步项
+  async retryFailedSync(): Promise<{ success: number; failed: number }> {
+    const failedItems = this.syncQueue.filter(item => item.status === 'failed')
+    let success = 0
+    let failed = 0
+
+    for (const item of failedItems) {
+      item.status = 'pending'
+      item.retries = 0
     }
     
     this.persistSyncQueue()
+    await this.processSyncQueue()
+
+    // 统计结果
+    for (const item of failedItems) {
+      if (item.status === 'completed') success++
+      else if (item.status === 'failed') failed++
+    }
+
+    return { success, failed }
   }
 
   // 创建本地存储适配器
@@ -567,26 +957,27 @@ class StorageServiceImpl implements StorageAdapter {
 
     try {
       // 根据类型和动作执行同步
+      const data = item.data as { id: string; [key: string]: unknown }
       switch (item.type) {
         case 'task':
           if (item.action === 'create') await this.cloudAdapter?.createTask(item.data)
-          else if (item.action === 'update') await this.cloudAdapter?.updateTask(item.data.id, item.data)
-          else if (item.action === 'delete') await this.cloudAdapter?.deleteTask(item.data.id)
+          else if (item.action === 'update') await this.cloudAdapter?.updateTask(data.id, item.data)
+          else if (item.action === 'delete') await this.cloudAdapter?.deleteTask(data.id)
           break
         case 'project':
           if (item.action === 'create') await this.cloudAdapter?.createProject(item.data)
-          else if (item.action === 'update') await this.cloudAdapter?.updateProject(item.data.id, item.data)
-          else if (item.action === 'delete') await this.cloudAdapter?.deleteProject(item.data.id)
+          else if (item.action === 'update') await this.cloudAdapter?.updateProject(data.id, item.data)
+          else if (item.action === 'delete') await this.cloudAdapter?.deleteProject(data.id)
           break
         case 'risk':
           if (item.action === 'create') await this.cloudAdapter?.createRisk(item.data)
-          else if (item.action === 'update') await this.cloudAdapter?.updateRisk(item.data.id, item.data)
-          else if (item.action === 'delete') await this.cloudAdapter?.deleteRisk(item.data.id)
+          else if (item.action === 'update') await this.cloudAdapter?.updateRisk(data.id, item.data)
+          else if (item.action === 'delete') await this.cloudAdapter?.deleteRisk(data.id)
           break
         case 'milestone':
           if (item.action === 'create') await this.cloudAdapter?.createMilestone(item.data)
-          else if (item.action === 'update') await this.cloudAdapter?.updateMilestone(item.data.id, item.data)
-          else if (item.action === 'delete') await this.cloudAdapter?.deleteMilestone(item.data.id)
+          else if (item.action === 'update') await this.cloudAdapter?.updateMilestone(data.id, item.data)
+          else if (item.action === 'delete') await this.cloudAdapter?.deleteMilestone(data.id)
           break
       }
 
@@ -630,9 +1021,10 @@ class StorageServiceImpl implements StorageAdapter {
   // 强制使用本地版本（增加版本号后重试）
   forceUpdate(entityId: string): void {
     // 从同步队列中找到该项目，增加版本号后重试
-    const item = this.syncQueue.find(i => i.data?.id === entityId)
+    const item = this.syncQueue.find(i => (i.data as any)?.id === entityId)
     if (item && item.data) {
-      item.data.version = (item.data.version || 1) + 1
+      const d = item.data as { id: string; version?: number }
+      d.version = (d.version || 1) + 1
       item.status = 'pending'
       item.retries = 0
       this.persistSyncQueue()
@@ -642,7 +1034,7 @@ class StorageServiceImpl implements StorageAdapter {
   // 应用服务器数据
   applyServerData(entityId: string): void {
     // 从同步队列中移除该项（因为要使用服务器版本）
-    this.syncQueue = this.syncQueue.filter(i => i.data?.id !== entityId)
+    this.syncQueue = this.syncQueue.filter(i => (i.data as any)?.id !== entityId)
     this.persistSyncQueue()
   }
 

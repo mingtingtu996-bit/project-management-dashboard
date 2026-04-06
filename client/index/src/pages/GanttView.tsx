@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useStore } from '@/hooks/useStore'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -20,12 +20,13 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { toast } from '@/hooks/use-toast'
-import { ArrowLeft, Plus, Calendar, Save, Trash2, GitBranch, AlertCircle } from 'lucide-react'
+import { ArrowLeft, Plus, Calendar, Save, Trash2, GitBranch, AlertCircle, Flag, ChevronRight, ChevronDown, LayoutTemplate } from 'lucide-react'
 import { formatDate } from '@/lib/utils'
 import { taskDb, generateId } from '@/lib/localDb'
 import { calculateCPM, isCriticalTask, getCriticalPathSummary, type CPMResult } from '@/lib/cpm'
 import { GanttViewSkeleton } from '@/components/ui/page-skeleton'
 import { Pagination, usePagination } from '@/components/ui/Pagination'
+import { ConflictDialog } from '@/components/ConflictDialog'
 
 // Task类型（本地版本）
 interface Task {
@@ -44,11 +45,77 @@ interface Task {
   assignee_unit?: string
   responsible_unit?: string
   dependencies?: string[]
+  parent_id?: string | null   // WBS父节点ID
   is_critical?: boolean  // 手动标记的关键任务
+  is_milestone?: boolean  // 是否为里程碑节点
+  milestone_level?: number  // 里程碑层级：1=一级(amber)/2=二级(blue)/3=三级(gray)
+  milestone_order?: number  // 同级排序
   version?: number
   created_at: string
   updated_at: string
 }
+
+// WBS 树节点（包含 children）
+interface WBSNode extends Task {
+  children: WBSNode[]
+  depth: number
+}
+
+// 里程碑层级样式配置
+const MILESTONE_LEVEL_CONFIG: Record<number, { label: string; color: string; borderColor: string; bgColor: string }> = {
+  1: { label: '一级里程碑', color: 'text-amber-600', borderColor: 'border-amber-500', bgColor: 'bg-amber-50' },
+  2: { label: '二级里程碑', color: 'text-blue-600', borderColor: 'border-blue-500', bgColor: 'bg-blue-50' },
+  3: { label: '三级里程碑', color: 'text-gray-500', borderColor: 'border-gray-400', bgColor: 'bg-gray-50' },
+}
+
+// ─── WBS 树形结构工具函数 ───────────────────────────────────────
+
+/**
+ * 将平铺 tasks 数组按 parent_id 重建为多叉树
+ * 没有 parent_id（或 parent_id 找不到对应节点）的任务作为根节点
+ */
+function buildWBSTree(tasks: Task[]): WBSNode[] {
+  const nodeMap = new Map<string, WBSNode>()
+  // 初始化节点
+  for (const t of tasks) {
+    nodeMap.set(t.id, { ...t, children: [], depth: 0 })
+  }
+  const roots: WBSNode[] = []
+  for (const node of nodeMap.values()) {
+    const parentId = node.parent_id
+    if (parentId && nodeMap.has(parentId)) {
+      nodeMap.get(parentId)!.children.push(node)
+    } else {
+      roots.push(node)
+    }
+  }
+  // 设置 depth
+  function setDepth(nodes: WBSNode[], d: number) {
+    for (const n of nodes) {
+      n.depth = d
+      setDepth(n.children, d + 1)
+    }
+  }
+  setDepth(roots, 0)
+  return roots
+}
+
+/**
+ * 将 WBS 树打平为有序列表，用于渲染
+ * collapsed：存放已折叠节点 id 的 Set，折叠节点的子树跳过
+ */
+function flattenTree(nodes: WBSNode[], collapsed: Set<string>): WBSNode[] {
+  const result: WBSNode[] = []
+  for (const n of nodes) {
+    result.push(n)
+    if (!collapsed.has(n.id) && n.children.length > 0) {
+      result.push(...flattenTree(n.children, collapsed))
+    }
+  }
+  return result
+}
+
+// ──────────────────────────────────────────────────────────────────
 
 export default function GanttView() {
   const { id } = useParams<{ id: string }>()
@@ -57,6 +124,25 @@ export default function GanttView() {
   const [loading, setLoading] = useState(true)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingTask, setEditingTask] = useState<Task | null>(null)
+  
+  // WBS 树形状态
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  // 添加子任务时预设的父节点 ID
+  const [newTaskParentId, setNewTaskParentId] = useState<string | null>(null)
+
+  // 里程碑设置弹窗状态
+  const [milestoneDialogOpen, setMilestoneDialogOpen] = useState(false)
+  const [milestoneTargetTask, setMilestoneTargetTask] = useState<Task | null>(null)
+  
+  // 版本冲突处理状态
+  const [conflictOpen, setConflictOpen] = useState(false)
+  const [conflictData, setConflictData] = useState<{
+    localVersion: Task
+    serverVersion: Task
+  } | null>(null)
+  const [pendingTaskData, setPendingTaskData] = useState<Partial<Task> | null>(null)
+  
   const [formData, setFormData] = useState({
     name: '',
     description: '',
@@ -68,24 +154,17 @@ export default function GanttView() {
     assignee_name: '',
     responsible_unit: '',
     dependencies: [] as string[],
+    parent_id: null as string | null,
   })
 
-  // 分页状态
-  const {
-    currentData: paginatedTasks,
-    currentPage,
-    pageSize,
-    totalPages,
-    totalItems,
-    setPage,
-    setPageSize,
-    goToFirst,
-    goToPrev,
-    goToNext,
-  } = usePagination<Task>({
-    data: tasks as Task[],
-    initialPageSize: 20,
-  })
+  // ─── WBS 树形 ──────────────────────────────────────
+  const wbsTree = useMemo(() => buildWBSTree(tasks as Task[]), [tasks])
+  const flatList = useMemo(() => flattenTree(wbsTree, collapsed), [wbsTree, collapsed])
+
+  // 全选判断
+  const allSelected = flatList.length > 0 && flatList.every(n => selectedIds.has(n.id))
+  const someSelected = flatList.some(n => selectedIds.has(n.id))
+  // ────────────────────────────────────────────────────
 
   // CPM计算结果（考虑手动标记的关键任务）
   const cpmResult: CPMResult | null = useMemo(() => {
@@ -131,18 +210,28 @@ export default function GanttView() {
 
   // 项目统计信息
   const projectStats = useMemo(() => {
-    if (!cpmResult) return null
-    
     const totalTasks = tasks.length
     const completedTasks = tasks.filter(t => t.status === 'completed').length
-    const criticalTaskCount = cpmResult.criticalPath.length
+    const inProgressTasks = tasks.filter(t => t.status === 'in_progress').length
+    const overdueTask = tasks.filter(t =>
+      t.status !== 'completed' && t.end_date && new Date(t.end_date) < new Date()
+    ).length
+    const avgProgress = totalTasks > 0
+      ? Math.round(tasks.reduce((sum, t) => sum + (t.progress || 0), 0) / totalTasks)
+      : 0
+    const criticalTaskCount = cpmResult ? cpmResult.criticalPath.length : 0
+    const blockedTasks = tasks.filter(t => t.status === 'blocked').length
     
     return {
       totalTasks,
       completedTasks,
+      inProgressTasks,
+      overdueTask,
+      avgProgress,
       criticalTaskCount,
-      projectDuration: cpmResult.projectDuration,
-      criticalPathSummary: getCriticalPathSummary(cpmResult)
+      blockedTasks,
+      projectDuration: cpmResult ? cpmResult.projectDuration : 0,
+      criticalPathSummary: cpmResult ? getCriticalPathSummary(cpmResult) : ''
     }
   }, [tasks, cpmResult])
 
@@ -150,9 +239,9 @@ export default function GanttView() {
     if (id) {
       loadTasks()
     }
-  }, [id])
+  }, [id, loadTasks])
 
-  const loadTasks = () => {
+  const loadTasks = useCallback(() => {
     try {
       const data = taskDb.getByProject(id!)
       // 按开始日期排序
@@ -167,7 +256,7 @@ export default function GanttView() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [id, setTasks])
 
   const handleSaveTask = () => {
     if (!formData.name.trim() || !id) {
@@ -209,7 +298,7 @@ export default function GanttView() {
 
     try {
       // 字段映射：将表单字段转换为数据库字段
-      const taskData: any = {
+      const taskData: Partial<Task> = {
         title: formData.name,  // name -> title
         description: formData.description,
         status: formData.status,
@@ -220,22 +309,37 @@ export default function GanttView() {
         assignee: formData.assignee_name,  // assignee_name -> assignee
         assignee_unit: formData.responsible_unit,  // responsible_unit -> assignee_unit
         dependencies: formData.dependencies || [],
+        parent_id: formData.parent_id || null,
         project_id: id,
         updated_at: new Date().toISOString(),
       }
 
       if (editingTask) {
-        const updated = taskDb.update(editingTask.id, { ...taskData, version: (editingTask.version || 1) + 1 })
+        const currentVersion = editingTask.version || 1
+        const updated = taskDb.update(editingTask.id, { ...taskData, version: currentVersion + 1 })
+        
         if (updated) {
-          updateTask(editingTask.id, { ...editingTask, ...taskData })
+          updateTask(editingTask.id, { ...editingTask, ...taskData, version: currentVersion + 1 })
           toast({ title: "任务已更新" })
         } else {
-          // 版本冲突，直接更新
-          updateTask(editingTask.id, { ...editingTask, ...taskData })
-          toast({ title: "任务已更新" })
+          // 版本冲突：获取服务器版本并显示冲突对话框
+          const serverVersion = taskDb.getById(editingTask.id)
+          if (serverVersion) {
+            setConflictData({
+              localVersion: { ...editingTask, ...taskData },
+              serverVersion
+            })
+            setPendingTaskData(taskData)
+            setConflictOpen(true)
+          } else {
+            // 记录不存在，强制更新
+            taskDb.forceUpdate(editingTask.id, { ...taskData, version: currentVersion + 1 })
+            updateTask(editingTask.id, { ...editingTask, ...taskData, version: currentVersion + 1 })
+            toast({ title: "任务已更新" })
+          }
         }
       } else {
-        const newTask: any = {
+        const newTask: Task = {
           ...taskData,
           id: generateId(),
           version: 1,
@@ -305,7 +409,7 @@ export default function GanttView() {
     }
   }
 
-  const openEditDialog = (task?: Task) => {
+  const openEditDialog = (task?: Task, parentId?: string) => {
     if (task) {
       setEditingTask(task)
       setFormData({
@@ -319,10 +423,15 @@ export default function GanttView() {
         assignee_name: task.assignee_name || '',
         responsible_unit: task.responsible_unit || '',
         dependencies: task.dependencies || [],
+        parent_id: task.parent_id || null,
       })
     } else {
       resetForm()
+      if (parentId) {
+        setFormData(prev => ({ ...prev, parent_id: parentId }))
+      }
     }
+    setNewTaskParentId(parentId || null)
     setDialogOpen(true)
   }
 
@@ -352,8 +461,114 @@ export default function GanttView() {
       assignee_name: '',
       responsible_unit: '',
       dependencies: [],
+      parent_id: null,
+    })
+    setNewTaskParentId(null)
+  }
+
+  // 版本冲突处理函数
+  const handleKeepLocal = useCallback(() => {
+    if (!conflictData || !pendingTaskData || !editingTask) return
+    
+    // 强制保留本地版本
+    const newVersion = (conflictData.localVersion.version || 1) + 1
+    taskDb.forceUpdate(editingTask.id, { ...pendingTaskData, version: newVersion })
+    updateTask(editingTask.id, { ...conflictData.localVersion, ...pendingTaskData, version: newVersion })
+    
+    toast({ title: "已保留您的修改" })
+    setConflictOpen(false)
+    setConflictData(null)
+    setPendingTaskData(null)
+  }, [conflictData, pendingTaskData, editingTask, updateTask])
+
+  const handleKeepServer = useCallback(() => {
+    if (!conflictData || !editingTask) return
+    
+    // 使用服务器版本，刷新本地数据
+    const serverData = taskDb.getById(editingTask.id)
+    if (serverData) {
+      updateTask(editingTask.id, serverData)
+      toast({ title: "已使用服务器版本" })
+    }
+    
+    setConflictOpen(false)
+    setConflictData(null)
+    setPendingTaskData(null)
+    setDialogOpen(false)
+    resetForm()
+  }, [conflictData, editingTask, updateTask])
+
+  const handleMerge = useCallback(() => {
+    // 关闭冲突对话框，让用户在表单中手动合并
+    setConflictOpen(false)
+    toast({ title: "请手动合并不同之处", description: "服务器版本已加载到表单中" })
+    // 可以在这里预填服务器版本的数据到表单，让用户对比修改
+  }, [conflictData])
+
+  // ─── WBS 树形操作 ──────────────────────────────────
+
+  const toggleCollapse = (nodeId: string) => {
+    setCollapsed(prev => {
+      const next = new Set(prev)
+      if (next.has(nodeId)) {
+        next.delete(nodeId)
+      } else {
+        next.add(nodeId)
+      }
+      return next
     })
   }
+
+  const toggleSelectAll = () => {
+    if (allSelected) {
+      setSelectedIds(new Set())
+    } else {
+      setSelectedIds(new Set(flatList.map(n => n.id)))
+    }
+  }
+
+  const toggleSelect = (nodeId: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(nodeId)) {
+        next.delete(nodeId)
+      } else {
+        next.add(nodeId)
+      }
+      return next
+    })
+  }
+
+  const handleBatchComplete = () => {
+    if (selectedIds.size === 0) return
+    try {
+      for (const tid of selectedIds) {
+        taskDb.update(tid, { status: 'completed', progress: 100, updated_at: new Date().toISOString() })
+        updateTask(tid, { status: 'completed', progress: 100 })
+      }
+      toast({ title: `已完成 ${selectedIds.size} 个任务` })
+      setSelectedIds(new Set())
+    } catch (e) {
+      toast({ title: '批量操作失败', variant: 'destructive' })
+    }
+  }
+
+  const handleBatchDelete = () => {
+    if (selectedIds.size === 0) return
+    if (!confirm(`确定要删除选中的 ${selectedIds.size} 个任务吗？`)) return
+    try {
+      for (const tid of selectedIds) {
+        taskDb.delete(tid)
+        deleteTask(tid)
+      }
+      toast({ title: `已删除 ${selectedIds.size} 个任务` })
+      setSelectedIds(new Set())
+    } catch (e) {
+      toast({ title: '批量删除失败', variant: 'destructive' })
+    }
+  }
+
+  // ────────────────────────────────────────────────────
 
   // 判断任务是否在关键路径上
   const isOnCriticalPath = (taskId: string): boolean => {
@@ -384,75 +599,134 @@ export default function GanttView() {
             <ArrowLeft className="mr-2 h-4 w-4" />
             返回项目
           </Button>
-          <h2 className="text-xl font-semibold">甘特图</h2>
+          <div>
+            <h2 className="text-xl font-semibold">任务列表</h2>
+            <p className="text-sm text-muted-foreground mt-0.5">项目工作分解结构(WBS)及任务管理</p>
+          </div>
         </div>
-        <Button onClick={() => openEditDialog()}>
-          <Plus className="mr-2 h-4 w-4" />
-          添加任务
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => navigate(`/projects/${id}/wbs-templates`)}>
+            <LayoutTemplate className="mr-1.5 h-3.5 w-3.5" />
+            从模板生成
+          </Button>
+          <Button onClick={() => openEditDialog()}>
+            <Plus className="mr-2 h-4 w-4" />
+            新建任务
+          </Button>
+        </div>
       </div>
 
-      {/* 项目统计信息 */}
-      {projectStats && (
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-muted-foreground">总任务数</p>
-                  <p className="text-2xl font-bold">{projectStats.totalTasks}</p>
-                </div>
-                <Calendar className="h-8 w-8 text-muted-foreground" />
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-muted-foreground">已完成</p>
-                  <p className="text-2xl font-bold text-green-600">{projectStats.completedTasks}</p>
-                </div>
-                <Calendar className="h-8 w-8 text-green-600" />
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-muted-foreground">关键任务</p>
-                  <p className="text-2xl font-bold text-red-600">{projectStats.criticalTaskCount}</p>
-                </div>
-                <AlertCircle className="h-8 w-8 text-red-600" />
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-muted-foreground">项目工期</p>
-                  <p className="text-2xl font-bold">{projectStats.projectDuration}天</p>
-                </div>
-                <GitBranch className="h-8 w-8 text-muted-foreground" />
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      )}
-
-      {/* 甘特图展示区 */}
-      <Card>
-        <CardHeader>
-          <CardTitle>任务时间线</CardTitle>
-          {projectStats && projectStats.criticalTaskCount > 0 && (
-            <p className="text-sm text-muted-foreground font-normal">
-              关键路径: {projectStats.criticalPathSummary}
+      {/* 统计卡片 5项 */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+        <Card>
+          <CardContent className="pt-5 pb-4">
+            <p className="text-xs text-muted-foreground mb-1">总任务数</p>
+            <p className="text-2xl font-bold">{projectStats.totalTasks}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-5 pb-4">
+            <p className="text-xs text-muted-foreground mb-1">已完成</p>
+            <p className="text-2xl font-bold text-green-600">{projectStats.completedTasks}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {projectStats.totalTasks > 0 ? Math.round(projectStats.completedTasks / projectStats.totalTasks * 100) : 0}%
             </p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-5 pb-4">
+            <p className="text-xs text-muted-foreground mb-1">平均进度</p>
+            <p className="text-2xl font-bold text-blue-600">{projectStats.avgProgress}%</p>
+            <div className="w-full h-1.5 bg-gray-100 rounded-full mt-1.5 overflow-hidden">
+              <div className="h-full bg-blue-500 rounded-full transition-all" style={{ width: `${projectStats.avgProgress}%` }} />
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-5 pb-4">
+            <p className="text-xs text-muted-foreground mb-1">延期任务</p>
+            <p className={`text-2xl font-bold ${projectStats.overdueTask > 0 ? 'text-red-600' : 'text-gray-400'}`}>
+              {projectStats.overdueTask}
+            </p>
+            {projectStats.overdueTask > 0 && (
+              <p className="text-xs text-red-500 mt-0.5">需跟进</p>
+            )}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-5 pb-4">
+            <p className="text-xs text-muted-foreground mb-1">受阻任务</p>
+            <p className={`text-2xl font-bold ${projectStats.blockedTasks > 0 ? 'text-amber-600' : 'text-gray-400'}`}>
+              {projectStats.blockedTasks}
+            </p>
+            {projectStats.blockedTasks > 0 && (
+              <p className="text-xs text-amber-500 mt-0.5">需处理</p>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* 批量操作栏 */}
+      <div className="px-1 py-2.5 bg-gray-50 rounded-lg flex items-center justify-between">
+        <div className="flex items-center gap-4">
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              className="w-4 h-4 rounded border-gray-300"
+              checked={allSelected}
+              ref={el => { if (el) el.indeterminate = someSelected && !allSelected }}
+              onChange={toggleSelectAll}
+            />
+            <span className="text-sm text-gray-600">全选</span>
+          </label>
+          {selectedIds.size > 0 && (
+            <span className="text-sm text-gray-500">已选 {selectedIds.size} 项</span>
           )}
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleBatchComplete}
+            disabled={selectedIds.size === 0}
+            className="px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-200 rounded flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"/>
+            </svg>
+            批量完成
+          </button>
+          <button
+            onClick={handleBatchDelete}
+            disabled={selectedIds.size === 0}
+            className="px-3 py-1.5 text-sm text-red-500 hover:bg-red-50 rounded flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            <Trash2 className="w-4 h-4" />
+            批量删除
+          </button>
+        </div>
+      </div>
+
+      {/* WBS 任务树形结构 */}
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3 border-b">
+          <CardTitle className="text-base">WBS任务结构</CardTitle>
+          <div className="flex items-center gap-2">
+            {projectStats.criticalPathSummary && (
+              <p className="text-xs text-muted-foreground">
+                关键路径: {projectStats.criticalPathSummary}
+              </p>
+            )}
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-xs text-blue-600 h-7"
+              onClick={() => navigate(`/projects/${id}/wbs-templates`)}
+            >
+              <LayoutTemplate className="mr-1 h-3.5 w-3.5" />
+              从模板生成
+            </Button>
+          </div>
         </CardHeader>
-        <CardContent>
+        <CardContent className="p-0">
           {tasks.length === 0 ? (
             <div className="text-center py-12 text-muted-foreground">
               <Calendar className="h-12 w-12 mx-auto mb-4 opacity-50" />
@@ -462,116 +736,195 @@ export default function GanttView() {
               </Button>
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <div className="min-w-[800px]">
-                {/* 表头 */}
-                <div className="flex border-b pb-2 mb-2 font-medium text-sm">
-                  <div className="w-48 flex-shrink-0">任务名称</div>
-                  <div className="w-24 flex-shrink-0">状态</div>
-                  <div className="w-24 flex-shrink-0">优先级</div>
-                  <div className="w-24 flex-shrink-0">进度</div>
-                  <div className="flex-1">时间线</div>
-                </div>
+            <div className="divide-y">
+              {flatList.map(node => {
+                const task = node
+                const isOverdue = task.status !== 'completed' && task.end_date && new Date(task.end_date) < new Date()
+                const hasChildren = node.children.length > 0
+                const isCollapsed = collapsed.has(node.id)
+                const indentPx = node.depth * 24
 
-                {/* 任务列表 */}
-                {(paginatedTasks).map(task => {
-                  const onCriticalPath = isOnCriticalPath(task.id)
-                  const float = getTaskFloat(task.id)
-                  
-                  return (
+                // 状态配置
+                const statusConfig: Record<string, { label: string; cls: string }> = {
+                  completed: { label: '已完成', cls: 'bg-green-100 text-green-700' },
+                  in_progress: { label: '进行中', cls: 'bg-blue-100 text-blue-700' },
+                  blocked: { label: '受阻', cls: 'bg-amber-100 text-amber-700' },
+                  todo: { label: '待办', cls: 'bg-gray-100 text-gray-600' },
+                }
+                const statusInfo = statusConfig[task.status || 'todo'] || statusConfig.todo
+
+                // 进度条颜色
+                const progressColor = task.status === 'completed'
+                  ? 'bg-emerald-500'
+                  : isOverdue ? 'bg-red-500'
+                  : task.status === 'in_progress' ? 'bg-blue-500'
+                  : task.status === 'blocked' ? 'bg-amber-500'
+                  : 'bg-gray-300'
+
+                const fmtShort = (d?: string | null) => {
+                  if (!d) return null
+                  const dt = new Date(d)
+                  return `${String(dt.getMonth() + 1).padStart(2, '0')}/${String(dt.getDate()).padStart(2, '0')}`
+                }
+
+                return (
                   <div
                     key={task.id}
-                    className={`flex items-center border-b py-2 hover:bg-accent/50 ${onCriticalPath ? 'bg-red-50 border-l-4 border-l-red-500' : ''}`}
+                    className={`flex items-center px-4 py-2.5 group hover:bg-accent/30 transition-colors ${
+                      task.status === 'blocked'
+                        ? 'border-l-4 border-l-amber-400 bg-amber-50/50'
+                        : isOverdue
+                        ? 'border-l-4 border-l-red-400 bg-red-50/30'
+                        : ''
+                    }`}
                   >
-                    <div className="w-48 flex-shrink-0 flex items-center gap-2">
-                      {onCriticalPath && (
-                        <AlertCircle className="h-4 w-4 text-red-500 flex-shrink-0" title="关键路径任务" />
-                      )}
-                      <Button variant="ghost" size="sm" onClick={() => openEditDialog(task)} className={onCriticalPath ? "font-semibold text-red-700" : ""}>
-                        {task.title || task.name}
-                      </Button>
-                      {float > 0 && !onCriticalPath && (
-                        <span className="text-xs text-muted-foreground" title={`浮动时间: ${float}天`}>
-                          +{float}天
-                        </span>
+                    {/* 复选框 */}
+                    <div className="flex-shrink-0 w-6" style={{ marginLeft: `${indentPx}px` }}>
+                      <input
+                        type="checkbox"
+                        className="w-4 h-4 rounded border-gray-300"
+                        checked={selectedIds.has(task.id)}
+                        onChange={() => toggleSelect(task.id)}
+                      />
+                    </div>
+
+                    {/* 折叠/展开按钮 */}
+                    <div className="flex-shrink-0 w-5 mr-1">
+                      {hasChildren ? (
+                        <button
+                          onClick={() => toggleCollapse(node.id)}
+                          className="text-gray-400 hover:text-gray-600 transition-colors"
+                        >
+                          {isCollapsed
+                            ? <ChevronRight className="h-3.5 w-3.5" />
+                            : <ChevronDown className="h-3.5 w-3.5" />
+                          }
+                        </button>
+                      ) : (
+                        <span className="inline-block w-3.5" />
                       )}
                     </div>
-                    <div className="w-24 flex-shrink-0">
+
+                    {/* 旗帜图标：设置里程碑 */}
+                    <button
+                      title={task.is_milestone ? `${MILESTONE_LEVEL_CONFIG[task.milestone_level ?? 1]?.label}（点击修改）` : '设为里程碑'}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setMilestoneTargetTask(task)
+                        setMilestoneDialogOpen(true)
+                      }}
+                      className={`flex-shrink-0 p-0.5 rounded transition-colors hover:bg-accent mr-1.5 ${
+                        task.is_milestone
+                          ? MILESTONE_LEVEL_CONFIG[task.milestone_level ?? 1]?.color
+                          : 'text-gray-300 hover:text-gray-500'
+                      }`}
+                    >
+                      <Flag className="h-3.5 w-3.5" fill={task.is_milestone ? 'currentColor' : 'none'} />
+                    </button>
+
+                    {/* 任务名称区域 */}
+                    <div className="flex-1 min-w-0 flex items-center gap-1.5 mr-3">
+                      <button
+                        onClick={() => openEditDialog(task)}
+                        className={`text-sm font-medium truncate max-w-[200px] text-left hover:text-blue-600 transition-colors ${
+                          isOnCriticalPath(task.id) ? 'text-red-700'
+                          : task.status === 'blocked' ? 'text-amber-700'
+                          : isOverdue ? 'text-red-600'
+                          : task.status === 'completed' ? 'text-gray-400 line-through'
+                          : 'text-gray-800'
+                        }`}
+                        title={task.title || task.name}
+                      >
+                        {task.title || task.name}
+                      </button>
+                      {task.status === 'blocked' && (
+                        <span className="flex-shrink-0 px-1.5 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700 border border-amber-200">受阻</span>
+                      )}
+                      {isOverdue && task.status !== 'blocked' && (
+                        <span className="flex-shrink-0 px-1.5 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700 border border-red-200">逾期</span>
+                      )}
+                      {isOnCriticalPath(task.id) && (
+                        <span className="flex-shrink-0 px-1.5 py-0.5 rounded text-xs font-medium bg-red-50 text-red-600 border border-red-200">关键</span>
+                      )}
+                    </div>
+
+                    {/* 状态 */}
+                    <div className="flex-shrink-0 w-20">
                       <Select value={task.status || 'todo'} onValueChange={(val) => handleStatusChange(task.id, val)}>
-                        <SelectTrigger className="h-8">
-                          <SelectValue />
+                        <SelectTrigger className="h-7 border-0 bg-transparent p-0 shadow-none focus:ring-0 w-full">
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${statusInfo.cls}`}>
+                            {statusInfo.label}
+                          </span>
                         </SelectTrigger>
                         <SelectContent>
                           <SelectItem value="todo">待办</SelectItem>
                           <SelectItem value="in_progress">进行中</SelectItem>
                           <SelectItem value="completed">已完成</SelectItem>
-                          <SelectItem value="blocked">已阻塞</SelectItem>
+                          <SelectItem value="blocked">受阻</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
-                    <div className="w-24 flex-shrink-0">
-                      <Select value={task.priority || 'medium'} onValueChange={(val) => handlePriorityChange(task.id, val)}>
-                        <SelectTrigger className="h-8">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="low">低</SelectItem>
-                          <SelectItem value="medium">中</SelectItem>
-                          <SelectItem value="high">高</SelectItem>
-                          <SelectItem value="critical">紧急</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="w-24 flex-shrink-0">
-                      <div className="flex items-center gap-2">
-                        <div className="w-16 h-2 bg-gray-200 rounded-full overflow-hidden">
+
+                    {/* 进度 */}
+                    <div className="flex-shrink-0 w-32 px-3">
+                      <div className="flex items-center gap-1.5">
+                        <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
                           <div
-                            className="h-full bg-primary"
+                            className={`h-full rounded-full transition-all ${progressColor}`}
                             style={{ width: `${task.progress || 0}%` }}
                           />
                         </div>
-                        <span className="text-xs">{task.progress || 0}%</span>
+                        <span className="text-xs font-medium w-7 text-right tabular-nums text-gray-600">{task.progress || 0}%</span>
                       </div>
                     </div>
-                    <div className="flex-1 flex items-center gap-2">
-                      <span className="text-sm text-muted-foreground">
-                        {task.start_date ? formatDate(task.start_date) : '-'}
-                      </span>
-                      <span className="text-muted-foreground">→</span>
-                      <span className="text-sm text-muted-foreground">
-                        {task.end_date ? formatDate(task.end_date) : '-'}
-                      </span>
-                      {/* 关键任务切换按钮 */}
-                      <Button 
-                        variant={task.is_critical ? "default" : "outline"} 
-                        size="sm" 
-                        className={`h-7 px-2 ${task.is_critical ? 'bg-red-500 hover:bg-red-600' : ''}`}
-                        onClick={() => handleToggleCritical(task.id)}
-                        title={task.is_critical ? "取消关键任务" : "设为关键任务"}
+
+                    {/* 责任人 */}
+                    <div className="flex-shrink-0 w-20 text-xs text-gray-600 truncate" title={task.assignee_name || ''}>
+                      {task.assignee_name || <span className="text-muted-foreground/40">—</span>}
+                    </div>
+
+                    {/* 日期 */}
+                    <div className="flex-shrink-0 w-28 text-xs text-gray-500 tabular-nums">
+                      {fmtShort(task.start_date) && fmtShort(task.end_date)
+                        ? <span>{fmtShort(task.start_date)} ~ <span className={isOverdue ? 'text-red-600 font-medium' : ''}>{fmtShort(task.end_date)}</span></span>
+                        : fmtShort(task.start_date) || fmtShort(task.end_date)
+                        ? <span>{fmtShort(task.start_date) || fmtShort(task.end_date)}</span>
+                        : <span className="text-muted-foreground/40 italic">待定</span>
+                      }
+                    </div>
+
+                    {/* 操作按钮（hover显示） */}
+                    <div className="flex-shrink-0 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity ml-2">
+                      {/* 添加子任务 */}
+                      <button
+                        title="添加子任务"
+                        onClick={() => openEditDialog(undefined, task.id)}
+                        className="p-1.5 hover:bg-blue-50 rounded text-blue-400 hover:text-blue-600 transition-colors"
                       >
-                        {task.is_critical ? "关键" : "设为关键"}
-                      </Button>
-                      <Button variant="ghost" size="icon" className="ml-1 h-8 w-8 text-destructive" onClick={() => handleDeleteTask(task.id)}>
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                        <Plus className="h-3.5 w-3.5" />
+                      </button>
+                      {/* 编辑 */}
+                      <button
+                        title="编辑任务"
+                        onClick={() => openEditDialog(task)}
+                        className="p-1.5 hover:bg-gray-100 rounded text-gray-400 hover:text-gray-600 transition-colors"
+                      >
+                        <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                        </svg>
+                      </button>
+                      {/* 删除 */}
+                      <button
+                        title="删除任务"
+                        onClick={() => handleDeleteTask(task.id)}
+                        className="p-1.5 hover:bg-red-50 rounded text-gray-300 hover:text-red-500 transition-colors"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
                     </div>
                   </div>
-                  )
-                })}
-
-                {/* 分页控件 */}
-                {totalItems > pageSize && (
-                  <Pagination
-                    currentPage={currentPage}
-                    totalPages={totalPages}
-                    pageSize={pageSize}
-                    totalItems={totalItems}
-                    onPageChange={setPage}
-                    onPageSizeChange={setPageSize}
-                    pageSizeOptions={[10, 20, 50, 100]}
-                  />
-                )}
-              </div>
+                )
+              })}
             </div>
           )}
         </CardContent>
@@ -581,7 +934,14 @@ export default function GanttView() {
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>{editingTask ? '编辑任务' : '添加任务'}</DialogTitle>
+            <DialogTitle>
+              {editingTask ? '编辑任务' : newTaskParentId ? `添加子任务` : '新建任务'}
+            </DialogTitle>
+            {newTaskParentId && !editingTask && (
+              <p className="text-xs text-muted-foreground">
+                上级任务：{tasks.find(t => t.id === newTaskParentId)?.title || tasks.find(t => t.id === newTaskParentId)?.name || ''}
+              </p>
+            )}
           </DialogHeader>
           <div className="space-y-4 py-4">
             <div className="space-y-2">
@@ -673,6 +1033,30 @@ export default function GanttView() {
               </div>
             </div>
 
+            {/* 父任务选择（WBS结构） */}
+            <div className="space-y-2">
+              <Label>上级任务（可选）</Label>
+              <Select
+                value={formData.parent_id || '__none__'}
+                onValueChange={(val) => setFormData({ ...formData, parent_id: val === '__none__' ? null : val })}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="无（顶级任务）" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">无（顶级任务）</SelectItem>
+                  {tasks
+                    .filter(t => t.id !== editingTask?.id)
+                    .map(t => (
+                      <SelectItem key={t.id} value={t.id}>
+                        {t.title || t.name}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">选择上级任务，构建 WBS 层级结构</p>
+            </div>
+
             {/* 依赖关系选择 */}
             {tasks.length > 1 && (
               <div className="space-y-2">
@@ -710,6 +1094,85 @@ export default function GanttView() {
               <Save className="mr-2 h-4 w-4" />
               保存
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 版本冲突解决对话框 */}
+      <ConflictDialog
+        open={conflictOpen}
+        onOpenChange={setConflictOpen}
+        localVersion={conflictData?.localVersion as Task || {} as Task}
+        serverVersion={conflictData?.serverVersion as Task || {} as Task}
+        onKeepLocal={handleKeepLocal}
+        onKeepServer={handleKeepServer}
+        onMerge={handleMerge}
+        itemType="task"
+      />
+
+      {/* 里程碑层级设置弹窗 */}
+      <Dialog open={milestoneDialogOpen} onOpenChange={setMilestoneDialogOpen}>
+        <DialogContent className="sm:max-w-[380px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Flag className="h-4 w-4 text-amber-500" />
+              设置里程碑
+            </DialogTitle>
+          </DialogHeader>
+          <div className="py-3 space-y-3">
+            <p className="text-sm text-muted-foreground">
+              任务：<span className="font-medium text-foreground">{milestoneTargetTask?.title || milestoneTargetTask?.name}</span>
+            </p>
+            <div className="grid gap-2">
+              {/* 取消里程碑 */}
+              <button
+                onClick={() => {
+                  if (!milestoneTargetTask) return
+                  const updated = { ...milestoneTargetTask, is_milestone: false, milestone_level: undefined }
+                  taskDb.update(milestoneTargetTask.id, { is_milestone: false, milestone_level: undefined })
+                  updateTask(milestoneTargetTask.id, updated)
+                  setMilestoneDialogOpen(false)
+                  toast({ title: '已取消里程碑标记' })
+                }}
+                className={`flex items-center gap-3 p-3 rounded-lg border transition-colors hover:bg-accent ${!milestoneTargetTask?.is_milestone ? 'border-primary bg-primary/5' : 'border-border'}`}
+              >
+                <Flag className="h-4 w-4 text-gray-300" />
+                <div className="text-left">
+                  <div className="text-sm font-medium">普通任务</div>
+                  <div className="text-xs text-muted-foreground">取消里程碑标记</div>
+                </div>
+              </button>
+              {/* 三个层级选择 */}
+              {[1, 2, 3].map(level => {
+                const cfg = MILESTONE_LEVEL_CONFIG[level]
+                const isSelected = milestoneTargetTask?.is_milestone && milestoneTargetTask?.milestone_level === level
+                return (
+                  <button
+                    key={level}
+                    onClick={() => {
+                      if (!milestoneTargetTask) return
+                      const updated = { ...milestoneTargetTask, is_milestone: true, milestone_level: level }
+                      taskDb.update(milestoneTargetTask.id, { is_milestone: true, milestone_level: level })
+                      updateTask(milestoneTargetTask.id, updated)
+                      setMilestoneDialogOpen(false)
+                      toast({ title: `已设为${cfg.label}` })
+                    }}
+                    className={`flex items-center gap-3 p-3 rounded-lg border transition-colors hover:bg-accent ${isSelected ? `border-current ${cfg.bgColor} ${cfg.color}` : 'border-border'}`}
+                  >
+                    <Flag className={`h-4 w-4 ${cfg.color}`} fill="currentColor" />
+                    <div className="text-left">
+                      <div className={`text-sm font-medium ${cfg.color}`}>{cfg.label}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {level === 1 ? '关键节点，影响整体工期' : level === 2 ? '重要节点，分项关键控制点' : '一般节点，过程监控点'}
+                      </div>
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setMilestoneDialogOpen(false)}>取消</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

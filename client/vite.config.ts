@@ -4,9 +4,13 @@ import path from "path"
 
 export default defineConfig({
   plugins: [react()],
+  // 部署到根目录
+  base: './',
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      // 绕过 pnpm 符号链接问题，直接指定 chart.js 的真实路径
+      'chart.js': path.resolve(__dirname, './node_modules/.pnpm/chart.js@4.5.1/node_modules/chart.js/dist/chart.js'),
     },
   },
   build: {
@@ -26,6 +30,7 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    host: "127.0.0.1",
     proxy: {
       "/api": {
         target: "http://localhost:3001",
@@ -35,6 +40,6 @@ export default defineConfig({
   },
   // 依赖优化
   optimizeDeps: {
-    include: ['react', 'react-dom', 'react-router-dom'],
+    include: ['react', 'react-dom', 'react-router-dom', 'chart.js'],
   },
 })

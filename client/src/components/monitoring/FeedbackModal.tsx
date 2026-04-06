@@ -42,7 +42,12 @@ export default function FeedbackModal({ isOpen, onClose, onSubmit }: FeedbackMod
     }
 
     // 保存到本地存储
-    const existingFeedback = JSON.parse(localStorage.getItem('user_feedback') || '[]')
+    let existingFeedback: FeedbackData[] = []
+    try {
+      existingFeedback = JSON.parse(localStorage.getItem('user_feedback') || '[]')
+    } catch {
+      existingFeedback = []
+    }
     existingFeedback.push(feedback)
     localStorage.setItem('user_feedback', JSON.stringify(existingFeedback))
 
@@ -70,7 +75,7 @@ export default function FeedbackModal({ isOpen, onClose, onSubmit }: FeedbackMod
       />
       
       {/* 模态框 */}
-      <div className="relative bg-background border rounded-lg shadow-lg w-full max-w-md mx-4">
+      <div className="relative bg-background border rounded-xl shadow-lg w-full max-w-md mx-4">
         {/* 头部 */}
         <div className="flex items-center justify-between px-4 py-3 border-b">
           <div className="flex items-center gap-2">

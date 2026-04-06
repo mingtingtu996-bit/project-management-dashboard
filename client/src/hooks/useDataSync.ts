@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useConflictDetection, ConflictItem, ResolutionStrategy, smartMerge } from './useConflictDetection'
+import { useConflictDetection, ConflictItem, ResolutionStrategy, smartMerge, type VersionedEntity } from './useConflictDetection'
 import { storageService } from '@/lib/storageService'
 
 /**
@@ -75,7 +75,7 @@ export function useDataSync(config: UseDataSyncConfig = {}) {
           // 执行同步
           await storageService.processSyncItem(item.id)
         } catch (error) {
-          console.error('Sync failed for item:', item.id, error)
+          if (import.meta.env.DEV) console.error('Sync failed for item:', item.id, error)
         }
       }
 
@@ -86,7 +86,7 @@ export function useDataSync(config: UseDataSyncConfig = {}) {
         pendingChanges: 0
       }))
     } catch (error) {
-      console.error('Sync error:', error)
+      if (import.meta.env.DEV) console.error('Sync error:', error)
       setState(s => ({ ...s, isSyncing: false }))
     }
   }, [state.isOnline, state.isSyncing])
@@ -103,7 +103,7 @@ export function useDataSync(config: UseDataSyncConfig = {}) {
   }, [autoSyncInterval, state.isOnline, syncToServer])
 
   // 检测冲突
-  const checkForConflicts = useCallback(async <T>(
+  const checkForConflicts = useCallback(async <T extends VersionedEntity>(
     entityType: ConflictItem['entityType'],
     localData: T,
     serverData: T
@@ -126,10 +126,10 @@ export function useDataSync(config: UseDataSyncConfig = {}) {
   const handleResolveConflict = useCallback(async (
     entityId: string,
     strategy: ResolutionStrategy,
-    mergedData?: any
+    mergedData?: unknown
   ) => {
     // 记录解决策略
-    console.log(`Resolving conflict for ${entityId} with strategy: ${strategy}`)
+    if (import.meta.env.DEV) console.log(`Resolving conflict for ${entityId} with strategy: ${strategy}`)
 
     if (strategy === 'merge' && mergedData) {
       // 应用合并后的数据

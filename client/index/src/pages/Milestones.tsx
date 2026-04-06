@@ -41,15 +41,6 @@ export default function Milestones() {
     }
   }, [id])
 
-  // 按日期排序的里程碑
-  const sortedMilestones = useMemo(() => {
-    return [...milestones].sort((a, b) => {
-      if (!a.target_date) return 1
-      if (!b.target_date) return -1
-      return new Date(a.target_date).getTime() - new Date(b.target_date).getTime()
-    })
-  }, [milestones])
-
   // 计算里程碑进度
   const getMilestoneProgress = (milestone: Milestone): number => {
     const milestoneTasks = (tasks as any[]).filter(t => 
@@ -74,6 +65,19 @@ export default function Milestones() {
     if (daysUntil <= 7) return 'soon'
     return 'upcoming'
   }
+
+  // 逾期优先排序：overdue 排最前，再按目标日期升序
+  const sortedMilestones = useMemo(() => {
+    return [...milestones].sort((a, b) => {
+      const aOverdue = getMilestoneStatus(a) === 'overdue' ? 0 : 1
+      const bOverdue = getMilestoneStatus(b) === 'overdue' ? 0 : 1
+      if (aOverdue !== bOverdue) return aOverdue - bOverdue
+      if (!a.target_date) return 1
+      if (!b.target_date) return -1
+      return new Date(a.target_date).getTime() - new Date(b.target_date).getTime()
+    })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [milestones])
 
   const loadMilestones = () => {
     try {

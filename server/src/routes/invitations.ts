@@ -4,12 +4,14 @@ import { Router } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import { SupabaseService } from '../services/supabaseService.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
+import { authenticate } from '../middleware/auth.js'
 import { validate, validateIdParam, invitationCreateSchema } from '../middleware/validation.js'
 import { logger } from '../middleware/logger.js'
 import type { ApiResponse } from '../types/index.js'
 import type { Invitation } from '../types/db.js'
 
 const router = Router()
+router.use(authenticate)
 const supabase = new SupabaseService()
 
 // 生成邀请码

@@ -2,7 +2,8 @@
 // 第三阶段：安全与测试 - 权限体系完善
 
 import { useMemo } from 'react'
-import { useStore } from '@/hooks/useStore'
+import { useCurrentProject, useCurrentUser } from '@/hooks/useStore'
+
 import {
   hasPermission,
   hasAnyPermission,
@@ -17,7 +18,9 @@ interface UsePermissionsOptions {
 }
 
 export function usePermissions(options: UsePermissionsOptions = {}) {
-  const { currentUser, currentProject } = useStore()
+  const currentUser = useCurrentUser()
+  const currentProject = useCurrentProject()
+
 
   // 获取用户在当前项目的权限级别
   const permissionLevel = useMemo((): PermissionLevel => {

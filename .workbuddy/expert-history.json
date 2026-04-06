@@ -1,0 +1,17 @@
+{
+  "version": 2,
+  "sessions": {
+    "2e2d08bcc315430d97e75b7e4f842fed": [
+      {
+        "expertId": "AiEngineer",
+        "name": "Amy",
+        "profession": "AI工程师",
+        "avatarUrl": "https://acc-1258344699.cos.accelerate.myqcloud.com/workbuddy/experts/avatars/02-Engineering/AiEngineer/AiEngineer.png",
+        "promptUrl": "https://acc-1258344699.cos.accelerate.myqcloud.com/workbuddy/experts/experts/02-Engineering/AiEngineer/AiEngineer_zh.md",
+        "usedAt": 1775218348663,
+        "industryId": "02-Engineering"
+      }
+    ]
+  },
+  "lastUpdated": 1775219078206
+}

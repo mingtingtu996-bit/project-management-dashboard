@@ -1,9 +1,18 @@
 import { useState, useCallback } from 'react'
 
 /**
+ * 带版本号的实体基础接口
+ */
+export interface VersionedEntity {
+  id?: string
+  version?: number
+  [key: string]: unknown
+}
+
+/**
  * 冲突类型定义
  */
-export interface ConflictItem<T = any> {
+export interface ConflictItem<T = VersionedEntity> {
   entityType: 'project' | 'task' | 'risk' | 'milestone' | 'member' | 'invitation'
   entityId: string
   localVersion: number
@@ -11,8 +20,8 @@ export interface ConflictItem<T = any> {
   localData: T
   serverData: T
   field: string
-  localValue: any
-  serverValue: any
+  localValue: unknown
+  serverValue: unknown
 }
 
 /**
@@ -26,9 +35,9 @@ export type ResolutionStrategy = 'keepLocal' | 'keepServer' | 'merge' | 'manual'
 export interface UseConflictDetectionReturn {
   conflicts: ConflictItem[]
   hasConflicts: boolean
-  resolveConflict: (entityId: string, strategy: ResolutionStrategy, mergedData?: any) => void
+  resolveConflict: (entityId: string, strategy: ResolutionStrategy, mergedData?: unknown) => void
   clearConflicts: () => void
-  detectConflicts: <T>(entityType: ConflictItem['entityType'], localData: T, serverData: T) => ConflictItem[]
+  detectConflicts: <T extends VersionedEntity>(entityType: ConflictItem['entityType'], localData: T, serverData: T) => ConflictItem[]
 }
 
 /**
@@ -41,7 +50,7 @@ export function useConflictDetection(): UseConflictDetectionReturn {
   /**
    * 检测两个版本之间的冲突
    */
-  const detectConflicts = useCallback(<T>(
+  const detectConflicts = useCallback(<T extends VersionedEntity>(
     entityType: ConflictItem['entityType'],
     localData: T,
     serverData: T
@@ -49,8 +58,8 @@ export function useConflictDetection(): UseConflictDetectionReturn {
     if (!localData || !serverData) return []
 
     const detectedConflicts: ConflictItem[] = []
-    const localVersion = (localData as any).version || 1
-    const serverVersion = (serverData as any).version || 1
+    const localVersion = (localData as VersionedEntity).version ?? 1
+    const serverVersion = (serverData as VersionedEntity).version ?? 1
 
     // 版本相同，无冲突
     if (localVersion === serverVersion) return []
@@ -67,14 +76,14 @@ export function useConflictDetection(): UseConflictDetectionReturn {
         continue
       }
 
-      const localValue = (localData as any)[key]
-      const serverValue = (serverData as any)[key]
+      const localValue = (localData as VersionedEntity)[key]
+      const serverValue = (serverData as VersionedEntity)[key]
 
       // 检测值差异
       if (localValue !== serverValue) {
         detectedConflicts.push({
           entityType,
-          entityId: (localData as any).id || (serverData as any).id,
+          entityId: ((localData as VersionedEntity).id || (serverData as VersionedEntity).id) as string,
           localVersion,
           serverVersion,
           localData,
@@ -95,7 +104,7 @@ export function useConflictDetection(): UseConflictDetectionReturn {
   const resolveConflict = useCallback((
     entityId: string,
     strategy: ResolutionStrategy,
-    mergedData?: any
+    mergedData?: unknown
   ) => {
     setConflicts(prev => {
       const remaining = prev.filter(c => c.entityId !== entityId)
@@ -103,11 +112,11 @@ export function useConflictDetection(): UseConflictDetectionReturn {
       // 根据策略处理冲突数据
       if (strategy === 'keepLocal' || strategy === 'keepServer') {
         // 数据已由调用方处理
-        console.log(`Conflict resolved for ${entityId}: ${strategy}`)
+        if (import.meta.env.DEV) console.log(`Conflict resolved for ${entityId}: ${strategy}`)
       } else if (strategy === 'merge' && mergedData) {
-        console.log(`Conflict merged for ${entityId}:`, mergedData)
+        if (import.meta.env.DEV) console.log(`Conflict merged for ${entityId}:`, mergedData)
       } else if (strategy === 'manual') {
-        console.log(`Manual resolution needed for ${entityId}`)
+        if (import.meta.env.DEV) console.log(`Manual resolution needed for ${entityId}`)
       }
       
       return remaining
@@ -135,8 +144,8 @@ export function useConflictDetection(): UseConflictDetectionReturn {
  * 自动合并两个版本的数据
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function smartMerge(localData: any, serverData: any): any {
-  const result: any = { ...serverData } // 以服务器数据为基础
+export function smartMerge(localData: VersionedEntity, serverData: VersionedEntity): VersionedEntity {
+  const result: VersionedEntity = { ...serverData } // 以服务器数据为基础
 
   // 时间字段：取最新
   const timeFields = ['created_at', 'updated_at', 'start_date', 'end_date', 'due_date']
@@ -194,7 +203,7 @@ export function smartMerge(localData: any, serverData: any): any {
 /**
  * 计算冲突字段的差异描述
  */
-export function getFieldDifference(field: string, localValue: any, serverValue: any): string {
+export function getFieldDifference(field: string, localValue: unknown, serverValue: unknown): string {
   const fieldLabels: Record<string, string> = {
     name: '名称',
     title: '标题',

@@ -3,6 +3,7 @@
 
 import { ReactNode } from 'react'
 import { PermissionAction, hasPermission, PermissionLevel } from '@/lib/permissions'
+import { usePermissions } from '@/hooks/usePermissions'
 
 interface PermissionGuardProps {
   children: ReactNode
@@ -26,13 +27,12 @@ export function PermissionGuard({
   fallback = null,
   requireAll = false,
 }: PermissionGuardProps) {
-  // 从上下文或 props 获取当前用户权限
-  // 这里简化处理，实际应该从 context 获取
-  const currentRole: PermissionLevel = 'admin' // TODO: 从 usePermissions 获取
+  // 使用 usePermissions hook 获取当前用户权限
+  const { permissionLevel } = usePermissions()
 
   // 检查单个权限
   if (typeof action === 'string') {
-    if (hasPermission(currentRole, action)) {
+    if (hasPermission(permissionLevel, action)) {
       return <>{children}</>
     }
     return <>{fallback}</>
@@ -40,8 +40,8 @@ export function PermissionGuard({
 
   // 检查多个权限
   if (Array.isArray(action)) {
-    const hasAny = action.some(a => hasPermission(currentRole, a))
-    const hasAll = action.every(a => hasPermission(currentRole, a))
+    const hasAny = action.some(a => hasPermission(permissionLevel, a))
+    const hasAll = action.every(a => hasPermission(permissionLevel, a))
 
     if (requireAll) {
       return hasAll ? <>{children}</> : <>{fallback}</>
@@ -56,9 +56,10 @@ export function PermissionGuard({
  * 角色守卫组件 - 根据角色决定是否显示子元素
  */
 export function RoleGuard({ children, roles, fallback = null }: RoleGuardProps) {
-  const currentRole: PermissionLevel = 'admin' // TODO: 从 context 获取
+  // 使用 usePermissions hook 获取当前用户权限
+  const { permissionLevel } = usePermissions()
 
-  if (roles.includes(currentRole)) {
+  if (roles.includes(permissionLevel)) {
     return <>{children}</>
   }
 

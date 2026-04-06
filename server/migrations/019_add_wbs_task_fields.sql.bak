@@ -1,0 +1,41 @@
+-- Migration 019: Add WBS and task extended fields to tasks table
+-- Date: 2026-03-29
+-- Purpose: 补全前端 GanttView 缺4 所需字段（wbs_code/wbs_level/sort_order/specialty_type/reference_duration/first_progress_at）
+--          以及对齐 mysqlService.ts 中已有但数据库缺失的字段（parent_id/is_critical/milestone_level/milestone_order）
+
+-- 1. WBS 编码字段
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS wbs_code VARCHAR(100);
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS wbs_level INTEGER DEFAULT 0;
+
+-- 2. 同层排序（替代仅靠 created_at 排序）
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT 0;
+
+-- 3. 专项工程分类（#12 专项筛选）
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS specialty_type VARCHAR(50);
+
+-- 4. 工期相关字段（#7 工期对比）
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS reference_duration INTEGER;   -- 计划/参考工期（天）
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS ai_duration INTEGER;           -- AI推荐工期（天）
+
+-- 5. 首次填报时间（#11 首次填报）
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS first_progress_at TIMESTAMPTZ;
+
+-- 6. parent_id（WBS层级树，初始迁移未添加）
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS parent_id UUID REFERENCES tasks(id) ON DELETE SET NULL;
+
+-- 7. 关键路径手动标记
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS is_critical BOOLEAN DEFAULT FALSE;
+
+-- 8. 里程碑层级和排序（前期迁移014已加 milestone_level/milestone_order，此处幂等补充）
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS milestone_level INTEGER CHECK (milestone_level IN (1, 2, 3));
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS milestone_order INTEGER DEFAULT 0;
+
+-- 9. 延期原因
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS delay_reason TEXT;
+
+-- 创建索引
+CREATE INDEX IF NOT EXISTS idx_tasks_parent_id ON tasks(parent_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_sort_order ON tasks(sort_order);
+CREATE INDEX IF NOT EXISTS idx_tasks_specialty_type ON tasks(specialty_type);
+CREATE INDEX IF NOT EXISTS idx_tasks_wbs_code ON tasks(wbs_code);
+CREATE INDEX IF NOT EXISTS idx_tasks_is_critical ON tasks(is_critical) WHERE is_critical = TRUE;

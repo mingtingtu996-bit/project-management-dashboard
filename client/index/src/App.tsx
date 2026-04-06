@@ -1,5 +1,5 @@
 import { useState, useEffect, lazy, Suspense } from 'react'
-import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
+import { HashRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { useStore } from '@/hooks/useStore'
 import { generateDeviceId } from '@/lib/utils'
 import { Toaster } from '@/components/ui/toaster'
@@ -123,8 +123,8 @@ function AppContent() {
 // 包装 AppContent 以使用 useLocation
 export default function App() {
   return (
-    <BrowserRouter>
+    <HashRouter>
       <AppContent />
-    </BrowserRouter>
+    </HashRouter>
   )
 }

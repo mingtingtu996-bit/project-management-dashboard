@@ -1,518 +1,1022 @@
-import { useEffect, useState, useMemo } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
-import { useStore } from '@/hooks/useStore'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
-import { TaskListSkeleton } from '@/components/ui/page-skeleton'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import { toast } from '@/hooks/use-toast'
-import { ArrowLeft, Plus, AlertTriangle, Shield, ShieldAlert, ShieldCheck, Trash2, Bell, RefreshCw } from 'lucide-react'
-import { riskDb, generateId, taskDb } from '@/lib/localDb'
-import { analyzeRisks, getRiskStatistics, generateRiskReport, type RiskAlert } from '@/lib/riskAlert'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import type { ReactNode } from 'react'
+import { useNavigate, useParams } from 'react-router-dom'
 
-// Risk类型（本地版本）
-interface Risk {
+import { EmptyState } from '@/components/EmptyState'
+import RiskTrendChart from '@/components/RiskTrendChart'
+import { PageHeader } from '@/components/PageHeader'
+import { ReadOnlyGuard } from '@/components/ReadOnlyGuard'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { useStore } from '@/hooks/useStore'
+import { toast } from '@/hooks/use-toast'
+import { apiGet, apiPost, apiPut } from '@/lib/apiClient'
+import { isActiveRisk } from '@/lib/taskBusinessStatus'
+import type { Risk, TaskObstacle } from '@/lib/supabase'
+import {
+  AlertTriangle,
+  ArrowLeft,
+  BarChart3,
+  Bell,
+  ChevronDown,
+  ChevronUp,
+  RefreshCw,
+  ShieldAlert,
+  XCircle,
+  type LucideIcon,
+} from 'lucide-react'
+
+type WarningItem = {
   id: string
-  project_id: string
+  task_id?: string
+  warning_type: string
+  warning_level: 'info' | 'warning' | 'critical'
+  title: string
+  description: string
+  is_acknowledged?: boolean
+  created_at?: string
+}
+
+type RiskItem = Risk & { version?: number }
+type ProblemItem = TaskObstacle & { version?: number; is_resolved?: boolean | number | null }
+
+const WARNING_TYPE_LABEL: Record<string, string> = {
+  condition_expired: '开工条件预警',
+  obstacle_timeout: '阻碍预警',
+  delay_exceeded: '延期预警',
+  acceptance_expired: '验收预警',
+}
+
+const WARNING_LEVEL_LABEL: Record<'info' | 'warning' | 'critical', string> = {
+  info: '提示',
+  warning: '关注',
+  critical: '严重',
+}
+
+const WARNING_LEVEL_STYLE: Record<'info' | 'warning' | 'critical', string> = {
+  info: 'border-blue-200 bg-blue-50 text-blue-700',
+  warning: 'border-amber-200 bg-amber-50 text-amber-700',
+  critical: 'border-red-200 bg-red-50 text-red-700',
+}
+
+const RISK_LEVEL_STYLE: Record<string, string> = {
+  low: 'border-blue-200 bg-blue-50 text-blue-700',
+  medium: 'border-amber-200 bg-amber-50 text-amber-700',
+  high: 'border-orange-200 bg-orange-50 text-orange-700',
+  critical: 'border-red-200 bg-red-50 text-red-700',
+}
+
+const RISK_LEVEL_LABEL: Record<string, string> = {
+  low: '低',
+  medium: '中',
+  high: '高',
+  critical: '严重',
+}
+
+function formatDateTime(value?: string | null) {
+  if (!value) return '--'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '--'
+  return date.toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+function getWarningCategory(warning: WarningItem) {
+  return WARNING_TYPE_LABEL[warning.warning_type] || '系统预警'
+}
+
+function normalizeWarningText(value: string) {
+  return value
+    .replace(/已逾期|今天到期|请立即处理|需立即处理|建议尽快调整计划或采取措施/g, '')
+    .replace(/\d+天后到期/g, '')
+    .replace(/\s+/g, '')
+    .trim()
+}
+
+function getWarningSignature(warning: WarningItem) {
+  return [warning.warning_type, warning.task_id || '', normalizeWarningText(String(warning.description || ''))].join('|')
+}
+
+function readConfirmedWarningSignatures(projectId?: string) {
+  if (!projectId || typeof window === 'undefined') return []
+
+  try {
+    const raw = window.localStorage.getItem(`risk-management:confirmed-warnings:${projectId}`)
+    const parsed = raw ? JSON.parse(raw) : []
+    return Array.isArray(parsed) ? parsed.filter((value) => typeof value === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+function writeConfirmedWarningSignatures(projectId: string, signatures: string[]) {
+  if (typeof window === 'undefined') return
+
+  try {
+    window.localStorage.setItem(
+      `risk-management:confirmed-warnings:${projectId}`,
+      JSON.stringify(Array.from(new Set(signatures))),
+    )
+  } catch {
+    // Ignore storage failures in private mode or locked-down browsers.
+  }
+}
+
+function getRiskSourceBadge(risk: RiskItem) {
+  const riskAny = risk as Record<string, unknown>
+  const isAuto = riskAny.source === 'auto' || riskAny.is_auto === true
+  if (isAuto) {
+    return (
+      <Badge className="border-blue-200 bg-blue-50 text-blue-700">自动检测</Badge>
+    )
+  }
+  if (riskAny.created_by) {
+    return (
+      <Badge className="border-green-200 bg-green-50 text-green-700">手动补录</Badge>
+    )
+  }
+  return (
+    <Badge className="border-blue-200 bg-blue-50 text-blue-700">自动来源</Badge>
+  )
+}
+
+function getProblemTitle(problem: ProblemItem) {
+  return String(problem.description || problem.title || '未命名问题')
+}
+
+function getProblemStatus(problem: ProblemItem) {
+  const status = String(problem.status || '').trim()
+  if (problem.is_resolved === true || problem.is_resolved === 1) return '已解决'
+  if (status === '已解决' || status === 'resolved' || status === 'closed') return '已解决'
+  if (status === '处理中' || status === 'processing' || status === 'resolving') return '处理中'
+  return '待处理'
+}
+
+function isProblemActive(problem: ProblemItem) {
+  return getProblemStatus(problem) !== '已解决'
+}
+
+type RiskTab = 'overview' | 'warnings' | 'risks' | 'problems'
+
+function MetricCard({
+  label,
+  value,
+  hint,
+  icon: Icon,
+  iconClass,
+  badgeClass,
+}: {
+  label: string
+  value: string | number
+  hint: string
+  icon: LucideIcon
+  iconClass: string
+  badgeClass: string
+}) {
+  return (
+    <Card className="overflow-hidden border-slate-200 shadow-sm">
+      <CardContent className="flex items-start justify-between gap-4 p-5">
+        <div className="space-y-2">
+          <p className="text-sm font-medium text-slate-500">{label}</p>
+          <div className="text-3xl font-semibold text-slate-900">{value}</div>
+          <p className="text-xs text-slate-400">{hint}</p>
+        </div>
+        <div className={`rounded-2xl p-3 ${badgeClass}`}>
+          <Icon className={`h-5 w-5 ${iconClass}`} />
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+function OverviewCard({
+  title,
+  count,
+  hint,
+  icon: Icon,
+  accentClass,
+  actionLabel,
+  onAction,
+  children,
+}: {
+  title: string
+  count: number
+  hint: string
+  icon: LucideIcon
+  accentClass: string
+  actionLabel: string
+  onAction: () => void
+  children: ReactNode
+}) {
+  return (
+    <Card className={`overflow-hidden border-slate-200 ${accentClass}`}>
+      <CardHeader className="pb-3">
+        <div className="flex items-start justify-between gap-3">
+          <div className="space-y-1">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Icon className="h-4 w-4" />
+              {title}
+            </CardTitle>
+            <p className="text-sm text-slate-500">{hint}</p>
+          </div>
+          <div className="rounded-2xl bg-white/80 px-3 py-2 text-right shadow-sm">
+            <div className="text-2xl font-semibold text-slate-900">{count}</div>
+            <div className="text-xs text-slate-500">条</div>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4 pt-0">
+        {children}
+        <Button variant="outline" size="sm" onClick={onAction}>
+          {actionLabel}
+        </Button>
+      </CardContent>
+    </Card>
+  )
+}
+
+function CategoryItem({
+  badge,
+  title,
+  description,
+  footer,
+  action,
+}: {
+  badge: ReactNode
   title: string
   description?: string
-  level?: string
-  status?: string
-  probability?: number
-  impact?: number
-  mitigation?: string
-  created_at: string
-  updated_at: string
+  footer?: string
+  action: ReactNode
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-200 p-4 shadow-sm">
+      <div className="flex flex-wrap gap-2">{badge}</div>
+      <p className="mt-3 font-medium text-slate-900">{title}</p>
+      {description ? <p className="mt-1 text-sm text-slate-500">{description}</p> : null}
+      {footer ? <p className="mt-2 text-xs text-slate-400">{footer}</p> : null}
+      <div className="mt-3">{action}</div>
+    </div>
+  )
 }
 
-const riskLevelColors: Record<string, string> = {
-  low: 'bg-green-100 text-green-800',
-  medium: 'bg-yellow-100 text-yellow-800',
-  high: 'bg-orange-100 text-orange-800',
-  critical: 'bg-red-100 text-red-800',
-}
-
-const riskStatusColors: Record<string, string> = {
-  identified: 'bg-blue-100 text-blue-800',
-  monitoring: 'bg-purple-100 text-purple-800',
-  mitigated: 'bg-green-100 text-green-800',
-  occurred: 'bg-red-100 text-red-800',
+function FocusRow({
+  title,
+  tone,
+  item,
+  emptyText,
+  onJump,
+}: {
+  title: string
+  tone: string
+  item: { title: string; meta: string; badge: string } | null
+  emptyText: string
+  onJump: () => void
+}) {
+  return (
+    <div className={`rounded-2xl border ${tone} p-4`}>
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-sm font-medium text-slate-900">{title}</p>
+          <p className="text-xs text-slate-500">优先查看当前最需要处理的一条。</p>
+        </div>
+        <Button variant="ghost" size="sm" onClick={onJump}>
+          查看
+        </Button>
+      </div>
+      {item ? (
+        <div className="mt-3 space-y-1.5">
+          <Badge variant="outline" className="w-fit">
+            {item.badge}
+          </Badge>
+          <p className="font-medium text-slate-900">{item.title}</p>
+          <p className="text-xs text-slate-500">{item.meta}</p>
+        </div>
+      ) : (
+        <p className="mt-3 text-sm text-slate-500">{emptyText}</p>
+      )}
+    </div>
+  )
 }
 
 export default function RiskManagement() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const { risks, setRisks, addRisk, updateRisk, deleteRisk, tasks, setTasks } = useStore()
-  const [loading, setLoading] = useState(true)
-  const [dialogOpen, setDialogOpen] = useState(false)
-  const [editingRisk, setEditingRisk] = useState<Risk | null>(null)
-  const [autoAlerts, setAutoAlerts] = useState<RiskAlert[]>([])
 
-  // 自动风险检测
-  useEffect(() => {
-    if (id && tasks.length > 0) {
-      const criticalTaskIds: string[] = [] // 可从CPM计算获取
-      const alerts = analyzeRisks(tasks, criticalTaskIds)
-      setAutoAlerts(alerts)
-    }
-  }, [id, tasks])
+  const currentProject = useStore((state) => state.currentProject)
 
-  // 风险统计
-  const riskStats = useMemo(() => {
-    return getRiskStatistics(autoAlerts)
-  }, [autoAlerts])
+  const [loading, setLoading] = useState(false)
+  const [warnings, setWarnings] = useState<WarningItem[]>([])
+  const [risks, setRisks] = useState<RiskItem[]>([])
+  const [problems, setProblems] = useState<ProblemItem[]>([])
+  const [search, setSearch] = useState('')
+  const [confirmedWarningTick, setConfirmedWarningTick] = useState(0)
+  const [activeTab, setActiveTab] = useState<RiskTab>('overview')
+  const [trendExpanded, setTrendExpanded] = useState(false)
 
-  // 手动触发风险检测
-  const runRiskAnalysis = () => {
-    if (tasks.length > 0) {
-      const alerts = analyzeRisks(tasks, [])
-      setAutoAlerts(alerts)
-      toast({ title: `风险检测完成，发现${alerts.length}项风险` })
-    } else {
-      toast({ title: "请先添加任务", variant: "destructive" })
-    }
-  }
-  const [formData, setFormData] = useState({
-    title: '',
-    description: '',
-    level: 'medium',
-    status: 'identified',
-    probability: 50,
-    impact: 50,
-    mitigation: '',
-  })
+  const confirmedWarningSignatures = useMemo(
+    () => readConfirmedWarningSignatures(id),
+    [id, confirmedWarningTick],
+  )
+  const confirmedWarningSet = useMemo(
+    () => new Set(confirmedWarningSignatures),
+    [confirmedWarningSignatures],
+  )
 
-  useEffect(() => {
-    if (id) {
-      loadRisks()
-      // 加载任务数据用于风险分析
-      const taskData = taskDb.getByProject(id)
-      setTasks(taskData)
-    }
-  }, [id])
-
-  const loadRisks = () => {
+  const refresh = useCallback(async () => {
+    if (!id) return
+    setLoading(true)
     try {
-      const data = riskDb.getByProject(id!)
-      setRisks(data)
+      const [warningList, riskList, obstacleList] = await Promise.all([
+        apiGet<WarningItem[]>(`/api/warnings?projectId=${encodeURIComponent(id)}`),
+        apiGet<RiskItem[]>(`/api/risks?projectId=${encodeURIComponent(id)}`),
+        apiGet<ProblemItem[]>(`/api/task-obstacles?projectId=${encodeURIComponent(id)}`),
+      ])
+
+      setWarnings(Array.isArray(warningList) ? warningList : [])
+      setRisks(Array.isArray(riskList) ? riskList : [])
+      setProblems(Array.isArray(obstacleList) ? obstacleList : [])
     } catch (error) {
-      console.error('加载风险失败:', error)
+      console.error('Failed to load risk management data:', error)
+      toast({
+        title: '加载失败',
+        description: '请稍后重试。',
+        variant: 'destructive',
+      })
     } finally {
       setLoading(false)
     }
-  }
+  }, [id])
 
-  const handleSaveRisk = () => {
-    if (!formData.title.trim() || !id) {
-      toast({ title: "请输入风险名称", variant: "destructive" })
+  useEffect(() => {
+    void refresh()
+  }, [refresh])
+
+  const keyword = search.trim().toLowerCase()
+
+  const filteredWarnings = useMemo(
+    () =>
+      warnings.filter((item) => {
+        if (item.is_acknowledged) return false
+        if (item.warning_type === 'obstacle_timeout') return false
+        if (confirmedWarningSet.has(getWarningSignature(item))) return false
+        if (!keyword) return true
+        return [item.title, item.description, getWarningCategory(item), item.warning_level]
+          .map((value) => String(value || '').toLowerCase())
+          .some((value) => value.includes(keyword))
+      }),
+    [confirmedWarningSet, keyword, warnings],
+  )
+
+  const filteredRisks = useMemo(
+    () =>
+      risks.filter((item) => {
+        if (!keyword) return true
+        return [item.title, item.description, item.level, item.status, item.category]
+          .map((value) => String(value || '').toLowerCase())
+          .some((value) => value.includes(keyword))
+      }),
+    [keyword, risks],
+  )
+
+  const filteredProblems = useMemo(
+    () =>
+      problems.filter((item) => {
+        if (!keyword) return true
+        return [getProblemTitle(item), item.status, item.severity, item.obstacle_type]
+          .map((value) => String(value || '').toLowerCase())
+          .some((value) => value.includes(keyword))
+      }),
+    [keyword, problems],
+  )
+
+  const confirmWarning = async (warning: WarningItem) => {
+    const duplicateRisk = risks.some(
+      (risk) => String(risk.title || '').trim() === String(warning.title || '').trim(),
+    )
+    if (duplicateRisk) {
+      toast({
+        title: '已在风险清单中',
+        description: '这条预警对应的风险已存在。',
+      })
       return
     }
 
     try {
-      const riskData = {
-        ...formData,
+      const created = await apiPost<RiskItem>('/api/risks', {
         project_id: id,
-        updated_at: new Date().toISOString(),
+        title: warning.title,
+        description: warning.description,
+        level:
+          warning.warning_level === 'critical'
+            ? 'critical'
+            : warning.warning_level === 'warning'
+              ? 'high'
+              : 'medium',
+        status: 'identified',
+        probability: 50,
+        impact: 50,
+        mitigation: undefined,
+        risk_category: warning.warning_type === 'acceptance_expired' ? 'quality' : 'progress',
+      })
+
+      const signature = getWarningSignature(warning)
+      const nextSignatures = [...confirmedWarningSignatures, signature]
+      if (id) {
+        writeConfirmedWarningSignatures(id, nextSignatures)
       }
 
-      if (editingRisk) {
-        const updated = riskDb.update(editingRisk.id, riskData)
-        if (updated) {
-          updateRisk(editingRisk.id, riskData)
-          toast({ title: "风险已更新" })
-        }
-      } else {
-        const newRisk = {
-          ...riskData,
-          id: generateId(),
-          created_at: new Date().toISOString(),
-        }
-        riskDb.create(newRisk)
-        addRisk(newRisk)
-        toast({ title: "风险已添加" })
-      }
-
-      setDialogOpen(false)
-      resetForm()
+      setConfirmedWarningTick((value) => value + 1)
+      setWarnings((current) => current.filter((item) => getWarningSignature(item) !== signature))
+      setRisks((current) => [created, ...current])
+      toast({ title: '已确认为风险', description: '预警已纳入风险清单。' })
     } catch (error) {
-      console.error('保存风险失败:', error)
-      toast({ title: "保存失败", variant: "destructive" })
+      console.error('Failed to confirm warning as risk:', error)
+      toast({
+        title: '确认失败',
+        description: '请稍后重试。',
+        variant: 'destructive',
+      })
     }
   }
 
-  const handleDeleteRisk = (riskId: string) => {
-    if (!confirm('确定要删除这个风险吗？')) return
+  const toggleRisk = async (risk: RiskItem) => {
+    if (!risk.id || !id) return
+
+    const nextStatus = isActiveRisk(risk) ? 'closed' : 'identified'
+    try {
+      const updated = await apiPut<RiskItem>(`/api/risks/${risk.id}`, {
+        project_id: id,
+        title: risk.title,
+        description: risk.description || undefined,
+        level: risk.level || 'medium',
+        status: nextStatus,
+        probability: risk.probability ?? 50,
+        impact: risk.impact ?? 50,
+        mitigation: risk.mitigation || undefined,
+        risk_category: risk.category || 'other',
+        task_id: risk.task_id || undefined,
+        version: risk.version || 1,
+      })
+
+      setRisks((current) => current.map((item) => (item.id === updated.id ? updated : item)))
+      toast({
+        title: nextStatus === 'closed' ? '风险已关闭' : '风险已重新打开',
+        description: '状态已更新。',
+      })
+    } catch (error) {
+      console.error('Failed to update risk:', error)
+      toast({
+        title: '操作失败',
+        description: '请稍后重试。',
+        variant: 'destructive',
+      })
+    }
+  }
+
+  const resolveProblem = async (problem: ProblemItem) => {
+    if (!problem.id) return
 
     try {
-      riskDb.delete(riskId)
-      deleteRisk(riskId)
-      toast({ title: "风险已删除" })
-    } catch (error) {
-      console.error('删除风险失败:', error)
-      toast({ title: "删除失败", variant: "destructive" })
-    }
-  }
-
-  const openEditDialog = (risk?: Risk) => {
-    if (risk) {
-      setEditingRisk(risk)
-      setFormData({
-        title: risk.title,
-        description: risk.description || '',
-        level: risk.level || 'medium',
-        status: risk.status || 'identified',
-        probability: risk.probability || 50,
-        impact: risk.impact || 50,
-        mitigation: risk.mitigation || '',
+      const updated = await apiPut<ProblemItem>(`/api/task-obstacles/${problem.id}`, {
+        status: 'resolved',
+        is_resolved: true,
+        resolution: '现场已处理',
       })
-    } else {
-      resetForm()
+
+      setProblems((current) => current.map((item) => (item.id === updated.id ? updated : item)))
+      toast({
+        title: '问题已解决',
+        description: '问题记录已关闭。',
+      })
+    } catch (error) {
+      console.error('Failed to resolve problem:', error)
+      toast({
+        title: '操作失败',
+        description: '请稍后重试。',
+        variant: 'destructive',
+      })
     }
-    setDialogOpen(true)
   }
 
-  const resetForm = () => {
-    setEditingRisk(null)
-    setFormData({
-      title: '',
-      description: '',
-      level: 'medium',
-      status: 'identified',
-      probability: 50,
-      impact: 50,
-      mitigation: '',
-    })
-  }
+  const warningCount = filteredWarnings.length
+  const riskCount = filteredRisks.filter((risk) => isActiveRisk(risk)).length
+  const problemCount = filteredProblems.length
+  const totalAttentionCount = warningCount + riskCount + problemCount
 
-  // 计算风险分数
-  const calculateRiskScore = (probability: number, impact: number) => {
-    return (probability * impact) / 100
-  }
+  // 最近7天新增统计（用于统计卡上下文副文案）
+  const sevenDaysAgo = useMemo(() => {
+    const d = new Date()
+    d.setDate(d.getDate() - 7)
+    return d.getTime()
+  }, [])
 
-  if (loading) {
+  const recentWarnings = useMemo(
+    () => filteredWarnings.filter((w) => w.created_at && new Date(w.created_at).getTime() >= sevenDaysAgo).length,
+    [filteredWarnings, sevenDaysAgo],
+  )
+  const recentRisks = useMemo(
+    () => filteredRisks.filter((r) => isActiveRisk(r) && (r as { created_at?: string }).created_at && new Date((r as { created_at?: string }).created_at!).getTime() >= sevenDaysAgo).length,
+    [filteredRisks, sevenDaysAgo],
+  )
+  const recentProblems = useMemo(
+    () => filteredProblems.filter((p) => (p as { created_at?: string }).created_at && new Date((p as { created_at?: string }).created_at!).getTime() >= sevenDaysAgo).length,
+    [filteredProblems, sevenDaysAgo],
+  )
+
+  const topWarning = filteredWarnings[0]
+  const topRisk = filteredRisks.find((risk) => isActiveRisk(risk))
+  const topProblem = filteredProblems[0]
+  const currentProjectName = currentProject?.name || '当前项目'
+
+  const categoryTabs: Array<{ value: RiskTab; label: string; count: number }> = [
+    { value: 'overview', label: '总览', count: totalAttentionCount },
+    { value: 'warnings', label: '预警', count: warningCount },
+    { value: 'risks', label: '风险', count: riskCount },
+    { value: 'problems', label: '问题', count: problemCount },
+  ]
+
+  if (!id && loading) {
     return (
-      <div className="p-6">
-        <TaskListSkeleton />
+      <div className="space-y-4 p-6">
+        {[1, 2, 3].map((i) => (
+          <div key={i} className="h-24 rounded-xl bg-gray-200 animate-pulse" />
+        ))}
       </div>
     )
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Button variant="ghost" onClick={() => navigate(`/projects/${id}`)}>
-            <ArrowLeft className="mr-2 h-4 w-4" />
-            返回项目
+    <div className="page-enter space-y-6 p-6">
+      <div className="max-w-[1600px] space-y-6">
+        <PageHeader
+          eyebrow="项目级主模块"
+          title="风险与问题"
+          subtitle={`${currentProjectName} 的问题与风险、预警统一在这里承接。这里只做轻流程展示和处置，不改动主链口径。`}
+        >
+          <Button variant="outline" size="sm" onClick={refresh} disabled={loading}>
+            <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+            刷新
           </Button>
-          <h2 className="text-xl font-semibold">风险管理</h2>
+          <Button variant="outline" size="sm" onClick={() => navigate(`/projects/${id}/reports?view=risk`)} disabled={!id}>
+            <BarChart3 className="mr-2 h-4 w-4" />
+            风险分析
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => navigate(`/projects/${id}/dashboard`)} disabled={!id}>
+            <ArrowLeft className="mr-2 h-4 w-4" />
+            项目 Dashboard
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => navigate('/notifications')}>
+            去提醒中心
+          </Button>
+        </PageHeader>
+
+        {!id && (
+          <Alert variant="destructive">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertDescription>缺少项目上下文，当前无法加载问题与风险视图。</AlertDescription>
+          </Alert>
+        )}
+
+        <Card className="border-slate-200 shadow-sm">
+          <CardContent className="flex flex-col gap-4 p-4 lg:flex-row lg:items-center lg:justify-between">
+            <div className="space-y-1">
+              <p className="text-sm font-medium text-slate-900">筛选</p>
+              <p className="text-xs text-slate-500">搜索标题、描述、状态，快速收拢当前项目的风险与问题。</p>
+            </div>
+            <Input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="搜索标题、描述、状态"
+              className="w-full lg:w-[320px]"
+            />
+          </CardContent>
+        </Card>
+
+        {loading && (
+          <div className="space-y-4">
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="h-24 rounded-xl bg-gray-200 animate-pulse" />
+            ))}
+          </div>
+        )}
+
+        {!loading && (
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <MetricCard
+            label="预警"
+            value={warningCount}
+            hint={warningCount > 0 ? (recentWarnings > 0 ? `最近7天新增 ${recentWarnings} 条` : `${warningCount} 条待处理`) : '当前无活跃预警'}
+            icon={Bell}
+            iconClass="text-blue-700"
+            badgeClass="bg-blue-50"
+          />
+          <MetricCard
+            label="风险"
+            value={riskCount}
+            hint={riskCount > 0 ? (recentRisks > 0 ? `最近7天新增 ${recentRisks} 项` : `${riskCount} 项活跃风险`) : '当前无进行中风险'}
+            icon={ShieldAlert}
+            iconClass="text-rose-700"
+            badgeClass="bg-rose-50"
+          />
+          <MetricCard
+            label="问题"
+            value={problemCount}
+            hint={problemCount > 0 ? (recentProblems > 0 ? `最近7天新增 ${recentProblems} 项` : `${problemCount} 项待处理`) : '当前无待处理问题'}
+            icon={XCircle}
+            iconClass="text-orange-700"
+            badgeClass="bg-orange-50"
+          />
+          <MetricCard
+            label="总关注"
+            value={totalAttentionCount}
+            hint={totalAttentionCount > 0 ? `合计 ${totalAttentionCount} 项 · 近7天+${recentWarnings + recentRisks + recentProblems}` : '当前无需关注事项'}
+            icon={AlertTriangle}
+            iconClass="text-slate-700"
+            badgeClass="bg-slate-100"
+          />
         </div>
-        <Button onClick={() => openEditDialog()}>
-          <Plus className="mr-2 h-4 w-4" />
-          添加风险
-        </Button>
-      </div>
+        )}
 
-      {/* 风险统计 - 同时统计手动添加和自动检测的风险 */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">总风险数</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{risks.length + autoAlerts.length}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">高风险</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-red-600">
-              {risks.filter((r) => r.level === 'high' || r.level === 'critical').length + 
-               autoAlerts.filter((a) => a.severity === 'critical' || a.severity === 'high').length}
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">监控中</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-purple-600">
-              {risks.filter((r) => r.status === 'monitoring').length + 
-               autoAlerts.filter((a) => a.severity === 'high').length}
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">已缓解</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-green-600">
-              {risks.filter((r) => r.status === 'mitigated').length}
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* 风险检测控制面板 */}
-      <Card className={autoAlerts.length > 0 ? "border-red-200 bg-red-50" : "border-gray-200"}>
-        <CardContent className="pt-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <div className={`text-3xl font-bold ${autoAlerts.length > 0 ? 'text-red-600' : 'text-gray-400'}`}>
-                {autoAlerts.length}
-              </div>
-              <div>
-                <div className="font-medium">自动检测到{autoAlerts.length > 0 ? '项风险' : '暂无风险'}</div>
-                <div className="text-sm text-muted-foreground">
-                  {autoAlerts.filter(a => a.severity === 'critical').length > 0 && 
-                    `${autoAlerts.filter(a => a.severity === 'critical').length}项严重风险需关注`}
-                </div>
-              </div>
-            </div>
-            <Button 
-              variant={autoAlerts.length > 0 ? "destructive" : "default"} 
-              size="lg"
-              onClick={runRiskAnalysis}
-              className="gap-2"
-            >
-              <RefreshCw className={`h-5 w-5 ${autoAlerts.length > 0 ? '' : 'animate-spin'}`} />
-              {autoAlerts.length > 0 ? '重新检测风险' : '开始风险检测'}
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* 自动风险预警面板 */}
-      {autoAlerts.length > 0 && (
-        <Card className="border-orange-200 bg-orange-50">
-          <CardHeader className="pb-2">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-orange-800 flex items-center gap-2">
-                <Bell className="h-5 w-5" />
-                自动风险预警
-              </CardTitle>
-              <Button variant="outline" size="sm" onClick={runRiskAnalysis}>
-                <RefreshCw className="h-4 w-4 mr-1" />
-                重新检测
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-2">
-              {autoAlerts.map((alert) => (
-                <div
-                  key={alert.id}
-                  className={`p-3 rounded-lg border ${
-                    alert.severity === 'critical' ? 'bg-red-100 border-red-300' :
-                    alert.severity === 'high' ? 'bg-orange-100 border-orange-300' :
-                    alert.severity === 'medium' ? 'bg-yellow-100 border-yellow-300' :
-                    'bg-green-100 border-green-300'
-                  }`}
-                >
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <p className="font-medium text-sm">{alert.title}</p>
-                      <p className="text-xs text-muted-foreground mt-1">{alert.description}</p>
-                      {alert.建议 && (
-                        <p className="text-xs mt-1 font-medium text-blue-600">{alert.建议}</p>
-                      )}
-                    </div>
-                    <span className={`text-xs px-2 py-1 rounded ${
-                      alert.severity === 'critical' ? 'bg-red-500 text-white' :
-                      alert.severity === 'high' ? 'bg-orange-500 text-white' :
-                      alert.severity === 'medium' ? 'bg-yellow-500 text-white' :
-                      'bg-green-500 text-white'
-                    }`}>
-                      {alert.severity === 'critical' ? '严重' :
-                       alert.severity === 'high' ? '高' :
-                       alert.severity === 'medium' ? '中' : '低'}
-                    </span>
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,1.6fr)_minmax(320px,0.8fr)]">
+          <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as RiskTab)} className="space-y-6">
+            <Card className="overflow-hidden border-slate-200 shadow-sm">
+              <CardHeader className="border-b border-slate-100 pb-4">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="space-y-1">
+                    <CardTitle className="text-lg text-slate-900">风险主视图</CardTitle>
+                    <p className="text-sm text-slate-500">
+                      先看预警，再看风险，最后看已经发生的问题。统计、筛选和列表都在同一主模块里收口。
+                    </p>
                   </div>
+                  <TabsList className="grid h-auto grid-cols-4 gap-1 bg-slate-100 p-1">
+                    {categoryTabs.map((tab) => (
+                      <TabsTrigger key={tab.value} value={tab.value} className="flex flex-col gap-0.5 px-3 py-2">
+                        <span>{tab.label}</span>
+                        <span className="text-xs text-slate-400">{tab.count}</span>
+                      </TabsTrigger>
+                    ))}
+                  </TabsList>
                 </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* 风险列表 */}
-      <Card>
-        <CardHeader>
-          <CardTitle>风险列表</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {risks.length === 0 ? (
-            <div className="text-center py-12 text-muted-foreground">
-              <AlertTriangle className="h-12 w-12 mx-auto mb-4 opacity-50" />
-              <p>暂无风险</p>
-              <Button className="mt-4" onClick={() => openEditDialog()}>
-                添加第一个风险
-              </Button>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {(risks as Risk[]).map(risk => {
-                const riskScore = calculateRiskScore(risk.probability || 0, risk.impact || 0)
-                return (
-                  <div
-                    key={risk.id}
-                    className="flex items-start gap-4 p-4 border rounded-lg hover:bg-accent/50"
-                  >
-                    <div className={`p-2 rounded-lg ${risk.level === 'critical' ? 'bg-red-100' : risk.level === 'high' ? 'bg-orange-100' : risk.level === 'medium' ? 'bg-yellow-100' : 'bg-green-100'}`}>
-                      {risk.level === 'critical' || risk.level === 'high' ? (
-                        <ShieldAlert className="h-5 w-5 text-red-600" />
+              </CardHeader>
+              <CardContent className="space-y-6 pt-6">
+                <TabsContent value="overview" className="mt-0 space-y-4">
+                  <div className="grid gap-4 lg:grid-cols-3">
+                    <OverviewCard
+                      title="预警"
+                      count={warningCount}
+                      hint="系统预警与轻流程入口"
+                      icon={Bell}
+                      accentClass="bg-gradient-to-br from-blue-50 to-slate-50"
+                      actionLabel="查看预警"
+                      onAction={() => setActiveTab('warnings')}
+                    >
+                      {filteredWarnings.length === 0 ? (
+                        <EmptyState
+                          icon={Bell}
+                          title="暂无预警"
+                          description="当前没有需要额外关注的系统预警。"
+                          className="py-8"
+                        />
                       ) : (
-                        <Shield className="h-5 w-5 text-green-600" />
+                        <div className="space-y-3">
+                          {filteredWarnings.slice(0, 3).map((warning) => (
+                            <CategoryItem
+                              key={warning.id}
+                              badge={
+                                <>
+                                  <Badge className={WARNING_LEVEL_STYLE[warning.warning_level]}>
+                                    {WARNING_LEVEL_LABEL[warning.warning_level]}
+                                  </Badge>
+                                  <Badge variant="outline">{getWarningCategory(warning)}</Badge>
+                                </>
+                              }
+                              title={warning.title}
+                              description={warning.description}
+                              footer={formatDateTime(warning.created_at || null)}
+                              action={
+                                <ReadOnlyGuard action="create" message="请登录后确认预警">
+                                  <Button size="sm" onClick={() => confirmWarning(warning)}>
+                                    确认为风险
+                                  </Button>
+                                </ReadOnlyGuard>
+                              }
+                            />
+                          ))}
+                        </div>
                       )}
-                    </div>
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="font-medium">{risk.title}</span>
-                        <span className={`px-2 py-0.5 rounded text-xs ${riskLevelColors[risk.level || 'medium']}`}>
-                          {risk.level === 'critical' ? '紧急' : risk.level === 'high' ? '高' : risk.level === 'medium' ? '中' : '低'}
-                        </span>
-                        <span className={`px-2 py-0.5 rounded text-xs ${riskStatusColors[risk.status || 'identified']}`}>
-                          {risk.status === 'identified' ? '已识别' : risk.status === 'monitoring' ? '监控中' : risk.status === 'mitigated' ? '已缓解' : '已发生'}
-                        </span>
-                      </div>
-                      {risk.description && (
-                        <p className="text-sm text-muted-foreground mb-2">{risk.description}</p>
+                    </OverviewCard>
+
+                    <OverviewCard
+                      title="风险"
+                      count={riskCount}
+                      hint="当前进行中的风险清单"
+                      icon={ShieldAlert}
+                      accentClass="bg-gradient-to-br from-rose-50 to-slate-50"
+                      actionLabel="查看风险"
+                      onAction={() => setActiveTab('risks')}
+                    >
+                      {filteredRisks.filter((risk) => isActiveRisk(risk)).length === 0 ? (
+                        <EmptyState
+                          icon={ShieldAlert}
+                          title="暂无风险"
+                          description="当前没有已登记的风险。"
+                          className="py-8"
+                        />
+                      ) : (
+                        <div className="space-y-3">
+                          {filteredRisks
+                            .filter((risk) => isActiveRisk(risk))
+                            .slice(0, 3)
+                            .map((risk) => {
+                              const level = String(risk.level || 'medium')
+                              return (
+                                <CategoryItem
+                                  key={String(risk.id)}
+                                  badge={
+                                    <>
+                                      <Badge className={RISK_LEVEL_STYLE[level] || RISK_LEVEL_STYLE.medium}>
+                                        {RISK_LEVEL_LABEL[level] || '中'}
+                                      </Badge>
+                                      <Badge variant="outline">{risk.category || '其他'}</Badge>
+                                      {getRiskSourceBadge(risk)}
+                                    </>
+                                  }
+                                  title={risk.title || '未命名风险'}
+                                  description={risk.description || undefined}
+                                  footer={risk.task_id ? `关联任务：${risk.task_id}` : '当前未关联任务'}
+                                  action={
+                                    <ReadOnlyGuard action="edit" message="请登录后更新风险">
+                                      <Button size="sm" variant="outline" onClick={() => toggleRisk(risk)}>
+                                        {isActiveRisk(risk) ? '关闭风险' : '重新打开'}
+                                      </Button>
+                                    </ReadOnlyGuard>
+                                  }
+                                />
+                              )
+                            })}
+                        </div>
                       )}
-                      <div className="flex items-center gap-4 text-sm text-muted-foreground">
-                        <span>发生概率: {risk.probability || 0}%</span>
-                        <span>影响程度: {risk.impact || 0}%</span>
-                        <span>风险分数: {riskScore}</span>
-                      </div>
-                    </div>
-                    <div className="flex gap-2">
-                      <Button variant="ghost" size="sm" onClick={() => openEditDialog(risk)}>
-                        编辑
-                      </Button>
-                      <Button variant="ghost" size="sm" className="text-destructive" onClick={() => handleDeleteRisk(risk.id)}>
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </div>
+                    </OverviewCard>
+
+                    <OverviewCard
+                      title="问题"
+                      count={problemCount}
+                      hint="现场已经发生的事项"
+                      icon={XCircle}
+                      accentClass="bg-gradient-to-br from-orange-50 to-slate-50"
+                      actionLabel="查看问题"
+                      onAction={() => setActiveTab('problems')}
+                    >
+                      {filteredProblems.length === 0 ? (
+                        <EmptyState
+                          icon={XCircle}
+                          title="暂无问题"
+                          description="当前没有未解决的问题。"
+                          className="py-8"
+                        />
+                      ) : (
+                        <div className="space-y-3">
+                          {filteredProblems.slice(0, 3).map((problem) => {
+                            const status = getProblemStatus(problem)
+                            return (
+                              <CategoryItem
+                                key={String(problem.id)}
+                                badge={
+                                  <>
+                                    <Badge className="border-orange-200 bg-orange-50 text-orange-700">
+                                      {status}
+                                    </Badge>
+                                    {problem.severity && <Badge variant="outline">级别：{problem.severity}</Badge>}
+                                  </>
+                                }
+                                title={getProblemTitle(problem)}
+                                description={problem.obstacle_type ? `类型：${problem.obstacle_type}` : undefined}
+                                footer={
+                                  problem.responsible_person || problem.responsible_unit
+                                    ? [problem.responsible_person, problem.responsible_unit].filter(Boolean).join(' / ')
+                                    : '现场已发生事项'
+                                }
+                                action={
+                                  <ReadOnlyGuard action="edit" message="请登录后处理问题">
+                                    <Button size="sm" variant="outline" onClick={() => resolveProblem(problem)}>
+                                      标记已解决
+                                    </Button>
+                                  </ReadOnlyGuard>
+                                }
+                              />
+                            )
+                          })}
+                        </div>
+                      )}
+                    </OverviewCard>
                   </div>
-                )
-              })}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+                </TabsContent>
 
-      {/* 风险编辑对话框 */}
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>{editingRisk ? '编辑风险' : '添加风险'}</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 py-4">
-            <div className="space-y-2">
-              <Label>风险名称</Label>
-              <Input
-                value={formData.title}
-                onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-                placeholder="输入风险名称"
-              />
-            </div>
+                <TabsContent value="warnings" className="mt-0 space-y-3">
+                  {filteredWarnings.length === 0 ? (
+                    <EmptyState
+                      icon={Bell}
+                      title="暂无预警"
+                      description="当前没有需要额外关注的系统预警。"
+                      className="py-12"
+                    />
+                  ) : (
+                    filteredWarnings.map((warning) => (
+                      <CategoryItem
+                        key={warning.id}
+                        badge={
+                          <>
+                            <Badge className={WARNING_LEVEL_STYLE[warning.warning_level]}>
+                              {WARNING_LEVEL_LABEL[warning.warning_level]}
+                            </Badge>
+                            <Badge variant="outline">{getWarningCategory(warning)}</Badge>
+                          </>
+                        }
+                        title={warning.title}
+                        description={warning.description}
+                        footer={formatDateTime(warning.created_at || null)}
+                        action={
+                          <ReadOnlyGuard action="create" message="请登录后确认预警">
+                            <Button size="sm" onClick={() => confirmWarning(warning)}>
+                              确认为风险
+                            </Button>
+                          </ReadOnlyGuard>
+                        }
+                      />
+                    ))
+                  )}
+                </TabsContent>
 
-            <div className="space-y-2">
-              <Label>描述</Label>
-              <Input
-                value={formData.description}
-                onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                placeholder="风险描述"
-              />
-            </div>
+                <TabsContent value="risks" className="mt-0 space-y-3">
+                  {filteredRisks.length === 0 ? (
+                    <EmptyState
+                      icon={ShieldAlert}
+                      title="暂无风险"
+                      description="当前没有已登记的风险。"
+                      className="py-12"
+                    />
+                  ) : (
+                    filteredRisks.map((risk) => {
+                      const active = isActiveRisk(risk)
+                      const level = String(risk.level || 'medium')
+                      return (
+                        <CategoryItem
+                          key={String(risk.id)}
+                          badge={
+                            <>
+                              <Badge className={RISK_LEVEL_STYLE[level] || RISK_LEVEL_STYLE.medium}>
+                                {RISK_LEVEL_LABEL[level] || '中'}
+                              </Badge>
+                              <Badge variant="outline">{active ? '进行中' : '已关闭'}</Badge>
+                              <Badge variant="outline">{String(risk.category || '其他')}</Badge>
+                              {getRiskSourceBadge(risk)}
+                            </>
+                          }
+                          title={risk.title || '未命名风险'}
+                          description={risk.description || undefined}
+                          footer={risk.task_id ? `关联任务：${risk.task_id}` : '当前未关联任务'}
+                          action={
+                            <ReadOnlyGuard action="edit" message="请登录后更新风险">
+                              <Button size="sm" variant="outline" onClick={() => toggleRisk(risk)}>
+                                {active ? '关闭风险' : '重新打开'}
+                              </Button>
+                            </ReadOnlyGuard>
+                          }
+                        />
+                      )
+                    })
+                  )}
+                </TabsContent>
 
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>风险等级</Label>
-                <Select value={formData.level} onValueChange={(val: string) => setFormData({ ...formData, level: val })}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="low">低</SelectItem>
-                    <SelectItem value="medium">中</SelectItem>
-                    <SelectItem value="high">高</SelectItem>
-                    <SelectItem value="critical">紧急</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>状态</Label>
-                <Select value={formData.status} onValueChange={(val: string) => setFormData({ ...formData, status: val })}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="identified">已识别</SelectItem>
-                    <SelectItem value="monitoring">监控中</SelectItem>
-                    <SelectItem value="mitigated">已缓解</SelectItem>
-                    <SelectItem value="occurred">已发生</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
+                <TabsContent value="problems" className="mt-0 space-y-3">
+                  {filteredProblems.length === 0 ? (
+                    <EmptyState
+                      icon={XCircle}
+                      title="暂无问题"
+                      description="当前没有未解决的问题。"
+                      className="py-12"
+                    />
+                  ) : (
+                    filteredProblems.map((problem) => {
+                      const status = getProblemStatus(problem)
+                      return (
+                        <CategoryItem
+                          key={String(problem.id)}
+                          badge={
+                            <>
+                              <Badge className="border-orange-200 bg-orange-50 text-orange-700">
+                                {status}
+                              </Badge>
+                              {problem.severity && <Badge variant="outline">级别：{problem.severity}</Badge>}
+                            </>
+                          }
+                          title={getProblemTitle(problem)}
+                          description={problem.obstacle_type ? `类型：${problem.obstacle_type}` : undefined}
+                          footer={
+                            problem.responsible_person || problem.responsible_unit
+                              ? [problem.responsible_person, problem.responsible_unit].filter(Boolean).join(' / ')
+                              : '现场已发生事项'
+                          }
+                          action={
+                            <ReadOnlyGuard action="edit" message="请登录后处理问题">
+                              <Button size="sm" variant="outline" onClick={() => resolveProblem(problem)}>
+                                标记已解决
+                              </Button>
+                            </ReadOnlyGuard>
+                          }
+                        />
+                      )
+                    })
+                  )}
+                </TabsContent>
+              </CardContent>
+            </Card>
+          </Tabs>
 
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>发生概率 ({formData.probability}%)</Label>
-                <Input
-                  type="range"
-                  min="0"
-                  max="100"
-                  value={formData.probability}
-                  onChange={(e) => setFormData({ ...formData, probability: parseInt(e.target.value) })}
+          <div className="space-y-6">
+            <Card className="border-slate-200 shadow-sm">
+              <CardHeader className="pb-4">
+                <CardTitle className="text-base">重点关注</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <FocusRow
+                  title="预警"
+                  tone="border-blue-100 bg-blue-50/70"
+                  item={
+                    topWarning
+                      ? {
+                          title: topWarning.title,
+                          meta: topWarning.description,
+                          badge: getWarningCategory(topWarning),
+                        }
+                      : null
+                  }
+                  emptyText="暂无预警"
+                  onJump={() => setActiveTab('warnings')}
                 />
-              </div>
-              <div className="space-y-2">
-                <Label>影响程度 ({formData.impact}%)</Label>
-                <Input
-                  type="range"
-                  min="0"
-                  max="100"
-                  value={formData.impact}
-                  onChange={(e) => setFormData({ ...formData, impact: parseInt(e.target.value) })}
+                <FocusRow
+                  title="风险"
+                  tone="border-rose-100 bg-rose-50/70"
+                  item={
+                    topRisk
+                      ? {
+                          title: topRisk.title || '未命名风险',
+                          meta: topRisk.description || '当前风险未填写描述。',
+                          badge: RISK_LEVEL_LABEL[String(topRisk.level || 'medium')] || '中',
+                        }
+                      : null
+                  }
+                  emptyText="暂无风险"
+                  onJump={() => setActiveTab('risks')}
                 />
-              </div>
-            </div>
+                <FocusRow
+                  title="问题"
+                  tone="border-orange-100 bg-orange-50/70"
+                  item={
+                    topProblem
+                      ? {
+                          title: getProblemTitle(topProblem),
+                          meta: topProblem.obstacle_type ? `类型：${topProblem.obstacle_type}` : '当前问题已收口到主链',
+                          badge: getProblemStatus(topProblem),
+                        }
+                      : null
+                  }
+                  emptyText="暂无问题"
+                  onJump={() => setActiveTab('problems')}
+                />
+              </CardContent>
+            </Card>
 
-            <div className="space-y-2">
-              <Label>缓解措施</Label>
-              <Input
-                value={formData.mitigation}
-                onChange={(e) => setFormData({ ...formData, mitigation: e.target.value })}
-                placeholder="缓解措施描述"
-              />
-            </div>
+            <Card className="border-slate-200 shadow-sm">
+              <CardHeader className="pb-3">
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-between text-left"
+                  onClick={() => setTrendExpanded((v) => !v)}
+                >
+                  <CardTitle className="text-base">趋势分析</CardTitle>
+                  <span className="text-slate-400 text-sm select-none">
+                    {trendExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                  </span>
+                </button>
+              </CardHeader>
+              {trendExpanded && (
+                <CardContent className="pt-0">
+                  <RiskTrendChart defaultExpanded={true} />
+                </CardContent>
+              )}
+            </Card>
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDialogOpen(false)}>取消</Button>
-            <Button onClick={handleSaveRisk}>保存</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        </div>
+      </div>
     </div>
   )
 }

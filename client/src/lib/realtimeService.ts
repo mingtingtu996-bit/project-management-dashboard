@@ -45,16 +45,16 @@ class RealtimeService {
     const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY
 
     if (!supabaseUrl || !supabaseKey) {
-      console.warn('Supabase配置不完整，跳过实时订阅初始化')
+      if (import.meta.env.DEV) console.warn('Supabase配置不完整，跳过实时订阅初始化')
       return
     }
 
     try {
       this.client = createClient(supabaseUrl, supabaseKey)
       this.isInitialized = true
-      console.log('实时订阅服务初始化成功')
+      if (import.meta.env.DEV) console.log('实时订阅服务初始化成功')
     } catch (error) {
-      console.error('实时订阅服务初始化失败:', error)
+      if (import.meta.env.DEV) console.error('实时订阅服务初始化失败:', error)
     }
   }
 
@@ -69,7 +69,7 @@ class RealtimeService {
   // 订阅项目数据变更
   subscribeToProject(projectId: string, callback: EventCallback) {
     if (!this.client || !this.isInitialized) {
-      console.warn('实时订阅服务未初始化')
+      if (import.meta.env.DEV) console.warn('实时订阅服务未初始化')
       return () => {}
     }
 
@@ -139,7 +139,7 @@ class RealtimeService {
         }
       )
       .subscribe((status) => {
-        console.log(`订阅状态: ${status}`)
+        if (import.meta.env.DEV) console.log(`订阅状态: ${status}`)
       })
 
     this.channels.set(channelName, channel)
@@ -157,7 +157,7 @@ class RealtimeService {
   // 订阅在线成员状态
   subscribeToPresence(projectId: string, callback: PresenceCallback) {
     if (!this.client || !this.isInitialized) {
-      console.warn('实时订阅服务未初始化')
+      if (import.meta.env.DEV) console.warn('实时订阅服务未初始化')
       return () => {}
     }
 
@@ -190,10 +190,10 @@ class RealtimeService {
         this.notifyPresenceCallbacks(channelName, members)
       })
       .on('presence', { event: 'join' }, ({ key, newPresences }) => {
-        console.log('用户加入:', key, newPresences)
+        if (import.meta.env.DEV) console.log('用户加入:', key, newPresences)
       })
       .on('presence', { event: 'leave' }, ({ key, leftPresences }) => {
-        console.log('用户离开:', key, leftPresences)
+        if (import.meta.env.DEV) console.log('用户离开:', key, leftPresences)
       })
 
     // 跟踪当前用户
@@ -206,7 +206,7 @@ class RealtimeService {
     }
 
     channel.subscribe((status) => {
-      console.log(`在线状态订阅状态: ${status}`)
+      if (import.meta.env.DEV) console.log(`在线状态订阅状态: ${status}`)
     })
 
     this.channels.set(channelName, channel)
@@ -259,11 +259,11 @@ class RealtimeService {
   async syncChange(
     table: string,
     action: 'INSERT' | 'UPDATE' | 'DELETE',
-    data: any,
+    data: unknown,
     projectId?: string
   ) {
     if (!this.client || !this.isInitialized) {
-      console.warn('实时订阅服务未初始化，无法同步')
+      if (import.meta.env.DEV) console.warn('实时订阅服务未初始化，无法同步')
       return
     }
 
@@ -273,19 +273,19 @@ class RealtimeService {
           await this.client.from(table).insert(data)
           break
         case 'UPDATE':
-          if (data.id) {
-            await this.client.from(table).update(data).eq('id', data.id)
+          if ((data as { id?: string }).id) {
+            await this.client.from(table).update(data).eq('id', (data as { id: string }).id)
           }
           break
         case 'DELETE':
-          if (data.id) {
-            await this.client.from(table).delete().eq('id', data.id)
+          if ((data as { id?: string }).id) {
+            await this.client.from(table).delete().eq('id', (data as { id: string }).id)
           }
           break
       }
-      console.log(`数据同步成功: ${action} ${table}`)
+      if (import.meta.env.DEV) console.log(`数据同步成功: ${action} ${table}`)
     } catch (error) {
-      console.error(`数据同步失败: ${action} ${table}`, error)
+      if (import.meta.env.DEV) console.error(`数据同步失败: ${action} ${table}`, error)
       // 可以加入重试队列
     }
   }

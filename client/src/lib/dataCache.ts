@@ -143,9 +143,18 @@ class DataCache {
 // 导出单例
 export const dataCache = new DataCache()
 
-// 启动定期清理（每分钟清理一次）
+// 定期清理定时器（可清理，防止内存泄漏）
+let cleanupTimerId: ReturnType<typeof setInterval> | undefined
 if (typeof window !== 'undefined') {
-  setInterval(() => dataCache.cleanup(), 60 * 1000)
+  cleanupTimerId = setInterval(() => dataCache.cleanup(), 60 * 1000)
+}
+
+/** 停止定期清理（组件卸载时调用） */
+export function stopDataCacheCleanup(): void {
+  if (cleanupTimerId !== undefined) {
+    clearInterval(cleanupTimerId)
+    cleanupTimerId = undefined
+  }
 }
 
 /**

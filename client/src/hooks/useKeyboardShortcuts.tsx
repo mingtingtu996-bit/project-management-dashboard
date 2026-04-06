@@ -13,23 +13,36 @@ interface Shortcut {
 export function useKeyboardShortcuts(shortcuts: Shortcut[], enabled = true) {
   const handleKeyDown = useCallback((event: KeyboardEvent) => {
     if (!enabled) return
+    if (typeof event.key !== 'string' || event.key.length === 0) return
 
-    // 如果用户正在输入，不触发快捷键
+    // 如果用户正在输入，不触发导航/非搜索快捷键
+    // 但 Ctrl+K / Ctrl+F 应该仍可触发（聚焦搜索框）
     const target = event.target as HTMLElement
-    if (target.tagName === 'INPUT' || 
-        target.tagName === 'TEXTAREA' || 
-        target.tagName === 'SELECT' ||
-        target.isContentEditable) {
-      return
-    }
+    const isTyping = (
+      target.tagName === 'INPUT' ||
+      target.tagName === 'TEXTAREA' ||
+      target.tagName === 'SELECT' ||
+      target.isContentEditable
+    )
 
     for (const shortcut of shortcuts) {
-      const keyMatch = event.key.toLowerCase() === shortcut.key.toLowerCase()
-      const ctrlMatch = shortcut.ctrlKey ? (event.ctrlKey || event.metaKey) : !event.ctrlKey
+      // 跳过无效快捷键
+      if (!shortcut?.key) continue
+
+      const eventKey = event.key.toLowerCase()
+      const shortcutKey = typeof shortcut.key === 'string' ? shortcut.key.toLowerCase() : ''
+      if (!shortcutKey) continue
+
+      const keyMatch = eventKey === shortcutKey
+      const ctrlMatch = shortcut.ctrlKey ? (event.ctrlKey || event.metaKey) : !(event.ctrlKey || event.metaKey)
       const shiftMatch = shortcut.shiftKey ? event.shiftKey : !event.shiftKey
       const altMatch = shortcut.altKey ? event.altKey : !event.altKey
 
       if (keyMatch && ctrlMatch && shiftMatch && altMatch) {
+        // Ctrl 组合键在输入框中也允许（比如 Ctrl+K 聚焦搜索）
+        // 非 Ctrl 组合键在输入状态下跳过
+        if (isTyping && !shortcut.ctrlKey) continue
+
         event.preventDefault()
         shortcut.action()
         return
@@ -52,7 +65,7 @@ export const DEFAULT_SHORTCUTS = [
 ]
 
 // 快捷键帮助对话框
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Card, CardContent } from '@/components/ui/card'
 
 interface ShortcutsHelpProps {
@@ -62,12 +75,17 @@ interface ShortcutsHelpProps {
 
 export function ShortcutsHelp({ open, onOpenChange }: ShortcutsHelpProps) {
   const shortcuts = [
-    { key: 'Ctrl + N', description: '新建任务' },
-    { key: 'Ctrl + S', description: '保存当前内容' },
-    { key: 'Ctrl + F', description: '搜索' },
-    { key: 'Escape', description: '关闭对话框/取消' },
-    { key: '?', description: '显示快捷键帮助' },
-    { key: '← / →', description: '导航切换' },
+    { key: 'Ctrl + K', description: '聚焦搜索框' },
+    { key: 'Ctrl + F', description: '聚焦搜索框' },
+    { key: 'Ctrl + 1', description: '跳转：项目 Dashboard' },
+    { key: 'Ctrl + 2', description: '跳转：里程碑' },
+    { key: 'Ctrl + 3', description: '跳转：任务管理' },
+    { key: 'Ctrl + 4', description: '跳转：风险与问题' },
+    { key: 'Ctrl + 5', description: '跳转：证照管理' },
+    { key: 'Ctrl + 6', description: '跳转：任务总结' },
+    { key: 'Ctrl + 7', description: '跳转：提醒中心' },
+    { key: 'Escape', description: '关闭对话框 / 取消' },
+    { key: '?', description: '显示快捷键帮助面板' },
   ]
 
   return (
@@ -75,6 +93,7 @@ export function ShortcutsHelp({ open, onOpenChange }: ShortcutsHelpProps) {
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>键盘快捷键</DialogTitle>
+          <DialogDescription>查看当前应用支持的常用快捷键与导航组合。</DialogDescription>
         </DialogHeader>
         <Card>
           <CardContent className="pt-4">
@@ -84,7 +103,7 @@ export function ShortcutsHelp({ open, onOpenChange }: ShortcutsHelpProps) {
                   <kbd className="px-2 py-1 bg-muted rounded text-sm font-mono">
                     {shortcut.key}
                   </kbd>
-                  <span className="text-muted-foreground">{shortcut.description}</span>
+                  <span className="text-muted-foreground text-sm">{shortcut.description}</span>
                 </div>
               ))}
             </div>

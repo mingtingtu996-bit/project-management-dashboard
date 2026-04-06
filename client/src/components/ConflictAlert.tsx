@@ -36,7 +36,7 @@ export function ConflictAlert({ conflicts, onViewDetails, onDismiss }: ConflictA
 
   return (
     <div className="fixed top-4 right-4 z-50 max-w-sm">
-      <div className="bg-amber-50 border border-amber-200 rounded-lg shadow-lg overflow-hidden">
+      <div className="bg-amber-50 border border-amber-200 rounded-xl shadow-lg overflow-hidden">
         {/* 头部 */}
         <div className="flex items-center justify-between px-4 py-3 bg-amber-100">
           <div className="flex items-center gap-2">

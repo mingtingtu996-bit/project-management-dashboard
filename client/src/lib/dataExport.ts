@@ -504,8 +504,8 @@ function getTaskStatusText(status: string): string {
   return map[status] || status
 }
 
-function parseTaskStatus(status: string): string {
-  const map: Record<string, string> = {
+function parseTaskStatus(status: string): 'todo' | 'in_progress' | 'completed' {
+  const map: Record<string, 'todo' | 'in_progress' | 'completed'> = {
     '待处理': 'todo',
     '进行中': 'in_progress',
     '已完成': 'completed',
@@ -525,14 +525,15 @@ function getPriorityText(priority: string): string {
   return map[priority] || priority
 }
 
-function parsePriority(priority: string): string {
-  const map: Record<string, string> = {
+function parsePriority(priority: string): 'low' | 'medium' | 'high' | 'urgent' {
+  const map: Record<string, 'low' | 'medium' | 'high' | 'urgent'> = {
     '低': 'low',
     '中': 'medium',
     '高': 'high',
     'low': 'low',
     'medium': 'medium',
-    'high': 'high'
+    'high': 'high',
+    'urgent': 'urgent'
   }
   return map[priority] || 'medium'
 }

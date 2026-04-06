@@ -25,7 +25,7 @@ export function useAuditLog(options: UseAuditLogOptions = {}) {
   const log = (action: string, resourceType: string, options?: {
     resourceId?: string
     resourceName?: string
-    details?: Record<string, any>
+    details?: Record<string, unknown>
   }) => {
     if (!projectId || !currentUser) return
     
@@ -46,7 +46,7 @@ export function useAuditLog(options: UseAuditLogOptions = {}) {
     log(AuditActions.TASK_CREATE, 'task', { resourceId: taskId, resourceName: taskName })
   }
   
-  const logTaskUpdate = (taskId: string, taskName: string, details?: Record<string, any>) => {
+  const logTaskUpdate = (taskId: string, taskName: string, details?: Record<string, unknown>) => {
     log(AuditActions.TASK_UPDATE, 'task', { resourceId: taskId, resourceName: taskName, details })
   }
   
@@ -58,7 +58,7 @@ export function useAuditLog(options: UseAuditLogOptions = {}) {
     log(AuditActions.RISK_CREATE, 'risk', { resourceId: riskId, resourceName: riskName })
   }
   
-  const logRiskUpdate = (riskId: string, riskName: string, details?: Record<string, any>) => {
+  const logRiskUpdate = (riskId: string, riskName: string, details?: Record<string, unknown>) => {
     log(AuditActions.RISK_UPDATE, 'risk', { resourceId: riskId, resourceName: riskName, details })
   }
   
@@ -66,7 +66,7 @@ export function useAuditLog(options: UseAuditLogOptions = {}) {
     log(AuditActions.MILESTONE_CREATE, 'milestone', { resourceId: milestoneId, resourceName: milestoneName })
   }
   
-  const logMilestoneUpdate = (milestoneId: string, milestoneName: string, details?: Record<string, any>) => {
+  const logMilestoneUpdate = (milestoneId: string, milestoneName: string, details?: Record<string, unknown>) => {
     log(AuditActions.MILESTONE_UPDATE, 'milestone', { resourceId: milestoneId, resourceName: milestoneName, details })
   }
   
