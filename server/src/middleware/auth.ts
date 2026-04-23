@@ -300,6 +300,18 @@ export const requireProjectMember = (getProjectId: (req: Request) => string | un
 
       const { userId, projectId } = authResult
 
+      if (!isUuidLike(userId)) {
+        res.status(403).json({
+          success: false,
+          error: {
+            code: 'FORBIDDEN',
+            message: '当前登录身份无效，请重新登录后重试',
+          },
+          timestamp: new Date().toISOString(),
+        })
+        return
+      }
+
       // 先检查项目是否存在，不存在返回 404 而非 403
       // 使用 executeSQLOne 绕过 RLS，确保非成员查询真实不存在的项目也能正确返回 404
       if (isUuidLike(projectId)) {

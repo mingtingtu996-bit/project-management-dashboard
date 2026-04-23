@@ -401,6 +401,7 @@ describe('acceptance ancillary routes', () => {
 
   it('allows status progression after all acceptance requirements are met', async () => {
     state.requirements[0].status = 'met'
+    state.requirements[0].is_satisfied = true
 
     const response = await supertest(buildApp())
       .patch('/api/acceptance-plans/plan-1/status')

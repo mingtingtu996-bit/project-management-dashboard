@@ -3,7 +3,10 @@ import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 function readRouteSource() {
-  return readFileSync(resolve(process.cwd(), 'src', 'routes', 'drawing-packages.ts'), 'utf8')
+  const serverRoot = /[\\/]server$/.test(process.cwd())
+    ? process.cwd()
+    : resolve(process.cwd(), 'server')
+  return readFileSync(resolve(serverRoot, 'src', 'routes', 'drawing-packages.ts'), 'utf8')
 }
 
 describe('drawing package linked-context query contracts', () => {

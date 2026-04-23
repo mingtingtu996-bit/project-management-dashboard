@@ -10,10 +10,12 @@ import { join } from 'node:path'
 
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 
-const SERVER_ROOT = join(process.cwd(), 'src')
+const SERVER_ROOT = /[\\/]server$/.test(process.cwd())
+  ? process.cwd()
+  : join(process.cwd(), 'server')
 
 function readServerSource(relPath: string): string {
-  const full = join(SERVER_ROOT, relPath)
+  const full = join(SERVER_ROOT, 'src', relPath)
   if (!existsSync(full)) throw new Error(`Source not found: ${full}`)
   return readFileSync(full, 'utf8')
 }

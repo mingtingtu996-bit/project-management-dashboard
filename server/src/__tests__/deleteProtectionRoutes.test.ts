@@ -30,7 +30,7 @@ const mocks = vi.hoisted(() => {
       from: vi.fn(() => obstacleQueryBuilderFactory()),
       rpc: vi.fn(async () => ({ data: true, error: null })),
     },
-    warningEvaluate: vi.fn(async () => undefined),
+    warningEvaluate: vi.fn(async (_payload?: unknown) => undefined),
     passiveReorderDetection: vi.fn(async () => undefined),
     enqueueProjectHealthUpdate: vi.fn(async () => undefined),
     writeStatusTransitionLog: vi.fn(async () => undefined),
@@ -45,6 +45,31 @@ const mocks = vi.hoisted(() => {
       error: vi.fn(),
       debug: vi.fn(),
     },
+    closeTaskInMainChain: vi.fn(async (id: string, version: number, userId: string | null) => {
+      const updatedTask = await mocks.updateTaskRecord(
+        id,
+        {
+          status: 'completed',
+          progress: 100,
+          updated_by: userId,
+        },
+        version,
+        { skipSnapshotWrite: true },
+      )
+
+      await mocks.warningEvaluate({
+        type: 'task',
+        task: {
+          id,
+          status: 'completed',
+          progress: 100,
+        },
+      })
+
+      return {
+        task: updatedTask,
+      }
+    }),
   }
 })
 
@@ -120,6 +145,13 @@ vi.mock('../services/businessStatusService.js', () => ({
     resolveObstacle: mocks.resolveObstacle,
     calculateBusinessStatus: mocks.calculateBusinessStatus,
   },
+}))
+
+vi.mock('../services/taskWriteChainService.js', () => ({
+  closeTaskInMainChain: mocks.closeTaskInMainChain,
+  createTaskInMainChain: vi.fn(),
+  reopenTaskInMainChain: vi.fn(),
+  updateTaskInMainChain: vi.fn(),
 }))
 
 function buildApp(path: string, router: express.Router) {

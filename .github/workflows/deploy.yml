@@ -31,18 +31,18 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+
       - name: Setup Node.js 20
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: pnpm
           cache-dependency-path: client/pnpm-lock.yaml
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
-          run_install: false
 
       - name: Install client dependencies
         run: pnpm --dir client install --frozen-lockfile
@@ -84,7 +84,8 @@ jobs:
         run: npm run guard:execute-sql
 
       - name: Server tests
-        run: npm test
+        working-directory: .
+        run: npx --prefix server vitest run --root server
 
       - name: Server build
         run: npm run build
@@ -98,18 +99,18 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+
       - name: Setup Node.js 20
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: pnpm
           cache-dependency-path: client/pnpm-lock.yaml
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
-          run_install: false
 
       - name: Install client dependencies
         run: pnpm --dir client install --frozen-lockfile

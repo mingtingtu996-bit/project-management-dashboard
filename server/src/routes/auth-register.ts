@@ -1,5 +1,5 @@
 import express from 'express'
-import { createClient } from '@supabase/supabase-js'
+import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { z } from 'zod'
 
 import { authError, authSuccess, setAuthTokenCookie } from '../auth/http.js'
@@ -13,14 +13,24 @@ import { validate } from '../middleware/validation.js'
 
 const router = express.Router()
 
-const supabaseUrl = process.env.SUPABASE_URL || ''
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY || ''
+type SupabaseAdminClient = SupabaseClient
 
-if (!supabaseUrl || !supabaseServiceKey) {
-  throw new Error('Missing Supabase environment variables')
+let supabaseClient: SupabaseAdminClient | null = null
+
+function getSupabaseAdminClient(): SupabaseAdminClient {
+  const supabaseUrl = process.env.SUPABASE_URL || ''
+  const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY || ''
+
+  if (!supabaseUrl || !supabaseServiceKey) {
+    throw new Error('Missing Supabase environment variables')
+  }
+
+  if (!supabaseClient) {
+    supabaseClient = createClient(supabaseUrl, supabaseServiceKey)
+  }
+
+  return supabaseClient
 }
-
-const supabase = createClient(supabaseUrl, supabaseServiceKey)
 
 const registerSchema = z.object({
   username: z.string().trim().min(1, '请输入用户名'),
@@ -30,6 +40,14 @@ const registerSchema = z.object({
 })
 
 router.post('/', validate(registerSchema), asyncHandler(async (req, res) => {
+  let supabase: SupabaseAdminClient
+  try {
+    supabase = getSupabaseAdminClient()
+  } catch (error) {
+    logger.error('Register route missing Supabase environment variables', { error })
+    return res.status(500).json(authError('REGISTER_CONFIG_MISSING', '注册服务配置缺失，请稍后重试'))
+  }
+
   const rawBody = req.body ?? {}
   const username = String(rawBody.username ?? '').trim()
   const password = String(rawBody.password ?? '')

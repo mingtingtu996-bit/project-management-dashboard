@@ -66,6 +66,10 @@ vi.mock('../services/dbService.js', () => ({
   createTask: state.createTask,
 }))
 
+vi.mock('../services/issueWriteChainService.js', () => ({
+  createIssueInMainChain: state.createIssue,
+}))
+
 vi.mock('../services/acceptanceFlowService.js', () => ({
   syncAcceptanceRequirementsBySource: state.syncAcceptanceRequirementsBySource,
 }))
