@@ -118,6 +118,7 @@ describe('migration runner contract', () => {
     expect(resolveMigrationConnectionConfig()).toEqual({
       host: 'db.wwdrkjnbvcbfytwnnyvs.supabase.co',
       port: 5432,
+      family: 4,
       database: 'postgres',
       user: 'postgres',
       password: 'secret-value',
@@ -130,6 +131,7 @@ describe('migration runner contract', () => {
 
     expect(resolveMigrationConnectionConfig()).toEqual({
       connectionString: 'postgresql://postgres:secret@db.example.supabase.co:5432/postgres',
+      family: 4,
       ssl: { rejectUnauthorized: false },
     })
   })
