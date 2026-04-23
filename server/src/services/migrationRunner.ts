@@ -168,7 +168,7 @@ export function resolveMigrationConnectionConfig() {
     : { rejectUnauthorized: false as const }
 
   if (connectionString) {
-    return { connectionString, ssl }
+    return { connectionString, ssl, family: 4 as const }
   }
 
   if (!host || !password) {
@@ -184,6 +184,7 @@ export function resolveMigrationConnectionConfig() {
     user,
     password,
     ssl,
+    family: 4 as const,
   }
 }
 
