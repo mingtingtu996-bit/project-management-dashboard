@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { chromium } from 'playwright'
+import { maybeBuildMockAuthResponse, primeBrowserAuth } from './browser-auth-fixture.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const scriptsDir = dirname(__filename)
@@ -60,6 +61,40 @@ const mockTaskSummary = {
   },
 }
 
+const mockTaskSummaryAssignees = [
+  {
+    assignee: '闃胯揪鏄殑',
+    total: 4,
+    on_time: 3,
+    delayed: 1,
+    on_time_rate: 75,
+  },
+  {
+    assignee: '鏉庡伐',
+    total: 3,
+    on_time: 3,
+    delayed: 0,
+    on_time_rate: 100,
+  },
+]
+
+const mockDailyProgress = {
+  date: '2026-04-24',
+  progress_change: 3.2,
+  tasks_updated: 2,
+  tasks_completed: 1,
+  details: [
+    {
+      task_id: 'task-1',
+      task_title: '涓讳綋缁撴瀯鏂藉伐',
+      progress_before: 97,
+      progress_after: 100,
+      progress_delta: 3,
+      assignee: '闃胯揪鏄殑',
+    },
+  ],
+}
+
 function assert(condition, message) {
   if (!condition) {
     throw new Error(message)
@@ -113,6 +148,11 @@ function startPreviewServer() {
 function buildMockResponse(urlString) {
   const url = new URL(urlString)
   const { pathname } = url
+  const authResponse = maybeBuildMockAuthResponse(pathname, json)
+
+  if (authResponse) {
+    return authResponse
+  }
 
   if (pathname === '/api/projects') {
     return json({ success: true, data: [mockProject] })
@@ -143,6 +183,18 @@ function buildMockResponse(urlString) {
     return json({ success: true, data: mockTaskSummary })
   }
 
+  if (pathname === `/api/task-summaries/projects/${projectId}/task-summary/assignees`) {
+    return json({ success: true, data: mockTaskSummaryAssignees })
+  }
+
+  if (pathname === `/api/task-summaries/projects/${projectId}/task-summary/compare`) {
+    return json({ success: true, data: [] })
+  }
+
+  if (pathname === `/api/task-summaries/projects/${projectId}/daily-progress`) {
+    return json({ success: true, data: mockDailyProgress })
+  }
+
   return json({ success: true, data: [] })
 }
 
@@ -169,6 +221,7 @@ async function main() {
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1400 } })
     page.setDefaultTimeout(30000)
+    await primeBrowserAuth(page)
 
     page.on('console', (message) => {
       if (message.type() === 'error') {

@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { chromium } from 'playwright'
+import { maybeBuildMockAuthResponse, primeBrowserAuth } from './browser-auth-fixture.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const scriptsDir = dirname(__filename)
@@ -219,6 +220,50 @@ const mockDeviationAnalysis = {
   trend_events: [],
 }
 
+const mockTaskSummary = {
+  stats: {
+    total_completed: 12,
+    on_time_count: 10,
+    delayed_count: 2,
+    completed_milestone_count: 3,
+    avg_delay_days: 1.8,
+  },
+}
+
+const mockTaskSummaryAssignees = [
+  {
+    assignee: '闃胯揪鏄殑',
+    total: 4,
+    on_time: 3,
+    delayed: 1,
+    on_time_rate: 75,
+  },
+  {
+    assignee: '鏉庡伐',
+    total: 3,
+    on_time: 3,
+    delayed: 0,
+    on_time_rate: 100,
+  },
+]
+
+const mockDailyProgress = {
+  date: '2026-04-24',
+  progress_change: 3.2,
+  tasks_updated: 2,
+  tasks_completed: 1,
+  details: [
+    {
+      task_id: 'task-1',
+      task_title: TEXT.taskTitle,
+      progress_before: 45,
+      progress_after: 48,
+      progress_delta: 3,
+      assignee: '闃胯揪鏄殑',
+    },
+  ],
+}
+
 const mockNotifications = [
   {
     id: 'notif-task-1',
@@ -333,6 +378,11 @@ function startPreviewServer() {
 function buildMockResponse(urlString, method) {
   const url = new URL(urlString)
   const { pathname } = url
+  const authResponse = maybeBuildMockAuthResponse(pathname, json)
+
+  if (authResponse) {
+    return authResponse
+  }
 
   if (pathname === '/api/notifications' && method === 'GET') {
     return json({ success: true, data: mockNotifications })
@@ -420,17 +470,19 @@ function buildMockResponse(urlString, method) {
   }
 
   if (pathname === `/api/task-summaries/projects/${projectId}/task-summary`) {
-    return json({
-      success: true,
-      data: {
-        stats: {
-          completedTasks: 12,
-          carryoverTasks: 3,
-          delayedTasks: 1,
-          riskTasks: 2,
-        },
-      },
-    })
+    return json({ success: true, data: mockTaskSummary })
+  }
+
+  if (pathname === `/api/task-summaries/projects/${projectId}/task-summary/assignees`) {
+    return json({ success: true, data: mockTaskSummaryAssignees })
+  }
+
+  if (pathname === `/api/task-summaries/projects/${projectId}/task-summary/compare`) {
+    return json({ success: true, data: [] })
+  }
+
+  if (pathname === `/api/task-summaries/projects/${projectId}/daily-progress`) {
+    return json({ success: true, data: mockDailyProgress })
   }
 
   if (
@@ -487,6 +539,7 @@ async function main() {
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1400 } })
     page.setDefaultTimeout(30000)
+    await primeBrowserAuth(page)
 
     page.on('console', (message) => {
       if (message.type() === 'error') {

@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { chromium } from 'playwright'
+import { maybeBuildMockAuthResponse, primeBrowserAuth } from './browser-auth-fixture.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const scriptsDir = dirname(__filename)
@@ -448,6 +449,11 @@ function startPreviewServer() {
 function buildMockResponse(urlString) {
   const url = new URL(urlString)
   const { pathname } = url
+  const authResponse = maybeBuildMockAuthResponse(pathname, json)
+
+  if (authResponse) {
+    return authResponse
+  }
 
   if (pathname === '/api/projects') {
     return json({ success: true, data: [mockProject] })
@@ -557,6 +563,7 @@ async function main() {
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1800 } })
     page.setDefaultTimeout(30000)
+    await primeBrowserAuth(page)
 
     await page.addInitScript(({ key, snapshot }) => {
       window.localStorage.setItem(key, JSON.stringify(snapshot))

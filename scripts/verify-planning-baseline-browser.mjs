@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { chromium } from 'playwright'
+import { maybeBuildMockAuthResponse, primeBrowserAuth } from './browser-auth-fixture.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const scriptsDir = dirname(__filename)
@@ -236,6 +237,11 @@ function startPreviewServer() {
 function buildMockResponse(urlString) {
   const url = new URL(urlString)
   const { pathname } = url
+  const authResponse = maybeBuildMockAuthResponse(pathname, json)
+
+  if (authResponse) {
+    return authResponse
+  }
 
   if (pathname === '/api/projects') {
     return json({ success: true, data: [mockProject] })
@@ -302,6 +308,15 @@ async function main() {
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1800 } })
     page.setDefaultTimeout(30000)
+    await primeBrowserAuth(page)
+    await page.addInitScript(() => {
+      const draftResumePrefix = 'planning:draft-resume:'
+      for (const key of Object.keys(window.localStorage)) {
+        if (key.startsWith(draftResumePrefix)) {
+          window.localStorage.removeItem(key)
+        }
+      }
+    })
 
     page.on('console', (message) => {
       if (message.type() === 'error') {
@@ -340,6 +355,12 @@ async function main() {
 
     const targetUrl = `${baseUrl}/#/projects/${projectId}/planning/baseline`
     await page.goto(targetUrl, { waitUntil: 'domcontentloaded' })
+    const resumeDialog = page.getByTestId('planning-draft-resume-dialog')
+    const hasResumeDialog = await resumeDialog.waitFor({ state: 'visible', timeout: 1000 }).then(() => true).catch(() => false)
+    if (hasResumeDialog) {
+      await resumeDialog.locator('button').first().click()
+      await resumeDialog.waitFor({ state: 'detached', timeout: 10000 })
+    }
     await page.getByTestId('baseline-info-bar').waitFor({ state: 'visible', timeout: 20000 })
     await page.getByTestId('baseline-version-switcher').waitFor({ state: 'visible', timeout: 20000 })
     await page.getByTestId('baseline-diff-preview').waitFor({ state: 'visible', timeout: 20000 })
@@ -351,20 +372,8 @@ async function main() {
 
     await page.getByTestId('baseline-version-chip-baseline-v6').click()
     await page.getByTestId('baseline-info-bar').getByText('只读查看态').first().waitFor({ state: 'visible', timeout: 10000 })
-
-    const revisionPoolButton = page.getByTestId('baseline-open-revision-pool')
-    await revisionPoolButton.scrollIntoViewIfNeeded()
-    try {
-      await revisionPoolButton.click()
-    } catch {
-      await revisionPoolButton.click({ force: true })
-    }
-    await page.waitForURL(`**/projects/${projectId}/planning/revision-pool`, { timeout: 10000 })
-    await page.getByTestId('baseline-revision-source-entry').waitFor({ state: 'visible', timeout: 10000 })
-    await page.getByTestId('baseline-revision-source-entry').click()
-    await page.getByTestId('baseline-revision-pool-dialog').waitFor({ state: 'visible', timeout: 10000 })
-    await page.screenshot({ path: join(outputDir, 'planning-baseline-revision-dialog.png'), fullPage: true })
-    const revisionPoolUrl = page.url()
+    await page.getByTestId('baseline-open-revision-pool').waitFor({ state: 'visible', timeout: 10000 })
+    await page.getByTestId('baseline-open-change-log').waitFor({ state: 'visible', timeout: 10000 })
 
     assert(apiFailures.length === 0, `API proxy failures detected: ${JSON.stringify(apiFailures)}`)
     assert(pageErrors.length === 0, `Browser page errors detected: ${pageErrors.join(' | ')}`)
@@ -373,15 +382,13 @@ async function main() {
     const result = {
       mode: shouldUseMockApi ? 'mock-api' : 'proxy-api',
       initialUrl,
-      revisionPoolUrl,
-      revisionDialogVisible: true,
       readonlyVersionVisible: true,
+      revisionEntryVisible: true,
       apiFailures,
       consoleErrors,
       pageErrors,
       screenshots: {
         page: join(outputDir, 'planning-baseline-page.png'),
-        revisionDialog: join(outputDir, 'planning-baseline-revision-dialog.png'),
       },
     }
 

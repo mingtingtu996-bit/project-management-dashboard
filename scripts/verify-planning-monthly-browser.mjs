@@ -4,6 +4,11 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { chromium } from 'playwright'
+import {
+  isIgnorableBrowserConsoleError,
+  maybeBuildMockAuthResponse,
+  primeBrowserAuth,
+} from './browser-auth-fixture.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const scriptsDir = dirname(__filename)
@@ -206,6 +211,11 @@ function startPreviewServer() {
 function buildMockResponse(urlString) {
   const url = new URL(urlString)
   const { pathname } = url
+  const authResponse = maybeBuildMockAuthResponse(pathname, json)
+
+  if (authResponse) {
+    return authResponse
+  }
 
   if (pathname === '/api/projects') {
     return json({ success: true, data: [mockProject] })
@@ -280,10 +290,22 @@ async function main() {
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1800 } })
     page.setDefaultTimeout(30000)
+    await primeBrowserAuth(page)
+    await page.addInitScript(() => {
+      const draftResumePrefix = 'planning:draft-resume:'
+      for (const key of Object.keys(window.localStorage)) {
+        if (key.startsWith(draftResumePrefix)) {
+          window.localStorage.removeItem(key)
+        }
+      }
+    })
 
     page.on('console', (message) => {
       if (message.type() === 'error') {
-        consoleErrors.push(message.text())
+        const text = message.text()
+        if (!isIgnorableBrowserConsoleError(text)) {
+          consoleErrors.push(text)
+        }
       }
     })
 
@@ -331,14 +353,20 @@ async function main() {
     await page.screenshot({ path: join(outputDir, 'planning-monthly-page.png'), fullPage: true })
 
     await page.getByTestId('planning-selection-checkbox').first().click()
+    const resumeDialog = page.getByTestId('planning-draft-resume-dialog')
+    const hasResumeDialog = await resumeDialog.waitFor({ state: 'visible', timeout: 1000 }).then(() => true).catch(() => false)
+    if (hasResumeDialog) {
+      await resumeDialog.locator('button').first().click()
+      await resumeDialog.waitFor({ state: 'detached', timeout: 10000 })
+    }
     await page.getByText('草稿已调整').waitFor({ state: 'visible', timeout: 10000 })
-    await page.getByRole('button', { name: '去看项目基线' }).click()
+    await page.locator('[data-testid="planning-page-tabs"] button').filter({ hasText: '项目基线' }).first().click()
     await page.getByTestId('monthly-plan-unsaved-changes-dialog').waitFor({ state: 'visible', timeout: 10000 })
     await page.screenshot({ path: join(outputDir, 'planning-monthly-unsaved-dialog.png'), fullPage: true })
-    await page.getByTestId('monthly-plan-unsaved-changes-dialog').getByRole('button', { name: '取消' }).click()
+    await page.getByTestId('monthly-plan-unsaved-changes-dialog').locator('button').first().click()
     await page.getByTestId('monthly-plan-unsaved-changes-dialog').waitFor({ state: 'detached', timeout: 10000 })
 
-    await page.getByRole('button', { name: '标准确认入口' }).click()
+    await page.getByTestId('monthly-plan-standard-confirm-entry').click()
     await page.getByTestId('monthly-plan-confirm-dialog').waitFor({ state: 'visible', timeout: 10000 })
     await page.screenshot({ path: join(outputDir, 'planning-monthly-confirm-dialog.png'), fullPage: true })
 
