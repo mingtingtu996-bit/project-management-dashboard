@@ -263,6 +263,7 @@ jobs:
     needs: [build-frontend, browser-checks, browser-checks-summary, database-migration]
     env:
       DEPLOY_TARGET: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || 'production' }}
+      HAS_SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK != '' }}
     if: >
       always() &&
       needs.build-frontend.result == 'success' &&
@@ -324,7 +325,7 @@ jobs:
         run: node scripts/deploy-cloudbase-backend.mjs
 
       - name: Send deployment notification
-        if: ${{ secrets.SLACK_WEBHOOK != '' }}
+        if: ${{ env.HAS_SLACK_WEBHOOK == 'true' }}
         uses: rtCamp/action-slack-notify@v2
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
