@@ -60,6 +60,7 @@ VITE_STORAGE_MODE=api
 PORT=3001
 SUPABASE_URL=
 SUPABASE_ANON_KEY=
+SUPABASE_MIGRATION_URL=
 SUPABASE_HOST=
 SUPABASE_PORT=
 SUPABASE_DATABASE=
@@ -105,6 +106,8 @@ cd server
 npm run migrate:plan
 npm run migrate:pending
 ```
+
+CI 中的自动迁移优先使用 `SUPABASE_MIGRATION_URL`。它应当配置为 Supabase 提供的可公网访问 pooler/session 连接串；当前直连 `db.<project>.supabase.co` 在 GitHub Hosted Runner 上通常只有 IPv6，不适合作为 CI 迁移入口。
 
 ## 发布与工程化说明
 

@@ -114,11 +114,11 @@ npm run migrate:pending
 
 ### 数据迁移
 
-- `SUPABASE_HOST`
-- `SUPABASE_PORT`
-- `SUPABASE_DATABASE`
-- `SUPABASE_USER`
-- `SUPABASE_PASSWORD`
+- `SUPABASE_MIGRATION_URL`
+
+建议将它配置为 Supabase 提供的 pooler/session 连接串。当前直连 `db.<project>.supabase.co` 在 GitHub Hosted Runner 上通常只有 IPv6，CI 迁移不稳定。
+
+如果未配置 `SUPABASE_MIGRATION_URL`，当前工作流会明确记录“migration skipped”并继续部署；此时请确保发布前已经在可连通环境中执行过 `npm run migrate:plan` / `npm run migrate:pending`。
 
 ### CloudBase 部署
 
