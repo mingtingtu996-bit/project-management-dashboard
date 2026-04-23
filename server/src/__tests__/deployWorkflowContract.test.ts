@@ -8,16 +8,17 @@ const workspaceRoot = process.cwd().endsWith(`${sep}server`)
   : process.cwd()
 
 describe('deploy workflow contract', () => {
-  it('pins node 20, actions v4, explicit quality gates, and CloudBase-only deployment', () => {
+  it('pins node 20, node24-compatible actions, explicit quality gates, and CloudBase-only deployment', () => {
     const workflow = readFileSync(resolve(workspaceRoot, '.github', 'workflows', 'deploy.yml'), 'utf8')
 
     expect(workflow).toContain('concurrency:')
     expect(workflow).toContain('cancel-in-progress: true')
-    expect(workflow).toContain('actions/checkout@v4')
-    expect(workflow).toContain('actions/setup-node@v4')
-    expect(workflow).toContain('actions/upload-artifact@v4')
-    expect(workflow).toContain('actions/download-artifact@v4')
-    expect(workflow).toContain('actions/cache@v4')
+    expect(workflow).toContain('FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true')
+    expect(workflow).toContain('actions/checkout@v6')
+    expect(workflow).toContain('actions/setup-node@v6')
+    expect(workflow).toContain('actions/upload-artifact@v7')
+    expect(workflow).toContain('actions/download-artifact@v7')
+    expect(workflow).toContain('actions/cache@v5')
     expect(workflow).toContain("node-version: '20'")
 
     expect(workflow).toContain('pnpm/action-setup@v4')
@@ -84,8 +85,9 @@ describe('deploy workflow contract', () => {
     expect(workflowGuard).toContain('name: Workflow Guard')
     expect(workflowGuard).toContain('pull_request:')
     expect(workflowGuard).toContain('.github/workflows/deploy.yml')
-    expect(workflowGuard).toContain('actions/checkout@v4')
-    expect(workflowGuard).toContain('actions/setup-node@v4')
+    expect(workflowGuard).toContain('FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true')
+    expect(workflowGuard).toContain('actions/checkout@v6')
+    expect(workflowGuard).toContain('actions/setup-node@v6')
     expect(workflowGuard).toContain("node-version: '20'")
     expect(workflowGuard).toContain('scripts/deploy-cloudbase-backend.mjs')
     expect(workflowGuard).toContain('npm ci --workspaces=false')
