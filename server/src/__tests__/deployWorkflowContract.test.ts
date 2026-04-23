@@ -53,7 +53,9 @@ describe('deploy workflow contract', () => {
     expect(workflow).toContain('deploy-cloudbase-backend.mjs')
     expect(workflow).toContain('project-management-api')
     expect(workflow).toContain('CLOUDBASE_BACKEND_PORT: \'3001\'')
-    expect(workflow).toContain('CLOUDBASE_ENV_ID != \'\'')
+    expect(workflow).toContain('Check deployment credentials')
+    expect(workflow).toContain('can_deploy=true')
+    expect(workflow).toContain('steps.deployment-eligibility.outputs.can_deploy == \'true\'')
     expect(workflow).toContain("needs.database-migration.result == 'skipped'")
 
     expect(workflow).not.toContain('passWithNoTests')

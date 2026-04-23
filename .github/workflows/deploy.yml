@@ -273,12 +273,7 @@ jobs:
       (
         (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')) ||
         github.event_name == 'workflow_dispatch'
-      ) &&
-      (
-        (secrets.CLOUDBASE_SECRET_ID != '' && secrets.CLOUDBASE_SECRET_KEY != '') ||
-        (secrets.TENCENT_SECRET_ID != '' && secrets.TENCENT_SECRET_KEY != '')
-      ) &&
-      secrets.CLOUDBASE_ENV_ID != ''
+      )
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -297,7 +292,40 @@ jobs:
       - name: Install CloudBase CLI
         run: npm install -g @cloudbase/cli
 
+      - name: Check deployment credentials
+        id: deployment-eligibility
+        env:
+          CLOUDBASE_ENV_ID: ${{ secrets.CLOUDBASE_ENV_ID }}
+          CLOUDBASE_SECRET_ID: ${{ secrets.CLOUDBASE_SECRET_ID }}
+          CLOUDBASE_SECRET_KEY: ${{ secrets.CLOUDBASE_SECRET_KEY }}
+          TENCENT_SECRET_ID: ${{ secrets.TENCENT_SECRET_ID }}
+          TENCENT_SECRET_KEY: ${{ secrets.TENCENT_SECRET_KEY }}
+        run: |
+          HAS_ENV_ID=false
+          HAS_CLOUDBASE_CREDS=false
+          HAS_TENCENT_CREDS=false
+
+          if [ -n "$CLOUDBASE_ENV_ID" ]; then
+            HAS_ENV_ID=true
+          fi
+
+          if [ -n "$CLOUDBASE_SECRET_ID" ] && [ -n "$CLOUDBASE_SECRET_KEY" ]; then
+            HAS_CLOUDBASE_CREDS=true
+          fi
+
+          if [ -n "$TENCENT_SECRET_ID" ] && [ -n "$TENCENT_SECRET_KEY" ]; then
+            HAS_TENCENT_CREDS=true
+          fi
+
+          if [ "$HAS_ENV_ID" = true ] && { [ "$HAS_CLOUDBASE_CREDS" = true ] || [ "$HAS_TENCENT_CREDS" = true ]; }; then
+            echo "can_deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "can_deploy=false" >> "$GITHUB_OUTPUT"
+            echo "CloudBase deployment skipped because required secrets are missing."
+          fi
+
       - name: Login CloudBase
+        if: ${{ steps.deployment-eligibility.outputs.can_deploy == 'true' }}
         env:
           CLOUDBASE_SECRET_ID: ${{ secrets.CLOUDBASE_SECRET_ID }}
           CLOUDBASE_SECRET_KEY: ${{ secrets.CLOUDBASE_SECRET_KEY }}
@@ -315,9 +343,11 @@ jobs:
             --apiKey "$API_KEY"
 
       - name: Deploy frontend
+        if: ${{ steps.deployment-eligibility.outputs.can_deploy == 'true' }}
         run: tcb hosting:deploy dist --envId ${{ secrets.CLOUDBASE_ENV_ID }}
 
       - name: Deploy backend CloudRun service
+        if: ${{ steps.deployment-eligibility.outputs.can_deploy == 'true' }}
         env:
           CLOUDBASE_ENV_ID: ${{ secrets.CLOUDBASE_ENV_ID }}
           CLOUDBASE_BACKEND_SERVICE: project-management-api
