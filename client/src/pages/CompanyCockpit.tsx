@@ -387,13 +387,13 @@ export default function CompanyCockpit() {
       }
 
       if (dialogMode === 'edit' && editTarget) {
-        const updatedProject = await apiPut(`/api/projects/${editTarget.id}`, {
+        const updatedProject = await apiPut<Project>(`/api/projects/${editTarget.id}`, {
           ...payload,
           version: editTarget.version ?? 1,
         })
         upsertLocalProject(updatedProject)
       } else {
-        const createdProject = await apiPost('/api/projects', payload)
+        const createdProject = await apiPost<Project>('/api/projects', payload)
         upsertLocalProject(createdProject)
       }
 
@@ -434,7 +434,7 @@ export default function CompanyCockpit() {
 
     setSubmitting(true)
     try {
-      const updatedProject = await apiPut(`/api/projects/${project.id}`, {
+      const updatedProject = await apiPut<Project>(`/api/projects/${project.id}`, {
         status: nextStatus,
         version: project.version ?? 1,
       })

@@ -347,7 +347,7 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ targetUserId: member.userId }),
           })
-          updateProject({ id: projectId, owner_id: member.userId })
+          updateProject(projectId, { owner_id: member.userId })
           dispatchProjectAccessOverride({
             projectId,
             permissionLevel: 'editor',

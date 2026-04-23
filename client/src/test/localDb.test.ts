@@ -24,7 +24,20 @@ function makeProject(id: string): Project {
 }
 
 function makeTask(id: string, projectId: string, version = 1): Task {
-  return { id, project_id: projectId, title: `Task ${id}`, status: 'todo', progress: 0, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), version }
+  return {
+    id,
+    project_id: projectId,
+    title: `Task ${id}`,
+    status: 'todo',
+    priority: 'medium',
+    progress: 0,
+    dependencies: [],
+    is_milestone: false,
+    milestone_order: 0,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    version,
+  }
 }
 
 describe('本地数据库模块', () => {

@@ -8,8 +8,10 @@ import { useStore } from '@/hooks/useStore'
 import { ApiClientError } from '@/lib/apiClient'
 import { projectDb } from '@/lib/localDb'
 
-const { apiGet } = vi.hoisted(() => ({
+const { apiGet, useAuth, useAuthDialog } = vi.hoisted(() => ({
   apiGet: vi.fn(),
+  useAuth: vi.fn(),
+  useAuthDialog: vi.fn(),
 }))
 
 vi.mock('@/lib/apiClient', async () => {
@@ -19,6 +21,14 @@ vi.mock('@/lib/apiClient', async () => {
     apiGet,
   }
 })
+
+vi.mock('@/hooks/useAuth', () => ({
+  useAuth,
+}))
+
+vi.mock('@/hooks/useAuthDialog', () => ({
+  useAuthDialog,
+}))
 
 const sharedSliceStatus = {
   notifications: { loading: false, error: null },
@@ -78,6 +88,8 @@ describe('ProjectLayout', () => {
     document.body.appendChild(container)
     root = createRoot(container)
     apiGet.mockReset()
+    useAuth.mockReturnValue({ isAuthenticated: true, loading: false })
+    useAuthDialog.mockReturnValue({ openLoginDialog: vi.fn(), closeLoginDialog: vi.fn(), isOpen: false })
     projectDb.replaceAll([])
     resetStore()
   })

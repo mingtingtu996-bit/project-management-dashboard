@@ -367,7 +367,7 @@ function AppContent() {
       <ShortcutsHelp open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
       <FeedbackButton />
       <LoginDialog isOpen={showLoginDialog} onClose={closeLoginDialog} />
-      <ConditionWarningModal projectId={projectId} />
+      <ConditionWarningModal projectId={projectId ?? undefined} />
     </div>
   )
 }

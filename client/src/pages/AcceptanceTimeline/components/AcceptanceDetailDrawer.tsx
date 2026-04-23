@@ -227,10 +227,10 @@ export default function AcceptanceDetailDrawer({
   const canSubmitDeclaration = !changingStatus && !detailLoading && detailContext != null && prerequisitesMet && requiredRequirementsMet
 
   async function handleDependencyAdd() {
-    if (!dependencyTargetId) return
+    if (!dependencyTargetId || !currentNodeId) return
     setMutatingDependency(true)
     try {
-      await onDependencyAdd(node.id, dependencyTargetId)
+      await onDependencyAdd(currentNodeId, dependencyTargetId)
     } catch (error) {
       toast({
         title: '新增前置失败',
@@ -243,9 +243,10 @@ export default function AcceptanceDetailDrawer({
   }
 
   async function handleDependencyRemove(sourcePlanId: string) {
+    if (!currentNodeId) return
     setMutatingDependency(true)
     try {
-      await onDependencyRemove(node.id, sourcePlanId)
+      await onDependencyRemove(currentNodeId, sourcePlanId)
     } catch (error) {
       toast({
         title: '移除前置失败',
@@ -451,6 +452,7 @@ export default function AcceptanceDetailDrawer({
                     onChange={(event) => setRequirementDraft((current) => ({ ...current, requirement_type: event.target.value }))}
                     className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
                     placeholder="external / drawing / task_condition"
+                    data-testid="acceptance-requirement-type-input"
                   />
                 </label>
                 <label className="grid gap-1 text-xs text-slate-500">
@@ -460,6 +462,7 @@ export default function AcceptanceDetailDrawer({
                     onChange={(event) => setRequirementDraft((current) => ({ ...current, source_entity_type: event.target.value }))}
                     className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
                     placeholder="task_condition"
+                    data-testid="acceptance-requirement-source-type-input"
                   />
                 </label>
                 <label className="grid gap-1 text-xs text-slate-500">
@@ -469,6 +472,7 @@ export default function AcceptanceDetailDrawer({
                     onChange={(event) => setRequirementDraft((current) => ({ ...current, source_entity_id: event.target.value }))}
                     className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
                     placeholder="condition-1"
+                    data-testid="acceptance-requirement-source-id-input"
                   />
                 </label>
                 <label className="grid gap-1 text-xs text-slate-500">
@@ -491,6 +495,7 @@ export default function AcceptanceDetailDrawer({
                   value={requirementDraft.description}
                   onChange={(event) => setRequirementDraft((current) => ({ ...current, description: event.target.value }))}
                   className="min-h-20 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                  data-testid="acceptance-requirement-description-input"
                   placeholder="补充验收条件、前置判断或共享来源说明"
                 />
               </label>
@@ -500,6 +505,7 @@ export default function AcceptanceDetailDrawer({
                   className="gap-2"
                   disabled={!canCreateRequirement || creatingRequirement}
                   onClick={() => void handleRequirementCreate()}
+                  data-testid="acceptance-create-requirement"
                 >
                   <Plus className="h-4 w-4" />
                   {creatingRequirement ? '保存中...' : '新增条件'}

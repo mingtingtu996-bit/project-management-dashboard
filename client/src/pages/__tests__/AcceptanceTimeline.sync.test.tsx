@@ -1,3 +1,4 @@
+import { fireEvent } from '@testing-library/react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
@@ -415,14 +416,10 @@ describe('AcceptanceTimeline dependency sync', () => {
     expect(descriptionInput).toBeTruthy()
 
     act(() => {
-      requirementTypeInput!.value = 'external'
-      requirementTypeInput!.dispatchEvent(new Event('input', { bubbles: true }))
-      sourceTypeInput!.value = 'task_condition'
-      sourceTypeInput!.dispatchEvent(new Event('input', { bubbles: true }))
-      sourceIdInput!.value = sourceId
-      sourceIdInput!.dispatchEvent(new Event('input', { bubbles: true }))
-      descriptionInput!.value = 'created from drawer'
-      descriptionInput!.dispatchEvent(new Event('input', { bubbles: true }))
+      fireEvent.change(requirementTypeInput!, { target: { value: 'external' } })
+      fireEvent.change(sourceTypeInput!, { target: { value: 'task_condition' } })
+      fireEvent.change(sourceIdInput!, { target: { value: sourceId } })
+      fireEvent.change(descriptionInput!, { target: { value: 'created from drawer' } })
     })
 
     act(() => {

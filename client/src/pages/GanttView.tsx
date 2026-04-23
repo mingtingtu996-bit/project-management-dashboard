@@ -869,9 +869,9 @@ export default function GanttView() {
       ? '当前仍有 ' + unmetEditingTaskConditions.length + ' 项开工条件未满足，首次填报后会弹出条件预警提醒。'
       : '任务进度会同步驱动业务状态。'
 
-  const openConditionWarning = useCallback((task: Pick<Task, 'id' | 'title' | 'name'>, pendingConditionCount: number) => {
+  const openConditionWarning = useCallback((task: Pick<Task, 'title' | 'name'> & { id?: string }, pendingConditionCount: number) => {
     setConditionWarningTarget({
-      taskId: String(task.id),
+      taskId: String(task.id ?? ''),
       taskTitle: String(task.title || task.name || '当前任务'),
       pendingConditionCount,
     })
@@ -1809,8 +1809,8 @@ export default function GanttView() {
         assignee: formData.assignee_name,  // assignee_name -> assignee
         assignee_user_id: formData.assignee_user_id || null,
         participant_unit_id: formData.participant_unit_id || null,
-        responsible_unit: resolvedResponsibleUnit || null,
-        assignee_unit: resolvedResponsibleUnit || null,
+        responsible_unit: resolvedResponsibleUnit || undefined,
+        assignee_unit: resolvedResponsibleUnit || undefined,
         dependencies: formData.dependencies || [],
         parent_id: formData.parent_id || null,
         milestone_id: formData.milestone_id || null,

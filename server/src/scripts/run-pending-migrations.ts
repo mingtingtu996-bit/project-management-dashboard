@@ -1,3 +1,4 @@
+import { setDefaultResultOrder } from 'node:dns'
 import { resolve } from 'node:path'
 
 import pg from 'pg'
@@ -20,6 +21,7 @@ const args = new Set(process.argv.slice(2))
 const isPlanMode = args.has('--plan') || args.has('--dry-run')
 
 async function main() {
+  setDefaultResultOrder('ipv4first')
   const discovered = await discoverMigrationFiles(migrationsDir)
 
   const client = new Client(resolveMigrationConnectionConfig())
