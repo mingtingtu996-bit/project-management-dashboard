@@ -156,8 +156,8 @@ describe('§7.3 /api/* global rate limiting', () => {
 // ─────────────────────────────────────────────
 describe('§7.3 XSS protection', () => {
   it('containsXss detects <script> tags', async () => {
-    const { containsXss } = await import('../../server/src/middleware/xssProtection.js').catch(
-      () => require(join(SERVER_ROOT, 'middleware/xssProtection.js')),
+    const { containsXss } = await import('../middleware/xssProtection.js').catch(
+      () => require(join(SERVER_ROOT, 'middleware/xssProtection.ts')),
     ).catch(() => ({ containsXss: null }))
 
     if (!containsXss) {
@@ -256,7 +256,7 @@ describe('§7.3 JWT expiry unified validation', () => {
 
   it('verifyToken returns null on expired token', async () => {
     // Import verifyToken via dynamic import if available in test context
-    const jwtMod = await import('../../server/src/auth/jwt.js').catch(() => null)
+    const jwtMod = await import('../auth/jwt.js').catch(() => null)
     if (!jwtMod) {
       // Static check fallback
       const src = readServerSource('auth/jwt.ts')

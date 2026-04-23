@@ -98,6 +98,7 @@ describe('taskWriteChainService participant unit lookup', () => {
       project_id: 'project-1',
       title: '带责任单位的任务',
       status: 'in_progress',
+      priority: 'medium',
       progress: 20,
       participant_unit_id: 'unit-1',
       responsible_unit: '责任单位',

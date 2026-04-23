@@ -64,7 +64,6 @@ describe('warning chain contract', () => {
       description: '示例',
       is_acknowledged: false,
       created_at: '2026-04-21T08:00:00.000Z',
-      source_entity_type: 'responsibility_subject',
       source_entity_id: 'unit:unit:12345678-1234-4abc-8def-1234567890ab',
     })
 
