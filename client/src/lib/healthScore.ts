@@ -14,11 +14,13 @@
  */
 
 // ── 健康度颜色常量（与 Tailwind 语义色一致，集中管理）────────────────────────
+import { CHART_SERIES } from './chartPalette'
+
 const HEALTH_COLORS = {
-  excellent: { bg: 'bg-emerald-500', text: 'text-emerald-600', color: '#10b981' },
-  good:      { bg: 'bg-blue-500',    text: 'text-blue-600',    color: '#3b82f6' },
-  warning:   { bg: 'bg-amber-500',   text: 'text-amber-600',   color: '#f59e0b' },
-  critical:  { bg: 'bg-red-500',     text: 'text-red-600',     color: '#ef4444' },
+  excellent: { bg: 'bg-emerald-500', text: 'text-emerald-600', color: CHART_SERIES.success },
+  good:      { bg: 'bg-blue-500',    text: 'text-blue-600',    color: CHART_SERIES.primary },
+  warning:   { bg: 'bg-amber-500',   text: 'text-amber-600',   color: CHART_SERIES.warning },
+  critical:  { bg: 'bg-red-500',     text: 'text-red-600',     color: CHART_SERIES.danger },
 } as const
 
 export interface HealthScoreParams {

@@ -4,6 +4,10 @@ import { buildMilestoneOverview, getMilestoneLifecycleStatus } from '../mileston
 
 describe('milestone overview', () => {
   it('classifies milestone tasks from the shared task list', () => {
+    const now = new Date()
+    const futureDate = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    const pastDate = new Date(now.getTime() - 10 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    const farPastDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
     const overview = buildMilestoneOverview([
       {
         id: 'm1',
@@ -11,7 +15,7 @@ describe('milestone overview', () => {
         status: 'completed',
         progress: 100,
         is_milestone: true,
-        planned_end_date: '2026-04-01',
+        planned_end_date: farPastDate,
         created_at: '2026-03-01T00:00:00.000Z',
         updated_at: '2026-04-01T00:00:00.000Z',
       },
@@ -21,7 +25,7 @@ describe('milestone overview', () => {
         status: 'in_progress',
         progress: 60,
         is_milestone: true,
-        planned_end_date: '2026-04-06',
+        planned_end_date: futureDate,
         created_at: '2026-03-01T00:00:00.000Z',
         updated_at: '2026-04-02T00:00:00.000Z',
       },
@@ -31,7 +35,7 @@ describe('milestone overview', () => {
         status: 'todo',
         progress: 0,
         is_milestone: true,
-        planned_end_date: '2026-03-28',
+        planned_end_date: pastDate,
         created_at: '2026-03-01T00:00:00.000Z',
         updated_at: '2026-03-28T00:00:00.000Z',
       },
@@ -41,7 +45,7 @@ describe('milestone overview', () => {
         status: 'in_progress',
         progress: 40,
         is_milestone: false,
-        planned_end_date: '2026-04-05',
+        planned_end_date: futureDate,
         created_at: '2026-03-01T00:00:00.000Z',
         updated_at: '2026-04-02T00:00:00.000Z',
       },

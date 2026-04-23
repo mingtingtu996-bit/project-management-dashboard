@@ -13,7 +13,7 @@
 import { useState, useEffect } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LoadingState } from '@/components/ui/loading-state'
 import {
   TrendingUp,
   BarChart3,
@@ -47,6 +47,8 @@ interface ComparePeriod {
   from: string
   to: string
 }
+
+type CompareGranularity = 'day' | 'week' | 'month'
 
 interface TaskDetail {
   id: string
@@ -88,6 +90,17 @@ const fmt = (d: Date) => {
   return `${y}-${m}-${day}`
 }
 
+const fmtMonth = (value: string) => value.slice(0, 7)
+
+function buildMonthPeriod(monthValue: string) {
+  const start = new Date(`${monthValue}-01T00:00:00`)
+  const end = new Date(start.getFullYear(), start.getMonth() + 1, 0)
+  return {
+    from: fmt(start),
+    to: fmt(end),
+  }
+}
+
 // ─── 每日进度变化组件 ─────────────────────────────────────
 
 function DailyProgressSection({ projectId }: { projectId?: string }) {
@@ -113,9 +126,11 @@ function DailyProgressSection({ projectId }: { projectId?: string }) {
 
   if (loading) {
     return (
-      <div className="space-y-3">
-        <Skeleton className="h-20 w-full" />
-      </div>
+      <LoadingState
+        label="每日进度加载中"
+        description="正在读取当天的进度变化数据"
+        className="min-h-20"
+      />
     )
   }
 
@@ -203,7 +218,7 @@ function DailyProgressSection({ projectId }: { projectId?: string }) {
 // ─── 完整时段对比组件（与TaskSummary完全一致）─────────────
 
 function CompareView({ projectId }: { projectId?: string }) {
-  const [granularity, setGranularity] = useState<'day' | 'week'>('day')
+  const [granularity, setGranularity] = useState<CompareGranularity>('day')
   const [results, setResults] = useState<CompareResult[]>([])
   const [loading, setLoading] = useState(false)
   const [expandedChange, setExpandedChange] = useState<number | null>(null)
@@ -225,6 +240,12 @@ function CompareView({ projectId }: { projectId?: string }) {
       if (granularity === 'day' && (field === 'from' || field === 'to')) {
         return { ...p, from: value, to: value }
       }
+      if (granularity === 'month' && (field === 'from' || field === 'to')) {
+        if (!value) {
+          return { ...p, from: '', to: '' }
+        }
+        return { ...p, ...buildMonthPeriod(value) }
+      }
       return { ...p, [field]: value }
     }))
   }
@@ -240,7 +261,7 @@ function CompareView({ projectId }: { projectId?: string }) {
   }
 
   // 快捷选择
-  const quickSelect = (preset: 'day1' | 'day3' | 'day7' | 'week' | 'biweek' | 'month') => {
+  const quickSelect = (preset: 'day1' | 'day3' | 'day7' | 'week' | 'biweek' | 'month' | 'quarter') => {
     const now = new Date()
 
     if (preset === 'day1') {
@@ -288,6 +309,15 @@ function CompareView({ projectId }: { projectId?: string }) {
         { label: '上月', from: fmt(lastMonthFirst), to: fmt(lastMonthLast) },
         { label: '本月', from: fmt(firstOfMonth), to: fmt(now) },
       ])
+    } else if (preset === 'quarter') {
+      const currentQuarterStartMonth = Math.floor(now.getMonth() / 3) * 3
+      const thisQuarterStart = new Date(now.getFullYear(), currentQuarterStartMonth, 1)
+      const prevQuarterStart = new Date(now.getFullYear(), currentQuarterStartMonth - 3, 1)
+      const prevQuarterEnd = new Date(now.getFullYear(), currentQuarterStartMonth, 0)
+      setPeriods([
+        { label: '上季度', from: fmt(prevQuarterStart), to: fmt(prevQuarterEnd) },
+        { label: '本季度', from: fmt(thisQuarterStart), to: fmt(now) },
+      ])
     }
   }
 
@@ -297,10 +327,15 @@ function CompareView({ projectId }: { projectId?: string }) {
         { key: 'day1' as const, label: '今昨对比' },
         { key: 'day7' as const, label: '周同比' },
       ]
-    : [
-        { key: 'week' as const, label: '周环比' },
-        { key: 'month' as const, label: '月环比' },
-      ]
+    : granularity === 'week'
+      ? [
+          { key: 'week' as const, label: '周环比' },
+          { key: 'biweek' as const, label: '双周对比' },
+        ]
+      : [
+          { key: 'month' as const, label: '月环比' },
+          { key: 'quarter' as const, label: '季度对比' },
+        ]
 
   const runCompare = () => {
     const validPeriods = periods.filter(p => p.from && p.to && p.label)
@@ -365,6 +400,8 @@ function CompareView({ projectId }: { projectId?: string }) {
               onClick={() => { setGranularity('day'); quickSelect('day1') }}>按天</button>
             <button className={`px-3 py-1.5 text-xs transition-colors ${granularity === 'week' ? 'bg-blue-500 text-white' : 'text-gray-600 hover:bg-gray-50'}`}
               onClick={() => { setGranularity('week'); quickSelect('week') }}>按周</button>
+            <button className={`px-3 py-1.5 text-xs transition-colors ${granularity === 'month' ? 'bg-blue-500 text-white' : 'text-gray-600 hover:bg-gray-50'}`}
+              onClick={() => { setGranularity('month'); quickSelect('month') }}>按月</button>
           </div>
         </div>
 
@@ -378,6 +415,9 @@ function CompareView({ projectId }: { projectId?: string }) {
               {granularity === 'day' ? (
                 <input type="date" value={p.from} onChange={e => updatePeriod(idx, 'from', e.target.value)}
                   className="px-2 py-1.5 border rounded-lg text-sm focus:ring-2 focus:ring-blue-300 focus:outline-none [::-webkit-calendar-picker-indicator]:opacity-60" />
+              ) : granularity === 'month' ? (
+                <input type="month" value={p.from ? fmtMonth(p.from) : ''} onChange={e => updatePeriod(idx, 'from', e.target.value)}
+                  className="px-2 py-1.5 border rounded-lg text-sm focus:ring-2 focus:ring-blue-300 focus:outline-none" />
               ) : (
                 <>
                   <input type="date" value={p.from} onChange={e => updatePeriod(idx, 'from', e.target.value)}
@@ -401,16 +441,22 @@ function CompareView({ projectId }: { projectId?: string }) {
             onClick={addPeriod}>
             + 添加时段
           </button>
-          <Button size="sm" disabled={loading} onClick={runCompare}
+          <Button size="sm" loading={loading} onClick={runCompare}
             className="bg-blue-600 hover:bg-blue-700 text-white">
-            {loading ? <RefreshCw className="w-4 h-4 mr-1.5 animate-spin" /> : <BarChart3 className="w-4 h-4 mr-1.5" />}
+            <BarChart3 className="w-4 h-4 mr-1.5" />
             开始对比
           </Button>
         </div>
       </div>
 
       {/* 对比结果 */}
-      {loading && <div className="flex items-center justify-center h-32 text-gray-400"><RefreshCw className="w-4 h-4 animate-spin mr-2" />加载中...</div>}
+      {loading && (
+        <LoadingState
+          label="时间段对比加载中"
+          description="正在计算所选时间段的进度变化"
+          className="h-32 min-h-32"
+        />
+      )}
 
       {results.length > 0 && !loading && (
         <div className="space-y-3">
@@ -430,7 +476,9 @@ function CompareView({ projectId }: { projectId?: string }) {
                 <div key={idx} className="bg-gray-50 rounded-lg p-3 border border-gray-100 flex items-center justify-between">
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-gray-700 truncate">{r.period_label}</p>
-                    <p className="text-xs text-gray-400">{r.from.slice(5)} ~ {r.to.slice(5)}</p>
+                    <p className="text-xs text-gray-400">
+                      {granularity === 'month' ? fmtMonth(r.from) : `${r.from.slice(5)} ~ ${r.to.slice(5)}`}
+                    </p>
                   </div>
                   <div className="flex items-center gap-3 text-right">
                     <div>

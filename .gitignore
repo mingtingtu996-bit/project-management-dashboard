@@ -28,6 +28,7 @@ Thumbs.db
 
 # Logs
 *.log
+*.pid
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -37,7 +38,17 @@ coverage/
 
 # Temporary files
 *.tmp
+.tmp/
 .temp/
+tmp-browser-checks/
+check-*.png
+tmp-*.png
+tmp-*.json
+tmp-*.txt
+tmp-*.pdf
+
+# Generated artifacts
+artifacts/
 
 # Project specific
 .project-snapshots/

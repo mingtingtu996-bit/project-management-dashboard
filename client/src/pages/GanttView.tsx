@@ -1,47 +1,62 @@
-import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react'
+﻿import React, { useEffect, useState, useMemo, useCallback } from 'react'
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
-import { useStore } from '@/hooks/useStore'
+import { Suspense, lazy, useRef } from 'react'
+import {
+  useAddTask,
+  useConditions,
+  useCurrentProject,
+  useDeleteTask,
+  useHydratedProjectId,
+  useObstacles,
+  useParticipantUnits,
+  useStore,
+  useSetConditions,
+  useSetObstacles,
+  useSetTasks,
+  useTasks,
+  useUpdateTask,
+} from '@/hooks/useStore'
 import { useConfirmDialog } from '@/hooks/useConfirmDialog'
 import { useDebounce } from '@/hooks/useDebounce'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
-import {
-  Popover,
-  PopoverTrigger,
-  PopoverContent,
-} from '@/components/ui/popover'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { toast } from '@/hooks/use-toast'
-import { ArrowLeft, Plus, Calendar, Save, Trash2, GitBranch, AlertCircle, Flag, ChevronRight, ChevronDown, LayoutTemplate, ShieldCheck, AlertOctagon, CheckCircle2, XCircle, Search, X, SlidersHorizontal, BarChart2 } from 'lucide-react'
-import { formatDate, cn } from '@/lib/utils'
-import { getAuthHeaders } from '@/lib/apiClient'
-import { calculateCPM, isCriticalTask, getCriticalPathSummary, type CPMResult } from '@/lib/cpm'
+import { LoadingState } from '@/components/ui/loading-state'
+import { zhCN } from '@/i18n/zh-CN'
+import { Calendar, Save, Trash2, ChevronRight, ChevronDown, LayoutTemplate, CheckCircle2, XCircle, Search, SlidersHorizontal, AlertTriangle } from 'lucide-react'
+import { apiDelete, apiGet, apiPost, apiPut, getApiErrorMessage, getAuthHeaders, isAbortError } from '@/lib/apiClient'
+import { DashboardApiService, type ProjectSummary } from '@/services/dashboardApi'
+import { DataQualityApiService, type DataQualityLiveCheckSummary, type DataQualityProjectSummary } from '@/services/dataQualityApi'
+import { safeJsonParse, safeStorageGet, safeStorageRemove, safeStorageSet } from '@/lib/browserStorage'
+import { calculateDelayImpact } from '@/lib/cpm'
+import { prefetchProjectTasks } from '@/lib/projectTaskPrefetch'
+import { getStatusTheme } from '@/lib/statusTheme'
+import { formatCriticalPathCount } from '@/lib/userFacingTerms'
 import {
   buildProjectTaskProgressSnapshot,
   getTaskBusinessStatus,
   isCompletedTask,
 } from '@/lib/taskBusinessStatus'
 import { BatchActionBar } from '@/components/BatchActionBar'
+import { ConditionWarningModal } from '@/components/ConditionWarningModal'
+import { DeleteProtectionDialog } from '@/components/DeleteProtectionDialog'
 import { GanttViewSkeleton } from '@/components/ui/page-skeleton'
 import { Pagination, usePagination } from '@/components/ui/Pagination'
-import { ConflictDialog } from '@/components/ConflictDialog'
-import { Breadcrumb } from '@/components/Breadcrumb'
-import { PageHeader } from '@/components/PageHeader'
+import { GanttViewHeader } from './GanttViewHeader'
+import { useGanttCriticalPath } from './useGanttCriticalPath'
+import { GanttBatchBar, GanttFilterBar, GanttStatsCards } from './GanttViewFilters'
+import { GanttTaskRows } from './GanttViewRows'
+import {
+  ParticipantUnitsDialog,
+  type ParticipantUnitDraft,
+  type ParticipantUnitRecord,
+} from './GanttView/ParticipantUnitsDialog'
+import {
+  TaskTimelineView,
+  type GanttTimelineCompareMode,
+  type GanttTimelineScale,
+  type TaskTimelineViewHandle,
+} from './GanttView/TaskTimelineView'
 import {
   DndContext,
   closestCenter,
@@ -57,7 +72,16 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
 
-// 从独立文件引入类型、常量和工具函数（拆分以避免 esbuild 解析超大文件的 bug）
+const LazyGanttViewDialogs = lazy(() =>
+  import('./GanttViewDialogs').then((module) => ({ default: module.GanttViewDialogs })),
+)
+const LazyTaskDetailPanel = lazy(() =>
+  import('./GanttViewPanels').then((module) => ({ default: module.TaskDetailPanel })),
+)
+const LazyCriticalPathDialog = lazy(() =>
+  import('./GanttView/CriticalPathDialog').then((module) => ({ default: module.CriticalPathDialog })),
+)
+
 import {
   type Task,
   type WBSNode,
@@ -71,156 +95,599 @@ import {
   buildWBSTree,
   assignWBSCode,
   flattenTree,
+  getDependencyChain,
 } from './GanttViewTypes'
-import { SortableTaskRowWrapper } from './GanttViewComponents'
+import type {
+  DelayRequest as StoreDelayRequestRecord,
+  ProjectMember,
+  Task as StoreTaskRecord,
+  TaskCondition as StoreTaskConditionRecord,
+  TaskObstacle as StoreTaskObstacleRecord,
+} from '@/lib/supabase'
 
 const API_BASE = ''
 
+function createEmptyParticipantUnitDraft(projectId?: string | null): ParticipantUnitDraft {
+  return {
+    id: null,
+    project_id: projectId ?? '',
+    unit_name: '',
+    unit_type: '',
+    contact_name: '',
+    contact_role: '',
+    contact_phone: '',
+    contact_email: '',
+    version: null,
+  }
+}
+
+function toParticipantUnitDraft(unit: ParticipantUnitRecord, projectId?: string | null): ParticipantUnitDraft {
+  return {
+    id: unit.id,
+    project_id: String(unit.project_id ?? projectId ?? ''),
+    unit_name: unit.unit_name,
+    unit_type: unit.unit_type,
+    contact_name: unit.contact_name ?? '',
+    contact_role: unit.contact_role ?? '',
+    contact_phone: unit.contact_phone ?? '',
+    contact_email: unit.contact_email ?? '',
+    version: unit.version ?? 1,
+  }
+}
+
+function sortParticipantUnits(units: ParticipantUnitRecord[]) {
+  return [...units].sort((left, right) => left.unit_name.localeCompare(right.unit_name, 'zh-CN'))
+}
+
+interface DelayRequestRecord {
+  id: string
+  task_id: string
+  project_id?: string | null
+  baseline_version_id?: string | null
+  original_date: string
+  delayed_date: string
+  delay_days: number
+  reason?: string | null
+  delay_reason?: string | null
+  status: 'pending' | 'approved' | 'rejected' | 'withdrawn'
+  requested_by?: string | null
+  requested_at?: string | null
+  reviewed_at?: string | null
+  withdrawn_at?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+function normalizeDelayRequestRecord(row: Record<string, unknown>): DelayRequestRecord {
+  return {
+    id: String(row.id ?? ''),
+    task_id: row.task_id ? String(row.task_id) : '',
+    project_id: row.project_id ? String(row.project_id) : null,
+    baseline_version_id: row.baseline_version_id ? String(row.baseline_version_id) : null,
+    original_date: row.original_date ? String(row.original_date) : '',
+    delayed_date: row.delayed_date ? String(row.delayed_date) : '',
+    delay_days: Number(row.delay_days ?? 0),
+    reason: row.reason ? String(row.reason) : null,
+    delay_reason: row.delay_reason ? String(row.delay_reason) : null,
+    status: (String(row.status ?? 'pending').trim().toLowerCase() as DelayRequestRecord['status']) || 'pending',
+    requested_by: row.requested_by ? String(row.requested_by) : null,
+    requested_at: row.requested_at ? String(row.requested_at) : null,
+    reviewed_at: row.reviewed_at ? String(row.reviewed_at) : null,
+    withdrawn_at: row.withdrawn_at ? String(row.withdrawn_at) : null,
+    created_at: row.created_at ? String(row.created_at) : null,
+    updated_at: row.updated_at ? String(row.updated_at) : null,
+  }
+}
+
+function upsertDelayRequestRecord(records: DelayRequestRecord[], nextRecord: DelayRequestRecord): DelayRequestRecord[] {
+  const nextIndex = records.findIndex((record) => record.id === nextRecord.id)
+  if (nextIndex < 0) {
+    return [nextRecord, ...records]
+  }
+  return records.map((record, index) => (index === nextIndex ? { ...record, ...nextRecord } : record))
+}
+
+interface BaselineVersionOption {
+  id: string
+  version: number
+  title: string
+  status: string
+}
+
+type GanttViewMode = 'list' | 'timeline'
+
+function normalizeGanttViewMode(value: string | null): GanttViewMode | null {
+  return value === 'timeline' || value === 'list' ? value : null
+}
+
+function normalizeTimelineScale(value: string | null): GanttTimelineScale | null {
+  return value === 'day' || value === 'week' || value === 'month' ? value : null
+}
+
+function normalizeTimelineCompareMode(value: string | null): GanttTimelineCompareMode | null {
+  return value === 'plan' || value === 'baseline' ? value : null
+}
+
+type DelayRequestErrorCode = 'PENDING_CONFLICT' | 'DUPLICATE_REASON'
+
+type DelayRequestErrorDetails = {
+  task_id?: string
+  pending_request_id?: string
+  pending_requested_at?: string | null
+  pending_delayed_date?: string | null
+  pending_reason?: string | null
+  last_rejected_request_id?: string
+  last_rejected_at?: string | null
+  last_rejected_reason?: string | null
+}
+
+type DeleteProtectionDetails = {
+  entity_type?: string
+  entity_id?: string
+  status?: string | null
+  progress?: number | null
+  child_task_count?: number
+  condition_count?: number
+  obstacle_count?: number
+  delay_request_count?: number
+  acceptance_plan_count?: number
+  has_execution_trail?: boolean
+  linked_issue_id?: string | null
+  linked_issue_status?: string | null
+  close_action?: {
+    method?: string
+    endpoint?: string
+    label?: string
+  }
+}
+
+type GanttProjectMember = {
+  userId: string
+  displayName: string
+  permissionLevel?: string | null
+}
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function extractApiErrorDetails(value: unknown): Record<string, unknown> | null {
+  if (!isObjectRecord(value)) return null
+  const errorBlock = value.error
+  if (!isObjectRecord(errorBlock)) return null
+  return isObjectRecord(errorBlock.details) ? errorBlock.details : null
+}
+
+function extractApiErrorCode(value: unknown): string | null {
+  if (!isObjectRecord(value)) return null
+  const errorBlock = value.error
+  if (!isObjectRecord(errorBlock)) return null
+  return typeof errorBlock.code === 'string' ? errorBlock.code : null
+}
+
+function extractApiErrorMessage(value: unknown, fallback: string): string {
+  if (!isObjectRecord(value)) return fallback
+  const errorBlock = value.error
+  if (!isObjectRecord(errorBlock)) return fallback
+  return typeof errorBlock.message === 'string' && errorBlock.message.trim() ? errorBlock.message : fallback
+}
+
+function formatTaskDeleteProtectionWarning(details: DeleteProtectionDetails): string {
+  const parts: string[] = []
+  if ((details.child_task_count ?? 0) > 0) parts.push(`包含 ${details.child_task_count} 个子任务`)
+  if ((details.condition_count ?? 0) > 0) parts.push(`包含 ${details.condition_count} 条开工条件`)
+  if ((details.obstacle_count ?? 0) > 0) parts.push(`包含 ${details.obstacle_count} 条障碍记录`)
+  if ((details.delay_request_count ?? 0) > 0) parts.push(`包含 ${details.delay_request_count} 条延期申请`)
+  if ((details.acceptance_plan_count ?? 0) > 0) parts.push(`包含 ${details.acceptance_plan_count} 条验收计划`)
+  if (details.has_execution_trail) parts.push('已有执行留痕')
+  return parts.length > 0 ? `删除已被保护：${parts.join('；')}。` : '删除已被保护，请改为关闭此记录。'
+}
+
+function formatObstacleDeleteProtectionWarning(details: DeleteProtectionDetails): string {
+  const parts: string[] = []
+  if (details.status) parts.push(`当前状态：${details.status}`)
+  if (details.linked_issue_id) {
+    const linkedStatus = details.linked_issue_status ? `（${details.linked_issue_status}）` : ''
+    parts.push(`已关联升级问题 ${details.linked_issue_id}${linkedStatus}`)
+  }
+  return parts.length > 0 ? `删除已被保护：${parts.join('；')}。` : '删除已被保护，请改为关闭此记录。'
+}
+
+function buildDeleteProtectionState(
+  kind: 'task' | 'obstacle',
+  id: string,
+  title: string,
+  payload: unknown,
+): DeleteGuardTarget | null {
+  const details = extractApiErrorDetails(payload) as DeleteProtectionDetails | null
+  if (!details) return null
+
+  return {
+    kind,
+    id,
+    title,
+    blocked: true,
+    message: extractApiErrorMessage(payload, '删除受保护，请改为关闭此记录。'),
+    warning: kind === 'task'
+      ? formatTaskDeleteProtectionWarning(details)
+      : formatObstacleDeleteProtectionWarning(details),
+    details,
+  }
+}
+
+function buildDelayConflictMessage(
+  code: DelayRequestErrorCode,
+  details: DelayRequestErrorDetails | null,
+  fallback: string,
+): { form?: string; reason?: string } {
+  if (code === 'PENDING_CONFLICT') {
+    const delayedDate = details?.pending_delayed_date ? `，当前申请延期至 ${details.pending_delayed_date}` : ''
+    const pendingReason = details?.pending_reason ? `，原因：${details.pending_reason}` : ''
+    return {
+      form: `已有待审批申请${delayedDate}${pendingReason}。请先等待审批或撤回后再重提。`,
+    }
+  }
+
+  const rejectedReason = details?.last_rejected_reason ? `最近一次驳回原因：${details.last_rejected_reason}。` : ''
+  return {
+    reason: '重新提交原因不能与最近一次驳回原因重复。',
+    form: `${rejectedReason}${fallback}`,
+  }
+}
+
+function sortDelayRequests(records: DelayRequestRecord[]): DelayRequestRecord[] {
+  return [...records].sort((left, right) => {
+    const leftTime = left.requested_at ?? left.created_at ?? ''
+    const rightTime = right.requested_at ?? right.created_at ?? ''
+    return rightTime.localeCompare(leftTime)
+  })
+}
+
+function toDateValue(baseDate?: string | null): string {
+  const basis = baseDate ? new Date(baseDate) : new Date()
+  if (Number.isNaN(basis.getTime())) return ''
+  return basis.toISOString().slice(0, 10)
+}
+
+function toStoreTaskRecord(task: Task): StoreTaskRecord {
+  return task as StoreTaskRecord
+}
+
+function toStoreTaskPatch(patch: Partial<Task>): Partial<StoreTaskRecord> {
+  return patch as Partial<StoreTaskRecord>
+}
+
+function toStoreConditionRecords(conditions: TaskCondition[]): StoreTaskConditionRecord[] {
+  return conditions as StoreTaskConditionRecord[]
+}
+
+function toStoreObstacleRecords(obstacles: TaskObstacle[]): StoreTaskObstacleRecord[] {
+  return obstacles as StoreTaskObstacleRecord[]
+}
+
+function toStoreDelayRequestRecords(records: DelayRequestRecord[]): StoreDelayRequestRecord[] {
+  return records as StoreDelayRequestRecord[]
+}
+
+type DeleteGuardTarget =
+  | {
+      kind: 'task'
+      id: string
+      title: string
+      blocked?: boolean
+      message?: string
+      warning?: string
+      details?: DeleteProtectionDetails
+    }
+  | {
+      kind: 'obstacle'
+      id: string
+      title: string
+      blocked?: boolean
+      message?: string
+      warning?: string
+      details?: DeleteProtectionDetails
+    }
+
 /**
- * 辅助函数：为 fetch 请求添加 credentials: 'include'
- * 确保浏览器自动携带 httpOnly Cookie
  */
 const withCredentials = (options: RequestInit = {}): RequestInit => ({
   ...options,
   credentials: 'include',
 })
 
+function mergeRequestHeaders(headers?: HeadersInit): HeadersInit {
+  const merged = new Headers(getAuthHeaders())
+  if (headers) {
+    new Headers(headers).forEach((value, key) => {
+      merged.set(key, value)
+    })
+  }
+  return Object.fromEntries(merged.entries())
+}
+
+const withRequestContext = (options: RequestInit = {}): RequestInit => ({
+  ...options,
+  credentials: 'include',
+  headers: mergeRequestHeaders(options.headers),
+})
+
 export default function GanttView() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const location = useLocation()
-  const {
-    tasks,
-    setTasks,
-    addTask,
-    updateTask,
-    deleteTask,
-    currentProject,
-    conditions: projectConditions,
-    setConditions: setProjectConditions,
-    obstacles: projectObstacles,
-    setObstacles: setProjectObstacles,
-  } = useStore()
+  const searchParams = useMemo(() => new URLSearchParams(location.search), [location.search])
+  const timelineViewRef = useRef<TaskTimelineViewHandle | null>(null)
+  const currentProject = useCurrentProject()
+  const currentUser = useStore((state) => state.currentUser)
+  const lastRealtimeEvent = useStore((state) => state.lastRealtimeEvent)
+  const delayRequests = useStore((state) => state.delayRequests) as DelayRequestRecord[]
+  const setDelayRequests = useStore((state) => state.setDelayRequests)
+  const delayRequestsStatus = useStore((state) => state.sharedSliceStatus.delayRequests)
+  const setSharedSliceStatus = useStore((state) => state.setSharedSliceStatus)
+  const hydratedProjectId = useHydratedProjectId()
+  const allTasks = useTasks()
+  const allConditions = useConditions()
+  const allObstacles = useObstacles()
+  const participantUnits = useParticipantUnits()
+  const setTasks = useSetTasks()
+  const addTask = useAddTask()
+  const updateTask = useUpdateTask()
+  const deleteTask = useDeleteTask()
+  const setProjectConditions = useSetConditions()
+  const setProjectObstacles = useSetObstacles()
+  const setParticipantUnits = useStore((state) => state.setParticipantUnits)
   const [loading, setLoading] = useState(true)
+  const [projectSummary, setProjectSummary] = useState<ProjectSummary | null>(null)
+  const [dataQualitySummary, setDataQualitySummary] = useState<DataQualityProjectSummary | null>(null)
+  const [liveCheckSummary, setLiveCheckSummary] = useState<DataQualityLiveCheckSummary | null>(null)
+  const [liveCheckLoading, setLiveCheckLoading] = useState(false)
+  const [taskSaving, setTaskSaving] = useState(false)
+  const highlightScrollTimerRef = useRef<number | null>(null)
+  const highlightClearTimerRef = useRef<number | null>(null)
+  const lastHandledRealtimeEventKeyRef = useRef<string | null>(null)
+  const [viewMode, setViewMode] = useState<GanttViewMode>(() => {
+    const queryMode = normalizeGanttViewMode(new URLSearchParams(location.search).get('view'))
+    if (queryMode) return queryMode
+    return normalizeGanttViewMode(safeStorageGet(localStorage, `gantt_view_mode_${id}`)) || 'list'
+  })
+  const [timelineScale, setTimelineScale] = useState<GanttTimelineScale>(() => {
+    const queryScale = normalizeTimelineScale(new URLSearchParams(location.search).get('scale'))
+    if (queryScale) return queryScale
+    return normalizeTimelineScale(safeStorageGet(localStorage, `gantt_timeline_scale_${id}`)) || 'week'
+  })
+  const [timelineCompareMode, setTimelineCompareMode] = useState<GanttTimelineCompareMode>(() => {
+    const queryMode = normalizeTimelineCompareMode(new URLSearchParams(location.search).get('compare'))
+    if (queryMode) return queryMode
+    return normalizeTimelineCompareMode(safeStorageGet(localStorage, `gantt_timeline_compare_${id}`)) || 'plan'
+  })
+  const [baselineOptions, setBaselineOptions] = useState<BaselineVersionOption[]>([])
+  const [baselineLoading, setBaselineLoading] = useState(false)
+  const validBaselineOptionIds = useMemo(
+    () => new Set(baselineOptions.map((option) => option.id)),
+    [baselineOptions],
+  )
+  const [timelineBaselineVersionId, setTimelineBaselineVersionId] = useState<string>(() => (
+    new URLSearchParams(location.search).get('baselineVersionId')
+    || safeStorageGet(localStorage, `gantt_timeline_baseline_${id}`)
+    || ''
+  ))
+  const {
+    criticalPathSummary,
+    criticalPathDialogOpen,
+    setCriticalPathDialogOpen,
+    criticalPathDialogLoading,
+    criticalPathActionLoading,
+    criticalPathError,
+    criticalPathOverrides,
+    criticalPathFocusTaskId,
+    setCriticalPathFocusTaskId,
+    handleOpenCriticalPathDialog,
+    handleRefreshCriticalPath,
+    handleCreateCriticalPathOverride,
+    handleDeleteCriticalPathOverride,
+  } = useGanttCriticalPath({ projectId: loading ? null : id })
+  const tasks = useMemo(
+    () => (id ? allTasks.filter((task) => task.project_id === id) : []),
+    [allTasks, id],
+  )
+  const projectTaskIds = useMemo(
+    () => new Set(tasks.map((task) => task.id).filter((taskId): taskId is string => Boolean(taskId))),
+    [tasks],
+  )
+  const projectConditions = useMemo<TaskCondition[]>(
+    () =>
+      allConditions.filter(
+        (condition) => Boolean(condition.task_id) && projectTaskIds.has(condition.task_id as string),
+      ) as TaskCondition[],
+    [allConditions, projectTaskIds],
+  )
+  const projectObstacles = useMemo<TaskObstacle[]>(
+    () =>
+      allObstacles.filter(
+        (obstacle) => Boolean(obstacle.task_id) && projectTaskIds.has(obstacle.task_id as string),
+      ) as TaskObstacle[],
+    [allObstacles, projectTaskIds],
+  )
 
-  // #16-B: 从总结页跳回时，高亮指定任务行
   const highlightTaskId = new URLSearchParams(location.search).get('highlight') || null
   useEffect(() => {
+    if (highlightScrollTimerRef.current) {
+      clearTimeout(highlightScrollTimerRef.current)
+      highlightScrollTimerRef.current = null
+    }
+    if (highlightClearTimerRef.current) {
+      clearTimeout(highlightClearTimerRef.current)
+      highlightClearTimerRef.current = null
+    }
+
     if (!highlightTaskId || loading) return
-    const outerTimer = setTimeout(() => {
+
+    highlightScrollTimerRef.current = window.setTimeout(() => {
       const el = document.getElementById(`gantt-task-row-${highlightTaskId}`)
       if (el) {
         el.scrollIntoView({ behavior: 'smooth', block: 'center' })
         el.classList.add('!bg-orange-50', 'ring-1', 'ring-orange-300')
-        const innerTimer = setTimeout(() => el.classList.remove('!bg-orange-50', 'ring-1', 'ring-orange-300'), 3000)
-        // 将内层定时器存储以便清理（通过闭包引用）
-        ;(el as any)._highlightTimer = innerTimer
+        highlightClearTimerRef.current = window.setTimeout(() => {
+          el.classList.remove('!bg-orange-50', 'ring-1', 'ring-orange-300')
+          highlightClearTimerRef.current = null
+        }, 3000)
       }
     }, 400)
+
     return () => {
-      clearTimeout(outerTimer)
-      // 清理可能残留的内层高亮定时器
-      const el = document.getElementById(`gantt-task-row-${highlightTaskId}`)
-      if (el && (el as any)._highlightTimer) {
-        clearTimeout((el as any)._highlightTimer)
-        el.classList.remove('!bg-orange-50', 'ring-1', 'ring-orange-300')
+      if (highlightScrollTimerRef.current) {
+        clearTimeout(highlightScrollTimerRef.current)
+        highlightScrollTimerRef.current = null
       }
+      if (highlightClearTimerRef.current) {
+        clearTimeout(highlightClearTimerRef.current)
+        highlightClearTimerRef.current = null
+      }
+      const el = document.getElementById(`gantt-task-row-${highlightTaskId}`)
+      el?.classList.remove('!bg-orange-50', 'ring-1', 'ring-orange-300')
     }
   }, [highlightTaskId, loading])
+
+  useEffect(() => {
+    const nextViewMode = normalizeGanttViewMode(searchParams.get('view'))
+    if (nextViewMode && nextViewMode !== viewMode) {
+      setViewMode(nextViewMode)
+    }
+
+    const nextScale = normalizeTimelineScale(searchParams.get('scale'))
+    if (nextScale && nextScale !== timelineScale) {
+      setTimelineScale(nextScale)
+    }
+
+    const nextCompareMode = normalizeTimelineCompareMode(searchParams.get('compare'))
+    if (nextCompareMode && nextCompareMode !== timelineCompareMode) {
+      setTimelineCompareMode(nextCompareMode)
+    }
+
+    const nextBaselineVersionId = searchParams.get('baselineVersionId')
+    if (
+      nextBaselineVersionId &&
+      nextBaselineVersionId !== timelineBaselineVersionId &&
+      validBaselineOptionIds.has(nextBaselineVersionId)
+    ) {
+      setTimelineBaselineVersionId(nextBaselineVersionId)
+    }
+  }, [
+    searchParams,
+    timelineBaselineVersionId,
+    timelineCompareMode,
+    timelineScale,
+    validBaselineOptionIds,
+    viewMode,
+  ])
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingTask, setEditingTask] = useState<Task | null>(null)
   
-  // WBS 树形状态
+  // WBS 閺嶆垵鑸伴悩鑸碘偓?
   const [collapsed, setCollapsed] = useState<Set<string>>(() => {
-    // #13: 展开状态记忆 — 从 localStorage 恢复
-    try {
-      const saved = localStorage.getItem(`gantt_collapsed_${id}`)
-      return saved ? new Set(JSON.parse(saved) as string[]) : new Set()
-    } catch { return new Set() }
+    const saved = safeStorageGet(localStorage, `gantt_collapsed_${id}`)
+    return new Set(safeJsonParse<string[]>(saved, [], `gantt collapsed ${id ?? 'unknown'}`))
   })
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
-  // 确认弹窗状态（使用 useConfirmDialog hook 统一管理，替代 window.confirm）
   const { confirmDialog, setConfirmDialog, openConfirm } = useConfirmDialog()
-  // 添加子任务时预设的父节点 ID
+  // 濞ｈ濮炵€涙劒鎹㈤崝鈩冩妫板嫯顔曢惃鍕煑閼哄倻鍋?ID
   const [newTaskParentId, setNewTaskParentId] = useState<string | null>(null)
 
-  // 里程碑设置弹窗状态
   const [milestoneDialogOpen, setMilestoneDialogOpen] = useState(false)
   const [milestoneTargetTask, setMilestoneTargetTask] = useState<Task | null>(null)
 
-  // 条件管理弹窗状态
   const [conditionDialogOpen, setConditionDialogOpen] = useState(false)
   const [conditionTask, setConditionTask] = useState<Task | null>(null)
   const [taskConditions, setTaskConditions] = useState<TaskCondition[]>([])
   const [conditionsLoading, setConditionsLoading] = useState(false)
-  // P2-9: 存储每个条件的前置任务列表 { conditionId: [{task_id, title, name, status}] }
   const [conditionPrecedingTasks, setConditionPrecedingTasks] = useState<Record<string, Array<{task_id: string; title?: string; name?: string; status?: string}>>>({})
+  const [forceSatisfyDialogOpen, setForceSatisfyDialogOpen] = useState(false)
+  const [forceSatisfyCondition, setForceSatisfyCondition] = useState<TaskCondition | null>(null)
+  const [forceSatisfyReason, setForceSatisfyReason] = useState('')
   const [newConditionName, setNewConditionName] = useState('')
-  const [newConditionType, setNewConditionType] = useState<string>('other')     // P0-1: 条件类型
-  const [newConditionTargetDate, setNewConditionTargetDate] = useState('')       // P1-6: 目标日期
-  const [newConditionDescription, setNewConditionDescription] = useState('')     // [G3]: 条件详细说明
-  const [newConditionResponsibleUnit, setNewConditionResponsibleUnit] = useState('') // [G3]: 责任单位
-  // P2-9: 前置任务多选
+  const [newConditionType, setNewConditionType] = useState<string>('other')
+  const [newConditionTargetDate, setNewConditionTargetDate] = useState('')       // P1-6: 閻╊喗鐖ｉ弮銉︽埂
+  const [newConditionDescription, setNewConditionDescription] = useState('')     // [G3]: 閺夆€叉鐠囷妇绮忕拠瀛樻
+  const [newConditionResponsibleUnit, setNewConditionResponsibleUnit] = useState('')
   const [newConditionPrecedingTaskIds, setNewConditionPrecedingTaskIds] = useState<string[]>([])
 
-  // 阻碍管理弹窗状态
   const [obstacleDialogOpen, setObstacleDialogOpen] = useState(false)
   const [obstacleTask, setObstacleTask] = useState<Task | null>(null)
   const [taskObstacles, setTaskObstacles] = useState<TaskObstacle[]>([])
   const [obstaclesLoading, setObstaclesLoading] = useState(false)
+  const [delayRequestForm, setDelayRequestForm] = useState({ delayedDate: '', reason: '', baselineVersionId: '' })
+  const [delayFormErrors, setDelayFormErrors] = useState<{
+    baselineVersionId?: string
+    delayedDate?: string
+    reason?: string
+    form?: string
+  }>({})
+  const [delayRequestSubmitting, setDelayRequestSubmitting] = useState(false)
+  const [delayRequestWithdrawingId, setDelayRequestWithdrawingId] = useState<string | null>(null)
+  const [delayRequestReviewingId, setDelayRequestReviewingId] = useState<string | null>(null)
 
-  // inline 条件面板：展开的 taskId + 已加载的条件缓存
   const [expandedConditionTaskId, setExpandedConditionTaskId] = useState<string | null>(null)
   const [inlineConditionsMap, setInlineConditionsMap] = useState<Record<string, TaskCondition[]>>({})
   const [newObstacleTitle, setNewObstacleTitle] = useState('')
-  // P1-5: 阻碍编辑状态
+  const [newObstacleSeverity, setNewObstacleSeverity] = useState('medium')
+  const [newObstacleExpectedResolutionDate, setNewObstacleExpectedResolutionDate] = useState('')
+  const [newObstacleResolutionNotes, setNewObstacleResolutionNotes] = useState('')
   const [editingObstacleId, setEditingObstacleId] = useState<string | null>(null)
   const [editingObstacleTitle, setEditingObstacleTitle] = useState('')
+  const [editingObstacleSeverity, setEditingObstacleSeverity] = useState('medium')
+  const [editingObstacleExpectedResolutionDate, setEditingObstacleExpectedResolutionDate] = useState('')
+  const [editingObstacleResolutionNotes, setEditingObstacleResolutionNotes] = useState('')
+  const [deleteGuardTarget, setDeleteGuardTarget] = useState<DeleteGuardTarget | null>(null)
+  const [deleteGuardSubmitting, setDeleteGuardSubmitting] = useState(false)
+  const [deleteGuardSecondarySubmitting, setDeleteGuardSecondarySubmitting] = useState(false)
+  const [conditionWarningTarget, setConditionWarningTarget] = useState<null | {
+    taskId: string
+    taskTitle: string
+    pendingConditionCount: number
+  }>(null)
 
-  // ── 缺8：筛选/搜索工具栏状态 ─────────────────────────
-  // #9: 筛选持久化 — 从 localStorage 初始化
   const [searchText, setSearchText] = useState('')
-  // 防抖：搜索输入 300ms 后才触发 useMemo 重新计算，减少大列表过滤频率
   const debouncedSearchText = useDebounce(searchText, 300)
   const [filterStatus, setFilterStatus] = useState<string>(() => {
-    try { return localStorage.getItem(`gantt_filter_status_${id}`) || 'all' } catch { return 'all' }
+    return safeStorageGet(localStorage, `gantt_filter_status_${id}`) || 'all'
   })
   const [filterPriority, setFilterPriority] = useState<string>(() => {
-    try { return localStorage.getItem(`gantt_filter_priority_${id}`) || 'all' } catch { return 'all' }
+    return safeStorageGet(localStorage, `gantt_filter_priority_${id}`) || 'all'
   })
   const [filterCritical, setFilterCritical] = useState<boolean>(() => {
-    try { return localStorage.getItem(`gantt_filter_critical_${id}`) === 'true' } catch { return false }
+    return safeStorageGet(localStorage, `gantt_filter_critical_${id}`) === 'true'
   })
   const [showFilterBar, setShowFilterBar] = useState(false)
-  // #12: 专项工程筛选（持久化）
   const [filterSpecialty, setFilterSpecialty] = useState<string>(() => {
-    try { return localStorage.getItem(`gantt_filter_specialty_${id}`) || 'all' } catch { return 'all' }
+    return safeStorageGet(localStorage, `gantt_filter_specialty_${id}`) || 'all'
   })
-  // 楼栋/分部筛选：选择某个顶层节点后只展示该子树
   const [filterBuilding, setFilterBuilding] = useState<string>('all')
-  // ────────────────────────────────────────────────────
 
-  // #4: 双栏布局 — 右侧详情面板
   const [selectedTask, setSelectedTask] = useState<Task | null>(null)
+  const selectedTaskDelayRequests = useMemo(
+    () =>
+      selectedTask?.id
+        ? sortDelayRequests(delayRequests.filter((request) => request.task_id === selectedTask.id))
+        : [],
+    [delayRequests, selectedTask?.id],
+  )
+  const delayRequestsLoading = delayRequestsStatus.loading
 
-  // ── 缺7：行内进度编辑状态 ─────────────────────────────
   const [inlineProgressTaskId, setInlineProgressTaskId] = useState<string | null>(null)
   const [inlineProgressValue, setInlineProgressValue] = useState<number>(0)
-  // #14: 行内任务名称编辑
   const [inlineTitleTaskId, setInlineTitleTaskId] = useState<string | null>(null)
   const [inlineTitleValue, setInlineTitleValue] = useState<string>('')
-  // #15: 右键快捷菜单
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; task: Task } | null>(null)
-  // ────────────────────────────────────────────────────
+  const [hoveredTaskId, setHoveredTaskId] = useState<string | null>(null)
 
-  // 版本冲突处理状态
+  // 鐗堟湰鍐茬獊婢跺嫮鎮婇悩鑸碘偓?
   const [conflictOpen, setConflictOpen] = useState(false)
   const [conflictData, setConflictData] = useState<{
     localVersion: Task
     serverVersion: Task
   } | null>(null)
   const [pendingTaskData, setPendingTaskData] = useState<Partial<Task> | null>(null)
-  // AI 工期建议
+  // AI 瀹搞儲婀″楦款唴
   const [aiDurationLoading, setAiDurationLoading] = useState(false)
   const [aiDurationSuggestion, setAiDurationSuggestion] = useState<{
     estimated_duration: number
@@ -236,27 +703,50 @@ export default function GanttView() {
     priority: 'medium',
     start_date: '',
     end_date: '',
+    actual_start_date: '',
     progress: 0,
     assignee_name: '',
+    assignee_user_id: null as string | null,
+    participant_unit_id: null as string | null,
     responsible_unit: '',
     dependencies: [] as string[],
     parent_id: null as string | null,
+    milestone_id: null as string | null,
     specialty_type: '' as string,          // #12
-    reference_duration: '' as string,      // #7 计划工期
+    reference_duration: '' as string,
   })
+  const [participantUnitsOpen, setParticipantUnitsOpen] = useState(false)
+  const [participantUnitsLoading, setParticipantUnitsLoading] = useState(false)
+  const [participantUnitsLoaded, setParticipantUnitsLoaded] = useState(false)
+  const [participantUnitSaving, setParticipantUnitSaving] = useState(false)
+  const [participantUnitDraft, setParticipantUnitDraft] = useState<ParticipantUnitDraft>(() => createEmptyParticipantUnitDraft(id))
+  const [projectMembers, setProjectMembers] = useState<GanttProjectMember[]>([])
+  const [taskFormErrors, setTaskFormErrors] = useState<{ name?: string; start_date?: string; end_date?: string }>({})
+  const canAdminForceSatisfyCondition = useMemo(() => {
+    if (!currentUser?.id) return false
+    if (currentUser.global_role === 'company_admin') return true
+    if (currentProject?.owner_id && currentProject.owner_id === currentUser.id) return true
+    return projectMembers.some((member) => member.userId === currentUser.id && ['owner', 'admin'].includes(String(member.permissionLevel ?? '').trim().toLowerCase()))
+  }, [currentProject?.owner_id, currentUser?.global_role, currentUser?.id, projectMembers])
 
-  // ─── WBS 树形 ──────────────────────────────────────
-  // P1-7: 新建任务后是否弹出条件询问
   const [newTaskConditionPromptId, setNewTaskConditionPromptId] = useState<string | null>(null)
   const wbsTree = useMemo(() => {
     const tree = buildWBSTree(tasks as Task[])
-    assignWBSCode(tree)  // 缺4：自动生成 wbs_code
+    assignWBSCode(tree)
     return tree
   }, [tasks])
   const flatList = useMemo(() => flattenTree(wbsTree, collapsed), [wbsTree, collapsed])
 
-  // ── 缺6：父级自动汇总子级进度 ─────────────────────────
-  // 递归计算节点（含子节点）的平均进度
+  const taskMap = useMemo(() => {
+    const map = new Map<string, Task>()
+    for (const t of tasks) { if (t.id) map.set(t.id, t as Task) }
+    return map
+  }, [tasks])
+  const dependencyChainIds = useMemo(() => {
+    if (!hoveredTaskId) return new Set<string>()
+    return getDependencyChain(hoveredTaskId, taskMap)
+  }, [hoveredTaskId, taskMap])
+
   const computeRolledProgress = useCallback((node: WBSNode): number => {
     if (node.children.length === 0) {
       return node.progress || 0
@@ -265,7 +755,7 @@ export default function GanttView() {
     return Math.round(childAvg)
   }, [])
 
-  // 汇总进度 map：taskId -> rolledProgress
+  // 濮瑰洦鈧槒绻樻惔?map閿涙askId -> rolledProgress
   const rolledProgressMap = useMemo(() => {
     const map: Record<string, number> = {}
     function walk(node: WBSNode) {
@@ -275,17 +765,14 @@ export default function GanttView() {
     wbsTree.forEach(walk)
     return map
   }, [wbsTree, computeRolledProgress])
-  // ────────────────────────────────────────────────────
 
-  // 楼栋列表：WBS 根节点（parent_id=null），用于筛选下拉
   const buildingOptions = useMemo(() => {
     return wbsTree.map(node => ({
       id: node.id,
-      label: node.title || node.name || `楼栋-${node.wbs_code || node.id.slice(0, 6)}`
+      label: node.title || node.name || `濡ゅ吋鐖?${node.wbs_code || node.id.slice(0, 6)}`
     }))
   }, [wbsTree])
 
-  // 楼栋筛选：当选中某楼栋时，收集该节点及其所有子孙的 id 集合
   const buildingNodeIds = useMemo<Set<string>>(() => {
     if (filterBuilding === 'all') return new Set()
     const ids = new Set<string>()
@@ -298,7 +785,16 @@ export default function GanttView() {
     return ids
   }, [filterBuilding, wbsTree])
 
-  // ── 缺8：筛选后的列表 ────────────────────────────────
+  const criticalPathSnapshot = criticalPathSummary?.snapshot ?? null
+  const criticalPathTaskMap = useMemo(
+    () => new Map((criticalPathSnapshot?.tasks ?? []).map((task) => [task.taskId, task])),
+    [criticalPathSnapshot],
+  )
+  const criticalPathDisplayTaskIds = useMemo(
+    () => new Set(criticalPathSnapshot?.displayTaskIds ?? []),
+    [criticalPathSnapshot],
+  )
+
   const filteredFlatList = useMemo(() => {
     if (!debouncedSearchText && filterStatus === 'all' && filterPriority === 'all' && !filterCritical && filterSpecialty === 'all' && filterBuilding === 'all') {
       return flatList
@@ -306,25 +802,21 @@ export default function GanttView() {
     const lowerSearch = debouncedSearchText.toLowerCase()
     return flatList.filter(node => {
       const task = node
-      // 楼栋/分部筛选（只展示选中子树）
       if (filterBuilding !== 'all' && !buildingNodeIds.has(task.id)) return false
-      // 关键字匹配（任务名/责任人）
       if (lowerSearch) {
         const name = (task.title || task.name || '').toLowerCase()
         const assignee = (task.assignee || task.assignee_name || '').toLowerCase()
         if (!name.includes(lowerSearch) && !assignee.includes(lowerSearch)) return false
       }
-      // 状态筛选
+      // 閻樿埖鈧胶鐡柅?
       if (filterStatus !== 'all' && task.status !== filterStatus) return false
-      // 优先级筛选
+      // 娴兼ê鍘涚痪褏鐡柅?
       if (filterPriority !== 'all' && task.priority !== filterPriority) return false
-      // 关键路径筛选
-      if (filterCritical && !isOnCriticalPath(task.id)) return false
-      // #12: 专项工程筛选
+      if (filterCritical && !criticalPathDisplayTaskIds.has(task.id)) return false
       if (filterSpecialty !== 'all' && task.specialty_type !== filterSpecialty) return false
       return true
     })
-  }, [flatList, debouncedSearchText, filterStatus, filterPriority, filterCritical, filterSpecialty, filterBuilding, buildingNodeIds])
+  }, [flatList, debouncedSearchText, filterStatus, filterPriority, filterCritical, filterSpecialty, filterBuilding, buildingNodeIds, criticalPathDisplayTaskIds])
 
   const activeFilterCount = [
     debouncedSearchText ? 1 : 0,
@@ -342,109 +834,99 @@ export default function GanttView() {
     setFilterCritical(false)
     setFilterSpecialty('all')
     setFilterBuilding('all')
-    // #9: 清空持久化
-    try {
-      localStorage.removeItem(`gantt_filter_status_${id}`)
-      localStorage.removeItem(`gantt_filter_priority_${id}`)
-      localStorage.removeItem(`gantt_filter_critical_${id}`)
-      localStorage.removeItem(`gantt_filter_specialty_${id}`)
-    } catch { }
+    safeStorageRemove(localStorage, `gantt_filter_status_${id}`)
+    safeStorageRemove(localStorage, `gantt_filter_priority_${id}`)
+    safeStorageRemove(localStorage, `gantt_filter_critical_${id}`)
+    safeStorageRemove(localStorage, `gantt_filter_specialty_${id}`)
   }
-  // ────────────────────────────────────────────────────
 
-  // 全选判断
   const allSelected = flatList.length > 0 && flatList.every(n => selectedIds.has(n.id))
   const someSelected = flatList.some(n => selectedIds.has(n.id))
-  // ────────────────────────────────────────────────────
 
-  // CPM计算结果（考虑手动标记的关键任务）
-  const cpmResult: CPMResult | null = useMemo(() => {
-    if (tasks.length === 0) return null
-
-    // 只有同时满足「有开始日期 + 有结束日期 + (有依赖关系 OR 被其他任务依赖)」的任务才参与 CPM 自动计算。
-    // 缺少日期或完全孤立的任务浮动时间恒为 0，会误判为"关键"，故排除。
-    const allDepIds = new Set(tasks.flatMap(t => t.dependencies || []))
-    const cpmEligibleIds = new Set(
-      tasks
-        .filter(t =>
-          t.start_date && t.end_date &&
-          ((t.dependencies || []).length > 0 || allDepIds.has(t.id))
-        )
-        .map(t => t.id)
-    )
-
-    // 转换为CPM任务节点（仅合格任务）
-    const taskNodes = tasks
-      .filter(t => cpmEligibleIds.has(t.id))
-      .map(t => {
-        const taskName = t.title || t.name || ''
-        const startDate = new Date(t.start_date!)
-        const endDate = new Date(t.end_date!)
-        // 使用inclusive计算：结束日-开始日+1，例如03/01到03/21=21天
-        const duration = Math.max(1, Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1)
-
-        return {
-          id: t.id,
-          name: taskName,
-          duration,
-          startDate,
-          endDate,
-          // 依赖关系也只保留合格任务之间的边
-          dependencies: (t.dependencies || []).filter(d => cpmEligibleIds.has(d))
-        }
-      })
-
-    // 如果符合条件的任务为空，只有手动标记的关键任务
-    if (taskNodes.length === 0) {
-      const manualCriticalIds = tasks.filter(t => t.is_critical).map(t => t.id)
-      if (manualCriticalIds.length === 0) return null
-      return {
-        criticalPath: manualCriticalIds,
-        criticalTasks: [],
-        earliestStart: new Map(),
-        earliestFinish: new Map(),
-        latestStart: new Map(),
-        latestFinish: new Map(),
-        float: new Map(manualCriticalIds.map(id => [id, 0])),
-        projectDuration: 0,
-      }
-    }
-
-    // 自动计算CPM
-    const autoCpm = calculateCPM(taskNodes, new Date())
-    
-    // 合并手动标记的关键任务
-    const manualCriticalIds = tasks.filter(t => t.is_critical).map(t => t.id)
-    const combinedCriticalPath = [...new Set([...autoCpm.criticalPath, ...manualCriticalIds])]
-    
-    return {
-      ...autoCpm,
-      criticalPath: combinedCriticalPath
-    }
-  }, [tasks])
-
-  // 工具函数：日期加减
   function addDays(date: Date, days: number): Date {
     const result = new Date(date)
     result.setDate(result.getDate() + days)
     return result
   }
 
-  const currentTaskIds = useMemo(() => new Set(tasks.map((task) => task.id)), [tasks])
-
-  const scopedProjectConditions = useMemo(
-    () => projectConditions.filter((condition) => condition.task_id && currentTaskIds.has(condition.task_id)),
-    [currentTaskIds, projectConditions],
+  const milestoneOptions = useMemo(
+    () => tasks.filter((task) => task.is_milestone && task.id !== editingTask?.id),
+    [editingTask?.id, tasks],
   )
 
-  const scopedProjectObstacles = useMemo(
-    () => projectObstacles.filter((obstacle) => obstacle.task_id && currentTaskIds.has(obstacle.task_id)),
-    [currentTaskIds, projectObstacles],
+  const scopedProjectConditions = projectConditions as TaskCondition[]
+  const scopedProjectObstacles = projectObstacles as TaskObstacle[]
+
+  const editingTaskConditions = useMemo(
+    () => (editingTask ? scopedProjectConditions.filter((condition) => condition.task_id === editingTask.id) : []),
+    [editingTask, scopedProjectConditions],
   )
+  const unmetEditingTaskConditions = editingTaskConditions.filter((condition) => !condition.is_satisfied)
+  const progressInputBlocked = unmetEditingTaskConditions.length > 0 && Number(editingTask?.progress ?? 0) > 0
+  const progressInputHint = progressInputBlocked
+    ? '仍有 ' + unmetEditingTaskConditions.length + ' 项开工条件未满足，首次填报后再次更新前请先处理条件。'
+    : unmetEditingTaskConditions.length > 0
+      ? '当前仍有 ' + unmetEditingTaskConditions.length + ' 项开工条件未满足，首次填报后会弹出条件预警提醒。'
+      : '任务进度会同步驱动业务状态。'
+
+  const openConditionWarning = useCallback((task: Pick<Task, 'id' | 'title' | 'name'>, pendingConditionCount: number) => {
+    setConditionWarningTarget({
+      taskId: String(task.id),
+      taskTitle: String(task.title || task.name || '当前任务'),
+      pendingConditionCount,
+    })
+  }, [])
 
   const taskProgressSnapshot = useMemo(
     () => buildProjectTaskProgressSnapshot(tasks, scopedProjectConditions, scopedProjectObstacles),
     [scopedProjectConditions, scopedProjectObstacles, tasks],
+  )
+
+  useEffect(() => {
+    if (!id) {
+      setProjectMembers([])
+      return
+    }
+    if (!dialogOpen && !conditionDialogOpen && !forceSatisfyDialogOpen && !selectedTask?.id) {
+      return
+    }
+
+    const controller = new AbortController()
+    void apiGet<{ success?: boolean; members?: ProjectMember[] }>(`/api/members/${id}`, { signal: controller.signal })
+      .then((payload) => {
+        const members = Array.isArray(payload?.members) ? payload.members : []
+        setProjectMembers(
+          members
+            .map((member) => ({
+              userId: String(member.userId ?? member.user_id ?? ''),
+              displayName: String(member.displayName ?? member.username ?? '').trim(),
+              permissionLevel: String(member.permissionLevel ?? member.permission_level ?? member.role ?? '').trim() || null,
+            }))
+            .filter((member) => member.userId && member.displayName),
+        )
+      })
+      .catch((error) => {
+        if (!isAbortError(error)) {
+          console.warn('[GanttView] load project members failed', error)
+        }
+      })
+
+    return () => controller.abort()
+  }, [conditionDialogOpen, dialogOpen, forceSatisfyDialogOpen, id, selectedTask?.id])
+  const blockedProgressTaskIds = useMemo(
+    () =>
+      new Set(
+        tasks
+          .filter((task) => {
+            if (!task.id) return false
+            const summary = taskProgressSnapshot.taskConditionMap[task.id]
+            const hasPendingConditions = Boolean(summary && summary.total > summary.satisfied)
+            return hasPendingConditions && Number(task.progress ?? 0) > 0
+          })
+          .map((task) => task.id)
+          .filter((taskId): taskId is string => Boolean(taskId)),
+      ),
+    [taskProgressSnapshot.taskConditionMap, tasks],
   )
 
   useEffect(() => {
@@ -463,10 +945,198 @@ export default function GanttView() {
     )
   }, [obstacleTask, scopedProjectObstacles])
 
-  // 项目统计信息
+  const mergeDelayRequestIntoStore = useCallback((recordLike: unknown) => {
+    if (!recordLike || typeof recordLike !== 'object') return
+    const nextRecord = normalizeDelayRequestRecord(recordLike as Record<string, unknown>)
+    if (!nextRecord.id) return
+    const previousRecords = useStore.getState().delayRequests as DelayRequestRecord[]
+    setDelayRequests(toStoreDelayRequestRecords(upsertDelayRequestRecord(previousRecords, nextRecord)))
+  }, [setDelayRequests])
+
+  const loadBaselineOptions = useCallback(async (requestOptions?: { signal?: AbortSignal }) => {
+    if (!id) {
+      setBaselineOptions([])
+      return
+    }
+
+    setBaselineLoading(true)
+    try {
+      const response = await fetch(`${API_BASE}/api/task-baselines?project_id=${encodeURIComponent(id)}`, {
+        headers: getAuthHeaders(),
+        signal: requestOptions?.signal,
+        ...withCredentials(),
+      })
+      const json = await response.json()
+      if (!json.success) {
+        throw new Error(json.error?.message || '加载基线版本失败')
+      }
+
+      const nextOptions = Array.isArray(json.data)
+        ? (json.data as Array<Record<string, unknown>>)
+            .filter((row) => ['confirmed', 'closed'].includes(String(row.status ?? '').trim()))
+            .map((row) => ({
+              id: String(row.id ?? ''),
+              version: Number(row.version ?? 0),
+              title: String(row.title ?? '项目基线'),
+              status: String(row.status ?? 'draft'),
+            }))
+            .filter((row) => row.id)
+            .sort((left, right) => right.version - left.version)
+        : []
+
+      if (!requestOptions?.signal?.aborted) {
+        setBaselineOptions(nextOptions)
+        setDelayRequestForm((previous) => ({
+          ...previous,
+          baselineVersionId: previous.baselineVersionId || nextOptions[0]?.id || '',
+        }))
+      }
+    } catch (error) {
+      if (!isAbortError(error)) {
+        setBaselineOptions([])
+      }
+    } finally {
+      if (!requestOptions?.signal?.aborted) {
+        setBaselineLoading(false)
+      }
+    }
+  }, [id])
+
+  useEffect(() => {
+    if (!id) {
+      setBaselineOptions([])
+      setBaselineLoading(false)
+      return
+    }
+    if (loading) {
+      return
+    }
+    const shouldLoadBaselineOptions =
+      Boolean(selectedTask?.id) || (viewMode === 'timeline' && timelineCompareMode === 'baseline')
+    if (!shouldLoadBaselineOptions) {
+      return
+    }
+
+    const controller = new AbortController()
+    const timer = window.setTimeout(() => {
+      void loadBaselineOptions({ signal: controller.signal })
+    }, 500)
+
+    return () => {
+      window.clearTimeout(timer)
+      controller.abort()
+    }
+  }, [id, loadBaselineOptions, loading, selectedTask?.id, timelineCompareMode, viewMode])
+
+  useEffect(() => {
+    if (baselineOptions.length === 0) {
+      if (timelineCompareMode === 'baseline' && timelineBaselineVersionId) {
+        setTimelineBaselineVersionId('')
+      }
+      return
+    }
+
+    if (!baselineOptions.some((option) => option.id === timelineBaselineVersionId)) {
+      setTimelineBaselineVersionId(baselineOptions[0]?.id || '')
+    }
+  }, [baselineOptions, timelineBaselineVersionId, timelineCompareMode])
+
+  useEffect(() => {
+    if (!id) return
+
+    safeStorageSet(localStorage, `gantt_view_mode_${id}`, viewMode)
+    safeStorageSet(localStorage, `gantt_timeline_scale_${id}`, timelineScale)
+    safeStorageSet(localStorage, `gantt_timeline_compare_${id}`, timelineCompareMode)
+
+    if (timelineBaselineVersionId) {
+      safeStorageSet(localStorage, `gantt_timeline_baseline_${id}`, timelineBaselineVersionId)
+    } else {
+      safeStorageRemove(localStorage, `gantt_timeline_baseline_${id}`)
+    }
+
+    const nextParams = new URLSearchParams(location.search)
+    const setOrDelete = (key: string, value: string | null) => {
+      if (value) nextParams.set(key, value)
+      else nextParams.delete(key)
+    }
+
+    setOrDelete('view', viewMode === 'list' ? null : viewMode)
+
+    if (viewMode === 'timeline') {
+      setOrDelete('scale', timelineScale === 'week' ? null : timelineScale)
+      setOrDelete('compare', timelineCompareMode === 'plan' ? null : timelineCompareMode)
+      setOrDelete(
+        'baselineVersionId',
+        timelineCompareMode === 'baseline' && timelineBaselineVersionId ? timelineBaselineVersionId : null,
+      )
+    } else {
+      nextParams.delete('scale')
+      nextParams.delete('compare')
+      nextParams.delete('baselineVersionId')
+    }
+
+    const nextSearch = nextParams.toString()
+    const currentSearch = location.search.startsWith('?') ? location.search.slice(1) : location.search
+    if (nextSearch !== currentSearch) {
+      navigate(
+        {
+          pathname: location.pathname,
+          search: nextSearch ? `?${nextSearch}` : '',
+        },
+        { replace: true },
+      )
+    }
+  }, [
+    id,
+    location.pathname,
+    location.search,
+    navigate,
+    timelineBaselineVersionId,
+    timelineCompareMode,
+    timelineScale,
+    viewMode,
+  ])
+
+  useEffect(() => {
+    if (!selectedTask?.id) {
+      setDelayRequestForm((previous) => ({ ...previous, delayedDate: '', reason: '' }))
+      setDelayFormErrors({})
+      return
+    }
+
+    setDelayRequestForm((previous) => ({
+      delayedDate: toDateValue(selectedTask.planned_end_date || selectedTask.end_date),
+      reason: '',
+      baselineVersionId: previous.baselineVersionId || baselineOptions[0]?.id || '',
+    }))
+    setDelayFormErrors({})
+  }, [baselineOptions, selectedTask?.end_date, selectedTask?.id])
+
+  const criticalPathSummaryText = useMemo(() => {
+    if (!criticalPathSummary) return ''
+
+    const summaryParts = [
+      formatCriticalPathCount(criticalPathSummary.primaryTaskCount),
+      '工期 ' + criticalPathSummary.projectDurationDays + ' 天',
+    ]
+
+    if (criticalPathSummary.alternateChainCount > 0) {
+      summaryParts.push('备选 ' + criticalPathSummary.alternateChainCount + ' 条')
+    }
+    if (criticalPathSummary.manualAttentionCount > 0) {
+      summaryParts.push('关注 ' + criticalPathSummary.manualAttentionCount + ' 项')
+    }
+    if (criticalPathSummary.manualInsertedCount > 0) {
+      summaryParts.push('插链 ' + criticalPathSummary.manualInsertedCount + ' 项')
+    }
+
+    return summaryParts.join('，')
+  }, [criticalPathSummary])
+
+  // 页面顶部统计卡
   const projectStats = useMemo(() => {
-    const criticalTaskCount = cpmResult ? cpmResult.criticalPath.length : 0
-    // #10: AI 工期聚合
+    const criticalTaskCount = criticalPathSummary?.primaryTaskCount ?? 0
+    // #10: AI 参考工期任务
     const aiDurationTasks = tasks.filter(t => t.ai_duration && t.ai_duration > 0)
     const totalAiDuration = aiDurationTasks.reduce((sum, t) => sum + (t.ai_duration || 0), 0)
     const avgAiDuration = aiDurationTasks.length > 0 ? Math.round(totalAiDuration / aiDurationTasks.length) : 0
@@ -482,18 +1152,15 @@ export default function GanttView() {
       blockedTasks: taskProgressSnapshot.activeObstacleTaskCount,
       pendingStartTasks: taskProgressSnapshot.pendingConditionTaskCount,
       readyToStartTasks: taskProgressSnapshot.readyToStartTaskCount,
-      projectDuration: cpmResult ? cpmResult.projectDuration : 0,
-      criticalPathSummary: cpmResult ? getCriticalPathSummary(cpmResult) : '',
+      projectDuration: criticalPathSummary?.projectDurationDays ?? 0,
+      criticalPathSummary: criticalPathSummaryText,
       aiDurationTaskCount: aiDurationTasks.length,
       totalAiDuration,
       avgAiDuration,
     }
-  }, [tasks, cpmResult, taskProgressSnapshot])
+  }, [criticalPathSummary, criticalPathSummaryText, tasks, taskProgressSnapshot])
 
-  // ── #1 业务状态计算 ──────────────────────────────────
   /**
-   * 计算任务的业务状态（统一函数）
-   * 优先级：已完成 > 受阻 > 待开工(条件未满足) > 可开工(条件已满足) > 进行中 > 未开始
    */
   const getBusinessStatus = useCallback((task: Task): {
     label: string
@@ -510,71 +1177,564 @@ export default function GanttView() {
 
     switch (businessStatus.code) {
       case 'completed':
-        return { label: businessStatus.label, cls: 'bg-emerald-100 text-emerald-700' }
-      case 'blocked':
-        return {
-          label: businessStatus.label,
-          cls: 'bg-amber-100 text-amber-700',
-          badge: obstacleCount > 0 ? { text: `${obstacleCount}个阻碍`, cls: 'bg-amber-100 text-amber-700 border border-amber-200' } : undefined,
-        }
+        return { label: businessStatus.label, cls: getStatusTheme('completed').className }
+      case 'lagging_severe':
+        return { label: businessStatus.label, cls: 'bg-orange-100 text-orange-700 border border-orange-200' }
+      case 'lagging_moderate':
+        return { label: businessStatus.label, cls: 'bg-amber-100 text-amber-700 border border-amber-200' }
+      case 'lagging_mild':
+        return { label: businessStatus.label, cls: 'bg-amber-50 text-amber-600 border border-amber-200' }
       case 'in_progress':
         return {
           label: businessStatus.label,
-          cls: 'bg-blue-100 text-blue-700',
-          badge: isOverdue ? { text: `延期${Math.ceil((new Date().getTime() - new Date(task.end_date!).getTime()) / 86400000)}天`, cls: 'bg-red-100 text-red-700 border border-red-200' } : undefined,
+          cls: getStatusTheme('in_progress').className,
+          badge: isOverdue ? { text: '逾期' + Math.ceil((new Date().getTime() - new Date(task.end_date!).getTime()) / 86400000) + '天', cls: getStatusTheme('overdue').className } : undefined,
         }
       case 'pending_conditions':
         return {
           label: businessStatus.label,
-          cls: 'bg-orange-100 text-orange-700',
-          badge: condInfo ? { text: `${condInfo.total - condInfo.satisfied}/${condInfo.total}条件未满足`, cls: 'bg-orange-100 text-orange-700 border border-orange-200' } : undefined,
+          cls: getStatusTheme('pending_conditions').className,
+          badge: condInfo ? { text: String(condInfo.total - condInfo.satisfied) + '/' + String(condInfo.total) + '项条件未满足', cls: getStatusTheme('pending_conditions').className } : undefined,
         }
       case 'ready':
-        return { label: businessStatus.label, cls: 'bg-emerald-100 text-emerald-700' }
+        return { label: businessStatus.label, cls: getStatusTheme('ready').className }
       default:
         return {
           label: businessStatus.label,
-          cls: 'bg-gray-100 text-gray-600',
-          badge: isOverdue ? { text: `延期${Math.ceil((new Date().getTime() - new Date(task.end_date!).getTime()) / 86400000)}天`, cls: 'bg-red-100 text-red-700 border border-red-200' } : undefined,
+          cls: getStatusTheme('open').className,
+          badge: isOverdue ? { text: '逾期' + Math.ceil((new Date().getTime() - new Date(task.end_date!).getTime()) / 86400000) + '天', cls: getStatusTheme('overdue').className } : undefined,
         }
     }
   }, [taskProgressSnapshot])
-  // ────────────────────────────────────────────────────
 
-  const loadTasks = useCallback(async () => {
-    try {
-      const res = await fetch(`${API_BASE}/api/tasks?projectId=${id}`, {
-        headers: getAuthHeaders()
-      })
-      const json = await res.json()
-      const data: Task[] = json.data || []
-      // 按开始日期排序
-      const sorted = [...data].sort((a, b) => {
-        if (!a.start_date) return 1
-        if (!b.start_date) return -1
-        return new Date(a.start_date).getTime() - new Date(b.start_date).getTime()
-      })
-      setTasks(sorted)
-    } catch (error) {
-      console.error('加载任务失败:', error)
-    } finally {
-      setLoading(false)
-    }
-  }, [id, setTasks])
-
-  useEffect(() => {
-    if (id) {
-      loadTasks()
-    }
-  }, [id, loadTasks])
-
-  const handleSaveTask = async () => {
-    if (!formData.name.trim() || !id) {
-      toast({ title: "请输入任务名称", variant: "destructive" })
+  const loadTasks = useCallback(async (options?: { signal?: AbortSignal; force?: boolean }) => {
+    const shouldReuseHydratedTasks = !options?.force && hydratedProjectId === id && viewMode === 'list'
+    if (!id || shouldReuseHydratedTasks) {
       return
     }
 
-    // 验证依赖任务的日期
+    try {
+      const data: Task[] = viewMode === 'list'
+        ? await prefetchProjectTasks(id, { signal: options?.signal, force: options?.force })
+        : await (async () => {
+          const requestParams = new URLSearchParams({ projectId: id })
+          requestParams.set('timeline_projection', 'true')
+          if (timelineCompareMode === 'baseline' && timelineBaselineVersionId) {
+            requestParams.set('baseline_version_id', timelineBaselineVersionId)
+          }
+
+          const res = await fetch(
+            `${API_BASE}/api/tasks?${requestParams.toString()}`,
+            withRequestContext({ signal: options?.signal }),
+          )
+          const json = await res.json()
+          return json.data || []
+        })()
+      if (!options?.signal?.aborted) {
+        setTasks(data)
+      }
+    } catch (error) {
+      if (!isAbortError(error)) {
+        console.error('加载甘特任务失败:', error)
+      }
+    }
+  }, [hydratedProjectId, id, setTasks, timelineBaselineVersionId, timelineCompareMode, viewMode])
+
+  const loadProjectConditions = useCallback(async (options?: { signal?: AbortSignal }) => {
+    if (!id) {
+      setProjectConditions([])
+      return
+    }
+
+    try {
+      const data = await apiGet<TaskCondition[]>(
+        `/api/task-conditions?projectId=${encodeURIComponent(id)}`,
+        options?.signal ? { signal: options.signal } : undefined,
+      )
+      if (!options?.signal?.aborted) {
+        setProjectConditions(toStoreConditionRecords(Array.isArray(data) ? data : []))
+      }
+    } catch (error) {
+      if (!isAbortError(error)) {
+        console.error('加载甘特开工条件失败:', error)
+      }
+    }
+  }, [id, setProjectConditions])
+
+  const loadProjectObstacles = useCallback(async (options?: { signal?: AbortSignal }) => {
+    if (!id) {
+      setProjectObstacles([])
+      return
+    }
+
+    try {
+      const data = await apiGet<TaskObstacle[]>(
+        `/api/task-obstacles?projectId=${encodeURIComponent(id)}`,
+        options?.signal ? { signal: options.signal } : undefined,
+      )
+      if (!options?.signal?.aborted) {
+        setProjectObstacles(toStoreObstacleRecords(Array.isArray(data) ? data : []))
+      }
+    } catch (error) {
+      if (!isAbortError(error)) {
+        console.error('加载甘特阻碍失败:', error)
+      }
+    }
+  }, [id, setProjectObstacles])
+
+  const loadDelayRequests = useCallback(async (options?: { signal?: AbortSignal }) => {
+    if (!id) {
+      setDelayRequests([])
+      setSharedSliceStatus('delayRequests', { loading: false, error: null })
+      return
+    }
+
+    setSharedSliceStatus('delayRequests', { loading: true, error: null })
+
+    try {
+      const data = await apiGet<Record<string, unknown>[]>(
+        `/api/delay-requests?projectId=${encodeURIComponent(id)}`,
+        options?.signal ? { signal: options.signal } : undefined,
+      )
+      if (!options?.signal?.aborted) {
+        setDelayRequests(
+          toStoreDelayRequestRecords(
+            (Array.isArray(data) ? data : []).map((item) => normalizeDelayRequestRecord(item)),
+          ),
+        )
+        setSharedSliceStatus('delayRequests', { loading: false, error: null })
+      }
+    } catch (error) {
+      if (!isAbortError(error) && !options?.signal?.aborted) {
+        console.error('加载甘特延期申请失败:', error)
+        setSharedSliceStatus('delayRequests', {
+          loading: false,
+          error: getApiErrorMessage(error, '延期申请数据加载失败'),
+        })
+      }
+    }
+  }, [id, setDelayRequests, setSharedSliceStatus])
+
+  const loadProjectSummary = useCallback(async (options?: { signal?: AbortSignal }) => {
+    if (!id) {
+      setProjectSummary(null)
+      return
+    }
+
+    try {
+      const nextSummary = await DashboardApiService.getProjectSummary(id, { signal: options?.signal })
+      if (!options?.signal?.aborted) {
+        setProjectSummary(nextSummary)
+      }
+    } catch (error) {
+      if (!isAbortError(error)) {
+        console.error('加载项目摘要失败:', error)
+        setProjectSummary(null)
+      }
+    }
+  }, [id])
+
+  const loadDataQualitySummary = useCallback(async (options?: { signal?: AbortSignal }) => {
+    if (!id) {
+      setDataQualitySummary(null)
+      return
+    }
+
+    try {
+      const summary = await DataQualityApiService.getProjectSummary(id, undefined, { signal: options?.signal })
+      if (!options?.signal?.aborted) {
+        setDataQualitySummary(summary)
+      }
+    } catch (error) {
+      if (!isAbortError(error)) {
+        console.error('加载数据质量摘要失败:', error)
+        setDataQualitySummary(null)
+      }
+    }
+  }, [id])
+
+  const loadParticipantUnits = useCallback(async (options?: { signal?: AbortSignal }) => {
+    if (!id) {
+      setParticipantUnits([])
+      setParticipantUnitsLoaded(false)
+      return
+    }
+
+    setParticipantUnitsLoading(true)
+    try {
+      const data = await apiGet<ParticipantUnitRecord[]>(
+        `/api/participant-units?projectId=${encodeURIComponent(id)}`,
+        options?.signal ? { signal: options.signal } : undefined,
+      )
+      if (!options?.signal?.aborted) {
+        setParticipantUnits(sortParticipantUnits(data ?? []))
+        setParticipantUnitsLoaded(true)
+      }
+    } catch (error) {
+      if (!isAbortError(error)) {
+        console.error('加载参建单位台账失败:', error)
+      }
+    } finally {
+      if (!options?.signal?.aborted) {
+        setParticipantUnitsLoading(false)
+      }
+    }
+  }, [id, setParticipantUnits])
+
+  const refreshGanttProjectData = useCallback(async (options?: {
+    signal?: AbortSignal
+    includeSummary?: boolean
+  }) => {
+    const requests: Array<Promise<unknown>> = [
+      loadTasks({ signal: options?.signal, force: true }),
+      loadProjectConditions({ signal: options?.signal }),
+      loadProjectObstacles({ signal: options?.signal }),
+      loadDelayRequests({ signal: options?.signal }),
+    ]
+
+    if (options?.includeSummary) {
+      requests.push(
+        loadProjectSummary({ signal: options.signal }),
+        loadDataQualitySummary({ signal: options.signal }),
+      )
+    }
+
+    await Promise.allSettled(requests)
+  }, [
+    loadDataQualitySummary,
+    loadDelayRequests,
+    loadProjectConditions,
+    loadProjectObstacles,
+    loadProjectSummary,
+    loadTasks,
+  ])
+  const dataQualityRefreshKey = useMemo(() => {
+    const taskSignature = tasks
+      .map((task) => [
+        task.id,
+        task.status ?? '',
+        task.progress ?? 0,
+        task.start_date ?? '',
+        task.end_date ?? '',
+        task.updated_at ?? '',
+      ].join(':'))
+      .join('|')
+    const conditionSignature = projectConditions
+      .map((condition) => [
+        condition.id,
+        condition.task_id ?? '',
+        condition.is_satisfied ? '1' : '0',
+        condition.updated_at ?? '',
+      ].join(':'))
+      .join('|')
+    return `${taskSignature}::${conditionSignature}`
+  }, [projectConditions, tasks])
+
+  useEffect(() => {
+    if (!id) {
+      setParticipantUnits([])
+      setParticipantUnitsLoaded(false)
+      setParticipantUnitDraft(createEmptyParticipantUnitDraft(null))
+      setProjectSummary(null)
+      setDataQualitySummary(null)
+      setLoading(false)
+      return
+    }
+
+    setLoading(true)
+    setParticipantUnitsLoaded(false)
+    setProjectSummary(null)
+    const controller = new AbortController()
+    const tasksPromise = loadTasks({ signal: controller.signal })
+    void tasksPromise.finally(() => {
+      if (!controller.signal.aborted) {
+        setLoading(false)
+      }
+    })
+
+    return () => {
+      controller.abort()
+    }
+  }, [
+    id,
+    loadTasks,
+    setParticipantUnits,
+  ])
+
+  useEffect(() => {
+    if (!id) {
+      setProjectSummary(null)
+      return
+    }
+    if (loading) {
+      return
+    }
+
+    const controller = new AbortController()
+    const timer = window.setTimeout(() => {
+      void loadProjectSummary({ signal: controller.signal })
+    }, 1200)
+
+    return () => {
+      window.clearTimeout(timer)
+      controller.abort()
+    }
+  }, [id, loadProjectSummary, loading])
+
+  useEffect(() => {
+    if (!id) {
+      setDataQualitySummary(null)
+      return
+    }
+    if (loading) {
+      return
+    }
+
+    const controller = new AbortController()
+    const timer = window.setTimeout(() => {
+      void loadDataQualitySummary({ signal: controller.signal })
+    }, 1500)
+
+    return () => {
+      window.clearTimeout(timer)
+      controller.abort()
+    }
+  }, [dataQualityRefreshKey, id, loadDataQualitySummary, loading])
+
+  useEffect(() => {
+    if (!id) {
+      return
+    }
+    if (!dialogOpen && !participantUnitsOpen) {
+      return
+    }
+    if (participantUnitsLoaded || participantUnitsLoading) {
+      return
+    }
+
+    const controller = new AbortController()
+    void loadParticipantUnits({ signal: controller.signal })
+
+    return () => {
+      controller.abort()
+    }
+  }, [
+    dialogOpen,
+    id,
+    loadParticipantUnits,
+    participantUnitsLoaded,
+    participantUnitsLoading,
+    participantUnitsOpen,
+  ])
+
+  useEffect(() => {
+    if (!id || !lastRealtimeEvent) {
+      return
+    }
+
+    if (lastRealtimeEvent.channel !== 'project' || lastRealtimeEvent.projectId !== id) {
+      return
+    }
+
+    const entityType = String(lastRealtimeEvent.entityType ?? '').trim()
+    if (!['task', 'delay_request', 'task_condition', 'task_obstacle', 'milestone'].includes(entityType)) {
+      return
+    }
+
+    const eventKey = [
+      lastRealtimeEvent.timestamp,
+      lastRealtimeEvent.type,
+      lastRealtimeEvent.projectId ?? '',
+      entityType,
+      lastRealtimeEvent.entityId ?? '',
+    ].join(':')
+    if (lastHandledRealtimeEventKeyRef.current === eventKey) {
+      return
+    }
+    lastHandledRealtimeEventKeyRef.current = eventKey
+
+    const controller = new AbortController()
+    void refreshGanttProjectData({ signal: controller.signal, includeSummary: true })
+
+    return () => {
+      controller.abort()
+    }
+  }, [
+    id,
+    lastRealtimeEvent,
+    refreshGanttProjectData,
+  ])
+
+  useEffect(() => {
+    if (!id || typeof window === 'undefined') {
+      return
+    }
+
+    let activeController: AbortController | null = null
+    const refreshVisiblePage = () => {
+      if (document.visibilityState === 'hidden') {
+        return
+      }
+
+      activeController?.abort()
+      activeController = new AbortController()
+      void refreshGanttProjectData({ signal: activeController.signal })
+    }
+
+    const timer = window.setInterval(refreshVisiblePage, 4000)
+    return () => {
+      window.clearInterval(timer)
+      activeController?.abort()
+    }
+  }, [id, refreshGanttProjectData])
+
+  useEffect(() => {
+    setParticipantUnitDraft(createEmptyParticipantUnitDraft(id))
+  }, [id])
+
+  const buildLiveCheckDraft = useCallback(
+    () => ({
+      id: editingTask?.id,
+      title: formData.name,
+      description: formData.description || null,
+      status: formData.status,
+      priority: formData.priority,
+      start_date: formData.start_date || null,
+      end_date: formData.end_date || null,
+      planned_start_date: formData.start_date || null,
+      planned_end_date: formData.end_date || null,
+      progress: formData.progress,
+      assignee_name: formData.assignee_name || null,
+      responsible_unit: formData.responsible_unit || null,
+      dependencies: formData.dependencies,
+      parent_id: formData.parent_id,
+      milestone_id: formData.milestone_id,
+      specialty_type: formData.specialty_type || null,
+      reference_duration: formData.reference_duration ? Number(formData.reference_duration) : null,
+      is_milestone: Boolean(editingTask?.is_milestone),
+    }),
+    [
+      editingTask?.id,
+      editingTask?.is_milestone,
+      formData.assignee_name,
+      formData.dependencies,
+      formData.description,
+      formData.end_date,
+      formData.milestone_id,
+      formData.name,
+      formData.parent_id,
+      formData.priority,
+      formData.progress,
+      formData.reference_duration,
+      formData.responsible_unit,
+      formData.specialty_type,
+      formData.start_date,
+      formData.status,
+    ],
+  )
+
+  useEffect(() => {
+    if (!dialogOpen || !id) {
+      setLiveCheckSummary(null)
+      setLiveCheckLoading(false)
+      return
+    }
+
+    const hasDraftContent = Boolean(
+      editingTask
+      || formData.name.trim()
+      || formData.description.trim()
+      || formData.start_date
+      || formData.end_date
+      || formData.progress > 0
+      || formData.dependencies.length > 0
+      || formData.parent_id
+      || formData.milestone_id
+      || formData.assignee_name.trim()
+      || formData.responsible_unit.trim(),
+    )
+
+    if (!hasDraftContent) {
+      setLiveCheckSummary(null)
+      setLiveCheckLoading(false)
+      return
+    }
+
+    const controller = new AbortController()
+    const timer = window.setTimeout(() => {
+      setLiveCheckLoading(true)
+      void DataQualityApiService.liveCheckTaskDraft(
+        id,
+        buildLiveCheckDraft(),
+        editingTask?.id,
+        { signal: controller.signal },
+      )
+        .then((summary) => {
+          if (!controller.signal.aborted) {
+            setLiveCheckSummary(summary)
+          }
+        })
+        .catch((error) => {
+          if (!isAbortError(error)) {
+            console.warn('[GanttView] live data-quality check failed', error)
+            setLiveCheckSummary(null)
+          }
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) {
+            setLiveCheckLoading(false)
+          }
+        })
+    }, 240)
+
+    return () => {
+      clearTimeout(timer)
+      controller.abort()
+    }
+  }, [
+    dialogOpen,
+    editingTask,
+    formData.assignee_name,
+    formData.dependencies,
+    formData.description,
+    formData.end_date,
+    formData.milestone_id,
+    formData.name,
+    formData.parent_id,
+    formData.priority,
+    formData.progress,
+    formData.reference_duration,
+    formData.responsible_unit,
+    formData.specialty_type,
+    formData.start_date,
+    formData.status,
+    buildLiveCheckDraft,
+    id,
+  ])
+
+  const handleSaveTask = async () => {
+    if (taskSaving) return
+
+    const nextErrors: { name?: string; start_date?: string; end_date?: string } = {}
+    if (!formData.name.trim()) {
+      nextErrors.name = '请输入任务名称'
+    }
+    if (!formData.start_date) {
+      nextErrors.start_date = '甘特与关键路径任务必须填写开始日期'
+    }
+    if (!formData.end_date) {
+      nextErrors.end_date = '甘特与关键路径任务必须填写结束日期'
+    }
+    setTaskFormErrors(nextErrors)
+
+    if (Object.keys(nextErrors).length > 0 || !id) {
+      if (Object.keys(nextErrors).length > 0) {
+        toast({ title: '请先补全任务日期与名称', variant: 'destructive' })
+      }
+      return
+    }
+
+    // 妤犲矁鐦夋笟婵婄娴犺濮熼惃鍕）閺?
     if (formData.dependencies && formData.dependencies.length > 0) {
       const newStartDate = formData.start_date ? new Date(formData.start_date) : null
       const newEndDate = formData.end_date ? new Date(formData.end_date) : null
@@ -586,37 +1746,55 @@ export default function GanttView() {
         const depStartDate = depTask.start_date ? new Date(depTask.start_date) : null
         const depEndDate = depTask.end_date ? new Date(depTask.end_date) : null
         
-        // 验证：任务的开始时间不能早于依赖任务的完成时间
         if (newStartDate && depEndDate && newStartDate < depEndDate) {
           toast({ 
-            title: "日期冲突", 
-            description: `依赖任务"${depTask.title || depTask.name}"完成于${depTask.end_date}，当前任务开始时间不能早于此时间`,
-            variant: "destructive" 
+            title: '日期冲突', 
+            description: `依赖任务 "${depTask.title || depTask.name}" 完成于 ${depTask.end_date}，当前任务开始时间不能早于此时间`,
+            variant: 'destructive' 
           })
           return
         }
         
-        // 验证：任务的开始时间不能早于依赖任务的开始时间（建议）
         if (newStartDate && depStartDate && newStartDate < depStartDate) {
           toast({ 
-            title: "日期建议", 
-            description: `依赖任务"${depTask.title || depTask.name}"开始于${depTask.start_date}，建议当前任务在此之后开始`,
+            title: '日期建议', 
+            description: `依赖任务 "${depTask.title || depTask.name}" 开始于 ${depTask.start_date}，建议当前任务安排在其之后`,
           })
         }
       }
     }
 
     try {
-      // ── 缺9修复：进度与状态联动 ──────────────────────
+      setTaskSaving(true)
+
+      const preSaveSummary = await DataQualityApiService.liveCheckTaskDraft(
+        id,
+        buildLiveCheckDraft(),
+        editingTask?.id,
+      ).catch((error) => {
+        console.warn('[GanttView] pre-save live data-quality check failed', error)
+        return null
+      })
+
+      if (preSaveSummary) {
+        setLiveCheckSummary(preSaveSummary)
+      }
+
       let autoStatus = formData.status
       if (formData.progress >= 100 && formData.status !== 'completed') {
         autoStatus = 'completed'
       } else if (formData.progress === 0 && formData.status === 'completed') {
         autoStatus = 'todo'
       }
-      // ────────────────────────────────────────────────
 
-      // 字段映射：将表单字段转换为数据库字段
+      const boundParticipantUnit = formData.participant_unit_id
+        ? participantUnits.find((unit) => unit.id === formData.participant_unit_id) ?? null
+        : null
+      const resolvedResponsibleUnit = (
+        boundParticipantUnit?.unit_name
+        || formData.responsible_unit
+      ).trim()
+
       const taskData: Partial<Task> = {
         title: formData.name,  // name -> title
         description: formData.description,
@@ -624,37 +1802,45 @@ export default function GanttView() {
         priority: formData.priority,
         start_date: formData.start_date || null,
         end_date: formData.end_date || null,
+        actual_start_date: formData.actual_start_date || null,
+        planned_start_date: formData.start_date || null,
+        planned_end_date: formData.end_date || null,
         progress: formData.progress,
         assignee: formData.assignee_name,  // assignee_name -> assignee
-        assignee_unit: formData.responsible_unit,  // responsible_unit -> assignee_unit
+        assignee_user_id: formData.assignee_user_id || null,
+        participant_unit_id: formData.participant_unit_id || null,
+        responsible_unit: resolvedResponsibleUnit || null,
+        assignee_unit: resolvedResponsibleUnit || null,
         dependencies: formData.dependencies || [],
         parent_id: formData.parent_id || null,
+        milestone_id: formData.milestone_id || null,
         project_id: id,
         updated_at: new Date().toISOString(),
         specialty_type: formData.specialty_type || null,  // #12
         reference_duration: formData.reference_duration ? Number(formData.reference_duration) : undefined,  // #7
-        // #11: 首次填报时间 — 仅在进度从0变为>0时首次设置
         ...(formData.progress > 0 && editingTask && !editingTask.first_progress_at
           ? { first_progress_at: new Date().toISOString() }
           : {}),
       }
 
       if (editingTask) {
+        const shouldWarnConditionAdvance = Number(editingTask.progress ?? 0) === 0
+          && Number(formData.progress ?? 0) > 0
+          && unmetEditingTaskConditions.length > 0
         const currentVersion = editingTask.version || 1
-        const res = await fetch(`${API_BASE}/api/tasks/${editingTask.id}`, {
-          method: 'PUT',
-          headers: { 
-            'Content-Type': 'application/json',
-            ...getAuthHeaders()
-          },
-          body: JSON.stringify({ ...taskData, version: currentVersion }),
-        })
+        const res = await fetch(
+          `${API_BASE}/api/tasks/${editingTask.id}`,
+          withRequestContext({
+            method: 'PUT',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ ...taskData, version: currentVersion }),
+          }),
+        )
         const json = await res.json()
         if (res.status === 409) {
-          // 版本冲突：用服务器版本显示对话框
-          const serverRes = await fetch(`${API_BASE}/api/tasks/${editingTask.id}`, {
-            headers: getAuthHeaders()
-          })
+          const serverRes = await fetch(`${API_BASE}/api/tasks/${editingTask.id}`, withRequestContext())
           const serverJson = await serverRes.json()
           setConflictData({
             localVersion: { ...editingTask, ...taskData } as unknown as Task,
@@ -662,32 +1848,45 @@ export default function GanttView() {
           })
           setPendingTaskData(taskData)
           setConflictOpen(true)
+          return
         } else if (json.success) {
           updateTask(editingTask.id, json.data)
-          toast({ title: "任务已更新" })
+          if (shouldWarnConditionAdvance) {
+            openConditionWarning(editingTask, unmetEditingTaskConditions.length)
+          }
+          toast({
+            title: preSaveSummary?.count
+              ? `任务已更新，另有 ${preSaveSummary.count} 条数据矛盾待确认`
+              : '任务已更新',
+            description: preSaveSummary?.count ? preSaveSummary.summary : undefined,
+          })
         } else {
           throw new Error(json.error?.message || '更新失败')
         }
       } else {
-        console.log('[DEBUG] 创建任务，发送数据:', JSON.stringify(taskData, null, 2))
-        const res = await fetch(`${API_BASE}/api/tasks`, {
-          method: 'POST',
-          headers: { 
-            'Content-Type': 'application/json',
-            ...getAuthHeaders()
-          },
-          body: JSON.stringify(taskData),
-        })
+        const res = await fetch(
+          `${API_BASE}/api/tasks`,
+          withRequestContext({
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(taskData),
+          }),
+        )
         const json = await res.json()
-        console.log('[DEBUG] 创建任务响应:', JSON.stringify(json, null, 2))
         if (!json.success) {
-          const detail = json.error?.details || json.error?.message || '创建失败'
+          const detail = json.error?.details || json.error?.message || '閸掓稑缂撴径杈Е'
           throw new Error(detail)
         }
         const newTask = json.data as Task
-        addTask(newTask as any)
-        toast({ title: "任务已创建" })
-        // P1-7: 新建任务后提示是否添加开工条件
+        addTask(toStoreTaskRecord(newTask))
+        toast({
+          title: preSaveSummary?.count
+            ? `任务已创建，另有 ${preSaveSummary.count} 条数据矛盾待确认`
+            : '任务已创建',
+          description: preSaveSummary?.count ? preSaveSummary.summary : undefined,
+        })
         setNewTaskConditionPromptId(newTask.id)
       }
 
@@ -695,132 +1894,229 @@ export default function GanttView() {
       resetForm()
     } catch (error) {
       console.error('保存任务失败:', error)
-      toast({ title: "保存失败: " + (error as Error).message, variant: "destructive" })
+      toast({ title: '保存失败: ' + (error as Error).message, variant: 'destructive' })
+    } finally {
+      setTaskSaving(false)
     }
   }
 
-  const handleDeleteTask = async (taskId: string) => {
-    openConfirm('删除任务', '确定要删除这个任务吗？此操作不可撤销。', async () => {
-      try {
-        const res = await fetch(`${API_BASE}/api/tasks/${taskId}`, { 
-          method: 'DELETE',
-          headers: getAuthHeaders()
-        })
-        const json = await res.json()
-        if (!json.success) throw new Error(json.error?.message || '删除失败')
-        deleteTask(taskId)
-        toast({ title: "任务已删除" })
-      } catch (error) {
-        console.error('删除任务失败:', error)
-        toast({ title: "删除失败", variant: "destructive" })
-      }
+  const openTaskDeleteGuard = useCallback((taskId: string) => {
+    const targetTask = tasks.find((item) => item.id === taskId)
+    setDeleteGuardTarget({
+      kind: 'task',
+      id: taskId,
+      title: targetTask?.title || targetTask?.name || '未命名任务',
+      blocked: false,
     })
-  }
+  }, [tasks])
 
-  // 切换关键任务状态
-  const handleToggleCritical = async (taskId: string) => {
-    const task = tasks.find(t => t.id === taskId)
-    if (!task) return
+  const closeDeleteGuard = useCallback(() => {
+    if (deleteGuardSubmitting || deleteGuardSecondarySubmitting) return
+    setDeleteGuardTarget(null)
+  }, [deleteGuardSecondarySubmitting, deleteGuardSubmitting])
 
-    const newCriticalStatus = !task.is_critical
-    try {
-      const res = await fetch(`${API_BASE}/api/tasks/${taskId}`, {
-        method: 'PUT',
-        headers: { 
-          'Content-Type': 'application/json',
-          ...getAuthHeaders()
-        },
-        body: JSON.stringify({ is_critical: newCriticalStatus, version: task.version ?? 1 }),
-      })
-      const json = await res.json()
-      if (!json.success) throw new Error(json.error?.message || '操作失败')
-      const updatedTasks = tasks.map(t =>
-        t.id === taskId ? { ...t, is_critical: newCriticalStatus } : t
-      )
-      setTasks(updatedTasks)
-      toast({
-        title: newCriticalStatus ? "已标记为关键任务" : "已取消关键任务标记",
-        description: newCriticalStatus ? "该任务将显示在关键路径中" : ""
-      })
-    } catch (error) {
-      console.error('更新关键任务状态失败:', error)
-      toast({ title: "操作失败", variant: "destructive" })
+  const handleCloseTaskRecord = useCallback(async (taskId: string) => {
+    const targetTask = tasks.find((item) => item.id === taskId)
+    const closeEndpoint =
+      deleteGuardTarget?.kind === 'task' && deleteGuardTarget.id === taskId
+        ? deleteGuardTarget.details?.close_action?.endpoint
+        : null
+    if (!targetTask) {
+      setDeleteGuardTarget(null)
+      return
     }
+    if (targetTask.status === 'completed' && Number(targetTask.progress ?? 0) >= 100) {
+      toast({ title: '任务已处于关闭态', description: '当前任务已经是已完成状态。' })
+      setDeleteGuardTarget(null)
+      return
+    }
+    try {
+      setDeleteGuardSecondarySubmitting(true)
+      const response = await fetch(
+        `${API_BASE}${closeEndpoint || `/api/tasks/${taskId}/close`}`,
+        withRequestContext({
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ version: targetTask.version ?? 1 }),
+        }),
+      )
+      const json = await response.json()
+      if (!json.success) {
+        throw new Error(extractApiErrorMessage(json, '关闭任务失败'))
+      }
+      updateTask(taskId, json.data as Task)
+      if (selectedTask?.id === taskId) {
+        setSelectedTask(json.data as Task)
+      }
+      setDeleteGuardTarget(null)
+      toast({ title: '已关闭此任务记录', description: '任务已转为完成态，留痕会继续保留。' })
+    } catch (error) {
+      toast({
+        title: '关闭任务失败',
+        description: getApiErrorMessage(error, '请稍后重试。'),
+        variant: 'destructive',
+      })
+    } finally {
+      setDeleteGuardSecondarySubmitting(false)
+    }
+  }, [deleteGuardTarget, selectedTask?.id, tasks, updateTask])
+
+  const handleConfirmDeleteGuard = useCallback(async () => {
+    if (!deleteGuardTarget) return
+    if (deleteGuardTarget.blocked) {
+      setDeleteGuardTarget(null)
+      return
+    }
+    try {
+      setDeleteGuardSubmitting(true)
+      if (deleteGuardTarget.kind === 'task') {
+        const response = await fetch(
+          `${API_BASE}/api/tasks/${deleteGuardTarget.id}`,
+          withRequestContext({
+            method: 'DELETE',
+          }),
+        )
+        const json = await response.json()
+        if (!json.success) {
+          if (response.status === 422) {
+            const nextGuard = buildDeleteProtectionState('task', deleteGuardTarget.id, deleteGuardTarget.title, json)
+            if (nextGuard) {
+              setDeleteGuardTarget(nextGuard)
+              return
+            }
+          }
+          throw new Error(extractApiErrorMessage(json, '删除任务失败'))
+        }
+        deleteTask(deleteGuardTarget.id)
+        setDeleteGuardTarget(null)
+        toast({ title: '任务已删除', description: `已移除“${deleteGuardTarget.title}”。` })
+        return
+      }
+      const response = await fetch(
+        `${API_BASE}/api/task-obstacles/${deleteGuardTarget.id}`,
+        withRequestContext({
+          method: 'DELETE',
+        }),
+      )
+      const json = await response.json()
+      if (!json.success) {
+        if (response.status === 422) {
+          const nextGuard = buildDeleteProtectionState('obstacle', deleteGuardTarget.id, deleteGuardTarget.title, json)
+          if (nextGuard) {
+            setDeleteGuardTarget(nextGuard)
+            return
+          }
+        }
+        throw new Error(extractApiErrorMessage(json, '删除阻碍失败'))
+      }
+      setProjectObstacles(toStoreObstacleRecords(projectObstacles.filter((obstacle) => obstacle.id !== deleteGuardTarget.id)))
+      setTaskObstacles((prev) => prev.filter((obstacle) => obstacle.id !== deleteGuardTarget.id))
+      setDeleteGuardTarget(null)
+      toast({ title: '阻碍记录已删除', description: `已移除“${deleteGuardTarget.title}”。` })
+    } catch (error) {
+      toast({
+        title: deleteGuardTarget.kind === 'task' ? '删除任务失败' : '删除阻碍失败',
+        description: getApiErrorMessage(error, '请稍后重试。'),
+        variant: 'destructive',
+      })
+    } finally {
+      setDeleteGuardSubmitting(false)
+    }
+  }, [deleteGuardTarget, deleteTask, projectObstacles, setProjectObstacles])
+
+  const handleDeleteTask = useCallback((taskId: string) => {
+    openTaskDeleteGuard(taskId)
+  }, [openTaskDeleteGuard])
+
+  const handleViewTaskSummary = (taskId: string) => {
+    navigate(`/projects/${id}/task-summary?taskId=${taskId}`)
   }
 
   const handleStatusChange = async (taskId: string, val: string) => {
     const task = tasks.find(t => t.id === taskId)
-    const res = await fetch(`${API_BASE}/api/tasks/${taskId}`, {
-      method: 'PUT',
-      headers: { 
-        'Content-Type': 'application/json',
-        ...getAuthHeaders()
-      },
-      body: JSON.stringify({ status: val, updated_at: new Date().toISOString(), version: task?.version ?? 1 }),
-    })
+    const statusPayload: Record<string, unknown> = {
+      status: val,
+      updated_at: new Date().toISOString(),
+      version: task?.version ?? 1,
+    }
+    if (val === 'completed') {
+      statusPayload.progress = 100
+    }
+    const res = await fetch(
+      `${API_BASE}/api/tasks/${taskId}`,
+      withRequestContext({
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(statusPayload),
+      }),
+    )
     const json = await res.json()
     if (json.success) {
-      updateTask(taskId, { status: val as 'todo' | 'in_progress' | 'completed' })
-      // #2: 状态变更时，若任务已逾期且变为 in_progress，自动记录延期
-      if (task && val === 'in_progress' && task.end_date) {
+      const updatedTask = json.data as Partial<Task> | undefined
+      updateTask(taskId, {
+        status: (updatedTask?.status ?? val) as 'todo' | 'in_progress' | 'completed',
+        ...(typeof updatedTask?.progress === 'number'
+          ? { progress: updatedTask.progress }
+          : val === 'completed'
+            ? { progress: 100 }
+            : {}),
+        ...(updatedTask?.actual_start_date ? { actual_start_date: updatedTask.actual_start_date } : {}),
+        ...(updatedTask?.actual_end_date ? { actual_end_date: updatedTask.actual_end_date } : {}),
+        ...(typeof updatedTask?.version === 'number' ? { version: updatedTask.version } : {}),
+      })
+      const submitAutoDelayRequest = async (reason: string, delayedDate: string) => {
+        if (!task?.end_date || !id) return
         const now = new Date()
         const endDate = new Date(task.end_date)
-        if (now > endDate) {
-          const delayDays = Math.ceil((now.getTime() - endDate.getTime()) / 86400000)
-          fetch(`${API_BASE}/api/task-delays`, {
+        if (Number.isNaN(endDate.getTime()) || now <= endDate) return
+        const delayDays = Math.ceil((now.getTime() - endDate.getTime()) / 86400000)
+        try {
+          await fetch(`${API_BASE}/api/delay-requests`, {
             method: 'POST',
-            headers: { 
+            headers: {
               'Content-Type': 'application/json',
-              ...getAuthHeaders()
+              ...getAuthHeaders(),
             },
             body: JSON.stringify({
               task_id: taskId,
               project_id: id,
+              baseline_version_id: baselineOptions[0]?.id ?? null,
+              original_date: task.end_date,
+              delayed_date: delayedDate,
               delay_days: delayDays,
-              original_end_date: task.end_date,
-              detected_at: now.toISOString(),
-              reason: '手动标记开始时已逾期',
+              reason,
+              delay_reason: reason,
             }),
-          }).catch(() => { /* 静默失败 */ })
+            ...withCredentials(),
+          })
+        } catch {
         }
       }
-      // #2: 状态变为 completed 时，若之前已逾期，记录实际完成延期天数
+      if (task && val === 'in_progress' && task.end_date) {
+        void submitAutoDelayRequest('手动标记开工时已逾期', new Date().toISOString().slice(0, 10))
+      }
       if (task && val === 'completed' && task.end_date) {
-        const now = new Date()
-        const endDate = new Date(task.end_date)
-        if (now > endDate) {
-          const delayDays = Math.ceil((now.getTime() - endDate.getTime()) / 86400000)
-          fetch(`${API_BASE}/api/task-delays`, {
-            method: 'POST',
-            headers: { 
-              'Content-Type': 'application/json',
-              ...getAuthHeaders()
-            },
-            body: JSON.stringify({
-              task_id: taskId,
-              project_id: id,
-              delay_days: delayDays,
-              original_end_date: task.end_date,
-              actual_end_date: now.toISOString().split('T')[0],
-              detected_at: now.toISOString(),
-              reason: '逾期完成',
-            }),
-          }).catch(() => { /* 静默失败 */ })
-        }
+        void submitAutoDelayRequest('逾期完成', new Date().toISOString().slice(0, 10))
       }
     }
   }
 
   const handlePriorityChange = async (taskId: string, val: string) => {
     const task = tasks.find(t => t.id === taskId)
-    const res = await fetch(`${API_BASE}/api/tasks/${taskId}`, {
-      method: 'PUT',
-      headers: { 
-        'Content-Type': 'application/json',
-        ...getAuthHeaders()
-      },
-      body: JSON.stringify({ priority: val, updated_at: new Date().toISOString(), version: task?.version ?? 1 }),
-    })
+    const res = await fetch(
+      `${API_BASE}/api/tasks/${taskId}`,
+      withRequestContext({
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ priority: val, updated_at: new Date().toISOString(), version: task?.version ?? 1 }),
+      }),
+    )
     const json = await res.json()
     if (json.success) {
       updateTask(taskId, { priority: val as 'low' | 'medium' | 'high' | 'urgent' })
@@ -830,18 +2126,23 @@ export default function GanttView() {
   const openEditDialog = (task?: Task, parentId?: string) => {
     if (task) {
       setEditingTask(task)
+      setTaskFormErrors({})
       setFormData({
         name: task.title || task.name || '',
         description: task.description || '',
         status: task.status || 'todo',
         priority: task.priority || 'medium',
-        start_date: task.start_date || '',
-        end_date: task.end_date || '',
+        start_date: task.planned_start_date || task.start_date || '',
+        end_date: task.planned_end_date || task.end_date || '',
+        actual_start_date: task.actual_start_date || '',
         progress: task.progress || 0,
         assignee_name: task.assignee_name || '',
+        assignee_user_id: task.assignee_user_id || null,
+        participant_unit_id: task.participant_unit_id || null,
         responsible_unit: task.responsible_unit || '',
         dependencies: task.dependencies || [],
         parent_id: task.parent_id || null,
+        milestone_id: task.milestone_id || null,
         specialty_type: task.specialty_type || '',
         reference_duration: task.reference_duration != null ? String(task.reference_duration) : '',
       })
@@ -855,11 +2156,50 @@ export default function GanttView() {
     setDialogOpen(true)
   }
 
-  // 处理依赖关系变更
+  const handleSelectMilestoneLevel = async (level: number | null) => {
+    if (!milestoneTargetTask?.id) return
+
+    try {
+      const response = await fetch(
+        `${API_BASE}/api/tasks/${milestoneTargetTask.id}`,
+        withRequestContext({
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            is_milestone: level !== null,
+            milestone_level: level,
+            version: milestoneTargetTask.version ?? 1,
+          }),
+        }),
+      )
+      const result = await response.json()
+      if (!result.success) {
+        throw new Error(result.error?.message || '里程碑设置失败')
+      }
+
+      updateTask(milestoneTargetTask.id, {
+        is_milestone: level !== null,
+        milestone_level: level ?? undefined,
+      })
+      toast({
+        title: level === null ? '已取消里程碑标记' : zhCN.gantt.milestoneToast.replace('{label}', MILESTONE_LEVEL_CONFIG[level]?.label ?? '里程碑'),
+      })
+      setMilestoneDialogOpen(false)
+      setMilestoneTargetTask(null)
+    } catch (error) {
+      console.error('设置里程碑失败:', error)
+      toast({
+        title: '设置里程碑失败',
+        variant: 'destructive',
+      })
+    }
+  }
+
   const handleDependencyChange = (taskId: string, checked: boolean) => {
     const currentDeps = formData.dependencies || []
     if (checked) {
-      // 不能依赖自己
       if (taskId !== editingTask?.id) {
         setFormData({ ...formData, dependencies: [...currentDeps, taskId] })
       }
@@ -871,6 +2211,9 @@ export default function GanttView() {
   const resetForm = () => {
     setEditingTask(null)
     setAiDurationSuggestion(null)
+    setLiveCheckSummary(null)
+    setLiveCheckLoading(false)
+    setTaskFormErrors({})
     setFormData({
       name: '',
       description: '',
@@ -878,35 +2221,121 @@ export default function GanttView() {
       priority: 'medium',
       start_date: '',
       end_date: '',
+      actual_start_date: '',
       progress: 0,
       assignee_name: '',
+      assignee_user_id: null,
+      participant_unit_id: null,
       responsible_unit: '',
       dependencies: [],
       parent_id: null,
+      milestone_id: null,
       specialty_type: '',
       reference_duration: '',
     })
     setNewTaskParentId(null)
   }
 
-  // AI 工期建议（仅编辑已有任务时可用）
+  const openParticipantUnitsDialog = useCallback(() => {
+    setParticipantUnitDraft(createEmptyParticipantUnitDraft(id))
+    setParticipantUnitsOpen(true)
+  }, [id])
+
+  const handleParticipantUnitCreateNew = useCallback(() => {
+    setParticipantUnitDraft(createEmptyParticipantUnitDraft(id))
+  }, [id])
+
+  const handleParticipantUnitEdit = useCallback((unit: ParticipantUnitRecord) => {
+    setParticipantUnitDraft(toParticipantUnitDraft(unit, id))
+  }, [id])
+
+  const handleParticipantUnitSubmit = useCallback(async () => {
+    if (!id) return
+
+    const payload = {
+      project_id: id,
+      unit_name: participantUnitDraft.unit_name.trim(),
+      unit_type: participantUnitDraft.unit_type.trim(),
+      contact_name: participantUnitDraft.contact_name.trim() || null,
+      contact_role: participantUnitDraft.contact_role.trim() || null,
+      contact_phone: participantUnitDraft.contact_phone.trim() || null,
+      contact_email: participantUnitDraft.contact_email.trim() || null,
+    }
+
+    if (!payload.unit_name || !payload.unit_type) {
+      toast({ title: '请先补全单位名称和单位类型', variant: 'destructive' })
+      return
+    }
+
+    setParticipantUnitSaving(true)
+    try {
+      if (participantUnitDraft.id) {
+        const updated = await apiPut<ParticipantUnitRecord>(`/api/participant-units/${participantUnitDraft.id}`, {
+          ...payload,
+          version: participantUnitDraft.version ?? 1,
+        })
+        setParticipantUnits(sortParticipantUnits(
+          participantUnits.map((unit) => (unit.id === updated.id ? updated : unit)),
+        ))
+        toast({ title: '参建单位已更新', description: updated.unit_name })
+      } else {
+        const created = await apiPost<ParticipantUnitRecord>('/api/participant-units', payload)
+        setParticipantUnits(sortParticipantUnits([...participantUnits, created]))
+        toast({ title: '参建单位已创建', description: created.unit_name })
+      }
+
+      setParticipantUnitDraft(createEmptyParticipantUnitDraft(id))
+      void loadTasks()
+    } catch (error) {
+      toast({
+        title: '参建单位保存失败',
+        description: getApiErrorMessage(error, '请稍后重试。'),
+        variant: 'destructive',
+      })
+    } finally {
+      setParticipantUnitSaving(false)
+    }
+  }, [id, loadTasks, participantUnitDraft, participantUnits, setParticipantUnits])
+
+  const handleParticipantUnitDelete = useCallback(async (unit: ParticipantUnitRecord) => {
+    setParticipantUnitSaving(true)
+    try {
+      await apiDelete(`/api/participant-units/${unit.id}`)
+      setParticipantUnits(participantUnits.filter((item) => item.id !== unit.id))
+      setParticipantUnitDraft((current) => (current.id === unit.id ? createEmptyParticipantUnitDraft(id) : current))
+      toast({ title: '参建单位已删除', description: unit.unit_name })
+      void loadTasks()
+    } catch (error) {
+      toast({
+        title: '参建单位删除失败',
+        description: getApiErrorMessage(error, '请稍后重试。'),
+        variant: 'destructive',
+      })
+    } finally {
+      setParticipantUnitSaving(false)
+    }
+  }, [id, loadTasks, participantUnits, setParticipantUnits])
+
+  // AI 工期建议：依据历史数据给出参考时长
   const fetchAiDurationSuggestion = useCallback(async () => {
     if (!editingTask?.id || !id) return
     setAiDurationLoading(true)
     setAiDurationSuggestion(null)
     try {
-      const res = await fetch(`${API_BASE}/api/ai-duration/estimate-duration`, {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          ...getAuthHeaders()
-        },
-        body: JSON.stringify({
-          task_id: editingTask.id,
-          project_id: id,
-          historical_data: true,
+      const res = await fetch(
+        `${API_BASE}/api/ai-duration/estimate-duration`,
+        withRequestContext({
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            task_id: editingTask.id,
+            project_id: id,
+            historical_data: true,
+          }),
         }),
-      })
+      )
       const data = await res.json()
       if (data.success && data.data) {
         setAiDurationSuggestion({
@@ -923,37 +2352,37 @@ export default function GanttView() {
     } finally {
       setAiDurationLoading(false)
     }
-  }, [editingTask, id, toast])
+  }, [editingTask, id])
 
-  // 应用 AI 建议工期：从开始日期 + estimated_duration 天计算结束日期
   const applyAiDuration = useCallback(() => {
     if (!aiDurationSuggestion) return
     const start = formData.start_date ? new Date(formData.start_date) : new Date()
     const end = new Date(start.getTime() + aiDurationSuggestion.estimated_duration * 24 * 60 * 60 * 1000)
     const endStr = end.toISOString().split('T')[0]
     setFormData(prev => ({ ...prev, end_date: endStr }))
-    toast({ title: `已应用 AI 建议工期：${aiDurationSuggestion.estimated_duration} 天` })
-  }, [aiDurationSuggestion, formData.start_date, toast])
+    toast({ title: '已应用 AI 建议工期：' + aiDurationSuggestion.estimated_duration + ' 天' })
+  }, [aiDurationSuggestion, formData.start_date])
 
-  // 版本冲突处理函数
+  // 鐗堟湰鍐茬獊婢跺嫮鎮婇崙鑺ユ殶
   const handleKeepLocal = useCallback(async () => {
     if (!conflictData || !pendingTaskData || !editingTask) return
 
-    // 强制保留本地版本：用服务器版本号 +1 提交
     const serverVersion = conflictData.serverVersion.version || 1
-    const res = await fetch(`${API_BASE}/api/tasks/${editingTask.id}`, {
-      method: 'PUT',
-      headers: { 
-        'Content-Type': 'application/json',
-        ...getAuthHeaders()
-      },
-      body: JSON.stringify({ ...pendingTaskData, version: serverVersion }),
-    })
+    const res = await fetch(
+      `${API_BASE}/api/tasks/${editingTask.id}`,
+      withRequestContext({
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ ...pendingTaskData, version: serverVersion }),
+      }),
+    )
     const json = await res.json()
     if (json.success) {
       updateTask(editingTask.id, json.data)
     }
-    toast({ title: "已保留您的修改" })
+    toast({ title: '已保留你的修改' })
     setConflictOpen(false)
     setConflictData(null)
     setPendingTaskData(null)
@@ -962,9 +2391,8 @@ export default function GanttView() {
   const handleKeepServer = useCallback(() => {
     if (!conflictData || !editingTask) return
 
-    // 使用服务器版本，刷新本地状态
     updateTask(editingTask.id, conflictData.serverVersion)
-    toast({ title: "已使用服务器版本" })
+    toast({ title: '已使用服务器版本' })
 
     setConflictOpen(false)
     setConflictData(null)
@@ -974,13 +2402,13 @@ export default function GanttView() {
   }, [conflictData, editingTask, updateTask])
 
   const handleMerge = useCallback(() => {
-    // 关闭冲突对话框，让用户在表单中手动合并
     setConflictOpen(false)
-    toast({ title: "请手动合并不同之处", description: "服务器版本已加载到表单中" })
-    // 可以在这里预填服务器版本的数据到表单，让用户对比修改
-  }, [conflictData])
+    toast({
+      title: '请手动合并差异',
+      description: '服务器版本已经加载到表单中',
+    })
+  }, [])
 
-  // ─── 条件管理 ──────────────────────────────────────
   const openConditionDialog = async (task: Task) => {
     const nextConditions = scopedProjectConditions.filter(
       (condition) => condition.task_id === task.id,
@@ -992,12 +2420,9 @@ export default function GanttView() {
     setNewConditionName('')
     setTaskConditions(nextConditions)
     try {
-      // P2-9: 并发获取所有条件的前置任务（junction 表）
       const precedingTaskPromises = nextConditions.map(async (cond) => {
         try {
-          const prRes = await fetch(`/api/task-conditions/${cond.id}/preceding-tasks`, {
-            headers: getAuthHeaders()
-          })
+          const prRes = await fetch(`/api/task-conditions/${cond.id}/preceding-tasks`, withRequestContext())
           const prJson = await prRes.json()
           return { conditionId: cond.id, tasks: prJson.data || [] }
         } catch {
@@ -1022,14 +2447,14 @@ export default function GanttView() {
     try {
       const body: Record<string, unknown> = {
         task_id: conditionTask.id,
-        project_id: conditionTask.project_id, // P0-1: 修复缺少 project_id
+        project_id: conditionTask.project_id,
         name: newConditionName.trim(),
         is_satisfied: false,
         condition_type: newConditionType,
       }
       if (newConditionTargetDate) body.target_date = newConditionTargetDate
-      if (newConditionDescription.trim()) body.description = newConditionDescription.trim() // [G3]: 详细说明
-      if (newConditionResponsibleUnit.trim()) body.responsible_unit = newConditionResponsibleUnit.trim() // [G3]: 责任单位
+      if (newConditionDescription.trim()) body.description = newConditionDescription.trim()
+      if (newConditionResponsibleUnit.trim()) body.responsible_unit = newConditionResponsibleUnit.trim()
       const res = await fetch(`${API_BASE}/api/task-conditions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
@@ -1039,7 +2464,6 @@ export default function GanttView() {
       const json = await res.json()
       if (json.success) {
         const nextCondition = json.data as TaskCondition
-        // P2-9: 如果是前置工序类型且选了多个前置任务，写入 junction 表
         if (newConditionType === 'preceding' && newConditionPrecedingTaskIds.length > 0) {
           await fetch(`${API_BASE}/api/task-conditions/${json.data.id}/preceding-tasks`, {
             method: 'POST',
@@ -1047,7 +2471,7 @@ export default function GanttView() {
             body: JSON.stringify({ preceding_task_ids: newConditionPrecedingTaskIds }),
           })
         }
-        setProjectConditions([...projectConditions, nextCondition] as any)
+        setProjectConditions(toStoreConditionRecords([...projectConditions, nextCondition]))
         setTaskConditions(prev => [...prev, nextCondition])
         setInlineConditionsMap(prev => {
           if (!conditionTask || !prev[conditionTask.id]) return prev
@@ -1064,7 +2488,7 @@ export default function GanttView() {
         setNewConditionPrecedingTaskIds([])
       }
     } catch {
-      toast({ title: '添加条件失败', variant: 'destructive' })
+      toast({ title: '新增开工条件失败', variant: 'destructive' })
     }
   }
 
@@ -1080,7 +2504,7 @@ export default function GanttView() {
       if (json.success) {
         const nextCondition = (json.data ?? { ...cond, is_satisfied: !cond.is_satisfied }) as TaskCondition
         setProjectConditions(
-          projectConditions.map((item) => (item.id === cond.id ? { ...item, ...nextCondition } : item)) as any,
+          toStoreConditionRecords(projectConditions.map((item) => (item.id === cond.id ? { ...item, ...nextCondition } : item))),
         )
         setTaskConditions(prev => prev.map(c => c.id === cond.id ? nextCondition : c))
         setInlineConditionsMap(prev => {
@@ -1092,16 +2516,86 @@ export default function GanttView() {
         })
       }
     } catch {
-      toast({ title: '更新条件失败', variant: 'destructive' })
+      toast({ title: '更新开工条件失败', variant: 'destructive' })
     }
   }
 
+  const handleAdminForceSatisfyCondition = useCallback((cond: TaskCondition) => {
+    setForceSatisfyCondition(cond)
+    setForceSatisfyReason('')
+    setForceSatisfyDialogOpen(true)
+  }, [])
+
+  const closeForceSatisfyDialog = useCallback(() => {
+    setForceSatisfyDialogOpen(false)
+    setForceSatisfyCondition(null)
+    setForceSatisfyReason('')
+  }, [])
+
+  const confirmAdminForceSatisfyCondition = useCallback(async () => {
+    if (!forceSatisfyCondition) return
+    const trimmedReason = forceSatisfyReason.trim()
+    if (!trimmedReason) {
+      toast({ title: '请先填写强制满足原因', variant: 'destructive' })
+      return
+    }
+    try {
+      const res = await fetch(`/api/task-conditions/${forceSatisfyCondition.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify({
+          is_satisfied: true,
+          change_source: 'admin_force',
+          satisfied_reason: 'admin_force',
+          satisfied_reason_note: trimmedReason,
+          change_reason: trimmedReason,
+        }),
+        ...withCredentials(),
+      })
+      const json = await res.json()
+      if (!json.success) {
+        throw new Error(json.error?.message || '强制满足失败')
+      }
+      const nextCondition = (json.data ?? { ...forceSatisfyCondition, is_satisfied: true }) as TaskCondition
+      setProjectConditions(
+        toStoreConditionRecords(
+          projectConditions.map((item) => (item.id === forceSatisfyCondition.id ? { ...item, ...nextCondition } : item)),
+        ),
+      )
+      setTaskConditions((prev) => prev.map((item) => (item.id === forceSatisfyCondition.id ? nextCondition : item)))
+      setInlineConditionsMap((prev) => {
+        if (!forceSatisfyCondition.task_id || !prev[forceSatisfyCondition.task_id]) return prev
+        return {
+          ...prev,
+          [forceSatisfyCondition.task_id]: prev[forceSatisfyCondition.task_id].map((item) => (item.id === forceSatisfyCondition.id ? nextCondition : item)),
+        }
+      })
+      closeForceSatisfyDialog()
+      toast({ title: '已强制满足条件', description: '管理员原因和留痕已同步更新。' })
+    } catch (error) {
+      console.error('强制满足条件失败', error)
+      toast({ title: '强制满足失败', variant: 'destructive' })
+    }
+  }, [
+    closeForceSatisfyDialog,
+    forceSatisfyCondition,
+    forceSatisfyReason,
+    projectConditions,
+    setProjectConditions,
+    setTaskConditions,
+  ])
+
   const handleDeleteCondition = async (condId: string) => {
     try {
-      const res = await fetch(`/api/task-conditions/${condId}`, { method: 'DELETE', headers: getAuthHeaders() })
+      const res = await fetch(
+        `/api/task-conditions/${condId}`,
+        withRequestContext({
+          method: 'DELETE',
+        }),
+      )
       const json = await res.json()
       if (json.success) {
-        setProjectConditions(projectConditions.filter((condition) => condition.id !== condId) as any)
+        setProjectConditions(toStoreConditionRecords(projectConditions.filter((condition) => condition.id !== condId)))
         setTaskConditions(prev => prev.filter(c => c.id !== condId))
         if (conditionTask) {
           setInlineConditionsMap(prev => {
@@ -1118,7 +2612,203 @@ export default function GanttView() {
     }
   }
 
-  // ─── inline 条件面板 toggle（chip 点击）──────────────
+  const pendingDelayRequest = selectedTaskDelayRequests.find((request) => request.status === 'pending') ?? null
+  const rejectedDelayRequest = selectedTaskDelayRequests.find((request) => request.status === 'rejected') ?? null
+  const duplicateRejectedReason = Boolean(
+    rejectedDelayRequest &&
+    delayRequestForm.reason.trim() &&
+    delayRequestForm.reason.trim() === (rejectedDelayRequest.reason ?? rejectedDelayRequest.delay_reason ?? '').trim(),
+  )
+  const currentDelayBaseDate = selectedTask?.planned_end_date || selectedTask?.end_date || ''
+  const requestedDelayDays = selectedTask && delayRequestForm.delayedDate && currentDelayBaseDate
+    ? Math.max(0, Math.ceil((new Date(delayRequestForm.delayedDate).getTime() - new Date(currentDelayBaseDate).getTime()) / 86400000))
+    : 0
+  const selectedTaskFloatDays = selectedTask ? (criticalPathTaskMap.get(selectedTask.id)?.floatDays ?? 0) : 0
+  const delayImpactDays = selectedTask && requestedDelayDays > 0
+    ? calculateDelayImpact(
+        selectedTask.id,
+        requestedDelayDays,
+        { float: new Map([[selectedTask.id, selectedTaskFloatDays]]) } as never,
+      )
+    : 0
+  const delayImpactSummary = requestedDelayDays <= 0
+    ? '选择延期后的日期后，将自动估算对总工期的影响。'
+    : delayImpactDays > 0
+      ? `预计会把项目总工期推迟 ${delayImpactDays} 天。`
+      : `当前浮时 ${selectedTaskFloatDays} 天，可吸收本次延期。`
+
+  const handleReviewDelayRequest = async (requestId: string, action: 'approve' | 'reject') => {
+    if (!selectedTask) return
+    try {
+      setDelayRequestReviewingId(`${action}:${requestId}`)
+      const response = await fetch(`${API_BASE}/api/delay-requests/${requestId}/${action}`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        ...withCredentials(),
+      })
+      const json = await response.json()
+      if (!json.success) {
+        throw new Error(json.error?.message || `延期申请${action === 'approve' ? '批准' : '驳回'}失败`)
+      }
+      mergeDelayRequestIntoStore(json.data)
+      if (action === 'approve') {
+        const taskId = String(json.data?.task_id ?? selectedTask.id ?? '').trim()
+        if (taskId) {
+          try {
+            const taskResponse = await fetch(`${API_BASE}/api/tasks/${taskId}`, {
+              headers: getAuthHeaders(),
+              ...withCredentials(),
+            })
+            const taskJson = await taskResponse.json()
+            if (taskResponse.ok && taskJson?.success && taskJson.data) {
+              const nextTask = taskJson.data as Task
+              updateTask(taskId, toStoreTaskPatch(nextTask))
+              setSelectedTask((previous) => (previous?.id === taskId ? { ...previous, ...nextTask } : previous))
+              setDelayRequestForm((previous) => ({
+                ...previous,
+                delayedDate: toDateValue(nextTask.planned_end_date || nextTask.end_date),
+                reason: '',
+              }))
+            }
+          } catch (refreshError) {
+            console.warn('延期申请已批准，但任务详情刷新失败:', refreshError)
+          }
+        }
+      }
+      toast({ title: action === 'approve' ? '延期申请已批准' : '延期申请已驳回' })
+    } catch (error) {
+      console.error('延期申请审批失败:', error)
+      toast({
+        title: action === 'approve' ? '批准延期申请失败' : '驳回延期申请失败',
+        description: (error as Error).message,
+        variant: 'destructive',
+      })
+    } finally {
+      setDelayRequestReviewingId(null)
+    }
+  }
+
+  const handleSubmitDelayRequest = async () => {
+    if (!selectedTask || !id) return
+
+    const originalPlannedEndDate = selectedTask.planned_end_date || selectedTask.end_date || ''
+    const delayedDate = delayRequestForm.delayedDate
+    const reason = delayRequestForm.reason.trim()
+    const nextErrors: {
+      baselineVersionId?: string
+      delayedDate?: string
+      reason?: string
+      form?: string
+    } = {}
+
+    if (!originalPlannedEndDate) {
+      nextErrors.form = '缺少原计划完成日期，暂不支持提交延期申请。'
+    }
+    if (!delayRequestForm.baselineVersionId) {
+      nextErrors.baselineVersionId = '请选择当前生效的基线版本。'
+    }
+    if (pendingDelayRequest) {
+      setDelayFormErrors({
+        form: buildDelayConflictMessage('PENDING_CONFLICT', {
+          pending_delayed_date: pendingDelayRequest.delayed_date ?? null,
+          pending_reason: pendingDelayRequest.reason ?? pendingDelayRequest.delay_reason ?? null,
+        }, '已有待审批申请').form,
+      })
+      toast({ title: '已有待审批申请，当前不能重复提交。', variant: 'destructive' })
+      return
+    }
+    if (!delayedDate) {
+      nextErrors.delayedDate = '请选择延期后的日期。'
+    }
+    if (!reason) {
+      nextErrors.reason = '请填写延期原因。'
+    }
+    if (delayedDate && originalPlannedEndDate && new Date(delayedDate) <= new Date(originalPlannedEndDate)) {
+      nextErrors.delayedDate = '延期后的日期必须晚于原计划完成日期。'
+    }
+    if (duplicateRejectedReason) {
+      nextErrors.reason = '重新提交原因不能与最近一次驳回原因重复。'
+    }
+
+    setDelayFormErrors(nextErrors)
+    if (Object.keys(nextErrors).length > 0) {
+      toast({ title: nextErrors.form || '请先补全延期申请信息。', variant: 'destructive' })
+      return
+    }
+
+    const delayDays = Math.ceil((new Date(delayedDate).getTime() - new Date(originalPlannedEndDate).getTime()) / 86400000)
+    setDelayFormErrors({})
+    setDelayRequestSubmitting(true)
+    try {
+      const response = await fetch(`${API_BASE}/api/delay-requests`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders(),
+        },
+        body: JSON.stringify({
+          task_id: selectedTask.id,
+          project_id: id,
+          baseline_version_id: delayRequestForm.baselineVersionId,
+          original_date: originalPlannedEndDate,
+          delayed_date: delayedDate,
+          delay_days: delayDays,
+          reason,
+          delay_reason: reason,
+        }),
+        ...withCredentials(),
+      })
+      const json = await response.json()
+      if (!json.success) {
+        const errorCode = extractApiErrorCode(json) as DelayRequestErrorCode | null
+        const errorMessage = extractApiErrorMessage(json, '提交延期申请失败')
+        if (errorCode === 'PENDING_CONFLICT' || errorCode === 'DUPLICATE_REASON') {
+          const nextGuardrails = buildDelayConflictMessage(
+            errorCode,
+            extractApiErrorDetails(json) as DelayRequestErrorDetails | null,
+            errorMessage,
+          )
+          setDelayFormErrors((previous) => ({
+            ...previous,
+            ...nextGuardrails,
+          }))
+        }
+        throw new Error(errorMessage)
+      }
+      mergeDelayRequestIntoStore(json.data)
+      toast({ title: '延期申请已提交。' })
+      setDelayRequestForm((previous) => ({ ...previous, reason: '' }))
+    } catch (error) {
+      console.error('提交延期申请失败:', error)
+      toast({ title: `提交延期申请失败：${(error as Error).message}`, variant: 'destructive' })
+    } finally {
+      setDelayRequestSubmitting(false)
+    }
+  }
+
+  const handleWithdrawDelayRequest = async () => {
+    if (!pendingDelayRequest || !selectedTask) return
+    setDelayRequestWithdrawingId(pendingDelayRequest.id)
+    try {
+      const response = await fetch(`${API_BASE}/api/delay-requests/${pendingDelayRequest.id}/withdraw`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        ...withCredentials(),
+      })
+      const json = await response.json()
+      if (!json.success) {
+        throw new Error(json.error?.message || '撤回延期申请失败')
+      }
+      mergeDelayRequestIntoStore(json.data)
+      toast({ title: '延期申请已撤回。' })
+    } catch (error) {
+      console.error('撤回延期申请失败:', error)
+      toast({ title: `撤回延期申请失败：${(error as Error).message}`, variant: 'destructive' })
+    } finally {
+      setDelayRequestWithdrawingId(null)
+    }
+  }
+
   const toggleInlineConditions = async (taskId: string, e: React.MouseEvent) => {
     e.stopPropagation()
     if (expandedConditionTaskId === taskId) {
@@ -1134,18 +2824,25 @@ export default function GanttView() {
     }
   }
 
-  // ─── 阻碍管理 ──────────────────────────────────────
   const openObstacleDialog = async (task: Task) => {
     setObstacleTask(task)
     setObstacleDialogOpen(true)
     setObstaclesLoading(true)
     setNewObstacleTitle('')
+    setNewObstacleSeverity('medium')
+    setNewObstacleExpectedResolutionDate('')
+    setNewObstacleResolutionNotes('')
+    setEditingObstacleId(null)
+    setEditingObstacleTitle('')
+    setEditingObstacleSeverity('medium')
+    setEditingObstacleExpectedResolutionDate('')
+    setEditingObstacleResolutionNotes('')
     try {
       setTaskObstacles(
         scopedProjectObstacles.filter((obstacle) => obstacle.task_id === task.id) as TaskObstacle[],
       )
     } catch {
-      toast({ title: '加载阻碍失败', variant: 'destructive' })
+      toast({ title: '加载障碍失败', variant: 'destructive' })
     } finally {
       setObstaclesLoading(false)
     }
@@ -1157,18 +2854,29 @@ export default function GanttView() {
       const res = await fetch(`${API_BASE}/api/task-obstacles`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-        body: JSON.stringify({ task_id: obstacleTask.id, project_id: id, title: newObstacleTitle.trim(), is_resolved: false }),
+        body: JSON.stringify({
+          task_id: obstacleTask.id,
+          project_id: id,
+          title: newObstacleTitle.trim(),
+          is_resolved: false,
+          severity: newObstacleSeverity,
+          expected_resolution_date: newObstacleExpectedResolutionDate || null,
+          resolution_notes: newObstacleResolutionNotes.trim() || null,
+        }),
         ...withCredentials(),
       })
       const json = await res.json()
       if (json.success) {
         const nextObstacle = json.data as TaskObstacle
-        setProjectObstacles([nextObstacle, ...projectObstacles] as any)
+        setProjectObstacles(toStoreObstacleRecords([nextObstacle, ...projectObstacles]))
         setTaskObstacles(prev => [nextObstacle, ...prev])
         setNewObstacleTitle('')
+        setNewObstacleSeverity('medium')
+        setNewObstacleExpectedResolutionDate('')
+        setNewObstacleResolutionNotes('')
       }
     } catch {
-      toast({ title: '添加阻碍失败', variant: 'destructive' })
+      toast({ title: '新增障碍记录失败', variant: 'destructive' })
     }
   }
 
@@ -1184,58 +2892,121 @@ export default function GanttView() {
       if (json.success) {
         const nextObstacle = (json.data ?? { ...obs, is_resolved: true }) as TaskObstacle
         setProjectObstacles(
-          projectObstacles.map((item) => (item.id === obs.id ? { ...item, ...nextObstacle } : item)) as any,
+          toStoreObstacleRecords(projectObstacles.map((item) => (item.id === obs.id ? { ...item, ...nextObstacle } : item))),
         )
         setTaskObstacles(prev => prev.map(o => o.id === obs.id ? nextObstacle : o))
-        toast({ title: '阻碍已标记为已解决' })
+        toast({ title: '障碍已标记为已解决' })
       }
     } catch {
       toast({ title: '操作失败', variant: 'destructive' })
     }
   }
 
-  // P0-4: 删除阻碍（只有已解决的才能删除）
-  const handleDeleteObstacle = async (obsId: string) => {
-    try {
-      const res = await fetch(`/api/task-obstacles/${obsId}`, { method: 'DELETE', headers: getAuthHeaders() })
-      const json = await res.json()
-      if (json.success) {
-        setProjectObstacles(projectObstacles.filter((obstacle) => obstacle.id !== obsId) as any)
-        setTaskObstacles(prev => prev.filter(o => o.id !== obsId))
-        toast({ title: '阻碍记录已删除' })
-      }
-    } catch {
-      toast({ title: '删除失败', variant: 'destructive' })
+  const handleCloseObstacleRecord = useCallback(async (obsId: string) => {
+    const obstacle = taskObstacles.find((item) => item.id === obsId) ?? projectObstacles.find((item) => item.id === obsId)
+    const closeEndpoint =
+      deleteGuardTarget?.kind === 'obstacle' && deleteGuardTarget.id === obsId
+        ? deleteGuardTarget.details?.close_action?.endpoint
+        : null
+    if (!obstacle) {
+      setDeleteGuardTarget(null)
+      return
     }
-  }
+    if (obstacle.is_resolved) {
+      toast({ title: '阻碍已处于关闭态', description: '当前阻碍已经是已解决状态。' })
+      setDeleteGuardTarget(null)
+      return
+    }
+    try {
+      setDeleteGuardSecondarySubmitting(true)
+      const response = await fetch(
+        `${API_BASE}${closeEndpoint || `/api/task-obstacles/${obsId}/close`}`,
+        withRequestContext({
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({}),
+        }),
+      )
+      const json = await response.json()
+      if (!json.success) {
+        throw new Error(extractApiErrorMessage(json, '关闭阻碍失败'))
+      }
+      const nextObstacle = (isObjectRecord(json.data) ? json.data.obstacle ?? json.data : json.data) as TaskObstacle
+      setProjectObstacles(
+        toStoreObstacleRecords(
+          projectObstacles.map((item) => (item.id === obsId ? { ...item, ...(nextObstacle ?? { ...item, is_resolved: true }) } : item)),
+        ),
+      )
+      setTaskObstacles((prev) =>
+        prev.map((item) => (item.id === obsId ? { ...item, ...(nextObstacle ?? { ...item, is_resolved: true }) } : item)),
+      )
+      setDeleteGuardTarget(null)
+      toast({ title: '已关闭此阻碍记录', description: '阻碍已转为已解决，留痕会继续保留。' })
+    } catch (error) {
+      toast({
+        title: '关闭阻碍失败',
+        description: getApiErrorMessage(error, '请稍后重试。'),
+        variant: 'destructive',
+      })
+    } finally {
+      setDeleteGuardSecondarySubmitting(false)
+    }
+  }, [deleteGuardTarget, projectObstacles, taskObstacles, setProjectObstacles])
 
-  // P1-5: 保存阻碍编辑
+  const handleDeleteObstacle = useCallback((obsId: string) => {
+    const obstacle = taskObstacles.find((item) => item.id === obsId) ?? projectObstacles.find((item) => item.id === obsId)
+    setDeleteGuardTarget({
+      kind: 'obstacle',
+      id: obsId,
+      title: obstacle?.title || '未命名阻碍',
+      blocked: false,
+    })
+  }, [projectObstacles, taskObstacles])
+
   const handleSaveObstacleEdit = async (obsId: string) => {
     if (!editingObstacleTitle.trim()) return
     try {
       const res = await fetch(`/api/task-obstacles/${obsId}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-          body: JSON.stringify({ title: editingObstacleTitle.trim() }),
+          body: JSON.stringify({
+            title: editingObstacleTitle.trim(),
+            severity: editingObstacleSeverity || null,
+            expected_resolution_date: editingObstacleExpectedResolutionDate || null,
+            resolution_notes: editingObstacleResolutionNotes.trim() || null,
+          }),
           ...withCredentials(),
         })
       const json = await res.json()
       if (json.success) {
-        const nextObstacle = (json.data ?? { ...taskObstacles.find((item) => item.id === obsId), title: editingObstacleTitle.trim() }) as TaskObstacle
+        const nextObstacle = (
+          json.data
+          ?? {
+            ...taskObstacles.find((item) => item.id === obsId),
+            title: editingObstacleTitle.trim(),
+            severity: editingObstacleSeverity || null,
+            expected_resolution_date: editingObstacleExpectedResolutionDate || null,
+            resolution_notes: editingObstacleResolutionNotes.trim() || null,
+          }
+        ) as TaskObstacle
         setProjectObstacles(
-          projectObstacles.map((item) => (item.id === obsId ? { ...item, ...nextObstacle } : item)) as any,
+          toStoreObstacleRecords(projectObstacles.map((item) => (item.id === obsId ? { ...item, ...nextObstacle } : item))),
         )
         setTaskObstacles(prev => prev.map(o => o.id === obsId ? nextObstacle : o))
         setEditingObstacleId(null)
         setEditingObstacleTitle('')
-        toast({ title: '阻碍已更新' })
+        setEditingObstacleSeverity('medium')
+        setEditingObstacleExpectedResolutionDate('')
+        setEditingObstacleResolutionNotes('')
+        toast({ title: '障碍已更新' })
       }
     } catch {
       toast({ title: '更新失败', variant: 'destructive' })
     }
   }
 
-  // ── 缺5：拖拽排序 sensors ─────────────────────────────
   const dndSensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
@@ -1245,7 +3016,6 @@ export default function GanttView() {
     const { active, over } = event
     if (!over || active.id === over.id) return
 
-    // 找到拖拽项和目标项在 flatList 中的位置
     const activeIdx = flatList.findIndex(n => n.id === active.id)
     const overIdx = flatList.findIndex(n => n.id === over.id)
     if (activeIdx === -1 || overIdx === -1) return
@@ -1253,10 +3023,8 @@ export default function GanttView() {
     const activeNode = flatList[activeIdx]
     const overNode = flatList[overIdx]
 
-    // 判断是否跨层级
     const isCrossLevel = activeNode.parent_id !== overNode.parent_id
 
-    // 防止将任务拖拽到其自身的子孙节点（避免循环引用）
     const isDescendant = (nodeId: string, potentialAncestorId: string): boolean => {
       const node = tasks.find(t => t.id === nodeId)
       if (!node || !node.parent_id) return false
@@ -1264,11 +3032,10 @@ export default function GanttView() {
       return isDescendant(node.parent_id, potentialAncestorId)
     }
     if (isCrossLevel && isDescendant(overNode.id, activeNode.id)) {
-      toast({ title: '无法移动', description: '不能将任务移动到其子任务下', variant: 'destructive' })
+      toast({ title: '无法移动', description: '不能将任务移动到其子任务中', variant: 'destructive' })
       return
     }
 
-    // 目标层级中重新排列
     const newParentId = overNode.parent_id
     const targetSiblings = tasks.filter(t => (t.parent_id || null) === (newParentId || null) && t.id !== activeNode.id)
     const overPos = targetSiblings.findIndex(t => t.id === overNode.id)
@@ -1277,8 +3044,6 @@ export default function GanttView() {
     const reordered = [...targetSiblings]
     reordered.splice(insertAt, 0, activeNode)
 
-    // 更新 tasks：修改 activeNode 的 parent_id（如有变化）并更新 sort_order
-    // otherTasks = 不属于目标层、且不是被拖动节点 的其他任务（保持不变）
     const otherTasks = tasks.filter(t =>
       (t.parent_id || null) !== (newParentId || null) && t.id !== activeNode.id
     )
@@ -1286,32 +3051,41 @@ export default function GanttView() {
       ...otherTasks,
       ...reordered.map((t, i) => ({
         ...t,
-        parent_id: newParentId,   // 跨层时同步更新 activeNode 的 parent_id
+        parent_id: newParentId,   // 鐠恒劌鐪伴弮璺烘倱濮濄儲娲块弬?activeNode 閻?parent_id
         sort_order: i,
         updated_at: new Date().toISOString()
       }))
     ]
 
-    // 批量持久化（reordered 中的每个节点都统一使用 newParentId）
     reordered.forEach((t, i) => {
-      fetch(`${API_BASE}/api/tasks/${t.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          parent_id: newParentId,
-          sort_order: i,
-          updated_at: new Date().toISOString(),
+      fetch(
+        `${API_BASE}/api/tasks/${t.id}`,
+        withRequestContext({
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            parent_id: newParentId,
+            sort_order: i,
+            updated_at: new Date().toISOString(),
+          }),
         }),
-      }).catch(() => { /* 拖拽排序持久化失败静默处理 */ })
+      ).catch(() => { /* 閹锋牗瀚块幒鎺戠碍閹镐椒绠欓崠鏍с亼鐠愩儵娼ゆ妯侯槱閻?*/ })
     })
     setTasks(updatedTasks)
     toast({ title: isCrossLevel ? '已移动到新层级' : '排序已更新' })
   }, [flatList, tasks, setTasks])
-  // ────────────────────────────────────────────────────
   const handleInlineProgressSave = useCallback(async (taskId: string, newProgress: number) => {
     const task = tasks.find(t => t.id === taskId)
     if (!task) return
+    if (blockedProgressTaskIds.has(taskId)) {
+      toast({ title: '仍有未满足条件，先处理条件后再继续填报进度。', variant: 'destructive' })
+      setInlineProgressTaskId(null)
+      return
+    }
     const prevProgress = task.progress ?? 0
+    const taskConditionSummary = taskProgressSnapshot.taskConditionMap[taskId]
+    const pendingConditionCount = Math.max(0, Number(taskConditionSummary?.total ?? 0) - Number(taskConditionSummary?.satisfied ?? 0))
+    const shouldWarnConditionAdvance = prevProgress === 0 && newProgress > 0 && pendingConditionCount > 0
     const autoStatus = (newProgress >= 100
       ? 'completed'
       : newProgress > 0 && task.status === 'todo'
@@ -1319,7 +3093,6 @@ export default function GanttView() {
       : newProgress === 0 && task.status === 'completed'
       ? 'todo'
       : task.status) as 'todo' | 'in_progress' | 'completed'
-    // #11: 首次填报时间 — 仅在进度首次从0变为>0时写入
     const now = new Date().toISOString()
     const firstProgressAt = (prevProgress === 0 && newProgress > 0 && !task.first_progress_at)
       ? now
@@ -1332,69 +3105,87 @@ export default function GanttView() {
       updated_at: now,
     } as unknown as Task
     try {
-      const res = await fetch(`${API_BASE}/api/tasks/${taskId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const res = await fetch(
+        `${API_BASE}/api/tasks/${taskId}`,
+        withRequestContext({
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            progress: newProgress,
+            status: autoStatus,
+            first_progress_at: firstProgressAt,
+            updated_at: now,
+            version: task.version ?? 1,
+          }),
+        }),
+      )
+      const json = await res.json()
+      if (!json.success) {
+        if (res.status === 400 && json.error?.fields) {
+          const fieldMessages = Object.entries(json.error.fields as Record<string, string>)
+            .map(([field, msg]) => `${field}: ${msg}`)
+            .join('；')
+          throw new Error(fieldMessages || json.error?.message || '输入有误')
+        }
+        throw new Error(json.error?.message || '更新失败')
+      }
+
+      // #22: 后端可能自动写入actual_start_date/actual_end_date，需反映到前端
+      const updatedTask = json.data as Task | undefined
+      if (updatedTask) {
+        updateTask(taskId, toStoreTaskPatch({
           progress: newProgress,
           status: autoStatus,
           first_progress_at: firstProgressAt,
           updated_at: now,
-          version: task.version ?? 1,  // 防止 VERSION_MISMATCH
-        }),
-      })
-      const json = await res.json()
-      if (!json.success) throw new Error(json.error?.message || '更新失败')
-      updateTask(updated.id!, {
-        progress: newProgress,
-        status: autoStatus,
-        first_progress_at: firstProgressAt,
-        updated_at: now,
-      })
-      setInlineProgressTaskId(null)
+          actual_start_date: updatedTask.actual_start_date,
+          actual_end_date: updatedTask.actual_end_date,
+          version: updatedTask.version,
+        }))
+      }
 
-      // P0-2: 进度首次从0变为>0时，自动满足该任务所有未满足开工条件
+      // 首次进度推进后刷新条件真值，保持页面提示与后端一致
       if (prevProgress === 0 && newProgress > 0) {
         try {
-          const res = await fetch(`/api/task-conditions/batch-satisfy`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ task_id: taskId }),
-          })
-          const json = await res.json()
-          if (json.success && json.count > 0) {
-            toast({ title: `已自动满足 ${json.count} 个开工条件`, description: '任务已开工，条件自动关闭' })
-            // 更新缓存
-            setTaskConditionMap(prev => {
-              const cur = prev[taskId]
-              if (!cur) return prev
-              return { ...prev, [taskId]: { total: cur.total, satisfied: cur.total } }
-            })
+          const condRes = await fetch(`${API_BASE}/api/task-conditions?projectId=${encodeURIComponent(currentProject?.id || '')}`, withRequestContext())
+          const condJson = await condRes.json()
+          if (condJson.success && Array.isArray(condJson.data)) {
+            setProjectConditions(condJson.data)
           }
-        } catch {
-          // 静默处理：条件自动满足失败不影响进度保存
+        } catch (err) {
+          console.warn('Failed to reload conditions after progress update:', err)
         }
       }
+
+      if (shouldWarnConditionAdvance) {
+        openConditionWarning(task, pendingConditionCount)
+      }
+
+      setInlineProgressTaskId(null)
+
     } catch (err: any) {
-      const msg = err?.message || '未知错误'
+      const msg = err?.message || '閺堫亞鐓￠柨娆掝嚖'
       if (msg.includes('VERSION_MISMATCH')) {
-        // 版本冲突：自动用最新数据重试一次
+        // 鐗堟湰鍐茬獊閿涙俺鍤滈崝銊ф暏閺堚偓閺傜増鏆熼幑顕€鍣哥拠鏇氱濞?
         try {
-          const refetch = await fetch(`${API_BASE}/api/tasks/${taskId}`)
+          const refetch = await fetch(`${API_BASE}/api/tasks/${taskId}`, withRequestContext())
           const refetchJson = await refetch.json()
           if (refetchJson.success && refetchJson.data) {
             const latestVersion = refetchJson.data.version ?? 1
-            const retryRes = await fetch(`${API_BASE}/api/tasks/${taskId}`, {
-              method: 'PUT',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                progress: newProgress,
-                status: autoStatus,
-                first_progress_at: firstProgressAt,
-                updated_at: now,
-                version: latestVersion,
+            const retryRes = await fetch(
+              `${API_BASE}/api/tasks/${taskId}`,
+              withRequestContext({
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  progress: newProgress,
+                  status: autoStatus,
+                  first_progress_at: firstProgressAt,
+                  updated_at: now,
+                  version: latestVersion,
+                }),
               }),
-            })
+            )
             const retryJson = await retryRes.json()
             if (retryJson.success) {
               updateTask(updated.id!, {
@@ -1409,32 +3200,32 @@ export default function GanttView() {
               return
             }
           }
-        } catch { /* 重试失败，走下方通用错误 */ }
+        } catch { }
         toast({ title: '数据已变更，请刷新页面后重试', variant: 'destructive' })
       } else {
         toast({ title: '更新进度失败', description: msg, variant: 'destructive' })
       }
     }
-  }, [tasks, updateTask])
-  // ────────────────────────────────────────────────────
+  }, [blockedProgressTaskIds, currentProject?.id, openConditionWarning, taskProgressSnapshot.taskConditionMap, tasks, toast, updateTask])
 
-  // ────────────────────────────────────────────────────
 
-  // #14: 行内任务名称保存
   const handleInlineTitleSave = useCallback(async (taskId: string) => {
     const trimmed = inlineTitleValue.trim()
     if (!trimmed) { setInlineTitleTaskId(null); return }
     const task = tasks.find(t => t.id === taskId)
     if (!task || trimmed === (task.title || task.name)) { setInlineTitleTaskId(null); return }
     try {
-      const res = await fetch(`${API_BASE}/api/tasks/${taskId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: trimmed, updated_at: new Date().toISOString(), version: task.version ?? 1 }),
-      })
+      const res = await fetch(
+        `${API_BASE}/api/tasks/${taskId}`,
+        withRequestContext({
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: trimmed, updated_at: new Date().toISOString(), version: task.version ?? 1 }),
+        }),
+      )
       const json = await res.json()
       if (!json.success) throw new Error(json.error?.message || '更新失败')
-      updateTask(taskId, { title: trimmed, updated_at: new Date().toISOString() } as any)
+      updateTask(taskId, toStoreTaskPatch({ title: trimmed, updated_at: new Date().toISOString() }))
       toast({ title: '任务名称已更新' })
     } catch {
       toast({ title: '更新失败', variant: 'destructive' })
@@ -1449,8 +3240,7 @@ export default function GanttView() {
       } else {
         next.add(nodeId)
       }
-      // #13: 展开状态记忆 — 持久化到 localStorage
-      try { localStorage.setItem(`gantt_collapsed_${id}`, JSON.stringify([...next])) } catch { }
+      safeStorageSet(localStorage, `gantt_collapsed_${id}`, JSON.stringify([...next]))
       return next
     })
   }
@@ -1475,81 +3265,175 @@ export default function GanttView() {
     })
   }
 
-  const handleBatchComplete = async () => {
-    if (selectedIds.size === 0) return
-    const alreadyDone = [...selectedIds].filter(tid => tasks.find(t => t.id === tid)?.status === 'completed').length
-    const toComplete = selectedIds.size - alreadyDone
-    try {
-      await Promise.all([...selectedIds].map(tid => {
-        const task = tasks.find(t => t.id === tid)
-        return fetch(`${API_BASE}/api/tasks/${tid}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            status: 'completed', 
-            progress: 100, 
-            updated_at: new Date().toISOString(),
-            version: task?.version ?? 1 
+  const syncBatchCompletionWrites = async (
+    entries: Array<{ id: string; task: Task }>,
+    optimisticUpdatedAt: string,
+  ) => {
+    const concurrency = 12
+    const optimisticActualDate = toDateValue(optimisticUpdatedAt)
+    const failures: Array<{ task: Task; message: string }> = []
+
+    for (let index = 0; index < entries.length; index += concurrency) {
+      const batch = entries.slice(index, index + concurrency)
+      const results = await Promise.allSettled(batch.map(async ({ task }) => {
+        const response = await fetch(
+          `${API_BASE}/api/tasks/${task.id}`,
+          withRequestContext({
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              status: 'completed',
+              progress: 100,
+              updated_at: optimisticUpdatedAt,
+              version: task.version ?? 1,
+            }),
           }),
+        )
+        const json = await response.json().catch(() => null)
+        if (!response.ok || json?.success === false) {
+          throw new Error(extractApiErrorMessage(json, '批量完成失败'))
+        }
+
+        const serverTask = (json?.data ?? json) as Partial<Task> | null
+        updateTask(task.id, {
+          status: 'completed',
+          progress: 100,
+          updated_at: serverTask?.updated_at ?? optimisticUpdatedAt,
+          actual_start_date: serverTask?.actual_start_date ?? task.actual_start_date ?? optimisticActualDate,
+          actual_end_date: serverTask?.actual_end_date ?? optimisticActualDate,
+          first_progress_at: serverTask?.first_progress_at ?? task.first_progress_at ?? optimisticUpdatedAt,
+          version: typeof serverTask?.version === 'number' ? serverTask.version : Number(task.version ?? 1) + 1,
         })
       }))
-      for (const tid of selectedIds) {
-        updateTask(tid, { status: 'completed', progress: 100 })
-      }
-      toast({
-        title: `已完成 ${toComplete} 个任务`,
-        description: alreadyDone > 0 ? `其中 ${alreadyDone} 个已是完成状态` : undefined
-      })
-      setSelectedIds(new Set())
-    } catch (e: any) {
-      // 处理版本冲突错误
-      if (e.message && e.message.includes('VERSION_MISMATCH')) {
-        toast({ 
-          title: '版本冲突', 
-          description: '部分任务已被其他用户修改，请刷新后重试',
-          variant: 'destructive' 
+
+      results.forEach((result, batchIndex) => {
+        if (result.status === 'fulfilled') return
+        failures.push({
+          task: batch[batchIndex].task,
+          message: getApiErrorMessage(result.reason, '批量完成失败'),
         })
-      } else {
-        toast({ title: '批量操作失败', variant: 'destructive' })
-      }
+      })
+    }
+
+    if (failures.length === 0) {
+      return
+    }
+
+    failures.forEach(({ task }) => {
+      updateTask(task.id, task)
+    })
+
+    const versionConflictCount = failures.filter(({ message }) => message.includes('VERSION_MISMATCH')).length
+    toast({
+      title: '部分任务同步失败',
+      description: versionConflictCount > 0
+        ? `已回退 ${failures.length} 个任务，其中 ${versionConflictCount} 个存在版本冲突。`
+        : `已回退 ${failures.length} 个任务，请稍后重试。`,
+      variant: 'destructive',
+    })
+  }
+
+  const handleBatchComplete = async () => {
+    if (selectedIds.size === 0) return
+    const selectedTaskEntries = [...selectedIds]
+      .map((taskId) => ({ id: taskId, task: tasks.find((item) => item.id === taskId) }))
+      .filter((entry): entry is { id: string; task: Task } => Boolean(entry.task))
+    const alreadyDone = selectedTaskEntries.filter(({ task }) => task.status === 'completed').length
+    const tasksToPersist = selectedTaskEntries.filter(({ task }) => task.status !== 'completed')
+    const optimisticUpdatedAt = new Date().toISOString()
+    const optimisticActualDate = toDateValue(optimisticUpdatedAt)
+
+    tasksToPersist.forEach(({ task }) => {
+      updateTask(task.id, {
+        status: 'completed',
+        progress: 100,
+        updated_at: optimisticUpdatedAt,
+        actual_start_date: task.actual_start_date ?? optimisticActualDate,
+        actual_end_date: optimisticActualDate,
+        first_progress_at: task.first_progress_at ?? optimisticUpdatedAt,
+        version: Number(task.version ?? 1) + 1,
+      })
+    })
+
+    setSelectedIds(new Set())
+    toast({
+      title: '已完成 ' + tasksToPersist.length + ' 个任务',
+      description: alreadyDone > 0
+        ? `其中 ${alreadyDone} 个任务原本已是完成状态，后台同步中。`
+        : '后台同步中。',
+    })
+
+    if (tasksToPersist.length > 0) {
+      void syncBatchCompletionWrites(tasksToPersist, optimisticUpdatedAt)
     }
   }
 
   const handleBatchDelete = async () => {
     if (selectedIds.size === 0) return
-    openConfirm('批量删除任务', `确定要删除选中的 ${selectedIds.size} 个任务吗？此操作不可撤销。`, async () => {
+    openConfirm('批量删除任务', '确定要删除选中的 ' + selectedIds.size + ' 个任务吗？此操作不可撤销。', async () => {
       try {
-        await Promise.all([...selectedIds].map(tid =>
-          fetch(`${API_BASE}/api/tasks/${tid}`, { method: 'DELETE' })
-        ))
+        let deletedCount = 0
         for (const tid of selectedIds) {
+          const task = tasks.find((item) => item.id === tid)
+          const response = await fetch(
+            `${API_BASE}/api/tasks/${tid}`,
+            withRequestContext({
+              method: 'DELETE',
+            }),
+          )
+          const json = await response.json()
+          if (!json.success) {
+            if (response.status === 422) {
+              const nextGuard = buildDeleteProtectionState('task', tid, task?.title || task?.name || '未命名任务', json)
+              if (nextGuard) {
+                setDeleteGuardTarget(nextGuard)
+              }
+              if (deletedCount > 0) {
+                toast({ title: `已先删除 ${deletedCount} 个任务`, description: '其余任务命中删除保护，已为你打开处理提示。' })
+              }
+              return
+            }
+            throw new Error(extractApiErrorMessage(json, '批量删除失败'))
+          }
           deleteTask(tid)
+          deletedCount += 1
         }
-        toast({ title: `已删除 ${selectedIds.size} 个任务` })
+        toast({ title: '已删除 ' + deletedCount + ' 个任务' })
         setSelectedIds(new Set())
-      } catch (e) {
-        toast({ title: '批量删除失败', variant: 'destructive' })
+      } catch (error) {
+        toast({
+          title: '批量删除失败',
+          description: getApiErrorMessage(error, '请稍后重试。'),
+          variant: 'destructive',
+        })
       }
     })
   }
 
-  // ────────────────────────────────────────────────────
 
-  // 判断任务是否在关键路径上
   const isOnCriticalPath = (taskId: string): boolean => {
-    if (!cpmResult) return false
-    return isCriticalTask(taskId, cpmResult)
+    return criticalPathDisplayTaskIds.has(taskId)
   }
 
-  // 获取任务的浮动时间
+  const getCriticalPathTask = (taskId: string) => criticalPathTaskMap.get(taskId) ?? null
+
   const getTaskFloat = (taskId: string): number => {
-    if (!cpmResult) return 0
-    return cpmResult.float.get(taskId) || 0
+    return criticalPathTaskMap.get(taskId)?.floatDays ?? 0
   }
+  const selectedCriticalPathTask = selectedTask?.id ? getCriticalPathTask(selectedTask.id) : null
+  const planningGovernance = projectSummary?.planningGovernance
+  const shouldRenderGanttDialogs =
+    dialogOpen
+    || conflictOpen
+    || milestoneDialogOpen
+    || conditionDialogOpen
+    || obstacleDialogOpen
+    || forceSatisfyDialogOpen
+    || confirmDialog.open
 
   if (loading) {
     return (
-      <div className="p-6">
+      <div className="p-6" data-testid="gantt-loading-skeleton">
         <GanttViewSkeleton />
       </div>
     )
@@ -1557,184 +3441,114 @@ export default function GanttView() {
 
   return (
     <div className="space-y-6 page-enter">
-      {/* 面包屑导航（N07/N08） */}
-      {currentProject && (
-        <Breadcrumb items={[
-          { label: '公司驾驶舱', href: '/company' },
-          { label: currentProject.name, href: `/projects/${id}/dashboard` },
-          { label: '任务管理', href: `/projects/${id}/gantt` },
-          { label: '任务列表' },
-        ]} />
-      )}
-      <PageHeader
-        eyebrow="任务管理"
-        title="任务管理 / 任务列表"
-        subtitle="承接任务录入、WBS 结构和执行维护；任务总结作为复盘子页独立承接。"
-      >
-        <Button variant="ghost" onClick={() => navigate(`/projects/${id}/dashboard`)}>
-          <ArrowLeft className="mr-2 h-4 w-4" />
-          项目 Dashboard
-        </Button>
-        <Button variant="outline" onClick={() => navigate(`/projects/${id}/task-summary`)}>
-          <BarChart2 className="mr-2 h-4 w-4" />
-          任务总结
-        </Button>
-        <Button variant="outline" onClick={() => navigate(`/projects/${id}/reports?view=wbs`)}>
-          <BarChart2 className="mr-2 h-4 w-4" />
-          WBS完成度分析
-        </Button>
-        <Button onClick={() => openEditDialog()}>
-          <Plus className="mr-2 h-4 w-4" />
-          新建任务
-        </Button>
-      </PageHeader>
+      <GanttViewHeader
+        projectId={id || ''}
+        projectName={currentProject?.name}
+        planningGovernance={planningGovernance}
+        viewMode={viewMode}
+        onBack={() => navigate(`/projects/${id}/dashboard`)}
+        onViewModeChange={setViewMode}
+        onOpenCriticalPath={() => handleOpenCriticalPathDialog(selectedTask?.id)}
+        onOpenParticipantUnits={openParticipantUnitsDialog}
+        onCreateTask={() => openEditDialog()}
+        onOpenCloseout={() => navigate(`/projects/${id}/planning/closeout`)}
+        onScrollToToday={() => {
+          if (viewMode === 'timeline') {
+            timelineViewRef.current?.scrollToToday()
+          } else {
+            const firstTodayEl = document.querySelector<HTMLElement>('[data-today-active="true"]')
+            if (firstTodayEl) {
+              firstTodayEl.scrollIntoView({ behavior: 'smooth', block: 'center' })
+            } else {
+              document.querySelector('[data-testid="gantt-task-rows"]')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+            }
+          }
+        }}
+      />
 
-      {/* 统计卡片 6项 */}
-      <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
-        <Card>
-          <CardContent className="pt-5 pb-4">
-            <p className="text-xs text-muted-foreground mb-1">总任务数</p>
-            <p className="text-2xl font-bold">{projectStats.totalTasks}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-5 pb-4">
-            <p className="text-xs text-muted-foreground mb-1">已完成</p>
-            <p className="text-2xl font-bold text-emerald-600">{projectStats.completedTasks}</p>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              {projectStats.progressBaseTaskCount > 0 ? Math.round(projectStats.completedTasks / projectStats.progressBaseTaskCount * 100) : 0}%
-            </p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-5 pb-4">
-            <p className="text-xs text-muted-foreground mb-1">平均进度</p>
-            <p className="text-2xl font-bold text-blue-600">{projectStats.avgProgress}%</p>
-            <div className="w-full h-1.5 bg-gray-100 rounded-full mt-1.5 overflow-hidden">
-              <div className="h-full bg-blue-500 rounded-full transition-all" style={{ width: `${projectStats.avgProgress}%` }} />
+      <div data-testid="task-workspace-layer-l2">
+        <GanttStatsCards projectStats={projectStats} />
+      </div>
+
+      {/* 閹靛綊鍣洪幙宥勭稊閺?*/}
+      {viewMode === 'list' ? (
+        <GanttBatchBar
+          allSelected={allSelected}
+          someSelected={someSelected}
+          selectedCount={selectedIds.size}
+          onToggleSelectAll={toggleSelectAll}
+          onBatchComplete={handleBatchComplete}
+          onBatchDelete={handleBatchDelete}
+        />
+      ) : null}
+
+      {dataQualitySummary?.prompt && dataQualitySummary.prompt.count > 0 ? (
+        <details
+          data-testid="gantt-data-quality-prompt-bar"
+          className="rounded-2xl border border-sky-200 bg-sky-50 px-5 py-4 text-sm text-sky-950"
+        >
+          <summary className="cursor-pointer list-none space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center rounded-full bg-sky-100 px-2.5 py-1 text-xs font-semibold text-sky-800">
+                任务列表非常态提示
+              </span>
+              <span className="inline-flex items-center rounded-full bg-white px-2.5 py-1 text-xs font-medium text-sky-800">
+                {dataQualitySummary.prompt.count} 条数据矛盾待确认
+              </span>
             </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-5 pb-4">
-            <p className="text-xs text-muted-foreground mb-1">延期任务</p>
-            <p className={`text-2xl font-bold ${projectStats.overdueTask > 0 ? 'text-red-600' : 'text-gray-400'}`}>
-              {projectStats.overdueTask}
-            </p>
-            {projectStats.overdueTask > 0 && (
-              <p className="text-xs text-red-500 mt-0.5">需跟进</p>
-            )}
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-5 pb-4">
-            <p className="text-xs text-muted-foreground mb-1">受阻任务</p>
-            <p className={`text-2xl font-bold ${projectStats.blockedTasks > 0 ? 'text-amber-600' : 'text-gray-400'}`}>
-              {projectStats.blockedTasks}
-            </p>
-            {projectStats.blockedTasks > 0 && (
-              <p className="text-xs text-amber-500 mt-0.5">需处理</p>
-            )}
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-5 pb-4">
-            <p className="text-xs text-muted-foreground mb-1">条件未满足任务</p>
-            <p className={`text-2xl font-bold ${projectStats.pendingStartTasks > 0 ? 'text-orange-600' : 'text-gray-400'}`}>
-              {projectStats.pendingStartTasks}
-            </p>
-            {projectStats.readyToStartTasks > 0 && (
-              <p className="text-xs text-green-600 mt-0.5">可开工 {projectStats.readyToStartTasks}</p>
-            )}
-          </CardContent>
-        </Card>
-        {/* #10: AI工期聚合卡片（有AI工期数据时才显示） */}
-        {projectStats.aiDurationTaskCount > 0 && (
-          <Card>
-            <CardContent className="pt-5 pb-4">
-              <p className="text-xs text-muted-foreground mb-1">AI推荐工期</p>
-              <p className="text-2xl font-bold text-purple-600">{projectStats.totalAiDuration}d</p>
-              <p className="text-xs text-gray-400 mt-0.5">
-                {projectStats.aiDurationTaskCount} 个任务 · 均{projectStats.avgAiDuration}d
-              </p>
-            </CardContent>
-          </Card>
-        )}
-      </div>
+            <p className="leading-6">{dataQualitySummary.prompt.summary}</p>
+          </summary>
+          <div className="mt-4 space-y-3">
+            {dataQualitySummary.prompt.items.map((item) => (
+              <div key={item.id} className="rounded-2xl border border-sky-100 bg-white px-4 py-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="text-sm font-semibold text-slate-900">{item.taskTitle}</div>
+                  <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
+                    {item.severity === 'critical' ? '严重' : item.severity === 'warning' ? '警告' : '关注'}
+                  </span>
+                </div>
+                <div className="mt-1 text-sm leading-6 text-slate-700">{item.summary}</div>
+                <div className="mt-2 text-xs leading-5 text-slate-500">建议：{item.recommendation}</div>
+              </div>
+            ))}
+          </div>
+        </details>
+      ) : null}
 
-      {/* 批量操作栏 */}
-      <div className="px-1 py-2.5 bg-gray-50 rounded-lg flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <label className="flex items-center gap-2 cursor-pointer select-none">
-            <input
-              type="checkbox"
-              className="w-4 h-4 rounded border-gray-300"
-              checked={allSelected}
-              ref={el => { if (el) el.indeterminate = someSelected && !allSelected }}
-              onChange={toggleSelectAll}
-            />
-            <span className="text-sm text-gray-600">全选</span>
-          </label>
-          {selectedIds.size > 0 && (
-            <span className="text-sm text-gray-500">已选 {selectedIds.size} 项</span>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={handleBatchComplete}
-            disabled={selectedIds.size === 0}
-            className="px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-200 rounded flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"/>
-            </svg>
-            批量完成
-          </button>
-          <button
-            onClick={handleBatchDelete}
-            disabled={selectedIds.size === 0}
-            className="px-3 py-1.5 text-sm text-red-500 hover:bg-red-50 rounded flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-          >
-            <Trash2 className="w-4 h-4" />
-            批量删除
-          </button>
-        </div>
-      </div>
-
-      {/* WBS 任务树形结构 + #4双栏布局详情面板 */}
-      <div className={`flex gap-4 items-start transition-all duration-300 ${selectedTask ? '' : ''}`}>
-        {/* 左侧：WBS任务列表 */}
-        <div className={`transition-all duration-300 ${selectedTask ? 'flex-1 min-w-0' : 'w-full'}`}>
-      {/* WBS 任务树形结构 */}
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3 border-b">
+      <div data-testid="task-workspace-body" className={`grid gap-4 transition-all duration-300 ${selectedTask ? 'xl:grid-cols-[minmax(0,1fr)_20rem]' : 'grid-cols-1'}`}>
+        {/* 瀹革缚鏅堕敍姝怋S娴犺濮熼崚妤勩€?*/}
+        <div data-testid="task-workspace-layer-l4" className="min-w-0 transition-all duration-300">
+      <Card variant="detail">
+        <CardHeader data-testid="task-workspace-layer-l3" className="flex flex-row items-center justify-between space-y-0 pb-3 border-b">
           <div className="flex items-center gap-3">
-            <CardTitle className="text-base">WBS 结构</CardTitle>
+            <CardTitle className="text-base">{zhCN.gantt.structureTitle}</CardTitle>
+            <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${viewMode === 'timeline' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600'}`}>
+              {viewMode === 'timeline' ? '横道图视图' : '列表视图'}
+            </span>
             {activeFilterCount > 0 && (
               <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
-                {filteredFlatList.length}/{flatList.length} 条
+                {filteredFlatList.length}/{flatList.length} {zhCN.gantt.structureCount}
               </span>
             )}
           </div>
           <div className="flex items-center gap-2">
             {projectStats.criticalPathSummary && (
               <p className="text-xs text-muted-foreground">
-                关键路径: {projectStats.criticalPathSummary}
+                {zhCN.gantt.criticalPath}: {projectStats.criticalPathSummary}
               </p>
             )}
-            {/* 缺8：筛选入口 */}
             <button
               onClick={() => setShowFilterBar(v => !v)}
               className={`flex items-center gap-1 px-2.5 py-1 text-xs rounded-md border transition-colors ${showFilterBar || activeFilterCount > 0 ? 'bg-blue-50 border-blue-200 text-blue-700' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}
             >
               <SlidersHorizontal className="h-3 w-3" />
-              筛选{activeFilterCount > 0 ? `(${activeFilterCount})` : ''}
+              筛选{activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}
             </button>
             <Button
               variant="ghost"
               size="sm"
               className="text-xs text-blue-600 h-7"
-              onClick={() => navigate(`/projects/${id}/wbs-templates`)}
+              onClick={() => navigate(`/projects/${id}/planning/wbs-templates`)}
             >
               <LayoutTemplate className="mr-1 h-3.5 w-3.5" />
               从模板生成
@@ -1742,1641 +3556,417 @@ export default function GanttView() {
           </div>
         </CardHeader>
 
-        {/* 筛选工具栏（展开时显示） */}
         {showFilterBar && (
-          <div className="px-4 py-3 border-b bg-gray-50/80 flex flex-wrap items-center gap-2">
-            {/* 关键字搜索 */}
-            <div className="relative flex-1 min-w-[180px] max-w-[260px]">
-              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400" />
-              <input
-                type="text"
-                placeholder="搜索任务名/责任人..."
-                value={searchText}
-                onChange={e => setSearchText(e.target.value)}
-                className="w-full pl-8 pr-8 py-1.5 text-sm border rounded-md bg-white focus:outline-none focus:ring-1 focus:ring-blue-400"
-              />
-              {searchText && (
-                <button onClick={() => setSearchText('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              )}
-            </div>
-            {/* 状态筛选 */}
-            <select
-              value={filterStatus}
-              onChange={e => {
-                setFilterStatus(e.target.value)
-                try { localStorage.setItem(`gantt_filter_status_${id}`, e.target.value) } catch { }
-              }}
-              className={`text-sm border rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-blue-400 ${filterStatus !== 'all' ? 'border-blue-400 text-blue-700' : 'text-gray-600'}`}
-            >
-              <option value="all">全部状态</option>
-              <option value="todo">待办</option>
-              <option value="in_progress">进行中</option>
-              <option value="completed">已完成</option>
-              <option value="blocked">受阻</option>
-            </select>
-            {/* 优先级筛选 */}
-            <select
-              value={filterPriority}
-              onChange={e => {
-                setFilterPriority(e.target.value)
-                try { localStorage.setItem(`gantt_filter_priority_${id}`, e.target.value) } catch { }
-              }}
-              className={`text-sm border rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-blue-400 ${filterPriority !== 'all' ? 'border-blue-400 text-blue-700' : 'text-gray-600'}`}
-            >
-              <option value="all">全部优先级</option>
-              <option value="high">高优先级</option>
-              <option value="medium">中优先级</option>
-              <option value="low">低优先级</option>
-            </select>
-            {/* 关键路径筛选 */}
-            <button
-              onClick={() => {
-                setFilterCritical(v => {
-                  try { localStorage.setItem(`gantt_filter_critical_${id}`, String(!v)) } catch { }
-                  return !v
-                })
-              }}
-              className={`flex items-center gap-1 text-sm px-2.5 py-1.5 border rounded-md transition-colors ${filterCritical ? 'bg-red-50 border-red-300 text-red-700' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}
-            >
-              <GitBranch className="h-3.5 w-3.5" />
-              仅关键路径
-            </button>
-            {/* #12: 专项工程筛选 */}
-            <select
-              value={filterSpecialty}
-              onChange={e => {
-                setFilterSpecialty(e.target.value)
-                try { localStorage.setItem(`gantt_filter_specialty_${id}`, e.target.value) } catch { }
-              }}
-              className={`text-sm border rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-purple-400 ${filterSpecialty !== 'all' ? 'border-purple-300 text-purple-700 bg-purple-50' : 'border-purple-200 text-purple-600'}`}
-            >
-              <option value="all">全部专项</option>
-              {SPECIALTY_TYPES.map(s => (
-                <option key={s.value} value={s.value}>{s.label}</option>
-              ))}
-            </select>
-            {/* 楼栋/分部筛选（WBS 根节点） */}
-            {buildingOptions.length > 1 && (
-              <select
-                value={filterBuilding}
-                onChange={e => setFilterBuilding(e.target.value)}
-                className={`text-sm border rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-blue-400 ${filterBuilding !== 'all' ? 'border-blue-400 text-blue-700' : 'text-gray-600'}`}
-              >
-                <option value="all">全部楼栋</option>
-                {buildingOptions.map(b => (
-                  <option key={b.id} value={b.id}>{b.label}</option>
-                ))}
-              </select>
-            )}
-            {/* 清空 / 重置 / 应用 */}
-            <div className="flex items-center gap-1.5 ml-auto">
-              <button
-                onClick={clearAllFilters}
-                className="text-xs px-2.5 py-1.5 border border-gray-200 rounded-md text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors"
-              >
-                重置筛选
-              </button>
-              <button
-                onClick={() => setShowFilterBar(false)}
-                className="text-xs px-2.5 py-1.5 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors font-medium"
-              >
-                应用筛选
-              </button>
-            </div>
-          </div>
-        )}
-        <CardContent className="p-0">
-          {tasks.length === 0 ? (
-            <div className="text-center py-12 text-muted-foreground">
-              <Calendar className="h-12 w-12 mx-auto mb-4 opacity-50" />
-              <p>暂无任务</p>
-              <Button className="mt-4" onClick={() => openEditDialog()}>
-                添加第一个任务
-              </Button>
-            </div>
-          ) : filteredFlatList.length === 0 ? (
-            <div className="text-center py-10 text-muted-foreground">
-              <Search className="h-10 w-10 mx-auto mb-3 opacity-40" />
-              <p className="text-sm">没有匹配的任务</p>
-              <button onClick={clearAllFilters} className="mt-2 text-xs text-blue-500 hover:underline">清空筛选条件</button>
-            </div>
-          ) : (
-            <DndContext sensors={dndSensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-              <SortableContext items={filteredFlatList.map(n => n.id)} strategy={verticalListSortingStrategy}>
-                <div className="divide-y">
-                  {filteredFlatList.map(node => {
-                const task = node
-                const isOverdue = task.status !== 'completed' && task.end_date && new Date(task.end_date) < new Date()
-                const hasChildren = node.children.length > 0
-                const isCollapsed = collapsed.has(node.id)
-                const indentPx = node.depth * 24
-
-                // #1: 业务状态（统一计算）
-                const bizStatus = getBusinessStatus(task)
-
-                // 进度条颜色
-                const progressColor = task.status === 'completed'
-                  ? 'bg-emerald-500'
-                  : isOverdue ? 'bg-red-500'
-                  : task.status === 'in_progress' ? 'bg-blue-500'
-                  : task.status === 'blocked' ? 'bg-amber-500'
-                  : 'bg-gray-300'
-
-                // #2: 延期天数
-                const overdueDays = isOverdue && task.end_date
-                  ? Math.ceil((new Date().getTime() - new Date(task.end_date).getTime()) / 86400000)
-                  : 0
-
-                const fmtShort = (d?: string | null) => {
-                  if (!d) return null
-                  const dt = new Date(d)
-                  return `${String(dt.getMonth() + 1).padStart(2, '0')}/${String(dt.getDate()).padStart(2, '0')}`
-                }
-
-                return (
-                  <SortableTaskRowWrapper key={task.id} id={task.id}>
-                  <div
-                    id={`gantt-task-row-${task.id}`}
-                    className={`flex items-center px-4 py-2.5 group hover:bg-accent/30 transition-colors ${
-                      task.status === 'blocked'
-                        ? 'border-l-4 border-l-amber-400 bg-amber-50/50'
-                        : isOverdue
-                        ? 'border-l-4 border-l-red-400 bg-red-50/30'
-                        : ''
-                    }`}
-                    onContextMenu={(e) => {
-                      e.preventDefault()
-                      setContextMenu({ x: e.clientX, y: e.clientY, task })
-                    }}
-                  >
-                    {/* 复选框 */}
-                    <div className="flex-shrink-0 w-6" style={{ marginLeft: `${indentPx}px` }}>
-                      <input
-                        type="checkbox"
-                        className="w-4 h-4 rounded border-gray-300"
-                        checked={selectedIds.has(task.id)}
-                        onChange={() => toggleSelect(task.id)}
-                      />
-                    </div>
-
-                    {/* 折叠/展开按钮 */}
-                    <div className="flex-shrink-0 w-5 mr-1">
-                      {hasChildren ? (
-                        <button
-                          onClick={() => toggleCollapse(node.id)}
-                          className="text-gray-400 hover:text-gray-600 transition-colors"
-                        >
-                          {isCollapsed
-                            ? <ChevronRight className="h-3.5 w-3.5" />
-                            : <ChevronDown className="h-3.5 w-3.5" />
-                          }
-                        </button>
-                      ) : (
-                        <span className="inline-block w-3.5" />
-                      )}
-                    </div>
-
-                    {/* 旗帜图标：设置里程碑 */}
-                    <button
-                      title={task.is_milestone ? `${MILESTONE_LEVEL_CONFIG[task.milestone_level ?? 1]?.label}（点击修改）` : '设为里程碑'}
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        setMilestoneTargetTask(task)
-                        setMilestoneDialogOpen(true)
-                      }}
-                      className={`flex-shrink-0 p-0.5 rounded transition-colors hover:bg-accent mr-1.5 ${
-                        task.is_milestone
-                          ? MILESTONE_LEVEL_CONFIG[task.milestone_level ?? 1]?.color
-                          : 'text-gray-300 hover:text-gray-500'
-                      }`}
-                    >
-                      <Flag className="h-3.5 w-3.5" fill={task.is_milestone ? 'currentColor' : 'none'} />
-                    </button>
-
-                    {/* 任务名称区域 */}
-                    <div
-                      className="flex-1 min-w-0 flex items-center gap-1.5 mr-3 cursor-pointer"
-                      onClick={() => setSelectedTask(prev => prev?.id === task.id ? null : task)}
-                    >
-                      {/* #5: WBS层级图标 */}
-                      {(() => {
-                        const iconInfo = getWBSNodeIcon(node)
-                        if (iconInfo.icon === 'folder') return (
-                          <svg className={`flex-shrink-0 h-3.5 w-3.5 ${iconInfo.cls}`} fill="currentColor" viewBox="0 0 24 24">
-                            <path d="M10 4H4c-1.11 0-2 .89-2 2v12c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V8c0-1.11-.89-2-2-2h-8l-2-2z"/>
-                          </svg>
-                        )
-                        if (iconInfo.icon === 'folder-open') return (
-                          <svg className={`flex-shrink-0 h-3.5 w-3.5 ${iconInfo.cls}`} fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 9.776c.112-.017.227-.026.344-.026h15.812c.117 0 .232.009.344.026m-16.5 0a2.25 2.25 0 00-1.883 2.542l.857 6a2.25 2.25 0 002.227 1.932H19.05a2.25 2.25 0 002.227-1.932l.857-6a2.25 2.25 0 00-1.883-2.542m-16.5 0V6A2.25 2.25 0 016 3.75h3.879a1.5 1.5 0 011.06.44l2.122 2.12a1.5 1.5 0 001.06.44H18A2.25 2.25 0 0120.25 9v.776"/>
-                          </svg>
-                        )
-                        return (
-                          <svg className={`flex-shrink-0 h-3.5 w-3.5 ${iconInfo.cls}`} fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/>
-                          </svg>
-                        )
-                      })()}
-                      {/* 缺4：WBS编码显示 */}
-                      {task.wbs_code && (
-                        <span className="flex-shrink-0 text-[10px] tabular-nums text-gray-400 font-mono min-w-[24px]">
-                          {task.wbs_code}
-                        </span>
-                      )}
-                      {/* #14: 行内编辑任务名（双击进入编辑模式） */}
-                      {inlineTitleTaskId === task.id ? (
-                        <input
-                          type="text"
-                          value={inlineTitleValue}
-                          onChange={e => setInlineTitleValue(e.target.value)}
-                          onBlur={() => handleInlineTitleSave(task.id)}
-                          onKeyDown={e => {
-                            if (e.key === 'Enter') handleInlineTitleSave(task.id)
-                            if (e.key === 'Escape') setInlineTitleTaskId(null)
-                          }}
-                          autoFocus
-                          className="text-sm font-medium w-40 border-b border-blue-400 bg-transparent outline-none px-0.5 py-0 text-gray-800"
-                          onClick={e => e.stopPropagation()}
-                        />
-                      ) : (
-                        <button
-                          onClick={() => openEditDialog(task)}
-                          onDoubleClick={(e) => {
-                            e.stopPropagation()
-                            setInlineTitleTaskId(task.id)
-                            setInlineTitleValue(task.title || task.name || '')
-                          }}
-                          className={`text-sm font-medium truncate max-w-[200px] text-left hover:text-blue-600 transition-colors ${
-                            isOnCriticalPath(task.id) ? 'text-red-700'
-                            : task.status === 'blocked' ? 'text-amber-700'
-                            : isOverdue ? 'text-red-600'
-                            : task.status === 'completed' ? 'text-gray-400 line-through'
-                            : 'text-gray-800'
-                          }`}
-                          title="单击打开编辑，双击快速改名"
-                        >
-                          {task.title || task.name}
-                        </button>
-                      )}
-
-                      {/* ── #1 业务状态 badge（待开工/可开工/阻碍说明/延期天数）─── */}
-                      {bizStatus.badge && (
-                        <span className={`flex-shrink-0 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-xs font-medium ${bizStatus.badge.cls}`}>
-                          {bizStatus.badge.text}
-                        </span>
-                      )}
-                      {/* #2: 延期天数（进行中/未开始均显示，bizStatus.badge 没有时补充显示） */}
-                      {overdueDays > 0 && !bizStatus.badge && (
-                        <span className="flex-shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700 border border-red-200">
-                          延期{overdueDays}天
-                        </span>
-                      )}
-                      {/* ─────────────────────────────────────────────────── */}
-
-                      {/* 条件 chip：有条件时常驻显示，点击展开 inline 面板 */}
-                      {(() => {
-                        const cond = taskProgressSnapshot.taskConditionMap[task.id]
-                        if (!cond || cond.total === 0) return null
-                        const allSatisfied = cond.satisfied >= cond.total
-                        const isExpanded = expandedConditionTaskId === task.id
-                        return (
-                          <button
-                            onClick={e => toggleInlineConditions(task.id, e)}
-                            className={`flex-shrink-0 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium border transition-colors ${
-                              isExpanded
-                                ? 'bg-emerald-100 text-emerald-700 border-emerald-300'
-                                : allSatisfied
-                                ? 'bg-emerald-50 text-emerald-600 border-emerald-200 hover:bg-emerald-100'
-                                : 'bg-orange-50 text-orange-600 border-orange-200 hover:bg-orange-100'
-                            }`}
-                            title={`开工条件 ${cond.satisfied}/${cond.total}，点击展开详情`}
-                          >
-                            <ShieldCheck className="h-2.5 w-2.5" />
-                            {cond.satisfied}/{cond.total}
-                            {isExpanded ? <ChevronDown className="h-2.5 w-2.5" /> : <ChevronRight className="h-2.5 w-2.5" />}
-                          </button>
-                        )
-                      })()}
-
-                      {/* 阻碍 chip：有未解决阻碍时显示 */}
-                      {(() => {
-                        const cnt = taskProgressSnapshot.obstacleCountMap[task.id] || 0
-                        if (cnt === 0) return null
-                        return (
-                          <span
-                            className="flex-shrink-0 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-50 text-amber-700 border border-amber-200"
-                            title={`${cnt} 个未解决阻碍，点击操作按钮管理`}
-                          >
-                            <AlertOctagon className="h-2.5 w-2.5" />
-                            阻碍{cnt}
-                          </span>
-                        )
-                      })()}
-
-                      {isOnCriticalPath(task.id) && (
-                        <span
-                          className="flex-shrink-0 px-1.5 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-700 border border-purple-200 cursor-help"
-                          title={`关键任务 · 浮动时间: ${getTaskFloat(task.id)}天`}
-                        >
-                          关键 +{getTaskFloat(task.id)}d
-                        </span>
-                      )}
-                    </div>
-
-                    {/* 状态（下拉选择，显示业务状态标签） */}
-                    <div className="flex-shrink-0 w-20">
-                      <Select value={task.status || 'todo'} onValueChange={(val) => handleStatusChange(task.id, val)}>
-                        <SelectTrigger className="h-7 border-0 bg-transparent p-0 shadow-none focus:ring-0 w-full">
-                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${bizStatus.cls}`}>
-                            {bizStatus.label}
-                          </span>
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="todo">未开始</SelectItem>
-                          <SelectItem value="in_progress">进行中</SelectItem>
-                          <SelectItem value="completed">已完成</SelectItem>
-                          <SelectItem value="blocked">受阻</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    {/* 进度 — 缺6汇总显示 + 缺7行内滑动条 */}
-                    <div className="flex-shrink-0 w-32 px-3">
-                      {inlineProgressTaskId === task.id ? (
-                        // 行内编辑模式
-                        <div className="flex items-center gap-1.5" onBlur={() => handleInlineProgressSave(task.id, inlineProgressValue)}>
-                          <input
-                            type="range"
-                            min={0}
-                            max={100}
-                            step={5}
-                            value={inlineProgressValue}
-                            onChange={e => setInlineProgressValue(Number(e.target.value))}
-                            onKeyDown={e => {
-                              if (e.key === 'Enter') handleInlineProgressSave(task.id, inlineProgressValue)
-                              if (e.key === 'Escape') setInlineProgressTaskId(null)
-                            }}
-                            className="flex-1 h-1.5 accent-blue-500"
-                            autoFocus
-                          />
-                          <span className="text-xs font-medium w-7 text-right tabular-nums text-blue-600">{inlineProgressValue}%</span>
-                        </div>
-                      ) : (
-                        // 普通显示模式（点击进入编辑）
-                        <div
-                          className="flex items-center gap-1.5 cursor-pointer group/prog"
-                          title={hasChildren ? `汇总进度: ${rolledProgressMap[task.id] || 0}%（点击编辑实际进度: ${task.progress || 0}%）` : '点击快速编辑进度'}
-                          onClick={() => {
-                            setInlineProgressTaskId(task.id)
-                            setInlineProgressValue(task.progress || 0)
-                          }}
-                        >
-                          <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
-                            <div
-                              className={`h-full rounded-full transition-all ${progressColor}`}
-                              style={{ width: `${hasChildren ? rolledProgressMap[task.id] : (task.progress || 0)}%` }}
-                            />
-                          </div>
-                          <span className="text-xs font-medium w-7 text-right tabular-nums text-gray-600 group-hover/prog:text-blue-500">
-                            {hasChildren ? rolledProgressMap[task.id] : (task.progress || 0)}%{hasChildren && <span className="text-[10px] text-purple-500 ml-0.5" title="父级汇总进度">↑</span>}
-                          </span>
-                          {/* #18: 父子进度差异提示 */}
-                          {hasChildren && task.progress !== undefined && task.progress !== rolledProgressMap[task.id] && (
-                            <span
-                              className="text-[10px] text-amber-500"
-                              title={`手填进度(${task.progress}%) ≠ 子任务汇总进度(${rolledProgressMap[task.id]}%)，以汇总值显示`}
-                            >!</span>
-                          )}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* 责任人 */}
-                    <div className="flex-shrink-0 w-20 text-xs text-gray-600 truncate" title={task.assignee_name || ''}>
-                      {task.assignee_name || <span className="text-muted-foreground/40">—</span>}
-                    </div>
-
-                    {/* 日期 */}
-                    <div className="flex-shrink-0 w-28 text-xs text-gray-500 tabular-nums">
-                      {fmtShort(task.start_date) && fmtShort(task.end_date)
-                        ? <span>{fmtShort(task.start_date)} ~ <span className={isOverdue ? 'text-red-600 font-medium' : ''}>{fmtShort(task.end_date)}</span></span>
-                        : fmtShort(task.start_date) || fmtShort(task.end_date)
-                        ? <span>{fmtShort(task.start_date) || fmtShort(task.end_date)}</span>
-                        : <span className="text-muted-foreground/40 italic">待定</span>
-                      }
-                    </div>
-
-                    {/* #7: 工期对比列 */}
-                    {(() => {
-                      const planDays = task.reference_duration
-                      const actualDays = (task.start_date && task.end_date)
-                        ? Math.max(1, Math.ceil((new Date(task.end_date).getTime() - new Date(task.start_date).getTime()) / 86400000) + 1)
-                        : null
-                      const aiDays = task.ai_duration
-                      const hasDuration = planDays || actualDays || aiDays
-                      if (!hasDuration) return (
-                        <div className="flex-shrink-0 w-24 text-xs text-muted-foreground/30 tabular-nums text-center">—</div>
-                      )
-                      const diffColor = (planDays && actualDays)
-                        ? actualDays > planDays ? 'text-red-600' : actualDays < planDays ? 'text-emerald-600' : 'text-gray-500'
-                        : 'text-gray-500'
-                      return (
-                        <div className="flex-shrink-0 w-24 text-xs tabular-nums flex flex-col gap-0.5">
-                          {planDays && (
-                            <span className="text-gray-500" title="计划工期">计划{planDays}d</span>
-                          )}
-                          {actualDays && (
-                            <span className={diffColor} title="实际/排期工期">
-                              实际{actualDays}d{planDays && actualDays !== planDays ? (actualDays > planDays ? ' ↑' : ' ↓') : ''}
-                            </span>
-                          )}
-                          {aiDays && (
-                            <span className="text-purple-500" title="AI推荐工期">AI{aiDays}d</span>
-                          )}
-                        </div>
-                      )
-                    })()}
-
-                    {/* #17: 关键路径浮动时间 badge */}
-                    {cpmResult && !hasChildren && (() => {
-                      const f = getTaskFloat(task.id)
-                      if (isOnCriticalPath(task.id)) {
-                        return (
-                          <span
-                            className="flex-shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-red-50 text-red-600 font-medium tabular-nums"
-                            title="关键任务：无缓冲时间，延期会直接影响项目工期"
-                          >关键</span>
-                        )
-                      }
-                      if (f > 0) {
-                        return (
-                          <span
-                            className="flex-shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-500 tabular-nums"
-                            title={`浮动时间 ${f} 天：此任务可延迟最多 ${f} 天而不影响项目工期`}
-                          >缓冲{f}d</span>
-                        )
-                      }
-                      return null
-                    })()}
-
-                    {/* 操作按钮（hover显示） */}
-                    <div className="flex-shrink-0 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity ml-2">
-                      {/* 条件管理（缺2修复） */}
-                      <button
-                        title="开工条件管理"
-                        onClick={() => openConditionDialog(task)}
-                        className="p-1.5 hover:bg-green-50 rounded text-gray-300 hover:text-green-600 transition-colors"
-                      >
-                        <ShieldCheck className="h-3.5 w-3.5" />
-                      </button>
-                      {/* 阻碍管理（缺3修复） */}
-                      <button
-                        title="阻碍记录"
-                        onClick={() => openObstacleDialog(task)}
-                        className="p-1.5 hover:bg-amber-50 rounded text-gray-300 hover:text-amber-600 transition-colors"
-                      >
-                        <AlertOctagon className="h-3.5 w-3.5" />
-                      </button>
-                      {/* 添加子任务 */}
-                      <button
-                        title="添加子任务"
-                        onClick={() => openEditDialog(undefined, task.id)}
-                        className="p-1.5 hover:bg-blue-50 rounded text-blue-400 hover:text-blue-600 transition-colors"
-                      >
-                        <Plus className="h-3.5 w-3.5" />
-                      </button>
-                      {/* 编辑 */}
-                      <button
-                        title="编辑任务"
-                        onClick={() => openEditDialog(task)}
-                        className="p-1.5 hover:bg-gray-100 rounded text-gray-400 hover:text-gray-600 transition-colors"
-                      >
-                        <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
-                        </svg>
-                      </button>
-                      {/* 删除 */}
-                      <button
-                        title="删除任务"
-                        onClick={() => handleDeleteTask(task.id)}
-                        className="p-1.5 hover:bg-red-50 rounded text-gray-300 hover:text-red-500 transition-colors"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
-                      {/* #16: 查看总结（仅完成态显示） */}
-                      {task.status === 'completed' && (
-                        <button
-                          title="查看任务完成总结"
-                          onClick={() => navigate(`/projects/${id}/task-summary?highlight=${task.id}`)}
-                          className="p-1.5 hover:bg-orange-50 rounded text-gray-300 hover:text-orange-500 transition-colors"
-                        >
-                          <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 002.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 00-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 00.75-.75 2.25 2.25 0 00-.1-.664m-5.8 0A2.251 2.251 0 0113.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25zM6.75 12h.008v.008H6.75V12zm0 3h.008v.008H6.75V15zm0 3h.008v.008H6.75V18z"/>
-                          </svg>
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* ── inline 条件面板（chip 展开后显示）─── */}
-                  {expandedConditionTaskId === task.id && (() => {
-                    const list = inlineConditionsMap[task.id]
-                    return (
-                      <div
-                        className="mx-4 mb-2 rounded-xl border border-green-100 bg-green-50/60 p-3"
-                        style={{ marginLeft: `${indentPx + 16}px` }}
-                        onClick={e => e.stopPropagation()}
-                      >
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-xs font-medium text-green-700 flex items-center gap-1">
-                            <ShieldCheck className="h-3 w-3" />
-                            开工条件
-                          </span>
-                          <button
-                            onClick={e => toggleInlineConditions(task.id, e)}
-                            className="text-xs text-gray-400 hover:text-gray-600"
-                          >收起</button>
-                        </div>
-                        {!list ? (
-                          <div className="text-xs text-gray-400 py-1">加载中...</div>
-                        ) : list.length === 0 ? (
-                          <div className="text-xs text-gray-400 py-1">暂无条件记录</div>
-                        ) : (
-                          <div className="space-y-1.5">
-                            {list.map(c => {
-                              const typeInfo = CONDITION_TYPES.find(t => t.value === c.condition_type)
-                              return (
-                                <div key={c.id} className="flex items-center gap-1.5 text-xs">
-                                  {c.is_satisfied
-                                    ? <CheckCircle2 className="h-3 w-3 text-emerald-500 flex-shrink-0" />
-                                    : <XCircle className="h-3 w-3 text-orange-400 flex-shrink-0" />
-                                  }
-                                  <span className={c.is_satisfied ? 'text-gray-400 line-through' : 'text-gray-700'}>{c.name}</span>
-                                  {typeInfo && (
-                                    <span className={`px-1 py-0.5 rounded text-[10px] ${typeInfo.color}`}>{typeInfo.label}</span>
-                                  )}
-                                  {c.target_date && (
-                                    <span className="text-gray-400 ml-auto">{c.target_date}</span>
-                                  )}
-                                </div>
-                              )
-                            })}
-                          </div>
-                        )}
-                        <button
-                          onClick={e => { e.stopPropagation(); openConditionDialog(task) }}
-                          className="mt-2 text-xs text-green-600 hover:text-green-800 hover:underline"
-                        >
-                          管理条件 →
-                        </button>
-                      </div>
-                    )
-                  })()}
-                  </SortableTaskRowWrapper>
-                )
-              })}
-                </div>
-              </SortableContext>
-            </DndContext>
-          )}
-        </CardContent>
-      </Card>
-        </div>{/* 左侧列表结束 */}
-
-        {/* #4: 右侧详情面板（selectedTask 有值时显示） */}
-        {selectedTask && (
-          <div className="w-80 flex-shrink-0 sticky top-4">
-            <Card className="rounded-xl shadow-sm border-gray-100">
-              <CardHeader className="pb-3 border-b flex flex-row items-start justify-between space-y-0">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-1.5 mb-1">
-                    {selectedTask.is_milestone && (
-                      <Flag className={`h-3.5 w-3.5 flex-shrink-0 ${MILESTONE_LEVEL_CONFIG[selectedTask.milestone_level ?? 1]?.color}`} fill="currentColor" />
-                    )}
-                    <CardTitle className="text-sm font-semibold truncate">{selectedTask.title || selectedTask.name}</CardTitle>
-                  </div>
-                  {selectedTask.wbs_code && (
-                    <span className="text-[10px] font-mono text-gray-400">{selectedTask.wbs_code}</span>
-                  )}
-                </div>
-                <button
-                  onClick={() => setSelectedTask(null)}
-                  className="flex-shrink-0 ml-2 p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              </CardHeader>
-              <CardContent className="pt-3 space-y-3 text-sm">
-                {/* 业务状态 */}
-                {(() => {
-                  const biz = getBusinessStatus(selectedTask)
-                  return (
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-gray-500">业务状态</span>
-                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${biz.cls}`}>
-                        {biz.label}
-                        {biz.badge && <span className="opacity-80">· {biz.badge.text}</span>}
-                      </span>
-                    </div>
-                  )
-                })()}
-
-                {/* 进度 */}
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs text-gray-500">进度</span>
-                    <span className="text-xs font-medium text-gray-700">{selectedTask.progress || 0}%</span>
-                  </div>
-                  <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
-                    <div
-                      className={`h-full rounded-full transition-all ${
-                        selectedTask.status === 'completed' ? 'bg-emerald-500'
-                        : selectedTask.status === 'blocked' ? 'bg-amber-500'
-                        : 'bg-blue-500'
-                      }`}
-                      style={{ width: `${selectedTask.progress || 0}%` }}
-                    />
-                  </div>
-                </div>
-
-                {/* 工期对比 */}
-                {(selectedTask.reference_duration || selectedTask.ai_duration || (selectedTask.start_date && selectedTask.end_date)) && (
-                  <div className="rounded-lg bg-gray-50 p-2.5 space-y-1.5">
-                    <p className="text-xs font-medium text-gray-600 mb-1.5">工期对比</p>
-                    {selectedTask.reference_duration && (
-                      <div className="flex justify-between text-xs">
-                        <span className="text-gray-500">计划工期</span>
-                        <span className="font-medium text-gray-700">{selectedTask.reference_duration} 天</span>
-                      </div>
-                    )}
-                    {selectedTask.start_date && selectedTask.end_date && (
-                      <div className="flex justify-between text-xs">
-                        <span className="text-gray-500">排期工期</span>
-                        <span className={`font-medium ${
-                          selectedTask.reference_duration && Math.ceil((new Date(selectedTask.end_date).getTime() - new Date(selectedTask.start_date).getTime()) / 86400000) + 1 > selectedTask.reference_duration
-                            ? 'text-red-600' : 'text-gray-700'
-                        }`}>
-                          {Math.max(1, Math.ceil((new Date(selectedTask.end_date).getTime() - new Date(selectedTask.start_date).getTime()) / 86400000) + 1)} 天
-                        </span>
-                      </div>
-                    )}
-                    {selectedTask.ai_duration && (
-                      <div className="flex justify-between text-xs">
-                        <span className="text-gray-500">AI推荐</span>
-                        <span className="font-medium text-purple-600">{selectedTask.ai_duration} 天</span>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* 日期区间 */}
-                {(selectedTask.start_date || selectedTask.end_date) && (
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="text-gray-500">时间区间</span>
-                    <span className="text-gray-700 tabular-nums">
-                      {selectedTask.start_date ? formatDate(selectedTask.start_date) : '—'} ~ {selectedTask.end_date ? formatDate(selectedTask.end_date) : '—'}
-                    </span>
-                  </div>
-                )}
-
-                {/* 责任人 */}
-                {selectedTask.assignee_name && (
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="text-gray-500">责任人</span>
-                    <span className="text-gray-700">{selectedTask.assignee_name}</span>
-                  </div>
-                )}
-
-                {/* 责任单位 */}
-                {selectedTask.responsible_unit && (
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="text-gray-500">责任单位</span>
-                    <span className="text-gray-700 truncate max-w-[160px]" title={selectedTask.responsible_unit}>{selectedTask.responsible_unit}</span>
-                  </div>
-                )}
-
-                {/* 专项工程 */}
-                {selectedTask.specialty_type && (
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="text-gray-500">专项类型</span>
-                    <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${SPECIALTY_TYPES.find(s => s.value === selectedTask.specialty_type)?.color || 'bg-gray-100 text-gray-600'}`}>
-                      {SPECIALTY_TYPES.find(s => s.value === selectedTask.specialty_type)?.label || selectedTask.specialty_type}
-                    </span>
-                  </div>
-                )}
-
-                {/* 首次填报时间 */}
-                {selectedTask.first_progress_at && (
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="text-gray-500">首次填报</span>
-                    <span className="text-gray-600 tabular-nums">
-                      {new Date(selectedTask.first_progress_at).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
-                    </span>
-                  </div>
-                )}
-
-                {/* 描述 */}
-                {selectedTask.description && (
-                  <div className="text-xs text-gray-600 leading-relaxed pt-1 border-t border-gray-100">
-                    <p className="text-gray-400 mb-1">描述</p>
-                    <p>{selectedTask.description}</p>
-                  </div>
-                )}
-
-                {/* 快速操作 */}
-                <div className="flex gap-2 pt-2 border-t border-gray-100">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="flex-1 h-7 text-xs"
-                    onClick={() => openEditDialog(selectedTask)}
-                  >
-                    编辑
-                  </Button>
-                  <button
-                    onClick={() => openConditionDialog(selectedTask)}
-                    className="flex-1 h-7 text-xs px-2 border rounded-md text-green-700 border-green-200 hover:bg-green-50 transition-colors"
-                  >
-                    条件
-                  </button>
-                  <button
-                    onClick={() => openObstacleDialog(selectedTask)}
-                    className="flex-1 h-7 text-xs px-2 border rounded-md text-amber-700 border-amber-200 hover:bg-amber-50 transition-colors"
-                  >
-                    阻碍
-                  </button>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        )}
-      </div>{/* 双栏容器结束 */}
-
-      {/* #15: 右键快捷菜单 */}
-      {contextMenu && (
-        <>
-          {/* 点击其他区域关闭菜单 */}
-          <div
-            className="fixed inset-0 z-40"
-            onClick={() => setContextMenu(null)}
-            onContextMenu={(e) => { e.preventDefault(); setContextMenu(null) }}
+          <GanttFilterBar
+            searchText={searchText}
+            filterStatus={filterStatus}
+            filterPriority={filterPriority}
+            filterCritical={filterCritical}
+            filterSpecialty={filterSpecialty}
+            filterBuilding={filterBuilding}
+            buildingOptions={buildingOptions}
+            projectId={id}
+            onSearchChange={setSearchText}
+            onStatusChange={setFilterStatus}
+            onPriorityChange={setFilterPriority}
+            onCriticalToggle={() => {
+              setFilterCritical((value) => {
+                safeStorageSet(localStorage, `gantt_filter_critical_${id}`, String(!value))
+                return !value
+              })
+            }}
+            onSpecialtyChange={setFilterSpecialty}
+            onBuildingChange={setFilterBuilding}
+            onClearAll={clearAllFilters}
+            onClose={() => setShowFilterBar(false)}
           />
+        )}
+        {criticalPathSnapshot?.hasCycleDetected && (
           <div
-            className="fixed z-50 bg-white rounded-xl shadow-lg border border-gray-200 py-1 min-w-[160px] text-sm"
-            style={{ left: contextMenu.x, top: contextMenu.y }}
+            data-testid="gantt-cycle-detection-banner"
+            className="mx-4 mb-3 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"
           >
-            <button
-              className="w-full text-left px-3 py-1.5 hover:bg-gray-50 text-gray-700 flex items-center gap-2"
-              onClick={() => { openEditDialog(contextMenu.task); setContextMenu(null) }}
-            >
-              <svg className="h-3.5 w-3.5 text-gray-400" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125"/>
-              </svg>
-              编辑任务
-            </button>
-            <button
-              className="w-full text-left px-3 py-1.5 hover:bg-green-50 text-green-700 flex items-center gap-2"
-              onClick={() => { openConditionDialog(contextMenu.task); setContextMenu(null) }}
-            >
-              <ShieldCheck className="h-3.5 w-3.5" />
-              开工条件
-            </button>
-            <button
-              className="w-full text-left px-3 py-1.5 hover:bg-amber-50 text-amber-700 flex items-center gap-2"
-              onClick={() => { openObstacleDialog(contextMenu.task); setContextMenu(null) }}
-            >
-              <AlertOctagon className="h-3.5 w-3.5" />
-              进行中阻碍
-            </button>
-            <div className="my-1 border-t border-gray-100" />
-            <button
-              className="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-blue-700 flex items-center gap-2"
-              onClick={() => {
-                openEditDialog(undefined, contextMenu.task.id)
-                setContextMenu(null)
-              }}
-            >
-              <Plus className="h-3.5 w-3.5" />
-              添加子任务
-            </button>
-            <button
-              className="w-full text-left px-3 py-1.5 hover:bg-gray-50 text-gray-700 flex items-center gap-2"
-              onClick={() => {
-                setInlineTitleTaskId(contextMenu.task.id)
-                setInlineTitleValue(contextMenu.task.title || contextMenu.task.name || '')
-                setContextMenu(null)
-              }}
-            >
-              <svg className="h-3.5 w-3.5 text-gray-400" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487zm0 0L19.5 7.125"/>
-              </svg>
-              快速改名
-            </button>
-            <div className="my-1 border-t border-gray-100" />
-            {contextMenu.task.status !== 'completed' && (
-              <button
-                className="w-full text-left px-3 py-1.5 hover:bg-emerald-50 text-emerald-700 flex items-center gap-2"
-                onClick={() => {
-                  handleStatusChange(contextMenu.task.id, 'completed')
-                  setContextMenu(null)
-                }}
-              >
-                <CheckCircle2 className="h-3.5 w-3.5" />
-                标记完成
-              </button>
-            )}
-            <button
-              className="w-full text-left px-3 py-1.5 hover:bg-red-50 text-red-600 flex items-center gap-2"
-              onClick={() => {
-                const taskName = contextMenu.task.title || contextMenu.task.name
-                const taskId = contextMenu.task.id
-                setContextMenu(null)
-                openConfirm('删除任务', `确定删除「${taskName}」？此操作不可撤销。`, async () => {
-                  const res = await fetch(`${API_BASE}/api/tasks/${taskId}`, { method: 'DELETE' })
-                  const json = await res.json()
-                  if (json.success) {
-                    deleteTask(taskId)
-                    toast({ title: '任务已删除' })
-                  } else {
-                    toast({ title: '删除失败', variant: 'destructive' })
-                  }
-                })
-              }}
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-              删除任务
-            </button>
-          </div>
-        </>
-      )}
-
-      {/* 任务编辑对话框 */}
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>
-              {editingTask ? '编辑任务' : newTaskParentId ? `添加子任务` : '新建任务'}
-            </DialogTitle>
-            {newTaskParentId && !editingTask && (
-              <p className="text-xs text-muted-foreground">
-                上级任务：{tasks.find(t => t.id === newTaskParentId)?.title || tasks.find(t => t.id === newTaskParentId)?.name || ''}
-              </p>
-            )}
-          </DialogHeader>
-          <div className="space-y-4 py-4">
-            <div className="space-y-2">
-              <Label>任务名称</Label>
-              <Input
-                value={formData.name}
-                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                placeholder="输入任务名称"
-              />
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>开始日期</Label>
-                <Input
-                  type="date"
-                  value={formData.start_date}
-                  onChange={(e) => setFormData({ ...formData, start_date: e.target.value })}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>结束日期</Label>
-                <Input
-                  type="date"
-                  value={formData.end_date}
-                  onChange={(e) => setFormData({ ...formData, end_date: e.target.value })}
-                />
-              </div>
-            </div>
-
-            {/* AI 工期建议（仅编辑已有任务时显示） */}
-            {editingTask && (
-              <div className="rounded-xl border border-blue-100 bg-blue-50/60 p-3 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium text-blue-700">AI 工期建议</span>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-6 text-xs px-2 border-blue-200 text-blue-600 hover:bg-blue-100"
-                    onClick={fetchAiDurationSuggestion}
-                    disabled={aiDurationLoading}
-                  >
-                    {aiDurationLoading ? '计算中…' : '获取建议'}
-                  </Button>
-                </div>
-                {aiDurationSuggestion && (
-                  <div className="space-y-1.5">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-semibold text-blue-800">
-                        建议工期：{aiDurationSuggestion.estimated_duration} 天
-                      </span>
-                      <span className={cn(
-                        'text-xs px-1.5 py-0.5 rounded-full',
-                        aiDurationSuggestion.confidence_level === 'high'
-                          ? 'bg-emerald-100 text-emerald-700'
-                          : aiDurationSuggestion.confidence_level === 'medium'
-                          ? 'bg-yellow-100 text-yellow-700'
-                          : 'bg-gray-100 text-gray-600'
-                      )}>
-                        置信度 {Math.round((aiDurationSuggestion.confidence_score || 0) * 100)}%
-                      </span>
-                    </div>
-                    <p className="text-xs text-blue-600">
-                      基于历史相似任务数据估算，仅供参考
-                    </p>
-                    <Button
-                      type="button"
-                      size="sm"
-                      className="h-6 text-xs px-2"
-                      onClick={applyAiDuration}
-                    >
-                      应用此工期
-                    </Button>
-                  </div>
-                )}
-                {!aiDurationSuggestion && !aiDurationLoading && (
-                  <p className="text-xs text-blue-500">点击"获取建议"，AI 将基于历史同类任务数据估算工期</p>
-                )}
-              </div>
-            )}
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>状态</Label>
-                <Select value={formData.status} onValueChange={(val) => setFormData({ ...formData, status: val })}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="todo">待办</SelectItem>
-                    <SelectItem value="in_progress">进行中</SelectItem>
-                    <SelectItem value="completed">已完成</SelectItem>
-                    <SelectItem value="blocked">已阻塞</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>优先级</Label>
-                <Select value={formData.priority} onValueChange={(val) => setFormData({ ...formData, priority: val })}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="low">低</SelectItem>
-                    <SelectItem value="medium">中</SelectItem>
-                    <SelectItem value="high">高</SelectItem>
-                    <SelectItem value="critical">紧急</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label>进度 (%)</Label>
-              <Input
-                type="number"
-                min="0"
-                max="100"
-                value={formData.progress}
-                onChange={(e) => setFormData({ ...formData, progress: parseInt(e.target.value) || 0 })}
-              />
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>责任人</Label>
-                <Input
-                  value={formData.assignee_name}
-                  onChange={(e) => setFormData({ ...formData, assignee_name: e.target.value })}
-                  placeholder="负责人姓名"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>责任单位</Label>
-                <Input
-                  value={formData.responsible_unit}
-                  onChange={(e) => setFormData({ ...formData, responsible_unit: e.target.value })}
-                  placeholder="所属部门/单位"
-                />
-              </div>
-            </div>
-
-            {/* #12 专项工程 + #7 计划工期 */}
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>专项工程（可选）</Label>
-                <Select
-                  value={formData.specialty_type || '__none__'}
-                  onValueChange={(val) => setFormData({ ...formData, specialty_type: val === '__none__' ? '' : val })}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="无专项分类" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none__">无专项分类</SelectItem>
-                    {SPECIALTY_TYPES.map(s => (
-                      <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>计划工期（天）</Label>
-                <Input
-                  type="number"
-                  min="0"
-                  placeholder="参考工期天数"
-                  value={formData.reference_duration}
-                  onChange={(e) => setFormData({ ...formData, reference_duration: e.target.value })}
-                />
-              </div>
-            </div>
-
-            {/* 父任务选择（WBS结构） */}
-            <div className="space-y-2">
-              <Label>上级任务（可选）</Label>
-              <Select
-                value={formData.parent_id || '__none__'}
-                onValueChange={(val) => setFormData({ ...formData, parent_id: val === '__none__' ? null : val })}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="无（顶级任务）" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__none__">无（顶级任务）</SelectItem>
-                  {tasks
-                    .filter(t => t.id !== editingTask?.id)
-                    .map(t => (
-                      <SelectItem key={t.id} value={t.id}>
-                        {t.title || t.name}
-                      </SelectItem>
-                    ))}
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">选择上级任务，构建 WBS 层级结构</p>
-            </div>
-
-            {/* 依赖关系选择 */}
-            {tasks.length > 1 && (
-              <div className="space-y-2">
-                <Label>前置依赖任务</Label>
-                <div className="border rounded-md max-h-32 overflow-y-auto p-2 space-y-1">
-                  {tasks
-                    .filter(t => t.id !== editingTask?.id)
-                    .map(task => (
-                      <label
-                        key={task.id}
-                        className="flex items-center gap-2 p-1 hover:bg-accent rounded cursor-pointer"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={(formData.dependencies || []).includes(task.id)}
-                          onChange={(e) => handleDependencyChange(task.id, e.target.checked)}
-                          className="rounded border-input"
-                        />
-                        <span className="text-sm">{task.title || task.name}</span>
-                        {isOnCriticalPath(task.id) && (
-                          <AlertCircle className="h-3 w-3 text-red-500" />
-                        )}
-                      </label>
-                    ))}
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  选择此任务依赖的前置任务（完成后才能开始）
-                </p>
-              </div>
-            )}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDialogOpen(false)}>取消</Button>
-            <Button onClick={handleSaveTask}>
-              <Save className="mr-2 h-4 w-4" />
-              保存
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* 版本冲突解决对话框 */}
-      <ConflictDialog
-        open={conflictOpen}
-        onOpenChange={setConflictOpen}
-        localVersion={conflictData?.localVersion as Task || {} as Task}
-        serverVersion={conflictData?.serverVersion as Task || {} as Task}
-        onKeepLocal={handleKeepLocal}
-        onKeepServer={handleKeepServer}
-        onMerge={handleMerge}
-        itemType="task"
-      />
-
-      {/* 里程碑层级设置弹窗 */}
-      <Dialog open={milestoneDialogOpen} onOpenChange={setMilestoneDialogOpen}>
-        <DialogContent className="sm:max-w-[380px]">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Flag className="h-4 w-4 text-amber-500" />
-              设置里程碑
-            </DialogTitle>
-          </DialogHeader>
-          <div className="py-3 space-y-3">
-            <p className="text-sm text-muted-foreground">
-              任务：<span className="font-medium text-foreground">{milestoneTargetTask?.title || milestoneTargetTask?.name}</span>
-            </p>
-            <div className="grid gap-2">
-              {/* 取消里程碑 */}
-              <button
-                onClick={async () => {
-                  if (!milestoneTargetTask) return
-                  const res = await fetch(`${API_BASE}/api/tasks/${milestoneTargetTask.id}`, {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                      is_milestone: false, 
-                      milestone_level: null,
-                      version: milestoneTargetTask.version ?? 1 
-                    }),
-                  })
-                  const json = await res.json()
-                  if (json.success) {
-                    updateTask(milestoneTargetTask.id, { ...milestoneTargetTask, is_milestone: false, milestone_level: undefined })
-                  }
-                  setMilestoneDialogOpen(false)
-                  toast({ title: '已取消里程碑标记' })
-                }}
-                className={`flex items-center gap-3 p-3 rounded-lg border transition-colors hover:bg-accent ${!milestoneTargetTask?.is_milestone ? 'border-primary bg-primary/5' : 'border-border'}`}
-              >
-                <Flag className="h-4 w-4 text-gray-300" />
-                <div className="text-left">
-                  <div className="text-sm font-medium">普通任务</div>
-                  <div className="text-xs text-muted-foreground">取消里程碑标记</div>
-                </div>
-              </button>
-              {/* 三个层级选择 */}
-              {[1, 2, 3].map(level => {
-                const cfg = MILESTONE_LEVEL_CONFIG[level]
-                const isSelected = milestoneTargetTask?.is_milestone && milestoneTargetTask?.milestone_level === level
-                const selectedCls = isSelected ? `border-current ${cfg.bgColor} ${cfg.color}` : 'border-border'
-                return (
-                  <button
-                    key={level}
-                    onClick={async () => {
-                      if (!milestoneTargetTask) return
-                      const res = await fetch(`${API_BASE}/api/tasks/${milestoneTargetTask.id}`, {
-                        method: 'PUT',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ 
-                          is_milestone: true, 
-                          milestone_level: level,
-                          version: milestoneTargetTask.version ?? 1 
-                        }),
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+            <div className="min-w-0">
+              <div className="font-semibold">检测到任务依赖环路</div>
+              <div className="mt-0.5 text-xs text-amber-700">
+                关键路径计算已暂停。请检查以下任务的依赖关系并消除环路后重新计算：
+                {(criticalPathSnapshot.cycleTaskIds ?? []).length > 0 && (
+                  <span className="ml-1 font-medium">
+                    {(criticalPathSnapshot.cycleTaskIds ?? [])
+                      .map((tid) => {
+                        const t = (tasks as Array<{ id: string; title?: string; name?: string }>).find((task) => task.id === tid)
+                        return t ? (t.title || t.name || tid) : tid
                       })
-                      const json = await res.json()
-                      if (json.success) {
-                        updateTask(milestoneTargetTask.id, { ...milestoneTargetTask, is_milestone: true, milestone_level: level })
-                      }
-                      setMilestoneDialogOpen(false)
-                      toast({ title: `已设为${cfg.label}` })
-                    }}
-                    className={`flex items-center gap-3 p-3 rounded-lg border transition-colors hover:bg-accent ${selectedCls}`}
-                  >
-                    <Flag className={`h-4 w-4 ${cfg.color}`} fill="currentColor" />
-                    <div className="text-left">
-                      <div className={`text-sm font-medium ${cfg.color}`}>{cfg.label}</div>
-                      <div className="text-xs text-muted-foreground">
-                        {level === 1 ? '关键节点，影响整体工期' : level === 2 ? '重要节点，分项关键控制点' : '一般节点，过程监控点'}
-                      </div>
-                    </div>
-                  </button>
-                )
-              })}
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setMilestoneDialogOpen(false)}>取消</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* ── 条件管理弹窗 ─────────────────────────────── */}
-      <Dialog open={conditionDialogOpen} onOpenChange={setConditionDialogOpen}>
-        <DialogContent className="sm:max-w-[520px]">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <ShieldCheck className="h-4 w-4 text-green-600" />
-              开工条件管理
-            </DialogTitle>
-            <p className="text-xs text-muted-foreground mt-1">
-              任务：<span className="font-medium text-foreground">{conditionTask?.title || conditionTask?.name}</span>
-            </p>
-          </DialogHeader>
-          <div className="py-2 space-y-3">
-            {/* 添加新条件 */}
-            <div className="space-y-2 p-3 rounded-xl border border-dashed border-gray-200 bg-gray-50/50">
-              <div className="flex gap-2">
-                {/* P0-1: 条件类型 Select */}
-                <Select value={newConditionType} onValueChange={setNewConditionType}>
-                  <SelectTrigger className="w-28 h-8 text-xs">
-                    <SelectValue placeholder="类型" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {CONDITION_TYPES.map(t => (
-                      <SelectItem key={t.value} value={t.value} className="text-xs">{t.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Input
-                  placeholder="输入开工条件描述"
-                  value={newConditionName}
-                  onChange={(e) => setNewConditionName(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleAddCondition()}
-                  className="flex-1 h-8 text-sm"
-                />
-              </div>
-              {/* [G3]: 条件详细说明（占一行） */}
-              <Input
-                placeholder="详细说明（可选）"
-                value={newConditionDescription}
-                onChange={(e) => setNewConditionDescription(e.target.value)}
-                className="h-7 text-xs"
-              />
-              <div className="flex gap-2 items-center">
-                {/* P1-6: 目标解决日期 */}
-                <div className="flex items-center gap-1.5 flex-1">
-                  <Calendar className="h-3.5 w-3.5 text-gray-400" />
-                  <label className="text-xs text-gray-500">目标日期</label>
-                  <Input
-                    type="date"
-                    value={newConditionTargetDate}
-                    onChange={(e) => setNewConditionTargetDate(e.target.value)}
-                    className="h-7 text-xs flex-1"
-                  />
-                </div>
-                {/* [G3]: 责任单位 */}
-                <Input
-                  placeholder="责任单位"
-                  value={newConditionResponsibleUnit}
-                  onChange={(e) => setNewConditionResponsibleUnit(e.target.value)}
-                  className="h-7 text-xs w-28"
-                />
-                {/* P2-9: 前置任务多选（Popover + Checkbox List） */}
-                {newConditionType === 'preceding' && (
-                  <Popover>
-                    <PopoverTrigger asChild>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-7 text-xs flex-1 justify-start gap-1.5 border-amber-200 bg-amber-50/50 hover:bg-amber-50"
-                      >
-                        <GitBranch className="h-3.5 w-3.5 text-amber-500 flex-shrink-0" />
-                        {newConditionPrecedingTaskIds.length === 0 ? (
-                          <span className="text-gray-400">选择前置任务（可多选）</span>
-                        ) : (
-                          <span className="text-amber-700 font-medium truncate">
-                            已选 {newConditionPrecedingTaskIds.length} 个前置任务
-                          </span>
-                        )}
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-72 p-0" align="start">
-                      <div className="px-3 py-2 border-b bg-gray-50">
-                        <p className="text-xs text-gray-500">勾选所有前置任务（可多选）</p>
-                      </div>
-                      <div className="max-h-56 overflow-y-auto py-1">
-                        {tasks
-                          .filter(t => conditionTask && t.id !== conditionTask.id)
-                          .map(t => {
-                            const checked = newConditionPrecedingTaskIds.includes(t.id)
-                            return (
-                              <label
-                                key={t.id}
-                                className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 cursor-pointer"
-                              >
-                                <input
-                                  type="checkbox"
-                                  checked={checked}
-                                  onChange={(e) => {
-                                    if (e.target.checked) {
-                                      setNewConditionPrecedingTaskIds(prev => [...prev, t.id])
-                                    } else {
-                                      setNewConditionPrecedingTaskIds(prev => prev.filter(id => id !== t.id))
-                                    }
-                                  }}
-                                  className="accent-amber-500 w-3.5 h-3.5"
-                                />
-                                <span className="text-xs text-gray-700 truncate flex-1">
-                                  {t.title || t.name}
-                                </span>
-                                {t.status && (
-                                  <span className={`text-[10px] px-1 rounded ${
-                                    t.status === '已完成' ? 'bg-green-100 text-green-700' :
-                                    t.status === '进行中' ? 'bg-blue-100 text-blue-700' :
-                                    'bg-gray-100 text-gray-500'
-                                  }`}>
-                                    {t.status}
-                                  </span>
-                                )}
-                              </label>
-                            )
-                          })}
-                      </div>
-                    </PopoverContent>
-                  </Popover>
-                )}
-              </div>
-              {newConditionType === 'preceding' && newConditionPrecedingTaskIds.length > 0 && (
-                <p className="text-xs text-amber-600 flex items-center gap-1">
-                  <GitBranch className="h-3 w-3" />
-                  已选 {newConditionPrecedingTaskIds.length} 个前置任务 — 全部完成时，此条件自动满足
-                </p>
-              )}
-            </div>
-            {/* 条件列表 */}
-            <div className="space-y-2 max-h-64 overflow-y-auto">
-              {conditionsLoading ? (
-                <p className="text-sm text-muted-foreground text-center py-4">加载中...</p>
-              ) : taskConditions.length === 0 ? (
-                <p className="text-sm text-muted-foreground text-center py-4">暂无开工条件，点击上方添加</p>
-              ) : (
-                taskConditions.map(cond => {
-                  const typeConf = CONDITION_TYPES.find(t => t.value === cond.condition_type)
-                  // P0-3 体现在条件层面: 目标日期超期未满足
-                  const isOverdue = !cond.is_satisfied && cond.target_date && new Date(cond.target_date) < new Date()
-                  return (
-                    <div key={cond.id} className={`flex items-start gap-2 p-2.5 rounded-xl border transition-colors ${cond.is_satisfied ? 'bg-green-50 border-green-200' : isOverdue ? 'bg-red-50 border-red-300' : 'bg-gray-50 border-gray-200'}`}>
-                      <button
-                        onClick={() => handleToggleCondition(cond)}
-                        className={`flex-shrink-0 mt-0.5 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-colors ${cond.is_satisfied ? 'bg-emerald-500 border-emerald-500 text-white' : 'border-gray-300 hover:border-emerald-400'}`}
-                      >
-                        {cond.is_satisfied && <CheckCircle2 className="h-3 w-3" />}
-                      </button>
-                      <div className="flex-1 min-w-0">
-                        <p className={`text-sm ${cond.is_satisfied ? 'line-through text-gray-400' : 'text-gray-700'}`}>{cond.name}</p>
-                        <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                          {typeConf && (
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${typeConf.color}`}>{typeConf.label}</span>
-                          )}
-                          {cond.target_date && (
-                            <span className={`text-[10px] flex items-center gap-0.5 ${isOverdue ? 'text-red-600 font-medium' : 'text-gray-400'}`}>
-                              <Calendar className="h-2.5 w-2.5" />
-                              {isOverdue ? '已超期: ' : ''}{cond.target_date}
-                            </span>
-                          )}
-                          {/* P2-9: 前置任务芯片 */}
-                          {(conditionPrecedingTasks[cond.id] || []).map(pt => (
-                            <span
-                              key={pt.task_id}
-                              className={`text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5 ${
-                                pt.status === '已完成' ? 'bg-green-100 text-green-700' :
-                                'bg-amber-100 text-amber-700'
-                              }`}
-                              title={`前置任务: ${pt.title || pt.name}`}
-                            >
-                              <GitBranch className="h-2.5 w-2.5 flex-shrink-0" />
-                              {pt.title || pt.name}
-                            </span>
-                          ))}
-                          <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${cond.is_satisfied ? 'bg-emerald-100 text-emerald-700' : 'bg-orange-100 text-orange-700'}`}>
-                            {cond.is_satisfied ? '已满足' : '未满足'}
-                          </span>
-                        </div>
-                      </div>
-                      <button
-                        onClick={() => handleDeleteCondition(cond.id)}
-                        className="flex-shrink-0 p-1 rounded hover:bg-red-50 text-gray-300 hover:text-red-500 transition-colors"
-                      >
-                        <XCircle className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                  )
-                })
-              )}
-            </div>
-            {taskConditions.length > 0 && (
-              <p className="text-xs text-muted-foreground">
-                已满足 {taskConditions.filter(c => c.is_satisfied).length}/{taskConditions.length} 个条件
-                {taskConditions.every(c => c.is_satisfied) && (
-                  <span className="ml-1.5 text-green-600 font-medium">全部满足，可以开工</span>
-                )}
-              </p>
-            )}
-          </div>
-          <DialogFooter className="gap-2">
-            <Button variant="outline" onClick={() => setConditionDialogOpen(false)}>关闭</Button>
-            <Button onClick={handleAddCondition} disabled={!newConditionName.trim()}>
-              <Plus className="h-4 w-4 mr-1" />
-              保存条件
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* ── 阻碍管理弹窗 ─────────────────────────────── */}
-      <Dialog open={obstacleDialogOpen} onOpenChange={setObstacleDialogOpen}>
-        <DialogContent className="sm:max-w-[520px]">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <AlertOctagon className="h-4 w-4 text-amber-600" />
-              阻碍记录
-            </DialogTitle>
-            <p className="text-xs text-muted-foreground mt-1">
-              任务：<span className="font-medium text-foreground">{obstacleTask?.title || obstacleTask?.name}</span>
-            </p>
-          </DialogHeader>
-          <div className="py-2 space-y-3">
-            {/* 添加新阻碍 */}
-            <div className="flex gap-2">
-              <Input
-                placeholder="描述阻碍（如：材料未到场，无法施工）"
-                value={newObstacleTitle}
-                onChange={(e) => setNewObstacleTitle(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleAddObstacle()}
-                className="flex-1"
-              />
-            </div>
-            {/* 阻碍列表 */}
-            <div className="space-y-2 max-h-64 overflow-y-auto">
-              {obstaclesLoading ? (
-                <p className="text-sm text-muted-foreground text-center py-4">加载中...</p>
-              ) : taskObstacles.length === 0 ? (
-                <p className="text-sm text-muted-foreground text-center py-4">暂无阻碍记录</p>
-              ) : (
-                taskObstacles.map(obs => {
-                  // P0-3: 超时标识 —— 未解决且超过3天
-                  const daysSince = Math.floor((Date.now() - new Date(obs.created_at).getTime()) / 86400000)
-                  const isLongTerm = !obs.is_resolved && daysSince > 3
-                  // P1-8: 超过7天推送标识
-                  const isCritical = !obs.is_resolved && daysSince > 7
-                  const isEditing = editingObstacleId === obs.id
-
-                  return (
-                    <div key={obs.id} className={`p-2.5 rounded-xl border transition-colors ${obs.is_resolved ? 'bg-gray-50 border-gray-200 opacity-60' : isCritical ? 'bg-red-50 border-red-300' : isLongTerm ? 'bg-orange-50 border-orange-300' : 'bg-amber-50 border-amber-200'}`}>
-                      <div className="flex items-start gap-2">
-                        <div className="flex-1 min-w-0">
-                          {isEditing ? (
-                            /* P1-5: 编辑态 */
-                            <div className="flex gap-1">
-                              <Input
-                                value={editingObstacleTitle}
-                                onChange={e => setEditingObstacleTitle(e.target.value)}
-                                onKeyDown={e => {
-                                  if (e.key === 'Enter') handleSaveObstacleEdit(obs.id)
-                                  if (e.key === 'Escape') { setEditingObstacleId(null); setEditingObstacleTitle('') }
-                                }}
-                                className="h-7 text-xs flex-1"
-                                autoFocus
-                              />
-                              <Button size="sm" className="h-7 px-2" onClick={() => handleSaveObstacleEdit(obs.id)}>
-                                <CheckCircle2 className="h-3.5 w-3.5" />
-                              </Button>
-                              <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => { setEditingObstacleId(null); setEditingObstacleTitle('') }}>
-                                <X className="h-3.5 w-3.5" />
-                              </Button>
-                            </div>
-                          ) : (
-                            <p className={`text-sm ${obs.is_resolved ? 'line-through text-gray-400' : 'text-gray-800'}`}>{obs.title}</p>
-                          )}
-                          {!isEditing && (
-                            <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                              {/* P0-3: 超时标签 */}
-                              {isCritical && (
-                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 font-medium flex items-center gap-0.5">
-                                  <AlertCircle className="h-2.5 w-2.5" />长期阻碍·{daysSince}天
-                                </span>
-                              )}
-                              {isLongTerm && !isCritical && (
-                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-orange-100 text-orange-700 font-medium">
-                                  超时·{daysSince}天
-                                </span>
-                              )}
-                              {!isLongTerm && !obs.is_resolved && (
-                                <span className="text-[10px] text-gray-400">{daysSince}天前</span>
-                              )}
-                            </div>
-                          )}
-                          {obs.description && !isEditing && <p className="text-xs text-muted-foreground mt-0.5">{obs.description}</p>}
-                        </div>
-                        {!isEditing && (
-                          <div className="flex items-center gap-1 flex-shrink-0">
-                            <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${obs.is_resolved ? 'bg-gray-100 text-gray-500' : isCritical ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>
-                              {obs.is_resolved ? '已解决' : '进行中'}
-                            </span>
-                            {/* P1-5: 编辑按钮（未解决才可编辑） */}
-                            {!obs.is_resolved && (
-                              <button
-                                onClick={() => { setEditingObstacleId(obs.id); setEditingObstacleTitle(obs.title) }}
-                                className="p-1 rounded hover:bg-blue-50 text-gray-400 hover:text-blue-600 transition-colors"
-                                title="编辑"
-                              >
-                                <Save className="h-3.5 w-3.5" />
-                              </button>
-                            )}
-                            {!obs.is_resolved && (
-                              <button
-                                onClick={() => handleResolveObstacle(obs)}
-                                className="p-1 rounded hover:bg-green-50 text-gray-400 hover:text-green-600 transition-colors"
-                                title="标记为已解决"
-                              >
-                                <CheckCircle2 className="h-3.5 w-3.5" />
-                              </button>
-                            )}
-                            {/* P0-4: 删除按钮（已解决才能删除） */}
-                            {obs.is_resolved && (
-                              <button
-                                onClick={() => handleDeleteObstacle(obs.id)}
-                                className="p-1 rounded hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors"
-                                title="删除"
-                              >
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </button>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )
-                })
-              )}
-            </div>
-            {taskObstacles.length > 0 && (
-              <p className="text-xs text-muted-foreground">
-                共 {taskObstacles.length} 条阻碍 · {taskObstacles.filter(o => !o.is_resolved).length} 条待解决
-                {taskObstacles.filter(o => !o.is_resolved && Math.floor((Date.now() - new Date(o.created_at).getTime()) / 86400000) > 7).length > 0 && (
-                  <span className="ml-1.5 text-red-600 font-medium">
-                    · {taskObstacles.filter(o => !o.is_resolved && Math.floor((Date.now() - new Date(o.created_at).getTime()) / 86400000) > 7).length} 条长期阻碍
+                      .join(' → ')}
                   </span>
                 )}
-              </p>
-            )}
+              </div>
+            </div>
           </div>
-          <DialogFooter className="gap-2">
-            <Button variant="outline" onClick={() => setObstacleDialogOpen(false)}>关闭</Button>
-            <Button onClick={handleAddObstacle} disabled={!newObstacleTitle.trim()}>
-              <Plus className="h-4 w-4 mr-1" />
-              保存阻碍
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        )}
+        {viewMode === 'timeline' ? (
+          <div className="p-4 pt-0">
+            <TaskTimelineView
+              ref={timelineViewRef}
+              rows={filteredFlatList}
+              collapsed={collapsed}
+              selectedTaskId={selectedTask?.id}
+              highlightTaskId={highlightTaskId}
+              scale={timelineScale}
+              compareMode={timelineCompareMode}
+              baselineOptions={baselineOptions}
+              baselineVersionId={timelineBaselineVersionId}
+              baselineLoading={baselineLoading}
+              onScaleChange={setTimelineScale}
+              onCompareModeChange={setTimelineCompareMode}
+              onBaselineVersionIdChange={setTimelineBaselineVersionId}
+              onToggleCollapse={toggleCollapse}
+              onSelectTask={(task) => setSelectedTask((previous) => (previous?.id === task.id ? null : task))}
+              isOnCriticalPath={isOnCriticalPath}
+            />
+          </div>
+        ) : (
+          <DndContext sensors={dndSensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+            <SortableContext items={filteredFlatList.map((node) => node.id)} strategy={verticalListSortingStrategy}>
+              <GanttTaskRows
+                tasks={tasks as Task[]}
+                flatList={flatList}
+                filteredFlatList={filteredFlatList}
+                collapsed={collapsed}
+                selectedIds={selectedIds}
+                expandedConditionTaskId={expandedConditionTaskId}
+                inlineConditionsMap={inlineConditionsMap}
+                taskProgressSnapshot={taskProgressSnapshot}
+                rolledProgressMap={rolledProgressMap}
+                inlineProgressTaskId={inlineProgressTaskId}
+                inlineProgressValue={inlineProgressValue}
+                inlineTitleTaskId={inlineTitleTaskId}
+                inlineTitleValue={inlineTitleValue}
+                onClearFilters={clearAllFilters}
+                onToggleCollapse={toggleCollapse}
+                onToggleSelect={toggleSelect}
+                onSelectTask={(task) => setSelectedTask((previous) => (previous?.id === task.id ? null : task))}
+                onOpenMilestoneDialog={(task) => {
+                  setMilestoneTargetTask(task)
+                  setMilestoneDialogOpen(true)
+                }}
+                onOpenEditDialog={openEditDialog}
+                onOpenConditionDialog={openConditionDialog}
+                onOpenObstacleDialog={openObstacleDialog}
+                onDeleteTask={handleDeleteTask}
+                onStatusChange={handleStatusChange}
+                onToggleInlineConditions={toggleInlineConditions}
+                onToggleCondition={handleToggleCondition}
+                dependencyChainIds={dependencyChainIds}
+                onHoverTaskId={setHoveredTaskId}
+                onStartInlineTitleEdit={(task) => {
+                  setInlineTitleTaskId(task.id)
+                  setInlineTitleValue(task.title || task.name || '')
+                }}
+                onInlineTitleValueChange={setInlineTitleValue}
+                onInlineTitleSave={handleInlineTitleSave}
+                onCancelInlineTitleEdit={() => setInlineTitleTaskId(null)}
+                onStartInlineProgressEdit={(task) => {
+                  if (blockedProgressTaskIds.has(task.id)) {
+                    toast({ title: '仍有未满足条件，先处理条件后再继续填报进度。', variant: 'destructive' })
+                    return
+                  }
+                  setInlineProgressTaskId(task.id)
+                  setInlineProgressValue(task.progress || 0)
+                }}
+                onInlineProgressValueChange={setInlineProgressValue}
+                onInlineProgressSave={handleInlineProgressSave}
+                onCancelInlineProgressEdit={() => setInlineProgressTaskId(null)}
+                onViewTaskSummary={handleViewTaskSummary}
+                onDeleteTaskFromContextMenu={(task) => handleDeleteTask(task.id)}
+                onMarkCriticalPathAttention={(taskId) => void handleCreateCriticalPathOverride({ taskId, mode: 'manual_attention' })}
+                onInsertBeforeChain={(taskId) => void handleCreateCriticalPathOverride({ taskId, mode: 'manual_insert' })}
+                onInsertAfterChain={(taskId) => void handleCreateCriticalPathOverride({ taskId, mode: 'manual_insert' })}
+                onRemoveCriticalPathOverride={handleDeleteCriticalPathOverride}
+                getBusinessStatus={getBusinessStatus}
+                getCriticalPathTask={(taskId) => criticalPathTaskMap.get(taskId) ?? null}
+                isOnCriticalPath={isOnCriticalPath}
+                getTaskFloat={getTaskFloat}
+              />
+            </SortableContext>
+          </DndContext>
+        )}
+      </Card>
+        </div>{/* 瀹革缚鏅堕崚妤勩€冪紒鎾存将 */}
 
-      {/* P1-7: 新建任务后提示添加开工条件 */}
-      <Dialog open={!!newTaskConditionPromptId} onOpenChange={(open) => { if (!open) setNewTaskConditionPromptId(null) }}>
-        <DialogContent className="sm:max-w-[380px]">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <ShieldCheck className="h-4 w-4 text-green-600" />
-              需要设置开工条件吗？
-            </DialogTitle>
-          </DialogHeader>
-          <p className="text-sm text-muted-foreground py-2">
-            任务已创建。如果该任务有尚未满足的前提条件（如材料到位、许可证办理等），可以现在添加开工条件来跟踪进度。
-          </p>
-          <DialogFooter className="gap-2">
-            <Button variant="outline" onClick={() => setNewTaskConditionPromptId(null)}>
-              暂不设置
-            </Button>
-            <Button onClick={() => {
-              const taskId = newTaskConditionPromptId
-              setNewTaskConditionPromptId(null)
-              if (taskId) {
-                const task = tasks.find(t => t.id === taskId)
-                if (task) openConditionDialog(task as unknown as Task)
+        {selectedTask && (
+          <aside data-testid="task-workspace-layer-l5" className="space-y-4">
+            {/* Guardrail UI remains in TaskDetailPanel:
+                gantt-delay-request-submit / gantt-delay-request-withdraw / 已有待审批申请，提交按钮已禁用 */}
+            <Suspense
+              fallback={
+                <Card variant="detail">
+                  <CardContent className="p-4">
+                    <LoadingState label="正在加载任务详情" className="min-h-[18rem]" />
+                  </CardContent>
+                </Card>
               }
-            }}>
-              <ShieldCheck className="h-4 w-4 mr-1.5" />
-              添加开工条件
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+            >
+              <LazyTaskDetailPanel
+                selectedTask={selectedTask}
+                onClose={() => setSelectedTask(null)}
+                getBusinessStatus={getBusinessStatus}
+                onEdit={openEditDialog}
+                onOpenCondition={openConditionDialog}
+                onOpenObstacle={openObstacleDialog}
+                criticalPathSummaryText={criticalPathSummaryText}
+                criticalPathError={criticalPathError}
+                selectedCriticalPathTask={selectedCriticalPathTask}
+                onOpenCriticalPathDialog={() => handleOpenCriticalPathDialog(selectedTask.id)}
+                delayRequests={selectedTaskDelayRequests}
+                delayRequestsLoading={delayRequestsLoading}
+                pendingDelayRequest={pendingDelayRequest}
+                rejectedDelayRequest={rejectedDelayRequest}
+                duplicateRejectedReason={duplicateRejectedReason}
+                baselineOptions={baselineOptions}
+                baselineLoading={baselineLoading}
+                delayRequestForm={delayRequestForm}
+                delayFormErrors={delayFormErrors}
+                delayRequestSubmitting={delayRequestSubmitting}
+                delayRequestWithdrawingId={delayRequestWithdrawingId}
+                delayRequestReviewingId={delayRequestReviewingId}
+                delayImpactDays={delayImpactDays}
+                delayImpactSummary={delayImpactSummary}
+                onDelayRequestFormChange={(field, value) => {
+                  setDelayFormErrors((previous) => ({
+                    ...previous,
+                    [field]: undefined,
+                    form: undefined,
+                  }))
+                  setDelayRequestForm((previous) => ({
+                    ...previous,
+                    [field]: value,
+                  }))
+                }}
+                onSubmitDelayRequest={handleSubmitDelayRequest}
+                onWithdrawDelayRequest={handleWithdrawDelayRequest}
+                onApproveDelayRequest={() => pendingDelayRequest && void handleReviewDelayRequest(pendingDelayRequest.id, 'approve')}
+                onRejectDelayRequest={() => pendingDelayRequest && void handleReviewDelayRequest(pendingDelayRequest.id, 'reject')}
+                canReviewDelayRequest={canAdminForceSatisfyCondition}
+                onOpenChangeLogs={() => navigate(`/projects/${id}/reports?view=change_log&taskId=${selectedTask.id}`)}
+              />
+            </Suspense>
+          </aside>
+        )}
+      </div>{}
 
-      {/* 通用确认弹窗（替代 window.confirm） */}
-      <Dialog open={confirmDialog.open} onOpenChange={(open) => !open && setConfirmDialog(prev => ({ ...prev, open: false }))}>
-        <DialogContent className="max-w-sm">
-          <DialogHeader>
-            <DialogTitle>{confirmDialog.title}</DialogTitle>
-          </DialogHeader>
-          <p className="text-sm text-muted-foreground py-2">{confirmDialog.message}</p>
-          <DialogFooter className="gap-2">
-            <Button variant="outline" onClick={() => setConfirmDialog(prev => ({ ...prev, open: false }))}>
-              取消
-            </Button>
-            <Button variant="destructive" onClick={() => {
-              setConfirmDialog(prev => ({ ...prev, open: false }))
-              confirmDialog.onConfirm()
-            }}>
-              确定
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {criticalPathDialogOpen && (
+        <Suspense fallback={null}>
+          <LazyCriticalPathDialog
+            open={criticalPathDialogOpen}
+            onOpenChange={(open) => {
+              setCriticalPathDialogOpen(open)
+              if (!open) setCriticalPathFocusTaskId(null)
+            }}
+            projectName={currentProject?.name}
+            tasks={tasks as Task[]}
+            snapshot={criticalPathSummary?.snapshot ?? null}
+            overrides={criticalPathOverrides}
+            focusTaskId={criticalPathFocusTaskId}
+            loading={criticalPathDialogLoading}
+            error={criticalPathError}
+            actionLoading={criticalPathActionLoading}
+            onRefresh={handleRefreshCriticalPath}
+            onCreateOverride={handleCreateCriticalPathOverride}
+            onDeleteOverride={handleDeleteCriticalPathOverride}
+          />
+        </Suspense>
+      )}
 
-      {/* BatchActionBar — 批量操作浮动条（I02） */}
+      {shouldRenderGanttDialogs && (
+        <Suspense fallback={null}>
+          <LazyGanttViewDialogs
+            dialogOpen={dialogOpen}
+            setDialogOpen={setDialogOpen}
+            editingTask={editingTask as Task | null}
+            newTaskParentId={newTaskParentId}
+            tasks={tasks as Task[]}
+            formData={formData}
+            setFormData={setFormData}
+            taskFormErrors={taskFormErrors}
+            setTaskFormErrors={setTaskFormErrors}
+            projectMembers={projectMembers}
+            participantUnits={participantUnits}
+            onOpenParticipantUnits={openParticipantUnitsDialog}
+            aiDurationLoading={aiDurationLoading}
+            aiDurationSuggestion={aiDurationSuggestion}
+            fetchAiDurationSuggestion={fetchAiDurationSuggestion}
+            applyAiDuration={applyAiDuration}
+            handleDependencyChange={handleDependencyChange}
+            handleSaveTask={handleSaveTask}
+            taskSaving={taskSaving}
+            liveCheckSummary={liveCheckSummary}
+            liveCheckLoading={liveCheckLoading}
+            progressInputBlocked={progressInputBlocked}
+            progressInputHint={progressInputHint}
+            milestoneOptions={milestoneOptions as Task[]}
+            isOnCriticalPath={isOnCriticalPath}
+            conflictOpen={conflictOpen}
+            setConflictOpen={setConflictOpen}
+            conflictData={conflictData as { localVersion: Task; serverVersion: Task } | null}
+            handleKeepLocal={handleKeepLocal}
+            handleKeepServer={handleKeepServer}
+            handleMerge={handleMerge}
+            milestoneDialogOpen={milestoneDialogOpen}
+            setMilestoneDialogOpen={setMilestoneDialogOpen}
+            milestoneTargetTask={milestoneTargetTask as Task | null}
+            handleSelectMilestoneLevel={handleSelectMilestoneLevel}
+            conditionDialogOpen={conditionDialogOpen}
+            setConditionDialogOpen={setConditionDialogOpen}
+            conditionTask={conditionTask as Task | null}
+            conditionsLoading={conditionsLoading}
+            taskConditions={taskConditions}
+            conditionPrecedingTasks={conditionPrecedingTasks}
+            newConditionName={newConditionName}
+            setNewConditionName={setNewConditionName}
+            newConditionType={newConditionType}
+            setNewConditionType={setNewConditionType}
+            newConditionTargetDate={newConditionTargetDate}
+            setNewConditionTargetDate={setNewConditionTargetDate}
+            newConditionDescription={newConditionDescription}
+            setNewConditionDescription={setNewConditionDescription}
+            newConditionResponsibleUnit={newConditionResponsibleUnit}
+            setNewConditionResponsibleUnit={setNewConditionResponsibleUnit}
+            newConditionPrecedingTaskIds={newConditionPrecedingTaskIds}
+            setNewConditionPrecedingTaskIds={setNewConditionPrecedingTaskIds}
+            handleAddCondition={handleAddCondition}
+            handleToggleCondition={handleToggleCondition}
+            handleDeleteCondition={handleDeleteCondition}
+            handleAdminForceSatisfyCondition={handleAdminForceSatisfyCondition}
+            forceSatisfyDialogOpen={forceSatisfyDialogOpen}
+            setForceSatisfyDialogOpen={setForceSatisfyDialogOpen}
+            forceSatisfyCondition={forceSatisfyCondition}
+            forceSatisfyReason={forceSatisfyReason}
+            setForceSatisfyReason={setForceSatisfyReason}
+            confirmAdminForceSatisfyCondition={confirmAdminForceSatisfyCondition}
+            canAdminForceSatisfyCondition={canAdminForceSatisfyCondition}
+            obstacleDialogOpen={obstacleDialogOpen}
+            setObstacleDialogOpen={setObstacleDialogOpen}
+            obstacleTask={obstacleTask as Task | null}
+            obstaclesLoading={obstaclesLoading}
+            taskObstacles={taskObstacles}
+            newObstacleTitle={newObstacleTitle}
+            setNewObstacleTitle={setNewObstacleTitle}
+            newObstacleSeverity={newObstacleSeverity}
+            setNewObstacleSeverity={setNewObstacleSeverity}
+            newObstacleExpectedResolutionDate={newObstacleExpectedResolutionDate}
+            setNewObstacleExpectedResolutionDate={setNewObstacleExpectedResolutionDate}
+            newObstacleResolutionNotes={newObstacleResolutionNotes}
+            setNewObstacleResolutionNotes={setNewObstacleResolutionNotes}
+            editingObstacleId={editingObstacleId}
+            setEditingObstacleId={setEditingObstacleId}
+            editingObstacleTitle={editingObstacleTitle}
+            setEditingObstacleTitle={setEditingObstacleTitle}
+            editingObstacleSeverity={editingObstacleSeverity}
+            setEditingObstacleSeverity={setEditingObstacleSeverity}
+            editingObstacleExpectedResolutionDate={editingObstacleExpectedResolutionDate}
+            setEditingObstacleExpectedResolutionDate={setEditingObstacleExpectedResolutionDate}
+            editingObstacleResolutionNotes={editingObstacleResolutionNotes}
+            setEditingObstacleResolutionNotes={setEditingObstacleResolutionNotes}
+            handleAddObstacle={handleAddObstacle}
+            handleResolveObstacle={handleResolveObstacle}
+            handleDeleteObstacle={handleDeleteObstacle}
+            handleSaveObstacleEdit={handleSaveObstacleEdit}
+            onOpenRiskWorkspaceForObstacle={(obstacle) => navigate(`/projects/${id}/risks?stream=problems&source=obstacle_escalated&obstacleId=${encodeURIComponent(String(obstacle.id || ''))}`)}
+            newTaskConditionPromptId={newTaskConditionPromptId}
+            setNewTaskConditionPromptId={setNewTaskConditionPromptId}
+            openConditionDialogByTaskId={(taskId) => {
+              const task = tasks.find((item) => item.id === taskId)
+              if (task) openConditionDialog(task as Task)
+            }}
+            confirmDialog={confirmDialog}
+            setConfirmDialog={setConfirmDialog}
+          />
+        </Suspense>
+      )}
+      <ParticipantUnitsDialog
+        open={participantUnitsOpen}
+        onOpenChange={(open) => {
+          setParticipantUnitsOpen(open)
+          if (!open) {
+            setParticipantUnitDraft(createEmptyParticipantUnitDraft(id))
+          }
+        }}
+        loading={participantUnitsLoading}
+        saving={participantUnitSaving}
+        units={participantUnits}
+        draft={participantUnitDraft}
+        setDraft={setParticipantUnitDraft}
+        onSubmit={() => void handleParticipantUnitSubmit()}
+        onEdit={handleParticipantUnitEdit}
+        onDelete={(unit) => void handleParticipantUnitDelete(unit)}
+        onCreateNew={handleParticipantUnitCreateNew}
+      />
+      <DeleteProtectionDialog
+        open={Boolean(deleteGuardTarget)}
+        onOpenChange={(open) => {
+          if (!open) closeDeleteGuard()
+        }}
+        title={
+          deleteGuardTarget
+            ? deleteGuardTarget.blocked
+              ? deleteGuardTarget.kind === 'task'
+                ? '任务暂不可删除'
+                : '阻碍记录暂不可删除'
+              : deleteGuardTarget.kind === 'task'
+                ? '删除任务'
+                : '删除阻碍记录'
+            : '删除记录'
+        }
+        description={
+          deleteGuardTarget
+            ? deleteGuardTarget.blocked
+              ? deleteGuardTarget.message || '当前记录仍被链路引用，暂时无法删除。'
+              : deleteGuardTarget.kind === 'task'
+                ? `确认删除“${deleteGuardTarget.title}”吗？删除后会移除任务行及其入口。`
+                : `确认删除“${deleteGuardTarget.title}”吗？删除后会移除该条阻碍记录。`
+            : '确认删除当前记录。'
+        }
+        warning={
+          deleteGuardTarget
+            ? deleteGuardTarget.blocked
+              ? deleteGuardTarget.warning || '如果还需要保留执行留痕，请直接使用“关闭此记录”；若确实要删除，请先解除引用链路后再试。'
+              : deleteGuardTarget.kind === 'task'
+                ? '若当前任务仍在执行链路中，建议优先使用“关闭此记录”转为完成态，避免丢失留痕。'
+                : '若当前阻碍仍在跟踪链路中，建议优先使用“关闭此记录”转为已解决。'
+            : undefined
+        }
+        confirmLabel={deleteGuardTarget?.blocked ? '知道了' : deleteGuardSubmitting ? '删除中...' : '确认删除'}
+        secondaryActionLabel={
+          deleteGuardTarget
+            ? deleteGuardTarget.details?.close_action?.label || '关闭此记录'
+            : undefined
+        }
+        secondaryActionLoading={deleteGuardSecondarySubmitting}
+        loading={deleteGuardSubmitting}
+        onSecondaryAction={() => {
+          if (!deleteGuardTarget) return
+          if (deleteGuardTarget.kind === 'task') {
+            void handleCloseTaskRecord(deleteGuardTarget.id)
+            return
+          }
+          void handleCloseObstacleRecord(deleteGuardTarget.id)
+        }}
+        onConfirm={() => void handleConfirmDeleteGuard()}
+        testId="gantt-delete-protection-dialog"
+      />
+      <ConditionWarningModal
+        open={Boolean(conditionWarningTarget)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setConditionWarningTarget(null)
+          }
+        }}
+        projectId={id}
+        taskTitle={conditionWarningTarget?.taskTitle}
+        pendingConditionCount={conditionWarningTarget?.pendingConditionCount}
+      />
       <BatchActionBar
         selectedCount={selectedIds.size}
         onClear={() => setSelectedIds(new Set())}
@@ -3386,6 +3976,7 @@ export default function GanttView() {
             icon: CheckCircle2,
             onClick: handleBatchComplete,
             disabled: selectedIds.size === 0,
+            testId: 'gantt-batch-complete',
           },
           {
             label: '批量删除',
@@ -3393,9 +3984,13 @@ export default function GanttView() {
             variant: 'destructive',
             onClick: handleBatchDelete,
             disabled: selectedIds.size === 0,
+            testId: 'gantt-batch-delete',
           },
         ]}
       />
     </div>
   )
 }
+
+
+

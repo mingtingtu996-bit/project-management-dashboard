@@ -4,6 +4,7 @@ import {
   buildProjectTaskProgressSnapshot,
   calculateProjectHealthScore,
   getTaskBusinessStatus,
+  TASK_STATUS_THEME,
 } from '../taskBusinessStatus'
 
 describe('taskBusinessStatus', () => {
@@ -50,28 +51,28 @@ describe('taskBusinessStatus', () => {
         { id: 'done', status: 'completed', progress: 100 },
         { conditionSummary: { total: 0, satisfied: 0 }, activeObstacleCount: 0 },
       ),
-    ).toEqual({ code: 'completed', label: '已完成' })
+    ).toEqual(TASK_STATUS_THEME.completed)
 
     expect(
       getTaskBusinessStatus(
         { id: 'blocked', status: 'in_progress', progress: 50 },
         { conditionSummary: { total: 0, satisfied: 0 }, activeObstacleCount: 2 },
       ),
-    ).toEqual({ code: 'blocked', label: '进行中(有阻碍)' })
+    ).toEqual(TASK_STATUS_THEME.in_progress)
 
     expect(
       getTaskBusinessStatus(
         { id: 'pending', status: 'todo', progress: 0 },
         { conditionSummary: { total: 2, satisfied: 1 }, activeObstacleCount: 0 },
       ),
-    ).toEqual({ code: 'pending_conditions', label: '待开工' })
+    ).toEqual(TASK_STATUS_THEME.pending_conditions)
 
     expect(
       getTaskBusinessStatus(
         { id: 'ready', status: 'todo', progress: 0 },
         { conditionSummary: { total: 1, satisfied: 1 }, activeObstacleCount: 0 },
       ),
-    ).toEqual({ code: 'ready', label: '可开工' })
+    ).toEqual(TASK_STATUS_THEME.ready)
   })
 
   it('matches the fallback health score formula used by the unified project summary', () => {

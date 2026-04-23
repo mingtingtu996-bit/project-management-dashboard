@@ -4,7 +4,6 @@
  */
 
 // Sentry 条件导入 - 如果未安装则跳过
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 let Sentry: any = null
 try {
   Sentry = require('@sentry/react')

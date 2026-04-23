@@ -70,19 +70,19 @@ export function RoleGuard({ children, roles, fallback = null }: RoleGuardProps) 
  * 管理员专属组件
  */
 export function AdminOnly({ children, fallback = null }: { children: ReactNode; fallback?: ReactNode }) {
-  return <RoleGuard roles={['admin']} fallback={fallback}>{children}</RoleGuard>
+  return <RoleGuard roles={['owner']} fallback={fallback}>{children}</RoleGuard>
 }
 
 /**
  * 编辑者及以上权限组件
  */
 export function EditorAndAbove({ children, fallback = null }: { children: ReactNode; fallback?: ReactNode }) {
-  return <RoleGuard roles={['admin', 'editor']} fallback={fallback}>{children}</RoleGuard>
+  return <RoleGuard roles={['owner', 'editor']} fallback={fallback}>{children}</RoleGuard>
 }
 
 /**
  * 访客不可见组件 - 非访客可见
  */
 export function MemberOnly({ children, fallback = null }: { children: ReactNode; fallback?: ReactNode }) {
-  return <RoleGuard roles={['admin', 'editor', 'guest']} fallback={fallback}>{children}</RoleGuard>
+  return <RoleGuard roles={['owner', 'editor', 'viewer']} fallback={fallback}>{children}</RoleGuard>
 }

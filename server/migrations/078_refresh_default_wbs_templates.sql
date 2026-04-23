@@ -1,0 +1,268 @@
+-- Migration 078: refresh built-in WBS templates with real-estate-oriented engineering breakdowns
+-- Purpose:
+--   1. Replace coarse legacy presets with practical engineering-only building templates
+--   2. Keep selectable built-in templates aligned with current WBS quality expectations
+-- Scope:
+--   - Residential high-rise (basement + tower)
+--   - Commercial mixed-use / office shell-and-core
+--   - Industrial steel structure factory / warehouse
+
+DELETE FROM wbs_templates
+WHERE created_by IS NULL
+  AND template_name IN (
+    '住宅标准WBS模板',
+    '商业综合体WBS模板',
+    '工业厂房WBS模板',
+    '市政道路WBS模板',
+    '高层住宅（地库+塔楼）WBS模板',
+    '商业办公综合体（塔楼+裙房）WBS模板',
+    '钢结构厂房/仓储WBS模板',
+    '公共建筑（学校/医院）WBS模板',
+    '学校公共建筑WBS模板',
+    '医院公共建筑WBS模板'
+  );
+
+INSERT INTO wbs_templates (template_name, template_type, description, wbs_nodes, is_default, created_by)
+VALUES
+(
+  '高层住宅（地库+塔楼）WBS模板',
+  '住宅',
+  '面向房地产住宅交付主链，覆盖场地、地下室、主体、机电、外立面、室外配套和专项验收，不含拿地、营销、招商等非工程节点。',
+  $$[
+    {"id":"R1","name":"场地准备与测量","reference_days":22,"children":[
+      {"id":"R1-1","name":"三通一平与场地移交","reference_days":7},
+      {"id":"R1-2","name":"围挡临建与临水临电","reference_days":9},
+      {"id":"R1-3","name":"控制网复核与轴线放样","reference_days":6}
+    ]},
+    {"id":"R2","name":"基坑支护与土方","reference_days":48,"children":[
+      {"id":"R2-1","name":"围护桩/支护体系施工","reference_days":14},
+      {"id":"R2-2","name":"降水井及基坑监测","reference_days":11},
+      {"id":"R2-3","name":"土方开挖与外运","reference_days":15},
+      {"id":"R2-4","name":"垫层与防水基层","reference_days":8}
+    ]},
+    {"id":"R3","name":"地基基础及地下室结构","reference_days":82,"is_milestone":true,"children":[
+      {"id":"R3-1","name":"工程桩与地基处理","reference_days":20},
+      {"id":"R3-2","name":"承台/筏板及基础梁","reference_days":22},
+      {"id":"R3-3","name":"地下室底板与外墙结构","reference_days":24},
+      {"id":"R3-4","name":"地下室顶板、防水与回填","reference_days":16}
+    ]},
+    {"id":"R4","name":"主体结构","reference_days":178,"is_milestone":true,"children":[
+      {"id":"R4-1","name":"塔楼标准层结构循环","reference_days":128},
+      {"id":"R4-2","name":"屋面层及机房层结构","reference_days":18},
+      {"id":"R4-3","name":"楼梯、构造柱与零星现浇","reference_days":14},
+      {"id":"R4-4","name":"主体结构实测实量与修补","reference_days":18}
+    ]},
+    {"id":"R5","name":"二次结构与屋面工程","reference_days":74,"children":[
+      {"id":"R5-1","name":"砌体及二次结构","reference_days":26},
+      {"id":"R5-2","name":"抹灰基层与门洞收口","reference_days":20},
+      {"id":"R5-3","name":"屋面找坡、保温与防水","reference_days":16},
+      {"id":"R5-4","name":"烟风道、栏杆预埋与构件安装","reference_days":12}
+    ]},
+    {"id":"R6","name":"机电安装","reference_days":126,"children":[
+      {"id":"R6-1","name":"给排水及消防立管","reference_days":26},
+      {"id":"R6-2","name":"桥架配管与配线","reference_days":31},
+      {"id":"R6-3","name":"通风防排烟与暖通末端","reference_days":24},
+      {"id":"R6-4","name":"电梯设备安装","reference_days":16},
+      {"id":"R6-5","name":"机房设备、户内末端与调试准备","reference_days":29}
+    ]},
+    {"id":"R7","name":"外立面及门窗","reference_days":78,"children":[
+      {"id":"R7-1","name":"外墙基层与保温系统","reference_days":18},
+      {"id":"R7-2","name":"铝合金门窗及栏杆安装","reference_days":24},
+      {"id":"R7-3","name":"外墙涂料/真石漆与线条收口","reference_days":20},
+      {"id":"R7-4","name":"屋面泛水、百叶与外立面收边","reference_days":16}
+    ]},
+    {"id":"R8","name":"公区与户内交付面","reference_days":96,"children":[
+      {"id":"R8-1","name":"公共区域精装","reference_days":28},
+      {"id":"R8-2","name":"户内地面墙顶与固定家具基层","reference_days":34},
+      {"id":"R8-3","name":"洁具五金、灯具面板与户内门安装","reference_days":18},
+      {"id":"R8-4","name":"分户验收、整改与成品保护","reference_days":16}
+    ]},
+    {"id":"R9","name":"室外综合配套","reference_days":64,"children":[
+      {"id":"R9-1","name":"室外雨污、给水与电力管网","reference_days":24},
+      {"id":"R9-2","name":"道路硬景、消防登高面与停车位","reference_days":18},
+      {"id":"R9-3","name":"景观绿化与海绵设施","reference_days":14},
+      {"id":"R9-4","name":"围墙大门、照明与标识","reference_days":8}
+    ]},
+    {"id":"R10","name":"专项验收与交付","reference_days":42,"is_milestone":true,"children":[
+      {"id":"R10-1","name":"机电单体调试与联调联试","reference_days":12},
+      {"id":"R10-2","name":"消防、电梯、人防、节能专项验收","reference_days":16},
+      {"id":"R10-3","name":"竣工验收与备案","reference_days":9},
+      {"id":"R10-4","name":"资料移交与交付准备","reference_days":5}
+    ]}
+  ]$$::jsonb,
+  TRUE,
+  NULL
+),
+(
+  '商业办公综合体（塔楼+裙房）WBS模板',
+  '商业',
+  '适用于商业办公综合体、写字楼与带裙房的房建项目，突出地库、主体、幕墙、机电、精装和联调验收，不包含招商、开业筹备等非工程工作。',
+  $$[
+    {"id":"C1","name":"场地准备与基坑工程","reference_days":52,"children":[
+      {"id":"C1-1","name":"围挡临建与场地平整","reference_days":11},
+      {"id":"C1-2","name":"支护、降水与监测","reference_days":16},
+      {"id":"C1-3","name":"土方开挖与外运","reference_days":15},
+      {"id":"C1-4","name":"垫层及基础防水基层","reference_days":10}
+    ]},
+    {"id":"C2","name":"基础与地下室结构","reference_days":96,"is_milestone":true,"children":[
+      {"id":"C2-1","name":"桩基及承台/筏板","reference_days":28},
+      {"id":"C2-2","name":"地下室结构","reference_days":34},
+      {"id":"C2-3","name":"机房、设备基础与后浇带","reference_days":16},
+      {"id":"C2-4","name":"外墙防水、肥槽回填与顶板覆土","reference_days":18}
+    ]},
+    {"id":"C3","name":"地上主体结构","reference_days":208,"is_milestone":true,"children":[
+      {"id":"C3-1","name":"塔楼核心筒/框架结构","reference_days":112},
+      {"id":"C3-2","name":"裙房及大空间结构","reference_days":46},
+      {"id":"C3-3","name":"机房屋面及钢结构雨棚","reference_days":20},
+      {"id":"C3-4","name":"二次结构与楼梯间穿插","reference_days":30}
+    ]},
+    {"id":"C4","name":"外立面与屋面","reference_days":134,"children":[
+      {"id":"C4-1","name":"幕墙埋件与龙骨","reference_days":28},
+      {"id":"C4-2","name":"玻璃/铝板/石材幕墙安装","reference_days":48},
+      {"id":"C4-3","name":"外立面收口与泛光预留","reference_days":24},
+      {"id":"C4-4","name":"屋面保温、防水及机房外装","reference_days":34}
+    ]},
+    {"id":"C5","name":"机电安装","reference_days":172,"children":[
+      {"id":"C5-1","name":"机电深化与综合管线排布","reference_days":16},
+      {"id":"C5-2","name":"给排水及消防系统","reference_days":36},
+      {"id":"C5-3","name":"供配电及照明","reference_days":42},
+      {"id":"C5-4","name":"暖通空调与防排烟","reference_days":46},
+      {"id":"C5-5","name":"弱电智能化、BA 与安防","reference_days":18},
+      {"id":"C5-6","name":"电梯扶梯安装","reference_days":14}
+    ]},
+    {"id":"C6","name":"公区精装与机房末端","reference_days":124,"children":[
+      {"id":"C6-1","name":"大堂与标准层公区精装","reference_days":38},
+      {"id":"C6-2","name":"商业公区地面、吊顶与卫生间","reference_days":34},
+      {"id":"C6-3","name":"机房装修、末端设备与标识","reference_days":24},
+      {"id":"C6-4","name":"收边收口、样板层与成品保护","reference_days":28}
+    ]},
+    {"id":"C7","name":"室外工程与市政接驳","reference_days":72,"children":[
+      {"id":"C7-1","name":"室外综合管网接驳","reference_days":26},
+      {"id":"C7-2","name":"道路广场、卸货区与车行流线","reference_days":20},
+      {"id":"C7-3","name":"景观照明、导视与硬景","reference_days":16},
+      {"id":"C7-4","name":"海绵设施与室外收边","reference_days":10}
+    ]},
+    {"id":"C8","name":"调试验收与移交","reference_days":56,"is_milestone":true,"children":[
+      {"id":"C8-1","name":"机电系统单机调试","reference_days":14},
+      {"id":"C8-2","name":"联调联试与综合调试","reference_days":16},
+      {"id":"C8-3","name":"消防、电梯、防雷、节能专项验收","reference_days":16},
+      {"id":"C8-4","name":"竣工验收、备案与工程移交","reference_days":10}
+    ]}
+  ]$$::jsonb,
+  TRUE,
+  NULL
+),
+(
+  '钢结构厂房/仓储WBS模板',
+  '工业',
+  '适用于厂房、仓储和物流类房建项目，覆盖基础、钢结构、围护、地坪、机电与工艺公用工程、试运转和移交，不包含工艺审批等非工程节点。',
+  $$[
+    {"id":"I1","name":"场地准备与测量","reference_days":22,"children":[
+      {"id":"I1-1","name":"场平碾压与临时道路","reference_days":8},
+      {"id":"I1-2","name":"临建、临水临电与排水组织","reference_days":8},
+      {"id":"I1-3","name":"控制网复核与轴线放样","reference_days":6}
+    ]},
+    {"id":"I2","name":"地基与基础","reference_days":64,"is_milestone":true,"children":[
+      {"id":"I2-1","name":"地基处理与换填","reference_days":16},
+      {"id":"I2-2","name":"独立基础及设备基础","reference_days":22},
+      {"id":"I2-3","name":"地梁、短柱与预埋件","reference_days":14},
+      {"id":"I2-4","name":"基础回填及地坪基层","reference_days":12}
+    ]},
+    {"id":"I3","name":"钢结构主体与围护","reference_days":118,"is_milestone":true,"children":[
+      {"id":"I3-1","name":"钢构件深化设计与加工","reference_days":26},
+      {"id":"I3-2","name":"钢柱钢梁与支撑系统安装","reference_days":34},
+      {"id":"I3-3","name":"檩条、系杆与稳定体系","reference_days":18},
+      {"id":"I3-4","name":"屋面板、墙面板与保温围护","reference_days":24},
+      {"id":"I3-5","name":"门窗、采光带、天沟与落水","reference_days":16}
+    ]},
+    {"id":"I4","name":"室内地坪与装卸配套","reference_days":48,"children":[
+      {"id":"I4-1","name":"地坪钢筋及混凝土","reference_days":16},
+      {"id":"I4-2","name":"耐磨/环氧地坪","reference_days":12},
+      {"id":"I4-3","name":"月台、雨棚与装卸口","reference_days":12},
+      {"id":"I4-4","name":"散水坡道与门口收边","reference_days":8}
+    ]},
+    {"id":"I5","name":"机电与工艺配套","reference_days":98,"children":[
+      {"id":"I5-1","name":"给排水及消防管网","reference_days":24},
+      {"id":"I5-2","name":"供配电、动力照明与接地","reference_days":28},
+      {"id":"I5-3","name":"通风空调与防排烟","reference_days":18},
+      {"id":"I5-4","name":"压缩空气/工艺公用工程预留","reference_days":14},
+      {"id":"I5-5","name":"消防报警、安防与弱电","reference_days":14}
+    ]},
+    {"id":"I6","name":"室外工程","reference_days":42,"children":[
+      {"id":"I6-1","name":"室外雨污、给水与电力接驳","reference_days":16},
+      {"id":"I6-2","name":"园区道路与场地硬化","reference_days":12},
+      {"id":"I6-3","name":"围墙、大门与门卫室","reference_days":9},
+      {"id":"I6-4","name":"绿化与室外收边","reference_days":5}
+    ]},
+    {"id":"I7","name":"调试验收与移交","reference_days":32,"is_milestone":true,"children":[
+      {"id":"I7-1","name":"消防联动与专项检测","reference_days":10},
+      {"id":"I7-2","name":"单机试运转与联动试车","reference_days":10},
+      {"id":"I7-3","name":"竣工验收与资料移交","reference_days":12}
+    ]}
+  ]$$::jsonb,
+  TRUE,
+  NULL
+),
+(
+  '公共建筑（学校/医院）WBS模板',
+  '公共建筑',
+  '适用于学校、医院及其他公共建筑项目，覆盖地下结构、主体、机电、专项系统、功能用房、室外配套和专项验收，不含运营管理等非工程节点。',
+  $$[
+    {"id":"P1","name":"场地准备与测量","reference_days":24,"children":[
+      {"id":"P1-1","name":"场地平整与临设布置","reference_days":8},
+      {"id":"P1-2","name":"临水临电、围挡与交通导改","reference_days":8},
+      {"id":"P1-3","name":"测量控制网与轴线复核","reference_days":8}
+    ]},
+    {"id":"P2","name":"基础与地下结构","reference_days":88,"is_milestone":true,"children":[
+      {"id":"P2-1","name":"基坑支护、降水与监测","reference_days":20},
+      {"id":"P2-2","name":"土方开挖与垫层","reference_days":16},
+      {"id":"P2-3","name":"桩基/筏板及承台基础","reference_days":24},
+      {"id":"P2-4","name":"地下结构、防水与回填","reference_days":28}
+    ]},
+    {"id":"P3","name":"主体结构","reference_days":186,"is_milestone":true,"children":[
+      {"id":"P3-1","name":"主体框架/框剪结构施工","reference_days":124},
+      {"id":"P3-2","name":"大空间及屋面结构","reference_days":26},
+      {"id":"P3-3","name":"楼梯、二次构件与结构修补","reference_days":18},
+      {"id":"P3-4","name":"结构实测实量与中间验收","reference_days":18}
+    ]},
+    {"id":"P4","name":"围护、屋面与门窗","reference_days":86,"children":[
+      {"id":"P4-1","name":"砌体及外围护墙体","reference_days":24},
+      {"id":"P4-2","name":"屋面找坡、保温与防水","reference_days":18},
+      {"id":"P4-3","name":"幕墙/外墙装饰及线条收口","reference_days":22},
+      {"id":"P4-4","name":"门窗、栏杆与采光顶","reference_days":22}
+    ]},
+    {"id":"P5","name":"机电安装","reference_days":144,"children":[
+      {"id":"P5-1","name":"给排水及消防系统","reference_days":30},
+      {"id":"P5-2","name":"供配电、照明与防雷接地","reference_days":32},
+      {"id":"P5-3","name":"暖通空调与防排烟","reference_days":34},
+      {"id":"P5-4","name":"弱电智能化与安防广播","reference_days":24},
+      {"id":"P5-5","name":"电梯及设备机房安装","reference_days":24}
+    ]},
+    {"id":"P6","name":"专项系统与功能用房","reference_days":102,"children":[
+      {"id":"P6-1","name":"净化/医气/厨房等专项预留安装","reference_days":28},
+      {"id":"P6-2","name":"实验室/诊室/教室等功能房配套","reference_days":34},
+      {"id":"P6-3","name":"固定家具、洁具及末端设备安装","reference_days":20},
+      {"id":"P6-4","name":"专项系统调试准备与成品保护","reference_days":20}
+    ]},
+    {"id":"P7","name":"室内装修与室外配套","reference_days":112,"children":[
+      {"id":"P7-1","name":"公共区域精装及吊顶墙地面","reference_days":34},
+      {"id":"P7-2","name":"功能用房精装与收边收口","reference_days":30},
+      {"id":"P7-3","name":"室外综合管网与道路广场","reference_days":28},
+      {"id":"P7-4","name":"景观绿化、标识与附属设施","reference_days":20}
+    ]},
+    {"id":"P8","name":"调试验收与移交","reference_days":52,"is_milestone":true,"children":[
+      {"id":"P8-1","name":"机电单机调试与联调联试","reference_days":14},
+      {"id":"P8-2","name":"消防、电梯、节能等专项验收","reference_days":16},
+      {"id":"P8-3","name":"竣工验收、备案与使用移交","reference_days":12},
+      {"id":"P8-4","name":"资料归档、培训与保修移交","reference_days":10}
+    ]}
+  ]$$::jsonb,
+  TRUE,
+  NULL
+)
+ON CONFLICT (template_name, template_type) DO UPDATE SET
+  description = EXCLUDED.description,
+  wbs_nodes = EXCLUDED.wbs_nodes,
+  is_default = EXCLUDED.is_default,
+  created_by = EXCLUDED.created_by,
+  deleted_at = NULL;

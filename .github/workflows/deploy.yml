@@ -1,172 +1,334 @@
 name: Deploy Project Management System
 
 on:
-  # 推送到main分支时触发
   push:
     branches: [main, master]
-  
-  # 手动触发部署
   workflow_dispatch:
     inputs:
       environment:
-        description: '部署环境'
+        description: Deployment environment
         required: true
-        default: 'production'
+        default: production
         type: choice
         options:
           - preview
           - staging
           - production
 
-jobs:
-  # 代码质量检查
-  quality-check:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-      
-      - name: Setup Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: '18'
-          cache: 'npm'
-          cache-dependency-path: '**/package-lock.json'
-      
-      - name: Install dependencies
-        run: |
-          cd client && npm ci
-          cd ../server && npm ci
-      
-      - name: TypeScript检查
-        run: |
-          cd client && npx tsc --noEmit
-          cd ../server && npx tsc --noEmit
-      
-      - name: Lint检查
-        run: |
-          cd client && npx eslint . --ext .ts,.tsx --max-warnings=0
-          cd ../server && npx eslint . --ext .ts,.tsx --max-warnings=0
-      
-      - name: 运行测试
-        run: |
-          cd client && npm test -- --passWithNoTests
-          cd ../server && npm test -- --passWithNoTests
+concurrency:
+  group: deploy-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
-  # 构建前端
-  build-frontend:
+permissions:
+  contents: read
+
+jobs:
+  client-quality:
+    name: Client Quality Check
     runs-on: ubuntu-latest
-    needs: quality-check
+    timeout-minutes: 20
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
-      
-      - name: Setup Node.js
-        uses: actions/setup-node@v3
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
         with:
-          node-version: '18'
-      
-      - name: 缓存依赖
-        uses: actions/cache@v3
+          node-version: '20'
+          cache: pnpm
+          cache-dependency-path: client/pnpm-lock.yaml
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
         with:
-          path: client/node_modules
-          key: ${{ runner.os }}-node-${{ hashFiles('client/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-node-
-      
-      - name: 安装前端依赖
-        run: cd client && npm ci
-      
-      - name: 构建前端
-        run: cd client && npm run build
+          version: 9
+          run_install: false
+
+      - name: Install client dependencies
+        run: pnpm --dir client install --frozen-lockfile
+
+      - name: Client lint
+        run: pnpm --dir client run lint
+
+      - name: Client typecheck
+        run: pnpm --dir client run typecheck
+
+      - name: Client tests
+        run: pnpm --dir client run test:run
+
+  server-quality:
+    name: Server Quality Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - name: Install server dependencies
+        run: npm ci --workspaces=false
+
+      - name: Server typecheck
+        run: npm run typecheck
+
+      - name: Server executeSQL guard
+        run: npm run guard:execute-sql
+
+      - name: Server tests
+        run: npm test
+
+      - name: Server build
+        run: npm run build
+
+  build-frontend:
+    name: Build Frontend Artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [client-quality, server-quality]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+          cache-dependency-path: client/pnpm-lock.yaml
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+
+      - name: Install client dependencies
+        run: pnpm --dir client install --frozen-lockfile
+
+      - name: Build frontend
+        run: pnpm --dir client run build
         env:
           VITE_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-      
-      - name: 上传构建产物
-        uses: actions/upload-artifact@v3
+
+      - name: Upload frontend build
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-build
+          path: client/dist
+          retention-days: 7
+
+  browser-checks:
+    name: Browser Checks (${{ matrix.suite.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [build-frontend]
+    strategy:
+      fail-fast: false
+      matrix:
+        suite:
+          - name: Shell And Collab
+            key: shell-and-collab
+            script: verify:browser-suite:shell-and-collab
+          - name: Project Chains
+            key: project-chains
+            script: verify:browser-suite:project-chains
+          - name: Planning And Tooling
+            key: planning-and-tooling
+            script: verify:browser-suite:planning-and-tooling
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install root dependencies
+        run: npm ci --no-fund
+
+      - name: Download frontend build
+        uses: actions/download-artifact@v4
         with:
           name: frontend-build
           path: client/dist
 
-  # 部署到Vercel
-  deploy-vercel:
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run browser suite
+        run: npm run ${{ matrix.suite.script }}
+        env:
+          BROWSER_SUITE_KEY: ${{ matrix.suite.key }}
+
+      - name: Publish browser suite summary
+        if: always()
+        run: node scripts/write-browser-suite-summary.mjs tmp-browser-checks/suite-manifest.json >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload browser suite artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-check-${{ matrix.suite.key }}
+          path: tmp-browser-checks
+          if-no-files-found: error
+          retention-days: 5
+
+  browser-checks-summary:
+    name: Browser Checks Overview
     runs-on: ubuntu-latest
-    needs: build-frontend
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    timeout-minutes: 10
+    needs: [browser-checks]
+    if: always()
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
-      
-      - name: 下载构建产物
-        uses: actions/download-artifact@v3
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install root dependencies
+        run: npm ci --no-fund
+
+      - name: Download browser suite artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: browser-check-*
+          path: browser-artifacts
+          merge-multiple: false
+
+      - name: Publish browser checks overview
+        run: node scripts/write-browser-overview-summary.mjs browser-artifacts >> $GITHUB_STEP_SUMMARY
+
+  database-migration:
+    name: Apply Pending Database Migrations
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [server-quality]
+    if: >
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')) ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment != 'preview')
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - name: Install server dependencies
+        run: npm ci --workspaces=false
+
+      - name: Apply pending migrations
+        run: npm run migrate:pending
+        env:
+          SUPABASE_HOST: ${{ secrets.SUPABASE_HOST }}
+          SUPABASE_PORT: ${{ secrets.SUPABASE_PORT }}
+          SUPABASE_DATABASE: ${{ secrets.SUPABASE_DATABASE }}
+          SUPABASE_USER: ${{ secrets.SUPABASE_USER }}
+          SUPABASE_PASSWORD: ${{ secrets.SUPABASE_PASSWORD }}
+
+  deploy-cloudbase:
+    name: Deploy To CloudBase
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [build-frontend, browser-checks, browser-checks-summary, database-migration]
+    env:
+      DEPLOY_TARGET: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || 'production' }}
+    if: >
+      always() &&
+      needs.build-frontend.result == 'success' &&
+      needs.browser-checks.result == 'success' &&
+      needs.browser-checks-summary.result == 'success' &&
+      (needs.database-migration.result == 'success' || needs.database-migration.result == 'skipped') &&
+      (
+        (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')) ||
+        github.event_name == 'workflow_dispatch'
+      ) &&
+      (
+        (secrets.CLOUDBASE_SECRET_ID != '' && secrets.CLOUDBASE_SECRET_KEY != '') ||
+        (secrets.TENCENT_SECRET_ID != '' && secrets.TENCENT_SECRET_KEY != '')
+      ) &&
+      secrets.CLOUDBASE_ENV_ID != ''
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Download frontend build
+        uses: actions/download-artifact@v4
         with:
           name: frontend-build
-          path: client/dist
-      
-      - name: 部署到Vercel
-        uses: amondnet/vercel-action@v20
-        with:
-          vercel-token: ${{ secrets.VERCEL_TOKEN }}
-          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
-          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
-          vercel-args: '--prod'
-          working-directory: client
-      
-      - name: 发送部署通知
+          path: dist
+
+      - name: Install CloudBase CLI
+        run: npm install -g @cloudbase/cli
+
+      - name: Login CloudBase
+        env:
+          CLOUDBASE_SECRET_ID: ${{ secrets.CLOUDBASE_SECRET_ID }}
+          CLOUDBASE_SECRET_KEY: ${{ secrets.CLOUDBASE_SECRET_KEY }}
+          TENCENT_SECRET_ID: ${{ secrets.TENCENT_SECRET_ID }}
+          TENCENT_SECRET_KEY: ${{ secrets.TENCENT_SECRET_KEY }}
+        run: |
+          API_KEY_ID="${CLOUDBASE_SECRET_ID:-$TENCENT_SECRET_ID}"
+          API_KEY="${CLOUDBASE_SECRET_KEY:-$TENCENT_SECRET_KEY}"
+          if [ -z "$API_KEY_ID" ] || [ -z "$API_KEY" ]; then
+            echo "CloudBase credentials are not configured."
+            exit 1
+          fi
+          tcb login \
+            --apiKeyId "$API_KEY_ID" \
+            --apiKey "$API_KEY"
+
+      - name: Deploy frontend
+        run: tcb hosting:deploy dist --envId ${{ secrets.CLOUDBASE_ENV_ID }}
+
+      - name: Deploy backend CloudRun service
+        env:
+          CLOUDBASE_ENV_ID: ${{ secrets.CLOUDBASE_ENV_ID }}
+          CLOUDBASE_BACKEND_SERVICE: project-management-api
+          CLOUDBASE_BACKEND_PORT: '3001'
+        run: node scripts/deploy-cloudbase-backend.mjs
+
+      - name: Send deployment notification
+        if: ${{ secrets.SLACK_WEBHOOK != '' }}
         uses: rtCamp/action-slack-notify@v2
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
           SLACK_CHANNEL: '#deployments'
-          SLACK_COLOR: 'good'
-          SLACK_TITLE: '✅ 房地产工程管理系统已部署'
-          SLACK_MESSAGE: '版本: ${{ github.sha }}\n环境: production\n链接: https://your-app.vercel.app'
-
-  # 部署到腾讯云CloudBase（备用）
-  deploy-cloudbase:
-    runs-on: ubuntu-latest
-    needs: build-frontend
-    if: github.event.inputs.environment == 'staging' || github.event_name == 'workflow_dispatch'
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-      
-      - name: 下载构建产物
-        uses: actions/download-artifact@v3
-        with:
-          name: frontend-build
-          path: dist
-      
-      - name: 安装CloudBase CLI
-        run: npm install -g @cloudbase/cli
-      
-      - name: 登录腾讯云
-        run: |
-          echo "${{ secrets.TENCENT_SECRET_ID }}" | tcb login --apiKeyId "${{ secrets.TENCENT_SECRET_ID }}" --apiKey "${{ secrets.TENCENT_SECRET_KEY }}"
-      
-      - name: 部署前端
-        run: tcb hosting:deploy dist --envId ${{ secrets.CLOUDBASE_ENV_ID }}
-      
-      - name: 部署云函数
-        run: |
-          cd server/functions/api
-          npm ci
-          cd ../../..
-          tcb functions:deploy api --envId ${{ secrets.CLOUDBASE_ENV_ID }}
-
-  # 数据库迁移
-  database-migration:
-    runs-on: ubuntu-latest
-    needs: quality-check
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-      
-      - name: 执行数据库迁移
-        run: |
-          cd server/migrations
-          # 连接到Supabase执行SQL
-          PGPASSWORD="${{ secrets.SUPABASE_PASSWORD }}" psql -h "${{ secrets.SUPABASE_HOST }}" -U "${{ secrets.SUPABASE_USER }}" -d "${{ secrets.SUPABASE_DATABASE }}" -f 001_initial_schema.sql
-          PGPASSWORD="${{ secrets.SUPABASE_PASSWORD }}" psql -h "${{ secrets.SUPABASE_HOST }}" -U "${{ secrets.SUPABASE_USER }}" -d "${{ secrets.SUPABASE_DATABASE }}" -f 002_phase2_tables.sql
-          PGPASSWORD="${{ secrets.SUPABASE_PASSWORD }}" psql -h "${{ secrets.SUPABASE_HOST }}" -U "${{ secrets.SUPABASE_USER }}" -d "${{ secrets.SUPABASE_DATABASE }}" -f 008_fix_phase36_triggers.sql
+          SLACK_COLOR: good
+          SLACK_TITLE: 'Project Management System deployed to CloudBase'
+          SLACK_MESSAGE: 'Commit: ${{ github.sha }}\nEnvironment: ${{ env.DEPLOY_TARGET }}'

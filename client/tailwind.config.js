@@ -6,9 +6,9 @@
 // -----------------------------------------------------------------------------
 // 核心变更：
 // 1. --radius 从 0.5rem(8px) → 0.75rem(12px)，对齐 V4 rounded-xl 统一圆角
-// 2. 新增 design token 颜色别名：brand / status / risk / milestone
+// 2. 清理未使用的自定义颜色/阴影 alias，统一回归 Tailwind 原生色阶与原生阴影
 // 3. 新增动效：fadeIn / skeleton-loading / expand-content / slide-in
-// 4. borderRadius 新增 xl2 对应 rounded-2xl(16px) 少量使用场景
+// 4. borderRadius 新增 card token，并将历史 rounded-2xl 写法统一映射到 12px
 // =============================================================================
 
 export default {
@@ -28,7 +28,7 @@ export default {
     extend: {
       // -----------------------------------------------------------------------
       // 颜色 Token
-      // 规则：shadcn 语义变量保持不变（兼容组件库），在此基础上追加 V4 专用别名
+      // 规则：保留 shadcn 语义变量；页面配色统一直接使用 Tailwind 原生色阶
       // -----------------------------------------------------------------------
       colors: {
         // shadcn 语义变量（不动）
@@ -65,70 +65,19 @@ export default {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))",
         },
-
-        // V4 品牌色别名
-        // 用法：bg-brand-primary / text-brand-primary
-        brand: {
-          primary: "#2563EB",    // blue-600：主按钮、激活态
-          "primary-light": "#EFF6FF", // blue-50：激活背景
-          "primary-ring": "#BFDBFE",  // blue-100：hover ring
-        },
-
-        // V4 状态色别名（进度条/徽章颜色）
-        // 用法：bg-status-done / text-status-delayed
-        status: {
-          done: "#10B981",       // emerald-500：已完成
-          "done-bg": "#D1FAE5",  // emerald-100
-          "done-text": "#065F46",// emerald-800
-          active: "#3B82F6",     // blue-500：进行中
-          "active-bg": "#DBEAFE",
-          "active-text": "#1D4ED8",
-          pending: "#F59E0B",    // amber-500：未开始/待办
-          "pending-bg": "#FEF3C7",
-          "pending-text": "#92400E",
-          delayed: "#EF4444",    // red-500：延期/逾期
-          "delayed-bg": "#FEE2E2",
-          "delayed-text": "#991B1B",
-          blocked: "#FBBF24",    // amber-400：受阻边框
-        },
-
-        // V4 风险等级色别名
-        // 用法：bg-risk-high / border-risk-high
-        risk: {
-          "high-bg": "#FEF2F2",  // red-50
-          "high-border": "#EF4444", // red-500
-          "high-text": "#DC2626",
-          "mid-bg": "#FFF7ED",   // orange-50
-          "mid-border": "#F97316", // orange-500
-          "mid-text": "#C2410C",
-          "low-bg": "#EFF6FF",   // blue-50
-          "low-border": "#3B82F6", // blue-500
-          "low-text": "#1D4ED8",
-        },
-
-        // V4 里程碑层级色别名
-        // 用法：border-ms-lv1 / text-ms-lv1
-        milestone: {
-          lv1: "#F59E0B",        // amber-500：一级
-          lv2: "#3B82F6",        // blue-500：二级
-          lv3: "#9CA3AF",        // gray-400：三级
-        },
-
-        // V4 界面骨架色
-        sidebar: "#111827",      // gray-900：Sidebar 背景
-        "page-bg": "#F9FAFB",    // gray-50：页面背景
       },
 
       // -----------------------------------------------------------------------
       // 圆角 Token
-      // V4 规范：卡片统一 rounded-xl (12px)
+      // V4 规范：卡片统一 12px
       // shadcn 默认 rounded-lg = var(--radius) = 8px → 已在 index.css 改为 0.75rem
       // -----------------------------------------------------------------------
       borderRadius: {
         lg: "var(--radius)",           // shadcn default，现为 0.75rem (12px)
         md: "calc(var(--radius) - 2px)", // 0.625rem (10px)
         sm: "calc(var(--radius) - 4px)", // 0.5rem (8px)
-        xl2: "1rem",                   // 16px，少数大卡片
+        card: "var(--radius)",        // 语义化卡片圆角 token = 12px
+        "2xl": "var(--radius)",       // 历史 rounded-2xl 写法统一回收为 12px
       },
 
       // -----------------------------------------------------------------------
@@ -183,16 +132,6 @@ export default {
         "slide-in-right": "slide-in-right 0.2s ease-out",
       },
 
-      // -----------------------------------------------------------------------
-      // 阴影 Token
-      // V4 规范：卡片用 shadow-sm，hover 升级 shadow-md
-      // 以下是语义别名，直接用 shadow-sm/shadow-md 也可以
-      // -----------------------------------------------------------------------
-      boxShadow: {
-        card: "0 1px 2px 0 rgba(0,0,0,0.05)",       // = shadow-sm
-        "card-hover": "0 4px 6px -1px rgba(0,0,0,0.07)", // = shadow-md
-        "health-glow": "0 0 0 3px rgba(16,185,129,0.15)", // 健康度卡片绿光
-      },
     },
   },
   plugins: [require("tailwindcss-animate")],

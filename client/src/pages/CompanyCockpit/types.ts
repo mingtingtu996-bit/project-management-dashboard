@@ -2,33 +2,53 @@
  * CompanyCockpit 公司驾驶舱共享类型
  *
  * 此文件定义公司驾驶舱各子组件共享的数据类型，
- * 避免在 CompanyCockpit.tsx、MilestoneSection.tsx 等文件中重复定义。
+ * 避免在 CompanyCockpit.tsx 和各拆分组件中重复定义。
  */
 
-import type { Project, Task, Risk, Milestone } from '@/lib/supabase';
+import type { LucideIcon } from 'lucide-react'
+import type { Project } from '@/lib/localDb'
+import type { ProjectSummary } from '@/services/dashboardApi'
+
+export type HealthHistory = {
+  thisMonth: number | null
+  lastMonth: number | null
+  change: number | null
+  lastMonthPeriod?: string | null
+}
+
+export type ProjectFormStatus = '未开始' | '进行中' | '已完成' | '已暂停'
+
+export type CockpitTab = 'all' | 'in_progress' | 'completed' | 'paused'
+
+export type ProjectRow = {
+  project: Project
+  summary: ProjectSummary | null
+  summaryStatus: string
+  healthScore: number
+  hasNextMilestone: boolean
+  milestoneName: string
+  milestoneDate: string | null
+  milestoneDaysRemaining: number | null
+  deliveryDaysRemaining: number | null
+}
+
+export type HeroStatItem = {
+  label: string
+  value: string
+  hint: string
+  icon: LucideIcon
+  tone: string
+}
 
 /**
- * 单个项目的汇总统计数据（用于公司驾驶舱展示）
+ * ProjectStats — 旧版驾驶舱组件使用的聚合统计类型。
+ * 保留以避免破坏已有子组件，不应在新组件中使用。
+ * @deprecated 新组件请使用 ProjectRow 和 ProjectSummary
  */
 export interface ProjectStats {
-  /** 项目基础信息 */
-  project: Project;
-  /** 该项目下所有任务 */
-  tasks: Task[];
-  /** 该项目下所有风险 */
-  risks: Risk[];
-  /** 该项目下所有里程碑 */
-  milestones: Milestone[];
-  /** 健康度分数 (0-100) */
-  health: number;
-  /** 任务总数 */
-  taskCount: number;
-  /** 已完成任务数 */
-  completedCount: number;
-  /** 延期任务数 */
-  delayedCount: number;
-  /** 高/严重风险数 */
-  issueCount: number;
-  /** 待完成里程碑数 */
-  pendingMilestones: number;
+  project: { id: string; name: string; [key: string]: any }
+  milestones: Array<{ title?: string; name?: string; planned_end_date?: string; [key: string]: any }>
+  tasks: Array<any>
+  risks: Array<any>
+  [key: string]: any
 }

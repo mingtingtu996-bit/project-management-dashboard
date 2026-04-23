@@ -1,60 +1,73 @@
-﻿// 椤圭洰绠＄悊绯荤粺 API 鏈嶅姟鍣?
-// Express + TypeScript + Supabase
+﻿// Express + TypeScript + Supabase
 
 import express from 'express'
+import compression from 'compression'
 import cors from 'cors'
 import helmet from 'helmet'
 import rateLimit from 'express-rate-limit'
 import dotenv from 'dotenv'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import { createServer } from 'http'
 
-// 鍔犺浇鐜鍙橀噺
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 dotenv.config({ path: path.resolve(__dirname, '../.env') })
 
-if (process.env.NODE_ENV !== 'test') {
+const shouldBootScheduler = (
+  process.env.NODE_ENV !== 'test'
+  && process.env.SKIP_SCHEDULER_BOOT !== 'true'
+)
+const shouldValidateDatabaseOnBoot = process.env.SKIP_DATABASE_VALIDATE !== 'true'
+
+if (shouldBootScheduler) {
   await import('./scheduler.js')
 }
 
-// 瀵煎叆涓棿浠?
 import { requestLogger, logger } from './middleware/logger.js'
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js'
 import { xssProtection, sanitizeInput } from './middleware/xssProtection.js'
 import { auditLogger } from './middleware/auditLogger.js'
+import { readOnlyCacheMiddleware } from './middleware/httpCache.js'
 
-// 瀵煎叆骞跺惎鍔ㄥ畾鏃朵换鍔¤皟搴﹀櫒
 
-// 瀵煎叆 Supabase 瀹㈡埛绔?
 import { supabase } from './services/dbService.js'
 
-// 鈹€鈹€鈹€ 瀵煎叆璺敱 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
-// 鍩虹妯″潡锛堝師鏈夛級
 import projectsRouter from './routes/projects.js'
 import tasksRouter from './routes/tasks.js'
 import risksRouter from './routes/risks.js'
 import milestonesRouter from './routes/milestones.js'
+import taskBaselinesRouter from './routes/task-baselines.js'
+import monthlyPlansRouter from './routes/monthly-plans.js'
+import progressDeviationRouter from './routes/progress-deviation.js'
 import membersRouter from './routes/members.js'
 import invitationsRouter from './routes/invitations.js'
 
-// 鏂板妯″潡
+// 扩展模块
 import authRouter from './routes/auth.js'
 import authRegisterRouter from './routes/auth-register.js'
 import authLogoutRouter from './routes/auth-logout.js'
 import authMeRouter from './routes/auth-me.js'
 import authChangePasswordRouter from './routes/auth-change-password.js'
 import authProfileRouter from './routes/auth-profile.js'
+import authResetPasswordRouter from './routes/auth-reset-password.js'
 import dashboardRouter from './routes/dashboard.js'
+import dataQualityRouter from './routes/data-quality.js'
 import taskConditionsRouter from './routes/task-conditions.js'
 import taskObstaclesRouter from './routes/task-obstacles.js'
-import taskDelaysRouter from './routes/task-delays.js'
+import delayRequestsRouter from './routes/delay-requests.js'
 import taskSummariesRouter from './routes/task-summaries.js'
+import changeLogsRouter from './routes/change-logs.js'
 import preMilestonesRouter from './routes/pre-milestones.js'
 import preMilestoneConditionsRouter from './routes/pre-milestone-conditions.js'
 import preMilestoneDependenciesRouter from './routes/pre-milestone-dependencies.js'
-import certificateApprovalsRouter from './routes/certificate-approvals.js'
+import certificateWorkItemsRouter from './routes/certificate-work-items.js'
+import certificateDependenciesRouter from './routes/certificate-dependencies.js'
 import acceptancePlansRouter from './routes/acceptance-plans.js'
+import acceptanceCatalogRouter from './routes/acceptance-catalog.js'
+import acceptanceDependenciesRouter from './routes/acceptance-dependencies.js'
+import acceptanceRequirementsRouter from './routes/acceptance-requirements.js'
+import acceptanceRecordsRouter from './routes/acceptance-records.js'
 import acceptanceNodesRouter from './routes/acceptance-nodes.js'
 import wbsRouter from './routes/wbs.js'
 import wbsTemplatesRouter from './routes/wbs-templates.js'
@@ -64,12 +77,29 @@ import aiScheduleRouter from './routes/aiSchedule.js'
 import warningsRouter from './routes/warnings.js'
 import riskStatisticsRouter from './routes/risk-statistics.js'
 import notificationsRouter from './routes/notifications.js'
+import responsibilityRouter from './routes/responsibility.js'
 import remindersRouter from './routes/reminders.js'
 import jobsRouter from './routes/jobs.js'
 import healthScoreRouter from './routes/health-score.js'
+import planningGovernanceRouter from './routes/planning-governance.js'
 import constructionDrawingsRouter from './routes/construction-drawings.js'
+import criticalPathsRouter from './routes/critical-paths.js'
+import issuesRouter from './routes/issues.js'
+import clientErrorsRouter from './routes/client-errors.js'
+import scopeDimensionsRouter from './routes/scope-dimensions.js'
+import participantUnitsRouter from './routes/participant-units.js'
+import projectMaterialsRouter from './routes/project-materials.js'
+import weeklyDigestRouter from './routes/weekly-digest.js'
+import wbsTemplateGovernanceRouter from './routes/wbs-template-governance.js'
+import { initializeRealtimeServer } from './services/realtimeServer.js'
 
-// 鈹€鈹€鈹€ 鏁版嵁搴撹繛鎺ラ獙璇?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+if (process.env.NODE_ENV !== 'test' && !shouldBootScheduler) {
+  logger.info('[bootstrap] scheduler boot skipped by SKIP_SCHEDULER_BOOT=true')
+}
+if (process.env.NODE_ENV !== 'test' && !shouldValidateDatabaseOnBoot) {
+  logger.info('[bootstrap] database validation skipped by SKIP_DATABASE_VALIDATE=true')
+}
+
 async function validateDatabaseConnection() {
   try {
     const { createClient } = await import('@supabase/supabase-js')
@@ -83,16 +113,47 @@ async function validateDatabaseConnection() {
 
     logger.info('Database connection validated')
   } catch (error) {
-    logger.error('鏁版嵁搴撹繛鎺ラ獙璇佸け璐?', error)
-    console.error('鉂?鏁版嵁搴撹繛鎺ラ獙璇佸け璐?', error)
-    console.error('璇锋鏌?.env 鏂囦欢涓殑 SUPABASE_URL 鍜?SUPABASE_ANON_KEY 閰嶇疆')
+    logger.error('数据库连接验证失败', error)
+    logger.error('请检查 .env 文件中的 SUPABASE_URL 和 SUPABASE_ANON_KEY 配置')
     process.exit(1)
   }
 }
 
-// 鈹€鈹€鈹€ 搴旂敤鍒濆鍖?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+function startServer(app: express.Express) {
+  const server = createServer(app)
+  initializeRealtimeServer(server)
+  server.listen({
+    port: Number(PORT),
+    host: SERVER_HOST,
+    ipv6Only: false,
+  }, () => {
+    logger.info(`Server started`, { port: PORT })
+    logger.info('API Server running', {
+      host: SERVER_HOST,
+      urls: [
+        `http://localhost:${PORT}`,
+        `http://127.0.0.1:${PORT}`,
+      ],
+    })
+    logger.info('Health check ready', {
+      urls: [
+        `http://localhost:${PORT}/api/health`,
+        `http://127.0.0.1:${PORT}/api/health`,
+      ],
+    })
+    logger.info('Realtime endpoint ready', {
+      urls: [
+        `ws://localhost:${PORT}/ws`,
+        `ws://127.0.0.1:${PORT}/ws`,
+      ],
+    })
+  })
+}
+
+// 应用初始化
 const app = express()
 const PORT = process.env.PORT || 3001
+const SERVER_HOST = process.env.HOST || '::'
 const IS_PRODUCTION = process.env.NODE_ENV === 'production'
 
 function isLocalDevRequest(ip?: string) {
@@ -100,9 +161,7 @@ function isLocalDevRequest(ip?: string) {
   return ip === '::1' || ip === '127.0.0.1' || ip === '::ffff:127.0.0.1'
 }
 
-// 涓棿浠?
 app.use(helmet())
-// CORS 閰嶇疆锛氭敮鎸侀€楀彿鍒嗛殧鐨勫鍩熷悕
 const corsOrigins = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(',').map(s => s.trim())
   : ['http://localhost:5173'];
@@ -111,22 +170,21 @@ app.use(cors({
   origin: corsOrigins,
   credentials: true
 }))
+app.use(compression({ threshold: 0 }))
 app.use(express.json({ limit: '10mb' }))
 
-// 鈹€鈹€鈹€ 闄愭祦閰嶇疆 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
-// 閫氱敤API闄愭祦锛?00娆?15min锛堥槻姝㈡帴鍙ｆ互鐢級
+// 限流配置
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
   skip: (req) => !IS_PRODUCTION && isLocalDevRequest(req.ip),
-  message: { success: false, error: { code: 'RATE_LIMITED', message: '璇锋眰杩囦簬棰戠箒锛岃绋嶅悗鍐嶈瘯' } }
+  message: { success: false, error: { code: 'RATE_LIMITED', message: '请求过于频繁，请稍后再试' } }
 })
-// 鐧诲綍/娉ㄥ唽涓ユ牸闄愭祦锛?娆?15min锛堥槻鏆村姏鐮磋В锛?
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 5,
   skip: (req) => !IS_PRODUCTION && isLocalDevRequest(req.ip),
-  skipSuccessfulRequests: true, // 鎴愬姛璇锋眰涓嶈鍏ヨ鏁?
+  skipSuccessfulRequests: true,
   message: { success: false, error: { code: 'AUTH_RATE_LIMITED', message: 'Too many login attempts, please try again in 15 minutes' } }
 })
 
@@ -135,8 +193,8 @@ app.use(requestLogger)
 app.use(auditLogger)
 app.use(sanitizeInput)
 app.use(xssProtection)
+app.use(readOnlyCacheMiddleware)
 
-// 鍋ュ悍妫€鏌ワ紙鏃犻渶璁よ瘉锛?
 app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'ok', 
@@ -145,81 +203,95 @@ app.get('/api/health', (req, res) => {
   })
 })
 
-// 鈹€鈹€鈹€ API 璺敱娉ㄥ唽 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
-// 璁よ瘉妯″潡锛堢櫥褰?娉ㄥ唽浣跨敤涓ユ牸闄愭祦锛?
 app.use('/api/auth/login', authLimiter, authRouter)
 app.use('/api/auth/register', authLimiter, authRegisterRouter)
 app.use('/api/auth/logout', authLogoutRouter)
 app.use('/api/auth/me', authMeRouter)
 app.use('/api/auth/change-password', authChangePasswordRouter)
 app.use('/api/auth/profile', authProfileRouter)
+app.use('/api/auth/reset-password', authResetPasswordRouter)
 
-// 鍩虹妯″潡
+// 基础模块
+app.use('/api/scope-dimensions', scopeDimensionsRouter)
+app.use('/api/projects/:projectId/materials', projectMaterialsRouter)
 app.use('/api/projects', projectsRouter)
 app.use('/api/tasks', tasksRouter)
 app.use('/api/risks', risksRouter)
 app.use('/api/milestones', milestonesRouter)
+app.use('/api/task-baselines', taskBaselinesRouter)
+app.use('/api/monthly-plans', monthlyPlansRouter)
+app.use('/api/progress-deviation', progressDeviationRouter)
 app.use('/api/members', membersRouter)
 app.use('/api/invitations', invitationsRouter)
 
 // Dashboard
 app.use('/api/dashboard', dashboardRouter)
+app.use('/api/data-quality', dataQualityRouter)
 
-// 浠诲姟鎵╁睍
 app.use('/api/task-conditions', taskConditionsRouter)
 app.use('/api/task-obstacles', taskObstaclesRouter)
-app.use('/api/task-delays', taskDelaysRouter)
+app.use('/api/delay-requests', delayRequestsRouter)
 app.use('/api/task-summaries', taskSummariesRouter)
+app.use('/api/change-logs', changeLogsRouter)
 
-// 鍓嶆湡璇佺収锛堝紑宸ュ墠閲岀▼纰戯級
 app.use('/api/pre-milestones', preMilestonesRouter)
+app.use('/api/projects/:projectId/pre-milestones', preMilestonesRouter)
 app.use('/api/pre-milestone-conditions', preMilestoneConditionsRouter)
 app.use('/api/pre-milestone-dependencies', preMilestoneDependenciesRouter)
-app.use('/api/certificate-approvals', certificateApprovalsRouter)
+app.use('/api/projects/:projectId/certificate-work-items', certificateWorkItemsRouter)
+app.use('/api/projects/:projectId/certificate-dependencies', certificateDependenciesRouter)
 
-// 楠屾敹
 app.use('/api/acceptance-plans', acceptancePlansRouter)
+app.use('/api/acceptance-catalog', acceptanceCatalogRouter)
+app.use('/api/acceptance-dependencies', acceptanceDependenciesRouter)
+app.use('/api/acceptance-requirements', acceptanceRequirementsRouter)
+app.use('/api/acceptance-records', acceptanceRecordsRouter)
 app.use('/api/acceptance-nodes', acceptanceNodesRouter)
 
 // WBS
 app.use('/api/wbs', wbsRouter)
+app.use('/api/planning/wbs-templates', wbsTemplatesRouter)
 app.use('/api/wbs-templates', wbsTemplatesRouter)
+app.use('/api/wbs-template-governance', wbsTemplateGovernanceRouter)
 app.use('/api/standard-processes', standardProcessesRouter)
 
-// AI 宸ユ湡
 app.use('/api/ai-duration', aiDurationRouter)
 app.use('/api/ai-schedule', aiScheduleRouter)
 
-// 棰勮涓庨€氱煡
+// 预警与通知
 app.use('/api/warnings', warningsRouter)
 app.use('/api/risk-statistics', riskStatisticsRouter)
 app.use('/api/notifications', notificationsRouter)
+app.use('/api/projects/:projectId/responsibility', responsibilityRouter)
 app.use('/api/reminders', remindersRouter)
 
-// 鍚庡彴浠诲姟
 app.use('/api/jobs', jobsRouter)
 
-// 鍋ュ悍搴?
+// 健康度
 app.use('/api/health-score', healthScoreRouter)
+app.use('/api/planning-governance', planningGovernanceRouter)
 
-// 鏂藉伐鍥剧焊锛堢嫭绔嬩簬鍓嶆湡璇佺収锛?
 app.use('/api/construction-drawings', constructionDrawingsRouter)
+app.use('/api/projects', criticalPathsRouter)
 
-// 閿欒澶勭悊
+// 问题域（10.1 建立基础模型）
+app.use('/api/issues', issuesRouter)
+app.use('/api/client-errors', clientErrorsRouter)
+app.use('/api/participant-units', participantUnitsRouter)
+app.use('/api/projects', weeklyDigestRouter)
+
 app.use(notFoundHandler)
 app.use(errorHandler)
 
-// 鍚姩鏈嶅姟鍣紙浠呭湪闈炴祴璇曠幆澧冿級
 if (process.env.NODE_ENV !== 'test') {
-  // 楠岃瘉鏁版嵁搴撹繛鎺ュ悗鍐嶅惎鍔ㄦ湇鍔″櫒
-  validateDatabaseConnection().then(() => {
-    app.listen(PORT, () => {
-      logger.info(`Server started`, { port: PORT })
-      console.log(`馃殌 API Server running on http://localhost:${PORT}`)
-      console.log(`馃搵 Health check: http://localhost:${PORT}/api/health`)
-    })
+  const bootstrap = shouldValidateDatabaseOnBoot
+    ? validateDatabaseConnection()
+    : Promise.resolve()
+
+  bootstrap.then(() => {
+    startServer(app)
   }).catch((error) => {
-    logger.error('鏁版嵁搴撻獙璇佸け璐ワ紝鏈嶅姟鍣ㄦ湭鍚姩:', error)
+    logger.error('数据库验证失败，服务器未启动:', error)
     process.exit(1)
   })
 }

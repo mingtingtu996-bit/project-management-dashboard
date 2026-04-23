@@ -4,10 +4,11 @@ import { Router } from 'express'
 import { SupabaseService } from '../services/supabaseService.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import { validate, validateIdParam, projectSchema, projectUpdateSchema } from '../middleware/validation.js'
-import { authenticate } from '../middleware/auth.js'
+import { authenticate, requireProjectMember, requireProjectOwner } from '../middleware/auth.js'
 import { logger } from '../middleware/logger.js'
 import type { ApiResponse } from '../types/index.js'
 import type { Project } from '../types/db.js'
+import { getVisibleProjectIds } from '../auth/access.js'
 
 const router = Router()
 const supabase = new SupabaseService()
@@ -18,7 +19,15 @@ router.use(authenticate)
 // 获取所有项目
 router.get('/', asyncHandler(async (req, res) => {
   logger.info('Fetching all projects')
-  const projects = await supabase.getProjects()
+  let projects = await supabase.getProjects()
+
+  if (req.user?.id) {
+    const visibleProjectIds = await getVisibleProjectIds(req.user.id, req.user.globalRole)
+    if (visibleProjectIds) {
+      const visibleProjectIdSet = new Set(visibleProjectIds)
+      projects = projects.filter((project) => visibleProjectIdSet.has(project.id))
+    }
+  }
   
   const response: ApiResponse<Project[]> = {
     success: true,
@@ -28,8 +37,58 @@ router.get('/', asyncHandler(async (req, res) => {
   res.json(response)
 }))
 
+// 导出单个项目聚合数据
+router.get('/:id/export', validateIdParam, requireProjectMember(req => req.params.id), asyncHandler(async (req, res) => {
+  const { id } = req.params
+  logger.info('Exporting project aggregate data', { id })
+
+  const [project, tasks, risks, milestones, members, invitations] = await Promise.all([
+    supabase.getProject(id),
+    supabase.getTasks(id),
+    supabase.getRisks(id),
+    supabase.getMilestones(id),
+    supabase.getMembers(id),
+    supabase.getInvitations(id),
+  ])
+
+  if (!project) {
+    const response: ApiResponse = {
+      success: false,
+      error: { code: 'PROJECT_NOT_FOUND', message: '项目不存在' },
+      timestamp: new Date().toISOString(),
+    }
+    return res.status(404).json(response)
+  }
+
+  const response: ApiResponse<{
+    version: string
+    exportedAt: string
+    projects: Project[]
+    tasks: typeof tasks
+    risks: typeof risks
+    milestones: typeof milestones
+    members: typeof members
+    invitations: typeof invitations
+  }> = {
+    success: true,
+    data: {
+      version: '2.0.0',
+      exportedAt: new Date().toISOString(),
+      projects: [project],
+      tasks,
+      risks,
+      milestones,
+      members,
+      invitations,
+    },
+    timestamp: new Date().toISOString(),
+  }
+
+  res.json(response)
+}))
+
 // 获取单个项目
-router.get('/:id', validateIdParam, asyncHandler(async (req, res) => {
+router.get('/:id', validateIdParam, requireProjectMember(req => req.params.id), asyncHandler(async (req, res) => {
   const { id } = req.params
   logger.info('Fetching project', { id })
   
@@ -89,7 +148,7 @@ router.post('/with-id', validate(projectSchema), asyncHandler(async (req, res) =
 }))
 
 // 更新项目
-router.put('/:id', validateIdParam, validate(projectUpdateSchema), asyncHandler(async (req, res) => {
+router.put('/:id', validateIdParam, requireProjectOwner(req => req.params.id), validate(projectUpdateSchema), asyncHandler(async (req, res) => {
   const { id } = req.params
   const updates = req.body
   const expectedVersion = updates.version
@@ -128,7 +187,7 @@ router.put('/:id', validateIdParam, validate(projectUpdateSchema), asyncHandler(
 }))
 
 // 删除项目
-router.delete('/:id', validateIdParam, asyncHandler(async (req, res) => {
+router.delete('/:id', validateIdParam, requireProjectOwner(req => req.params.id), asyncHandler(async (req, res) => {
   const { id } = req.params
   logger.info('Deleting project', { id })
   

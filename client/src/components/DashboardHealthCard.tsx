@@ -1,4 +1,5 @@
 import { Card, CardContent } from '@/components/ui/card';
+import { LoadingState } from '@/components/ui/loading-state';
 import { ChevronDown, ChevronUp, TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import { useState, useEffect, useMemo } from 'react';
 import { useCountUp } from '@/hooks/useCountUp';
@@ -109,7 +110,7 @@ export default function DashboardHealthCard({
   }, []);
 
   return (
-    <Card className="rounded-xl border border-gray-200 shadow-sm bg-white hover:shadow-md transition-all h-full">
+    <Card variant="metric" className="h-full">
       <CardContent className="p-5">
         {/* 头部：标题 + 展开箭头 */}
         <div className="flex items-center justify-between mb-4">
@@ -185,7 +186,11 @@ export default function DashboardHealthCard({
         {expanded && (
           <div className="space-y-3">
             {loading ? (
-              <div className="text-center py-4 text-gray-500">加载中...</div>
+              <LoadingState
+                label="健康度加载中"
+                description="正在读取项目健康明细"
+                className="min-h-24 py-4"
+              />
             ) : progressDetails ? (
               <>
                 {/* 整体进度 - 绿色背景 */}

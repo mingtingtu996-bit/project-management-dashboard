@@ -44,10 +44,16 @@ const Toast = React.forwardRef<
   React.ComponentPropsWithoutRef<typeof ToastPrimitives.Root> &
     VariantProps<typeof toastVariants>
 >(({ className, variant, ...props }, ref) => {
+  const accessibilityProps =
+    variant === 'destructive'
+      ? { role: 'alert' as const, 'aria-live': 'assertive' as const }
+      : { role: 'status' as const, 'aria-live': 'polite' as const }
+
   return (
     <ToastPrimitives.Root
       ref={ref}
       className={cn(toastVariants({ variant }), className)}
+      {...accessibilityProps}
       {...props}
     />
   )

@@ -20,6 +20,7 @@ import { fileURLToPath } from 'url';
 
 const require = createRequire(import.meta.url);
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const CANONICAL_CLEAN_BUNDLE = 'CLEAN_MIGRATION_V4.sql';
 
 // 加载环境变量
 try {
@@ -154,7 +155,7 @@ function splitSQLStatements(sql) {
 async function runMigration() {
   console.log('');
   console.log('╔════════════════════════════════════════════════════╗');
-  console.log('║     CLEAN_MIGRATION_V4.sql  全量迁移执行工具       ║');
+  console.log(`║     ${CANONICAL_CLEAN_BUNDLE}  全量迁移执行工具       ║`);
   console.log('╚════════════════════════════════════════════════════╝');
   console.log('');
 
@@ -167,7 +168,7 @@ async function runMigration() {
     console.error('');
     console.error('方式1: 设置完整连接字符串（推荐）');
     console.error('  在 server/.env 中添加：');
-    console.error('  DB_CONNECTION_STRING=postgresql://postgres:[密码]@db.wwdrkjnbvcbfytwnnyvs.supabase.co:5432/postgres');
+    console.error('  DB_CONNECTION_STRING=postgresql://postgres:[密码]@db.<project-ref>.supabase.co:5432/postgres');
     console.error('');
     console.error('方式2: 只提供数据库密码');
     console.error('  在 server/.env 中添加：');
@@ -179,7 +180,7 @@ async function runMigration() {
   }
 
   // 读取迁移文件
-  const sqlFile = join(__dirname, 'migrations', 'CLEAN_MIGRATION_V4.sql');
+  const sqlFile = join(__dirname, 'migrations', CANONICAL_CLEAN_BUNDLE);
   console.log(`📄 读取迁移文件: ${sqlFile}`);
 
   let sqlContent;

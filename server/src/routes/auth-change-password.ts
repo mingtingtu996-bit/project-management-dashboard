@@ -1,72 +1,72 @@
 /**
- * 修改密码API路由
+ * 修改密码 API 路由
  */
 
-import express from 'express';
-import { verifyToken, extractTokenFromRequest } from '../auth/jwt';
-import { verifyPassword, hashPassword } from '../auth/password';
-import { query } from '../database';
+import express from 'express'
+import { z } from 'zod'
 
-const router = express.Router();
+import { authError, authSuccess } from '../auth/http.js'
+import { extractTokenFromRequest, verifyToken } from '../auth/jwt.js'
+import { hashPassword, validatePasswordStrength, verifyPassword } from '../auth/password.js'
+import { hasUsersUpdatedAtColumn } from '../auth/session.js'
+import type { AuthMessageData } from '../auth/types.js'
+import { query } from '../database.js'
+import { asyncHandler } from '../middleware/errorHandler.js'
+import { validate } from '../middleware/validation.js'
 
-/**
- * POST /api/auth/change-password - 修改密码
- */
-router.post('/', async (req, res) => {
-  try {
-    const token = extractTokenFromRequest(req);
-    if (!token) {
-      return res.status(401).json({ success: false, message: '未登录' });
-    }
+const router = express.Router()
 
-    const payload = verifyToken(token);
-    if (!payload) {
-      return res.status(401).json({ success: false, message: '登录已过期' });
-    }
+const changePasswordSchema = z.object({
+  oldPassword: z.string().min(1, '请输入旧密码'),
+  newPassword: z.string().min(1, '请输入新密码'),
+})
 
-    const { oldPassword, newPassword } = req.body;
-
-    if (!oldPassword || !newPassword) {
-      return res.status(400).json({ success: false, message: '请输入旧密码和新密码' });
-    }
-
-    if (newPassword.length < 6) {
-      return res.status(400).json({ success: false, message: '新密码长度至少6位' });
-    }
-
-    if (newPassword.length > 50) {
-      return res.status(400).json({ success: false, message: '新密码长度不能超过50位' });
-    }
-
-    // 查询当前用户
-    const userResult = await query(
-      'SELECT password_hash FROM public.users WHERE id = $1',
-      [payload.userId]
-    );
-    const user = userResult.rows[0];
-
-    if (!user) {
-      return res.status(404).json({ success: false, message: '用户不存在' });
-    }
-
-    // 验证旧密码
-    const isValid = await verifyPassword(oldPassword, user.password_hash);
-    if (!isValid) {
-      return res.status(400).json({ success: false, message: '旧密码错误' });
-    }
-
-    // 哈希新密码并更新
-    const newHash = await hashPassword(newPassword);
-    await query(
-      'UPDATE public.users SET password_hash = $1, updated_at = NOW() WHERE id = $2',
-      [newHash, payload.userId]
-    );
-
-    res.json({ success: true, message: '密码修改成功' });
-  } catch (error) {
-    console.error('Change password error:', error);
-    res.status(500).json({ success: false, message: '修改密码失败，请稍后重试' });
+router.post('/', validate(changePasswordSchema), asyncHandler(async (req, res) => {
+  const token = extractTokenFromRequest(req)
+  if (!token) {
+    return res.status(401).json(authError('UNAUTHORIZED', '未登录'))
   }
-});
 
-export default router;
+  const payload = verifyToken(token)
+  if (!payload) {
+    return res.status(401).json(authError('TOKEN_EXPIRED', '登录已过期'))
+  }
+
+  const { oldPassword, newPassword } = req.body
+  const passwordValidation = validatePasswordStrength(newPassword)
+  if (!passwordValidation.valid) {
+    return res.status(400).json(authError('WEAK_PASSWORD', passwordValidation.errors.join(', ')))
+  }
+
+  const userResult = await query(
+    'SELECT password_hash FROM public.users WHERE id = $1',
+    [payload.userId],
+  )
+  const user = userResult.rows[0]
+
+  if (!user) {
+    return res.status(404).json(authError('USER_NOT_FOUND', '用户不存在'))
+  }
+
+  const isValid = await verifyPassword(oldPassword, user.password_hash)
+  if (!isValid) {
+    return res.status(400).json(authError('INVALID_OLD_PASSWORD', '旧密码错误'))
+  }
+
+  const newHash = await hashPassword(newPassword)
+  const shouldWriteUpdatedAt = await hasUsersUpdatedAtColumn()
+  await query(
+    shouldWriteUpdatedAt
+      ? 'UPDATE public.users SET password_hash = $1, updated_at = NOW() WHERE id = $2'
+      : 'UPDATE public.users SET password_hash = $1 WHERE id = $2',
+    [newHash, payload.userId],
+  )
+
+  const response: AuthMessageData = {
+    message: '密码修改成功',
+  }
+
+  return res.json(authSuccess(response))
+}))
+
+export default router

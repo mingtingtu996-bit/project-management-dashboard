@@ -1,7 +1,63 @@
 import '@testing-library/jest-dom'
+import * as React from 'react'
 import { afterEach, vi } from 'vitest'
 
+vi.mock('react-router-dom', async () => {
+  const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom')
+
+  function MemoryRouterWithFutureFlags(
+    props: React.ComponentProps<typeof actual.MemoryRouter>,
+  ) {
+    const { future, ...rest } = props
+    return React.createElement(actual.MemoryRouter, {
+      ...rest,
+      future: {
+        v7_startTransition: true,
+        v7_relativeSplatPath: true,
+        ...(future ?? {}),
+      },
+    })
+  }
+
+  return {
+    ...actual,
+    MemoryRouter: MemoryRouterWithFutureFlags,
+  }
+})
+
+declare global {
+  var IS_REACT_ACT_ENVIRONMENT: boolean
+}
+
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
+
+const originalConsoleWarn = console.warn.bind(console)
+const originalConsoleError = console.error.bind(console)
+
+console.warn = (...args: unknown[]) => {
+  const message = args.map((arg) => String(arg)).join(' ')
+  if (message.includes('React Router Future Flag Warning')) {
+    return
+  }
+  originalConsoleWarn(...args as Parameters<typeof console.warn>)
+}
+
+console.error = (...args: unknown[]) => {
+  const message = args.map((arg) => String(arg)).join(' ')
+  if (message.includes('not wrapped in act(...)')) {
+    return
+  }
+  originalConsoleError(...args as Parameters<typeof console.error>)
+}
+
+if (!HTMLCanvasElement.prototype.getContext) {
+  Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
+    configurable: true,
+    value: vi.fn(() => null),
+  })
+} else {
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => null)
+}
 
 afterEach(() => {
   document.body.innerHTML = ''

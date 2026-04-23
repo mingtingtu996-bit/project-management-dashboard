@@ -1,21 +1,24 @@
 import { useEffect, useRef } from 'react'
 import { Chart, registerables } from 'chart.js'
 
+import { CHART_AXIS_COLORS, getProgressThresholdColor } from '@/lib/chartPalette'
+
 Chart.register(...registerables)
 
 type MilestoneChartProject = {
   id: string
   name: string
   milestoneProgress: number
+  shiftedMilestoneCount: number
 }
 
 export function MilestoneAchievementChart({ projects }: { projects: MilestoneChartProject[] }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const chartRef = useRef<Chart | null>(null)
-  const hasMilestoneProgress = projects.some((project) => project.milestoneProgress > 0)
+  const hasMilestoneSignal = projects.some((project) => project.milestoneProgress > 0 || project.shiftedMilestoneCount > 0)
 
   useEffect(() => {
-    if (!canvasRef.current || projects.length === 0 || !hasMilestoneProgress) {
+    if (!canvasRef.current || projects.length === 0 || !hasMilestoneSignal) {
       if (chartRef.current) {
         chartRef.current.destroy()
         chartRef.current = null
@@ -33,20 +36,9 @@ export function MilestoneAchievementChart({ projects }: { projects: MilestoneCha
 
     const labels = projects.map((project) => project.name)
     const values = projects.map((project) => project.milestoneProgress)
-
-    const backgroundColors = projects.map((project) => {
-      if (project.milestoneProgress >= 90) return 'rgba(16, 185, 129, 0.72)'
-      if (project.milestoneProgress >= 70) return 'rgba(59, 130, 246, 0.72)'
-      if (project.milestoneProgress >= 50) return 'rgba(245, 158, 11, 0.72)'
-      return 'rgba(239, 68, 68, 0.72)'
-    })
-
-    const borderColors = projects.map((project) => {
-      if (project.milestoneProgress >= 90) return 'rgba(16, 185, 129, 1)'
-      if (project.milestoneProgress >= 70) return 'rgba(59, 130, 246, 1)'
-      if (project.milestoneProgress >= 50) return 'rgba(245, 158, 11, 1)'
-      return 'rgba(239, 68, 68, 1)'
-    })
+    const shiftedValues = projects.map((project) => project.shiftedMilestoneCount)
+    const backgroundColors = projects.map((project) => getProgressThresholdColor(project.milestoneProgress).background)
+    const borderColors = projects.map((project) => getProgressThresholdColor(project.milestoneProgress).border)
 
     chartRef.current = new Chart(ctx, {
       type: 'bar',
@@ -61,6 +53,20 @@ export function MilestoneAchievementChart({ projects }: { projects: MilestoneCha
             borderWidth: 2,
             borderRadius: 8,
             maxBarThickness: 42,
+            yAxisID: 'yPercent',
+          },
+          {
+            label: '已偏移里程碑数',
+            data: shiftedValues,
+            type: 'line',
+            borderColor: '#f97316',
+            backgroundColor: 'rgba(249, 115, 22, 0.16)',
+            pointBackgroundColor: '#f97316',
+            pointBorderColor: '#ffffff',
+            pointBorderWidth: 2,
+            pointRadius: 4,
+            tension: 0.28,
+            yAxisID: 'yCount',
           },
         ],
       },
@@ -69,18 +75,25 @@ export function MilestoneAchievementChart({ projects }: { projects: MilestoneCha
         maintainAspectRatio: false,
         plugins: {
           legend: {
-            display: false,
+            position: 'bottom',
+            labels: {
+              boxWidth: 10,
+              color: CHART_AXIS_COLORS.axisText,
+            },
           },
           tooltip: {
             callbacks: {
               label(context) {
+                if (context.dataset.yAxisID === 'yCount') {
+                  return `${context.parsed.y} 个`
+                }
                 return `${context.parsed.y}%`
               },
             },
           },
         },
         scales: {
-          y: {
+          yPercent: {
             beginAtZero: true,
             max: 120,
             ticks: {
@@ -91,10 +104,26 @@ export function MilestoneAchievementChart({ projects }: { projects: MilestoneCha
             grid: {
               color(context) {
                 if (context.tick.value === 100) {
-                  return 'rgba(239, 68, 68, 0.22)'
+                  return CHART_AXIS_COLORS.emphasisGrid
                 }
-                return 'rgba(148, 163, 184, 0.16)'
+                return CHART_AXIS_COLORS.neutralGrid
               },
+            },
+            border: {
+              display: false,
+            },
+          },
+          yCount: {
+            position: 'right',
+            beginAtZero: true,
+            ticks: {
+              precision: 0,
+              callback(value) {
+                return `${value} 个`
+              },
+            },
+            grid: {
+              display: false,
             },
             border: {
               display: false,
@@ -105,7 +134,7 @@ export function MilestoneAchievementChart({ projects }: { projects: MilestoneCha
               display: false,
             },
             ticks: {
-              color: '#475569',
+              color: CHART_AXIS_COLORS.axisText,
               font: {
                 size: 11,
               },
@@ -125,7 +154,7 @@ export function MilestoneAchievementChart({ projects }: { projects: MilestoneCha
         chartRef.current = null
       }
     }
-  }, [hasMilestoneProgress, projects])
+  }, [hasMilestoneSignal, projects])
 
   if (projects.length === 0) {
     return (
@@ -135,12 +164,12 @@ export function MilestoneAchievementChart({ projects }: { projects: MilestoneCha
     )
   }
 
-  if (!hasMilestoneProgress) {
+  if (!hasMilestoneSignal) {
     return (
       <div className="flex h-64 flex-col items-center justify-center rounded-[24px] border border-dashed border-slate-200 bg-slate-50 px-6 text-center">
         <div className="text-base font-semibold text-slate-900">暂无里程碑趋势</div>
         <p className="mt-2 max-w-md text-sm leading-6 text-slate-500">
-          当前项目还没有可汇总的里程碑进展，识别出关键节点后，这里会展示跨项目的达成率对比。
+          当前项目还没有可汇总的里程碑达成或偏移信号，识别出关键节点后，这里会展示跨项目的达成率与偏移对比。
         </p>
       </div>
     )

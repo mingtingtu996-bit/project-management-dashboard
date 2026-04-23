@@ -17,6 +17,7 @@
  */
 import { X } from 'lucide-react'
 import { LucideIcon } from 'lucide-react'
+import { useSidebarOpen } from '@/hooks/useStore'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 
@@ -27,6 +28,7 @@ interface BatchAction {
   variant?: 'default' | 'destructive' | 'outline' | 'secondary' | 'ghost'
   onClick: () => void
   disabled?: boolean
+  testId?: string
 }
 
 interface BatchActionBarProps {
@@ -42,9 +44,11 @@ interface BatchActionBarProps {
 
 export function BatchActionBar({ selectedCount, onClear, actions, className }: BatchActionBarProps) {
   const visible = selectedCount > 0
+  const sidebarOpen = useSidebarOpen()
 
   return (
     <div
+      data-testid="batch-action-bar"
       className={cn(
         'fixed bottom-0 left-0 right-0 z-40 transition-transform duration-300',
         visible ? 'translate-y-0' : 'translate-y-full',
@@ -52,7 +56,12 @@ export function BatchActionBar({ selectedCount, onClear, actions, className }: B
       )}
       aria-live="polite"
     >
-      <div className="mx-auto max-w-[1440px] px-4 lg:px-6 pb-4">
+      <div
+        className={cn(
+          'mx-auto max-w-[1440px] px-4 pb-4 lg:px-6',
+          sidebarOpen ? 'lg:pl-72' : 'lg:pl-20',
+        )}
+      >
         <div className="flex items-center justify-between gap-4 rounded-xl bg-gray-900 px-4 py-3 shadow-xl text-white">
           {/* 左侧：已选中数量 */}
           <div className="flex items-center gap-3">
@@ -64,6 +73,7 @@ export function BatchActionBar({ selectedCount, onClear, actions, className }: B
               onClick={onClear}
               className="ml-1 rounded-md p-1 hover:bg-gray-700 transition-colors"
               aria-label="清空选择"
+              data-testid="batch-action-bar-clear"
             >
               <X className="h-4 w-4 text-gray-400" />
             </button>
@@ -78,6 +88,7 @@ export function BatchActionBar({ selectedCount, onClear, actions, className }: B
                 variant={action.variant ?? 'outline'}
                 onClick={action.onClick}
                 disabled={action.disabled}
+                data-testid={action.testId}
                 className={cn(
                   'gap-1.5 text-sm',
                   action.variant === 'destructive'

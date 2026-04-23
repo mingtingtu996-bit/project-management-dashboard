@@ -80,14 +80,14 @@ describe('taskTimeline', () => {
       [
         {
           id: 'task-1',
-          title: '涓讳綋缁撴瀯鏂藉伐',
+          title: '主体结构施工',
           status: 'in_progress',
           progress: 40,
           updated_at: '2026-04-02T08:00:00.000Z',
         },
         {
           id: 'task-2',
-          title: '涓讳綋灏侀《',
+          title: '主体封顶',
           status: 'completed',
           progress: 100,
           is_milestone: true,
@@ -98,9 +98,9 @@ describe('taskTimeline', () => {
         {
           id: 'condition-1',
           task_id: 'task-1',
-          condition_name: '宸ヤ綔闈㈢Щ浜?',
-          description: '宸ヤ綔闈㈠皻鏈Щ浜?',
-          status: '鏈弧瓒?',
+          condition_name: '工作面移交',
+          description: '工作面尚未移交',
+          status: '未满足',
           created_at: '2026-04-02T07:00:00.000Z',
         },
       ] as never,
@@ -108,8 +108,8 @@ describe('taskTimeline', () => {
         {
           id: 'obstacle-1',
           task_id: 'task-1',
-          description: '鏉愭枡鏈埌鍦?',
-          status: '澶勭悊涓?',
+          description: '材料未到场',
+          status: '处理中',
           created_at: '2026-04-02T07:30:00.000Z',
         },
       ] as never,

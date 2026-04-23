@@ -1,0 +1,53 @@
+name: Workflow Guard
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - '.github/workflows/deploy.yml'
+      - '.github/workflows/workflow-guard.yml'
+      - 'server/src/__tests__/deployWorkflowContract.test.ts'
+      - 'package.json'
+      - 'server/package-lock.json'
+      - 'scripts/deploy-cloudbase-backend.mjs'
+      - 'scripts/write-browser-suite-summary.mjs'
+      - 'scripts/write-browser-overview-summary.mjs'
+  pull_request:
+    paths:
+      - '.github/workflows/deploy.yml'
+      - '.github/workflows/workflow-guard.yml'
+      - 'server/src/__tests__/deployWorkflowContract.test.ts'
+      - 'package.json'
+      - 'server/package-lock.json'
+      - 'scripts/deploy-cloudbase-backend.mjs'
+      - 'scripts/write-browser-suite-summary.mjs'
+      - 'scripts/write-browser-overview-summary.mjs'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-workflow-contract:
+    name: Deploy Workflow Contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - name: Install server dependencies
+        run: npm ci --workspaces=false
+
+      - name: Verify deploy workflow contract
+        run: npm test -- src/__tests__/deployWorkflowContract.test.ts

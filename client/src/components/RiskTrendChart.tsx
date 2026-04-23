@@ -1,7 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react'
+import { CHART_SERIES } from '@/lib/chartPalette'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { TrendingUp, TrendingDown, Minus, ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
+import { LoadingState } from '@/components/ui/loading-state';
+import { TrendingUp, TrendingDown, Minus, ChevronDown, ChevronUp } from 'lucide-react';
 import { useProject } from '@/contexts/ProjectContext';
 
 interface RiskTrendData {
@@ -28,20 +30,14 @@ interface RiskTrendChartProps {
   defaultExpanded?: boolean;
 }
 
-export default function RiskTrendChart({ defaultExpanded = false }: RiskTrendChartProps) {
+export default function RiskTrendChart({ defaultExpanded = true }: RiskTrendChartProps) {
   const { currentProject } = useProject();
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<RiskTrendSummary | null>(null);
   const [days, setDays] = useState(30);
 
-  useEffect(() => {
-    if (currentProject && isExpanded) {
-      fetchTrendData();
-    }
-  }, [currentProject, isExpanded, days]);
-
-  const fetchTrendData = async () => {
+  const fetchTrendData = useCallback(async () => {
     if (!currentProject) return;
     
     setLoading(true);
@@ -59,7 +55,13 @@ export default function RiskTrendChart({ defaultExpanded = false }: RiskTrendCha
     } finally {
       setLoading(false);
     }
-  };
+  }, [currentProject, days]);
+
+  useEffect(() => {
+    if (currentProject && isExpanded) {
+      void fetchTrendData();
+    }
+  }, [currentProject, fetchTrendData, isExpanded]);
 
   // 格式化日期显示
   const formatDate = (dateStr: string) => {
@@ -150,10 +152,11 @@ export default function RiskTrendChart({ defaultExpanded = false }: RiskTrendCha
       {isExpanded && (
         <CardContent>
           {loading ? (
-            <div className="flex items-center justify-center py-12">
-              <Loader2 className="h-6 w-6 animate-spin text-gray-400" />
-              <span className="ml-2 text-gray-500">加载中...</span>
-            </div>
+            <LoadingState
+              label="风险趋势加载中"
+              description="正在读取最近 30 天的风险变化数据"
+              className="min-h-32 py-8"
+            />
           ) : !data?.trend?.length ? (
             <div className="text-center py-8 text-gray-500">
               <p>暂无趋势数据</p>
@@ -238,14 +241,14 @@ export default function RiskTrendChart({ defaultExpanded = false }: RiskTrendCha
                   {/* 新增/处理对比 */}
                   <div>
                     <div className="flex items-center justify-between mb-2">
-                      <span className="text-sm font-medium text-gray-700">新增 vs 处理</span>
+                      <span className="text-sm font-medium text-gray-700">新增与处理</span>
                       <div className="flex items-center gap-4 text-xs">
                         <span className="flex items-center gap-1">
-                          <span className="w-3 h-3 bg-red-400 rounded"></span>
+                          <span className="h-3 w-3 rounded" style={{ backgroundColor: CHART_SERIES.danger }}></span>
                           新增
                         </span>
                         <span className="flex items-center gap-1">
-                          <span className="w-3 h-3 bg-green-400 rounded"></span>
+                          <span className="h-3 w-3 rounded" style={{ backgroundColor: CHART_SERIES.success }}></span>
                           处理
                         </span>
                       </div>
@@ -261,13 +264,13 @@ export default function RiskTrendChart({ defaultExpanded = false }: RiskTrendCha
                               className="flex-1 flex items-end justify-center gap-0.5"
                             >
                               <div
-                                className="w-2 bg-red-400 rounded-t"
-                                style={{ height: `${Math.max(newHeight, 2)}%` }}
+                                className="w-2 rounded-t"
+                                style={{ height: `${Math.max(newHeight, 2)}%`, backgroundColor: CHART_SERIES.danger }}
                                 title={`新增: ${item.newRisks}`}
                               />
                               <div
-                                className="w-2 bg-green-400 rounded-t"
-                                style={{ height: `${Math.max(resolvedHeight, 2)}%` }}
+                                className="w-2 rounded-t"
+                                style={{ height: `${Math.max(resolvedHeight, 2)}%`, backgroundColor: CHART_SERIES.success }}
                                 title={`处理: ${item.resolvedRisks}`}
                               />
                             </div>
@@ -281,7 +284,7 @@ export default function RiskTrendChart({ defaultExpanded = false }: RiskTrendCha
                   <div>
                     <div className="flex items-center justify-between mb-2">
                       <span className="text-sm font-medium text-gray-700">风险全览</span>
-                      <span className="text-xs text-gray-400">按里程碑分组</span>
+                      <span className="text-xs text-gray-400">按风险等级汇总</span>
                     </div>
                     {data.trend.length > 0 && (
                       <div className="flex items-center gap-4 p-4 bg-gray-50 rounded-lg">

@@ -2,7 +2,7 @@
  * EditProfileDialog - 编辑个人信息弹窗
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useId } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { X } from 'lucide-react';
 
@@ -12,11 +12,13 @@ interface EditProfileDialogProps {
 }
 
 export const EditProfileDialog: React.FC<EditProfileDialogProps> = ({ isOpen, onClose }) => {
-  const { user } = useAuth();
+  const { user, updateProfile } = useAuth();
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const titleId = useId();
+  const closeRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (isOpen && user) {
@@ -26,6 +28,16 @@ export const EditProfileDialog: React.FC<EditProfileDialogProps> = ({ isOpen, on
     }
   }, [isOpen, user]);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    closeRef.current?.focus();
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !loading) onClose();
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, loading, onClose]);
+
   if (!isOpen) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -34,18 +46,8 @@ export const EditProfileDialog: React.FC<EditProfileDialogProps> = ({ isOpen, on
     setLoading(true);
 
     try {
-      const res = await fetch('/api/auth/profile', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ display_name: displayName.trim(), email: email.trim() }),
-      });
-      const data = await res.json();
+      const data = await updateProfile({ display_name: displayName.trim(), email: email.trim() });
       if (data.success) {
-        // 更新本地用户信息
-        if (data.user) {
-          localStorage.setItem('user_profile', JSON.stringify(data.user));
-        }
         onClose();
       } else {
         setError(data.message || '修改失败');
@@ -59,10 +61,10 @@ export const EditProfileDialog: React.FC<EditProfileDialogProps> = ({ isOpen, on
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => !loading && onClose()}>
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 p-6" onClick={e => e.stopPropagation()}>
+      <div role="dialog" aria-modal="true" aria-labelledby={titleId} className="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 p-6" onClick={e => e.stopPropagation()}>
         <div className="flex justify-between items-center mb-4">
-          <h2 className="text-lg font-semibold text-gray-800">编辑个人信息</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600" disabled={loading}>
+          <h2 id={titleId} className="text-lg font-semibold text-gray-800">编辑个人信息</h2>
+          <button ref={closeRef} onClick={onClose} className="text-gray-400 hover:text-gray-600" disabled={loading} aria-label="关闭">
             <X className="h-5 w-5" />
           </button>
         </div>

@@ -6,13 +6,11 @@
  * @module
  */
 
-export { ProjectCard } from './ProjectCard';
-export { MilestoneSection } from './MilestoneSection';
-export { MilestonesSummaryTable } from './MilestonesSummaryTable';
 export { MilestoneAchievementChart } from './MilestoneAchievementChart';
 export { RiskBubbleMatrix } from './RiskBubbleMatrix';
-export { ProjectRanking } from './ProjectRanking';
-export { DeliveryCountdown } from './DeliveryCountdown';
 export { CompanyHealthHeatmap } from './CompanyHealthHeatmap';
-export { ProjectMatrixMap } from './ProjectMatrixMap';
-
+export { ProjectSignalRanking } from './ProjectSignalRanking';
+export { CompanyHero } from './CompanyHero';
+export { CompanyInsightSection } from './CompanyInsightSection';
+export { ProjectOverviewSection } from './ProjectOverviewSection';
+export { CompanyCockpitDialogs } from './CompanyCockpitDialogs';

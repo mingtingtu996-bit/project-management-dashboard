@@ -20,6 +20,9 @@ export default defineConfig({
         manualChunks: {
           vendor: ['react', 'react-dom', 'react-router-dom'],
           ui: ['@radix-ui/react-dialog', '@radix-ui/react-dropdown-menu', '@radix-ui/react-select'],
+          charts: ['chart.js'],
+          icons: ['lucide-react'],
+          utils: ['date-fns', 'clsx', 'tailwind-merge'],
         },
       },
     },
@@ -35,6 +38,10 @@ export default defineConfig({
       "/api": {
         target: "http://localhost:3001",
         changeOrigin: true,
+      },
+      "/ws": {
+        target: "ws://localhost:3001",
+        ws: true,
       },
     },
   },

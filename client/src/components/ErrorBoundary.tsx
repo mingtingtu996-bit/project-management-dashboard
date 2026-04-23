@@ -3,6 +3,7 @@ import { Component, ReactNode } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { AlertTriangle, RefreshCw, Home } from 'lucide-react'
+import { reportRuntimeError } from '@/lib/runtimeErrorReporter'
 
 interface Props {
   children: ReactNode
@@ -31,6 +32,15 @@ export class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
     console.error('错误边界捕获到错误:', error, errorInfo)
+    void reportRuntimeError({
+      source: 'error_boundary',
+      message: error.message,
+      stack: error.stack,
+      componentStack: errorInfo.componentStack,
+      metadata: {
+        name: error.name,
+      },
+    })
     this.setState({
       error,
       errorInfo
@@ -65,13 +75,9 @@ export class ErrorBoundary extends Component<Props, State> {
                 应用程序遇到了一个意外错误。请尝试刷新页面或返回首页。
               </p>
               
-              {process.env.NODE_ENV === 'development' && this.state.error && (
-                <div className="mt-4 rounded-md bg-muted p-3">
-                  <p className="font-mono text-sm text-destructive">
-                    {this.state.error.message}
-                  </p>
-                </div>
-              )}
+              <div className="rounded-md bg-muted p-3 text-sm text-slate-600">
+                当前页面已中断，我们已经记录了错误信息。请先刷新页面；如果问题持续出现，再联系管理员协助处理。
+              </div>
               
               <div className="flex gap-2 justify-center pt-4">
                 <Button variant="outline" onClick={this.handleReset}>

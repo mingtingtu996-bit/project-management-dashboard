@@ -49,7 +49,7 @@ echo ============================================
 echo ⚠️  重要: 如果尚未执行数据库Migration，请按以下步骤操作:
 echo.
 echo 1. 打开 Supabase Dashboard: https://supabase.com/dashboard
-echo 2. 选择项目: wwdrkjnbvcbfytwnnyvs
+echo 2. 选择项目: ^<project-ref^>
 echo 3. 进入 SQL Editor
 echo 4. 执行文件: server\migrations\050_add_login_fields.sql
 echo 5. 默认管理员: admin / admin123

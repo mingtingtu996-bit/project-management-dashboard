@@ -4,17 +4,57 @@ import { Router } from 'express'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import { authenticate } from '../middleware/auth.js'
 import { logger } from '../middleware/logger.js'
+import { validate } from '../middleware/validation.js'
 import { executeSQL, executeSQLOne } from '../services/dbService.js'
 import { v4 as uuidv4 } from 'uuid'
+import { z } from 'zod'
 import type { ApiResponse } from '../types/index.js'
 import type { PreMilestoneCondition } from '../types/db.js'
+import {
+  buildSyncBatchLimitError,
+  REQUEST_TIMEOUT_BUDGETS,
+  runWithRequestBudget,
+} from '../services/requestBudgetService.js'
 
 const router = Router()
 router.use(authenticate)
 
+const preMilestoneConditionIdParamSchema = z.object({
+  id: z.string().trim().min(1, 'id 不能为空'),
+})
+
+const preMilestoneConditionListQuerySchema = z.object({
+  preMilestoneId: z.string().trim().min(1).optional(),
+  pre_milestone_id: z.string().trim().min(1).optional(),
+}).passthrough()
+
+const preMilestoneConditionCreateBodySchema = z.object({
+  pre_milestone_id: z.string().trim().optional(),
+  condition_type: z.string().trim().optional(),
+  condition_name: z.string().trim().optional(),
+  description: z.string().optional().nullable(),
+}).passthrough()
+
+const preMilestoneConditionUpdateBodySchema = z.object({
+  condition_type: z.string().trim().optional().nullable(),
+  condition_name: z.string().trim().optional().nullable(),
+  description: z.string().optional().nullable(),
+  status: z.string().trim().optional().nullable(),
+  completed_date: z.string().trim().optional().nullable(),
+}).passthrough()
+
+const preMilestoneConditionBatchBodySchema = z.object({
+  pre_milestone_id: z.string().trim().optional(),
+  conditions: z.array(z.object({
+    condition_type: z.string().trim().optional(),
+    condition_name: z.string().trim().optional(),
+    description: z.string().optional().nullable(),
+  }).passthrough()).optional(),
+}).passthrough()
+
 // 获取证照的所有条件
-router.get('/', asyncHandler(async (req, res) => {
-  const preMilestoneId = req.query.preMilestoneId as string
+router.get('/', validate(preMilestoneConditionListQuerySchema, 'query'), asyncHandler(async (req, res) => {
+  const preMilestoneId = String(req.query.preMilestoneId ?? req.query.pre_milestone_id ?? '').trim()
 
   if (!preMilestoneId) {
     const response: ApiResponse = {
@@ -41,7 +81,7 @@ router.get('/', asyncHandler(async (req, res) => {
 }))
 
 // 获取单个条件
-router.get('/:id', asyncHandler(async (req, res) => {
+router.get('/:id', validate(preMilestoneConditionIdParamSchema, 'params'), asyncHandler(async (req, res) => {
   const { id } = req.params
   logger.info('Fetching pre-milestone condition', { id })
 
@@ -68,7 +108,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
 }))
 
 // 创建条件
-router.post('/', asyncHandler(async (req, res) => {
+router.post('/', validate(preMilestoneConditionCreateBodySchema), asyncHandler(async (req, res) => {
   logger.info('Creating pre-milestone condition', req.body)
 
   const { pre_milestone_id, condition_type, condition_name, description } = req.body
@@ -109,7 +149,7 @@ router.post('/', asyncHandler(async (req, res) => {
 }))
 
 // 更新条件
-router.put('/:id', asyncHandler(async (req, res) => {
+router.put('/:id', validate(preMilestoneConditionIdParamSchema, 'params'), validate(preMilestoneConditionUpdateBodySchema), asyncHandler(async (req, res) => {
   const { id } = req.params
   logger.info('Updating pre-milestone condition', { id })
 
@@ -184,7 +224,7 @@ router.put('/:id', asyncHandler(async (req, res) => {
 }))
 
 // 删除条件
-router.delete('/:id', asyncHandler(async (req, res) => {
+router.delete('/:id', validate(preMilestoneConditionIdParamSchema, 'params'), asyncHandler(async (req, res) => {
   const { id } = req.params
   logger.info('Deleting pre-milestone condition', { id })
 
@@ -198,7 +238,7 @@ router.delete('/:id', asyncHandler(async (req, res) => {
 }))
 
 // 批量创建条件（当创建证照时，自动创建默认条件）
-router.post('/batch', asyncHandler(async (req, res) => {
+router.post('/batch', validate(preMilestoneConditionBatchBodySchema), asyncHandler(async (req, res) => {
   const { pre_milestone_id, conditions } = req.body
 
   if (!pre_milestone_id || !Array.isArray(conditions) || conditions.length === 0) {
@@ -215,32 +255,53 @@ router.post('/batch', asyncHandler(async (req, res) => {
 
   logger.info('Batch creating pre-milestone conditions', { pre_milestone_id, count: conditions.length })
 
-  const now = new Date().toISOString()
-  const insertedIds: string[] = []
-
-  for (const condition of conditions) {
-    const id = uuidv4()
-    await executeSQL(
-      `INSERT INTO pre_milestone_conditions
-       (id, pre_milestone_id, condition_type, condition_name, description, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [
-        id,
-        pre_milestone_id,
-        condition.condition_type,
-        condition.condition_name,
-        condition.description || null,
-        now
-      ]
-    )
-    insertedIds.push(id)
+  if (conditions.length > 100) {
+    const error = buildSyncBatchLimitError(conditions.length, { operation: 'pre_milestone_conditions.batch' })
+    const response: ApiResponse = {
+      success: false,
+      error: {
+        code: error.code ?? 'BATCH_ASYNC_REQUIRED',
+        message: error.message,
+        details: error.details,
+      },
+      timestamp: new Date().toISOString(),
+    }
+    return res.status(error.statusCode ?? 413).json(response)
   }
 
-  // 查询插入的记录
-  const placeholders = insertedIds.map(() => '?').join(', ')
-  const data = await executeSQL(
-    `SELECT * FROM pre_milestone_conditions WHERE id IN (${placeholders})`,
-    insertedIds
+  const data = await runWithRequestBudget(
+    {
+      operation: 'pre_milestone_conditions.batch',
+      timeoutMs: REQUEST_TIMEOUT_BUDGETS.batchWriteMs,
+    },
+    async () => {
+      const now = new Date().toISOString()
+      const insertedIds: string[] = []
+
+      for (const condition of conditions) {
+        const id = uuidv4()
+        await executeSQL(
+          `INSERT INTO pre_milestone_conditions
+           (id, pre_milestone_id, condition_type, condition_name, description, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          [
+            id,
+            pre_milestone_id,
+            condition.condition_type,
+            condition.condition_name,
+            condition.description || null,
+            now
+          ]
+        )
+        insertedIds.push(id)
+      }
+
+      const placeholders = insertedIds.map(() => '?').join(', ')
+      return await executeSQL(
+        `SELECT * FROM pre_milestone_conditions WHERE id IN (${placeholders})`,
+        insertedIds
+      )
+    },
   )
 
   const response: ApiResponse<PreMilestoneCondition[]> = {

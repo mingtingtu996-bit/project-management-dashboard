@@ -1,6 +1,7 @@
 // run-migration.cjs — 确认环境信息并给出操作指引
 const fs = require('fs');
 const path = require('path');
+const CANONICAL_CLEAN_BUNDLE = 'CLEAN_MIGRATION_V4.sql';
 
 // 直接读取 .env
 const envContent = fs.readFileSync(path.join(__dirname, '.env'), 'utf-8');
@@ -25,7 +26,7 @@ console.log('Service Key:', svcKey.substring(0, 15) + '...');
 console.log('DB Password:', dbPwd === 'NOT FOUND' ? 'NOT FOUND' : '***');
 
 // SQL 文件
-const sqlPath = path.join(__dirname, 'migrations', 'CLEAN_MIGRATION_V4.sql');
+const sqlPath = path.join(__dirname, 'migrations', CANONICAL_CLEAN_BUNDLE);
 const sql = fs.readFileSync(sqlPath, 'utf-8');
 console.log('\n迁移文件:', sqlPath);
 console.log('文件大小:', sql.length, '字符,', sql.split('\n').length, '行');

@@ -1,15 +1,16 @@
 import { type ClassValue, clsx } from "clsx"
 import { twMerge } from "tailwind-merge"
+import { safeStorageGet, safeStorageSet } from '@/lib/browserStorage'
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
 export function generateDeviceId(): string {
-  let deviceId = localStorage.getItem('device_id')
+  let deviceId = safeStorageGet(localStorage, 'device_id')
   if (!deviceId) {
     deviceId = crypto.randomUUID()
-    localStorage.setItem('device_id', deviceId)
+    safeStorageSet(localStorage, 'device_id', deviceId)
   }
   return deviceId
 }

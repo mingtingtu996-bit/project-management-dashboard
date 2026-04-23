@@ -1,0 +1,22 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { describe, expect, it } from 'vitest'
+
+const serverRoot = process.cwd().endsWith('\\server') ? process.cwd() : resolve(process.cwd(), 'server')
+
+function readServerFile(...segments: string[]) {
+  return readFileSync(resolve(serverRoot, ...segments), 'utf8')
+}
+
+describe('scope dimensions contract', () => {
+  it('keeps region in the shared route and adds dictionary POST/DELETE endpoints', () => {
+    const migration = readServerFile('migrations', '067_create_scope_dimensions_tables.sql')
+    const routeSource = readServerFile('src', 'routes', 'scope-dimensions.ts')
+
+    expect(migration).toContain("('region', '一区'")
+    expect(routeSource).toContain("const SCOPE_KEYS: ScopeDimensionKey[] = ['building', 'specialty', 'phase', 'region']")
+    expect(routeSource).toContain('router.post(')
+    expect(routeSource).toContain('router.delete(')
+    expect(routeSource).toContain('region: normalizeLabels')
+  })
+})

@@ -1,10 +1,12 @@
-type TaskLike = {
+﻿type TaskLike = {
   id?: string | null
   status?: string | null
   progress?: number | null
+  planned_start_date?: string | null
   planned_end_date?: string | null
   end_date?: string | null
   parent_id?: string | null
+  is_critical?: boolean | null
 }
 
 type TaskConditionLike = {
@@ -31,7 +33,9 @@ export type TaskConditionSummary = {
 
 export type TaskBusinessStatusCode =
   | 'completed'
-  | 'blocked'
+  | 'lagging_severe'
+  | 'lagging_moderate'
+  | 'lagging_mild'
   | 'pending_conditions'
   | 'ready'
   | 'in_progress'
@@ -60,13 +64,55 @@ export type ProjectTaskProgressSnapshot = {
   obstacleCountMap: Record<string, number>
 }
 
-const COMPLETED_STATUSES = new Set(['completed', 'done', '已完成'])
-const IN_PROGRESS_STATUSES = new Set(['in_progress', 'active', '进行中'])
-const TODO_STATUSES = new Set(['todo', 'pending', '未开始', 'not_started'])
-const BLOCKED_STATUSES = new Set(['blocked', '受阻', 'obstacle', 'obstructed'])
-const SATISFIED_CONDITION_STATUSES = new Set(['completed', 'satisfied', 'confirmed', '已满足', '已确认'])
-const RESOLVED_OBSTACLE_STATUSES = new Set(['resolved', 'closed', '已解决', '无法解决'])
-const CLOSED_RISK_STATUSES = new Set(['resolved', 'closed', 'mitigated', '已解决'])
+export const TASK_STATUS_THEME = {
+  completed: {
+    code: 'completed',
+    label: '\u5df2\u5b8c\u6210',
+    cls: 'bg-emerald-100 text-emerald-700 border border-emerald-200',
+  },
+  lagging_severe: {
+    code: 'lagging_severe',
+    label: '\u8fdb\u5ea6\u4e25\u91cd\u6ede\u540e',
+    cls: 'bg-orange-100 text-orange-700 border border-orange-200',
+  },
+  lagging_moderate: {
+    code: 'lagging_moderate',
+    label: '\u8fdb\u5ea6\u6162',
+    cls: 'bg-amber-100 text-amber-700 border border-amber-200',
+  },
+  lagging_mild: {
+    code: 'lagging_mild',
+    label: '\u8fdb\u5ea6\u504f\u6162',
+    cls: 'bg-amber-50 text-amber-600 border border-amber-200',
+  },
+  pending_conditions: {
+    code: 'pending_conditions',
+    label: '\u5f85\u5f00\u5de5',
+    cls: 'bg-orange-100 text-orange-700 border border-orange-200',
+  },
+  ready: {
+    code: 'ready',
+    label: '\u53ef\u5f00\u5de5',
+    cls: 'bg-emerald-50 text-emerald-700 border border-emerald-200',
+  },
+  in_progress: {
+    code: 'in_progress',
+    label: '\u8fdb\u884c\u4e2d',
+    cls: 'bg-blue-100 text-blue-700 border border-blue-200',
+  },
+  pending: {
+    code: 'pending',
+    label: '\u672a\u5f00\u59cb',
+    cls: 'bg-slate-100 text-slate-600 border border-slate-200',
+  },
+} as const
+
+const COMPLETED_STATUSES = new Set(['completed'])
+const IN_PROGRESS_STATUSES = new Set(['in_progress', 'blocked'])
+const TODO_STATUSES = new Set(['todo'])
+const SATISFIED_CONDITION_STATUSES = new Set(['\u5df2\u6ee1\u8db3', '\u5df2\u786e\u8ba4'])
+const RESOLVED_OBSTACLE_STATUSES = new Set(['\u5df2\u89e3\u51b3'])
+const CLOSED_RISK_STATUSES = new Set(['resolved', 'closed', 'mitigated', '\u5df2\u89e3\u51b3'])
 
 export function normalizeStatus(value: unknown): string {
   return String(value ?? '').trim().toLowerCase()
@@ -160,6 +206,38 @@ export function buildTaskObstacleSummary(
   return countMap
 }
 
+export type LaggingLevel = 'lagging_severe' | 'lagging_moderate' | 'lagging_mild'
+
+export function isLaggingTask(task: TaskLike): LaggingLevel | null {
+  const status = normalizeStatus(task.status)
+  if (status !== 'in_progress' && status !== 'blocked') return null
+  if (!task.planned_start_date || !task.planned_end_date) return null
+
+  const today = Date.now()
+  const start = new Date(task.planned_start_date).getTime()
+  const end = new Date(task.planned_end_date).getTime()
+  if (Number.isNaN(start) || Number.isNaN(end)) return null
+
+  const duration = Math.round((end - start) / 86400000)
+  if (duration <= 3) return null
+
+  if (today >= end) return null // 已逾期，走逾期逻辑
+
+  const elapsed = Math.max(0, Math.round((today - start) / 86400000))
+  const timeRatio = elapsed / duration
+  if (timeRatio <= 0) return null
+
+  const progress = Number(task.progress ?? 0)
+  const biasRatio = (progress / 100) / timeRatio
+  const remaining = Math.round((end - today) / 86400000)
+  const threshold = task.is_critical ? 0.8 : 0.7
+
+  if (biasRatio < 0.5 && remaining < 3) return 'lagging_severe'
+  if (biasRatio < 0.5) return 'lagging_moderate'
+  if (biasRatio < threshold) return 'lagging_mild'
+  return null
+}
+
 export function getTaskBusinessStatus(
   task: TaskLike,
   options: {
@@ -168,33 +246,29 @@ export function getTaskBusinessStatus(
   } = {},
 ): TaskBusinessStatus {
   const conditionSummary = options.conditionSummary ?? { total: 0, satisfied: 0 }
-  const activeObstacleCount = options.activeObstacleCount ?? 0
 
   if (isCompletedTask(task)) {
-    return { code: 'completed', label: '已完成' }
+    return TASK_STATUS_THEME.completed
+  }
+
+  const laggingLevel = isLaggingTask(task)
+  if (laggingLevel) {
+    return TASK_STATUS_THEME[laggingLevel]
   }
 
   if (isInProgressTask(task)) {
-    if (activeObstacleCount > 0 || BLOCKED_STATUSES.has(normalizeStatus(task.status))) {
-      return { code: 'blocked', label: '进行中(有阻碍)' }
-    }
-
-    return { code: 'in_progress', label: '进行中' }
-  }
-
-  if (activeObstacleCount > 0 || BLOCKED_STATUSES.has(normalizeStatus(task.status))) {
-    return { code: 'blocked', label: '受阻' }
+    return TASK_STATUS_THEME.in_progress
   }
 
   if (conditionSummary.total > 0 && conditionSummary.satisfied < conditionSummary.total) {
-    return { code: 'pending_conditions', label: '待开工' }
+    return TASK_STATUS_THEME.pending_conditions
   }
 
   if (isTodoTask(task)) {
-    return { code: 'ready', label: '可开工' }
+    return TASK_STATUS_THEME.ready
   }
 
-  return { code: 'pending', label: '未开始' }
+  return TASK_STATUS_THEME.pending
 }
 
 export function buildProjectTaskProgressSnapshot(
@@ -295,3 +369,4 @@ export function calculateProjectHealthScore(input: {
     ),
   )
 }
+

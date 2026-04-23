@@ -1,19 +1,86 @@
 ﻿// WBS模板 API 路由
 
 import { Router } from 'express'
-import { executeSQL, executeSQLOne } from '../services/dbService.js'
+import { executeSQL, executeSQLOne, supabase } from '../services/dbService.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import { authenticate } from '../middleware/auth.js'
 import { logger } from '../middleware/logger.js'
 import type { ApiResponse } from '../types/index.js'
 import type { WBSTemplate } from '../types/db.js'
 import { ValidationService } from '../services/validationService.js'
+import {
+  PlanningBootstrapService,
+  buildBaselineItemsFromTemplateNodes,
+  type PlanningBootstrapNode,
+} from '../services/planningBootstrap.js'
+import { buildSuggestedWbsTemplate } from '../services/wbsTemplatePresets.js'
 import multer from 'multer'
 import * as XLSX from 'xlsx'
 import { v4 as uuidv4 } from 'uuid'
 
 const router = Router()
 router.use(authenticate)
+const planningBootstrapService = new PlanningBootstrapService()
+const WBS_TEMPLATE_FIELDS = [
+  'id',
+  'template_name',
+  'template_type',
+  'description',
+  'wbs_nodes',
+  'is_default',
+  'is_construction_default',
+  'is_public',
+  'is_builtin',
+  'category',
+  'tags',
+  'node_count',
+  'reference_days',
+  'usage_count',
+  'deleted_at',
+  'created_by',
+  'created_at',
+  'updated_at',
+].join(', ')
+const WBS_TEMPLATE_SELECT = `SELECT ${WBS_TEMPLATE_FIELDS} FROM wbs_templates`
+const PROJECT_BOOTSTRAP_FIELDS = [
+  'id',
+  'name',
+  'status',
+  'project_type',
+  'building_type',
+  'planned_start_date',
+  'start_date',
+  'actual_start_date',
+  'current_phase',
+  'default_wbs_generated',
+].join(', ')
+const PROJECT_BOOTSTRAP_SELECT = `SELECT ${PROJECT_BOOTSTRAP_FIELDS} FROM projects`
+const BOOTSTRAP_TASK_FIELDS = [
+  'id',
+  'parent_id',
+  'title',
+  'description',
+  'reference_duration',
+  'ai_duration',
+  'is_milestone',
+].join(', ')
+const BOOTSTRAP_MILESTONE_FIELDS = [
+  'id',
+  'title',
+  'description',
+].join(', ')
+const TASK_BASELINE_DRAFT_FIELDS = [
+  'id',
+  'project_id',
+  'version',
+  'status',
+  'title',
+  'description',
+  'source_type',
+  'source_version_label',
+  'created_at',
+  'updated_at',
+].join(', ')
 
 // multer 内存存储（不写磁盘，解析完即丢弃）
 const upload = multer({
@@ -72,6 +139,191 @@ function countNodes(nodes: any[]): number {
   return count
 }
 
+function parsePlanningNodes(raw: any): PlanningBootstrapNode[] {
+  const source = raw?.wbs_nodes ?? raw?.template_data ?? raw?.nodes ?? raw ?? []
+  if (typeof source === 'string') {
+    try {
+      return parsePlanningNodes(JSON.parse(source))
+    } catch {
+      return []
+    }
+  }
+
+  if (!Array.isArray(source)) return []
+
+  return source.map((node: any) => ({
+    title: String(node.title ?? node.name ?? '未命名节点'),
+    description: node.description ?? null,
+    reference_days: node.reference_days ?? node.duration ?? null,
+    is_milestone: Boolean(node.is_milestone),
+    source_id: node.source_id ?? node.id ?? null,
+    children: parsePlanningNodes(node.children ?? []),
+  }))
+}
+
+function countPlanningNodes(nodes: PlanningBootstrapNode[]): number {
+  let total = 0
+  for (const node of nodes) {
+    total += 1
+    if (Array.isArray(node.children) && node.children.length > 0) {
+      total += countPlanningNodes(node.children)
+    }
+  }
+  return total
+}
+
+async function getProjectBootstrapBundle(projectId: string) {
+  const [project, tasksResponse, milestonesResponse] = await Promise.all([
+    executeSQLOne(`${PROJECT_BOOTSTRAP_SELECT} WHERE id = ? LIMIT 1`, [projectId]),
+    supabase.from('tasks').select(BOOTSTRAP_TASK_FIELDS).eq('project_id', projectId),
+    supabase.from('milestones').select(BOOTSTRAP_MILESTONE_FIELDS).eq('project_id', projectId),
+  ])
+
+  if (!project) {
+    return null
+  }
+
+  if (tasksResponse.error) throw new Error(tasksResponse.error.message)
+  if (milestonesResponse.error) throw new Error(milestonesResponse.error.message)
+
+  const tasks = (tasksResponse.data ?? []) as any[]
+  const milestones = (milestonesResponse.data ?? []) as any[]
+
+  const context = planningBootstrapService.buildContext({
+    project: project as any,
+    tasks,
+    milestones,
+  })
+  const nodes = planningBootstrapService.buildProjectNodes({
+    project: project as any,
+    tasks,
+    milestones,
+  })
+
+  return {
+    project: project as any,
+    tasks,
+    milestones,
+    context,
+    nodes,
+  }
+}
+
+async function getLatestVersion(tableName: 'task_baselines', projectId: string) {
+  const { data, error } = await supabase
+    .from(tableName)
+    .select('version')
+    .eq('project_id', projectId)
+    .order('version', { ascending: false })
+    .limit(1)
+
+  if (error) throw new Error(error.message)
+  return Number((data?.[0] as any)?.version ?? 0)
+}
+
+async function insertBaselineDraft(params: {
+  projectId: string
+  title: string
+  description?: string | null
+  sourceType: 'manual' | 'current_schedule' | 'imported_file' | 'carryover'
+  sourceVersionLabel?: string | null
+  anchorDate?: string | null
+  nodes: PlanningBootstrapNode[]
+}) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const version = (await getLatestVersion('task_baselines', params.projectId)) + 1
+    const baselineId = uuidv4()
+    const now = new Date().toISOString()
+    const { error: insertError } = await supabase.from('task_baselines').insert({
+      id: baselineId,
+      project_id: params.projectId,
+      version,
+      status: 'draft',
+      title: params.title,
+      description: params.description ?? null,
+      source_type: params.sourceType,
+      source_version_label: params.sourceVersionLabel ?? null,
+      created_at: now,
+      updated_at: now,
+    })
+
+    if (insertError) {
+      if (insertError.code === '23505' && attempt < 2) continue
+      throw new Error(insertError.message)
+    }
+
+    const items = buildBaselineItemsFromTemplateNodes(params.nodes, {
+      projectId: params.projectId,
+      baselineVersionId: baselineId,
+      anchorDate: params.anchorDate,
+    })
+    if (items.length > 0) {
+      const { error: itemError } = await supabase.from('task_baseline_items').insert(items)
+      if (itemError) {
+        await Promise.all([
+          supabase.from('task_baseline_items').delete().eq('baseline_version_id', baselineId),
+          supabase.from('task_baselines').delete().eq('id', baselineId),
+        ])
+        throw new Error(itemError.message)
+      }
+    }
+
+    const { data } = await supabase.from('task_baselines').select(TASK_BASELINE_DRAFT_FIELDS).eq('id', baselineId).single()
+    return {
+      baseline: data ?? {
+        id: baselineId,
+        project_id: params.projectId,
+        version,
+        status: 'draft',
+        title: params.title,
+        description: params.description ?? null,
+        source_type: params.sourceType,
+        source_version_label: params.sourceVersionLabel ?? null,
+        created_at: now,
+        updated_at: now,
+      },
+      items,
+    }
+  }
+
+  throw new Error('创建项目基线失败，请稍后重试')
+}
+
+async function insertTemplateDraft(params: {
+  projectId: string
+  createdBy?: string | null
+  templateName: string
+  templateType: string
+  description?: string | null
+  nodes: PlanningBootstrapNode[]
+}) {
+  const templateId = uuidv4()
+  const now = new Date().toISOString()
+  const payload = {
+    id: templateId,
+    template_name: params.templateName,
+    template_type: params.templateType,
+    description: params.description ?? null,
+    wbs_nodes: params.nodes,
+    is_default: 0,
+    is_public: 1,
+    is_builtin: 0,
+    category: params.templateType,
+    tags: ['计划编制', '冷启动'],
+    node_count: countPlanningNodes(params.nodes),
+    reference_days: null,
+    created_by: params.createdBy ?? null,
+    created_at: now,
+    updated_at: now,
+  }
+
+  const { error } = await supabase.from('wbs_templates').insert(payload)
+  if (error) throw new Error(error.message)
+
+  const { data } = await supabase.from('wbs_templates').select(WBS_TEMPLATE_FIELDS).eq('id', templateId).single()
+  return data ?? payload
+}
+
 // 获取所有WBS模板
 router.get('/', asyncHandler(async (req, res) => {
   const templateType = req.query.type as string
@@ -79,7 +331,7 @@ router.get('/', asyncHandler(async (req, res) => {
 
   logger.info('Fetching WBS templates', { templateType, statusFilter })
 
-  let sql = 'SELECT * FROM wbs_templates WHERE 1=1'
+  let sql = `${WBS_TEMPLATE_SELECT} WHERE 1=1`
   const params: any[] = []
 
   // 状态筛选：默认只返回未停用（deleted_at is null）的模板
@@ -125,151 +377,243 @@ router.post('/generate-ai', asyncHandler(async (req, res) => {
   }
 
   logger.info('AI generate WBS template', { prompt })
-
-  // ── 根据关键词匹配预置模板 ────────────────────────────────────────────
-  const p = prompt.toLowerCase()
-
-  // 判断项目类型
-  const isCommercial = /商业|综合体|商场|写字楼|办公/.test(p)
-  const isIndustrial = /工业|厂房|仓库|钢结构/.test(p)
-  // const isResidential = /住宅|公寓|小区|residential/.test(p)
-
-  // 判断结构类型
-  const isSteel = /钢结构|steel/.test(p)
-  const isFrame = /框架|框剪|frame/.test(p)
-
-  // 解析层数/面积（简单正则）
-  const floorsMatch = p.match(/(\d+)\s*[层楼]/)
-  const floors = floorsMatch ? parseInt(floorsMatch[1]) : 18
-  const isHighRise = floors >= 15
-
-  // 解析工期（月）
-  const monthsMatch = p.match(/(\d+)\s*个?月/)
-  const months = monthsMatch ? parseInt(monthsMatch[1]) : (isCommercial ? 24 : isIndustrial ? 12 : 18)
-
-  let templateType = '住宅'
-  let suggestedName = '标准住宅 WBS 模板'
-  let nodes: any[]
-
-  if (isCommercial) {
-    templateType = '商业'
-    suggestedName = '商业综合体 WBS 模板'
-    nodes = [
-      { name: '前期准备', reference_days: 60, children: [
-        { name: '立项报批', reference_days: 20 },
-        { name: '规划方案设计', reference_days: 30 },
-        { name: '施工图设计', reference_days: 45 },
-      ]},
-      { name: '基础工程', is_milestone: true, reference_days: Math.round(months * 30 * 0.15), children: [
-        { name: '土方开挖', reference_days: Math.round(months * 30 * 0.06) },
-        { name: '基础施工（桩基/筏板）', reference_days: Math.round(months * 30 * 0.1) },
-        { name: '地下室结构', reference_days: Math.round(months * 30 * 0.12) },
-      ]},
-      { name: '主体结构', is_milestone: true, reference_days: Math.round(months * 30 * 0.35), children: [
-        { name: `地上主体结构（${isSteel ? '钢结构' : '框架'}）`, reference_days: Math.round(months * 30 * 0.3) },
-        { name: '幕墙及外立面', reference_days: Math.round(months * 30 * 0.15) },
-      ]},
-      { name: '机电安装', reference_days: Math.round(months * 30 * 0.25), children: [
-        { name: '强电安装', reference_days: Math.round(months * 30 * 0.1) },
-        { name: '弱电智能化', reference_days: Math.round(months * 30 * 0.1) },
-        { name: '给排水', reference_days: Math.round(months * 30 * 0.08) },
-        { name: '暖通空调', reference_days: Math.round(months * 30 * 0.12) },
-      ]},
-      { name: '装饰装修', reference_days: Math.round(months * 30 * 0.25), children: [
-        { name: '公共区域精装', reference_days: Math.round(months * 30 * 0.2) },
-        { name: '租户区域装修', reference_days: Math.round(months * 30 * 0.15) },
-      ]},
-      { name: '室外工程', reference_days: Math.round(months * 30 * 0.1), children: [
-        { name: '景观绿化', reference_days: Math.round(months * 30 * 0.08) },
-        { name: '停车场', reference_days: Math.round(months * 30 * 0.05) },
-      ]},
-      { name: '竣工验收', is_milestone: true, reference_days: 30, children: [
-        { name: '消防验收', reference_days: 15 },
-        { name: '综合验收', reference_days: 20 },
-        { name: '竣工备案', reference_days: 10 },
-      ]},
-    ]
-  } else if (isIndustrial) {
-    templateType = '工业'
-    suggestedName = `工业厂房 WBS 模板${isSteel ? '（钢结构）' : ''}`
-    nodes = [
-      { name: '前期准备', reference_days: 30, children: [
-        { name: '场地勘察', reference_days: 15 },
-        { name: '施工图设计', reference_days: 30 },
-      ]},
-      { name: '基础工程', is_milestone: true, reference_days: Math.round(months * 30 * 0.2), children: [
-        { name: '土方平整', reference_days: Math.round(months * 30 * 0.06) },
-        { name: '独立基础/条形基础', reference_days: Math.round(months * 30 * 0.12) },
-      ]},
-      { name: '主体结构', is_milestone: true, reference_days: Math.round(months * 30 * 0.4), children: isSteel ? [
-        { name: '钢柱制作与安装', reference_days: Math.round(months * 30 * 0.2) },
-        { name: '钢梁及屋架安装', reference_days: Math.round(months * 30 * 0.15) },
-        { name: '围护结构（彩钢板）', reference_days: Math.round(months * 30 * 0.1) },
-      ] : [
-        { name: '混凝土框架施工', reference_days: Math.round(months * 30 * 0.3) },
-        { name: '屋面结构', reference_days: Math.round(months * 30 * 0.12) },
-      ]},
-      { name: '配套设施', reference_days: Math.round(months * 30 * 0.2), children: [
-        { name: '水电安装', reference_days: Math.round(months * 30 * 0.12) },
-        { name: '消防系统', reference_days: Math.round(months * 30 * 0.08) },
-        { name: '地坪工程', reference_days: Math.round(months * 30 * 0.08) },
-      ]},
-      { name: '竣工验收', is_milestone: true, reference_days: 20, children: [
-        { name: '消防验收', reference_days: 10 },
-        { name: '竣工验收', reference_days: 15 },
-      ]},
-    ]
-  } else {
-    // 默认住宅
-    templateType = floors > 10 ? (isHighRise ? '高层住宅' : '小高层住宅') : '多层住宅'
-    suggestedName = `${floors}层住宅 WBS 模板${isFrame ? '（框剪）' : ''}`
-    nodes = [
-      { name: '前期准备', reference_days: 45, children: [
-        { name: '地质勘察', reference_days: 15 },
-        { name: '施工图设计', reference_days: 30 },
-        { name: '开工许可证', reference_days: 20 },
-      ]},
-      { name: '基础工程', is_milestone: true, reference_days: Math.round(months * 30 * 0.18), children: [
-        { name: '土方开挖', reference_days: Math.round(months * 30 * 0.05) },
-        { name: '桩基础', reference_days: Math.round(months * 30 * 0.08) },
-        { name: '地下室底板', reference_days: Math.round(months * 30 * 0.07) },
-        { name: '地下室侧墙', reference_days: Math.round(months * 30 * 0.07) },
-      ]},
-      { name: '主体结构', is_milestone: true, reference_days: Math.round(months * 30 * 0.35), children: [
-        { name: `标准层施工（共${floors}层）`, reference_days: Math.round(months * 30 * 0.3) },
-        { name: '屋面层施工', reference_days: Math.round(months * 30 * 0.04) },
-      ]},
-      { name: '二次结构', reference_days: Math.round(months * 30 * 0.1), children: [
-        { name: '砌体工程', reference_days: Math.round(months * 30 * 0.08) },
-        { name: '抹灰工程', reference_days: Math.round(months * 30 * 0.07) },
-      ]},
-      { name: '机电安装', reference_days: Math.round(months * 30 * 0.2), children: [
-        { name: '给排水安装', reference_days: Math.round(months * 30 * 0.07) },
-        { name: '强弱电安装', reference_days: Math.round(months * 30 * 0.08) },
-        { name: '消防系统', reference_days: Math.round(months * 30 * 0.06) },
-        { name: '电梯安装', reference_days: Math.round(months * 30 * 0.08) },
-      ]},
-      { name: '装饰装修', reference_days: Math.round(months * 30 * 0.2), children: [
-        { name: '外墙保温及涂料', reference_days: Math.round(months * 30 * 0.12) },
-        { name: '公共区域装修', reference_days: Math.round(months * 30 * 0.1) },
-        { name: '门窗安装', reference_days: Math.round(months * 30 * 0.06) },
-      ]},
-      { name: '室外工程', reference_days: Math.round(months * 30 * 0.08), children: [
-        { name: '室外管网', reference_days: Math.round(months * 30 * 0.05) },
-        { name: '景观绿化', reference_days: Math.round(months * 30 * 0.06) },
-        { name: '车库地坪', reference_days: Math.round(months * 30 * 0.04) },
-      ]},
-      { name: '竣工验收', is_milestone: true, reference_days: 45, children: [
-        { name: '分项验收（消防/人防/节能）', reference_days: 30 },
-        { name: '综合竣工验收', reference_days: 20 },
-        { name: '竣工备案', reference_days: 15 },
-      ]},
-    ]
-  }
+  const { suggestedName, suggestedType, nodes } = buildSuggestedWbsTemplate(prompt)
 
   const response: ApiResponse<{ nodes: any[]; suggestedName: string; suggestedType: string }> = {
     success: true,
-    data: { nodes, suggestedName, suggestedType: templateType },
+    data: { nodes, suggestedName, suggestedType },
+    timestamp: new Date().toISOString(),
+  }
+  res.json(response)
+}))
+
+router.get('/bootstrap/context', asyncHandler(async (req, res) => {
+  const projectId = String(req.query.project_id ?? req.query.projectId ?? '').trim()
+  if (!projectId) {
+    const response: ApiResponse = {
+      success: false,
+      error: { code: 'VALIDATION_ERROR', message: 'project_id 不能为空' },
+      timestamp: new Date().toISOString(),
+    }
+    return res.status(400).json(response)
+  }
+
+  const bundle = await getProjectBootstrapBundle(projectId)
+  if (!bundle) {
+    const response: ApiResponse = {
+      success: false,
+      error: { code: 'PROJECT_NOT_FOUND', message: '项目不存在' },
+      timestamp: new Date().toISOString(),
+    }
+    return res.status(404).json(response)
+  }
+
+  const response: ApiResponse = {
+    success: true,
+    data: {
+      guide: bundle.context.guide,
+      project_id: projectId,
+      task_count: bundle.tasks.length,
+      milestone_count: bundle.milestones.length,
+      available_paths: [
+        { key: 'template_to_baseline', label: 'WBS 模板 -> 项目基线' },
+        { key: 'completed_project_to_template', label: '已完成项目 -> WBS 模板' },
+        { key: 'ongoing_project_to_baseline', label: '在建项目 -> 初始化基线' },
+      ],
+    },
+    timestamp: new Date().toISOString(),
+  }
+  res.json(response)
+}))
+
+router.post('/bootstrap/from-template', asyncHandler(async (req, res) => {
+  const projectId = String(req.body?.project_id ?? req.body?.projectId ?? '').trim()
+  const templateId = String(req.body?.template_id ?? req.body?.templateId ?? '').trim()
+
+  if (!projectId || !templateId) {
+    const response: ApiResponse = {
+      success: false,
+      error: { code: 'VALIDATION_ERROR', message: 'project_id 和 template_id 不能为空' },
+      timestamp: new Date().toISOString(),
+    }
+    return res.status(400).json(response)
+  }
+
+  const [project, templateResult] = await Promise.all([
+    executeSQLOne(`${PROJECT_BOOTSTRAP_SELECT} WHERE id = ? LIMIT 1`, [projectId]),
+    supabase.from('wbs_templates').select(WBS_TEMPLATE_FIELDS).eq('id', templateId).limit(1),
+  ])
+
+  if (!project) {
+    const response: ApiResponse = {
+      success: false,
+      error: { code: 'PROJECT_NOT_FOUND', message: '项目不存在' },
+      timestamp: new Date().toISOString(),
+    }
+    return res.status(404).json(response)
+  }
+  if (templateResult.error) throw new Error(templateResult.error.message)
+  const template = templateResult.data?.[0] as any
+  if (!template) {
+    const response: ApiResponse = {
+      success: false,
+      error: { code: 'TEMPLATE_NOT_FOUND', message: 'WBS 模板不存在' },
+      timestamp: new Date().toISOString(),
+    }
+    return res.status(404).json(response)
+  }
+
+  const nodes = parsePlanningNodes(template)
+  const baseline = await insertBaselineDraft({
+    projectId,
+    title: `${String(project.name ?? '项目')} 项目基线`,
+    description: '由 WBS 模板直接生成的项目基线。',
+    sourceType: 'manual',
+    sourceVersionLabel: String(template.template_name ?? template.name ?? 'WBS 模板'),
+    anchorDate: String(
+      project.planned_start_date
+        ?? project.start_date
+        ?? project.actual_start_date
+        ?? '',
+    ).trim() || null,
+    nodes,
+  })
+
+  const response: ApiResponse = {
+    success: true,
+    data: {
+      path: 'template_to_baseline',
+      baseline: baseline.baseline,
+      created_item_count: baseline.items.length,
+      template_id: templateId,
+      project_id: projectId,
+    },
+    timestamp: new Date().toISOString(),
+  }
+  res.status(201).json(response)
+}))
+
+router.post('/bootstrap/from-completed-project', asyncHandler(async (req, res) => {
+  const projectId = String(req.body?.project_id ?? req.body?.projectId ?? '').trim()
+  if (!projectId) {
+    const response: ApiResponse = {
+      success: false,
+      error: { code: 'VALIDATION_ERROR', message: 'project_id 不能为空' },
+      timestamp: new Date().toISOString(),
+    }
+    return res.status(400).json(response)
+  }
+
+  const bundle = await getProjectBootstrapBundle(projectId)
+  if (!bundle) {
+    const response: ApiResponse = {
+      success: false,
+      error: { code: 'PROJECT_NOT_FOUND', message: '项目不存在' },
+      timestamp: new Date().toISOString(),
+    }
+    return res.status(404).json(response)
+  }
+
+  const template = await insertTemplateDraft({
+    projectId,
+    createdBy: req.user?.id ?? null,
+    templateName: `${String(bundle.project.name ?? '项目')} 沉淀模板`,
+    templateType: String(bundle.project.project_type ?? bundle.project.building_type ?? '通用').trim() || '通用',
+    description: '由已完成项目沉淀出来的模板，可直接复用到新项目。',
+    nodes: bundle.nodes,
+  })
+
+  const response: ApiResponse = {
+    success: true,
+    data: {
+      path: 'completed_project_to_template',
+      template,
+      project_id: projectId,
+      node_count: countPlanningNodes(bundle.nodes),
+    },
+    timestamp: new Date().toISOString(),
+  }
+  res.status(201).json(response)
+}))
+
+router.post('/bootstrap/from-ongoing-project', asyncHandler(async (req, res) => {
+  const projectId = String(req.body?.project_id ?? req.body?.projectId ?? '').trim()
+  if (!projectId) {
+    const response: ApiResponse = {
+      success: false,
+      error: { code: 'VALIDATION_ERROR', message: 'project_id 不能为空' },
+      timestamp: new Date().toISOString(),
+    }
+    return res.status(400).json(response)
+  }
+
+  const bundle = await getProjectBootstrapBundle(projectId)
+  if (!bundle) {
+    const response: ApiResponse = {
+      success: false,
+      error: { code: 'PROJECT_NOT_FOUND', message: '项目不存在' },
+      timestamp: new Date().toISOString(),
+    }
+    return res.status(404).json(response)
+  }
+
+  const baseline = await insertBaselineDraft({
+    projectId,
+    title: `${String(bundle.project.name ?? '项目')} 项目基线`,
+    description: '由在建项目当前执行现状自动补建的初始基线。',
+    sourceType: 'current_schedule',
+    sourceVersionLabel: String(bundle.project.status ?? '进行中'),
+    nodes: bundle.nodes,
+  })
+
+  const response: ApiResponse = {
+    success: true,
+    data: {
+      path: 'ongoing_project_to_baseline',
+      baseline: baseline.baseline,
+      created_item_count: baseline.items.length,
+      project_id: projectId,
+      needs_mapping_review: true,
+    },
+    timestamp: new Date().toISOString(),
+  }
+  res.status(201).json(response)
+}))
+
+// ── F9: JSON 导出 ────────────────────────────────────────────────────────────
+router.get('/export-json', asyncHandler(async (req, res) => {
+  const { ids } = req.query as { ids?: string }
+
+  let query = `${WBS_TEMPLATE_SELECT} WHERE deleted_at IS NULL ORDER BY created_at DESC`
+  const params: string[] = []
+
+  if (ids) {
+    const idArr = ids.split(',').map((s: string) => s.trim()).filter(Boolean)
+    if (idArr.length > 0) {
+      query = `${WBS_TEMPLATE_SELECT} WHERE deleted_at IS NULL AND id IN (?) ORDER BY created_at DESC`
+      params.push(idArr.join(','))
+    }
+  }
+
+  const templates = await executeSQL<WBSTemplate[]>(query, params)
+
+  const result = (templates as any[]).map((t) => {
+    const mapped = mapTemplateFields(t)
+    const rawNodes = mapped.wbs_nodes || mapped.template_data || []
+    const nodes = (Array.isArray(rawNodes) ? rawNodes : []).map((n: any) => ({
+      id: n.id ?? null,
+      parent_id: n.parent_id ?? null,
+      title: n.title ?? n.name ?? '',
+      level: n.level ?? 0,
+      duration: n.duration ?? 0,
+      sort_order: n.sort_order ?? n.sortOrder ?? 0,
+    }))
+    return { ...mapped, nodes }
+  })
+
+  const response: ApiResponse<typeof result> = {
+    success: true,
+    data: result,
     timestamp: new Date().toISOString(),
   }
   res.json(response)
@@ -280,7 +624,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
   const { id } = req.params
   logger.info('Fetching WBS template', { id })
 
-  const data = await executeSQLOne('SELECT * FROM wbs_templates WHERE id = ? LIMIT 1', [id])
+  const data = await executeSQLOne(`${WBS_TEMPLATE_SELECT} WHERE id = ? LIMIT 1`, [id])
 
   if (!data) {
     const response: ApiResponse = {
@@ -337,7 +681,7 @@ router.post('/', asyncHandler(async (req, res) => {
     ]
   )
 
-  const data = await executeSQLOne('SELECT * FROM wbs_templates WHERE id = ? LIMIT 1', [id])
+  const data = await executeSQLOne(`${WBS_TEMPLATE_SELECT} WHERE id = ? LIMIT 1`, [id])
 
   const response: ApiResponse<WBSTemplate> = {
     success: true,
@@ -394,7 +738,7 @@ router.put('/:id', asyncHandler(async (req, res) => {
   params.push(id)
   await executeSQL(`UPDATE wbs_templates SET ${setClauses.join(', ')} WHERE id = ?`, params)
 
-  const data = await executeSQLOne('SELECT * FROM wbs_templates WHERE id = ? LIMIT 1', [id])
+  const data = await executeSQLOne(`${WBS_TEMPLATE_SELECT} WHERE id = ? LIMIT 1`, [id])
   if (!data) {
     const response: ApiResponse = {
       success: false,
@@ -444,7 +788,7 @@ router.post('/:id/apply', asyncHandler(async (req, res) => {
 
   // 1. 获取模板
   const template = await executeSQLOne(
-    'SELECT * FROM wbs_templates WHERE id = ? AND deleted_at IS NULL LIMIT 1',
+    `${WBS_TEMPLATE_SELECT} WHERE id = ? AND deleted_at IS NULL LIMIT 1`,
     [id]
   )
 
@@ -522,7 +866,9 @@ router.post('/:id/apply', asyncHandler(async (req, res) => {
   async function insertNodesBatch(
     nodes: any[],
     parentTaskId: string | null,
-    fallbackPrefix: string
+    fallbackPrefix: string,
+    parentWbsCode = '',
+    level = 1
   ): Promise<void> {
     if (!Array.isArray(nodes) || nodes.length === 0) return
 
@@ -531,10 +877,12 @@ router.post('/:id/apply', asyncHandler(async (req, res) => {
     for (let idx = 0; idx < nodes.length; idx++) {
       const node = nodes[idx]
       const newId = uuidv4()
+      const generatedWbsCode = parentWbsCode ? `${parentWbsCode}.${idx + 1}` : `${idx + 1}`
+      const wbsCode = String(node.wbs_code || generatedWbsCode)
       await executeSQL(
         `INSERT INTO tasks (id, project_id, parent_id, title, description, status, progress,
-           sort_order, is_milestone, reference_duration, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           sort_order, is_milestone, reference_duration, wbs_code, wbs_level, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           newId,
           projectId,
@@ -546,6 +894,8 @@ router.post('/:id/apply', asyncHandler(async (req, res) => {
           idx,
           node.is_milestone ? 1 : 0,
           node.reference_days || node.duration || null,
+          wbsCode,
+          level,
           nowTs,
           nowTs,
         ]
@@ -559,7 +909,8 @@ router.post('/:id/apply', asyncHandler(async (req, res) => {
       const node = nodes[i]
       const newParentId = insertedIds[i]
       if (newParentId && Array.isArray(node.children) && node.children.length > 0) {
-        await insertNodesBatch(node.children, newParentId, '子任务')
+        const childParentWbsCode = String(node.wbs_code || (parentWbsCode ? `${parentWbsCode}.${i + 1}` : `${i + 1}`))
+        await insertNodesBatch(node.children, newParentId, '子任务', childParentWbsCode, level + 1)
       }
     }
   }
@@ -606,7 +957,7 @@ router.post('/:id/set-default', asyncHandler(async (req, res) => {
     [id]
   )
 
-  const data = await executeSQLOne('SELECT * FROM wbs_templates WHERE id = ? LIMIT 1', [id])
+  const data = await executeSQLOne(`${WBS_TEMPLATE_SELECT} WHERE id = ? LIMIT 1`, [id])
   if (!data) {
     const response: ApiResponse = {
       success: false,
@@ -631,7 +982,7 @@ router.post('/:id/clone', asyncHandler(async (req, res) => {
 
   // 获取原模板
   const original = await executeSQLOne(
-    'SELECT * FROM wbs_templates WHERE id = ? AND deleted_at IS NULL LIMIT 1',
+    `${WBS_TEMPLATE_SELECT} WHERE id = ? AND deleted_at IS NULL LIMIT 1`,
     [id]
   )
 
@@ -669,7 +1020,7 @@ router.post('/:id/clone', asyncHandler(async (req, res) => {
     ]
   )
 
-  const cloned = await executeSQLOne('SELECT * FROM wbs_templates WHERE id = ? LIMIT 1', [clonedId])
+  const cloned = await executeSQLOne(`${WBS_TEMPLATE_SELECT} WHERE id = ? LIMIT 1`, [clonedId])
 
   const response: ApiResponse<WBSTemplate> = {
     success: true,
@@ -713,7 +1064,7 @@ router.patch('/:id/status', asyncHandler(async (req, res) => {
 
   await executeSQL(sql, params)
 
-  const data = await executeSQLOne('SELECT * FROM wbs_templates WHERE id = ? LIMIT 1', [id])
+  const data = await executeSQLOne(`${WBS_TEMPLATE_SELECT} WHERE id = ? LIMIT 1`, [id])
   if (!data) {
     const response: ApiResponse = {
       success: false,
@@ -889,7 +1240,7 @@ router.post('/import-excel', upload.single('file'), asyncHandler(async (req: any
     ]
   )
 
-  const data = await executeSQLOne('SELECT * FROM wbs_templates WHERE id = ? LIMIT 1', [newId])
+  const data = await executeSQLOne(`${WBS_TEMPLATE_SELECT} WHERE id = ? LIMIT 1`, [newId])
 
   const response: ApiResponse<WBSTemplate & { nodeCount: number; totalDays: number }> = {
     success: true,
@@ -901,40 +1252,6 @@ router.post('/import-excel', upload.single('file'), asyncHandler(async (req: any
     timestamp: new Date().toISOString(),
   }
   res.status(201).json(response)
-}))
-
-// ── F9: JSON 导出 ────────────────────────────────────────────────────────────
-router.get('/export-json', asyncHandler(async (req, res) => {
-  const { ids } = req.query as { ids?: string }
-
-  let query = 'SELECT * FROM wbs_templates WHERE deleted_at IS NULL ORDER BY created_at DESC'
-  const params: string[] = []
-
-  if (ids) {
-    const idArr = ids.split(',').map((s: string) => s.trim()).filter(Boolean)
-    if (idArr.length > 0) {
-      query = 'SELECT * FROM wbs_templates WHERE deleted_at IS NULL AND id IN (?) ORDER BY created_at DESC'
-      params.push(idArr.join(','))
-    }
-  }
-
-  const templates = await executeSQL<WBSTemplate[]>(query, params)
-
-  // 附加节点数据
-  const result = await Promise.all((templates as any[]).map(async (t) => {
-    const nodes = await executeSQL<Array<{ id: string; parent_id: string | null; title: string; level: number; duration: number; sort_order: number; }>>(
-      'SELECT id, parent_id, title, level, duration, sort_order FROM wbs_nodes WHERE template_id = ? ORDER BY sort_order',
-      [t.id]
-    )
-    return { ...mapTemplateFields(t), nodes }
-  }))
-
-  const response: ApiResponse<typeof result> = {
-    success: true,
-    data: result,
-    timestamp: new Date().toISOString(),
-  }
-  res.json(response)
 }))
 
 // ── F9: JSON 导入 ────────────────────────────────────────────────────────────
@@ -966,25 +1283,17 @@ router.post('/import-json', asyncHandler(async (req, res) => {
       continue
     }
     try {
-      const [insertResult] = await executeSQL<Array<{ insertId: number }>>(
-        `INSERT INTO wbs_templates (name, template_type, structure_type, description, is_default, created_at, updated_at)
-         VALUES (?, ?, ?, ?, 1, NOW(), NOW())`,
-        [t.name.trim(), t.template_type || '住宅', t.structure_type || '', t.description || '']
-      ) as any[]
-      const templateId = String(insertResult?.insertId ?? insertResult?.id ?? '')
+      const id = uuidv4()
+      const ts = new Date().toISOString().slice(0, 19).replace('T', ' ')
+      const nodesJson = JSON.stringify(Array.isArray(t.nodes) ? t.nodes : [])
 
-      if (Array.isArray(t.nodes) && t.nodes.length > 0) {
-        const nodeInserts = t.nodes.map((n, idx) => [
-          templateId, n.parent_id || null, n.title || `节点${idx + 1}`,
-          n.level || 0, n.duration || 1, idx,
-        ])
-        await executeSQL(
-          `INSERT INTO wbs_nodes (template_id, parent_id, title, level, duration, sort_order) VALUES ?`,
-          [nodeInserts]
-        )
-      }
+      await executeSQL(
+        `INSERT INTO wbs_templates (id, template_name, template_type, description, wbs_nodes, is_default, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, true, ?, ?)`,
+        [id, t.name.trim(), t.template_type || '住宅', t.description || '', nodesJson, ts, ts]
+      )
 
-      results.push({ name: t.name, id: templateId, status: 'created' })
+      results.push({ name: t.name, id, status: 'created' })
     } catch (err) {
       logger.error('JSON import failed', { name: t.name, error: String(err) })
       results.push({ name: t.name, id: '', status: 'error', error: String(err) })

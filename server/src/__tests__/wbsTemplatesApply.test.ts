@@ -30,7 +30,7 @@ const mocks = vi.hoisted(() => {
       return []
     }),
     executeSQLOne: vi.fn(async (query: string, params: any[] = []) => {
-      if (query.includes('SELECT * FROM wbs_templates WHERE id = ?')) {
+      if (query.includes('FROM wbs_templates WHERE id = ?')) {
         return {
           id: params[0],
           template_name: '商业综合体WBS模板',
@@ -51,7 +51,7 @@ const mocks = vi.hoisted(() => {
         }
       }
 
-      if (query.includes('SELECT id FROM projects WHERE id = ?')) {
+      if (query.includes('FROM projects WHERE id = ?')) {
         return { id: params[0] }
       }
 
@@ -149,7 +149,7 @@ describe('wbs template apply route', () => {
 
     const [rootInsert, childInsert] = mocks.insertedTasks
 
-    expect(rootInsert).toHaveLength(12)
+    expect(rootInsert).toHaveLength(14)
     expect(rootInsert[0]).toBe('task-root-1')
     expect(rootInsert[1]).toBe('project-1')
     expect(rootInsert[2]).toBeNull()
@@ -157,13 +157,17 @@ describe('wbs template apply route', () => {
     expect(rootInsert[5]).toBe('todo')
     expect(rootInsert[6]).toBe(0)
     expect(rootInsert[7]).toBe(0)
+    expect(rootInsert[10]).toBe('1')
+    expect(rootInsert[11]).toBe(1)
 
-    expect(childInsert).toHaveLength(12)
+    expect(childInsert).toHaveLength(14)
     expect(childInsert[0]).toBe('task-child-1')
     expect(childInsert[1]).toBe('project-1')
     expect(childInsert[2]).toBe('task-root-1')
     expect(childInsert[3]).toBe('二级任务')
     expect(childInsert[5]).toBe('todo')
     expect(childInsert[6]).toBe(0)
+    expect(childInsert[10]).toBe('1.1')
+    expect(childInsert[11]).toBe(2)
   })
 })

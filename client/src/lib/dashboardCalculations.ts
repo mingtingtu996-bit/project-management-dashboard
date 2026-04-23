@@ -74,9 +74,9 @@ export const calculateHealthScore = (
     completedTasks: tasks.filter(t => t.status === 'completed').length,
     completedMilestones: milestones.filter(m => m.status === 'completed').length,
     totalDelayDays: delayDays,
-    risks: risks.map(r => ({ 
-      level: r.level, 
-      status: r.status as string | undefined 
+    risks: risks.map(r => ({
+      level: r.level || 'medium',
+      status: r.status as string | undefined
     }))
   };
 
@@ -150,8 +150,8 @@ export const getRecentRisks = (risks: Risk[], limit = 5): Risk[] => {
   return [...risks]
     .sort((a, b) => {
       // 按等级排序：critical > high > medium > low
-      const levelOrder = { critical: 0, high: 1, medium: 2, low: 3 };
-      const levelDiff = (levelOrder[a.level] || 3) - (levelOrder[b.level] || 3);
+      const levelOrder: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
+      const levelDiff = (levelOrder[a.level || 'low'] || 3) - (levelOrder[b.level || 'low'] || 3);
       if (levelDiff !== 0) return levelDiff;
       
       // 按创建时间排序

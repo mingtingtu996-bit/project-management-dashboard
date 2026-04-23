@@ -4,6 +4,7 @@ export type {
   Project,
   Task,
   Risk,
+  Issue,
   Milestone,
   Invitation,
   ProjectMember,
@@ -14,3 +15,5 @@ export type {
   WbsTemplate,
   PreMilestone,
 } from '@/lib/supabase'
+
+export * from './planning'

@@ -1,11 +1,18 @@
 // AI工期预测和延期风险分析 API 路由
 
 import { Router } from 'express'
+import { z } from 'zod'
 import { SchedulePredictor } from '../services/schedulePredictor.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import { authenticate } from '../middleware/auth.js'
+import { validate } from '../middleware/validation.js'
 import { logger } from '../middleware/logger.js'
 import type { ApiResponse } from '../types/index.js'
+import {
+  buildSyncBatchLimitError,
+  REQUEST_TIMEOUT_BUDGETS,
+  runWithRequestBudget,
+} from '../services/requestBudgetService.js'
 
 const router = Router()
 router.use(authenticate)
@@ -13,12 +20,25 @@ router.use(authenticate)
 // 直接实例化（SchedulePredictor 已迁移为不依赖 SupabaseClient）
 const predictor = new SchedulePredictor()
 
+const taskIdBodySchema = z.object({
+  task_id: z.string().trim().min(1),
+}).passthrough()
+
+const predictBatchDurationsBodySchema = z.object({
+  task_ids: z.array(z.string().trim().min(1)).min(1),
+}).passthrough()
+
+const projectDurationInsightQuerySchema = z.object({
+  project_id: z.string().trim().min(1),
+}).passthrough()
+
 /**
  * POST /api/ai/predict-duration
  * 预测任务工期
  */
 router.post(
   '/predict-duration',
+  validate(taskIdBodySchema),
   asyncHandler(async (req, res) => {
     const { task_id } = req.body
 
@@ -59,6 +79,7 @@ router.post(
  */
 router.post(
   '/predict-batch-durations',
+  validate(predictBatchDurationsBodySchema),
   asyncHandler(async (req, res) => {
     const { task_ids } = req.body
 
@@ -71,9 +92,29 @@ router.post(
       return res.status(400).json(response)
     }
 
+    if (task_ids.length > 100) {
+      const error = buildSyncBatchLimitError(task_ids.length, { operation: 'ai_schedule.predict_batch_durations' })
+      const response: ApiResponse = {
+        success: false,
+        error: {
+          code: error.code ?? 'BATCH_ASYNC_REQUIRED',
+          message: error.message,
+          details: error.details,
+        },
+        timestamp: new Date().toISOString(),
+      }
+      return res.status(error.statusCode ?? 413).json(response)
+    }
+
     logger.info('批量预测任务工期', { count: task_ids.length })
 
-    const predictions = await predictor.predictBatchDurations(task_ids)
+    const predictions = await runWithRequestBudget(
+      {
+        operation: 'ai_schedule.predict_batch_durations',
+        timeoutMs: REQUEST_TIMEOUT_BUDGETS.batchWriteMs,
+      },
+      async () => predictor.predictBatchDurations(task_ids),
+    )
 
     const response: ApiResponse = {
       success: true,
@@ -90,6 +131,7 @@ router.post(
  */
 router.post(
   '/analyze-delay-risk',
+  validate(taskIdBodySchema),
   asyncHandler(async (req, res) => {
     const { task_id } = req.body
 
@@ -130,6 +172,7 @@ router.post(
  */
 router.get(
   '/project-duration-insight',
+  validate(projectDurationInsightQuerySchema, 'query'),
   asyncHandler(async (req, res) => {
     const { project_id } = req.query
 

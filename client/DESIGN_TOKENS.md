@@ -14,11 +14,12 @@
 | `rounded-md` | 10px（`calc(var(--radius) - 2px)`）| 输入框、次要按钮 |
 | `rounded-lg` | **12px**（`var(--radius)`）| shadcn 组件默认，等同 `rounded-xl` |
 | `rounded-xl` | 12px | **V4 卡片统一圆角（直接用这个）** |
-| `rounded-2xl` | 16px | 大弹窗、浮层面板 |
+| `rounded-card` | 12px（`var(--radius)`） | 语义化卡片圆角 token |
+| `rounded-2xl` | 12px（历史映射） | 历史卡片写法，已统一映射到当前圆角 |
 | `rounded-full` | 9999px | 徽章、头像、进度条端点 |
 
 > ⚠️ **`--radius` 已从 0.5rem 改为 0.75rem**，`rounded-lg` 现在等于 12px，与 `rounded-xl` 一致。  
-> 后续新代码统一写 `rounded-xl`，不要写 `rounded-lg`（避免混淆）。
+> 后续新代码优先写 `rounded-card` 或 `rounded-xl`，不要继续新增 `rounded-2xl` 卡片写法。
 
 ---
 
@@ -42,18 +43,17 @@ V4 设计稿直接使用 Tailwind 原生色阶，**不需要自定义颜色**，
 | 卡片背景 | `bg-white` | |
 | 卡片边框 | `border border-gray-100` | |
 
-### 2.2 语义别名（tailwind.config.js 中已定义）
+### 2.2 自定义别名状态
 
-仅在需要集中管理时使用，平时直接用上面的原色类即可。
+项目已清理未使用的颜色/阴影 alias，不再推荐维护 `brand/status/risk/milestone` 这类二次封装 token。
 
-| 别名 | 对应原色 |
-|------|---------|
-| `bg-status-done` | `bg-emerald-500` |
-| `bg-status-delayed` | `bg-red-500` |
-| `bg-milestone-lv1` / `border-milestone-lv1` | `#F59E0B` (amber-500) |
-| `bg-milestone-lv2` / `border-milestone-lv2` | `#3B82F6` (blue-500) |
-| `bg-milestone-lv3` / `border-milestone-lv3` | `#9CA3AF` (gray-400) |
-| `bg-risk-high-bg` / `border-risk-high-border` | `bg-red-50` / `border-red-500` |
+后续统一规则：
+
+| 规则 | 写法 |
+|------|------|
+| 按设计稿直接落地 | 优先写 Tailwind 原生类，如 `bg-blue-600`、`text-slate-500` |
+| 需要语义化组件 | 优先复用现有 `Button` / `Badge` / `Card` 等 UI 组件 |
+| 阴影 | 直接使用 `shadow-sm` / `hover:shadow-md` |
 
 ---
 

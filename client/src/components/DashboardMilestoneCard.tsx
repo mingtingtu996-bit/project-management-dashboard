@@ -2,6 +2,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ChevronRight, ChevronDown, ChevronUp } from 'lucide-react';
 import { Link, useParams } from 'react-router-dom';
 import { useState } from 'react';
+import { getStatusTheme } from '@/lib/statusTheme';
 
 interface MilestoneItem {
   id: string;
@@ -66,7 +67,7 @@ export default function DashboardMilestoneCard({
   const remaining = nextMilestone ? getDaysRemaining(nextMilestone.dueDate) : null;
 
   return (
-    <Card className="rounded-xl border border-gray-200 shadow-sm bg-white hover:shadow-md hover:ring-1 ring-blue-100 transition-all h-full">
+    <Card variant="metric" className="h-full">
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between">
           <CardTitle className="text-sm font-medium text-gray-700">里程碑追踪</CardTitle>
@@ -94,11 +95,11 @@ export default function DashboardMilestoneCard({
                 <div className="flex justify-between items-start mb-1">
                   <span className="font-medium text-gray-800">下一节点</span>
                   {remaining.isOverdue ? (
-                    <span className="px-2 py-0.5 bg-red-100 text-red-700 rounded text-xs">已延期</span>
+                    <span className={`px-2 py-0.5 rounded text-xs ${getStatusTheme('overdue').className}`}>已延期</span>
                   ) : remaining.isUrgent ? (
-                    <span className="px-2 py-0.5 bg-amber-100 text-amber-700 rounded text-xs">{remaining.text}</span>
+                    <span className={`px-2 py-0.5 rounded text-xs ${getStatusTheme('medium').className}`}>{remaining.text}</span>
                   ) : (
-                    <span className="px-2 py-0.5 bg-yellow-100 text-yellow-700 rounded text-xs">{remaining.text}</span>
+                    <span className={`px-2 py-0.5 rounded text-xs ${getStatusTheme('info').className}`}>{remaining.text}</span>
                   )}
                 </div>
                 <p className="text-sm font-medium text-blue-700">{nextMilestone.name}</p>
@@ -134,7 +135,7 @@ export default function DashboardMilestoneCard({
             <div className="p-3 border-l-4 border-green-500 bg-green-50 rounded-r">
               <div className="flex justify-between items-start mb-1">
                 <span className="font-medium text-gray-800">下一节点</span>
-                <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded text-xs">已完成</span>
+                <span className={`px-2 py-0.5 rounded text-xs ${getStatusTheme('completed').className}`}>已完成</span>
               </div>
               <p className="text-sm font-medium text-green-700">所有里程碑已完成</p>
             </div>
@@ -177,9 +178,9 @@ export default function DashboardMilestoneCard({
                         </div>
                         {remaining && (
                           <span className={`text-xs px-2 py-0.5 rounded ${
-                            remaining.isOverdue ? 'bg-red-100 text-red-700' :
-                            remaining.isUrgent ? 'bg-amber-100 text-amber-700' :
-                            'bg-gray-100 text-gray-600'
+                            remaining.isOverdue ? getStatusTheme('overdue').className :
+                            remaining.isUrgent ? getStatusTheme('medium').className :
+                            getStatusTheme('open').className
                           }`}>
                             {remaining.text}
                           </span>

@@ -1,3 +1,6 @@
+import { z } from 'zod'
+import { getBrowserStorage, safeJsonParse, safeStorageGet, safeStorageRemove, safeStorageSet } from '@/lib/browserStorage'
+
 /**
  * 弹窗频率管理器
  * 借鉴房地产工程管理系统的用户体验优化方案
@@ -10,6 +13,16 @@ interface ModalShowRecord {
   showCount: number;
   userDismissed: boolean;
 }
+
+const ModalShowRecordSchema = z.object({
+  modalId: z.string(),
+  lastShown: z.number().finite(),
+  showCount: z.number().int().nonnegative(),
+  userDismissed: z.boolean(),
+})
+
+const ModalShowRecordListSchema = z.array(ModalShowRecordSchema)
+const ModalPreferenceListSchema = z.array(z.tuple([z.string(), z.boolean()]))
 
 class ModalManager {
   private static instance: ModalManager;
@@ -268,8 +281,10 @@ class ModalManager {
 
   private saveRecords(): void {
     try {
+      const storage = getBrowserStorage()
+      if (!storage) return
       const recordsArray = Array.from(this.records.values());
-      localStorage.setItem('modal_manager_records', JSON.stringify(recordsArray));
+      safeStorageSet(storage, 'modal_manager_records', JSON.stringify(recordsArray));
     } catch (error) {
       console.warn('Failed to save modal records:', error);
     }
@@ -277,8 +292,10 @@ class ModalManager {
 
   private savePreferences(): void {
     try {
+      const storage = getBrowserStorage()
+      if (!storage) return
       const preferences = Array.from(this.dismissPreferences.entries());
-      localStorage.setItem('modal_manager_preferences', JSON.stringify(preferences));
+      safeStorageSet(storage, 'modal_manager_preferences', JSON.stringify(preferences));
     } catch (error) {
       console.warn('Failed to save modal preferences:', error);
     }
@@ -286,28 +303,43 @@ class ModalManager {
 
   private loadPreferences(): void {
     try {
+      const storage = getBrowserStorage()
+      if (!storage) return
       // 加载显示记录
-      const recordsJson = localStorage.getItem('modal_manager_records');
+      const recordsJson = safeStorageGet(storage, 'modal_manager_records');
       if (recordsJson) {
-        const recordsArray: ModalShowRecord[] = JSON.parse(recordsJson);
-        recordsArray.forEach(record => {
-          this.records.set(record.modalId, record);
-        });
+        const recordsArray = ModalShowRecordListSchema.safeParse(
+          safeJsonParse<unknown>(recordsJson, [], 'modal_manager_records'),
+        );
+        if (recordsArray.success) {
+          recordsArray.data.forEach(record => {
+            this.records.set(record.modalId, record);
+          });
+        } else {
+          safeStorageRemove(storage, 'modal_manager_records');
+        }
       }
 
       // 加载用户偏好
-      const preferencesJson = localStorage.getItem('modal_manager_preferences');
+      const preferencesJson = safeStorageGet(storage, 'modal_manager_preferences');
       if (preferencesJson) {
-        const preferencesArray: [string, boolean][] = JSON.parse(preferencesJson);
-        preferencesArray.forEach(([modalId, dismissed]) => {
-          this.dismissPreferences.set(modalId, dismissed);
-        });
+        const preferencesArray = ModalPreferenceListSchema.safeParse(
+          safeJsonParse<unknown>(preferencesJson, [], 'modal_manager_preferences'),
+        );
+        if (preferencesArray.success) {
+          preferencesArray.data.forEach(([modalId, dismissed]) => {
+            this.dismissPreferences.set(modalId, dismissed);
+          });
+        } else {
+          safeStorageRemove(storage, 'modal_manager_preferences');
+        }
       }
     } catch (error) {
       console.warn('Failed to load modal preferences:', error);
       // 如果加载失败，清空可能损坏的数据
-      localStorage.removeItem('modal_manager_records');
-      localStorage.removeItem('modal_manager_preferences');
+      const storage = getBrowserStorage()
+      safeStorageRemove(storage, 'modal_manager_records');
+      safeStorageRemove(storage, 'modal_manager_preferences');
     }
   }
 }

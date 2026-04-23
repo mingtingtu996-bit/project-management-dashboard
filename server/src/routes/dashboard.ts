@@ -7,10 +7,12 @@ import {
   getAllProjectExecutionSummaries,
   getProjectExecutionSummary,
 } from '../services/projectExecutionSummaryService.js'
+import { calculateProjectHealth } from '../services/projectHealthService.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
-import { authenticate } from '../middleware/auth.js'
+import { authenticate, requireProjectMember } from '../middleware/auth.js'
 import { logger } from '../middleware/logger.js'
 import type { ApiResponse } from '../types/index.js'
+import { getVisibleProjectIds } from '../auth/access.js'
 
 const router = Router()
 
@@ -18,7 +20,7 @@ const router = Router()
 router.use(authenticate)
 
 // GET /api/dashboard/project-summary?projectId=
-router.get('/project-summary', asyncHandler(async (req, res) => {
+router.get('/project-summary', requireProjectMember(req => req.query.projectId as string | undefined), asyncHandler(async (req, res) => {
   const projectId = req.query.projectId as string | undefined
 
   if (!projectId) {
@@ -51,9 +53,17 @@ router.get('/project-summary', asyncHandler(async (req, res) => {
 }))
 
 // GET /api/dashboard/projects-summary
-router.get('/projects-summary', asyncHandler(async (_req, res) => {
+router.get('/projects-summary', asyncHandler(async (req, res) => {
   logger.info('Fetching unified multi-project execution summaries')
-  const summaries = await getAllProjectExecutionSummaries()
+  let summaries = await getAllProjectExecutionSummaries()
+
+  if (req.user?.id) {
+    const visibleProjectIds = await getVisibleProjectIds(req.user.id, req.user.globalRole)
+    if (visibleProjectIds) {
+      const visibleProjectIdSet = new Set(visibleProjectIds)
+      summaries = summaries.filter((summary) => visibleProjectIdSet.has(summary.id))
+    }
+  }
 
   const response: ApiResponse<typeof summaries> = {
     success: true,
@@ -62,138 +72,6 @@ router.get('/projects-summary', asyncHandler(async (_req, res) => {
   }
   res.json(response)
 }))
-
-// 项目健康度算法（UI设计稿模型：基础分+加减分）
-function calculateHealthScore(
-  tasks: any[],
-  risks: any[],
-  milestones: any[]
-): {
-  score: number
-  breakdown: {
-    taskCompletion: number
-    progressDeviation: number
-    riskControl: number
-    milestoneAchievement: number
-  }
-  // UI设计稿4维度明细
-  details: {
-    baseScore: number
-    taskCompletionScore: number
-    delayPenaltyScore: number
-    riskPenaltyScore: number
-    milestoneBonusScore: number
-    totalScore: number
-    healthStatus: string
-  }
-} {
-  // 1. 任务完成率（30%权重）
-  const totalTasks = tasks.length
-  const completedTasks = tasks.filter((t: any) => t.status === '已完成' || t.status === 'completed').length
-  const taskCompletion = totalTasks > 0 ? (completedTasks / totalTasks) * 100 : 100
-
-  // 2. 进度偏差（30%权重）- 基于任务进度vs时间的偏差
-  let progressDeviation = 100
-  let totalDelayDays = 0
-  if (totalTasks > 0) {
-    const today = new Date()
-    const tasksWithDates = tasks.filter((t: any) => t.planned_start_date && t.planned_end_date)
-    if (tasksWithDates.length > 0) {
-      let totalDeviation = 0
-      tasksWithDates.forEach((t: any) => {
-        const start = new Date(t.planned_start_date)
-        const end = new Date(t.planned_end_date)
-        const totalDuration = end.getTime() - start.getTime()
-        if (totalDuration > 0) {
-          const elapsed = Math.max(0, today.getTime() - start.getTime())
-          const plannedProgress = Math.min(100, (elapsed / totalDuration) * 100)
-          const actualProgress = t.progress || 0
-          const deviation = plannedProgress > 0
-            ? Math.abs(actualProgress - plannedProgress) / plannedProgress
-            : 0
-          totalDeviation += deviation
-          
-          // 计算延期天数
-          if (actualProgress < plannedProgress && end < today) {
-            totalDelayDays += Math.ceil((today.getTime() - end.getTime()) / (1000 * 60 * 60 * 24))
-          }
-        }
-      })
-      const avgDeviation = totalDeviation / tasksWithDates.length
-      // 偏差越小分数越高
-      progressDeviation = Math.max(0, 100 - avgDeviation * 100)
-    }
-  }
-
-  // 3. 风险控制（20%权重）
-  const totalRisks = risks.length
-  const highRisks = risks.filter((r: any) => {
-    const level = r.level || r.status
-    return level === 'critical' || level === 'high' || level === 'occurred'
-  }).length
-  const riskControl = totalRisks > 0
-    ? ((totalRisks - highRisks) / totalRisks) * 100
-    : 100
-
-  // 4. 里程碑达成（20%权重）
-  const totalMilestones = milestones.length
-  const now = new Date()
-  const shouldHaveCompleted = milestones.filter((m: any) => {
-    if (m.status === 'completed' || m.status === '已完成') return true
-    const targetDate = new Date(m.planned_end_date || m.target_date || m.due_date || '')
-    return targetDate <= now
-  }).length
-  const actuallyCompleted = milestones.filter((m: any) => m.status === 'completed' || m.status === '已完成').length
-  const milestoneAchievement = shouldHaveCompleted > 0
-    ? (actuallyCompleted / shouldHaveCompleted) * 100
-    : 100
-
-  const score = Math.round(
-    taskCompletion * 0.3 +
-    progressDeviation * 0.3 +
-    riskControl * 0.2 +
-    milestoneAchievement * 0.2
-  )
-
-  // UI设计稿4维度明细计算
-  const baseScore = 50
-  const taskCompletionScore = completedTasks * 2
-  const milestoneBonusScore = actuallyCompleted * 5
-  const delayPenaltyScore = -Math.min(totalDelayDays, 50) // 最多扣50分
-  
-  // 风险惩罚：高=-10/中=-5/低=-2
-  const criticalRiskCount = risks.filter((r: any) => (r.level || r.status) === 'critical').length
-  const highRiskCount = risks.filter((r: any) => (r.level || r.status) === 'high' || (r.level || r.status) === 'occurred').length
-  const mediumRiskCount = risks.filter((r: any) => (r.level || r.status) === 'medium').length
-  const lowRiskCount = risks.filter((r: any) => (r.level || r.status) === 'low' || (r.level || r.status) === 'identified').length
-  const riskPenaltyScore = -(criticalRiskCount * 10 + highRiskCount * 10 + mediumRiskCount * 5 + lowRiskCount * 2)
-  
-  const totalScore = Math.max(0, Math.min(100, baseScore + taskCompletionScore + milestoneBonusScore + delayPenaltyScore + riskPenaltyScore))
-  
-  let healthStatus = '健康'
-  if (totalScore < 40) healthStatus = '危险'
-  else if (totalScore < 60) healthStatus = '预警'
-  else if (totalScore < 80) healthStatus = '亚健康'
-
-  return {
-    score: Math.max(0, Math.min(100, score)),
-    breakdown: {
-      taskCompletion: Math.round(taskCompletion),
-      progressDeviation: Math.round(progressDeviation),
-      riskControl: Math.round(riskControl),
-      milestoneAchievement: Math.round(milestoneAchievement),
-    },
-    details: {
-      baseScore,
-      taskCompletionScore,
-      delayPenaltyScore,
-      riskPenaltyScore,
-      milestoneBonusScore,
-      totalScore,
-      healthStatus
-    }
-  }
-}
 
 // 计算整体进度
 function calculateOverallProgress(tasks: any[]) {
@@ -208,9 +86,16 @@ function calculateOverallProgress(tasks: any[]) {
     }
   }
   
-  // 当前进度：所有任务的平均进度
+  // 当前进度：工期加权平均（无日期任务取权重 1 天）
+  const getWeight = (t: any): number => {
+    if (!t.planned_start_date || !t.planned_end_date) return 1
+    return Math.max(1, Math.round(
+      (new Date(t.planned_end_date).getTime() - new Date(t.planned_start_date).getTime()) / 86400000
+    ))
+  }
+  const totalWeight = tasks.reduce((sum, t) => sum + getWeight(t), 0)
   const currentProgress = Math.round(
-    tasks.reduce((sum, t) => sum + (t.progress || 0), 0) / totalTasks
+    tasks.reduce((sum, t) => sum + (t.progress || 0) * getWeight(t), 0) / (totalWeight || 1)
   )
   
   // 目标进度：基于计划时间计算
@@ -405,13 +290,16 @@ router.get('/health-score', asyncHandler(async (req, res) => {
   const projectId = req.query.projectId as string | undefined
   logger.info('Fetching health score', { projectId })
 
-  const [tasks, risks, milestones] = await Promise.all([
-    getTasks(projectId),
-    getRisks(projectId),
-    getMilestones(projectId),
-  ])
+  if (!projectId) {
+    const response: ApiResponse = {
+      success: false,
+      error: { code: 'MISSING_PROJECT_ID', message: '项目ID不能为空' },
+      timestamp: new Date().toISOString(),
+    }
+    return res.status(400).json(response)
+  }
 
-  const result = calculateHealthScore(tasks, risks, milestones)
+  const result = await calculateProjectHealth(projectId)
 
   const response: ApiResponse<typeof result> = {
     success: true,
@@ -497,7 +385,6 @@ router.get('/top-risks', asyncHandler(async (req, res) => {
   const levelOrder: Record<string, number> = {
     critical: 0,
     high: 1,
-    occurred: 1,
     medium: 2,
     mitigating: 2,
     low: 3,

@@ -360,3 +360,122 @@ getStorageUsage() // 查看localStorage使用量
 - 混合存储架构 ✅
 - 节点2核心功能 ✅
 
+---
+
+## 8.4 自动化验收测试记录（2026-04-07）
+
+### 新增验收测试文件
+
+| 文件路径 | 用途 | 测试数 |
+|----------|------|--------|
+| `server/src/__tests__/projectCreationSummaryChain.test.ts` | 项目创建 → 共享摘要联动（8.4.1） | 3 |
+| `server/src/__tests__/taskCompletionSummaryChain.test.ts` | 任务完成 → 任务总结联动（8.4.2） | 4 |
+| `server/src/__tests__/riskNotificationChain.test.ts` | 风险/问题变更 → 提醒中心联动（8.4.3） | 5 |
+
+### 验收运行命令（8.4.4 统一入口）
+
+```powershell
+# 一键统一验收（推荐）
+npm run acceptance:v1
+
+# 前端验收：共享摘要 / 甘特视图 / 通知中心
+npx vitest run --root client src/pages/__tests__/sharedSummary.test.tsx src/pages/__tests__/GanttView.test.tsx src/pages/__tests__/Notifications.test.tsx
+
+# 后端验收：三条主链 + 新增联动验收
+npx vitest run --root server src/__tests__/projectCreationSummaryChain.test.ts src/__tests__/taskCompletionSummaryChain.test.ts src/__tests__/riskNotificationChain.test.ts
+
+# 后端全量验收（含存量测试）
+npx vitest run --root server
+```
+
+### 验收结果（2026-04-07）
+
+| 测试集 | 结果 | 通过数 |
+|--------|------|--------|
+| 前端：sharedSummary + GanttView + Notifications | ✅ 全通过 | 6/6 |
+| 后端：projectCreationSummaryChain | ✅ 全通过 | 3/3 |
+| 后端：taskCompletionSummaryChain | ✅ 全通过 | 4/4 |
+| 后端：riskNotificationChain | ✅ 全通过 | 5/5 |
+
+**合计新增验收测试：12 个，全部通过。**
+
+---
+
+## 8.5 监控 / 诊断自动化记录（2026-04-07）
+
+### 8.5.0 散脚本盘点
+
+| 脚本 | 状态 | 说明 |
+|------|------|------|
+| `check-health.ts` | 保留，不迁移 | 依赖真实 Supabase，运行时诊断用 |
+| `verify-timed-jobs-fix.ts` | 保留，不迁移 | 历史排查脚本，按需使用 |
+| `server/verify-jobs.ts` | 保留，不迁移 | 定时任务验证，按需使用 |
+
+新脚本统一放入 `server/scripts/`，不再在根目录新增散脚本。
+
+### 8.5.1-8.5.3 新增诊断脚本
+
+| 脚本 | 用途 |
+|------|------|
+| `server/scripts/check-core-health.mjs` | 核心接口健康检查（/health / dashboard / task-summaries / notifications） |
+| `server/scripts/check-summary-consistency.mjs` | 摘要链一致性检查（字段完整性 / 类型校验） |
+| `server/scripts/check-warning-pipeline.mjs` | 通知/预警诊断（notifications / unread / jobs 可达性） |
+
+### 8.5.4 统一诊断入口
+
+已在 `package.json` 新增以下脚本：
+
+```powershell
+# 核心接口健康检查（server 需已启动）
+API_URL=http://localhost:3001 npm run diag:health
+
+# 摘要链一致性检查
+API_URL=http://localhost:3001 SAMPLE_PROJECT_ID=<uuid> npm run diag:summary
+
+# 通知/预警诊断
+API_URL=http://localhost:3001 SAMPLE_PROJECT_ID=<uuid> npm run diag:warning
+
+# v1 全量验收测试（不依赖真实服务）
+npm run acceptance:v1
+```
+
+> 注：`diag:*` 脚本需要 server 已启动。`acceptance:v1` 使用 vitest mock，不需要真实服务。
+
+---
+
+## 8.6 业务辅助自动化记录（2026-04-07）
+
+### 8.6.0 高频手工动作台账
+
+| 频率 | 动作 | 自动化方式 |
+|------|------|------------|
+| 每周 | 查看所有项目健康度/延期/风险 | `export-project-audit.mjs` |
+| 每周 | 确认任务总结链 timeline_ready | `export-project-audit.mjs` |
+| 每月 | 导出摘要快照供人工复核 | `export-summary-diff.mjs` |
+| 按需 | 生成日常巡检命令清单 | `generate-daily-checklist.mjs` |
+
+### 8.6.1-8.6.3 新增辅助脚本
+
+| 脚本 | 用途 |
+|------|------|
+| `server/scripts/export-project-audit.mjs` | 批量项目体检，输出健康度/进度/延期/任务总结可用性 |
+| `scripts/generate-daily-checklist.mjs` | 生成日常巡检命令清单（Markdown 格式） |
+| `server/scripts/export-summary-diff.mjs` | 导出摘要/任务总结/通知链差异快照，标记不一致点 |
+
+### 使用命令
+
+```powershell
+# 批量项目体检（需 server 已启动）
+API_URL=http://localhost:3001 npm run diag:health  # 先确认服务存活
+API_URL=http://localhost:3001 node server/scripts/export-project-audit.mjs --output audit-$(date +%Y%m%d).json
+
+# 日常巡检清单生成（离线可用）
+node scripts/generate-daily-checklist.mjs --api http://localhost:3001 --output daily-checklist.md
+
+# 数据一致性辅助导出（需 server 已启动）
+API_URL=http://localhost:3001 node server/scripts/export-summary-diff.mjs --output diff-$(date +%Y%m%d).json
+```
+
+
+
+

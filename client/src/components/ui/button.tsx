@@ -1,6 +1,7 @@
 import * as React from "react"
 import { Slot } from "@radix-ui/react-slot"
 import { cva, type VariantProps } from "class-variance-authority"
+import { Loader2 } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 
@@ -33,21 +34,96 @@ const buttonVariants = cva(
   }
 )
 
-export interface ButtonProps
-  extends React.ButtonHTMLAttributes<HTMLButtonElement>,
-    VariantProps<typeof buttonVariants> {
-  asChild?: boolean
+type ButtonBaseProps = VariantProps<typeof buttonVariants> & {
+  className?: string
 }
 
+type ButtonNativeProps = React.ButtonHTMLAttributes<HTMLButtonElement> &
+  ButtonBaseProps & {
+    asChild?: false
+    loading?: boolean
+  }
+
+type ButtonAsChildProps = React.ButtonHTMLAttributes<HTMLButtonElement> &
+  ButtonBaseProps & {
+    asChild: true
+    loading?: never
+  }
+
+export type ButtonProps = ButtonNativeProps | ButtonAsChildProps
+
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant, size, asChild = false, ...props }, ref) => {
+  (props, ref) => {
+    const {
+      className,
+      variant,
+      size,
+      asChild = false,
+      loading: loadingProp,
+      disabled,
+      children,
+      onClick,
+      style,
+      ...rest
+    } = props
     const Comp = asChild ? Slot : "button"
+    const loading = asChild ? false : loadingProp || false
+    const isDisabled = disabled || loading
+    const content = loading ? (
+      <>
+        <span className="opacity-0">{children}</span>
+        <span className="absolute inset-0 flex items-center justify-center">
+          <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" />
+        </span>
+      </>
+    ) : (
+      children
+    )
+
+    const handleClick: React.MouseEventHandler<HTMLButtonElement> = (event) => {
+      if (isDisabled) {
+        event.preventDefault()
+        event.stopPropagation()
+        return
+      }
+
+      onClick?.(event)
+    }
+
+    if (asChild) {
+      return (
+        <Comp
+          className={cn(buttonVariants({ variant, size, className }))}
+          aria-busy={loading || undefined}
+          aria-disabled={isDisabled || undefined}
+          data-disabled={isDisabled ? "" : undefined}
+          data-loading={loading ? "" : undefined}
+          onClickCapture={handleClick}
+          style={{
+            ...style,
+            pointerEvents: isDisabled ? "none" : style?.pointerEvents,
+          }}
+          ref={ref}
+          tabIndex={isDisabled ? -1 : rest.tabIndex}
+          {...rest}
+        >
+          {children}
+        </Comp>
+      )
+    }
+
     return (
       <Comp
-        className={cn(buttonVariants({ variant, size, className }))}
+        className={cn(buttonVariants({ variant, size, className }), loading && "relative")}
+        aria-busy={loading || undefined}
+        disabled={isDisabled}
+        onClick={handleClick}
         ref={ref}
-        {...props}
-      />
+        style={style}
+        {...rest}
+      >
+        <span className="inline-flex items-center justify-center gap-2">{content}</span>
+      </Comp>
     )
   }
 )

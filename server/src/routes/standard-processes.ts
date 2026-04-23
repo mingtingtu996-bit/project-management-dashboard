@@ -22,13 +22,9 @@ router.get('/', asyncHandler(async (req, res) => {
   const phase = req.query.phase as string | undefined
   const limit = Math.min(Number(req.query.limit ?? 50), 200)
 
-  const conditions: string[] = ['is_active = 1']
-  const values: any[] = []
+  const conditions: string[] = ['is_active = ?']
+  const values: any[] = [1]
 
-  if (q) {
-    conditions.push('(name LIKE ? OR tags LIKE ?)')
-    values.push(`%${q}%`, `%${q}%`)
-  }
   if (category && category !== 'all') {
     conditions.push('category = ?')
     values.push(category)
@@ -39,15 +35,23 @@ router.get('/', asyncHandler(async (req, res) => {
   }
 
   const whereClause = `WHERE ${conditions.join(' AND ')}`
-  values.push(limit)
 
-  const data = await executeSQL(
+  const rows = await executeSQL(
     `SELECT id, name, category, phase, reference_days, description, tags, sort_order
-     FROM standard_processes ${whereClause} ORDER BY sort_order ASC LIMIT ?`,
+     FROM standard_processes ${whereClause} ORDER BY sort_order ASC`,
     values
   )
 
-  res.json({ success: true, data: data ?? [] })
+  const normalizedKeyword = q?.toLowerCase()
+  const data = normalizedKeyword
+    ? (rows ?? []).filter((row: any) => {
+      const name = String(row?.name ?? '').toLowerCase()
+      const tags = String(row?.tags ?? '').toLowerCase()
+      return name.includes(normalizedKeyword) || tags.includes(normalizedKeyword)
+    }).slice(0, limit)
+    : (rows ?? []).slice(0, limit)
+
+  res.json({ success: true, data })
 }))
 
 // ==========================================

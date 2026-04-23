@@ -9,7 +9,8 @@
     "outDir": "./dist",
     "rootDir": "./src",
     "noEmit": false,
-    "customConditions": []
+    "customConditions": [],
+    "types": ["node", "vitest/globals"]
   },
   "include": ["src/**/*"],
   "ts-node": {

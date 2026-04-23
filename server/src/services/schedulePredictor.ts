@@ -3,6 +3,7 @@
 
 import type { Task } from '../types/db.js'
 import { executeSQL, executeSQLOne } from './dbService.js'
+import { getApprovedDelayReasonsByProjectId } from './delayRequests.js'
 import {
   calculateDeviationRate,
   calculateWeightedAverage,
@@ -503,7 +504,7 @@ export class SchedulePredictor {
     }
 
     if (riskFactors.includes('多个未解决阻碍')) {
-      recommendations.push('优先处理阻碍任务，及时上报无法解决的阻碍')
+      recommendations.push('优先处理阻碍任务，并将升级处理结果及时挂回问题链路')
     }
 
     if (riskFactors.includes('工期紧张')) {
@@ -544,24 +545,7 @@ export class SchedulePredictor {
    * 获取常见延期原因
    */
   private async getCommonDelayReasons(projectId: string): Promise<string[]> {
-    // 注意：原代码中用 projectId 查询 task_id 字段，按原逻辑保留
-    const delays = await executeSQL(
-      'SELECT reason FROM task_delay_history WHERE task_id = ? LIMIT 50',
-      [projectId]
-    )
-
-    if (!delays || delays.length === 0) {
-      return []
-    }
-
-    // 统计原因频率
-    const reasonCount = groupBy(delays, (d: any) => d.reason)
-    const sortedReasons = Object.entries(reasonCount)
-      .sort((a, b) => (b[1] as any[]).length - (a[1] as any[]).length)
-      .slice(0, 5)
-      .map(([reason]) => reason)
-
-    return sortedReasons
+    return getApprovedDelayReasonsByProjectId(projectId)
   }
 
   /**

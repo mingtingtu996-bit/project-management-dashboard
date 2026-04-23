@@ -2,7 +2,7 @@
  * ChangePasswordDialog - 修改密码弹窗
  */
 
-import { useState } from 'react';
+import { useState, useEffect, useRef, useId } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { X, Eye, EyeOff } from 'lucide-react';
 
@@ -21,6 +21,19 @@ export const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({ isOp
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const { user } = useAuth();
+  const titleId = useId();
+  const closeRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    closeRef.current?.focus();
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !loading) handleClose();
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, loading]);
 
   if (!isOpen) return null;
 
@@ -49,7 +62,7 @@ export const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({ isOp
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }),
+        body: JSON.stringify({ oldPassword, newPassword }),
       });
       const data = await res.json();
       if (data.success) {
@@ -79,10 +92,10 @@ export const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({ isOp
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={handleClose}>
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 p-6" onClick={e => e.stopPropagation()}>
+      <div role="dialog" aria-modal="true" aria-labelledby={titleId} className="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 p-6" onClick={e => e.stopPropagation()}>
         <div className="flex justify-between items-center mb-4">
-          <h2 className="text-lg font-semibold text-gray-800">修改密码</h2>
-          <button onClick={handleClose} className="text-gray-400 hover:text-gray-600">
+          <h2 id={titleId} className="text-lg font-semibold text-gray-800">修改密码</h2>
+          <button ref={closeRef} onClick={handleClose} className="text-gray-400 hover:text-gray-600" aria-label="关闭">
             <X className="h-5 w-5" />
           </button>
         </div>

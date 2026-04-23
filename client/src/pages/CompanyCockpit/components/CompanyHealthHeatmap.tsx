@@ -5,7 +5,6 @@ type HeatmapItem = {
   name: string
   healthScore: number
   progress: number
-  attentionCount: number
   statusLabel: string
 }
 
@@ -46,7 +45,7 @@ export function CompanyHealthHeatmap({ items }: CompanyHealthHeatmapProps) {
         <div className="flex items-center justify-between gap-3">
           <div>
             <CardTitle className="text-base font-semibold text-slate-900">健康热力分布</CardTitle>
-            <p className="mt-1 text-xs leading-5 text-slate-500">按项目健康度查看公司层面的冷热分布，优先识别需要关注的项目。</p>
+            <p className="mt-1 text-xs leading-5 text-slate-500">按项目健康度查看公司层面的冷热分布。</p>
           </div>
           {items.length > 0 && (
             <div className="flex flex-col items-end gap-1 text-xs text-slate-500">
@@ -97,12 +96,6 @@ export function CompanyHealthHeatmap({ items }: CompanyHealthHeatmapProps) {
                         className="h-full rounded-full bg-current opacity-40"
                         style={{ width: `${Math.max(0, Math.min(100, item.progress))}%` }}
                       />
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="opacity-75">关注项</span>
-                      <span className={`font-medium ${item.attentionCount > 0 ? 'opacity-100' : 'opacity-60'}`}>
-                        {item.attentionCount > 0 ? `${item.attentionCount} 项` : '平稳'}
-                      </span>
                     </div>
                   </div>
                 </div>

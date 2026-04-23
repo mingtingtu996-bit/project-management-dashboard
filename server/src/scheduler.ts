@@ -1,294 +1,855 @@
-/**
- * 定时任务调度器
- * 启动所有后台定时任务
- */
+import { dataRetentionJob } from './jobs/dataRetentionJob.js'
+import { planningDraftLockTimeoutJob } from './jobs/planningDraftLockTimeoutJob.js'
+import { responsibilityAlertJob } from './jobs/responsibilityAlertJob.js'
+import { riskStatisticsJob } from './jobs/riskStatisticsJob.js'
+import { logger } from './middleware/logger.js'
+import { runJobWithRetry } from './services/jobRuntime.js'
+import { DelayRequestNotificationService } from './services/delayRequestNotificationService.js'
+import { dataQualityService } from './services/dataQualityService.js'
+import { NotificationLifecycleService } from './services/notificationLifecycleService.js'
+import { OperationalNotificationService } from './services/operationalNotificationService.js'
+import { PlanningHealthService } from './services/planningHealthService.js'
+import { PlanningIntegrityService } from './services/planningIntegrityService.js'
+import { planningGovernanceService } from './services/planningGovernanceService.js'
+import { scanAllProjectBaselineValidity } from './services/baselineGovernanceService.js'
+import { materialArrivalReminderService } from './services/materialArrivalReminderService.js'
+import { recordProjectHealthSnapshots } from './services/projectHealthService.js'
+import { SystemAnomalyService } from './services/systemAnomalyService.js'
+import { WarningService } from './services/warningService.js'
+import { weeklyDigestService } from './services/weeklyDigestService.js'
 
-import { riskStatisticsJob } from './jobs/riskStatisticsJob.js';
-import { executeWarningCheck } from './services/preMilestoneWarningService.js';
-import { AutoAlertService } from './services/autoAlertService.js';
-import { recordProjectHealthSnapshots } from './services/projectHealthService.js';
-import { WarningService } from './services/warningService.js';
-import { logger } from './middleware/logger.js';
+const MAX_TIMEOUT_MS = 2_147_483_647
+const DAY_IN_MS = 24 * 60 * 60 * 1000
+const HOUR_IN_MS = 60 * 60 * 1000
 
-const MAX_TIMEOUT_MS = 2_147_483_647;
-
-
-/**
- * 前期证照预警定时任务类
- */
-class PreMilestoneWarningJob {
-  private timer: NodeJS.Timeout | null = null;
-
-  start() {
-    if (this.timer) {
-      logger.warn('前期证照预警任务已在运行');
-      return;
-    }
-
-    // 立即执行一次
-    this.execute('scheduler');
-
-    // 每天凌晨3:00执行
-    const now = new Date();
-    const tomorrow3AM = new Date(now);
-    tomorrow3AM.setDate(tomorrow3AM.getDate() + 1);
-    tomorrow3AM.setHours(3, 0, 0, 0);
-
-    const initialDelay = tomorrow3AM.getTime() - now.getTime();
-
-    setTimeout(() => {
-      this.execute('scheduler');
-      // 之后每24小时执行一次
-      this.timer = setInterval(() => {
-        this.execute('scheduler');
-      }, 24 * 60 * 60 * 1000);
-    }, initialDelay);
-  }
-
-  stop() {
-    if (this.timer) {
-      clearInterval(this.timer);
-      this.timer = null;
-      logger.info('前期证照预警任务已停止');
-    }
-  }
-
-  private async execute(triggeredBy: 'scheduler' | 'manual' = 'scheduler') {
-    try {
-      logger.info('开始执行前期证照预警检查', { triggeredBy });
-      const result = await executeWarningCheck();
-      logger.info('前期证照预警检查完成', result);
-    } catch (error) {
-      logger.error('前期证照预警检查失败', {
-        triggeredBy,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
+function createJobId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
 }
 
-const preMilestoneWarningJob = new PreMilestoneWarningJob();
-
-/**
- * 条件/阻碍预警定时任务类
- * 定时扫描条件到期和阻碍超时，主动生成预警记录
- */
 class ConditionAlertJob {
-  private timer: NodeJS.Timeout | null = null;
-  private warningService: WarningService;
-
-  constructor() {
-    this.warningService = new WarningService();
-  }
+  private timer: NodeJS.Timeout | null = null
+  private startTimer: NodeJS.Timeout | null = null
+  private warningService = new WarningService()
 
   start() {
-    if (this.timer) {
-      logger.warn('条件/阻碍预警任务已在运行');
-      return;
+    if (this.timer || this.startTimer) {
+      logger.warn('Condition/obstacle warning job is already running')
+      return
     }
 
-    // 计算距下一个整点的毫秒数，同步到整点执行
-    const now = new Date();
-    const nextHour = new Date(now);
-    nextHour.setMinutes(0, 0, 0);
-    nextHour.setHours(nextHour.getHours() + 1);
-    const initialDelay = nextHour.getTime() - now.getTime();
+    const now = new Date()
+    const nextHour = new Date(now)
+    nextHour.setMinutes(0, 0, 0)
+    nextHour.setHours(nextHour.getHours() + 1)
+    const initialDelay = Math.max(nextHour.getTime() - now.getTime(), 0)
 
-    setTimeout(() => {
-      this.execute('scheduler');
-      // 首次执行后，每60分钟执行一次
+    this.startTimer = setTimeout(() => {
+      this.startTimer = null
+      void this.execute('scheduler')
       this.timer = setInterval(() => {
-        this.execute('scheduler');
-      }, 60 * 60 * 1000);
-    }, initialDelay);
+        void this.execute('scheduler')
+      }, HOUR_IN_MS)
+    }, initialDelay)
   }
 
   stop() {
+    if (this.startTimer) {
+      clearTimeout(this.startTimer)
+      this.startTimer = null
+    }
+
     if (this.timer) {
-      clearInterval(this.timer);
-      this.timer = null;
-      logger.info('条件/阻碍预警任务已停止');
+      clearInterval(this.timer)
+      this.timer = null
+      logger.info('Condition/obstacle warning job stopped')
     }
   }
 
   private async execute(triggeredBy: 'scheduler' | 'manual' = 'scheduler') {
+    const jobId = createJobId()
+
     try {
-      logger.info('开始执行条件/阻碍预警扫描', { triggeredBy });
+      logger.info('Start condition/obstacle warning scan', { triggeredBy, jobId })
+      const { attempts, value } = await runJobWithRetry(
+        {
+          jobName: 'conditionAlertJob',
+          triggeredBy,
+          jobId,
+        },
+        async () => {
+          const warnings = await this.warningService.syncActiveWarnings()
+          const reminders = await this.warningService.generateReminders()
+          const [conditionExpiredIssues, acceptanceExpiredIssues, autoEscalatedRisks, autoEscalatedIssues] = await Promise.all([
+            this.warningService.syncConditionExpiredIssues(),
+            this.warningService.syncAcceptanceExpiredIssues(),
+            this.warningService.autoEscalateWarnings(),
+            this.warningService.autoEscalateRisksToIssues(),
+          ])
 
-      // 扫描条件到期预警
-      const conditionWarnings = await this.warningService.scanConditionWarnings();
-      logger.info('条件到期预警扫描完成', { count: conditionWarnings.length });
+          return {
+            warnings: warnings.length,
+            reminders: reminders.length,
+            conditionExpiredIssues: conditionExpiredIssues.length,
+            acceptanceExpiredIssues: acceptanceExpiredIssues.length,
+            autoEscalatedRisks: autoEscalatedRisks.length,
+            autoEscalatedIssues: autoEscalatedIssues.length,
+          }
+        },
+      )
 
-      // 扫描阻碍超时预警
-      const obstacleWarnings = await this.warningService.scanObstacleWarnings();
-      logger.info('阻碍超时预警扫描完成', { count: obstacleWarnings.length });
-
-      // 生成弹窗提醒
-      const reminders = await this.warningService.generateReminders();
-      logger.info('弹窗提醒生成完成', { count: reminders.length });
-
-      // 生成通知
-      const notifications = await this.warningService.generateNotifications();
-      logger.info('通知生成完成', { count: notifications.length });
-
-      const total = conditionWarnings.length + obstacleWarnings.length;
-      logger.info('条件/阻碍预警扫描全部完成', { total });
-    } catch (error) {
-      logger.error('条件/阻碍预警扫描失败', {
+      logger.info('Condition/obstacle warning scan completed', {
         triggeredBy,
+        jobId,
+        attempts,
+        ...value,
+      })
+    } catch (error) {
+      logger.error('Condition/obstacle warning scan failed', {
+        triggeredBy,
+        jobId,
         error: error instanceof Error ? error.message : String(error),
-      });
+      })
     }
   }
 }
 
-const conditionAlertJob = new ConditionAlertJob();
+class DelayRequestReminderJob {
+  private timer: NodeJS.Timeout | null = null
+  private startTimer: NodeJS.Timeout | null = null
+  private isRunning = false
+  private service = new DelayRequestNotificationService()
 
-/**
- * 健康度月度快照任务
- * 每月1日 00:05 记录一次所有活跃项目健康度，供公司驾驶舱显示“较上月变化”
- */
+  start() {
+    if (this.timer || this.startTimer) {
+      logger.warn('Delay request reminder job is already running')
+      return
+    }
+
+    void this.execute('scheduler')
+
+    const now = new Date()
+    const nextRun = new Date(now)
+    nextRun.setDate(nextRun.getDate() + 1)
+    nextRun.setHours(9, 0, 0, 0)
+    const initialDelay = Math.max(nextRun.getTime() - now.getTime(), 0)
+
+    this.startTimer = setTimeout(() => {
+      this.startTimer = null
+      void this.execute('scheduler')
+      this.timer = setInterval(() => {
+        void this.execute('scheduler')
+      }, DAY_IN_MS)
+    }, initialDelay)
+  }
+
+  stop() {
+    if (this.startTimer) {
+      clearTimeout(this.startTimer)
+      this.startTimer = null
+    }
+
+    if (this.timer) {
+      clearInterval(this.timer)
+      this.timer = null
+      logger.info('Delay request reminder job stopped')
+    }
+  }
+
+  private async execute(triggeredBy: 'scheduler' | 'manual' = 'scheduler') {
+    if (this.isRunning) {
+      logger.warn('Delay request reminder job is already running, skip tick')
+      return
+    }
+
+    this.isRunning = true
+    const jobId = createJobId()
+
+    try {
+      logger.info('Start delay request reminder scan', { triggeredBy, jobId })
+      const { attempts, value } = await runJobWithRetry(
+        {
+          jobName: 'delayRequestReminderJob',
+          triggeredBy,
+          jobId,
+        },
+        async () => {
+          const notifications = await this.service.persistPendingDelayRequestNotifications()
+          return {
+            scanned: notifications.length,
+            reminders: notifications.filter((item) => item.type === 'delay_request_reminder').length,
+            escalations: notifications.filter((item) => item.type === 'delay_request_escalation').length,
+          }
+        },
+      )
+
+      logger.info('Delay request reminder scan completed', {
+        triggeredBy,
+        jobId,
+        attempts,
+        ...value,
+      })
+    } catch (error) {
+      logger.error('Delay request reminder scan failed', {
+        triggeredBy,
+        jobId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    } finally {
+      this.isRunning = false
+    }
+  }
+}
+
 class HealthHistorySnapshotJob {
-  private timer: NodeJS.Timeout | null = null;
-  private isRunning = false;
-  private nextRun: Date | null = null;
+  private timer: NodeJS.Timeout | null = null
+  private isRunning = false
+  private nextRun: Date | null = null
 
   start() {
     if (this.timer) {
-      logger.warn('健康度月快照任务已在运行');
-      return;
+      logger.warn('Health history snapshot job is already running')
+      return
     }
 
-    this.scheduleNextRun();
+    this.scheduleNextRun()
   }
 
   stop() {
     if (this.timer) {
-      clearTimeout(this.timer);
-      this.timer = null;
-      this.nextRun = null;
-      logger.info('健康度月快照任务已停止');
+      clearTimeout(this.timer)
+      this.timer = null
+      this.nextRun = null
+      logger.info('Health history snapshot job stopped')
     }
   }
 
   private scheduleNextRun() {
-    const now = new Date();
-    const firstDayThisMonth = new Date(now.getFullYear(), now.getMonth(), 1, 0, 5, 0, 0);
-    const nextRun = firstDayThisMonth > now
-      ? firstDayThisMonth
-      : new Date(now.getFullYear(), now.getMonth() + 1, 1, 0, 5, 0, 0);
+    const now = new Date()
+    const firstDayThisMonth = new Date(now.getFullYear(), now.getMonth(), 1, 0, 5, 0, 0)
+    const nextRun =
+      firstDayThisMonth > now
+        ? firstDayThisMonth
+        : new Date(now.getFullYear(), now.getMonth() + 1, 1, 0, 5, 0, 0)
 
-    this.scheduleForDate(nextRun);
+    this.scheduleForDate(nextRun)
   }
 
   private scheduleForDate(targetDate: Date) {
-    const now = new Date();
-    const delay = Math.max(targetDate.getTime() - now.getTime(), 0);
-    this.nextRun = targetDate;
+    const delay = Math.max(targetDate.getTime() - Date.now(), 0)
+    this.nextRun = targetDate
 
-    logger.info('健康度月快照任务已设置', {
+    logger.info('Health history snapshot job scheduled', {
       nextRun: targetDate.toISOString(),
       remainingMs: delay,
-    });
+    })
 
     if (delay > MAX_TIMEOUT_MS) {
       this.timer = setTimeout(() => {
-        this.timer = null;
-        this.scheduleForDate(targetDate);
-      }, MAX_TIMEOUT_MS);
-      return;
+        this.timer = null
+        this.scheduleForDate(targetDate)
+      }, MAX_TIMEOUT_MS)
+      return
     }
 
     this.timer = setTimeout(async () => {
-      this.timer = null;
-      await this.execute('scheduler');
-      this.scheduleNextRun();
-    }, delay);
+      this.timer = null
+      await this.execute('scheduler')
+      this.scheduleNextRun()
+    }, delay)
   }
-
 
   private async execute(triggeredBy: 'scheduler' | 'manual' = 'scheduler') {
     if (this.isRunning) {
-      logger.warn('健康度月快照任务正在执行中，跳过本次');
-      return;
+      logger.warn('Health history snapshot job is already running, skip tick')
+      return
     }
 
-    this.isRunning = true;
+    this.isRunning = true
+    const jobId = createJobId()
+
     try {
-      logger.info('开始记录健康度月快照', { triggeredBy });
-      const result = await recordProjectHealthSnapshots();
-      logger.info('健康度月快照记录完成', {
+      logger.info('Start health history snapshot recording', { triggeredBy, jobId })
+      const { attempts, value } = await runJobWithRetry(
+        {
+          jobName: 'healthHistorySnapshotJob',
+          triggeredBy,
+          jobId,
+        },
+        async () => recordProjectHealthSnapshots(),
+      )
+
+      logger.info('Health history snapshot recording completed', {
         triggeredBy,
-        recorded: result.recorded,
-        failed: result.failed,
-        period: result.period,
-      });
+        jobId,
+        attempts,
+        recorded: value.recorded,
+        failed: value.failed,
+        period: value.period,
+      })
     } catch (error) {
-      logger.error('健康度月快照记录失败', {
+      logger.error('Health history snapshot recording failed', {
         triggeredBy,
+        jobId,
         error: error instanceof Error ? error.message : String(error),
-      });
+      })
     } finally {
-      this.isRunning = false;
+      this.isRunning = false
     }
   }
 }
 
-const healthHistorySnapshotJob = new HealthHistorySnapshotJob();
+class DataQualityJob {
+  private timer: NodeJS.Timeout | null = null
+  private startTimer: NodeJS.Timeout | null = null
+  private isRunning = false
 
-/**
- * 启动所有定时任务
- */
-function startAllJobs() {
-  console.log('🚀 启动定时任务调度器...\n');
+  start() {
+    if (this.timer || this.startTimer) {
+      logger.warn('Data quality job is already running')
+      return
+    }
 
-  // 1. 启动风险统计定时任务（每日 02:00）
-  riskStatisticsJob.start('0 2 * * *');
-  console.log('✅ 风险统计定时任务已启动（每日 02:00）');
+    const now = new Date()
+    const nextRun = new Date(now)
+    nextRun.setHours(2, 30, 0, 0)
+    if (nextRun <= now) {
+      nextRun.setDate(nextRun.getDate() + 1)
+    }
 
-  // 2. 启动前期证照预警任务（每日 03:00）
-  preMilestoneWarningJob.start();
-  console.log('✅ 前期证照预警任务已启动（每日 03:00）');
+    const initialDelay = Math.max(nextRun.getTime() - now.getTime(), 0)
+    logger.info('Data quality job scheduled', {
+      nextRun: nextRun.toISOString(),
+      trigger: 'daily_02_30',
+      initialDelay,
+    })
 
-  // 3. 启动自动预警服务（每日 02:30 + 每小时整点）
-  const autoAlertService = new AutoAlertService();
-  autoAlertService.start();
-  console.log('✅ 自动预警服务已启动（每日 02:30 + 每小时整点）');
+    this.startTimer = setTimeout(() => {
+      this.startTimer = null
+      void this.execute('scheduler')
+      this.timer = setInterval(() => {
+        void this.execute('scheduler')
+      }, DAY_IN_MS)
+    }, initialDelay)
+  }
 
-  // 4. 启动条件/阻碍预警扫描任务（每小时整点）
-  conditionAlertJob.start();
-  console.log('✅ 条件/阻碍预警扫描任务已启动（每小时整点）');
+  stop() {
+    if (this.startTimer) {
+      clearTimeout(this.startTimer)
+      this.startTimer = null
+    }
 
-  // 5. 启动健康度月快照任务（每月1日 00:05）
-  healthHistorySnapshotJob.start();
-  console.log('✅ 健康度月快照任务已启动（每月1日 00:05）');
+    if (this.timer) {
+      clearInterval(this.timer)
+      this.timer = null
+      logger.info('Data quality job stopped')
+    }
+  }
 
-  console.log('\n📋 所有定时任务已启动，运行中...');
-  console.log('💡 按 Ctrl+C 停止所有任务\n');
+  private async execute(triggeredBy: 'scheduler' | 'manual' = 'scheduler') {
+    if (this.isRunning) {
+      logger.warn('Data quality job is already running, skip tick')
+      return
+    }
 
-  // 优雅退出处理
-  process.on('SIGINT', () => {
-    console.log('\n⏹️  接收到退出信号，正在停止定时任务...');
-    riskStatisticsJob.stop();
-    preMilestoneWarningJob.stop();
-    autoAlertService.stop();
-    conditionAlertJob.stop();
-    healthHistorySnapshotJob.stop();
-    console.log('✅ 所有任务已停止');
-    process.exit(0);
-  });
+    this.isRunning = true
+    const jobId = createJobId()
 
-  process.on('SIGTERM', () => {
-    console.log('\n⏹️  接收到终止信号，正在停止定时任务...');
-    riskStatisticsJob.stop();
-    preMilestoneWarningJob.stop();
-    autoAlertService.stop();
-    conditionAlertJob.stop();
-    healthHistorySnapshotJob.stop();
-    console.log('✅ 所有任务已停止');
-    process.exit(0);
-  });
+    try {
+      logger.info('Start data quality scan', { triggeredBy, jobId })
+      const { attempts, value } = await runJobWithRetry(
+        {
+          jobName: 'dataQualityJob',
+          triggeredBy,
+          jobId,
+        },
+        async () => {
+          const reports = await dataQualityService.syncAllProjectsDataQuality()
+          return {
+            projects: reports.length,
+            lowConfidenceProjects: reports.filter((report) => report.confidence.flag === 'low').length,
+            activeFindings: reports.reduce((sum, report) => sum + report.confidence.activeFindingCount, 0),
+            trendWarnings: reports.reduce((sum, report) => sum + report.confidence.trendWarningCount, 0),
+          }
+        },
+      )
+
+      logger.info('Data quality scan completed', {
+        triggeredBy,
+        jobId,
+        attempts,
+        ...value,
+      })
+    } catch (error) {
+      logger.error('Data quality scan failed', {
+        triggeredBy,
+        jobId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    } finally {
+      this.isRunning = false
+    }
+  }
 }
 
-// 启动所有任务
-startAllJobs();
+class PlanningGovernanceJob {
+  private timer: NodeJS.Timeout | null = null
+  private startTimer: NodeJS.Timeout | null = null
+  private isRunning = false
+
+  start() {
+    if (this.timer || this.startTimer) {
+      logger.warn('Planning governance job is already running')
+      return
+    }
+
+    const now = new Date()
+    const nextRun = new Date(now)
+    nextRun.setHours(1, 0, 0, 0)
+    if (nextRun <= now) {
+      nextRun.setDate(nextRun.getDate() + 1)
+    }
+
+    const initialDelay = Math.max(nextRun.getTime() - now.getTime(), 0)
+    logger.info('Planning governance job scheduled', {
+      nextRun: nextRun.toISOString(),
+      trigger: 'daily_01_00',
+      initialDelay,
+    })
+
+    this.startTimer = setTimeout(() => {
+      this.startTimer = null
+      void this.execute('scheduler')
+      this.timer = setInterval(() => {
+        void this.execute('scheduler')
+      }, DAY_IN_MS)
+    }, initialDelay)
+  }
+
+  stop() {
+    if (this.startTimer) {
+      clearTimeout(this.startTimer)
+      this.startTimer = null
+    }
+
+    if (this.timer) {
+      clearInterval(this.timer)
+      this.timer = null
+      logger.info('Planning governance job stopped')
+    }
+  }
+
+  private async execute(triggeredBy: 'scheduler' | 'manual' = 'scheduler') {
+    if (this.isRunning) {
+      logger.warn('Planning governance job is already running, skip tick')
+      return
+    }
+
+    this.isRunning = true
+    const jobId = createJobId()
+
+    try {
+      logger.info('Start planning governance scan', { triggeredBy, jobId })
+      const { attempts, value } = await runJobWithRetry(
+        {
+          jobName: 'planningGovernanceJob',
+          triggeredBy,
+          jobId,
+        },
+        async () => {
+          const safeRun = async <T>(label: string, fn: () => Promise<T[]>): Promise<T[]> => {
+            try {
+              return await fn()
+            } catch (error) {
+              logger.error(`[planningGovernanceJob] ${label} failed`, {
+                error: error instanceof Error ? error.message : String(error),
+              })
+              return []
+            }
+          }
+
+          const [healthReports, integrityReports, anomalyReports, notifications, baselineValidityReports] = await Promise.all([
+            safeRun('healthScan', () => new PlanningHealthService().scanAllProjectHealth()),
+            safeRun('integrityScan', () => new PlanningIntegrityService().scanAllProjectIntegrity()),
+            safeRun('anomalyScan', () => new SystemAnomalyService().scanAllProjectPassiveReorder()),
+            safeRun('governanceNotifications', () => planningGovernanceService.persistProjectGovernanceNotifications()),
+            safeRun('baselineValidity', () => scanAllProjectBaselineValidity()),
+          ])
+
+          return {
+            healthReports: healthReports.length,
+            integrityReports: integrityReports.length,
+            anomalyReports: anomalyReports.length,
+            baselineValidityReports: baselineValidityReports.length,
+            baselinesQueuedForRealign: baselineValidityReports.filter((item) => item.action === 'queued_realign').length,
+            notifications_written: notifications.length,
+            closeout_notifications: notifications.filter((item) => String(item.type ?? '').includes('closeout')).length,
+            reorder_notifications: notifications.filter((item) => String(item.type ?? '').includes('reorder')).length,
+            ad_hoc_notifications: notifications.filter((item) => String(item.type ?? '').includes('ad_hoc_cross_month')).length,
+          }
+        },
+      )
+
+      logger.info('Planning governance scan completed', {
+        triggeredBy,
+        jobId,
+        attempts,
+        ...value,
+      })
+    } catch (error) {
+      logger.error('Planning governance scan failed', {
+        triggeredBy,
+        jobId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    } finally {
+      this.isRunning = false
+    }
+  }
+}
+
+class OperationalNotificationJob {
+  private timer: NodeJS.Timeout | null = null
+  private isRunning = false
+  private service = new OperationalNotificationService()
+
+  start() {
+    if (this.timer) {
+      logger.warn('Operational notification job is already running')
+      return
+    }
+
+    void this.execute('scheduler')
+    this.timer = setInterval(() => {
+      void this.execute('scheduler')
+    }, 2 * HOUR_IN_MS)
+  }
+
+  stop() {
+    if (this.timer) {
+      clearInterval(this.timer)
+      this.timer = null
+      logger.info('Operational notification job stopped')
+    }
+  }
+
+  private async execute(triggeredBy: 'scheduler' | 'manual' = 'scheduler') {
+    if (this.isRunning) {
+      logger.warn('Operational notification job is already running, skip tick')
+      return
+    }
+
+    this.isRunning = true
+    const jobId = createJobId()
+
+    try {
+      logger.info('Start operational notification scan', { triggeredBy, jobId })
+      const { attempts, value } = await runJobWithRetry(
+        {
+          jobName: 'operationalNotificationJob',
+          triggeredBy,
+          jobId,
+        },
+        async () => {
+          const notifications = await this.service.syncAllProjectNotifications()
+          return {
+            notificationsWritten: notifications.length,
+            dateInversionNotifications: notifications.filter((item) => item.type === 'date_inversion').length,
+            statusProgressNotifications: notifications.filter((item) => item.type === 'status_progress_mismatch').length,
+          }
+        },
+      )
+
+      logger.info('Operational notification scan completed', {
+        triggeredBy,
+        jobId,
+        attempts,
+        ...value,
+      })
+    } catch (error) {
+      logger.error('Operational notification scan failed', {
+        triggeredBy,
+        jobId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    } finally {
+      this.isRunning = false
+    }
+  }
+}
+
+class NotificationLifecycleJob {
+  private timer: NodeJS.Timeout | null = null
+  private startTimer: NodeJS.Timeout | null = null
+  private isRunning = false
+  private service = new NotificationLifecycleService()
+
+  start() {
+    if (this.timer || this.startTimer) {
+      logger.warn('Notification lifecycle job is already running')
+      return
+    }
+
+    const now = new Date()
+    const nextRun = new Date(now)
+    nextRun.setHours(3, 30, 0, 0)
+    if (nextRun <= now) {
+      nextRun.setDate(nextRun.getDate() + 1)
+    }
+
+    const initialDelay = Math.max(nextRun.getTime() - now.getTime(), 0)
+    logger.info('Notification lifecycle job scheduled', {
+      nextRun: nextRun.toISOString(),
+      trigger: 'daily_03_30',
+      initialDelay,
+    })
+
+    this.startTimer = setTimeout(() => {
+      this.startTimer = null
+      void this.execute('scheduler')
+      this.timer = setInterval(() => {
+        void this.execute('scheduler')
+      }, DAY_IN_MS)
+    }, initialDelay)
+  }
+
+  stop() {
+    if (this.startTimer) {
+      clearTimeout(this.startTimer)
+      this.startTimer = null
+    }
+
+    if (this.timer) {
+      clearInterval(this.timer)
+      this.timer = null
+      logger.info('Notification lifecycle job stopped')
+    }
+  }
+
+  private async execute(triggeredBy: 'scheduler' | 'manual' = 'scheduler') {
+    if (this.isRunning) {
+      logger.warn('Notification lifecycle job is already running, skip tick')
+      return
+    }
+
+    this.isRunning = true
+    const jobId = createJobId()
+
+    try {
+      logger.info('Start notification lifecycle cleanup', { triggeredBy, jobId })
+      const { attempts, value } = await runJobWithRetry(
+        {
+          jobName: 'notificationLifecycleJob',
+          triggeredBy,
+          jobId,
+        },
+        async () => this.service.runRetentionPolicy(),
+      )
+
+      logger.info('Notification lifecycle cleanup completed', {
+        triggeredBy,
+        jobId,
+        attempts,
+        archived: value.archived,
+        deleted: value.deleted,
+      })
+    } catch (error) {
+      logger.error('Notification lifecycle cleanup failed', {
+        triggeredBy,
+        jobId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    } finally {
+      this.isRunning = false
+    }
+  }
+}
+
+class WeeklyDigestJob {
+  private timer: NodeJS.Timeout | null = null
+  private startTimer: NodeJS.Timeout | null = null
+
+  start() {
+    if (this.timer || this.startTimer) return
+    const now = new Date()
+    // 下一个周一 09:00
+    const next = new Date(now)
+    const day = next.getDay()
+    const daysUntilMonday = day === 0 ? 1 : day === 1 ? 7 : 8 - day
+    next.setDate(next.getDate() + daysUntilMonday)
+    next.setHours(9, 0, 0, 0)
+    const initialDelay = Math.max(next.getTime() - now.getTime(), 0)
+    const WEEK_IN_MS = 7 * 24 * 60 * 60 * 1000
+
+    this.startTimer = setTimeout(() => {
+      this.startTimer = null
+      void weeklyDigestService.generateForAllProjects()
+      this.timer = setInterval(() => {
+        void weeklyDigestService.generateForAllProjects()
+      }, WEEK_IN_MS)
+    }, initialDelay)
+  }
+
+  stop() {
+    if (this.startTimer) { clearTimeout(this.startTimer); this.startTimer = null }
+    if (this.timer) { clearInterval(this.timer); this.timer = null }
+  }
+}
+
+class MaterialArrivalReminderJob {
+  private timer: NodeJS.Timeout | null = null
+  private startTimer: NodeJS.Timeout | null = null
+  private isRunning = false
+
+  start() {
+    if (this.timer || this.startTimer) {
+      logger.warn('Material arrival reminder job is already running')
+      return
+    }
+
+    void this.execute('scheduler')
+
+    const now = new Date()
+    const nextRun = new Date(now)
+    nextRun.setDate(nextRun.getDate() + 1)
+    nextRun.setHours(8, 30, 0, 0)
+    const initialDelay = Math.max(nextRun.getTime() - now.getTime(), 0)
+
+    this.startTimer = setTimeout(() => {
+      this.startTimer = null
+      void this.execute('scheduler')
+      this.timer = setInterval(() => {
+        void this.execute('scheduler')
+      }, DAY_IN_MS)
+    }, initialDelay)
+  }
+
+  stop() {
+    if (this.startTimer) {
+      clearTimeout(this.startTimer)
+      this.startTimer = null
+    }
+
+    if (this.timer) {
+      clearInterval(this.timer)
+      this.timer = null
+      logger.info('Material arrival reminder job stopped')
+    }
+  }
+
+  private async execute(triggeredBy: 'scheduler' | 'manual' = 'scheduler') {
+    if (this.isRunning) {
+      logger.warn('Material arrival reminder job is already running, skip tick')
+      return
+    }
+
+    this.isRunning = true
+    const jobId = createJobId()
+
+    try {
+      logger.info('Start material arrival reminder scan', { triggeredBy, jobId })
+      const { attempts, value } = await runJobWithRetry(
+        {
+          jobName: 'materialArrivalReminderJob',
+          triggeredBy,
+          jobId,
+        },
+        async () => materialArrivalReminderService.run(),
+      )
+
+      logger.info('Material arrival reminder scan completed', {
+        triggeredBy,
+        jobId,
+        attempts,
+        ...value,
+      })
+    } catch (error) {
+      logger.error('Material arrival reminder scan failed', {
+        triggeredBy,
+        jobId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    } finally {
+      this.isRunning = false
+    }
+  }
+}
+
+const conditionAlertJob = new ConditionAlertJob()
+const delayRequestReminderJob = new DelayRequestReminderJob()
+const healthHistorySnapshotJob = new HealthHistorySnapshotJob()
+const dataQualityJob = new DataQualityJob()
+const planningGovernanceJob = new PlanningGovernanceJob()
+const operationalNotificationJob = new OperationalNotificationJob()
+const notificationLifecycleJob = new NotificationLifecycleJob()
+const weeklyDigestJob = new WeeklyDigestJob()
+const materialArrivalReminderJob = new MaterialArrivalReminderJob()
+
+function startAllJobs() {
+  console.log('Starting scheduled jobs...')
+
+  riskStatisticsJob.start('0 2 * * *')
+  console.log('Risk statistics job started (daily 02:00)')
+
+  conditionAlertJob.start()
+  console.log('Condition/obstacle warning job started (hourly)')
+
+  healthHistorySnapshotJob.start()
+  console.log('Health history snapshot job started (monthly 1st 00:05)')
+
+  dataQualityJob.start()
+  console.log('Data quality job started (daily 02:30)')
+
+  planningDraftLockTimeoutJob.start()
+  console.log('Planning draft lock timeout job started (every minute)')
+
+  planningGovernanceJob.start()
+  console.log('Planning governance job started (daily 01:00)')
+
+  delayRequestReminderJob.start()
+  console.log('Delay request reminder job started (daily 09:00)')
+
+  responsibilityAlertJob.start()
+  console.log('Responsibility alert job started (daily 08:15)')
+
+  operationalNotificationJob.start()
+  console.log('Operational notification job started (every 2 hours)')
+
+  notificationLifecycleJob.start()
+  console.log('Notification lifecycle job started (daily 03:30)')
+
+  dataRetentionJob.start()
+  console.log('Data retention job started (monthly 1st 04:15)')
+
+  weeklyDigestJob.start()
+  console.log('Weekly digest job started (every Monday 09:00)')
+
+  materialArrivalReminderJob.start()
+  console.log('Material arrival reminder job started (daily 08:30)')
+
+  console.log('All scheduled jobs started, running...')
+  console.log('Press Ctrl+C to stop all jobs')
+
+  const stopAll = () => {
+    console.log('\nReceived shutdown signal, stopping scheduled jobs...')
+    riskStatisticsJob.stop()
+    conditionAlertJob.stop()
+    planningDraftLockTimeoutJob.stop()
+    planningGovernanceJob.stop()
+    delayRequestReminderJob.stop()
+    responsibilityAlertJob.stop()
+    healthHistorySnapshotJob.stop()
+    dataQualityJob.stop()
+    operationalNotificationJob.stop()
+    notificationLifecycleJob.stop()
+    dataRetentionJob.stop()
+    weeklyDigestJob.stop()
+    materialArrivalReminderJob.stop()
+    console.log('All jobs stopped')
+    process.exit(0)
+  }
+
+  process.on('SIGINT', stopAll)
+  process.on('SIGTERM', stopAll)
+}
+
+startAllJobs()

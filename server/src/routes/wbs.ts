@@ -1,21 +1,79 @@
 ﻿// WBS节点管理 API 路由
 
 import { Router } from 'express'
-import { executeSQL, executeSQLOne } from '../services/dbService.js'
+import { z } from 'zod'
+import {
+  createTask,
+  deleteTask,
+  executeSQL,
+  executeSQLOne,
+  getTask,
+  updateTask,
+} from '../services/dbService.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import { authenticate } from '../middleware/auth.js'
+import { validate } from '../middleware/validation.js'
 import { logger } from '../middleware/logger.js'
 import type { ApiResponse } from '../types/index.js'
-import type { WBSTemplate } from '../types/db.js'
 import { v4 as uuidv4 } from 'uuid'
 
 const router = Router()
 router.use(authenticate)
 
+const wbsListQuerySchema = z.object({
+  projectId: z.string().trim().min(1).optional(),
+  project_id: z.string().trim().min(1).optional(),
+}).passthrough()
+
+const wbsIdParamSchema = z.object({
+  id: z.string().trim().min(1),
+})
+
+const wbsCreateBodySchema = z.object({
+  project_id: z.string().trim().min(1),
+  title: z.string().trim().min(1),
+  description: z.string().optional().nullable(),
+  wbs_level: z.coerce.number().int().min(0),
+  parent_id: z.string().trim().optional().nullable(),
+  priority: z.string().trim().optional().nullable(),
+  start_date: z.string().trim().optional().nullable(),
+  end_date: z.string().trim().optional().nullable(),
+}).passthrough()
+
+const wbsUpdateBodySchema = z.object({
+  version: z.coerce.number().int().min(1).optional(),
+  title: z.string().trim().optional(),
+  description: z.string().optional().nullable(),
+  status: z.string().trim().optional(),
+  priority: z.string().trim().optional(),
+  wbs_level: z.coerce.number().int().min(0).optional(),
+  parent_id: z.string().trim().optional().nullable(),
+  start_date: z.string().trim().optional().nullable(),
+  end_date: z.string().trim().optional().nullable(),
+  progress: z.coerce.number().int().min(0).max(100).optional(),
+  assignee: z.string().trim().optional().nullable(),
+  assignee_unit: z.string().trim().optional().nullable(),
+  sort_order: z.coerce.number().int().optional(),
+  is_milestone: z.boolean().optional(),
+}).passthrough()
+
+const wbsTemplatesQuerySchema = z.object({
+  type: z.string().trim().optional(),
+}).passthrough()
+
+const wbsTemplateCreateBodySchema = z.object({
+  template_name: z.string().trim().min(1),
+  template_type: z.string().trim().min(1),
+  description: z.string().optional().nullable(),
+  wbs_nodes: z.unknown(),
+  is_default: z.boolean().optional(),
+  created_by: z.string().trim().optional().nullable(),
+}).passthrough()
+
 
 // GET /api/wbs-nodes?projectId= - 获取项目的WBS节点树
-router.get('/', asyncHandler(async (req, res) => {
-  const projectId = req.query.projectId as string | undefined
+router.get('/', validate(wbsListQuerySchema, 'query'), asyncHandler(async (req, res) => {
+  const projectId = String(req.query.projectId ?? req.query.project_id ?? '').trim() || undefined
   if (!projectId) {
     const response: ApiResponse = {
       success: false,
@@ -42,7 +100,7 @@ router.get('/', asyncHandler(async (req, res) => {
 }))
 
 // POST /api/wbs-nodes - 创建WBS节点（实际是创建带wbs_level的task）
-router.post('/', asyncHandler(async (req, res) => {
+router.post('/', validate(wbsCreateBodySchema), asyncHandler(async (req, res) => {
   logger.info('Creating WBS node', req.body)
 
   const { project_id, title, description, wbs_level, parent_id, priority, start_date, end_date } = req.body
@@ -56,16 +114,22 @@ router.post('/', asyncHandler(async (req, res) => {
     return res.status(400).json(response)
   }
 
-  const id = uuidv4()
-  const now = new Date().toISOString()
-
-  await executeSQL(
-    `INSERT INTO tasks (id, project_id, title, description, wbs_level, parent_id, status, priority, start_date, end_date, progress, version, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, 0, 1, ?, ?)`,
-    [id, project_id, title, description || null, wbs_level, parent_id || null, priority || 'medium', start_date || null, end_date || null, now, now]
-  )
-
-  const task = await executeSQLOne('SELECT * FROM tasks WHERE id = ?', [id])
+  const task = await createTask({
+    id: uuidv4(),
+    project_id,
+    title,
+    description: description || null,
+    status: 'pending',
+    priority: priority || 'medium',
+    progress: 0,
+    wbs_level,
+    parent_id: parent_id || null,
+    start_date: start_date || null,
+    end_date: end_date || null,
+    planned_start_date: start_date || null,
+    planned_end_date: end_date || null,
+    created_by: req.user?.id ?? null,
+  } as any)
 
   const response: ApiResponse<typeof task> = {
     success: true,
@@ -76,14 +140,14 @@ router.post('/', asyncHandler(async (req, res) => {
 }))
 
 // PUT /api/wbs-nodes/:id - 更新WBS节点
-router.put('/:id', asyncHandler(async (req, res) => {
+router.put('/:id', validate(wbsIdParamSchema, 'params'), validate(wbsUpdateBodySchema), asyncHandler(async (req, res) => {
   const { id } = req.params
   const { version, ...updates } = req.body
 
   logger.info('Updating WBS node', { id, updates })
 
   // 版本检查
-  const existing: any = await executeSQLOne('SELECT version FROM tasks WHERE id = ?', [id])
+  const existing: any = await getTask(id)
   if (!existing) {
     const response: ApiResponse = {
       success: false,
@@ -111,17 +175,9 @@ router.put('/:id', asyncHandler(async (req, res) => {
   const safeUpdates = Object.fromEntries(
     Object.entries(updates).filter(([k]) => ALLOWED_WBS_FIELDS.has(k))
   )
-  const fields = Object.keys(safeUpdates).map(k => `${k} = ?`).join(', ')
-  const values = Object.values(safeUpdates)
-
-  if (fields) {
-    await executeSQL(
-      `UPDATE tasks SET ${fields}, version = version + 1, updated_at = ? WHERE id = ?`,
-      [...values, new Date().toISOString(), id]
-    )
-  }
-
-  const task = await executeSQLOne('SELECT * FROM tasks WHERE id = ?', [id])
+  const task = Object.keys(safeUpdates).length > 0
+    ? await updateTask(id, { ...safeUpdates, updated_by: req.user?.id ?? null } as any, version)
+    : await getTask(id)
 
   const response: ApiResponse<typeof task> = {
     success: true,
@@ -132,11 +188,11 @@ router.put('/:id', asyncHandler(async (req, res) => {
 }))
 
 // DELETE /api/wbs-nodes/:id - 删除WBS节点
-router.delete('/:id', asyncHandler(async (req, res) => {
+router.delete('/:id', validate(wbsIdParamSchema, 'params'), asyncHandler(async (req, res) => {
   const { id } = req.params
   logger.info('Deleting WBS node', { id })
 
-  await executeSQL('DELETE FROM tasks WHERE id = ?', [id])
+  await deleteTask(id)
 
   const response: ApiResponse = {
     success: true,
@@ -146,7 +202,7 @@ router.delete('/:id', asyncHandler(async (req, res) => {
 }))
 
 // GET /api/wbs-nodes/templates - 获取WBS模板列表
-router.get('/templates', asyncHandler(async (req, res) => {
+router.get('/templates', validate(wbsTemplatesQuerySchema, 'query'), asyncHandler(async (req, res) => {
   const templateType = req.query.type as string | undefined
   logger.info('Fetching WBS templates', { templateType })
 
@@ -166,7 +222,7 @@ router.get('/templates', asyncHandler(async (req, res) => {
 }))
 
 // POST /api/wbs-nodes/templates - 创建WBS模板
-router.post('/templates', asyncHandler(async (req, res) => {
+router.post('/templates', validate(wbsTemplateCreateBodySchema), asyncHandler(async (req, res) => {
   logger.info('Creating WBS template', req.body)
 
   const { template_name, template_type, description, wbs_nodes, is_default } = req.body

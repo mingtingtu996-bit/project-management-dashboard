@@ -11,6 +11,7 @@
  * @param defaultTab  默认 Tab（没有历史记录时使用）
  */
 import { useState, useCallback } from 'react'
+import { safeStorageGet, safeStorageSet } from '@/lib/browserStorage'
 
 export function useTabPersist(
   storageKey: string,
@@ -20,7 +21,7 @@ export function useTabPersist(
 
   const [activeTab, setActiveTabState] = useState<string>(() => {
     try {
-      return sessionStorage.getItem(sessionKey) ?? defaultTab
+      return safeStorageGet(sessionStorage, sessionKey) ?? defaultTab
     } catch {
       return defaultTab
     }
@@ -29,7 +30,7 @@ export function useTabPersist(
   const setActiveTab = useCallback((tab: string) => {
     setActiveTabState(tab)
     try {
-      sessionStorage.setItem(sessionKey, tab)
+      safeStorageSet(sessionStorage, sessionKey, tab)
     } catch {
       // sessionStorage 不可用时静默失败
     }

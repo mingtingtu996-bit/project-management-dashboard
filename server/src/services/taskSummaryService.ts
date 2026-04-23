@@ -1,6 +1,7 @@
 ﻿// 任务完成总结服务 - Phase 3.6（基于 Supabase PostgreSQL）
 
 import { executeSQL, executeSQLOne } from './dbService.js'
+import { getApprovedDelayRequestsByTaskId } from './delayRequests.js'
 import type { Task, TaskCompletionReport } from '../types/db.js'
 import { logger } from '../middleware/logger.js'
 import { v4 as uuidv4 } from 'uuid'
@@ -347,10 +348,7 @@ export class TaskSummaryService {
    * 计算延期统计
    */
   async calculateDelayStats(taskId: string): Promise<DelayStats> {
-    const delayRecords = await executeSQL<any>(
-      'SELECT * FROM task_delay_history WHERE task_id = ? ORDER BY created_at DESC',
-      [taskId]
-    )
+    const delayRecords = await getApprovedDelayRequestsByTaskId(taskId)
 
     const delayCount = delayRecords?.length || 0
     const totalDelayDays = delayRecords?.reduce((sum: number, record: any) => sum + (record.delay_days || 0), 0) || 0

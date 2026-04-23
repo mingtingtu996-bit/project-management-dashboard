@@ -1,5 +1,5 @@
-import { normalizeAcceptanceStatus, type AcceptancePlan } from '@/types/acceptance'
-import type { Risk, Task, TaskCondition, TaskObstacle } from '@/lib/supabase'
+import { normalizeAcceptanceStatus } from '@/types/acceptance'
+import type { AcceptancePlan, Risk, Task, TaskCondition, TaskObstacle } from '@/lib/supabase'
 import { buildProjectTaskProgressSnapshot, isActiveRisk, normalizeStatus } from './taskBusinessStatus'
 
 export type ProjectAttentionSnapshot = {

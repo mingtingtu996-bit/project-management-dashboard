@@ -1,0 +1,26 @@
+export const zhCN = {
+  gantt: {
+    priority: '优先级',
+    progress: '进度（%）',
+    assignee: '责任人',
+    assigneePlaceholder: '输入责任人姓名',
+    specialty: '专业',
+    specialtyPlaceholder: '无专业',
+    plannedDuration: '计划工期（天）',
+    referenceDurationPlaceholder: '参考工期（天）',
+    parentTask: '父任务',
+    parentTaskHelp: '选择上级任务，构建 WBS 层级结构',
+    predecessorTasks: '前置任务',
+    predecessorHelp: '选择此任务依赖的前置任务，完成后才能开始',
+    structureCount: '条',
+    criticalPath: '关键路径',
+    precedingTask: '前置任务',
+    structureTitle: 'WBS 结构',
+    milestoneToast: '已设置里程碑：{label}',
+  },
+  wbsTemplates: {
+    commercial: '商业',
+    industrial: '工业',
+    publicBuilding: '公共建筑',
+  },
+} as const

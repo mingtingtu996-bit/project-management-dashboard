@@ -1,19 +1,20 @@
+-- DEPRECATED: do not use for new environment bootstrap
 -- ============================================================
 -- FULL_MIGRATION_ALL_IN_ONE.sql
--- 房地产工程管理系统 V4.1  完整数据库迁移（合并版）
--- 合并自: 001~017 全部迁移文件
--- 已跳过: 007_enable_rls_policies.sql（依赖 auth.uid()，无登录系统不适用）
--- 使用方法: 粘贴到 Supabase SQL Editor 点击 Run 即可
+-- 鎴垮湴浜у伐绋嬬鐞嗙郴缁?V4.1  瀹屾暣鏁版嵁搴撹縼绉伙紙鍚堝苟鐗堬級
+-- 鍚堝苟鑷? 001~017 鍏ㄩ儴杩佺Щ鏂囦欢
+-- 宸茶烦杩? 007_enable_rls_policies.sql锛堜緷璧?auth.uid()锛屾棤鐧诲綍绯荤粺涓嶉€傜敤锛?
+-- 浣跨敤鏂规硶: 绮樿创鍒?Supabase SQL Editor 鐐瑰嚮 Run 鍗冲彲
 -- ============================================================
 
 
 -- ============================================================
--- 来自: 001_initial_schema.sql
+-- 鏉ヨ嚜: 001_initial_schema.sql
 -- ============================================================
--- 项目管理系统数据库初始化脚本
--- 执行前请在 Supabase SQL Editor 中运行
+-- 椤圭洰绠＄悊绯荤粺鏁版嵁搴撳垵濮嬪寲鑴氭湰
+-- 鎵ц鍓嶈鍦?Supabase SQL Editor 涓繍琛?
 
--- 用户表（无注册模式，使用device_id）
+-- 鐢ㄦ埛琛紙鏃犳敞鍐屾ā寮忥紝浣跨敤device_id锛?
 CREATE TABLE IF NOT EXISTS users (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   device_id VARCHAR(255) UNIQUE NOT NULL,
@@ -23,7 +24,7 @@ CREATE TABLE IF NOT EXISTS users (
   last_active TIMESTAMP DEFAULT NOW()
 );
 
--- 项目表
+-- 椤圭洰琛?
 CREATE TABLE IF NOT EXISTS projects (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name VARCHAR(255) NOT NULL,
@@ -33,7 +34,7 @@ CREATE TABLE IF NOT EXISTS projects (
   updated_at TIMESTAMP DEFAULT NOW()
 );
 
--- 任务表
+-- 浠诲姟琛?
 CREATE TABLE IF NOT EXISTS tasks (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
@@ -54,7 +55,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   created_at TIMESTAMP DEFAULT NOW()
 );
 
--- 风险表
+-- 椋庨櫓琛?
 CREATE TABLE IF NOT EXISTS risks (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
@@ -70,7 +71,7 @@ CREATE TABLE IF NOT EXISTS risks (
   updated_at TIMESTAMP DEFAULT NOW()
 );
 
--- 里程碑表
+-- 閲岀▼纰戣〃
 CREATE TABLE IF NOT EXISTS milestones (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
@@ -82,7 +83,7 @@ CREATE TABLE IF NOT EXISTS milestones (
   created_at TIMESTAMP DEFAULT NOW()
 );
 
--- 邀请码表
+-- 閭€璇风爜琛?
 CREATE TABLE IF NOT EXISTS project_invitations (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
@@ -96,7 +97,7 @@ CREATE TABLE IF NOT EXISTS project_invitations (
   max_uses INTEGER
 );
 
--- 项目成员表
+-- 椤圭洰鎴愬憳琛?
 CREATE TABLE IF NOT EXISTS project_members (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
@@ -108,120 +109,154 @@ CREATE TABLE IF NOT EXISTS project_members (
   is_active BOOLEAN DEFAULT TRUE
 );
 
--- 创建索引
+-- 鍒涘缓绱㈠紩
 CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
 CREATE INDEX IF NOT EXISTS idx_risks_project ON risks(project_id);
 CREATE INDEX IF NOT EXISTS idx_milestones_project ON milestones(project_id);
 CREATE INDEX IF NOT EXISTS idx_invitations_project ON project_invitations(project_id);
 CREATE INDEX IF NOT EXISTS idx_members_project ON project_members(project_id);
 
--- 启用RLS策略（可选，生产环境建议启用）
--- 注意: 启用RLS后需要配置相应的策略
+-- 鍚敤RLS绛栫暐锛堝彲閫夛紝鐢熶骇鐜寤鸿鍚敤锛?
+-- 娉ㄦ剰: 鍚敤RLS鍚庨渶瑕侀厤缃浉搴旂殑绛栫暐
 
 
 -- ============================================================
--- 来自: 002_add_phase1_tables.sql
+-- 鏉ヨ嚜: 002_add_phase1_tables.sql
 -- ============================================================
--- 任务开工条件、阻碍、延期历史、验收计划、WBS模板、前期证照
--- 房地产工程管理系统V4.1 Phase 1 数据库迁移
--- 执行时间: 2026-03-22
+-- 浠诲姟寮€宸ユ潯浠躲€侀樆纰嶃€佸欢鏈熷巻鍙层€侀獙鏀惰鍒掋€乄BS妯℃澘銆佸墠鏈熻瘉鐓?
+-- 鎴垮湴浜у伐绋嬬鐞嗙郴缁烿4.1 Phase 1 鏁版嵁搴撹縼绉?
+-- 鎵ц鏃堕棿: 2026-03-22
 
--- 1. task_conditions（开工条件表）
+-- 1. task_conditions锛堝紑宸ユ潯浠惰〃锛?
 CREATE TABLE IF NOT EXISTS task_conditions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-  condition_type TEXT NOT NULL CHECK (condition_type IN ('图纸', '材料', '人员', '设备', '其他')),
+  condition_type TEXT NOT NULL CHECK (condition_type IN ('鍥剧焊', '鏉愭枡', '浜哄憳', '璁惧', '鍏朵粬')),
   name TEXT NOT NULL,
   description TEXT,
   is_satisfied BOOLEAN NOT NULL DEFAULT FALSE,
   attachments JSONB DEFAULT '[]',
   confirmed_by UUID REFERENCES users(id) ON DELETE SET NULL,
   confirmed_at TIMESTAMPTZ,
-  created_by UUID REFERENCES users(id) ON DELETE SET NULL,  -- 无登录系统允许NULL
+  created_by UUID REFERENCES users(id) ON DELETE SET NULL,  -- 鏃犵櫥褰曠郴缁熷厑璁窷ULL
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 2. task_obstacles（阻碍记录表）
+-- 2. task_obstacles锛堥樆纰嶈褰曡〃锛?
 CREATE TABLE IF NOT EXISTS task_obstacles (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-  obstacle_type TEXT NOT NULL CHECK (obstacle_type IN ('人员', '材料', '设备', '环境', '设计', '其他')),
+  obstacle_type TEXT NOT NULL CHECK (obstacle_type IN ('浜哄憳', '鏉愭枡', '璁惧', '鐜', '璁捐', '鍏朵粬')),
   description TEXT NOT NULL,
-  severity TEXT NOT NULL DEFAULT '中' CHECK (severity IN ('低', '中', '高', '严重')),
-  status TEXT NOT NULL DEFAULT '待处理' CHECK (status IN ('待处理', '处理中', '已解决', '无法解决')),
+  severity TEXT NOT NULL DEFAULT '涓? CHECK (severity IN ('浣?, '涓?, '楂?, '涓ラ噸')),
+  status TEXT NOT NULL DEFAULT '寰呭鐞? CHECK (status IN ('寰呭鐞?, '澶勭悊涓?, '宸茶В鍐?, '鏃犳硶瑙ｅ喅')),
   resolution TEXT,
   resolved_by UUID REFERENCES users(id) ON DELETE SET NULL,
   resolved_at TIMESTAMPTZ,
-  created_by UUID REFERENCES users(id) ON DELETE SET NULL,  -- 无登录系统允许NULL
+  created_by UUID REFERENCES users(id) ON DELETE SET NULL,  -- 鏃犵櫥褰曠郴缁熷厑璁窷ULL
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 3. task_delay_history（延期历史表）
+-- 3. task_delay_history锛堝欢鏈熷巻鍙茶〃锛?
 CREATE TABLE IF NOT EXISTS task_delay_history (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
   original_date DATE NOT NULL,
   delayed_date DATE NOT NULL,
   delay_days INTEGER NOT NULL CHECK (delay_days > 0),
-  delay_type TEXT NOT NULL CHECK (delay_type IN ('主动申请', '被动延期', '客观因素')),
+  delay_type TEXT NOT NULL CHECK (delay_type IN ('涓诲姩鐢宠', '琚姩寤舵湡', '瀹㈣鍥犵礌')),
   reason TEXT NOT NULL,
   delay_reason TEXT,
-  approved_by UUID REFERENCES users(id) ON DELETE SET NULL,  -- 允许NULL（系统自动记录时无审批人）
+  approved_by UUID REFERENCES users(id) ON DELETE SET NULL,  -- 鍏佽NULL锛堢郴缁熻嚜鍔ㄨ褰曟椂鏃犲鎵逛汉锛?
   approved_at TIMESTAMPTZ DEFAULT NOW(),
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 4. acceptance_plans（验收计划表）
+-- 4. acceptance_plans锛堥獙鏀惰鍒掕〃锛?
 CREATE TABLE IF NOT EXISTS acceptance_plans (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   task_id UUID REFERENCES tasks(id) ON DELETE SET NULL,
-  acceptance_type TEXT NOT NULL CHECK (acceptance_type IN ('分项', '分部', '竣工', '消防', '环保', '规划', '节能', '智能', '其他')),
+  acceptance_type TEXT NOT NULL CHECK (acceptance_type IN ('鍒嗛」', '鍒嗛儴', '绔ｅ伐', '娑堥槻', '鐜繚', '瑙勫垝', '鑺傝兘', '鏅鸿兘', '鍏朵粬')),
   acceptance_name TEXT NOT NULL,
   planned_date DATE NOT NULL,
   actual_date DATE,
-  status TEXT NOT NULL DEFAULT '待验收' CHECK (status IN ('待验收', '验收中', '已通过', '未通过')),
+  status TEXT NOT NULL DEFAULT '寰呴獙鏀? CHECK (status IN ('寰呴獙鏀?, '楠屾敹涓?, '宸查€氳繃', '鏈€氳繃')),
   documents JSONB DEFAULT '[]',
   notes TEXT,
-  created_by UUID REFERENCES users(id) ON DELETE SET NULL,  -- 无登录系统允许NULL
+  created_by UUID REFERENCES users(id) ON DELETE SET NULL,  -- 鏃犵櫥褰曠郴缁熷厑璁窷ULL
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 5. wbs_templates（WBS模板表）
+-- 5. wbs_templates锛圵BS妯℃澘琛級
 CREATE TABLE IF NOT EXISTS wbs_templates (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   template_name TEXT NOT NULL,
-  template_type TEXT NOT NULL CHECK (template_type IN ('住宅', '商业', '工业', '市政')),
+  template_type TEXT NOT NULL CHECK (template_type IN ('浣忓畢', '鍟嗕笟', '宸ヤ笟', '甯傛斂')),
   description TEXT,
   wbs_nodes JSONB NOT NULL DEFAULT '[]',
   is_default BOOLEAN DEFAULT FALSE,
-  created_by UUID REFERENCES users(id) ON DELETE SET NULL,  -- 无登录系统允许NULL（012也有修复）
+  created_by UUID REFERENCES users(id) ON DELETE SET NULL,  -- 鏃犵櫥褰曠郴缁熷厑璁窷ULL锛?12涔熸湁淇锛?
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   CONSTRAINT template_name_unique UNIQUE (template_name, template_type)
 );
 
--- 6. pre_milestones（前期证照表）
+-- 6. pre_milestones锛堝墠鏈熻瘉鐓ц〃锛?
 CREATE TABLE IF NOT EXISTS pre_milestones (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  milestone_type TEXT NOT NULL CHECK (milestone_type IN ('土地证', '规划证', '施工证', '预售证', '产权证', '其他')),
+  milestone_type TEXT NOT NULL CHECK (milestone_type IN (
+    'land_certificate',
+    'land_use_planning_permit',
+    'engineering_planning_permit',
+    'construction_permit'
+  )),
   milestone_name TEXT NOT NULL,
+  certificate_type TEXT,
+  certificate_name TEXT,
   application_date DATE,
   issue_date DATE,
   expiry_date DATE,
-  status TEXT NOT NULL DEFAULT '待申请' CHECK (status IN ('待申请', '办理中', '已取得', '已过期', '需延期')),
-  document_no TEXT,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN (
+    'pending',
+    'preparing_documents',
+    'internal_review',
+    'external_submission',
+    'supplement_required',
+    'approved',
+    'issued',
+    'expired',
+    'voided'
+  )),
+  certificate_no TEXT,
+  current_stage VARCHAR(32),
+  planned_finish_date DATE,
+  actual_finish_date DATE,
+  approving_authority VARCHAR(100),
+  issuing_authority TEXT,
+  next_action TEXT,
+  next_action_due_date DATE,
+  is_blocked BOOLEAN DEFAULT FALSE,
+  block_reason TEXT,
+  latest_record_at TIMESTAMPTZ,
+  description TEXT,
+  phase_id UUID,
+  lead_unit TEXT,
+  planned_start_date DATE,
+  planned_end_date DATE,
+  responsible_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  sort_order INTEGER DEFAULT 0,
   notes TEXT,
-  created_by UUID REFERENCES users(id) ON DELETE SET NULL,  -- 无登录系统允许NULL
+  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 创建索引
+-- 鍒涘缓绱㈠紩
 CREATE INDEX IF NOT EXISTS idx_task_conditions_task ON task_conditions(task_id);
 CREATE INDEX IF NOT EXISTS idx_task_obstacles_task ON task_obstacles(task_id);
 CREATE INDEX IF NOT EXISTS idx_task_delay_history_task ON task_delay_history(task_id);
@@ -230,8 +265,10 @@ CREATE INDEX IF NOT EXISTS idx_acceptance_plans_task ON acceptance_plans(task_id
 CREATE INDEX IF NOT EXISTS idx_wbs_templates_type ON wbs_templates(template_type);
 CREATE INDEX IF NOT EXISTS idx_pre_milestones_project ON pre_milestones(project_id);
 CREATE INDEX IF NOT EXISTS idx_pre_milestones_type ON pre_milestones(milestone_type);
+CREATE INDEX IF NOT EXISTS idx_pre_milestones_certificate_type ON pre_milestones(project_id, certificate_type);
+CREATE INDEX IF NOT EXISTS idx_pre_milestones_status_current ON pre_milestones(project_id, status);
 
--- 创建触发器：自动更新 updated_at 字段
+-- 鍒涘缓瑙﹀彂鍣細鑷姩鏇存柊 updated_at 瀛楁
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -267,186 +304,186 @@ CREATE TRIGGER update_pre_milestones_updated_at
 
 
 -- ============================================================
--- 来自: 003_add_task_locks_and_logs.sql
+-- 鏉ヨ嚜: 003_add_task_locks_and_logs.sql
 -- ============================================================
 -- ============================================================
--- Phase 1 补充数据库迁移
--- 房地产工程管理系统V4.1 Phase 1 补充
--- 执行时间: 2026-03-22
+-- Phase 1 琛ュ厖鏁版嵁搴撹縼绉?
+-- 鎴垮湴浜у伐绋嬬鐞嗙郴缁烿4.1 Phase 1 琛ュ厖
+-- 鎵ц鏃堕棿: 2026-03-22
 -- ============================================================
 
--- 1. task_locks（定时任务锁表）
+-- 1. task_locks锛堝畾鏃朵换鍔￠攣琛級
 CREATE TABLE IF NOT EXISTS task_locks (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     
-    -- 任务标识
+    -- 浠诲姟鏍囪瘑
     job_name VARCHAR(100) NOT NULL UNIQUE,
     
-    -- 锁状态
+    -- 閿佺姸鎬?
     is_locked BOOLEAN DEFAULT FALSE,
     
-    -- 锁信息
+    -- 閿佷俊鎭?
     locked_by VARCHAR(100),
     locked_at TIMESTAMP,
     lock_expires_at TIMESTAMP,
     
-    -- 锁配置
+    -- 閿侀厤缃?
     lock_duration_seconds INTEGER DEFAULT 300,
     max_retries INTEGER DEFAULT 3,
     
-    -- 元数据
+    -- 鍏冩暟鎹?
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );
 
--- 2. job_execution_logs（定时任务执行日志表）
+-- 2. job_execution_logs锛堝畾鏃朵换鍔℃墽琛屾棩蹇楄〃锛?
 CREATE TABLE IF NOT EXISTS job_execution_logs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     
-    -- 任务信息
+    -- 浠诲姟淇℃伅
     job_name VARCHAR(100) NOT NULL,
     job_type VARCHAR(50),
     
-    -- 执行状态
+    -- 鎵ц鐘舵€?
     status VARCHAR(20) NOT NULL
       CHECK (status IN ('pending', 'running', 'success', 'failed', 'timeout', 'cancelled')),
     
-    -- 执行时间
+    -- 鎵ц鏃堕棿
     started_at TIMESTAMP NOT NULL,
     finished_at TIMESTAMP,
     duration_ms INTEGER,
     
-    -- 输入输出
+    -- 杈撳叆杈撳嚭
     input_data JSONB DEFAULT '{}',
     output_data JSONB DEFAULT '{}',
     error_message TEXT,
     error_stack TEXT,
     
-    -- 执行环境
+    -- 鎵ц鐜
     executed_by VARCHAR(100),
     hostname VARCHAR(100),
     process_id INTEGER,
     
-    -- 重试信息
+    -- 閲嶈瘯淇℃伅
     retry_count INTEGER DEFAULT 0,
     original_log_id UUID REFERENCES job_execution_logs(id),
     
-    -- 元数据
+    -- 鍏冩暟鎹?
     created_at TIMESTAMP DEFAULT NOW()
 );
 
--- 3. 为task_locks表添加updated_at触发器
+-- 3. 涓簍ask_locks琛ㄦ坊鍔爑pdated_at瑙﹀彂鍣?
 CREATE TRIGGER update_task_locks_updated_at
   BEFORE UPDATE ON task_locks
   FOR EACH ROW
   EXECUTE FUNCTION update_updated_at_column();
 
--- 4. 创建索引
+-- 4. 鍒涘缓绱㈠紩
 CREATE INDEX IF NOT EXISTS idx_task_locks_job ON task_locks(job_name);
 CREATE INDEX IF NOT EXISTS idx_task_locks_locked ON task_locks(is_locked, lock_expires_at);
 CREATE INDEX IF NOT EXISTS idx_job_logs_name ON job_execution_logs(job_name);
 CREATE INDEX IF NOT EXISTS idx_job_logs_status ON job_execution_logs(status);
 CREATE INDEX IF NOT EXISTS idx_job_logs_started ON job_execution_logs(started_at);
 
--- 5. task_locks表注释
-COMMENT ON TABLE task_locks IS '定时任务锁表，防止分布式环境下的任务重复执行';
-COMMENT ON TABLE job_execution_logs IS '定时任务执行日志表，记录任务执行历史';
+-- 5. task_locks琛ㄦ敞閲?
+COMMENT ON TABLE task_locks IS '瀹氭椂浠诲姟閿佽〃锛岄槻姝㈠垎甯冨紡鐜涓嬬殑浠诲姟閲嶅鎵ц';
+COMMENT ON TABLE job_execution_logs IS '瀹氭椂浠诲姟鎵ц鏃ュ織琛紝璁板綍浠诲姟鎵ц鍘嗗彶';
 
 
 -- ============================================================
--- 来自: 004_add_dashboard_view.sql
+-- 鏉ヨ嚜: 004_add_dashboard_view.sql
 -- ============================================================
 -- ============================================================
--- Dashboard 物化视图
--- 房地产工程管理系统V4.1 Phase 1
--- 执行时间: 2026-03-22
+-- Dashboard 鐗╁寲瑙嗗浘
+-- 鎴垮湴浜у伐绋嬬鐞嗙郴缁烿4.1 Phase 1
+-- 鎵ц鏃堕棿: 2026-03-22
 -- ============================================================
 
--- 创建物化视图：项目Dashboard统计
--- [跳过MV] CREATE MATERIALIZED VIEW IF NOT EXISTS mv_project_dashboard AS
--- [跳过MV] SELECT 
--- [跳过MV]     p.id AS project_id,
--- [跳过MV]     p.name AS project_name,
--- [跳过MV]     p.status AS project_status,
--- [跳过MV]     p.health_score,
--- [跳过MV]     p.health_status,
--- [跳过MV]     p.start_date,
--- [跳过MV]     p.end_date AS project_end_date,
--- [跳过MV]     p.budget,
--- [跳过MV]     p.location,
+-- 鍒涘缓鐗╁寲瑙嗗浘锛氶」鐩瓺ashboard缁熻
+-- [璺宠繃MV] CREATE MATERIALIZED VIEW IF NOT EXISTS mv_project_dashboard AS
+-- [璺宠繃MV] SELECT 
+-- [璺宠繃MV]     p.id AS project_id,
+-- [璺宠繃MV]     p.name AS project_name,
+-- [璺宠繃MV]     p.status AS project_status,
+-- [璺宠繃MV]     p.health_score,
+-- [璺宠繃MV]     p.health_status,
+-- [璺宠繃MV]     p.start_date,
+-- [璺宠繃MV]     p.end_date AS project_end_date,
+-- [璺宠繃MV]     p.budget,
+-- [璺宠繃MV]     p.location,
     
--- [跳过MV]     -- 任务统计
--- [跳过MV]     (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id) AS total_tasks,
--- [跳过MV]     (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id AND t.status = '已完成') AS completed_tasks,
--- [跳过MV]     (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id AND t.status = '进行中') AS ongoing_tasks,
--- [跳过MV]     (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id AND t.status = '未开始') AS pending_tasks,
+-- [璺宠繃MV]     -- 浠诲姟缁熻
+-- [璺宠繃MV]     (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id) AS total_tasks,
+-- [璺宠繃MV]     (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id AND t.status = '宸插畬鎴?) AS completed_tasks,
+-- [璺宠繃MV]     (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id AND t.status = '杩涜涓?) AS ongoing_tasks,
+-- [璺宠繃MV]     (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id AND t.status = '鏈紑濮?) AS pending_tasks,
     
--- [跳过MV]     -- 里程碑统计
--- [跳过MV]     (SELECT COUNT(*) FROM milestones m WHERE m.project_id = p.id) AS total_milestones,
--- [跳过MV]     (SELECT COUNT(*) FROM milestones m WHERE m.project_id = p.id AND m.status = '已完成') AS completed_milestones,
--- [跳过MV]     (SELECT COUNT(*) FROM milestones m WHERE m.project_id = p.id AND m.status = '已延期') AS delayed_milestones,
+-- [璺宠繃MV]     -- 閲岀▼纰戠粺璁?
+-- [璺宠繃MV]     (SELECT COUNT(*) FROM milestones m WHERE m.project_id = p.id) AS total_milestones,
+-- [璺宠繃MV]     (SELECT COUNT(*) FROM milestones m WHERE m.project_id = p.id AND m.status = '宸插畬鎴?) AS completed_milestones,
+-- [璺宠繃MV]     (SELECT COUNT(*) FROM milestones m WHERE m.project_id = p.id AND m.status = '宸插欢鏈?) AS delayed_milestones,
     
--- [跳过MV]     -- 延期任务统计
--- [跳过MV]     (SELECT COUNT(*) FROM tasks t 
--- [跳过MV]      WHERE t.project_id = p.id 
--- [跳过MV]      AND t.planned_end_date < CURRENT_DATE 
--- [跳过MV]      AND t.status NOT IN ('已完成', '已暂停')) AS overdue_tasks,
+-- [璺宠繃MV]     -- 寤舵湡浠诲姟缁熻
+-- [璺宠繃MV]     (SELECT COUNT(*) FROM tasks t 
+-- [璺宠繃MV]      WHERE t.project_id = p.id 
+-- [璺宠繃MV]      AND t.planned_end_date < CURRENT_DATE 
+-- [璺宠繃MV]      AND t.status NOT IN ('宸插畬鎴?, '宸叉殏鍋?)) AS overdue_tasks,
     
--- [跳过MV]     -- 条件统计
--- [跳过MV]     (SELECT COUNT(*) FROM task_conditions tc 
--- [跳过MV]      JOIN tasks t ON tc.task_id = t.id 
--- [跳过MV]      WHERE t.project_id = p.id) AS total_conditions,
--- [跳过MV]     (SELECT COUNT(*) FROM task_conditions tc 
--- [跳过MV]      JOIN tasks t ON tc.task_id = t.id 
--- [跳过MV]      WHERE t.project_id = p.id AND tc.status = '已满足') AS satisfied_conditions,
--- [跳过MV]     (SELECT COUNT(*) FROM task_conditions tc 
--- [跳过MV]      JOIN tasks t ON tc.task_id = t.id 
--- [跳过MV]      WHERE t.project_id = p.id AND tc.status = '未满足') AS unsatisfied_conditions,
+-- [璺宠繃MV]     -- 鏉′欢缁熻
+-- [璺宠繃MV]     (SELECT COUNT(*) FROM task_conditions tc 
+-- [璺宠繃MV]      JOIN tasks t ON tc.task_id = t.id 
+-- [璺宠繃MV]      WHERE t.project_id = p.id) AS total_conditions,
+-- [璺宠繃MV]     (SELECT COUNT(*) FROM task_conditions tc 
+-- [璺宠繃MV]      JOIN tasks t ON tc.task_id = t.id 
+-- [璺宠繃MV]      WHERE t.project_id = p.id AND tc.status = '宸叉弧瓒?) AS satisfied_conditions,
+-- [璺宠繃MV]     (SELECT COUNT(*) FROM task_conditions tc 
+-- [璺宠繃MV]      JOIN tasks t ON tc.task_id = t.id 
+-- [璺宠繃MV]      WHERE t.project_id = p.id AND tc.status = '鏈弧瓒?) AS unsatisfied_conditions,
     
--- [跳过MV]     -- 阻碍统计
--- [跳过MV]     (SELECT COUNT(*) FROM task_obstacles ob 
--- [跳过MV]      JOIN tasks t ON ob.task_id = t.id 
--- [跳过MV]      WHERE t.project_id = p.id) AS total_obstacles,
--- [跳过MV]     (SELECT COUNT(*) FROM task_obstacles ob 
--- [跳过MV]      JOIN tasks t ON ob.task_id = t.id 
--- [跳过MV]      WHERE t.project_id = p.id AND ob.status = '待处理') AS pending_obstacles,
--- [跳过MV]     (SELECT COUNT(*) FROM task_obstacles ob 
--- [跳过MV]      JOIN tasks t ON ob.task_id = t.id 
--- [跳过MV]      WHERE t.project_id = p.id AND ob.status = '处理中') AS processing_obstacles,
+-- [璺宠繃MV]     -- 闃荤缁熻
+-- [璺宠繃MV]     (SELECT COUNT(*) FROM task_obstacles ob 
+-- [璺宠繃MV]      JOIN tasks t ON ob.task_id = t.id 
+-- [璺宠繃MV]      WHERE t.project_id = p.id) AS total_obstacles,
+-- [璺宠繃MV]     (SELECT COUNT(*) FROM task_obstacles ob 
+-- [璺宠繃MV]      JOIN tasks t ON ob.task_id = t.id 
+-- [璺宠繃MV]      WHERE t.project_id = p.id AND ob.status = '寰呭鐞?) AS pending_obstacles,
+-- [璺宠繃MV]     (SELECT COUNT(*) FROM task_obstacles ob 
+-- [璺宠繃MV]      JOIN tasks t ON ob.task_id = t.id 
+-- [璺宠繃MV]      WHERE t.project_id = p.id AND ob.status = '澶勭悊涓?) AS processing_obstacles,
     
--- [跳过MV]     -- 验收统计
--- [跳过MV]     (SELECT COUNT(*) FROM acceptance_plans ap 
--- [跳过MV]      WHERE ap.project_id = p.id) AS total_acceptance_plans,
--- [跳过MV]     (SELECT COUNT(*) FROM acceptance_plans ap 
--- [跳过MV]      WHERE ap.project_id = p.id AND ap.status = '已通过') AS passed_acceptance_plans,
--- [跳过MV]     (SELECT COUNT(*) FROM acceptance_plans ap 
--- [跳过MV]      WHERE ap.project_id = p.id AND ap.status = '待验收') AS pending_acceptance_plans,
+-- [璺宠繃MV]     -- 楠屾敹缁熻
+-- [璺宠繃MV]     (SELECT COUNT(*) FROM acceptance_plans ap 
+-- [璺宠繃MV]      WHERE ap.project_id = p.id) AS total_acceptance_plans,
+-- [璺宠繃MV]     (SELECT COUNT(*) FROM acceptance_plans ap 
+-- [璺宠繃MV]      WHERE ap.project_id = p.id AND ap.status = '宸查€氳繃') AS passed_acceptance_plans,
+-- [璺宠繃MV]     (SELECT COUNT(*) FROM acceptance_plans ap 
+-- [璺宠繃MV]      WHERE ap.project_id = p.id AND ap.status = '寰呴獙鏀?) AS pending_acceptance_plans,
     
--- [跳过MV]     -- 证照统计
--- [跳过MV]     (SELECT COUNT(*) FROM pre_milestones pm 
--- [跳过MV]      WHERE pm.project_id = p.id) AS total_pre_milestones,
--- [跳过MV]     (SELECT COUNT(*) FROM pre_milestones pm 
--- [跳过MV]      WHERE pm.project_id = p.id AND pm.status = '已取得') AS obtained_pre_milestones,
--- [跳过MV]     (SELECT COUNT(*) FROM pre_milestones pm 
--- [跳过MV]      WHERE pm.project_id = p.id AND pm.status IN ('办理中', '需延期')) AS processing_pre_milestones,
+-- [璺宠繃MV]     -- 璇佺収缁熻
+-- [璺宠繃MV]     (SELECT COUNT(*) FROM pre_milestones pm 
+-- [璺宠繃MV]      WHERE pm.project_id = p.id) AS total_pre_milestones,
+-- [璺宠繃MV]     (SELECT COUNT(*) FROM pre_milestones pm 
+-- [璺宠繃MV]      WHERE pm.project_id = p.id AND pm.status = '宸插彇寰?) AS obtained_pre_milestones,
+-- [璺宠繃MV]     (SELECT COUNT(*) FROM pre_milestones pm 
+-- [璺宠繃MV]      WHERE pm.project_id = p.id AND pm.status IN ('鍔炵悊涓?, '闇€寤舵湡')) AS processing_pre_milestones,
     
--- [跳过MV]     -- 更新时间
--- [跳过MV]     NOW() AS last_refreshed
--- [跳过MV] FROM projects p;
+-- [璺宠繃MV]     -- 鏇存柊鏃堕棿
+-- [璺宠繃MV]     NOW() AS last_refreshed
+-- [璺宠繃MV] FROM projects p;
 
--- [跳过] 物化视图索引（视图已被注释，跳过此索引）
+-- [璺宠繃] 鐗╁寲瑙嗗浘绱㈠紩锛堣鍥惧凡琚敞閲婏紝璺宠繃姝ょ储寮曪級
 -- CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_project_dashboard_project_id 
 -- ON mv_project_dashboard(project_id);
 
--- [跳过] COMMENT ON MATERIALIZED VIEW mv_project_dashboard IS '项目Dashboard物化视图';
+-- [璺宠繃] COMMENT ON MATERIALIZED VIEW mv_project_dashboard IS '椤圭洰Dashboard鐗╁寲瑙嗗浘';
 
--- 6. 创建更多触发器（Phase 1 补充）
+-- 6. 鍒涘缓鏇村瑙﹀彂鍣紙Phase 1 琛ュ厖锛?
 
--- 6.1 任务完成时自动闭合关联条件
+-- 6.1 浠诲姟瀹屾垚鏃惰嚜鍔ㄩ棴鍚堝叧鑱旀潯浠?
 CREATE OR REPLACE FUNCTION auto_complete_conditions()
 RETURNS TRIGGER AS $$
 BEGIN
-  IF NEW.status = '已完成' AND OLD.status != '已完成' THEN
+  IF NEW.status = '宸插畬鎴? AND OLD.status != '宸插畬鎴? THEN
     UPDATE task_conditions
     SET is_satisfied = TRUE, confirmed_at = NOW()
     WHERE task_id = NEW.id AND is_satisfied = FALSE;
@@ -458,10 +495,10 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER trigger_auto_complete_conditions
   AFTER UPDATE ON tasks
   FOR EACH ROW
-  WHEN (NEW.status = '已完成')
+  WHEN (NEW.status = '宸插畬鎴?)
   EXECUTE FUNCTION auto_complete_conditions();
 
--- 6.2 条件完成时自动更新任务进度
+-- 6.2 鏉′欢瀹屾垚鏃惰嚜鍔ㄦ洿鏂颁换鍔¤繘搴?
 CREATE OR REPLACE FUNCTION update_task_progress_on_condition_complete()
 RETURNS TRIGGER AS $$
 DECLARE
@@ -469,8 +506,8 @@ DECLARE
   v_completed_conditions INTEGER;
   v_progress INTEGER;
 BEGIN
-  IF NEW.status IN ('已满足', '已确认') AND OLD.status NOT IN ('已满足', '已确认') THEN
-    SELECT COUNT(*), COUNT(*) FILTER (WHERE status IN ('已满足', '已确认'))
+  IF NEW.status IN ('宸叉弧瓒?, '宸茬‘璁?) AND OLD.status NOT IN ('宸叉弧瓒?, '宸茬‘璁?) THEN
+    SELECT COUNT(*), COUNT(*) FILTER (WHERE status IN ('宸叉弧瓒?, '宸茬‘璁?))
     INTO v_total_conditions, v_completed_conditions
     FROM task_conditions
     WHERE task_id = NEW.task_id;
@@ -491,21 +528,21 @@ CREATE TRIGGER trigger_update_task_progress_on_condition
   FOR EACH ROW
   EXECUTE FUNCTION update_task_progress_on_condition_complete();
 
--- 6.3 延期历史自动记录（通过任务状态变更触发）
+-- 6.3 寤舵湡鍘嗗彶鑷姩璁板綍锛堥€氳繃浠诲姟鐘舵€佸彉鏇磋Е鍙戯級
 CREATE OR REPLACE FUNCTION record_task_delay_history()
 RETURNS TRIGGER AS $$
 BEGIN
   IF NEW.end_date > OLD.end_date 
      AND OLD.end_date < CURRENT_DATE
-     AND NEW.status NOT IN ('已完成', '已暂停') THEN
+     AND NEW.status NOT IN ('宸插畬鎴?, '宸叉殏鍋?) THEN
     INSERT INTO task_delay_history (task_id, original_date, delayed_date, delay_days, delay_type, reason, approved_by)
     VALUES (
       NEW.id,
       OLD.end_date,
       NEW.end_date,
       NEW.end_date - OLD.end_date,
-      '被动延期',
-      '计划延期',
+      '琚姩寤舵湡',
+      '璁″垝寤舵湡',
       NEW.updated_by
     );
   END IF;
@@ -518,7 +555,7 @@ CREATE TRIGGER trigger_record_task_delay
   FOR EACH ROW
   EXECUTE FUNCTION record_task_delay_history();
 
--- 6.4 健康度自动更新函数
+-- 6.4 鍋ュ悍搴﹁嚜鍔ㄦ洿鏂板嚱鏁?
 CREATE OR REPLACE FUNCTION calculate_project_health_score(p_project_id UUID)
 RETURNS TABLE(
   health_score INTEGER,
@@ -541,42 +578,42 @@ DECLARE
   v_health_score INTEGER;
   v_health_status VARCHAR(20);
 BEGIN
-  -- 获取任务统计
-  SELECT COUNT(*), COUNT(*) FILTER (WHERE status = '已完成')
+  -- 鑾峰彇浠诲姟缁熻
+  SELECT COUNT(*), COUNT(*) FILTER (WHERE status = '宸插畬鎴?)
     INTO v_total_tasks, v_completed_tasks
     FROM tasks WHERE project_id = p_project_id;
   v_task_completion_rate := CASE WHEN v_total_tasks > 0 THEN v_completed_tasks::NUMERIC / v_total_tasks ELSE 1 END;
   
-  -- 获取里程碑统计
-  SELECT COUNT(*), COUNT(*) FILTER (WHERE status = '已完成')
+  -- 鑾峰彇閲岀▼纰戠粺璁?
+  SELECT COUNT(*), COUNT(*) FILTER (WHERE status = '宸插畬鎴?)
     INTO v_total_milestones, v_completed_milestones
     FROM milestones WHERE project_id = p_project_id;
   v_milestone_achievement_rate := CASE WHEN v_total_milestones > 0 THEN v_completed_milestones::NUMERIC / v_total_milestones ELSE 1 END;
   
-  -- 延期风险
+  -- 寤舵湡椋庨櫓
   SELECT COUNT(*) INTO v_overdue_tasks
     FROM tasks 
     WHERE project_id = p_project_id 
     AND planned_end_date < CURRENT_DATE 
-    AND status NOT IN ('已完成', '已暂停');
+    AND status NOT IN ('宸插畬鎴?, '宸叉殏鍋?);
   v_delay_risk_score := CASE WHEN v_total_tasks > 0 THEN 100 - (v_overdue_tasks::NUMERIC / v_total_tasks * 100) ELSE 100 END;
   
-  -- 条件完成率
-  SELECT COUNT(*), COUNT(*) FILTER (WHERE status IN ('已满足', '已确认'))
+  -- 鏉′欢瀹屾垚鐜?
+  SELECT COUNT(*), COUNT(*) FILTER (WHERE status IN ('宸叉弧瓒?, '宸茬‘璁?))
     INTO v_total_conditions, v_completed_conditions
     FROM task_conditions tc
     JOIN tasks t ON tc.task_id = t.id
     WHERE t.project_id = p_project_id;
   v_condition_completion_rate := CASE WHEN v_total_conditions > 0 THEN v_completed_conditions::NUMERIC / v_total_conditions ELSE 1 END;
   
-  -- 阻碍风险
+  -- 闃荤椋庨櫓
   SELECT COUNT(*) INTO v_active_obstacles
     FROM task_obstacles o
     JOIN tasks t ON o.task_id = t.id
-    WHERE t.project_id = p_project_id AND o.status = '处理中';
+    WHERE t.project_id = p_project_id AND o.status = '澶勭悊涓?;
   v_obstacle_risk_score := 100 - (v_active_obstacles * 10);
   
-  -- 计算加权健康度
+  -- 璁＄畻鍔犳潈鍋ュ悍搴?
   v_health_score := ROUND(
     v_task_completion_rate * 30 +
     v_milestone_achievement_rate * 25 +
@@ -585,25 +622,25 @@ BEGIN
     v_obstacle_risk_score * 0.10
   );
   
-  -- 确定健康状态
+  -- 纭畾鍋ュ悍鐘舵€?
   v_health_status := CASE 
-    WHEN v_health_score >= 80 THEN '健康'
-    WHEN v_health_score >= 60 THEN '亚健康'
-    WHEN v_health_score >= 40 THEN '预警'
-    ELSE '危险'
+    WHEN v_health_score >= 80 THEN '鍋ュ悍'
+    WHEN v_health_score >= 60 THEN '浜氬仴搴?
+    WHEN v_health_score >= 40 THEN '棰勮'
+    ELSE '鍗遍櫓'
   END;
   
   RETURN QUERY SELECT v_health_score, v_health_status;
 END;
 $$ LANGUAGE plpgsql;
 
--- 6.5 健康度自动更新触发器
+-- 6.5 鍋ュ悍搴﹁嚜鍔ㄦ洿鏂拌Е鍙戝櫒
 CREATE OR REPLACE FUNCTION update_project_health_on_change()
 RETURNS TRIGGER AS $$
 DECLARE
   v_project_id UUID;
 BEGIN
-  -- 获取关联项目ID
+  -- 鑾峰彇鍏宠仈椤圭洰ID
   IF TG_TABLE_NAME = 'tasks' THEN
     v_project_id := NEW.project_id;
   ELSIF TG_TABLE_NAME = 'milestones' THEN
@@ -614,7 +651,7 @@ BEGIN
     SELECT project_id INTO v_project_id FROM tasks WHERE id = NEW.task_id;
   END IF;
   
-  -- 更新健康度
+  -- 鏇存柊鍋ュ悍搴?
   UPDATE projects
   SET (health_score, health_status) = (
     SELECT health_score, health_status 
@@ -626,7 +663,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- 为相关表创建触发器
+-- 涓虹浉鍏宠〃鍒涘缓瑙﹀彂鍣?
 CREATE TRIGGER trigger_update_health_tasks
   AFTER INSERT OR UPDATE ON tasks
   FOR EACH ROW
@@ -647,154 +684,154 @@ CREATE TRIGGER trigger_update_health_obstacles
   FOR EACH ROW
   EXECUTE FUNCTION update_project_health_on_change();
 
--- 添加注释
-COMMENT ON FUNCTION calculate_project_health_score(UUID) IS '计算项目健康度得分';
-COMMENT ON FUNCTION update_project_health_on_change() IS '任务/里程碑/条件/阻碍变更时自动更新健康度';
+-- 娣诲姞娉ㄩ噴
+COMMENT ON FUNCTION calculate_project_health_score(UUID) IS '璁＄畻椤圭洰鍋ュ悍搴﹀緱鍒?;
+COMMENT ON FUNCTION update_project_health_on_change() IS '浠诲姟/閲岀▼纰?鏉′欢/闃荤鍙樻洿鏃惰嚜鍔ㄦ洿鏂板仴搴峰害';
 
 
 -- ============================================================
--- 来自: 005_add_pre_milestone_conditions.sql
+-- 鏉ヨ嚜: 005_add_pre_milestone_conditions.sql
 -- ============================================================
 -- ============================================================
--- 前期证照条件关联表 + WBS结构表
--- 房地产工程管理系统V4.1 Phase 3
--- 执行时间: 2026-03-22
+-- 鍓嶆湡璇佺収鏉′欢鍏宠仈琛?+ WBS缁撴瀯琛?
+-- 鎴垮湴浜у伐绋嬬鐞嗙郴缁烿4.1 Phase 3
+-- 鎵ц鏃堕棿: 2026-03-22
 -- ============================================================
 
--- 启用ltree扩展（用于WBS层级路径管理）
+-- 鍚敤ltree鎵╁睍锛堢敤浜嶹BS灞傜骇璺緞绠＄悊锛?
 CREATE EXTENSION IF NOT EXISTS ltree;
 
--- 1. pre_milestone_conditions（前期证照条件关联表）
+-- 1. pre_milestone_conditions锛堝墠鏈熻瘉鐓ф潯浠跺叧鑱旇〃锛?
 CREATE TABLE IF NOT EXISTS pre_milestone_conditions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     
-    -- 关联的证照
+    -- 鍏宠仈鐨勮瘉鐓?
     pre_milestone_id UUID NOT NULL 
       REFERENCES pre_milestones(id) ON DELETE CASCADE,
     
-    -- 条件信息
+    -- 鏉′欢淇℃伅
     condition_type VARCHAR(50) NOT NULL,
     condition_name TEXT NOT NULL,
     description TEXT,
     
-    -- 状态
-    status VARCHAR(20) DEFAULT '待处理'
-      CHECK (status IN ('待处理', '已满足', '未满足', '已确认')),
+    -- 鐘舵€?
+    status VARCHAR(20) DEFAULT '寰呭鐞?
+      CHECK (status IN ('寰呭鐞?, '宸叉弧瓒?, '鏈弧瓒?, '宸茬‘璁?)),
     
-    -- 时间和人员
+    -- 鏃堕棿鍜屼汉鍛?
     target_date DATE,
     completed_date DATE,
     completed_by UUID REFERENCES users(id),
     notes TEXT,
     
-    -- 元数据
+    -- 鍏冩暟鎹?
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );
 
--- 2. wbs_structure（WBS层级结构表）
+-- 2. wbs_structure锛圵BS灞傜骇缁撴瀯琛級
 CREATE TABLE IF NOT EXISTS wbs_structure (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
-    -- WBS基本信息
+    -- WBS鍩烘湰淇℃伅
     project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     parent_id UUID REFERENCES wbs_structure(id) ON DELETE CASCADE,
 
-    -- WBS编码和路径（使用ltree扩展）
+    -- WBS缂栫爜鍜岃矾寰勶紙浣跨敤ltree鎵╁睍锛?
     wbs_code VARCHAR(100) NOT NULL,
     wbs_path LTREE NOT NULL,
     wbs_level INTEGER NOT NULL CHECK (wbs_level >= 0 AND wbs_level <= 4),
 
-    -- 节点信息
+    -- 鑺傜偣淇℃伅
     node_name VARCHAR(200) NOT NULL,
     node_code VARCHAR(50),
     description TEXT,
 
-    -- 层级
+    -- 灞傜骇
     level INTEGER NOT NULL DEFAULT 1,
     sort_order INTEGER DEFAULT 0,
 
-    -- 状态
-    status VARCHAR(20) DEFAULT '待开始'
-      CHECK (status IN ('待开始', '进行中', '已完成', '已暂停', '已取消')),
+    -- 鐘舵€?
+    status VARCHAR(20) DEFAULT '寰呭紑濮?
+      CHECK (status IN ('寰呭紑濮?, '杩涜涓?, '宸插畬鎴?, '宸叉殏鍋?, '宸插彇娑?)),
 
-    -- 时间
+    -- 鏃堕棿
     planned_start_date DATE,
     planned_end_date DATE,
     actual_start_date DATE,
     actual_end_date DATE,
 
-    -- 进度
+    -- 杩涘害
     progress INTEGER DEFAULT 0 CHECK (progress >= 0 AND progress <= 100),
 
-    -- 责任人
+    -- 璐ｄ换浜?
     responsible_user_id UUID REFERENCES users(id),
 
-    -- 扩展
+    -- 鎵╁睍
     properties JSONB DEFAULT '{}',
 
-    -- 元数据
+    -- 鍏冩暟鎹?
     created_by UUID REFERENCES users(id),
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );
 
--- 3. wbs_task_links（WBS节点与任务关联表）
+-- 3. wbs_task_links锛圵BS鑺傜偣涓庝换鍔″叧鑱旇〃锛?
 CREATE TABLE IF NOT EXISTS wbs_task_links (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     
-    -- 关联关系
+    -- 鍏宠仈鍏崇郴
     wbs_node_id UUID NOT NULL 
       REFERENCES wbs_structure(id) ON DELETE CASCADE,
     task_id UUID NOT NULL 
       REFERENCES tasks(id) ON DELETE CASCADE,
     
-    -- 关联类型
+    -- 鍏宠仈绫诲瀷
     link_type VARCHAR(20) DEFAULT 'subtask'
       CHECK (link_type IN ('subtask', 'milestone', 'delivery', 'dependency')),
     
-    -- 元数据
+    -- 鍏冩暟鎹?
     created_at TIMESTAMP DEFAULT NOW(),
     
     UNIQUE(wbs_node_id, task_id)
 );
 
--- 4. acceptance_nodes（验收节点表）
+-- 4. acceptance_nodes锛堥獙鏀惰妭鐐硅〃锛?
 CREATE TABLE IF NOT EXISTS acceptance_nodes (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     
-    -- 关联验收计划
+    -- 鍏宠仈楠屾敹璁″垝
     acceptance_plan_id UUID NOT NULL 
       REFERENCES acceptance_plans(id) ON DELETE CASCADE,
     
-    -- 节点信息
+    -- 鑺傜偣淇℃伅
     node_name VARCHAR(200) NOT NULL,
     node_type VARCHAR(50),
     description TEXT,
     
-    -- 状态
-    status VARCHAR(20) DEFAULT '待验收'
-      CHECK (status IN ('待验收', '验收中', '已通过', '未通过', '需补充')),
+    -- 鐘舵€?
+    status VARCHAR(20) DEFAULT '寰呴獙鏀?
+      CHECK (status IN ('寰呴獙鏀?, '楠屾敹涓?, '宸查€氳繃', '鏈€氳繃', '闇€琛ュ厖')),
     
-    -- 时间
+    -- 鏃堕棿
     planned_date DATE,
     actual_date DATE,
     
-    -- 验收结果
+    -- 楠屾敹缁撴灉
     result JSONB DEFAULT '{}',
     documents JSONB DEFAULT '[]',
     notes TEXT,
     
-    -- 验收人
+    -- 楠屾敹浜?
     accepted_by UUID REFERENCES users(id),
     accepted_at TIMESTAMP,
     
-    -- 元数据
+    -- 鍏冩暟鎹?
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );
 
--- 创建索引
+-- 鍒涘缓绱㈠紩
 CREATE INDEX IF NOT EXISTS idx_pre_milestone_conditions_milestone 
   ON pre_milestone_conditions(pre_milestone_id);
 
@@ -815,7 +852,7 @@ CREATE INDEX IF NOT EXISTS idx_wbs_task_links_task
 CREATE INDEX IF NOT EXISTS idx_acceptance_nodes_plan 
   ON acceptance_nodes(acceptance_plan_id);
 
--- 创建触发器
+-- 鍒涘缓瑙﹀彂鍣?
 CREATE TRIGGER update_pre_milestone_conditions_updated_at
   BEFORE UPDATE ON pre_milestone_conditions
   FOR EACH ROW
@@ -831,76 +868,75 @@ CREATE TRIGGER update_acceptance_nodes_updated_at
   FOR EACH ROW
   EXECUTE FUNCTION update_updated_at_column();
 
--- 添加注释
-COMMENT ON TABLE pre_milestone_conditions IS '前期证照条件关联表，记录证照办理的前置条件';
-COMMENT ON TABLE wbs_structure IS 'WBS层级结构表，存储项目WBS分解结构';
-COMMENT ON TABLE wbs_task_links IS 'WBS节点与任务关联表，建立WBS节点与任务的映射关系';
-COMMENT ON TABLE acceptance_nodes IS '验收节点表，存储验收计划下的具体验收节点';
+-- 娣诲姞娉ㄩ噴
+COMMENT ON TABLE pre_milestone_conditions IS '鍓嶆湡璇佺収鏉′欢鍏宠仈琛紝璁板綍璇佺収鍔炵悊鐨勫墠缃潯浠?;
+COMMENT ON TABLE wbs_structure IS 'WBS灞傜骇缁撴瀯琛紝瀛樺偍椤圭洰WBS鍒嗚В缁撴瀯';
+COMMENT ON TABLE wbs_task_links IS 'WBS鑺傜偣涓庝换鍔″叧鑱旇〃锛屽缓绔媁BS鑺傜偣涓庝换鍔＄殑鏄犲皠鍏崇郴';
+COMMENT ON TABLE acceptance_nodes IS '楠屾敹鑺傜偣琛紝瀛樺偍楠屾敹璁″垝涓嬬殑鍏蜂綋楠屾敹鑺傜偣';
 
 
 -- ============================================================
--- 来自: 006_add_task_completion_reports.sql
+-- 鏉ヨ嚜: 006_add_task_completion_reports.sql
 -- ============================================================
--- 任务完成总结表
--- 房地产工程管理系统V4.1 Phase 3.6 数据库迁移
--- 执行时间: 2026-03-22
+-- 浠诲姟瀹屾垚鎬荤粨琛?
+-- 鎴垮湴浜у伐绋嬬鐞嗙郴缁烿4.1 Phase 3.6 鏁版嵁搴撹縼绉?
+-- 鎵ц鏃堕棿: 2026-03-22
 
--- 1. task_completion_reports（任务完成总结表）
+-- 1. task_completion_reports锛堜换鍔″畬鎴愭€荤粨琛級
 CREATE TABLE IF NOT EXISTS task_completion_reports (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
   project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   
-  -- 基本信息
+  -- 鍩烘湰淇℃伅
   report_type TEXT NOT NULL CHECK (report_type IN ('task', 'building', 'sub_project', 'project')),
   title TEXT NOT NULL,
   summary TEXT,
   
-  -- 效率统计
-  planned_duration INTEGER NOT NULL,      -- 计划工期（天）
-  actual_duration INTEGER NOT NULL,       -- 实际工期（天）
-  efficiency_ratio NUMERIC(5, 2) NOT NULL, -- 效率比
+  -- 鏁堢巼缁熻
+  planned_duration INTEGER NOT NULL,      -- 璁″垝宸ユ湡锛堝ぉ锛?
+  actual_duration INTEGER NOT NULL,       -- 瀹為檯宸ユ湡锛堝ぉ锛?
+  efficiency_ratio NUMERIC(5, 2) NOT NULL, -- 鏁堢巼姣?
   efficiency_status TEXT NOT NULL DEFAULT 'normal' CHECK (efficiency_status IN ('fast', 'normal', 'slow')),
   
-  -- 延期统计
+  -- 寤舵湡缁熻
   total_delay_days INTEGER NOT NULL DEFAULT 0,
   delay_count INTEGER NOT NULL DEFAULT 0,
   delay_details JSONB DEFAULT '[]',
   
-  -- 阻碍统计
+  -- 闃荤缁熻
   obstacle_count INTEGER NOT NULL DEFAULT 0,
   obstacles_summary TEXT,
   
-  -- 完成质量
+  -- 瀹屾垚璐ㄩ噺
   quality_score INTEGER CHECK (quality_score BETWEEN 0 AND 100),
   quality_notes TEXT,
   
-  -- 总结内容
+  -- 鎬荤粨鍐呭
   highlights TEXT,
   issues TEXT,
   lessons_learned TEXT,
   
-  -- 元数据
+  -- 鍏冩暟鎹?
   generated_by UUID REFERENCES users(id) ON DELETE SET NULL,
   generated_at TIMESTAMPTZ DEFAULT NOW(),
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 2. task_progress_snapshots（任务进度快照表）- 用于效率计算
+-- 2. task_progress_snapshots锛堜换鍔¤繘搴﹀揩鐓ц〃锛? 鐢ㄤ簬鏁堢巼璁＄畻
 CREATE TABLE IF NOT EXISTS task_progress_snapshots (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
   progress INTEGER NOT NULL CHECK (progress BETWEEN 0 AND 100),
-  snapshot_date DATE NOT NULL,
+  snapshot_date DATE NOT NULL
   is_auto_generated BOOLEAN DEFAULT TRUE,
+  event_type VARCHAR(50),
+  event_source VARCHAR(50),
   notes TEXT,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  
-  -- 唯一约束：同一任务每天最多一条自动生成的快照
-  CONSTRAINT daily_snapshot UNIQUE (task_id, snapshot_date, is_auto_generated)
+  created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 创建索引
+-- 鍒涘缓绱㈠紩
 CREATE INDEX IF NOT EXISTS idx_task_completion_reports_task ON task_completion_reports(task_id);
 CREATE INDEX IF NOT EXISTS idx_task_completion_reports_project ON task_completion_reports(project_id);
 CREATE INDEX IF NOT EXISTS idx_task_completion_reports_type ON task_completion_reports(report_type);
@@ -909,17 +945,17 @@ CREATE INDEX IF NOT EXISTS idx_task_completion_reports_date ON task_completion_r
 CREATE INDEX IF NOT EXISTS idx_task_progress_snapshots_task ON task_progress_snapshots(task_id);
 CREATE INDEX IF NOT EXISTS idx_task_progress_snapshots_date ON task_progress_snapshots(snapshot_date);
 
--- 创建触发器：自动更新 updated_at 字段
+-- 鍒涘缓瑙﹀彂鍣細鑷姩鏇存柊 updated_at 瀛楁
 CREATE TRIGGER update_task_completion_reports_updated_at
   BEFORE UPDATE ON task_completion_reports
   FOR EACH ROW
   EXECUTE FUNCTION update_updated_at_column();
 
--- 创建触发器：任务进度达到100%时自动生成总结报告
+-- 鍒涘缓瑙﹀彂鍣細浠诲姟杩涘害杈惧埌100%鏃惰嚜鍔ㄧ敓鎴愭€荤粨鎶ュ憡
 CREATE OR REPLACE FUNCTION auto_generate_completion_report()
 RETURNS TRIGGER AS $$
 BEGIN
-  -- 当任务进度更新为100%时，触发总结报告生成
+  -- 褰撲换鍔¤繘搴︽洿鏂颁负100%鏃讹紝瑙﹀彂鎬荤粨鎶ュ憡鐢熸垚
   IF NEW.progress = 100 AND (OLD.progress IS NULL OR OLD.progress < 100) THEN
     INSERT INTO task_completion_reports (
       task_id,
@@ -938,16 +974,16 @@ BEGIN
       NEW.id,
       NEW.project_id,
       'task',
-      COALESCE(NEW.name, '任务') || ' 完成总结',
-      '任务已完成，自动生成总结报告',
+      COALESCE(NEW.name, '浠诲姟') || ' 瀹屾垚鎬荤粨',
+      '浠诲姟宸插畬鎴愶紝鑷姩鐢熸垚鎬荤粨鎶ュ憡',
       EXTRACT(DAY FROM (NEW.planned_end_date - NEW.start_date)),
       EXTRACT(DAY FROM (CURRENT_DATE - NEW.start_date)),
-      -- 效率比暂时设为1，由服务层重新计算
+      -- 鏁堢巼姣旀殏鏃惰涓?锛岀敱鏈嶅姟灞傞噸鏂拌绠?
       1.0,
       'normal',
       NEW.updated_by,
       NOW()
-    ON CONFLICT DO NOTHING; -- 避免重复插入
+    ON CONFLICT DO NOTHING; -- 閬垮厤閲嶅鎻掑叆
   END IF;
   
   RETURN NEW;
@@ -960,22 +996,31 @@ CREATE TRIGGER trigger_auto_generate_report
   WHEN (NEW.progress = 100 AND (OLD.progress IS NULL OR OLD.progress < 100))
   EXECUTE FUNCTION auto_generate_completion_report();
 
--- 创建触发器：任务进度更新时记录快照
+-- 鍒涘缓瑙﹀彂鍣細浠诲姟杩涘害鏇存柊鏃惰褰曞揩鐓?
 CREATE OR REPLACE FUNCTION auto_record_progress_snapshot()
 RETURNS TRIGGER AS $$
 BEGIN
-  -- 只有当进度发生变化时才记录快照
+  -- 鍙湁褰撹繘搴﹀彂鐢熷彉鍖栨椂鎵嶈褰曞揩鐓?
   IF NEW.progress IS DISTINCT FROM OLD.progress THEN
-    INSERT INTO task_progress_snapshots (task_id, progress, snapshot_date, notes)
+    INSERT INTO task_progress_snapshots (
+      task_id,
+      progress,
+      snapshot_date,
+      event_type,
+      event_source,
+      notes
+    )
     VALUES (
       NEW.id,
       NEW.progress,
       CURRENT_DATE,
+      'task_update',
+      'db_trigger',
       '进度更新: ' || NEW.progress || '%'
     )
-    ON CONFLICT (task_id, snapshot_date, is_auto_generated) 
-    DO UPDATE SET 
-      progress = NEW.progress,
+    ON CONFLICT (task_id, snapshot_date, event_type, event_source)
+    DO UPDATE SET
+      progress = EXCLUDED.progress,
       notes = EXCLUDED.notes;
   END IF;
   
@@ -989,34 +1034,34 @@ CREATE TRIGGER trigger_auto_record_snapshot
   WHEN (NEW.progress IS NOT NULL)
   EXECUTE FUNCTION auto_record_progress_snapshot();
 
--- [跳过] 007_enable_rls_policies.sql (RLS auth.uid() 依赖)
+-- [璺宠繃] 007_enable_rls_policies.sql (RLS auth.uid() 渚濊禆)
 
 
 -- ============================================================
--- 来自: 008_fix_phase36_triggers.sql
+-- 鏉ヨ嚜: 008_fix_phase36_triggers.sql
 -- ============================================================
--- Phase 3.6 触发器字段引用修复
--- 修复问题: P0-001, P0-002
--- 执行时间: 2026-03-22
+-- Phase 3.6 瑙﹀彂鍣ㄥ瓧娈靛紩鐢ㄤ慨澶?
+-- 淇闂: P0-001, P0-002
+-- 鎵ц鏃堕棿: 2026-03-22
 
 -- =====================================================
--- 修复 1: 修复 auto_generate_completion_report 函数
--- 问题: 
---   - P0-001: 引用了不存在的字段 planned_end_date，应改为 end_date
---   - P0-002: 引用了不存在的字段 name，应改为 title
+-- 淇 1: 淇 auto_generate_completion_report 鍑芥暟
+-- 闂: 
+--   - P0-001: 寮曠敤浜嗕笉瀛樺湪鐨勫瓧娈?planned_end_date锛屽簲鏀逛负 end_date
+--   - P0-002: 寮曠敤浜嗕笉瀛樺湪鐨勫瓧娈?name锛屽簲鏀逛负 title
 -- =====================================================
 
--- 先删除触发器（依赖函数）
+-- 鍏堝垹闄よЕ鍙戝櫒锛堜緷璧栧嚱鏁帮級
 DROP TRIGGER IF EXISTS trigger_auto_generate_report ON tasks;
 
--- 删除旧函数
+-- 鍒犻櫎鏃у嚱鏁?
 DROP FUNCTION IF EXISTS auto_generate_completion_report();
 
--- 创建修复后的函数
+-- 鍒涘缓淇鍚庣殑鍑芥暟
 CREATE OR REPLACE FUNCTION auto_generate_completion_report()
 RETURNS TRIGGER AS $$
 BEGIN
-  -- 当任务进度更新为100%时，触发总结报告生成
+  -- 褰撲换鍔¤繘搴︽洿鏂颁负100%鏃讹紝瑙﹀彂鎬荤粨鎶ュ憡鐢熸垚
   IF NEW.progress = 100 AND (OLD.progress IS NULL OR OLD.progress < 100) THEN
     INSERT INTO task_completion_reports (
       task_id,
@@ -1035,23 +1080,23 @@ BEGIN
       NEW.id,
       NEW.project_id,
       'task',
-      COALESCE(NEW.title, '任务') || ' 完成总结',  -- 修复: name -> title
-      '任务已完成，自动生成总结报告',
-      EXTRACT(DAY FROM (NEW.end_date - NEW.start_date)),  -- 修复: planned_end_date -> end_date
+      COALESCE(NEW.title, '浠诲姟') || ' 瀹屾垚鎬荤粨',  -- 淇: name -> title
+      '浠诲姟宸插畬鎴愶紝鑷姩鐢熸垚鎬荤粨鎶ュ憡',
+      EXTRACT(DAY FROM (NEW.end_date - NEW.start_date)),  -- 淇: planned_end_date -> end_date
       EXTRACT(DAY FROM (CURRENT_DATE - NEW.start_date)),
-      -- 效率比设为 NULL，由服务层重新计算（避免硬编码值）
+      -- 鏁堢巼姣旇涓?NULL锛岀敱鏈嶅姟灞傞噸鏂拌绠楋紙閬垮厤纭紪鐮佸€硷級
       NULL,
       'normal',
       NEW.updated_by,
       NOW()
-    ON CONFLICT DO NOTHING; -- 避免重复插入
+    ON CONFLICT DO NOTHING; -- 閬垮厤閲嶅鎻掑叆
   END IF;
   
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
--- 重新创建触发器
+-- 閲嶆柊鍒涘缓瑙﹀彂鍣?
 CREATE TRIGGER trigger_auto_generate_report
   AFTER UPDATE OF progress ON tasks
   FOR EACH ROW
@@ -1059,10 +1104,10 @@ CREATE TRIGGER trigger_auto_generate_report
   EXECUTE FUNCTION auto_generate_completion_report();
 
 -- =====================================================
--- 修复 2: 添加触发器异常处理（增强健壮性）
+-- 淇 2: 娣诲姞瑙﹀彂鍣ㄥ紓甯稿鐞嗭紙澧炲己鍋ュ．鎬э級
 -- =====================================================
 
--- 创建日志表（如果不存在）用于记录触发器异常
+-- 鍒涘缓鏃ュ織琛紙濡傛灉涓嶅瓨鍦級鐢ㄤ簬璁板綍瑙﹀彂鍣ㄥ紓甯?
 CREATE TABLE IF NOT EXISTS trigger_execution_logs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   trigger_name TEXT NOT NULL,
@@ -1075,31 +1120,31 @@ CREATE TABLE IF NOT EXISTS trigger_execution_logs (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 创建索引
+-- 鍒涘缓绱㈠紩
 CREATE INDEX IF NOT EXISTS idx_trigger_logs_name ON trigger_execution_logs(trigger_name);
 CREATE INDEX IF NOT EXISTS idx_trigger_logs_status ON trigger_execution_logs(status);
 CREATE INDEX IF NOT EXISTS idx_trigger_logs_created ON trigger_execution_logs(created_at);
 
 -- =====================================================
--- 修复 3: 创建带异常处理的包装函数（可选增强）
+-- 淇 3: 鍒涘缓甯﹀紓甯稿鐞嗙殑鍖呰鍑芥暟锛堝彲閫夊寮猴級
 -- =====================================================
 
 CREATE OR REPLACE FUNCTION safe_generate_completion_report()
 RETURNS TRIGGER AS $$
 BEGIN
-  -- 调用主函数并捕获异常
+  -- 璋冪敤涓诲嚱鏁板苟鎹曡幏寮傚父
   BEGIN
-    -- 检查必要字段是否存在
+    -- 妫€鏌ュ繀瑕佸瓧娈垫槸鍚﹀瓨鍦?
     IF NEW.id IS NULL OR NEW.project_id IS NULL THEN
-      RAISE WARNING '触发器执行跳过: task_id 或 project_id 为空';
+      RAISE WARNING '瑙﹀彂鍣ㄦ墽琛岃烦杩? task_id 鎴?project_id 涓虹┖';
       RETURN NEW;
     END IF;
     
-    -- 调用主逻辑
+    -- 璋冪敤涓婚€昏緫
     RETURN auto_generate_completion_report();
     
   EXCEPTION WHEN OTHERS THEN
-    -- 记录错误日志
+    -- 璁板綍閿欒鏃ュ織
     INSERT INTO trigger_execution_logs (
       trigger_name,
       table_name,
@@ -1122,60 +1167,60 @@ BEGIN
       )
     );
     
-    -- 触发器异常不应阻止原操作，返回 NEW 继续执行
+    -- 瑙﹀彂鍣ㄥ紓甯镐笉搴旈樆姝㈠師鎿嶄綔锛岃繑鍥?NEW 缁х画鎵ц
     RETURN NEW;
   END;
 END;
 $$ LANGUAGE plpgsql;
 
 -- =====================================================
--- 验证修复
+-- 楠岃瘉淇
 -- =====================================================
 
--- 添加注释说明修复内容
+-- 娣诲姞娉ㄩ噴璇存槑淇鍐呭
 COMMENT ON FUNCTION auto_generate_completion_report() IS 
-'任务完成时自动生成总结报告（已修复字段引用：name->title, planned_end_date->end_date）';
+'浠诲姟瀹屾垚鏃惰嚜鍔ㄧ敓鎴愭€荤粨鎶ュ憡锛堝凡淇瀛楁寮曠敤锛歯ame->title, planned_end_date->end_date锛?;
 
--- 验证触发器状态
+-- 楠岃瘉瑙﹀彂鍣ㄧ姸鎬?
 DO $$
 BEGIN
-  RAISE NOTICE 'Phase 3.6 触发器修复完成:';
-  RAISE NOTICE '  - P0-001: planned_end_date -> end_date (已修复)';
-  RAISE NOTICE '  - P0-002: name -> title (已修复)';
-  RAISE NOTICE '  - efficiency_ratio 改为 NULL，由服务层计算';
+  RAISE NOTICE 'Phase 3.6 瑙﹀彂鍣ㄤ慨澶嶅畬鎴?';
+  RAISE NOTICE '  - P0-001: planned_end_date -> end_date (宸蹭慨澶?';
+  RAISE NOTICE '  - P0-002: name -> title (宸蹭慨澶?';
+  RAISE NOTICE '  - efficiency_ratio 鏀逛负 NULL锛岀敱鏈嶅姟灞傝绠?;
 END $$;
 
 
 -- ============================================================
--- 来自: 009_add_job_execution_logs.sql
+-- 鏉ヨ嚜: 009_add_job_execution_logs.sql
 -- ============================================================
--- 扩展任务执行日志表（在003中已创建基础版，这里补充额外字段）
+-- 鎵╁睍浠诲姟鎵ц鏃ュ織琛紙鍦?03涓凡鍒涘缓鍩虹鐗堬紝杩欓噷琛ュ厖棰濆瀛楁锛?
 
--- 补充003中缺少的字段（使用ADD COLUMN IF NOT EXISTS避免冲突）
+-- 琛ュ厖003涓己灏戠殑瀛楁锛堜娇鐢ˋDD COLUMN IF NOT EXISTS閬垮厤鍐茬獊锛?
 ALTER TABLE job_execution_logs 
   ADD COLUMN IF NOT EXISTS result JSONB,
   ADD COLUMN IF NOT EXISTS job_id TEXT,
   ADD COLUMN IF NOT EXISTS triggered_by TEXT CHECK (triggered_by IN ('scheduler', 'manual', 'api'));
 
--- 补充索引（009版本索引，IF NOT EXISTS避免冲突）
+-- 琛ュ厖绱㈠紩锛?09鐗堟湰绱㈠紩锛孖F NOT EXISTS閬垮厤鍐茬獊锛?
 CREATE INDEX IF NOT EXISTS idx_job_execution_logs_job_name ON job_execution_logs(job_name);
 CREATE INDEX IF NOT EXISTS idx_job_execution_logs_status ON job_execution_logs(status);
 CREATE INDEX IF NOT EXISTS idx_job_execution_logs_started_at ON job_execution_logs(started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_job_execution_logs_job_id ON job_execution_logs(job_id);
 
--- 添加注释
-COMMENT ON TABLE job_execution_logs IS '定时任务执行日志表，记录所有定时任务的执行历史';
-COMMENT ON COLUMN job_execution_logs.job_name IS '任务名称（如: riskStatisticsJob, autoAlertService.daily）';
-COMMENT ON COLUMN job_execution_logs.status IS '执行状态: success=成功, error=失败, timeout=超时';
-COMMENT ON COLUMN job_execution_logs.started_at IS '任务开始时间';
-COMMENT ON COLUMN job_execution_logs.completed_at IS '任务完成时间';
-COMMENT ON COLUMN job_execution_logs.duration_ms IS '任务执行时长（毫秒）';
-COMMENT ON COLUMN job_execution_logs.result IS '任务执行结果（JSON格式）';
-COMMENT ON COLUMN job_execution_logs.error_message IS '错误消息（仅当status=error时有值）';
-COMMENT ON COLUMN job_execution_logs.job_id IS '任务执行ID（用于追踪手动触发的任务）';
-COMMENT ON COLUMN job_execution_logs.triggered_by IS '触发方式: scheduler=定时调度, manual=手动触发, api=API调用';
+-- 娣诲姞娉ㄩ噴
+COMMENT ON TABLE job_execution_logs IS '瀹氭椂浠诲姟鎵ц鏃ュ織琛紝璁板綍鎵€鏈夊畾鏃朵换鍔＄殑鎵ц鍘嗗彶';
+COMMENT ON COLUMN job_execution_logs.job_name IS '浠诲姟鍚嶇О锛堝: riskStatisticsJob, conditionAlertJob锛?;
+COMMENT ON COLUMN job_execution_logs.status IS '鎵ц鐘舵€? success=鎴愬姛, error=澶辫触, timeout=瓒呮椂';
+COMMENT ON COLUMN job_execution_logs.started_at IS '浠诲姟寮€濮嬫椂闂?;
+COMMENT ON COLUMN job_execution_logs.completed_at IS '浠诲姟瀹屾垚鏃堕棿';
+COMMENT ON COLUMN job_execution_logs.duration_ms IS '浠诲姟鎵ц鏃堕暱锛堟绉掞級';
+COMMENT ON COLUMN job_execution_logs.result IS '浠诲姟鎵ц缁撴灉锛圝SON鏍煎紡锛?;
+COMMENT ON COLUMN job_execution_logs.error_message IS '閿欒娑堟伅锛堜粎褰搒tatus=error鏃舵湁鍊硷級';
+COMMENT ON COLUMN job_execution_logs.job_id IS '浠诲姟鎵цID锛堢敤浜庤拷韪墜鍔ㄨЕ鍙戠殑浠诲姟锛?;
+COMMENT ON COLUMN job_execution_logs.triggered_by IS '瑙﹀彂鏂瑰紡: scheduler=瀹氭椂璋冨害, manual=鎵嬪姩瑙﹀彂, api=API璋冪敤';
 
--- 创建清理旧日志的函数（保留最近90天）
+-- 鍒涘缓娓呯悊鏃ф棩蹇楃殑鍑芥暟锛堜繚鐣欐渶杩?0澶╋級
 CREATE OR REPLACE FUNCTION cleanup_old_job_logs()
 RETURNS INTEGER AS $$
 DECLARE
@@ -1189,56 +1234,56 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- 添加注释
-COMMENT ON FUNCTION cleanup_old_job_logs IS '清理90天前的旧任务执行日志';
+-- 娣诲姞娉ㄩ噴
+COMMENT ON FUNCTION cleanup_old_job_logs IS '娓呯悊90澶╁墠鐨勬棫浠诲姟鎵ц鏃ュ織';
 
 
 -- ============================================================
--- 来自: 009_fix_delivery_issues.sql
+-- 鏉ヨ嚜: 009_fix_delivery_issues.sql
 -- ============================================================
 -- ============================================================
--- 修复交付计划遗留问题
--- 房地产工程管理系统V4.1 补丁迁移
--- 执行时间: 2026-03-23
--- 修复内容:
---   DEL-001 (P1): 创建 task_milestones 任务里程碑关联表
---   DEL-002 (P2): 创建 trg_pre_milestone_status_update 触发器
+-- 淇浜や粯璁″垝閬楃暀闂
+-- 鎴垮湴浜у伐绋嬬鐞嗙郴缁烿4.1 琛ヤ竵杩佺Щ
+-- 鎵ц鏃堕棿: 2026-03-23
+-- 淇鍐呭:
+--   DEL-001 (P1): 鍒涘缓 task_milestones 浠诲姟閲岀▼纰戝叧鑱旇〃
+--   DEL-002 (P2): 鍒涘缓 trg_pre_milestone_status_update 瑙﹀彂鍣?
 -- ============================================================
 
 -- ============================================================
--- DEL-001: task_milestones（任务里程碑关联表）
--- 用于关联任务和里程碑，支持里程碑作为里程碑子类型
+-- DEL-001: task_milestones锛堜换鍔￠噷绋嬬鍏宠仈琛級
+-- 鐢ㄤ簬鍏宠仈浠诲姟鍜岄噷绋嬬锛屾敮鎸侀噷绋嬬浣滀负閲岀▼纰戝瓙绫诲瀷
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS task_milestones (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     
-    -- 关联任务
+    -- 鍏宠仈浠诲姟
     task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
     
-    -- 关联里程碑
+    -- 鍏宠仈閲岀▼纰?
     milestone_id UUID NOT NULL REFERENCES milestones(id) ON DELETE CASCADE,
     
-    -- 关联类型：关联/关键/依赖
-    relation_type TEXT NOT NULL DEFAULT '关联'
-        CHECK (relation_type IN ('关联', '关键', '依赖')),
+    -- 鍏宠仈绫诲瀷锛氬叧鑱?鍏抽敭/渚濊禆
+    relation_type TEXT NOT NULL DEFAULT '鍏宠仈'
+        CHECK (relation_type IN ('鍏宠仈', '鍏抽敭', '渚濊禆')),
     
-    -- 元数据
+    -- 鍏冩暟鎹?
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     
-    -- 唯一约束：同一任务不重复关联同一里程碑
+    -- 鍞竴绾︽潫锛氬悓涓€浠诲姟涓嶉噸澶嶅叧鑱斿悓涓€閲岀▼纰?
     UNIQUE(task_id, milestone_id)
 );
 
--- 索引
+-- 绱㈠紩
 CREATE INDEX IF NOT EXISTS idx_task_milestones_task
     ON task_milestones(task_id);
 
 CREATE INDEX IF NOT EXISTS idx_task_milestones_milestone
     ON task_milestones(milestone_id);
 
--- updated_at 自动更新触发器
+-- updated_at 鑷姩鏇存柊瑙﹀彂鍣?
 CREATE TRIGGER update_task_milestones_updated_at
     BEFORE UPDATE ON task_milestones
     FOR EACH ROW
@@ -1246,8 +1291,8 @@ CREATE TRIGGER update_task_milestones_updated_at
 
 -- ============================================================
 -- DEL-002: trg_pre_milestone_status_update
--- 前期里程碑状态自动更新触发器
--- 当 pre_milestone_conditions 全部满足时，自动将 pre_milestone 状态改为"已取得"
+-- 鍓嶆湡閲岀▼纰戠姸鎬佽嚜鍔ㄦ洿鏂拌Е鍙戝櫒
+-- 褰?pre_milestone_conditions 鍏ㄩ儴婊¤冻鏃讹紝鑷姩灏?pre_milestone 鐘舵€佹敼涓?宸插彇寰?
 -- ============================================================
 
 CREATE OR REPLACE FUNCTION fn_update_pre_milestone_status()
@@ -1258,24 +1303,20 @@ DECLARE
     v_satisfied_conditions INTEGER;
     v_current_status TEXT;
 BEGIN
-    -- 确定受影响的 pre_milestone_id
     IF TG_OP = 'DELETE' THEN
         v_pre_milestone_id := OLD.pre_milestone_id;
     ELSE
         v_pre_milestone_id := NEW.pre_milestone_id;
     END IF;
 
-    -- 查询当前证照状态
     SELECT status INTO v_current_status
     FROM pre_milestones
     WHERE id = v_pre_milestone_id;
 
-    -- 已取得 / 已过期 状态不做自动变更
-    IF v_current_status IN ('已取得', '已过期') THEN
+    IF v_current_status IN ('issued', 'expired', 'voided') THEN
         RETURN COALESCE(NEW, OLD);
     END IF;
 
-    -- 统计条件总数和已满足数量
     SELECT
         COUNT(*),
         COUNT(*) FILTER (WHERE status IN ('已满足', '已确认'))
@@ -1283,641 +1324,28 @@ BEGIN
     FROM pre_milestone_conditions
     WHERE pre_milestone_id = v_pre_milestone_id;
 
-    -- 全部条件满足 → 状态更新为"已取得"
     IF v_total_conditions > 0 AND v_total_conditions = v_satisfied_conditions THEN
         UPDATE pre_milestones
-        SET status = '已取得',
+        SET status = 'issued',
             issue_date = COALESCE(issue_date, CURRENT_DATE),
             updated_at = NOW()
         WHERE id = v_pre_milestone_id
-          AND status NOT IN ('已取得', '已过期');
-
-    -- 存在未满足条件且当前为"待申请" → 更新为"办理中"
-    ELSIF v_satisfied_conditions > 0 AND v_current_status = '待申请' THEN
+          AND status NOT IN ('issued', 'expired', 'voided');
+    ELSIF v_satisfied_conditions > 0 AND v_current_status = 'pending' THEN
         UPDATE pre_milestones
-        SET status = '办理中',
+        SET status = 'preparing_documents',
             updated_at = NOW()
         WHERE id = v_pre_milestone_id
-          AND status = '待申请';
+          AND status = 'pending';
     END IF;
 
     RETURN COALESCE(NEW, OLD);
 END;
 $$ LANGUAGE plpgsql;
-
--- 绑定到 pre_milestone_conditions 表
 CREATE TRIGGER trg_pre_milestone_status_update
     AFTER INSERT OR UPDATE OR DELETE ON pre_milestone_conditions
     FOR EACH ROW
     EXECUTE FUNCTION fn_update_pre_milestone_status();
-
--- ============================================================
--- 验证注释
--- ============================================================
--- 执行后预期结果：
---   SELECT COUNT(*) FROM task_milestones;  → 0（空表正常）
---   \d task_milestones                     → 字段结构完整
---   SELECT tgname FROM pg_trigger WHERE tgname = 'trg_pre_milestone_status_update';
---   → 返回 1 行
--- ============================================================
-
-
--- ============================================================
--- 来自: 010_add_missing_tables.sql
--- ============================================================
--- Migration 010: Add missing tables and fields from design review
--- Date: 2026-03-23
-
--- 1. Add predecessor_ids field to tasks table
-ALTER TABLE tasks ADD COLUMN IF NOT EXISTS predecessor_ids JSONB;
-CREATE INDEX IF NOT EXISTS idx_tasks_predecessor_ids_gin ON tasks USING GIN(predecessor_ids);
-
--- 2. Create task_progress_history table
-CREATE TABLE IF NOT EXISTS task_progress_history (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-    progress INTEGER NOT NULL DEFAULT 0,
-    notes TEXT,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    created_by UUID REFERENCES users(id) ON DELETE SET NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_task_progress_history_task_id ON task_progress_history(task_id);
-CREATE INDEX IF NOT EXISTS idx_task_progress_history_created_at ON task_progress_history(created_at);
-CREATE INDEX IF NOT EXISTS idx_task_progress_history_task_created_by ON task_progress_history(task_id, created_by);
-
--- 3. Create acceptance_records table
-CREATE TABLE IF NOT EXISTS acceptance_records (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    acceptance_plan_id UUID NOT NULL REFERENCES acceptance_plans(id) ON DELETE CASCADE,
-    record_date DATE NOT NULL,
-    acceptance_result VARCHAR(50) NOT NULL,
-    score INTEGER,
-    findings TEXT,
-    issues JSONB,
-    attachments JSONB,
-    attendees JSONB,
-    next_action TEXT,
-    next_action_date DATE,
-    remarks TEXT,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    created_by UUID REFERENCES users(id) ON DELETE SET NULL,
-    updated_by UUID REFERENCES users(id) ON DELETE SET NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_acceptance_records_acceptance_plan_id ON acceptance_records(acceptance_plan_id);
-CREATE INDEX IF NOT EXISTS idx_acceptance_records_record_date ON acceptance_records(record_date);
-CREATE INDEX IF NOT EXISTS idx_acceptance_records_acceptance_result ON acceptance_records(acceptance_result);
-CREATE INDEX IF NOT EXISTS idx_acceptance_records_attachments_gin ON acceptance_records USING GIN(attachments);
-CREATE INDEX IF NOT EXISTS idx_acceptance_records_attendees_gin ON acceptance_records USING GIN(attendees);
-
--- 4. Create system_settings table
-CREATE TABLE IF NOT EXISTS system_settings (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    setting_key VARCHAR(100) NOT NULL UNIQUE,
-    setting_value JSONB NOT NULL,
-    setting_type VARCHAR(50) DEFAULT 'string',
-    category VARCHAR(50) NOT NULL,
-    description TEXT,
-    is_editable BOOLEAN DEFAULT TRUE,
-    is_system BOOLEAN DEFAULT FALSE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    created_by UUID REFERENCES users(id) ON DELETE SET NULL,
-    updated_by UUID REFERENCES users(id) ON DELETE SET NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_system_settings_category ON system_settings(category);
-CREATE INDEX IF NOT EXISTS idx_system_settings_key ON system_settings(setting_key);
-CREATE INDEX IF NOT EXISTS idx_system_settings_value_gin ON system_settings USING GIN(setting_value);
-
--- Insert default system settings
-INSERT INTO system_settings (setting_key, setting_value, setting_type, category, description, is_system) VALUES
-('risk.alert.thresholds', '{"critical": 7, "high": 14, "medium": 7}', 'json', 'risk_alert', '风险预警阈值配置', TRUE),
-('risk.consecutive.lag.weeks', '{"high": 2, "medium": 1}', 'json', 'risk_alert', '连续滞后周数阈值', TRUE),
-('obstacle.timeout.days', '{"warning": 3, "critical": 7, "severe": 14}', 'json', 'risk_alert', '阻碍超时天数阈值', TRUE),
-('dialog.frequency.defaults', '{"daily_max": 3, "cooldown_minutes": 60}', 'json', 'dialog_frequency', '弹窗频率默认配置', TRUE),
-('ai.duration.confidence.min', '{"value": 0.6}', 'json', 'ai', 'AI工期预测最小置信度', TRUE)
-ON CONFLICT (setting_key) DO NOTHING;
-
--- 5. Create notifications table
-CREATE TABLE IF NOT EXISTS notifications (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    notification_type VARCHAR(50) NOT NULL,
-    title VARCHAR(255) NOT NULL,
-    content TEXT,
-    target_type VARCHAR(50),
-    target_id UUID,
-    priority VARCHAR(20) DEFAULT 'normal',
-    channel VARCHAR(50) DEFAULT 'in_app',
-    is_read BOOLEAN DEFAULT FALSE,
-    read_at TIMESTAMP WITH TIME ZONE,
-    sent_at TIMESTAMP WITH TIME ZONE,
-    metadata JSONB,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications(user_id);
-CREATE INDEX IF NOT EXISTS idx_notifications_is_read ON notifications(is_read);
-CREATE INDEX IF NOT EXISTS idx_notifications_created_at ON notifications(created_at);
-CREATE INDEX IF NOT EXISTS idx_notifications_notification_type ON notifications(notification_type);
-
--- Enable RLS on new tables
-ALTER TABLE task_progress_history ENABLE ROW LEVEL SECURITY;
-ALTER TABLE acceptance_records ENABLE ROW LEVEL SECURITY;
-ALTER TABLE system_settings ENABLE ROW LEVEL SECURITY;
-ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
-
--- RLS Policies for task_progress_history
-DROP POLICY IF EXISTS "task_progress_history_select_policy" ON task_progress_history;
-CREATE POLICY "task_progress_history_select_policy" ON task_progress_history FOR SELECT
-    USING (EXISTS (SELECT 1 FROM tasks t WHERE t.id = task_progress_history.task_id AND t.deleted_at IS NULL));
-
-DROP POLICY IF EXISTS "task_progress_history_insert_policy" ON task_progress_history;
-CREATE POLICY "task_progress_history_insert_policy" ON task_progress_history FOR INSERT
-    WITH CHECK (TRUE);  -- 无登录系统，允许所有插入
-
-DROP POLICY IF EXISTS "task_progress_history_update_policy" ON task_progress_history;
-CREATE POLICY "task_progress_history_update_policy" ON task_progress_history FOR UPDATE
-    USING (TRUE);  -- 无登录系统，允许所有更新
-
--- RLS Policies for acceptance_records
-DROP POLICY IF EXISTS "acceptance_records_select_policy" ON acceptance_records;
-CREATE POLICY "acceptance_records_select_policy" ON acceptance_records FOR SELECT
-    USING (EXISTS (SELECT 1 FROM acceptance_plans ap WHERE ap.id = acceptance_records.acceptance_plan_id AND ap.deleted_at IS NULL));
-
-DROP POLICY IF EXISTS "acceptance_records_insert_policy" ON acceptance_records;
-CREATE POLICY "acceptance_records_insert_policy" ON acceptance_records FOR INSERT
-    WITH CHECK (TRUE);
-
-DROP POLICY IF EXISTS "acceptance_records_update_policy" ON acceptance_records;
-CREATE POLICY "acceptance_records_update_policy" ON acceptance_records FOR UPDATE
-    USING (TRUE);
-
--- RLS Policies for system_settings (read-only for regular users)
-DROP POLICY IF EXISTS "system_settings_select_policy" ON system_settings;
-CREATE POLICY "system_settings_select_policy" ON system_settings FOR SELECT
-    USING (TRUE);
-
-DROP POLICY IF EXISTS "system_settings_insert_policy" ON system_settings;
-CREATE POLICY "system_settings_insert_policy" ON system_settings FOR INSERT
-    WITH CHECK (TRUE);
-
-DROP POLICY IF EXISTS "system_settings_update_policy" ON system_settings;
-CREATE POLICY "system_settings_update_policy" ON system_settings FOR UPDATE
-    USING (TRUE);
-
--- RLS Policies for notifications
-DROP POLICY IF EXISTS "notifications_select_policy" ON notifications;
-CREATE POLICY "notifications_select_policy" ON notifications FOR SELECT
-    USING (TRUE);  -- 无登录系统，所有通知可见
-
-DROP POLICY IF EXISTS "notifications_insert_policy" ON notifications;
-CREATE POLICY "notifications_insert_policy" ON notifications FOR INSERT
-    WITH CHECK (TRUE);
-
-DROP POLICY IF EXISTS "notifications_update_policy" ON notifications;
-CREATE POLICY "notifications_update_policy" ON notifications FOR UPDATE
-    USING (TRUE);
-
-
--- ============================================================
--- 来自: 011_add_missing_tables_phase2.sql
--- ============================================================
--- Migration 011: Add missing tables phase 2 (phases, wbs_template_nodes, dialog_frequency)
--- Date: 2026-03-23
-
--- 1. Create phases table (分期表)
-CREATE TABLE IF NOT EXISTS phases (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    phase_name VARCHAR(255) NOT NULL,
-    phase_code VARCHAR(100),
-    phase_sequence INTEGER NOT NULL DEFAULT 0,
-    start_date DATE,
-    end_date DATE,
-    phase_status VARCHAR(50) DEFAULT 'planning',
-    area_size DECIMAL(15, 2),
-    building_count INTEGER,
-    description TEXT,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    created_by UUID REFERENCES users(id) ON DELETE SET NULL,
-    updated_by UUID REFERENCES users(id) ON DELETE SET NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_phases_project_id ON phases(project_id);
-CREATE INDEX IF NOT EXISTS idx_phases_phase_sequence ON phases(phase_sequence);
-CREATE INDEX IF NOT EXISTS idx_phases_phase_status ON phases(phase_status);
-
--- 2. Create wbs_template_nodes table (WBS模板节点表)
-CREATE TABLE IF NOT EXISTS wbs_template_nodes (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    template_id UUID NOT NULL REFERENCES wbs_templates(id) ON DELETE CASCADE,
-    parent_node_id UUID REFERENCES wbs_template_nodes(id) ON DELETE CASCADE,
-    wbs_level VARCHAR(50) NOT NULL,
-    wbs_code VARCHAR(100),
-    node_name VARCHAR(255) NOT NULL,
-    node_description TEXT,
-    sequence INTEGER NOT NULL DEFAULT 0,
-    standard_duration INTEGER,
-    estimated_cost DECIMAL(15, 2),
-    required_resources JSONB,
-    dependencies JSONB,
-    is_milestone BOOLEAN DEFAULT FALSE,
-    acceptance_plan JSONB,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    created_by UUID REFERENCES users(id) ON DELETE SET NULL,
-    updated_by UUID REFERENCES users(id) ON DELETE SET NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_wbs_template_nodes_template_id ON wbs_template_nodes(template_id);
-CREATE INDEX IF NOT EXISTS idx_wbs_template_nodes_parent_node_id ON wbs_template_nodes(parent_node_id);
-CREATE INDEX IF NOT EXISTS idx_wbs_template_nodes_sequence ON wbs_template_nodes(sequence);
-CREATE INDEX IF NOT EXISTS idx_wbs_template_nodes_required_resources_gin ON wbs_template_nodes USING GIN(required_resources);
-CREATE INDEX IF NOT EXISTS idx_wbs_template_nodes_dependencies_gin ON wbs_template_nodes USING GIN(dependencies);
-CREATE INDEX IF NOT EXISTS idx_wbs_template_nodes_acceptance_plan_gin ON wbs_template_nodes USING GIN(acceptance_plan);
-
--- 3. Create dialog_frequency_control table (弹窗频率控制表)
-CREATE TABLE IF NOT EXISTS dialog_frequency_control (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    dialog_type VARCHAR(50) NOT NULL,
-    target_id VARCHAR(100),
-    trigger_count INTEGER DEFAULT 1,
-    last_triggered_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    first_triggered_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    is_suppressed BOOLEAN DEFAULT FALSE,
-    suppress_until TIMESTAMP WITH TIME ZONE,
-    suppress_reason VARCHAR(50),
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_dialog_frequency_user_type ON dialog_frequency_control(user_id, dialog_type);
-CREATE INDEX IF NOT EXISTS idx_dialog_frequency_target ON dialog_frequency_control(target_id, dialog_type);
-CREATE INDEX IF NOT EXISTS idx_dialog_frequency_suppress ON dialog_frequency_control(suppress_until) WHERE is_suppressed = TRUE;
-
--- 4. Create dialog_frequency_settings table (弹窗频率配置表)
-CREATE TABLE IF NOT EXISTS dialog_frequency_settings (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    dialog_type VARCHAR(50) NOT NULL UNIQUE,
-    enable_first_progress_skip BOOLEAN DEFAULT TRUE,
-    first_progress_cool_minutes INTEGER DEFAULT 30,
-    daily_max_trigger INTEGER DEFAULT 3,
-    cooldown_minutes INTEGER DEFAULT 60,
-    is_enabled BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    created_by UUID REFERENCES users(id) ON DELETE SET NULL
-);
-
--- Insert default configuration data
-INSERT INTO dialog_frequency_settings (dialog_type, enable_first_progress_skip, first_progress_cool_minutes, daily_max_trigger, cooldown_minutes, is_enabled) VALUES
-('progress_condition', TRUE, 30, 5, 30, TRUE),
-('obstacle_warning', FALSE, 0, 1, 1440, TRUE),
-('risk_alert', FALSE, 0, 1, 10080, TRUE),
-('delay_warning', FALSE, 0, 2, 4320, TRUE)
-ON CONFLICT (dialog_type) DO NOTHING;
-
--- Enable RLS on new tables
-ALTER TABLE phases ENABLE ROW LEVEL SECURITY;
-ALTER TABLE wbs_template_nodes ENABLE ROW LEVEL SECURITY;
-ALTER TABLE dialog_frequency_control ENABLE ROW LEVEL SECURITY;
-ALTER TABLE dialog_frequency_settings ENABLE ROW LEVEL SECURITY;
-
--- RLS Policies for phases
-DROP POLICY IF EXISTS "phases_select_policy" ON phases;
-CREATE POLICY "phases_select_policy" ON phases FOR SELECT
-    USING (EXISTS (SELECT 1 FROM projects p WHERE p.id = phases.project_id AND p.deleted_at IS NULL));
-
-DROP POLICY IF EXISTS "phases_insert_policy" ON phases;
-CREATE POLICY "phases_insert_policy" ON phases FOR INSERT
--- [跳过 auth.uid()]     WITH CHECK (auth.uid() IS NOT NULL);
-
-DROP POLICY IF EXISTS "phases_update_policy" ON phases;
-CREATE POLICY "phases_update_policy" ON phases FOR UPDATE
--- [跳过 auth.uid()]     USING (auth.uid() IS NOT NULL);
-
--- RLS Policies for wbs_template_nodes
-DROP POLICY IF EXISTS "wbs_template_nodes_select_policy" ON wbs_template_nodes;
-CREATE POLICY "wbs_template_nodes_select_policy" ON wbs_template_nodes FOR SELECT
-    USING (EXISTS (SELECT 1 FROM wbs_templates wt WHERE wt.id = wbs_template_nodes.template_id AND wt.deleted_at IS NULL));
-
-DROP POLICY IF EXISTS "wbs_template_nodes_insert_policy" ON wbs_template_nodes;
-CREATE POLICY "wbs_template_nodes_insert_policy" ON wbs_template_nodes FOR INSERT
--- [跳过 auth.uid()]     WITH CHECK (auth.uid() IS NOT NULL);
-
-DROP POLICY IF EXISTS "wbs_template_nodes_update_policy" ON wbs_template_nodes;
-CREATE POLICY "wbs_template_nodes_update_policy" ON wbs_template_nodes FOR UPDATE
--- [跳过 auth.uid()]     USING (auth.uid() IS NOT NULL);
-
--- RLS Policies for dialog_frequency_control
-DROP POLICY IF EXISTS "dialog_frequency_control_select_policy" ON dialog_frequency_control;
-CREATE POLICY "dialog_frequency_control_select_policy" ON dialog_frequency_control FOR SELECT
--- [跳过 auth.uid()]     USING (user_id::text = auth.uid()::text OR user_id IS NULL);
-
-DROP POLICY IF EXISTS "dialog_frequency_control_insert_policy" ON dialog_frequency_control;
-CREATE POLICY "dialog_frequency_control_insert_policy" ON dialog_frequency_control FOR INSERT
--- [跳过 auth.uid()]     WITH CHECK (auth.uid() IS NOT NULL);
-
-DROP POLICY IF EXISTS "dialog_frequency_control_update_policy" ON dialog_frequency_control;
-CREATE POLICY "dialog_frequency_control_update_policy" ON dialog_frequency_control FOR UPDATE
--- [跳过 auth.uid()]     USING (auth.uid() IS NOT NULL);
-
--- RLS Policies for dialog_frequency_settings (read-only for regular users)
-DROP POLICY IF EXISTS "dialog_frequency_settings_select_policy" ON dialog_frequency_settings;
-CREATE POLICY "dialog_frequency_settings_select_policy" ON dialog_frequency_settings FOR SELECT
-    USING (TRUE);
-
-DROP POLICY IF EXISTS "dialog_frequency_settings_insert_policy" ON dialog_frequency_settings;
-CREATE POLICY "dialog_frequency_settings_insert_policy" ON dialog_frequency_settings FOR INSERT
--- [跳过 auth.uid()]     WITH CHECK (auth.uid() IS NOT NULL);
-
-DROP POLICY IF EXISTS "dialog_frequency_settings_update_policy" ON dialog_frequency_settings;
-CREATE POLICY "dialog_frequency_settings_update_policy" ON dialog_frequency_settings FOR UPDATE
--- [跳过 auth.uid()]     USING (auth.uid() IS NOT NULL);
-
-
--- ============================================================
--- 来自: 012_fix_wbs_templates.sql
--- ============================================================
--- Migration 012: Fix wbs_templates table issues
--- Date: 2026-03-24
--- Problems:
---   1. created_by NOT NULL constraint prevents template creation (no-login system)
---   2. wbs_template_nodes RLS policy references wbs_templates.deleted_at which doesn't exist
---   3. Add deleted_at to wbs_templates for soft delete support
---   4. Add seed data for common WBS templates
-
--- 1. Fix created_by: Change NOT NULL to nullable
-ALTER TABLE wbs_templates 
-  ALTER COLUMN created_by DROP NOT NULL;
-
--- 2. Add deleted_at column to wbs_templates (needed by wbs_template_nodes RLS policy)
-ALTER TABLE wbs_templates 
-  ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ DEFAULT NULL;
-
--- 3. Fix RLS policies on wbs_templates to work without auth
-DROP POLICY IF EXISTS "wbs_templates_select_policy" ON wbs_templates;
-CREATE POLICY "wbs_templates_select_policy" ON wbs_templates FOR SELECT
-    USING (deleted_at IS NULL);
-
-DROP POLICY IF EXISTS "wbs_templates_insert_policy" ON wbs_templates;
-CREATE POLICY "wbs_templates_insert_policy" ON wbs_templates FOR INSERT
-    WITH CHECK (TRUE);
-
-DROP POLICY IF EXISTS "wbs_templates_update_policy" ON wbs_templates;
-CREATE POLICY "wbs_templates_update_policy" ON wbs_templates FOR UPDATE
-    USING (deleted_at IS NULL);
-
-DROP POLICY IF EXISTS "wbs_templates_delete_policy" ON wbs_templates;
-CREATE POLICY "wbs_templates_delete_policy" ON wbs_templates FOR DELETE
-    USING (TRUE);
-
--- 4. Fix wbs_template_nodes RLS (referenced wbs_templates.deleted_at which now exists)
--- Already defined correctly in 011, just ensure it's applied
-DROP POLICY IF EXISTS "wbs_template_nodes_select_policy" ON wbs_template_nodes;
-CREATE POLICY "wbs_template_nodes_select_policy" ON wbs_template_nodes FOR SELECT
-    USING (EXISTS (SELECT 1 FROM wbs_templates wt WHERE wt.id = wbs_template_nodes.template_id AND wt.deleted_at IS NULL));
-
-DROP POLICY IF EXISTS "wbs_template_nodes_insert_policy" ON wbs_template_nodes;
-CREATE POLICY "wbs_template_nodes_insert_policy" ON wbs_template_nodes FOR INSERT
-    WITH CHECK (TRUE);
-
-DROP POLICY IF EXISTS "wbs_template_nodes_update_policy" ON wbs_template_nodes;
-CREATE POLICY "wbs_template_nodes_update_policy" ON wbs_template_nodes FOR UPDATE
-    USING (TRUE);
-
-DROP POLICY IF EXISTS "wbs_template_nodes_delete_policy" ON wbs_template_nodes;
-CREATE POLICY "wbs_template_nodes_delete_policy" ON wbs_template_nodes FOR DELETE
-    USING (TRUE);
-
--- 5. Seed data: Insert default WBS templates for common project types
-INSERT INTO wbs_templates (template_name, template_type, description, wbs_nodes, is_default)
-VALUES 
-(
-  '住宅标准WBS模板',
-  '住宅',
-  '适用于普通住宅项目的标准WBS任务分解模板，包含从前期准备到竣工验收的完整流程',
-  '[
-    {"id":"1","name":"前期准备","level":1,"duration":30,"children":[
-      {"id":"1-1","name":"可行性研究","level":2,"duration":15},
-      {"id":"1-2","name":"立项审批","level":2,"duration":10},
-      {"id":"1-3","name":"规划许可证办理","level":2,"duration":20}
-    ]},
-    {"id":"2","name":"勘察设计","level":1,"duration":90,"children":[
-      {"id":"2-1","name":"地质勘察","level":2,"duration":20},
-      {"id":"2-2","name":"方案设计","level":2,"duration":30},
-      {"id":"2-3","name":"施工图设计","level":2,"duration":45}
-    ]},
-    {"id":"3","name":"施工准备","level":1,"duration":30,"children":[
-      {"id":"3-1","name":"施工图审查","level":2,"duration":15},
-      {"id":"3-2","name":"招标采购","level":2,"duration":20},
-      {"id":"3-3","name":"施工许可证","level":2,"duration":10}
-    ]},
-    {"id":"4","name":"地基与基础","level":1,"duration":60,"children":[
-      {"id":"4-1","name":"土方开挖","level":2,"duration":15},
-      {"id":"4-2","name":"基础施工","level":2,"duration":30},
-      {"id":"4-3","name":"地下室施工","level":2,"duration":20}
-    ]},
-    {"id":"5","name":"主体结构","level":1,"duration":120,"children":[
-      {"id":"5-1","name":"钢筋工程","level":2,"duration":60},
-      {"id":"5-2","name":"模板工程","level":2,"duration":60},
-      {"id":"5-3","name":"混凝土浇筑","level":2,"duration":45}
-    ]},
-    {"id":"6","name":"二次结构与装修","level":1,"duration":90,"children":[
-      {"id":"6-1","name":"砌体工程","level":2,"duration":30},
-      {"id":"6-2","name":"抹灰工程","level":2,"duration":25},
-      {"id":"6-3","name":"门窗安装","level":2,"duration":15},
-      {"id":"6-4","name":"涂料工程","level":2,"duration":20}
-    ]},
-    {"id":"7","name":"机电安装","level":1,"duration":60,"children":[
-      {"id":"7-1","name":"给排水安装","level":2,"duration":30},
-      {"id":"7-2","name":"强弱电安装","level":2,"duration":30},
-      {"id":"7-3","name":"暖通安装","level":2,"duration":20}
-    ]},
-    {"id":"8","name":"竣工验收","level":1,"duration":30,"children":[
-      {"id":"8-1","name":"分项工程验收","level":2,"duration":15},
-      {"id":"8-2","name":"竣工验收申请","level":2,"duration":5},
-      {"id":"8-3","name":"竣工备案","level":2,"duration":10}
-    ]}
-  ]'::jsonb,
-  TRUE
-),
-(
-  '商业综合体WBS模板',
-  '商业',
-  '适用于商业综合体、写字楼、购物中心等商业项目的WBS任务分解模板',
-  '[
-    {"id":"1","name":"项目策划","level":1,"duration":45,"children":[
-      {"id":"1-1","name":"市场调研","level":2,"duration":20},
-      {"id":"1-2","name":"业态规划","level":2,"duration":15},
-      {"id":"1-3","name":"投资分析","level":2,"duration":15}
-    ]},
-    {"id":"2","name":"前期手续","level":1,"duration":60,"children":[
-      {"id":"2-1","name":"土地获取","level":2,"duration":30},
-      {"id":"2-2","name":"规划审批","level":2,"duration":20},
-      {"id":"2-3","name":"建设工程许可","level":2,"duration":15}
-    ]},
-    {"id":"3","name":"设计阶段","level":1,"duration":120,"children":[
-      {"id":"3-1","name":"概念设计","level":2,"duration":30},
-      {"id":"3-2","name":"方案深化","level":2,"duration":45},
-      {"id":"3-3","name":"施工图出图","level":2,"duration":60}
-    ]},
-    {"id":"4","name":"施工阶段","level":1,"duration":540,"children":[
-      {"id":"4-1","name":"基坑工程","level":2,"duration":60},
-      {"id":"4-2","name":"地下结构","level":2,"duration":90},
-      {"id":"4-3","name":"地上主体结构","level":2,"duration":180},
-      {"id":"4-4","name":"幕墙工程","level":2,"duration":90},
-      {"id":"4-5","name":"机电安装","level":2,"duration":120},
-      {"id":"4-6","name":"精装修工程","level":2,"duration":120}
-    ]},
-    {"id":"5","name":"招商运营准备","level":1,"duration":90,"children":[
-      {"id":"5-1","name":"招商策划","level":2,"duration":30},
-      {"id":"5-2","name":"主力店签约","level":2,"duration":45},
-      {"id":"5-3","name":"开业筹备","level":2,"duration":30}
-    ]},
-    {"id":"6","name":"竣工交付","level":1,"duration":30,"children":[
-      {"id":"6-1","name":"竣工验收","level":2,"duration":15},
-      {"id":"6-2","name":"消防验收","level":2,"duration":10},
-      {"id":"6-3","name":"产权登记","level":2,"duration":10}
-    ]}
-  ]'::jsonb,
-  TRUE
-),
-(
-  '工业厂房WBS模板',
-  '工业',
-  '适用于工业厂房、仓储物流等工业项目的WBS任务分解模板',
-  '[
-    {"id":"1","name":"前期工作","level":1,"duration":30,"children":[
-      {"id":"1-1","name":"工艺方案确定","level":2,"duration":15},
-      {"id":"1-2","name":"环评报告","level":2,"duration":20},
-      {"id":"1-3","name":"用地许可","level":2,"duration":15}
-    ]},
-    {"id":"2","name":"设计工作","level":1,"duration":60,"children":[
-      {"id":"2-1","name":"工艺设计","level":2,"duration":30},
-      {"id":"2-2","name":"建筑结构设计","level":2,"duration":35},
-      {"id":"2-3","name":"设备基础设计","level":2,"duration":20}
-    ]},
-    {"id":"3","name":"主体施工","level":1,"duration":180,"children":[
-      {"id":"3-1","name":"地基处理","level":2,"duration":30},
-      {"id":"3-2","name":"钢结构安装","level":2,"duration":60},
-      {"id":"3-3","name":"围护系统","level":2,"duration":30},
-      {"id":"3-4","name":"地坪工程","level":2,"duration":20}
-    ]},
-    {"id":"4","name":"设备安装","level":1,"duration":90,"children":[
-      {"id":"4-1","name":"工艺设备安装","level":2,"duration":45},
-      {"id":"4-2","name":"管道安装","level":2,"duration":30},
-      {"id":"4-3","name":"电气安装","level":2,"duration":25}
-    ]},
-    {"id":"5","name":"调试验收","level":1,"duration":30,"children":[
-      {"id":"5-1","name":"单机调试","level":2,"duration":15},
-      {"id":"5-2","name":"联动调试","level":2,"duration":10},
-      {"id":"5-3","name":"试生产验收","level":2,"duration":10}
-    ]}
-  ]'::jsonb,
-  TRUE
-),
-(
-  '市政道路WBS模板',
-  '市政',
-  '适用于市政道路、管网、桥梁等市政项目的WBS任务分解模板',
-  '[
-    {"id":"1","name":"勘察设计","level":1,"duration":90,"children":[
-      {"id":"1-1","name":"测量勘察","level":2,"duration":20},
-      {"id":"1-2","name":"初步设计","level":2,"duration":30},
-      {"id":"1-3","name":"施工图设计","level":2,"duration":45}
-    ]},
-    {"id":"2","name":"征地拆迁","level":1,"duration":60,"children":[
-      {"id":"2-1","name":"征地范围确定","level":2,"duration":15},
-      {"id":"2-2","name":"房屋拆迁","level":2,"duration":30},
-      {"id":"2-3","name":"管线迁改","level":2,"duration":20}
-    ]},
-    {"id":"3","name":"路基工程","level":1,"duration":90,"children":[
-      {"id":"3-1","name":"清表换填","level":2,"duration":20},
-      {"id":"3-2","name":"路基填筑压实","level":2,"duration":45},
-      {"id":"3-3","name":"边坡防护","level":2,"duration":20}
-    ]},
-    {"id":"4","name":"路面工程","level":1,"duration":60,"children":[
-      {"id":"4-1","name":"基层铺设","level":2,"duration":20},
-      {"id":"4-2","name":"沥青面层","level":2,"duration":30},
-      {"id":"4-3","name":"人行道铺装","level":2,"duration":15}
-    ]},
-    {"id":"5","name":"附属工程","level":1,"duration":45,"children":[
-      {"id":"5-1","name":"雨污水管网","level":2,"duration":25},
-      {"id":"5-2","name":"路灯照明","level":2,"duration":15},
-      {"id":"5-3","name":"交通标志标线","level":2,"duration":10}
-    ]},
-    {"id":"6","name":"竣工验收","level":1,"duration":20,"children":[
-      {"id":"6-1","name":"交工检测","level":2,"duration":10},
-      {"id":"6-2","name":"竣工验收","level":2,"duration":7},
-      {"id":"6-3","name":"移交管养","level":2,"duration":5}
-    ]}
-  ]'::jsonb,
-  TRUE
-)
-ON CONFLICT (template_name, template_type) DO NOTHING;
-
-
--- ============================================================
--- 来自: 013_add_risk_statistics.sql
--- ============================================================
--- 风险统计表：用于存储每日风险数据快照，支持趋势分析
-CREATE TABLE IF NOT EXISTS risk_statistics (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  project_id uuid REFERENCES projects(id) ON DELETE CASCADE,
-  stat_date date NOT NULL,
-  
-  -- 新增风险数量
-  new_risks int DEFAULT 0,
-  new_high_risks int DEFAULT 0,
-  new_medium_risks int DEFAULT 0,
-  new_low_risks int DEFAULT 0,
-  
-  -- 已处理风险数量
-  resolved_risks int DEFAULT 0,
-  resolved_high_risks int DEFAULT 0,
-  resolved_medium_risks int DEFAULT 0,
-  resolved_low_risks int DEFAULT 0,
-  
-  -- 当前风险存量（快照）
-  total_risks int DEFAULT 0,
-  high_risk_count int DEFAULT 0,
-  medium_risk_count int DEFAULT 0,
-  low_risk_count int DEFAULT 0,
-  
-  -- 按类型统计
-  delay_risks int DEFAULT 0,
-  obstacle_risks int DEFAULT 0,
-  condition_risks int DEFAULT 0,
-  general_risks int DEFAULT 0,
-  
-  created_at timestamptz DEFAULT now(),
-  updated_at timestamptz DEFAULT now(),
-  
-  -- 每个项目每天只有一条记录
-  UNIQUE(project_id, stat_date)
-);
-
--- 索引优化
-CREATE INDEX IF NOT EXISTS idx_risk_statistics_project_date 
-  ON risk_statistics(project_id, stat_date);
-CREATE INDEX IF NOT EXISTS idx_risk_statistics_stat_date 
-  ON risk_statistics(stat_date);
-
--- 更新时间戳触发器
-CREATE OR REPLACE FUNCTION update_risk_statistics_updated_at()
-RETURNS TRIGGER AS $$
-BEGIN
-  NEW.updated_at = now();
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
 
 DROP TRIGGER IF EXISTS trigger_update_risk_statistics_updated_at ON risk_statistics;
 CREATE TRIGGER trigger_update_risk_statistics_updated_at
@@ -1925,61 +1353,61 @@ CREATE TRIGGER trigger_update_risk_statistics_updated_at
   FOR EACH ROW
   EXECUTE FUNCTION update_risk_statistics_updated_at();
 
--- 启用RLS
+-- 鍚敤RLS
 ALTER TABLE risk_statistics ENABLE ROW LEVEL SECURITY;
 
--- RLS策略：用户只能查看自己有权限的项目的数据
+-- RLS绛栫暐锛氱敤鎴峰彧鑳芥煡鐪嬭嚜宸辨湁鏉冮檺鐨勯」鐩殑鏁版嵁
 CREATE POLICY risk_statistics_select_policy ON risk_statistics
   FOR SELECT USING (
     EXISTS (
       SELECT 1 FROM projects p
       JOIN project_members pm ON p.id = pm.project_id
       WHERE p.id = risk_statistics.project_id
--- [跳过 auth.uid()]       AND pm.user_id = auth.uid()
+-- [璺宠繃 auth.uid()]       AND pm.user_id = auth.uid()
     )
   );
 
-COMMENT ON TABLE risk_statistics IS '每日风险统计快照表，用于趋势分析';
-COMMENT ON COLUMN risk_statistics.new_risks IS '当日新增风险总数';
-COMMENT ON COLUMN risk_statistics.resolved_risks IS '当日已处理风险总数';
-COMMENT ON COLUMN risk_statistics.total_risks IS '当日结束时风险存量';
+COMMENT ON TABLE risk_statistics IS '姣忔棩椋庨櫓缁熻蹇収琛紝鐢ㄤ簬瓒嬪娍鍒嗘瀽';
+COMMENT ON COLUMN risk_statistics.new_risks IS '褰撴棩鏂板椋庨櫓鎬绘暟';
+COMMENT ON COLUMN risk_statistics.resolved_risks IS '褰撴棩宸插鐞嗛闄╂€绘暟';
+COMMENT ON COLUMN risk_statistics.total_risks IS '褰撴棩缁撴潫鏃堕闄╁瓨閲?;
 
 
 -- ============================================================
--- 来自: 014_add_project_health_details.sql
+-- 鏉ヨ嚜: 014_add_project_health_details.sql
 -- ============================================================
 -- Migration 014: Add project_health_details table
 -- Date: 2026-03-24
--- Purpose: 存储项目健康度分项得分，支持健康度分析和历史趋势（P2-02修复）
+-- Purpose: 瀛樺偍椤圭洰鍋ュ悍搴﹀垎椤瑰緱鍒嗭紝鏀寔鍋ュ悍搴﹀垎鏋愬拰鍘嗗彶瓒嬪娍锛圥2-02淇锛?
 
--- 1. 在 tasks 表增加 milestone_level 和 milestone_order 字段（如未创建）
+-- 1. 鍦?tasks 琛ㄥ鍔?milestone_level 鍜?milestone_order 瀛楁锛堝鏈垱寤猴級
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS milestone_level INTEGER CHECK (milestone_level IN (1, 2, 3));
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS milestone_order INTEGER DEFAULT 0;
 
 CREATE INDEX IF NOT EXISTS idx_tasks_milestone_level ON tasks(milestone_level) WHERE is_milestone = TRUE;
 CREATE INDEX IF NOT EXISTS idx_tasks_milestone_order ON tasks(milestone_order) WHERE is_milestone = TRUE;
 
-COMMENT ON COLUMN tasks.milestone_level IS '里程碑层级：1=一级(amber)，2=二级(blue)，3=三级(gray)';
-COMMENT ON COLUMN tasks.milestone_order IS '同级里程碑排序序号';
+COMMENT ON COLUMN tasks.milestone_level IS '閲岀▼纰戝眰绾э細1=涓€绾?amber)锛?=浜岀骇(blue)锛?=涓夌骇(gray)';
+COMMENT ON COLUMN tasks.milestone_order IS '鍚岀骇閲岀▼纰戞帓搴忓簭鍙?;
 
--- 2. 创建 project_health_details 表（方案B：存储分项分数）
+-- 2. 鍒涘缓 project_health_details 琛紙鏂规B锛氬瓨鍌ㄥ垎椤瑰垎鏁帮級
 CREATE TABLE IF NOT EXISTS project_health_details (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
 
-    -- 健康度总分
+    -- 鍋ュ悍搴︽€诲垎
     health_score INTEGER NOT NULL DEFAULT 50 CHECK (health_score >= 0 AND health_score <= 100),
-    health_status VARCHAR(20) NOT NULL DEFAULT '良好'
-        CHECK (health_status IN ('优秀', '良好', '警告', '危险')),
+    health_status VARCHAR(20) NOT NULL DEFAULT '鑹ソ'
+        CHECK (health_status IN ('浼樼', '鑹ソ', '璀﹀憡', '鍗遍櫓')),
 
-    -- 分项得分（调试和分析用）
+    -- 鍒嗛」寰楀垎锛堣皟璇曞拰鍒嗘瀽鐢級
     base_score INTEGER NOT NULL DEFAULT 50,
     task_completion_score INTEGER NOT NULL DEFAULT 0,
     milestone_bonus INTEGER NOT NULL DEFAULT 0,
     delay_penalty INTEGER NOT NULL DEFAULT 0,
     risk_penalty INTEGER NOT NULL DEFAULT 0,
 
-    -- 计算依据（快照）
+    -- 璁＄畻渚濇嵁锛堝揩鐓э級
     completed_task_count INTEGER DEFAULT 0,
     total_task_count INTEGER DEFAULT 0,
     completed_milestone_count INTEGER DEFAULT 0,
@@ -1988,17 +1416,17 @@ CREATE TABLE IF NOT EXISTS project_health_details (
     medium_risk_count INTEGER DEFAULT 0,
     low_risk_count INTEGER DEFAULT 0,
 
-    -- 时间戳
+    -- 鏃堕棿鎴?
     calculated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     created_by UUID REFERENCES users(id) ON DELETE SET NULL,
 
-    -- 每个项目保留最新一条（可查历史）
+    -- 姣忎釜椤圭洰淇濈暀鏈€鏂颁竴鏉★紙鍙煡鍘嗗彶锛?
     UNIQUE (project_id, calculated_at)
 );
 
--- 索引：按项目+时间查询
+-- 绱㈠紩锛氭寜椤圭洰+鏃堕棿鏌ヨ
 CREATE INDEX IF NOT EXISTS idx_project_health_details_project_id
     ON project_health_details(project_id);
 CREATE INDEX IF NOT EXISTS idx_project_health_details_calculated_at
@@ -2006,7 +1434,7 @@ CREATE INDEX IF NOT EXISTS idx_project_health_details_calculated_at
 CREATE INDEX IF NOT EXISTS idx_project_health_details_project_latest
     ON project_health_details(project_id, calculated_at DESC);
 
--- 更新时间戳触发器
+-- 鏇存柊鏃堕棿鎴宠Е鍙戝櫒
 CREATE OR REPLACE FUNCTION update_project_health_details_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -2021,43 +1449,43 @@ CREATE TRIGGER trigger_project_health_details_updated_at
     FOR EACH ROW
     EXECUTE FUNCTION update_project_health_details_updated_at();
 
--- 启用RLS
+-- 鍚敤RLS
 ALTER TABLE project_health_details ENABLE ROW LEVEL SECURITY;
 
--- RLS策略：项目成员可查询
+-- RLS绛栫暐锛氶」鐩垚鍛樺彲鏌ヨ
 CREATE POLICY project_health_details_select_policy ON project_health_details
     FOR SELECT USING (
         EXISTS (
             SELECT 1 FROM projects p
             JOIN project_members pm ON p.id = pm.project_id
             WHERE p.id = project_health_details.project_id
--- [跳过 auth.uid()]             AND pm.user_id = auth.uid()
+-- [璺宠繃 auth.uid()]             AND pm.user_id = auth.uid()
         )
     );
 
--- RLS策略：系统可写入（后端服务）
+-- RLS绛栫暐锛氱郴缁熷彲鍐欏叆锛堝悗绔湇鍔★級
 CREATE POLICY project_health_details_insert_policy ON project_health_details
     FOR INSERT WITH CHECK (
         EXISTS (
             SELECT 1 FROM projects p
             JOIN project_members pm ON p.id = pm.project_id
             WHERE p.id = project_health_details.project_id
--- [跳过 auth.uid()]             AND pm.user_id = auth.uid()
+-- [璺宠繃 auth.uid()]             AND pm.user_id = auth.uid()
         )
     );
 
-COMMENT ON TABLE project_health_details IS '项目健康度分项分数表，支持历史趋势分析和分项诊断';
-COMMENT ON COLUMN project_health_details.health_score IS '综合健康度得分（0-100）';
-COMMENT ON COLUMN project_health_details.health_status IS '健康度等级：优秀(90+)/良好(70-89)/警告(50-69)/危险(0-49)';
+COMMENT ON TABLE project_health_details IS '椤圭洰鍋ュ悍搴﹀垎椤瑰垎鏁拌〃锛屾敮鎸佸巻鍙茶秼鍔垮垎鏋愬拰鍒嗛」璇婃柇';
+COMMENT ON COLUMN project_health_details.health_score IS '缁煎悎鍋ュ悍搴﹀緱鍒嗭紙0-100锛?;
+COMMENT ON COLUMN project_health_details.health_status IS '鍋ュ悍搴︾瓑绾э細浼樼(90+)/鑹ソ(70-89)/璀﹀憡(50-69)/鍗遍櫓(0-49)';
 
 
 -- ============================================================
--- 来自: 015_add_license_phase_management.sql
+-- 鏉ヨ嚜: 015_add_license_phase_management.sql
 -- ============================================================
--- 证照管理优化 - 添加阶段管理和审批进度跟踪
--- 执行前请在 Supabase SQL Editor 中运行
+-- 璇佺収绠＄悊浼樺寲 - 娣诲姞闃舵绠＄悊鍜屽鎵硅繘搴﹁窡韪?
+-- 鎵ц鍓嶈鍦?Supabase SQL Editor 涓繍琛?
 
--- 1. 给 projects 表添加阶段管理相关字段
+-- 1. 缁?projects 琛ㄦ坊鍔犻樁娈电鐞嗙浉鍏冲瓧娈?
 ALTER TABLE projects 
 ADD COLUMN IF NOT EXISTS current_phase VARCHAR(50) DEFAULT 'pre-construction' 
   CHECK (current_phase IN ('pre-construction', 'construction', 'completion', 'delivery')),
@@ -2065,65 +1493,65 @@ ADD COLUMN IF NOT EXISTS construction_unlock_date DATE,
 ADD COLUMN IF NOT EXISTS construction_unlock_by UUID REFERENCES users(id),
 ADD COLUMN IF NOT EXISTS default_wbs_generated BOOLEAN DEFAULT FALSE;
 
--- 2. 创建证照审批进度跟踪表
+-- 2. 鍒涘缓璇佺収瀹℃壒杩涘害璺熻釜琛?
 CREATE TABLE IF NOT EXISTS certificate_approvals (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   
-  -- 关联的证照
+  -- 鍏宠仈鐨勮瘉鐓?
   pre_milestone_id UUID NOT NULL 
     REFERENCES pre_milestones(id) ON DELETE CASCADE,
   
-  -- 审批步骤
+  -- 瀹℃壒姝ラ
   approval_step INTEGER NOT NULL DEFAULT 1,
   step_name VARCHAR(100) NOT NULL,
   step_description TEXT,
   
-  -- 审批状态
+  -- 瀹℃壒鐘舵€?
   status VARCHAR(20) DEFAULT 'pending'
     CHECK (status IN ('pending', 'in_progress', 'approved', 'rejected', 'returned')),
   
-  -- 审批人员
+  -- 瀹℃壒浜哄憳
   approver_name VARCHAR(100),
   approver_unit VARCHAR(100),
   
-  -- 时间
+  -- 鏃堕棿
   planned_start_date DATE,
   planned_end_date DATE,
   actual_start_date DATE,
   actual_end_date DATE,
   
-  -- 审批意见
+  -- 瀹℃壒鎰忚
   approval_comment TEXT,
   
-  -- 排序
+  -- 鎺掑簭
   sort_order INTEGER DEFAULT 0,
   
-  -- 元数据
+  -- 鍏冩暟鎹?
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW()
 );
 
--- 索引
+-- 绱㈠紩
 CREATE INDEX IF NOT EXISTS idx_certificate_approvals_milestone 
   ON certificate_approvals(pre_milestone_id);
 
--- 3. 创建证照依赖关系表
+-- 3. 鍒涘缓璇佺収渚濊禆鍏崇郴琛?
 CREATE TABLE IF NOT EXISTS pre_milestone_dependencies (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   
-  -- 源证照（依赖方）
+  -- 婧愯瘉鐓э紙渚濊禆鏂癸級
   source_milestone_id UUID NOT NULL 
     REFERENCES pre_milestones(id) ON DELETE CASCADE,
   
-  -- 目标证照（被依赖方）
+  -- 鐩爣璇佺収锛堣渚濊禆鏂癸級
   target_milestone_id UUID NOT NULL 
     REFERENCES pre_milestones(id) ON DELETE CASCADE,
   
-  -- 依赖类型
-  dependency_type VARCHAR(20) DEFAULT 'sequential'
-    CHECK (dependency_type IN ('sequential', 'parallel', 'conditional')),
+  -- 渚濊禆绫诲瀷
+  dependency_kind VARCHAR(20) DEFAULT 'hard'
+    CHECK (dependency_kind IN ('hard', 'soft')),
   
-  -- 描述
+  -- 鎻忚堪
   description TEXT,
   
   created_at TIMESTAMP DEFAULT NOW(),
@@ -2136,11 +1564,11 @@ CREATE INDEX IF NOT EXISTS idx_pre_milestone_deps_source
 CREATE INDEX IF NOT EXISTS idx_pre_milestone_deps_target 
   ON pre_milestone_dependencies(target_milestone_id);
 
--- 4. 创建默认施工阶段WBS模板
+-- 4. 鍒涘缓榛樿鏂藉伐闃舵WBS妯℃澘
 ALTER TABLE wbs_templates 
 ADD COLUMN IF NOT EXISTS is_construction_default BOOLEAN DEFAULT FALSE;
 
--- 5. 触发器：自动更新 updated_at
+-- 5. 瑙﹀彂鍣細鑷姩鏇存柊 updated_at
 CREATE OR REPLACE FUNCTION update_certificate_approvals_timestamp()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -2154,36 +1582,36 @@ CREATE TRIGGER update_certificate_approvals_updated_at
   FOR EACH ROW
   EXECUTE FUNCTION update_certificate_approvals_timestamp();
 
--- 注释
-COMMENT ON TABLE projects IS '项目表 - 添加了阶段管理字段';
-COMMENT ON TABLE certificate_approvals IS '证照审批进度跟踪表';
-COMMENT ON TABLE pre_milestone_dependencies IS '证照依赖关系表';
+-- 娉ㄩ噴
+COMMENT ON TABLE projects IS '椤圭洰琛?- 娣诲姞浜嗛樁娈电鐞嗗瓧娈?;
+COMMENT ON TABLE certificate_approvals IS '璇佺収瀹℃壒杩涘害璺熻釜琛?;
+COMMENT ON TABLE pre_milestone_dependencies IS '璇佺収渚濊禆鍏崇郴琛?;
 
 
 -- ============================================================
--- 来自: 016_add_risk_category.sql
+-- 鏉ヨ嚜: 016_add_risk_category.sql
 -- ============================================================
--- 为 risks 表添加 risk_category 字段（风险类型：进度/质量/成本/安全/合同/外部/其他）
+-- 涓?risks 琛ㄦ坊鍔?risk_category 瀛楁锛堥闄╃被鍨嬶細杩涘害/璐ㄩ噺/鎴愭湰/瀹夊叏/鍚堝悓/澶栭儴/鍏朵粬锛?
 ALTER TABLE risks ADD COLUMN IF NOT EXISTS risk_category VARCHAR(20) DEFAULT 'other';
 
--- 为已有记录推断默认类型（全部设为 other，由用户手动更新）
-COMMENT ON COLUMN risks.risk_category IS '风险类型：progress(进度)/quality(质量)/cost(成本)/safety(安全)/contract(合同)/external(外部)/other(其他)';
+-- 涓哄凡鏈夎褰曟帹鏂粯璁ょ被鍨嬶紙鍏ㄩ儴璁句负 other锛岀敱鐢ㄦ埛鎵嬪姩鏇存柊锛?
+COMMENT ON COLUMN risks.risk_category IS '椋庨櫓绫诲瀷锛歱rogress(杩涘害)/quality(璐ㄩ噺)/cost(鎴愭湰)/safety(瀹夊叏)/contract(鍚堝悓)/external(澶栭儴)/other(鍏朵粬)';
 
 
 -- ============================================================
--- 来自: 017_add_standard_processes.sql
+-- 鏉ヨ嚜: 017_add_standard_processes.sql
 -- ============================================================
--- Migration 017: 标准工序库表
--- F4: 提供可搜索的标准工序参考数据，供用户在创建WBS模板时参考和引用
+-- Migration 017: 鏍囧噯宸ュ簭搴撹〃
+-- F4: 鎻愪緵鍙悳绱㈢殑鏍囧噯宸ュ簭鍙傝€冩暟鎹紝渚涚敤鎴峰湪鍒涘缓WBS妯℃澘鏃跺弬鑰冨拰寮曠敤
 
 CREATE TABLE IF NOT EXISTS standard_processes (
   id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  name       TEXT NOT NULL,                    -- 工序名称，如"地基开挖"
-  category   TEXT NOT NULL DEFAULT 'general',  -- 分类：civil/structure/fitout/mep/general
-  phase      TEXT,                             -- 所属阶段：foundation/structure/enclosure/mep/fitout
-  reference_days INTEGER,                      -- 参考工期（天）
-  description    TEXT,                         -- 工序说明
-  tags       TEXT[] DEFAULT '{}',              -- 搜索标签
+  name       TEXT NOT NULL,                    -- 宸ュ簭鍚嶇О锛屽"鍦板熀寮€鎸?
+  category   TEXT NOT NULL DEFAULT 'general',  -- 鍒嗙被锛歝ivil/structure/fitout/mep/general
+  phase      TEXT,                             -- 鎵€灞為樁娈碉細foundation/structure/enclosure/mep/fitout
+  reference_days INTEGER,                      -- 鍙傝€冨伐鏈燂紙澶╋級
+  description    TEXT,                         -- 宸ュ簭璇存槑
+  tags       TEXT[] DEFAULT '{}',              -- 鎼滅储鏍囩
   is_active  BOOLEAN NOT NULL DEFAULT true,
   sort_order INTEGER NOT NULL DEFAULT 0,
   created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -2194,50 +1622,1221 @@ CREATE INDEX IF NOT EXISTS idx_standard_processes_category ON standard_processes
 CREATE INDEX IF NOT EXISTS idx_standard_processes_is_active ON standard_processes(is_active);
 CREATE INDEX IF NOT EXISTS idx_standard_processes_name ON standard_processes USING gin(to_tsvector('simple', name));
 
--- 种子数据：常见建筑工序
+-- 绉嶅瓙鏁版嵁锛氬父瑙佸缓绛戝伐搴?
 INSERT INTO standard_processes (name, category, phase, reference_days, description, tags, sort_order) VALUES
-  ('场地平整', 'civil', 'preparation', 5,  '建设场地的清理与平整工作',        ARRAY['土方','基础准备'], 10),
-  ('基坑开挖', 'civil', 'foundation',  15, '按设计深度开挖基坑',              ARRAY['土方','地基'], 20),
-  ('基坑支护', 'civil', 'foundation',  20, '基坑围护结构施工',                ARRAY['支护','安全'], 30),
-  ('地基处理', 'civil', 'foundation',  10, '软弱地基的加固处理',              ARRAY['地基','加固'], 40),
-  ('桩基施工', 'civil', 'foundation',  25, '钻孔灌注桩或预制桩施工',          ARRAY['桩基','地基'], 50),
-  ('基础垫层', 'civil', 'foundation',  3,  '混凝土垫层浇筑',                  ARRAY['混凝土','基础'], 60),
-  ('基础施工', 'structure', 'foundation', 20, '独立基础或条形基础施工',         ARRAY['混凝土','基础'], 70),
-  ('地下室底板', 'structure', 'foundation', 15, '地下室底板钢筋绑扎及混凝土浇筑', ARRAY['混凝土','防水'], 80),
-  ('地下室外墙', 'structure', 'foundation', 20, '地下室外墙施工',               ARRAY['混凝土','防水'], 90),
-  ('地下室顶板', 'structure', 'foundation', 15, '地下室顶板施工',               ARRAY['混凝土'], 100),
+  ('鍦哄湴骞虫暣', 'civil', 'preparation', 5,  '寤鸿鍦哄湴鐨勬竻鐞嗕笌骞虫暣宸ヤ綔',        ARRAY['鍦熸柟','鍩虹鍑嗗'], 10),
+  ('鍩哄潙寮€鎸?, 'civil', 'foundation',  15, '鎸夎璁℃繁搴﹀紑鎸栧熀鍧?,              ARRAY['鍦熸柟','鍦板熀'], 20),
+  ('鍩哄潙鏀姢', 'civil', 'foundation',  20, '鍩哄潙鍥存姢缁撴瀯鏂藉伐',                ARRAY['鏀姢','瀹夊叏'], 30),
+  ('鍦板熀澶勭悊', 'civil', 'foundation',  10, '杞急鍦板熀鐨勫姞鍥哄鐞?,              ARRAY['鍦板熀','鍔犲浐'], 40),
+  ('妗╁熀鏂藉伐', 'civil', 'foundation',  25, '閽诲瓟鐏屾敞妗╂垨棰勫埗妗╂柦宸?,          ARRAY['妗╁熀','鍦板熀'], 50),
+  ('鍩虹鍨眰', 'civil', 'foundation',  3,  '娣峰嚌鍦熷灚灞傛祰绛?,                  ARRAY['娣峰嚌鍦?,'鍩虹'], 60),
+  ('鍩虹鏂藉伐', 'structure', 'foundation', 20, '鐙珛鍩虹鎴栨潯褰㈠熀纭€鏂藉伐',         ARRAY['娣峰嚌鍦?,'鍩虹'], 70),
+  ('鍦颁笅瀹ゅ簳鏉?, 'structure', 'foundation', 15, '鍦颁笅瀹ゅ簳鏉块挗绛嬬粦鎵庡強娣峰嚌鍦熸祰绛?, ARRAY['娣峰嚌鍦?,'闃叉按'], 80),
+  ('鍦颁笅瀹ゅ澧?, 'structure', 'foundation', 20, '鍦颁笅瀹ゅ澧欐柦宸?,               ARRAY['娣峰嚌鍦?,'闃叉按'], 90),
+  ('鍦颁笅瀹ら《鏉?, 'structure', 'foundation', 15, '鍦颁笅瀹ら《鏉挎柦宸?,               ARRAY['娣峰嚌鍦?], 100),
 
-  ('一层结构施工', 'structure', 'structure', 14, '首层钢筋绑扎、模板、混凝土浇筑', ARRAY['主体','混凝土'], 110),
-  ('标准层结构施工', 'structure', 'structure', 10, '标准层流水施工',             ARRAY['主体','混凝土'], 120),
-  ('楼板施工', 'structure', 'structure', 8, '楼板钢筋绑扎及混凝土浇筑',       ARRAY['主体','楼板'], 130),
-  ('楼梯施工', 'structure', 'structure', 5, '现浇楼梯施工',                    ARRAY['主体','楼梯'], 140),
-  ('屋面结构', 'structure', 'structure', 7, '屋面板施工',                      ARRAY['主体','屋面'], 150),
+  ('涓€灞傜粨鏋勬柦宸?, 'structure', 'structure', 14, '棣栧眰閽㈢瓔缁戞墡銆佹ā鏉裤€佹贩鍑濆湡娴囩瓚', ARRAY['涓讳綋','娣峰嚌鍦?], 110),
+  ('鏍囧噯灞傜粨鏋勬柦宸?, 'structure', 'structure', 10, '鏍囧噯灞傛祦姘存柦宸?,             ARRAY['涓讳綋','娣峰嚌鍦?], 120),
+  ('妤兼澘鏂藉伐', 'structure', 'structure', 8, '妤兼澘閽㈢瓔缁戞墡鍙婃贩鍑濆湡娴囩瓚',       ARRAY['涓讳綋','妤兼澘'], 130),
+  ('妤兼鏂藉伐', 'structure', 'structure', 5, '鐜版祰妤兼鏂藉伐',                    ARRAY['涓讳綋','妤兼'], 140),
+  ('灞嬮潰缁撴瀯', 'structure', 'structure', 7, '灞嬮潰鏉挎柦宸?,                      ARRAY['涓讳綋','灞嬮潰'], 150),
 
-  ('外墙砌筑', 'fitout', 'enclosure', 15, '外围护墙体砌筑',                   ARRAY['砌体','外墙'], 160),
-  ('内墙砌筑', 'fitout', 'enclosure', 20, '内隔墙砌筑',                       ARRAY['砌体','内墙'], 170),
-  ('外墙保温', 'fitout', 'enclosure', 15, '外墙保温系统施工',                  ARRAY['保温','节能'], 180),
-  ('外墙涂料', 'fitout', 'enclosure', 10, '外立面涂料施工',                    ARRAY['外立面','涂料'], 190),
-  ('屋面防水', 'fitout', 'enclosure', 8, '屋面防水层施工',                    ARRAY['防水','屋面'], 200),
-  ('外窗安装', 'fitout', 'enclosure', 10, '铝合金门窗安装',                    ARRAY['门窗','外立面'], 210),
+  ('澶栧鐮岀瓚', 'fitout', 'enclosure', 15, '澶栧洿鎶ゅ浣撶爩绛?,                   ARRAY['鐮屼綋','澶栧'], 160),
+  ('鍐呭鐮岀瓚', 'fitout', 'enclosure', 20, '鍐呴殧澧欑爩绛?,                       ARRAY['鐮屼綋','鍐呭'], 170),
+  ('澶栧淇濇俯', 'fitout', 'enclosure', 15, '澶栧淇濇俯绯荤粺鏂藉伐',                  ARRAY['淇濇俯','鑺傝兘'], 180),
+  ('澶栧娑傛枡', 'fitout', 'enclosure', 10, '澶栫珛闈㈡秱鏂欐柦宸?,                    ARRAY['澶栫珛闈?,'娑傛枡'], 190),
+  ('灞嬮潰闃叉按', 'fitout', 'enclosure', 8, '灞嬮潰闃叉按灞傛柦宸?,                    ARRAY['闃叉按','灞嬮潰'], 200),
+  ('澶栫獥瀹夎', 'fitout', 'enclosure', 10, '閾濆悎閲戦棬绐楀畨瑁?,                    ARRAY['闂ㄧ獥','澶栫珛闈?], 210),
 
-  ('给排水管道', 'mep', 'mep', 20, '给排水主管道及支管安装',                   ARRAY['水电','给排水'], 220),
-  ('强电线管', 'mep', 'mep', 15, '电气线管预埋及桥架安装',                    ARRAY['水电','强电'], 230),
-  ('弱电线管', 'mep', 'mep', 12, '弱电系统管线安装',                         ARRAY['水电','弱电'], 240),
-  ('通风空调', 'mep', 'mep', 25, '通风空调系统安装',                          ARRAY['机电','空调'], 250),
-  ('消防系统', 'mep', 'mep', 20, '消防管道及喷淋系统安装',                    ARRAY['机电','消防'], 260),
-  ('电梯安装', 'mep', 'mep', 30, '电梯设备安装及调试',                        ARRAY['机电','电梯'], 270),
+  ('缁欐帓姘寸閬?, 'mep', 'mep', 20, '缁欐帓姘翠富绠￠亾鍙婃敮绠″畨瑁?,                   ARRAY['姘寸數','缁欐帓姘?], 220),
+  ('寮虹數绾跨', 'mep', 'mep', 15, '鐢垫皵绾跨棰勫煁鍙婃ˉ鏋跺畨瑁?,                    ARRAY['姘寸數','寮虹數'], 230),
+  ('寮辩數绾跨', 'mep', 'mep', 12, '寮辩數绯荤粺绠＄嚎瀹夎',                         ARRAY['姘寸數','寮辩數'], 240),
+  ('閫氶绌鸿皟', 'mep', 'mep', 25, '閫氶绌鸿皟绯荤粺瀹夎',                          ARRAY['鏈虹數','绌鸿皟'], 250),
+  ('娑堥槻绯荤粺', 'mep', 'mep', 20, '娑堥槻绠￠亾鍙婂柗娣嬬郴缁熷畨瑁?,                    ARRAY['鏈虹數','娑堥槻'], 260),
+  ('鐢垫瀹夎', 'mep', 'mep', 30, '鐢垫璁惧瀹夎鍙婅皟璇?,                        ARRAY['鏈虹數','鐢垫'], 270),
 
-  ('地面找平', 'fitout', 'fitout', 5, '地面找平层施工',                       ARRAY['装修','地面'], 280),
-  ('内墙抹灰', 'fitout', 'fitout', 10, '内墙抹灰找平',                        ARRAY['装修','抹灰'], 290),
-  ('内墙涂料', 'fitout', 'fitout', 8, '内墙乳胶漆施工',                       ARRAY['装修','涂料'], 300),
-  ('地砖铺贴', 'fitout', 'fitout', 10, '地砖或木地板铺设',                    ARRAY['装修','地面'], 310),
-  ('吊顶施工', 'fitout', 'fitout', 8, '轻钢龙骨吊顶施工',                     ARRAY['装修','吊顶'], 320),
-  ('卫生洁具安装', 'fitout', 'fitout', 5, '卫浴设备安装调试',                  ARRAY['装修','洁具'], 330),
-  ('门窗套安装', 'fitout', 'fitout', 7, '内门及门套安装',                      ARRAY['装修','门窗'], 340),
+  ('鍦伴潰鎵惧钩', 'fitout', 'fitout', 5, '鍦伴潰鎵惧钩灞傛柦宸?,                       ARRAY['瑁呬慨','鍦伴潰'], 280),
+  ('鍐呭鎶圭伆', 'fitout', 'fitout', 10, '鍐呭鎶圭伆鎵惧钩',                        ARRAY['瑁呬慨','鎶圭伆'], 290),
+  ('鍐呭娑傛枡', 'fitout', 'fitout', 8, '鍐呭涔宠兌婕嗘柦宸?,                       ARRAY['瑁呬慨','娑傛枡'], 300),
+  ('鍦扮爾閾鸿创', 'fitout', 'fitout', 10, '鍦扮爾鎴栨湪鍦版澘閾鸿',                    ARRAY['瑁呬慨','鍦伴潰'], 310),
+  ('鍚婇《鏂藉伐', 'fitout', 'fitout', 8, '杞婚挗榫欓鍚婇《鏂藉伐',                     ARRAY['瑁呬慨','鍚婇《'], 320),
+  ('鍗敓娲佸叿瀹夎', 'fitout', 'fitout', 5, '鍗荡璁惧瀹夎璋冭瘯',                  ARRAY['瑁呬慨','娲佸叿'], 330),
+  ('闂ㄧ獥濂楀畨瑁?, 'fitout', 'fitout', 7, '鍐呴棬鍙婇棬濂楀畨瑁?,                      ARRAY['瑁呬慨','闂ㄧ獥'], 340),
 
-  ('竣工清理', 'general', 'completion', 5, '施工垃圾清运及场地清洁',           ARRAY['竣工','清理'], 350),
-  ('竣工验收', 'general', 'completion', 7, '组织竣工验收手续',                  ARRAY['竣工','验收'], 360),
-  ('质量检测', 'general', 'completion', 5, '各分部分项工程质量检测',            ARRAY['质量','检测'], 370),
-  ('档案整理', 'general', 'completion', 3, '工程资料整理归档',                  ARRAY['竣工','档案'], 380)
+  ('绔ｅ伐娓呯悊', 'general', 'completion', 5, '鏂藉伐鍨冨溇娓呰繍鍙婂満鍦版竻娲?,           ARRAY['绔ｅ伐','娓呯悊'], 350),
+  ('绔ｅ伐楠屾敹', 'general', 'completion', 7, '缁勭粐绔ｅ伐楠屾敹鎵嬬画',                  ARRAY['绔ｅ伐','楠屾敹'], 360),
+  ('璐ㄩ噺妫€娴?, 'general', 'completion', 5, '鍚勫垎閮ㄥ垎椤瑰伐绋嬭川閲忔娴?,            ARRAY['璐ㄩ噺','妫€娴?], 370),
+  ('妗ｆ鏁寸悊', 'general', 'completion', 3, '宸ョ▼璧勬枡鏁寸悊褰掓。',                  ARRAY['绔ｅ伐','妗ｆ'], 380)
 ON CONFLICT DO NOTHING;
 
+-- ============================================================
+-- Consolidated P0 contract alignment (folded from 056/065/066/067/068/084)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS issues (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  task_id UUID REFERENCES tasks(id) ON DELETE SET NULL,
+  title TEXT NOT NULL,
+  description TEXT,
+  source_type VARCHAR(60) NOT NULL
+    CHECK (source_type IN ('manual', 'risk_converted', 'risk_auto_escalated', 'obstacle_escalated', 'condition_expired', 'source_deleted')),
+  source_id UUID,
+  chain_id UUID,
+  severity VARCHAR(20) NOT NULL DEFAULT 'medium'
+    CHECK (severity IN ('critical', 'high', 'medium', 'low')),
+  priority INTEGER NOT NULL DEFAULT 50,
+  pending_manual_close BOOLEAN NOT NULL DEFAULT FALSE,
+  status VARCHAR(20) NOT NULL DEFAULT 'open'
+    CHECK (status IN ('open', 'investigating', 'resolved', 'closed')),
+  closed_reason VARCHAR(100),
+  closed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  version INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE INDEX IF NOT EXISTS idx_issues_source
+  ON issues (source_id, source_type)
+  WHERE source_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_issues_chain_id
+  ON issues (chain_id)
+  WHERE chain_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_issues_project
+  ON issues (project_id);
+CREATE INDEX IF NOT EXISTS idx_issues_task
+  ON issues (task_id)
+  WHERE task_id IS NOT NULL;
+
+DROP TRIGGER IF EXISTS issues_updated_at ON issues;
+CREATE TRIGGER issues_updated_at
+  BEFORE UPDATE ON issues
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TABLE IF NOT EXISTS participant_units (
+  id UUID PRIMARY KEY,
+  project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+  unit_name TEXT NOT NULL,
+  unit_type TEXT NOT NULL,
+  contact_name TEXT,
+  contact_role TEXT,
+  contact_phone TEXT,
+  contact_email TEXT,
+  version INTEGER NOT NULL DEFAULT 1,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_participant_units_project_id
+  ON participant_units(project_id);
+CREATE INDEX IF NOT EXISTS idx_participant_units_unit_name
+  ON participant_units(unit_name);
+CREATE INDEX IF NOT EXISTS idx_participant_units_unit_type
+  ON participant_units(unit_type);
+
+ALTER TABLE tasks
+  ADD COLUMN IF NOT EXISTS participant_unit_id UUID REFERENCES participant_units(id) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS idx_tasks_participant_unit_id
+  ON tasks(participant_unit_id);
+
+ALTER TABLE acceptance_plans
+  ADD COLUMN IF NOT EXISTS participant_unit_id UUID REFERENCES participant_units(id) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS idx_acceptance_plans_participant_unit_id
+  ON acceptance_plans(participant_unit_id);
+
+ALTER TABLE task_progress_snapshots
+  ADD COLUMN IF NOT EXISTS event_type VARCHAR(50),
+  ADD COLUMN IF NOT EXISTS event_source VARCHAR(50);
+
+UPDATE task_progress_snapshots
+SET
+  event_type = COALESCE(event_type, 'task_update'),
+  event_source = COALESCE(event_source, CASE WHEN is_auto_generated THEN 'system_auto' ELSE 'manual' END)
+WHERE event_type IS NULL
+   OR event_source IS NULL;
+
+CREATE TABLE IF NOT EXISTS scope_dimensions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  dimension_key TEXT NOT NULL,
+  label TEXT NOT NULL,
+  code TEXT,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  version INTEGER NOT NULL DEFAULT 1,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT scope_dimensions_dimension_key_label_key UNIQUE (dimension_key, label)
+);
+
+CREATE INDEX IF NOT EXISTS idx_scope_dimensions_dimension_key
+  ON scope_dimensions (dimension_key, sort_order, label);
+
+CREATE TABLE IF NOT EXISTS project_scope_dimensions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  dimension_key TEXT NOT NULL,
+  scope_dimension_id UUID NOT NULL REFERENCES scope_dimensions(id) ON DELETE CASCADE,
+  scope_dimension_label TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  version INTEGER NOT NULL DEFAULT 1,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT project_scope_dimensions_project_dimension_label_key UNIQUE (project_id, dimension_key, scope_dimension_label)
+);
+
+CREATE INDEX IF NOT EXISTS idx_project_scope_dimensions_project_id
+  ON project_scope_dimensions (project_id, dimension_key, sort_order);
+
+INSERT INTO scope_dimensions (dimension_key, label, sort_order, is_active, version)
+VALUES
+  ('building', '浣忓畢', 1, TRUE, 1),
+  ('building', '鍟嗕笟', 2, TRUE, 1),
+  ('building', '鍔炲叕', 3, TRUE, 1),
+  ('building', '宸ヤ笟', 4, TRUE, 1),
+  ('building', '缁煎悎浣?, 5, TRUE, 1),
+  ('building', '鍏朵粬', 6, TRUE, 1),
+  ('specialty', '鍦熷缓', 1, TRUE, 1),
+  ('specialty', '鏈虹數', 2, TRUE, 1),
+  ('specialty', '瑁呬慨', 3, TRUE, 1),
+  ('specialty', '骞曞', 4, TRUE, 1),
+  ('specialty', '鏅', 5, TRUE, 1),
+  ('specialty', '甯傛斂閰嶅', 6, TRUE, 1),
+  ('phase', '鍓嶆湡', 1, TRUE, 1),
+  ('phase', '璁捐', 2, TRUE, 1),
+  ('phase', '鏂藉伐', 3, TRUE, 1),
+  ('phase', '楠屾敹', 4, TRUE, 1),
+  ('phase', '浜や粯', 5, TRUE, 1),
+  ('region', '涓€鍖?, 1, TRUE, 1),
+  ('region', '浜屽尯', 2, TRUE, 1),
+  ('region', '涓夊尯', 3, TRUE, 1),
+  ('region', '鍥涘尯', 4, TRUE, 1)
+ON CONFLICT (dimension_key, label) DO UPDATE
+SET
+  is_active = EXCLUDED.is_active,
+  sort_order = EXCLUDED.sort_order,
+  version = scope_dimensions.version + 1,
+  updated_at = NOW();
+
+
+-- Consolidated post-057 schema alignment block (2026-04-16)
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+CREATE TABLE IF NOT EXISTS operation_logs (
+  id BIGSERIAL PRIMARY KEY,
+  user_id TEXT,
+  username TEXT,
+  project_id TEXT,
+  action TEXT NOT NULL,
+  resource_type TEXT,
+  resource_id TEXT,
+  method TEXT,
+  path TEXT,
+  status_code INTEGER,
+  ip_address TEXT,
+  user_agent TEXT,
+  request_body JSONB,
+  detail JSONB DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE IF EXISTS operation_logs
+  ADD COLUMN IF NOT EXISTS project_id TEXT,
+  ADD COLUMN IF NOT EXISTS resource_type TEXT,
+  ADD COLUMN IF NOT EXISTS resource_id TEXT,
+  ADD COLUMN IF NOT EXISTS method TEXT,
+  ADD COLUMN IF NOT EXISTS path TEXT,
+  ADD COLUMN IF NOT EXISTS status_code INTEGER,
+  ADD COLUMN IF NOT EXISTS request_body JSONB,
+  ADD COLUMN IF NOT EXISTS detail JSONB DEFAULT '{}'::jsonb;
+
+CREATE INDEX IF NOT EXISTS idx_operation_logs_user_id ON operation_logs(user_id);
+CREATE INDEX IF NOT EXISTS idx_operation_logs_project_id ON operation_logs(project_id);
+CREATE INDEX IF NOT EXISTS idx_operation_logs_action ON operation_logs(action);
+CREATE INDEX IF NOT EXISTS idx_operation_logs_created_at ON operation_logs(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS change_logs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID REFERENCES projects(id) ON DELETE SET NULL,
+  entity_type VARCHAR(60) NOT NULL
+    CHECK (entity_type IN (
+      'task',
+      'risk',
+      'issue',
+      'delay_request',
+      'milestone',
+      'monthly_plan',
+      'baseline',
+      'task_condition',
+      'task_obstacle'
+    )),
+  entity_id UUID NOT NULL,
+  field_name VARCHAR(100) NOT NULL,
+  old_value TEXT,
+  new_value TEXT,
+  change_reason TEXT,
+  changed_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  change_source VARCHAR(40) NOT NULL DEFAULT 'manual_adjusted'
+    CHECK (change_source IN (
+      'system_auto',
+      'manual_adjusted',
+      'admin_force',
+      'approval',
+      'monthly_plan_correction',
+      'baseline_revision'
+    ))
+);
+
+CREATE INDEX IF NOT EXISTS idx_change_logs_entity ON change_logs(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_change_logs_project ON change_logs(project_id);
+CREATE INDEX IF NOT EXISTS idx_change_logs_changed_at ON change_logs(changed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_change_logs_changed_by ON change_logs(changed_by)
+  WHERE changed_by IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS task_baselines (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  version INTEGER NOT NULL DEFAULT 1,
+  status VARCHAR(30) NOT NULL DEFAULT 'draft'
+    CHECK (status IN ('draft', 'confirmed', 'closed', 'revising', 'pending_realign', 'archived')),
+  title VARCHAR(255) NOT NULL,
+  description TEXT,
+  source_type VARCHAR(30) NOT NULL DEFAULT 'current_schedule'
+    CHECK (source_type IN ('manual', 'current_schedule', 'imported_file', 'carryover')),
+  source_version_id UUID,
+  source_version_label TEXT,
+  effective_from DATE,
+  effective_to DATE,
+  confirmed_at TIMESTAMPTZ,
+  confirmed_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (project_id, version)
+);
+
+CREATE TABLE IF NOT EXISTS task_baseline_items (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  baseline_version_id UUID NOT NULL REFERENCES task_baselines(id) ON DELETE CASCADE,
+  parent_item_id UUID REFERENCES task_baseline_items(id) ON DELETE SET NULL,
+  source_task_id UUID REFERENCES tasks(id) ON DELETE SET NULL,
+  source_milestone_id UUID REFERENCES milestones(id) ON DELETE SET NULL,
+  title VARCHAR(255) NOT NULL,
+  planned_start_date DATE,
+  planned_end_date DATE,
+  target_progress NUMERIC(6,2),
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  is_milestone BOOLEAN DEFAULT FALSE,
+  is_critical BOOLEAN DEFAULT FALSE,
+  is_baseline_critical BOOLEAN NOT NULL DEFAULT FALSE,
+  mapping_status VARCHAR(20) NOT NULL DEFAULT 'mapped'
+    CHECK (mapping_status IN ('mapped', 'pending', 'missing', 'merged')),
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS monthly_plans (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  version INTEGER NOT NULL DEFAULT 1,
+  status VARCHAR(30) NOT NULL DEFAULT 'draft'
+    CHECK (status IN ('draft', 'confirmed', 'closed', 'revising', 'pending_realign')),
+  month VARCHAR(7) NOT NULL,
+  title VARCHAR(255) NOT NULL,
+  description TEXT,
+  baseline_version_id UUID REFERENCES task_baselines(id) ON DELETE SET NULL,
+  source_version_id UUID,
+  source_version_label TEXT,
+  closeout_at TIMESTAMPTZ,
+  carryover_item_count INTEGER DEFAULT 0,
+  data_confidence_score NUMERIC(5,2),
+  data_confidence_flag TEXT,
+  data_confidence_note TEXT,
+  confirmed_at TIMESTAMPTZ,
+  confirmed_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (project_id, month, version)
+);
+
+CREATE TABLE IF NOT EXISTS monthly_plan_items (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  monthly_plan_version_id UUID NOT NULL REFERENCES monthly_plans(id) ON DELETE CASCADE,
+  baseline_item_id UUID REFERENCES task_baseline_items(id) ON DELETE SET NULL,
+  carryover_from_item_id UUID REFERENCES monthly_plan_items(id) ON DELETE SET NULL,
+  source_task_id UUID REFERENCES tasks(id) ON DELETE SET NULL,
+  title VARCHAR(255) NOT NULL,
+  planned_start_date DATE,
+  planned_end_date DATE,
+  target_progress NUMERIC(6,2),
+  current_progress NUMERIC(6,2),
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  is_milestone BOOLEAN DEFAULT FALSE,
+  is_critical BOOLEAN DEFAULT FALSE,
+  commitment_status VARCHAR(20) NOT NULL DEFAULT 'planned'
+    CHECK (commitment_status IN ('planned', 'carried_over', 'completed', 'cancelled')),
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS planning_draft_locks (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  draft_type VARCHAR(20) NOT NULL
+    CHECK (draft_type IN ('baseline', 'monthly_plan')),
+  resource_id UUID NOT NULL,
+  locked_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  locked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  lock_expires_at TIMESTAMPTZ NOT NULL,
+  reminder_sent_at TIMESTAMPTZ,
+  released_at TIMESTAMPTZ,
+  released_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  release_reason VARCHAR(30)
+    CHECK (release_reason IN ('timeout', 'force_unlock', 'manual_release')),
+  is_locked BOOLEAN NOT NULL DEFAULT TRUE,
+  version INTEGER NOT NULL DEFAULT 1,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (project_id, draft_type, resource_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_baselines_project_id ON task_baselines(project_id);
+CREATE INDEX IF NOT EXISTS idx_task_baselines_status ON task_baselines(status);
+CREATE INDEX IF NOT EXISTS idx_task_baseline_items_baseline_version_id ON task_baseline_items(baseline_version_id);
+CREATE INDEX IF NOT EXISTS idx_task_baseline_items_project_id ON task_baseline_items(project_id);
+CREATE INDEX IF NOT EXISTS idx_monthly_plans_project_id ON monthly_plans(project_id);
+CREATE INDEX IF NOT EXISTS idx_monthly_plans_month ON monthly_plans(month);
+CREATE INDEX IF NOT EXISTS idx_monthly_plan_items_plan_version_id ON monthly_plan_items(monthly_plan_version_id);
+CREATE INDEX IF NOT EXISTS idx_monthly_plan_items_project_id ON monthly_plan_items(project_id);
+CREATE INDEX IF NOT EXISTS idx_planning_draft_locks_project_id ON planning_draft_locks(project_id);
+CREATE INDEX IF NOT EXISTS idx_planning_draft_locks_expiry ON planning_draft_locks(is_locked, lock_expires_at);
+CREATE INDEX IF NOT EXISTS idx_planning_draft_locks_resource_id ON planning_draft_locks(resource_id);
+
+CREATE TABLE IF NOT EXISTS planning_governance_states (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  state_key TEXT NOT NULL UNIQUE,
+  category VARCHAR(30) NOT NULL
+    CHECK (category IN ('closeout', 'reorder', 'ad_hoc')),
+  kind VARCHAR(60) NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active', 'resolved')),
+  severity VARCHAR(20) NOT NULL DEFAULT 'warning'
+    CHECK (severity IN ('info', 'warning', 'critical')),
+  title TEXT NOT NULL,
+  detail TEXT NOT NULL,
+  threshold_day INTEGER,
+  dashboard_signal BOOLEAN NOT NULL DEFAULT FALSE,
+  payload JSONB,
+  source_entity_type VARCHAR(50),
+  source_entity_id TEXT,
+  active_from TIMESTAMPTZ,
+  resolved_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_planning_governance_states_project_id ON planning_governance_states(project_id);
+CREATE INDEX IF NOT EXISTS idx_planning_governance_states_status ON planning_governance_states(status);
+CREATE INDEX IF NOT EXISTS idx_planning_governance_states_category ON planning_governance_states(category);
+
+ALTER TABLE tasks
+  ADD COLUMN IF NOT EXISTS baseline_item_id UUID REFERENCES task_baseline_items(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS monthly_plan_item_id UUID REFERENCES monthly_plan_items(id) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS idx_tasks_baseline_item_id ON tasks(baseline_item_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_monthly_plan_item_id ON tasks(monthly_plan_item_id);
+
+ALTER TABLE milestones
+  ADD COLUMN IF NOT EXISTS baseline_date DATE,
+  ADD COLUMN IF NOT EXISTS current_plan_date DATE,
+  ADD COLUMN IF NOT EXISTS actual_date DATE;
+
+CREATE INDEX IF NOT EXISTS idx_milestones_baseline_date ON milestones(baseline_date);
+CREATE INDEX IF NOT EXISTS idx_milestones_current_plan_date ON milestones(current_plan_date);
+CREATE INDEX IF NOT EXISTS idx_milestones_actual_date ON milestones(actual_date);
+
+CREATE TABLE IF NOT EXISTS delay_requests (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID REFERENCES projects(id) ON DELETE SET NULL,
+  task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  original_date DATE NOT NULL,
+  delayed_date DATE NOT NULL,
+  delay_days INTEGER NOT NULL DEFAULT 0,
+  delay_type TEXT NOT NULL DEFAULT '涓诲姩寤舵湡',
+  reason TEXT NOT NULL,
+  delay_reason TEXT,
+  status VARCHAR(20) NOT NULL DEFAULT 'approved'
+    CHECK (status IN ('pending', 'approved', 'rejected', 'withdrawn')),
+  requested_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  requested_at TIMESTAMPTZ,
+  reviewed_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  reviewed_at TIMESTAMPTZ,
+  withdrawn_at TIMESTAMPTZ,
+  approved_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  approved_at TIMESTAMPTZ,
+  chain_id UUID,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE IF EXISTS delay_requests
+  ADD COLUMN IF NOT EXISTS project_id UUID REFERENCES projects(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'approved'
+    CHECK (status IN ('pending', 'approved', 'rejected', 'withdrawn')),
+  ADD COLUMN IF NOT EXISTS requested_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS requested_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS reviewed_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS withdrawn_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS approved_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS chain_id UUID,
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+ALTER TABLE IF EXISTS delay_requests
+  ALTER COLUMN approved_by DROP NOT NULL,
+  ALTER COLUMN updated_at SET DEFAULT NOW();
+
+CREATE INDEX IF NOT EXISTS idx_delay_requests_project_id ON delay_requests(project_id);
+CREATE INDEX IF NOT EXISTS idx_delay_requests_task_id ON delay_requests(task_id);
+CREATE INDEX IF NOT EXISTS idx_delay_requests_status ON delay_requests(status);
+CREATE INDEX IF NOT EXISTS idx_delay_requests_chain_id ON delay_requests(chain_id);
+
+ALTER TABLE task_progress_snapshots
+  ADD COLUMN IF NOT EXISTS event_type VARCHAR(50),
+  ADD COLUMN IF NOT EXISTS event_source VARCHAR(50),
+  ADD COLUMN IF NOT EXISTS status VARCHAR(40),
+  ADD COLUMN IF NOT EXISTS conditions_met_count INTEGER DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS conditions_total_count INTEGER DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS obstacles_active_count INTEGER DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS recorded_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS is_auto_generated BOOLEAN DEFAULT TRUE,
+  ADD COLUMN IF NOT EXISTS baseline_version_id UUID REFERENCES task_baselines(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS monthly_plan_version_id UUID REFERENCES monthly_plans(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS baseline_item_id UUID REFERENCES task_baseline_items(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS monthly_plan_item_id UUID REFERENCES monthly_plan_items(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS planning_source_type VARCHAR(30) DEFAULT 'execution'
+    CHECK (planning_source_type IN ('baseline', 'monthly_plan', 'current_schedule', 'execution')),
+  ADD COLUMN IF NOT EXISTS planning_source_version_id UUID,
+  ADD COLUMN IF NOT EXISTS planning_source_item_id UUID;
+
+UPDATE task_progress_snapshots
+SET
+  event_type = COALESCE(event_type, 'task_update'),
+  event_source = COALESCE(event_source, CASE WHEN is_auto_generated THEN 'system_auto' ELSE 'manual' END),
+  conditions_met_count = COALESCE(conditions_met_count, 0),
+  conditions_total_count = COALESCE(conditions_total_count, 0),
+  obstacles_active_count = COALESCE(obstacles_active_count, 0),
+  planning_source_type = COALESCE(planning_source_type, 'execution')
+WHERE event_type IS NULL
+   OR event_source IS NULL
+   OR conditions_met_count IS NULL
+   OR conditions_total_count IS NULL
+   OR obstacles_active_count IS NULL
+   OR planning_source_type IS NULL;
+
+ALTER TABLE acceptance_plans
+  ADD COLUMN IF NOT EXISTS building_id TEXT,
+  ADD COLUMN IF NOT EXISTS scope_level TEXT,
+  ADD COLUMN IF NOT EXISTS catalog_id UUID,
+  ADD COLUMN IF NOT EXISTS type_id TEXT,
+  ADD COLUMN IF NOT EXISTS type_name TEXT,
+  ADD COLUMN IF NOT EXISTS phase TEXT,
+  ADD COLUMN IF NOT EXISTS phase_order INTEGER,
+  ADD COLUMN IF NOT EXISTS sort_order INTEGER,
+  ADD COLUMN IF NOT EXISTS parallel_group_id TEXT,
+  ADD COLUMN IF NOT EXISTS position JSONB,
+  ADD COLUMN IF NOT EXISTS depends_on JSONB,
+  ADD COLUMN IF NOT EXISTS depended_by JSONB;
+
+CREATE TABLE IF NOT EXISTS acceptance_catalog (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID,
+  catalog_code TEXT,
+  catalog_name TEXT NOT NULL,
+  phase_code TEXT,
+  scope_level TEXT,
+  planned_finish_date DATE,
+  description TEXT,
+  is_system BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_acceptance_catalog_project_code
+  ON acceptance_catalog(project_id, catalog_code)
+  WHERE catalog_code IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_acceptance_catalog_project_id
+  ON acceptance_catalog(project_id);
+
+CREATE TABLE IF NOT EXISTS acceptance_dependencies (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID,
+  source_plan_id UUID NOT NULL REFERENCES acceptance_plans(id) ON DELETE CASCADE,
+  target_plan_id UUID NOT NULL REFERENCES acceptance_plans(id) ON DELETE CASCADE,
+  dependency_kind TEXT NOT NULL DEFAULT 'hard'
+    CHECK (dependency_kind IN ('hard', 'soft')),
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_acceptance_dependencies_project_id
+  ON acceptance_dependencies(project_id);
+CREATE INDEX IF NOT EXISTS idx_acceptance_dependencies_source_plan_id
+  ON acceptance_dependencies(source_plan_id);
+CREATE INDEX IF NOT EXISTS idx_acceptance_dependencies_target_plan_id
+  ON acceptance_dependencies(target_plan_id);
+
+CREATE TABLE IF NOT EXISTS acceptance_requirements (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID,
+  plan_id UUID NOT NULL REFERENCES acceptance_plans(id) ON DELETE CASCADE,
+  requirement_type TEXT NOT NULL,
+  source_entity_type TEXT NOT NULL,
+  source_entity_id TEXT NOT NULL,
+  description TEXT,
+  status TEXT NOT NULL DEFAULT 'open',
+  is_required BOOLEAN NOT NULL DEFAULT TRUE,
+  is_satisfied BOOLEAN NOT NULL DEFAULT FALSE,
+  drawing_package_id UUID,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE acceptance_requirements
+  ADD COLUMN IF NOT EXISTS drawing_package_id UUID;
+
+CREATE INDEX IF NOT EXISTS idx_acceptance_requirements_project_id
+  ON acceptance_requirements(project_id);
+CREATE INDEX IF NOT EXISTS idx_acceptance_requirements_plan_id
+  ON acceptance_requirements(plan_id);
+CREATE INDEX IF NOT EXISTS idx_acceptance_requirements_drawing_package_id
+  ON acceptance_requirements(drawing_package_id);
+
+ALTER TABLE acceptance_records
+  ADD COLUMN IF NOT EXISTS project_id UUID,
+  ADD COLUMN IF NOT EXISTS plan_id UUID,
+  ADD COLUMN IF NOT EXISTS record_type TEXT,
+  ADD COLUMN IF NOT EXISTS content TEXT,
+  ADD COLUMN IF NOT EXISTS operator TEXT,
+  ADD COLUMN IF NOT EXISTS attachments JSONB;
+
+CREATE INDEX IF NOT EXISTS idx_acceptance_records_project_id
+  ON acceptance_records(project_id);
+CREATE INDEX IF NOT EXISTS idx_acceptance_records_plan_id
+  ON acceptance_records(plan_id);
+
+CREATE INDEX IF NOT EXISTS idx_acceptance_plans_catalog_id
+  ON acceptance_plans(catalog_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'fk_acceptance_plans_catalog_id'
+  ) THEN
+    EXECUTE '
+      ALTER TABLE acceptance_plans
+      ADD CONSTRAINT fk_acceptance_plans_catalog_id
+      FOREIGN KEY (catalog_id)
+      REFERENCES acceptance_catalog(id)
+      ON DELETE RESTRICT
+      ON UPDATE CASCADE
+    ';
+  END IF;
+END $$;
+
+ALTER TABLE task_conditions
+  ADD COLUMN IF NOT EXISTS drawing_package_id UUID NULL,
+  ADD COLUMN IF NOT EXISTS drawing_package_code TEXT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_task_conditions_drawing_package_id
+  ON task_conditions(drawing_package_id);
+CREATE INDEX IF NOT EXISTS idx_task_conditions_drawing_package_code
+  ON task_conditions(drawing_package_code);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'fk_task_conditions_drawing_package_id'
+  ) THEN
+    EXECUTE '
+      ALTER TABLE task_conditions
+      ADD CONSTRAINT fk_task_conditions_drawing_package_id
+      FOREIGN KEY (drawing_package_id)
+      REFERENCES drawing_packages(id)
+      ON DELETE SET NULL
+    ';
+  END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS certificate_work_items (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  item_code VARCHAR(64),
+  item_name VARCHAR(200) NOT NULL,
+  item_stage VARCHAR(32) NOT NULL DEFAULT '璧勬枡鍑嗗'
+    CHECK (item_stage IN ('璧勬枡鍑嗗', '鍐呴儴鎶ュ', '澶栭儴鎶ユ壒', '鎵瑰棰嗚瘉')),
+  status VARCHAR(40) NOT NULL DEFAULT 'pending'
+    CHECK (status IN (
+      'pending',
+      'preparing_documents',
+      'internal_review',
+      'external_submission',
+      'supplement_required',
+      'approved',
+      'issued',
+      'expired',
+      'voided'
+    )),
+  planned_finish_date DATE,
+  actual_finish_date DATE,
+  approving_authority VARCHAR(100),
+  is_shared BOOLEAN DEFAULT FALSE,
+  next_action TEXT,
+  next_action_due_date DATE,
+  is_blocked BOOLEAN DEFAULT FALSE,
+  block_reason TEXT,
+  sort_order INTEGER DEFAULT 0,
+  notes TEXT,
+  latest_record_at TIMESTAMP,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS certificate_dependencies (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  predecessor_type VARCHAR(20) NOT NULL
+    CHECK (predecessor_type IN ('certificate', 'work_item')),
+  predecessor_id UUID NOT NULL,
+  successor_type VARCHAR(20) NOT NULL
+    CHECK (successor_type IN ('certificate', 'work_item')),
+  successor_id UUID NOT NULL,
+  dependency_kind VARCHAR(20) NOT NULL DEFAULT 'hard'
+    CHECK (dependency_kind IN ('hard', 'soft')),
+  notes TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  UNIQUE (project_id, predecessor_type, predecessor_id, successor_type, successor_id, dependency_kind)
+);
+
+CREATE INDEX IF NOT EXISTS idx_certificate_work_items_project
+  ON certificate_work_items(project_id);
+CREATE INDEX IF NOT EXISTS idx_certificate_work_items_stage
+  ON certificate_work_items(project_id, item_stage);
+CREATE INDEX IF NOT EXISTS idx_certificate_work_items_status
+  ON certificate_work_items(project_id, status);
+CREATE INDEX IF NOT EXISTS idx_certificate_dependencies_project
+  ON certificate_dependencies(project_id);
+CREATE INDEX IF NOT EXISTS idx_certificate_dependencies_predecessor
+  ON certificate_dependencies(project_id, predecessor_type, predecessor_id);
+CREATE INDEX IF NOT EXISTS idx_certificate_dependencies_successor
+  ON certificate_dependencies(project_id, successor_type, successor_id);
+
+CREATE OR REPLACE FUNCTION update_certificate_work_items_timestamp()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS update_certificate_work_items_updated_at ON certificate_work_items;
+CREATE TRIGGER update_certificate_work_items_updated_at
+  BEFORE UPDATE ON certificate_work_items
+  FOR EACH ROW
+  EXECUTE FUNCTION update_certificate_work_items_timestamp();
+
+CREATE OR REPLACE FUNCTION create_certificate_work_item_atomic(
+  p_id UUID,
+  p_project_id UUID,
+  p_item_code VARCHAR(64),
+  p_item_name VARCHAR(200),
+  p_item_stage VARCHAR(32),
+  p_status VARCHAR(40),
+  p_planned_finish_date DATE,
+  p_actual_finish_date DATE,
+  p_approving_authority VARCHAR(100),
+  p_is_shared BOOLEAN,
+  p_next_action TEXT,
+  p_next_action_due_date DATE,
+  p_is_blocked BOOLEAN,
+  p_block_reason TEXT,
+  p_sort_order INTEGER,
+  p_notes TEXT,
+  p_latest_record_at TIMESTAMP,
+  p_certificate_ids UUID[] DEFAULT ARRAY[]::UUID[]
+)
+RETURNS certificate_work_items
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_work_item certificate_work_items%ROWTYPE;
+  v_certificate_id UUID;
+BEGIN
+  INSERT INTO certificate_work_items (
+    id,
+    project_id,
+    item_code,
+    item_name,
+    item_stage,
+    status,
+    planned_finish_date,
+    actual_finish_date,
+    approving_authority,
+    is_shared,
+    next_action,
+    next_action_due_date,
+    is_blocked,
+    block_reason,
+    sort_order,
+    notes,
+    latest_record_at,
+    created_at,
+    updated_at
+  ) VALUES (
+    p_id,
+    p_project_id,
+    p_item_code,
+    p_item_name,
+    p_item_stage,
+    p_status,
+    p_planned_finish_date,
+    p_actual_finish_date,
+    p_approving_authority,
+    p_is_shared,
+    p_next_action,
+    p_next_action_due_date,
+    p_is_blocked,
+    p_block_reason,
+    p_sort_order,
+    p_notes,
+    COALESCE(p_latest_record_at, NOW()),
+    NOW(),
+    NOW()
+  )
+  RETURNING * INTO v_work_item;
+
+  IF p_certificate_ids IS NOT NULL THEN
+    FOREACH v_certificate_id IN ARRAY p_certificate_ids LOOP
+      INSERT INTO certificate_dependencies (
+        id,
+        project_id,
+        predecessor_type,
+        predecessor_id,
+        successor_type,
+        successor_id,
+        dependency_kind,
+        notes,
+        created_at
+      ) VALUES (
+        gen_random_uuid(),
+        p_project_id,
+        'certificate',
+        v_certificate_id,
+        'work_item',
+        p_id,
+        'hard',
+        NULL,
+        NOW()
+      );
+    END LOOP;
+  END IF;
+
+  RETURN v_work_item;
+END;
+$$;
+
+CREATE TABLE IF NOT EXISTS task_critical_overrides (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  mode VARCHAR(32) NOT NULL CHECK (mode IN ('manual_attention', 'manual_insert')),
+  anchor_type VARCHAR(16) CHECK (anchor_type IN ('before', 'after', 'between')),
+  left_task_id UUID REFERENCES tasks(id) ON DELETE SET NULL,
+  right_task_id UUID REFERENCES tasks(id) ON DELETE SET NULL,
+  reason TEXT,
+  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  CONSTRAINT task_critical_overrides_unique_task_mode UNIQUE (project_id, task_id, mode),
+  CONSTRAINT task_critical_overrides_manual_insert_anchor_check CHECK (
+    mode <> 'manual_insert'
+    OR anchor_type IS NOT NULL
+  ),
+  CONSTRAINT task_critical_overrides_manual_insert_anchor_ref_check CHECK (
+    mode <> 'manual_insert'
+    OR left_task_id IS NOT NULL
+    OR right_task_id IS NOT NULL
+  )
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_critical_overrides_project_id
+  ON task_critical_overrides(project_id);
+CREATE INDEX IF NOT EXISTS idx_task_critical_overrides_task_id
+  ON task_critical_overrides(task_id);
+
+INSERT INTO task_critical_overrides (
+  id,
+  project_id,
+  task_id,
+  mode,
+  anchor_type,
+  left_task_id,
+  right_task_id,
+  reason,
+  created_by,
+  created_at,
+  updated_at
+)
+SELECT
+  gen_random_uuid(),
+  t.project_id,
+  t.id,
+  'manual_attention',
+  NULL,
+  NULL,
+  NULL,
+  'migrated from tasks.is_critical',
+  NULL,
+  NOW(),
+  NOW()
+FROM tasks t
+WHERE t.is_critical = TRUE
+  AND NOT EXISTS (
+    SELECT 1
+    FROM task_critical_overrides o
+    WHERE o.project_id = t.project_id
+      AND o.task_id = t.id
+      AND o.mode = 'manual_attention'
+  );
+
+CREATE TABLE IF NOT EXISTS warning_acknowledgments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  project_id UUID NULL REFERENCES projects(id) ON DELETE CASCADE,
+  task_id UUID NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  warning_type VARCHAR(50) NOT NULL,
+  warning_signature VARCHAR(255) NOT NULL,
+  acked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_warning_acknowledgments_user_signature
+  ON warning_acknowledgments(user_id, warning_signature);
+CREATE INDEX IF NOT EXISTS idx_warning_acknowledgments_project
+  ON warning_acknowledgments(project_id, user_id);
+
+ALTER TABLE notifications
+  ADD COLUMN IF NOT EXISTS chain_id UUID,
+  ADD COLUMN IF NOT EXISTS first_seen_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS acknowledged_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS muted_until TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS escalated_to_risk_id UUID,
+  ADD COLUMN IF NOT EXISTS escalated_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS is_escalated BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS resolved_source TEXT;
+
+ALTER TABLE task_obstacles
+  ADD COLUMN IF NOT EXISTS severity_escalated_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS severity_manually_overridden BOOLEAN NOT NULL DEFAULT FALSE;
+
+ALTER TABLE task_baseline_items
+  ADD COLUMN IF NOT EXISTS is_baseline_critical BOOLEAN NOT NULL DEFAULT FALSE;
+
+CREATE INDEX IF NOT EXISTS idx_task_baseline_items_baseline_critical
+  ON task_baseline_items (baseline_version_id, is_baseline_critical);
+
+CREATE INDEX IF NOT EXISTS idx_notifications_warning_chain_id
+  ON notifications(chain_id)
+  WHERE chain_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_notifications_warning_source_signature
+  ON notifications(source_entity_type, source_entity_id)
+  WHERE source_entity_type = 'warning';
+CREATE INDEX IF NOT EXISTS idx_notifications_warning_status
+  ON notifications(status, source_entity_type)
+  WHERE source_entity_type = 'warning';
+
+CREATE TABLE IF NOT EXISTS drawing_packages (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  package_code TEXT NOT NULL,
+  package_name TEXT NOT NULL,
+  discipline_type TEXT NOT NULL,
+  document_purpose TEXT NOT NULL DEFAULT '鏂藉伐鎵ц',
+  status TEXT NOT NULL DEFAULT 'pending',
+  requires_review BOOLEAN NOT NULL DEFAULT FALSE,
+  review_mode TEXT NOT NULL DEFAULT 'none',
+  review_basis TEXT,
+  completeness_ratio NUMERIC(5, 2) NOT NULL DEFAULT 0,
+  missing_required_count INT NOT NULL DEFAULT 0,
+  current_version_drawing_id UUID,
+  has_change BOOLEAN NOT NULL DEFAULT FALSE,
+  schedule_impact_flag BOOLEAN NOT NULL DEFAULT FALSE,
+  is_ready_for_construction BOOLEAN NOT NULL DEFAULT FALSE,
+  is_ready_for_acceptance BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE (project_id, package_code)
+);
+
+CREATE TABLE IF NOT EXISTS drawing_package_items (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  package_id UUID NOT NULL REFERENCES drawing_packages(id) ON DELETE CASCADE,
+  item_code TEXT NOT NULL,
+  item_name TEXT NOT NULL,
+  is_required BOOLEAN NOT NULL DEFAULT TRUE,
+  current_drawing_id UUID,
+  current_version TEXT,
+  status TEXT NOT NULL DEFAULT 'missing',
+  notes TEXT,
+  sort_order INT NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE (package_id, item_code)
+);
+
+CREATE TABLE IF NOT EXISTS drawing_versions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  package_id UUID NOT NULL REFERENCES drawing_packages(id) ON DELETE CASCADE,
+  drawing_id UUID NOT NULL REFERENCES construction_drawings(id) ON DELETE CASCADE,
+  version_no TEXT NOT NULL,
+  previous_version_id UUID REFERENCES drawing_versions(id) ON DELETE SET NULL,
+  is_current_version BOOLEAN NOT NULL DEFAULT FALSE,
+  change_reason TEXT,
+  created_by UUID,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE (drawing_id, version_no)
+);
+
+CREATE TABLE IF NOT EXISTS drawing_review_rules (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+  package_code TEXT,
+  discipline_type TEXT,
+  document_purpose TEXT,
+  default_review_mode TEXT NOT NULL DEFAULT 'none',
+  review_basis TEXT NOT NULL,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE construction_drawings
+  ADD COLUMN IF NOT EXISTS package_id UUID REFERENCES drawing_packages(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS package_code TEXT,
+  ADD COLUMN IF NOT EXISTS package_name TEXT,
+  ADD COLUMN IF NOT EXISTS discipline_type TEXT,
+  ADD COLUMN IF NOT EXISTS document_purpose TEXT DEFAULT '鏂藉伐鎵ц',
+  ADD COLUMN IF NOT EXISTS drawing_code TEXT,
+  ADD COLUMN IF NOT EXISTS version_no TEXT,
+  ADD COLUMN IF NOT EXISTS is_current_version BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS requires_review BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS review_mode TEXT NOT NULL DEFAULT 'none',
+  ADD COLUMN IF NOT EXISTS review_basis TEXT,
+  ADD COLUMN IF NOT EXISTS has_change BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS change_reason TEXT,
+  ADD COLUMN IF NOT EXISTS schedule_impact_flag BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS is_ready_for_construction BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS is_ready_for_acceptance BOOLEAN NOT NULL DEFAULT FALSE;
+
+CREATE INDEX IF NOT EXISTS idx_drawing_packages_project ON drawing_packages(project_id);
+CREATE INDEX IF NOT EXISTS idx_drawing_packages_code ON drawing_packages(project_id, package_code);
+CREATE INDEX IF NOT EXISTS idx_drawing_package_items_package ON drawing_package_items(package_id);
+CREATE INDEX IF NOT EXISTS idx_drawing_versions_package ON drawing_versions(package_id);
+CREATE INDEX IF NOT EXISTS idx_drawing_versions_project ON drawing_versions(project_id);
+CREATE INDEX IF NOT EXISTS idx_drawing_review_rules_project ON drawing_review_rules(project_id);
+CREATE INDEX IF NOT EXISTS idx_drawing_review_rules_active ON drawing_review_rules(is_active);
+CREATE INDEX IF NOT EXISTS idx_construction_drawings_package ON construction_drawings(project_id, package_code);
+CREATE INDEX IF NOT EXISTS idx_construction_drawings_current_version ON construction_drawings(package_id, is_current_version);
+
+CREATE OR REPLACE FUNCTION update_drawing_packages_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS update_drawing_packages_updated_at ON drawing_packages;
+CREATE TRIGGER update_drawing_packages_updated_at
+  BEFORE UPDATE ON drawing_packages
+  FOR EACH ROW
+  EXECUTE FUNCTION update_drawing_packages_updated_at();
+
+CREATE OR REPLACE FUNCTION update_drawing_package_items_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS update_drawing_package_items_updated_at ON drawing_package_items;
+CREATE TRIGGER update_drawing_package_items_updated_at
+  BEFORE UPDATE ON drawing_package_items
+  FOR EACH ROW
+  EXECUTE FUNCTION update_drawing_package_items_updated_at();
+
+CREATE OR REPLACE FUNCTION update_drawing_versions_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS update_drawing_versions_updated_at ON drawing_versions;
+CREATE TRIGGER update_drawing_versions_updated_at
+  BEFORE UPDATE ON drawing_versions
+  FOR EACH ROW
+  EXECUTE FUNCTION update_drawing_versions_updated_at();
+
+CREATE OR REPLACE FUNCTION update_drawing_review_rules_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS update_drawing_review_rules_updated_at ON drawing_review_rules;
+CREATE TRIGGER update_drawing_review_rules_updated_at
+  BEFORE UPDATE ON drawing_review_rules
+  FOR EACH ROW
+  EXECUTE FUNCTION update_drawing_review_rules_updated_at();
+
+INSERT INTO drawing_review_rules (
+  id,
+  project_id,
+  package_code,
+  discipline_type,
+  document_purpose,
+  default_review_mode,
+  review_basis,
+  is_active,
+  created_at,
+  updated_at
+)
+VALUES
+  (gen_random_uuid(), NULL, 'fire-review', '娑堥槻', '閫佸鎶ユ壒', 'mandatory', '娑堥槻涓撻」鍖呴粯璁ゅ繀瀹?, TRUE, NOW(), NOW()),
+  (gen_random_uuid(), NULL, 'civil-defense-review', '浜洪槻', '閫佸鎶ユ壒', 'mandatory', '浜洪槻涓撻」鍖呴粯璁ゅ繀瀹?, TRUE, NOW(), NOW()),
+  (gen_random_uuid(), NULL, 'completion-archive', '绔ｅ伐褰掓。', '绔ｅ伐褰掓。', 'manual_confirm', '绔ｅ伐褰掓。鍖呴渶瑕佷汉宸ョ‘璁?, TRUE, NOW(), NOW()),
+  (gen_random_uuid(), NULL, 'architecture-construction', '寤虹瓚', '鏂藉伐鎵ц', 'none', '甯歌鏂藉伐鎵ц鍖呴粯璁や笉閫佸', TRUE, NOW(), NOW()),
+  (gen_random_uuid(), NULL, 'structure-construction', '缁撴瀯', '鏂藉伐鎵ц', 'none', '甯歌鏂藉伐鎵ц鍖呴粯璁や笉閫佸', TRUE, NOW(), NOW()),
+  (gen_random_uuid(), NULL, 'water-construction', '缁欐帓姘?, '鏂藉伐鎵ц', 'none', '甯歌鏂藉伐鎵ц鍖呴粯璁や笉閫佸', TRUE, NOW(), NOW()),
+  (gen_random_uuid(), NULL, 'hvac-construction', '鏆栭€?, '鏂藉伐鎵ц', 'none', '甯歌鏂藉伐鎵ц鍖呴粯璁や笉閫佸', TRUE, NOW(), NOW()),
+  (gen_random_uuid(), NULL, 'electrical-construction', '鐢垫皵', '鏂藉伐鎵ц', 'none', '甯歌鏂藉伐鎵ц鍖呴粯璁や笉閫佸', TRUE, NOW(), NOW())
+ON CONFLICT DO NOTHING;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'fk_acceptance_requirements_drawing_package_id'
+  ) THEN
+    EXECUTE '
+      ALTER TABLE acceptance_requirements
+      ADD CONSTRAINT fk_acceptance_requirements_drawing_package_id
+      FOREIGN KEY (drawing_package_id)
+      REFERENCES drawing_packages(id)
+      ON DELETE SET NULL
+    ';
+  END IF;
+END $$;
+
+-- P7 compatibility cleanup reconciliation
+UPDATE acceptance_plans
+SET status = CASE
+  WHEN status IN ('pending', '寰呭惎鍔?, '寰呴獙鏀?) THEN 'not_started'
+  WHEN status IN ('鍑嗗涓?) THEN 'preparing'
+  WHEN status IN ('宸茬敵鎶?) THEN 'submitted'
+  WHEN status IN ('in_progress', '楠屾敹涓?) THEN 'in_acceptance'
+  WHEN status IN ('failed', 'needs_revision', '鏁存敼涓?, '鏈€氳繃', '闇€琛ュ厖') THEN 'rectification'
+  WHEN status IN ('宸查€氳繃') THEN 'passed'
+  WHEN status IN ('宸插妗?) THEN 'recorded'
+  ELSE status
+END
+WHERE status IN ('pending', 'in_progress', 'failed', 'needs_revision', '寰呭惎鍔?, '鍑嗗涓?, '宸茬敵鎶?, '楠屾敹涓?, '鏁存敼涓?, '宸查€氳繃', '宸插妗?, '寰呴獙鏀?, '鏈€氳繃', '闇€琛ュ厖');
+
+UPDATE acceptance_nodes
+SET status = CASE
+  WHEN status IN ('pending', '寰呭惎鍔?, '寰呴獙鏀?) THEN 'not_started'
+  WHEN status IN ('鍑嗗涓?) THEN 'preparing'
+  WHEN status IN ('宸茬敵鎶?) THEN 'submitted'
+  WHEN status IN ('in_progress', '楠屾敹涓?) THEN 'in_acceptance'
+  WHEN status IN ('failed', 'needs_revision', '鏁存敼涓?, '鏈€氳繃', '闇€琛ュ厖') THEN 'rectification'
+  WHEN status IN ('宸查€氳繃') THEN 'passed'
+  WHEN status IN ('宸插妗?) THEN 'recorded'
+  ELSE status
+END
+WHERE status IN ('pending', 'in_progress', 'failed', 'needs_revision', '寰呭惎鍔?, '鍑嗗涓?, '宸茬敵鎶?, '楠屾敹涓?, '鏁存敼涓?, '宸查€氳繃', '宸插妗?, '寰呴獙鏀?, '鏈€氳繃', '闇€琛ュ厖');
+
+ALTER TABLE IF EXISTS acceptance_plans DROP COLUMN IF EXISTS depends_on;
+ALTER TABLE IF EXISTS acceptance_plans DROP CONSTRAINT IF EXISTS acceptance_plans_status_check_p7;
+ALTER TABLE IF EXISTS acceptance_plans
+  ADD CONSTRAINT acceptance_plans_status_check_p7
+  CHECK (status IN ('draft', 'preparing', 'ready_to_submit', 'submitted', 'inspecting', 'rectifying', 'passed', 'archived'));
+
+ALTER TABLE IF EXISTS acceptance_nodes DROP CONSTRAINT IF EXISTS acceptance_nodes_status_check_p7;
+ALTER TABLE IF EXISTS acceptance_nodes
+  ADD CONSTRAINT acceptance_nodes_status_check_p7
+  CHECK (status IN ('draft', 'preparing', 'ready_to_submit', 'submitted', 'inspecting', 'rectifying', 'passed', 'archived'));
+
+UPDATE task_obstacles SET status = '宸茶В鍐? WHERE status = '鏃犳硶瑙ｅ喅';
+ALTER TABLE IF EXISTS task_obstacles DROP CONSTRAINT IF EXISTS task_obstacles_status_check_p7;
+ALTER TABLE IF EXISTS task_obstacles
+  ADD CONSTRAINT task_obstacles_status_check_p7
+  CHECK (status IN ('寰呭鐞?, '澶勭悊涓?, '宸茶В鍐?));
+
+INSERT INTO task_critical_overrides (
+  id,
+  project_id,
+  task_id,
+  mode,
+  anchor_type,
+  left_task_id,
+  right_task_id,
+  reason,
+  created_by,
+  created_at,
+  updated_at
+)
+SELECT
+  gen_random_uuid(),
+  t.project_id,
+  t.id,
+  'manual_attention',
+  NULL,
+  NULL,
+  NULL,
+  'migrated from legacy is_critical flag',
+  NULL,
+  COALESCE(t.updated_at, t.created_at, NOW()),
+  COALESCE(t.updated_at, t.created_at, NOW())
+FROM tasks t
+WHERE COALESCE(t.is_critical, FALSE) = TRUE
+  AND t.project_id IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1
+    FROM task_critical_overrides o
+    WHERE o.project_id = t.project_id
+      AND o.task_id = t.id
+      AND o.mode = 'manual_attention'
+  );

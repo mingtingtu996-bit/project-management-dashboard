@@ -1,16 +1,49 @@
 // AI工期API路由 - Phase 2
 
 import { Router } from 'express'
+import { z } from 'zod'
 import { AIDurationService } from '../services/aiDurationService.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import { authenticate } from '../middleware/auth.js'
+import { validate } from '../middleware/validation.js'
 import { logger } from '../middleware/logger.js'
 import type { ApiResponse } from '../types/index.js'
 import type { AIDurationEstimate } from '../types/db.js'
+import {
+  buildSyncBatchLimitError,
+  REQUEST_TIMEOUT_BUDGETS,
+  runWithRequestBudget,
+} from '../services/requestBudgetService.js'
 
 const router = Router()
 router.use(authenticate)
 const aiDurationService = new AIDurationService()
+
+const taskIdParamSchema = z.object({
+  taskId: z.string().trim().min(1),
+})
+
+const estimateDurationBodySchema = z.object({
+  task_id: z.string().trim().min(1),
+  project_id: z.string().trim().min(1),
+  task_type: z.string().trim().optional(),
+  building_type: z.string().trim().optional(),
+  total_area: z.coerce.number().optional(),
+  historical_data: z.boolean().optional(),
+}).passthrough()
+
+const correctDurationBodySchema = z.object({
+  task_id: z.string().trim().min(1),
+  corrected_duration: z.coerce.number().positive(),
+  correction_reason: z.string().trim().optional(),
+  approved_by: z.string().trim().optional(),
+}).passthrough()
+
+const estimateBatchBodySchema = z.object({
+  task_ids: z.array(z.string().trim().min(1)).min(1),
+  project_id: z.string().trim().optional(),
+  historical_data: z.boolean().optional(),
+}).passthrough()
 
 /**
  * AI工期估算
@@ -24,7 +57,7 @@ const aiDurationService = new AIDurationService()
  *   historical_data?: boolean
  * }
  */
-router.post('/estimate-duration', asyncHandler(async (req, res) => {
+router.post('/estimate-duration', validate(estimateDurationBodySchema), asyncHandler(async (req, res) => {
   const input = req.body
 
   logger.info('Estimating duration', input)
@@ -65,7 +98,7 @@ router.post('/estimate-duration', asyncHandler(async (req, res) => {
  *   approved_by: string
  * }
  */
-router.post('/correct-duration', asyncHandler(async (req, res) => {
+router.post('/correct-duration', validate(correctDurationBodySchema), asyncHandler(async (req, res) => {
   const input = req.body
 
   logger.info('Correcting duration', input)
@@ -100,7 +133,7 @@ router.post('/correct-duration', asyncHandler(async (req, res) => {
  * 获取工期置信度
  * GET /api/ai/confidence/:taskId
  */
-router.get('/confidence/:taskId', asyncHandler(async (req, res) => {
+router.get('/confidence/:taskId', validate(taskIdParamSchema, 'params'), asyncHandler(async (req, res) => {
   const { taskId } = req.params
 
   logger.info('Getting confidence', { taskId })
@@ -162,22 +195,60 @@ router.get('/confidence/:taskId', asyncHandler(async (req, res) => {
  *   historical_data?: boolean
  * }
  */
-router.post('/estimate-batch', asyncHandler(async (req, res) => {
+router.post('/estimate-batch', validate(estimateBatchBodySchema), asyncHandler(async (req, res) => {
   const { task_ids, project_id, historical_data = false } = req.body
 
   logger.info('Batch estimating duration', { task_ids, project_id, historical_data })
 
-  try {
-    const estimates: AIDurationEstimate[] = []
-
-    for (const taskId of task_ids) {
-      const estimate = await aiDurationService.estimateDuration({
-        task_id: taskId,
-        project_id,
-        historical_data,
-      })
-      estimates.push(estimate)
+  if (!Array.isArray(task_ids) || task_ids.length === 0) {
+    const response: ApiResponse = {
+      success: false,
+      error: {
+        code: 'INVALID_PARAM',
+        message: 'task_ids 必须是非空数组',
+      },
+      timestamp: new Date().toISOString(),
     }
+
+    return res.status(400).json(response)
+  }
+
+  if (task_ids.length > 100) {
+    const error = buildSyncBatchLimitError(task_ids.length, { operation: 'ai_duration.estimate_batch' })
+    const response: ApiResponse = {
+      success: false,
+      error: {
+        code: error.code ?? 'BATCH_ASYNC_REQUIRED',
+        message: error.message,
+        details: error.details,
+      },
+      timestamp: new Date().toISOString(),
+    }
+
+    return res.status(error.statusCode ?? 413).json(response)
+  }
+
+  try {
+    const estimates = await runWithRequestBudget(
+      {
+        operation: 'ai_duration.estimate_batch',
+        timeoutMs: REQUEST_TIMEOUT_BUDGETS.batchWriteMs,
+      },
+      async () => {
+        const rows: AIDurationEstimate[] = []
+
+        for (const taskId of task_ids) {
+          const estimate = await aiDurationService.estimateDuration({
+            task_id: taskId,
+            project_id,
+            historical_data,
+          })
+          rows.push(estimate)
+        }
+
+        return rows
+      },
+    )
 
     const response: ApiResponse<AIDurationEstimate[]> = {
       success: true,
@@ -192,13 +263,14 @@ router.post('/estimate-batch', asyncHandler(async (req, res) => {
     const response: ApiResponse = {
       success: false,
       error: {
-        code: 'BATCH_ESTIMATE_FAILED',
+        code: error.code || 'BATCH_ESTIMATE_FAILED',
         message: error.message || '批量工期估算失败',
+        details: error.details,
       },
       timestamp: new Date().toISOString(),
     }
 
-    res.status(500).json(response)
+    res.status(error.statusCode || 500).json(response)
   }
 }))
 

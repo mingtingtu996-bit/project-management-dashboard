@@ -1,30 +1,49 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import TaskSummary from '../TaskSummary'
-import { useStore } from '@/hooks/useStore'
+
+vi.mock('react-router-dom', async () => {
+  const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom')
+  return {
+    ...actual,
+    useNavigate: vi.fn(),
+  }
+})
+
+vi.mock('@/hooks/useStore', () => ({
+  useCurrentProject: () => ({
+    id: 'project-1',
+    name: '示例项目',
+  }),
+}))
+
+vi.mock('@/hooks/use-toast', () => ({
+  toast: vi.fn(),
+}))
+
+const mockedUseNavigate = vi.mocked(useNavigate)
 
 function flush() {
   return new Promise((resolve) => setTimeout(resolve, 0))
 }
 
-async function waitForText(container: HTMLElement, expected: string[]) {
-  const deadline = Date.now() + 2000
+async function waitForSelector(container: HTMLElement, selector: string) {
+  const deadline = Date.now() + 2500
 
   while (Date.now() < deadline) {
     await act(async () => {
       await flush()
     })
 
-    const text = container.textContent || ''
-    if (expected.every((item) => text.includes(item))) {
+    if (container.querySelector(selector)) {
       return
     }
   }
 
-  throw new Error(`Timed out waiting for: ${expected.join(', ')}`)
+  throw new Error(`Timed out waiting for selector: ${selector}`)
 }
 
 function jsonResponse(data: unknown) {
@@ -34,9 +53,8 @@ function jsonResponse(data: unknown) {
   } as never
 }
 
-describe('TaskSummary page', () => {
+describe('TaskSummary page contract', () => {
   const projectId = 'project-1'
-  const projectName = '综合项目'
   let container: HTMLDivElement
   let root: Root | null = null
   const fetchMock = vi.fn()
@@ -46,76 +64,40 @@ describe('TaskSummary page', () => {
     document.body.appendChild(container)
     root = createRoot(container)
 
-    useStore.setState({
-      currentProject: {
-        id: projectId,
-        name: projectName,
-        description: '项目',
-        status: 'active',
-        planned_start_date: '2026-04-01',
-        planned_end_date: '2026-12-31',
-      } as never,
-      projects: [] as never,
-      tasks: [] as never,
-      risks: [] as never,
-      milestones: [] as never,
-      conditions: [] as never,
-      obstacles: [] as never,
-    })
+    mockedUseNavigate.mockReturnValue(vi.fn())
 
     fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input)
 
-      if (url.includes('/task-summary/assignees')) {
-        return jsonResponse({
-          success: true,
-          data: [
-            { assignee: '张三', total: 1, on_time: 1, delayed: 0, on_time_rate: 100 },
-          ],
-        })
-      }
-
-      if (url.includes('/task-summary?')) {
+      if (url === `/api/task-summaries/projects/${projectId}/task-summary`) {
         return jsonResponse({
           success: true,
           data: {
             stats: {
-              total_completed: 1,
-              on_time_count: 1,
-              delayed_count: 0,
-              completed_milestone_count: 1,
-              avg_delay_days: 0,
+              total_completed: 6,
+              on_time_count: 5,
+              delayed_count: 1,
+              completed_milestone_count: 2,
+              avg_delay_days: 1.2,
             },
-            groups: [
-              {
-                id: 'g1',
-                name: '主体结构',
-                status: 'completed',
-                tasks: [
-                  {
-                    id: 'task-1',
-                    title: '主体结构施工',
-                    assignee: '张三',
-                    building: '1#楼',
-                    section: '土建',
-                    completed_at: '2026-04-02 18:00',
-                    planned_end_date: '2026-04-01',
-                    actual_duration: 2,
-                    planned_duration: 1,
-                    subtask_total: 2,
-                    subtask_on_time: 1,
-                    subtask_delayed: 1,
-                    delay_total_days: 1,
-                    delay_records: [],
-                    status_label: 'on_time',
-                    confirmed: true,
-                  },
-                ],
-              },
-            ],
-            timeline_ready: true,
-            timeline_events: [],
           },
+        })
+      }
+
+      if (url === `/api/task-summaries/projects/${projectId}/task-summary/assignees`) {
+        return jsonResponse({
+          success: true,
+          data: [
+            { assignee: '张三', total: 4, on_time: 3, delayed: 1, on_time_rate: 75 },
+            { assignee: '李四', total: 2, on_time: 2, delayed: 0, on_time_rate: 100 },
+          ],
+        })
+      }
+
+      if (url.includes(`/api/task-summaries/projects/${projectId}/daily-progress?date=`)) {
+        return jsonResponse({
+          success: true,
+          data: null,
         })
       }
 
@@ -127,15 +109,6 @@ describe('TaskSummary page', () => {
 
   afterEach(() => {
     fetchMock.mockReset()
-    useStore.setState({ currentProject: null } as never)
-    useStore.setState({
-      projects: [] as never,
-      tasks: [] as never,
-      risks: [] as never,
-      milestones: [] as never,
-      conditions: [] as never,
-      obstacles: [] as never,
-    })
 
     act(() => {
       root?.unmount()
@@ -145,8 +118,8 @@ describe('TaskSummary page', () => {
     vi.unstubAllGlobals()
   })
 
-  it('renders task summary as a task management subpage', async () => {
-    await act(async () => {
+  it('renders results summary, assignee analysis, and compare analysis in-page', async () => {
+    act(() => {
       root?.render(
         <MemoryRouter initialEntries={[`/projects/${projectId}/task-summary`]}>
           <Routes>
@@ -154,21 +127,36 @@ describe('TaskSummary page', () => {
           </Routes>
         </MemoryRouter>,
       )
-      await flush()
     })
 
-    await waitForText(container, [
-      '任务管理 / 任务总结',
-      '只承接已完成任务复盘',
-      '返回任务列表',
-      '项目 Dashboard',
-      '总结列表',
-      '完成趋势',
-      '责任人',
-    ])
+    await waitForSelector(container, '[data-testid="task-summary-page"]')
+    await waitForSelector(container, '[data-testid="task-summary-header-actions"]')
+    await waitForSelector(container, '[data-testid="task-summary-results-section"]')
+    await waitForSelector(container, '[data-testid="task-summary-assignees-section"]')
+    await waitForSelector(container, '[data-testid="task-summary-compare-section"]')
+    await waitForSelector(container, '[data-testid="task-summary-export"]')
+    await waitForSelector(container, '[data-testid="task-summary-assignee-filter"]')
 
-    expect(container.textContent).not.toContain('AI 报告')
-    expect(container.textContent).not.toContain('导出报告')
-    expect(container.textContent).not.toContain('多选')
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/task-summaries/projects/${projectId}/task-summary`,
+      expect.objectContaining({
+        signal: expect.any(AbortSignal),
+      }),
+    )
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/task-summaries/projects/${projectId}/task-summary/assignees`,
+      expect.objectContaining({
+        signal: expect.any(AbortSignal),
+      }),
+    )
+    expect(
+      fetchMock.mock.calls.some(([url]) =>
+        String(url).includes(`/api/task-summaries/projects/${projectId}/daily-progress?date=`),
+      ),
+    ).toBe(true)
+    expect(container.textContent).toContain('结果摘要')
+    expect(container.textContent).toContain('任务执行分析')
+    expect(container.textContent).toContain('任务执行与对比分析')
+    expect(container.textContent).toContain('张三')
   })
 })

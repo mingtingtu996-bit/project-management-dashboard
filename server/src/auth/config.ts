@@ -3,13 +3,16 @@
  */
 
 export const JWT_CONFIG = {
-  // JWT密钥（生产环境应该从环境变量读取）
-  secret:
-    process.env.JWT_SECRET ||
-    process.env.SUPABASE_JWT_SECRET ||
-    ((process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test')
-      ? 'dev-local-jwt-secret'
-      : ''),
+  // JWT密钥（使用 getter 延迟读取，避免模块在 dotenv.config() 之前初始化时读到空值）
+  get secret(): string {
+    return (
+      process.env.JWT_SECRET ||
+      process.env.SUPABASE_JWT_SECRET ||
+      ((process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test')
+        ? 'dev-local-jwt-secret'
+        : '')
+    );
+  },
 
   // 访问令牌有效期（7天）
   accessTokenExpiresIn: process.env.JWT_ACCESS_EXPIRES_IN || '7d',

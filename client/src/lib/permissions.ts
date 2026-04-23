@@ -1,7 +1,9 @@
 // 权限类型定义
 // 第三阶段：安全与测试 - 权限体系完善
 
-export type PermissionLevel = 'guest' | 'editor' | 'admin'
+import { getProjectRoleLabel, normalizeProjectPermissionLevel, type ProjectPermissionLevel } from '@/lib/roleLabels'
+
+export type PermissionLevel = ProjectPermissionLevel
 
 export type PermissionAction = 
   | 'view:project'
@@ -29,7 +31,7 @@ export type PermissionAction =
 
 // 角色权限映射
 export const ROLE_PERMISSIONS: Record<PermissionLevel, PermissionAction[]> = {
-  guest: [
+  viewer: [
     'view:project',
     'view:task',
     'view:risk',
@@ -53,7 +55,7 @@ export const ROLE_PERMISSIONS: Record<PermissionLevel, PermissionAction[]> = {
     'view:reports',
     'export:data',
   ],
-  admin: [
+  owner: [
     'view:project',
     'edit:project',
     'delete:project',
@@ -105,20 +107,15 @@ export function hasAllPermissions(
 
 // 获取角色的显示名称
 export function getRoleDisplayName(role: PermissionLevel): string {
-  const names: Record<PermissionLevel, string> = {
-    guest: '访客',
-    editor: '编辑者',
-    admin: '管理员',
-  }
-  return names[role] || role
+  return getProjectRoleLabel(role)
 }
 
 // 获取角色的描述
 export function getRoleDescription(role: PermissionLevel): string {
   const descriptions: Record<PermissionLevel, string> = {
-    guest: '只能查看项目信息，无法编辑',
-    editor: '可以编辑任务、风险、里程碑等，不能管理成员',
-    admin: '完全访问权限，可以管理项目所有内容',
+    viewer: '只能查看项目内容，不能发起编辑或提交流程',
+    editor: '可以进行日常编辑和提交流程，但不能转让负责人或管理团队',
+    owner: '拥有项目完整管理权限，可转让负责人、管理成员和执行强制操作',
   }
-  return descriptions[role] || ''
+  return descriptions[normalizeProjectPermissionLevel(role)] || ''
 }

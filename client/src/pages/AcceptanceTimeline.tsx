@@ -1,766 +1,548 @@
-/**
- * 验收时间轴页面 - V4.4 力导向网络图版
- * 
- * 核心特性：
- * 1. 力导向网络图可视化
- * 2. 节点可拖拽编辑位置
- * 3. 自定义验收类型
- * 4. 依赖关系连线（带箭头）
- * 5. 双击创建依赖关系
- * 
- * 设计参考：验收时间轴_力导向网络图_V4.4.html
- */
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import { useParams } from 'react-router-dom'
+import { CheckCircle2, List, Network, Palette, Plus } from 'lucide-react'
 
-import React, { useState, useMemo, useCallback, useEffect } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
-import { 
-  BarChart3,
-  CheckCircle2, 
-  Circle, 
-  Loader2, 
-  XCircle, 
-  AlertCircle,
-  Plus,
-  Settings,
-  Link2,
-  Calendar,
-  Users,
-  FileText,
-  MoreHorizontal,
-  LayoutGrid,
-  List,
-  Network,
-  Save,
-  Trash2,
-  Edit3,
-  Palette,
-  ClipboardCheck,
-  Flame,
-  MapPin as Map,
-  Shield,
-  ArrowUpDown,
-  CloudLightning,
-  FileCheck
-} from 'lucide-react';
-import { 
-  Card, 
-  CardContent, 
-  CardHeader, 
-  CardTitle 
-} from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { 
-  Dialog, 
-  DialogContent, 
-  DialogHeader, 
-  DialogTitle,
-  DialogFooter
-} from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { cn } from '@/lib/utils';
-import { 
-  AcceptancePlan, 
-  AcceptanceStatus, 
-  AcceptanceType,
-  AcceptanceNode,
-  AcceptanceLink,
-  DEFAULT_ACCEPTANCE_TYPES,
-  ACCEPTANCE_STATUS_NAMES,
-  ACCEPTANCE_STATUS_CONFIG,
-  getAcceptanceTypeColor,
-  getAcceptanceTypeName,
-  summarizeAcceptancePlans
-} from '@/types/acceptance';
-import { groupAcceptanceByPhase } from '@/types/acceptance';
-import { acceptanceApi } from '@/services/acceptanceApi';
-import { useToast } from '@/hooks/use-toast';
-import { ForceDirectedGraph } from '@/components/ForceDirectedGraph';
-import { useStore } from '@/hooks/useStore';
-import { Breadcrumb } from '@/components/Breadcrumb';
-import { PageHeader } from '@/components/PageHeader';
-import { EmptyState } from '@/components/EmptyState';
+import { Breadcrumb } from '@/components/Breadcrumb'
+import { EmptyState } from '@/components/EmptyState'
+import { PageHeader } from '@/components/PageHeader'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent } from '@/components/ui/card'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Skeleton } from '@/components/ui/skeleton'
+import { safeStorageGet, safeStorageSet } from '@/lib/browserStorage'
+import { useToast } from '@/hooks/use-toast'
+import { useStore } from '@/hooks/useStore'
+import { cn } from '@/lib/utils'
+import { CHART_PALETTE } from '@/lib/chartPalette'
+import { acceptanceApi } from '@/services/acceptanceApi'
+import type { AcceptanceNode, AcceptancePlan, AcceptancePlanRelationBundle, AcceptanceStatus, AcceptanceType } from '@/types/acceptance'
+import { DEFAULT_ACCEPTANCE_TYPES, groupAcceptanceByPhase, isAcceptanceBlocked, normalizeAcceptanceStatus, summarizeAcceptancePlans } from '@/types/acceptance'
 
-// 图标映射
-const IconMap: Record<string, React.ComponentType<{ className?: string }>> = {
-  CheckCircle2,
-  Circle,
-  Loader2,
-  XCircle,
-  AlertCircle,
-  ClipboardCheck,
-  Users,
-  Flame,
-  Map,
-  Shield,
-  ArrowUpDown,
-  CloudLightning,
-  FileCheck,
-  Network
-};
+import AcceptanceDetailDrawer from './AcceptanceTimeline/components/AcceptanceDetailDrawer'
+import AcceptanceFlowBoard from './AcceptanceTimeline/components/AcceptanceFlowBoard'
+import AcceptanceLedger from './AcceptanceTimeline/components/AcceptanceLedger'
+import type { AcceptanceTimelineScale, AcceptanceTimelineViewMode } from './AcceptanceTimeline/types'
+import { buildAcceptanceFlowLayout } from './AcceptanceTimeline/utils/layout'
 
-// 获取图标组件
-function getIcon(iconName: string) {
-  return IconMap[iconName] || Circle;
+const PLAN_PRESETS = ['地基与基础验收', '主体结构验收', '节能验收', '消防验收', '规划验收', '人防验收', '电梯验收', '防雷验收', '竣工验收备案']
+const NAME_TO_TYPE: Record<string, string> = {
+  地基与基础验收: 'pre_acceptance',
+  主体结构验收: 'four_party',
+  节能验收: 'four_party',
+  消防验收: 'fire',
+  规划验收: 'planning',
+  人防验收: 'civil_defense',
+  电梯验收: 'elevator',
+  防雷验收: 'lightning',
+  竣工验收备案: 'completion_record',
+}
+const ACCEPTANCE_STATUS_OPTIONS: AcceptanceStatus[] = ['draft', 'preparing', 'ready_to_submit', 'submitted', 'inspecting', 'rectifying', 'passed', 'archived']
+const ACCEPTANCE_STATUS_LABELS: Record<AcceptanceStatus, string> = {
+  draft: '草稿',
+  preparing: '准备中',
+  ready_to_submit: '待申报',
+  submitted: '已申报',
+  inspecting: '验收中',
+  rectifying: '整改中',
+  passed: '已通过',
+  archived: '已归档',
+}
+const SCOPE_LEVEL_ORDER = ['project', 'building', 'unit', 'specialty'] as const
+const SCOPE_LEVEL_LABELS: Record<(typeof SCOPE_LEVEL_ORDER)[number], string> = {
+  project: '项目级',
+  building: '楼栋级',
+  unit: '单位工程级',
+  specialty: '专项级',
+}
+const ACCEPTANCE_PHASE_OPTIONS = [
+  { value: 'preparation', label: '准备阶段' },
+  { value: 'special_acceptance', label: '专项验收' },
+  { value: 'unit_completion', label: '单位工程验收' },
+  { value: 'filing_archive', label: '备案归档' },
+  { value: 'delivery_closeout', label: '交付收口' },
+] as const
+
+function normalizeScopeLevel(scopeLevel?: string | null) {
+  const normalized = String(scopeLevel ?? '').trim().toLowerCase()
+  if (['project', 'project_level'].includes(normalized)) return 'project'
+  if (['building', 'building_level'].includes(normalized)) return 'building'
+  if (['unit', 'unit_engineering', 'unit_project'].includes(normalized)) return 'unit'
+  if (['specialty', 'specialty_level'].includes(normalized)) return 'specialty'
+  return 'project'
+}
+
+function getScopeLevelLabel(scopeLevel?: string | null) {
+  return SCOPE_LEVEL_LABELS[normalizeScopeLevel(scopeLevel)] || '项目级'
+}
+
+function getBuildingLabel(buildingId?: string | null) {
+  const normalized = String(buildingId ?? '').trim()
+  return normalized || '全部楼栋'
 }
 
 export default function AcceptanceTimeline() {
-  const navigate = useNavigate();
-  const { id } = useParams<{ id: string }>();
-  const { toast } = useToast();
-  const { currentProject } = useStore();
-  
-  // 状态
-  const [plans, setPlans] = useState<AcceptancePlan[]>([]);
-  const [customTypes, setCustomTypes] = useState<AcceptanceType[]>([]);
-  const [nodes, setNodes] = useState<AcceptanceNode[]>([]);
-  const [links, setLinks] = useState<AcceptanceLink[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [viewMode, setViewMode] = useState<'graph' | 'list'>(() => {
-    try { return (sessionStorage.getItem(`acceptanceView:${id}`) as 'graph' | 'list') || 'graph' } catch { return 'graph' }
-  });
-  const [selectedNode, setSelectedNode] = useState<AcceptanceNode | null>(null);
-  const [detailOpen, setDetailOpen] = useState(false);
-  const [typeManagerOpen, setTypeManagerOpen] = useState(false);
-  const [editType, setEditType] = useState<AcceptanceType | null>(null);
-  const [addPlanOpen, setAddPlanOpen] = useState(false);
+  const { id } = useParams<{ id: string }>()
+  const { toast } = useToast()
+  const currentProject = useStore((state) => state.currentProject)
+  const projectId = id || currentProject?.id || ''
+  const projectName = currentProject?.name || '当前项目'
 
-  // 加载数据
-  useEffect(() => {
-    loadData();
-  }, [id]);
+  const [plans, setPlans] = useState<AcceptancePlan[]>([])
+  const [customTypes, setCustomTypes] = useState<AcceptanceType[]>([])
+  const [loading, setLoading] = useState(true)
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
+  const [detailOpen, setDetailOpen] = useState(false)
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [detailContext, setDetailContext] = useState<AcceptancePlanRelationBundle | null>(null)
+  const [typeManagerOpen, setTypeManagerOpen] = useState(false)
+  const [addPlanOpen, setAddPlanOpen] = useState(false)
+  const [statusFilter, setStatusFilter] = useState<'all' | AcceptanceStatus>('all')
+  const [blockedOnly, setBlockedOnly] = useState(false)
+  const [upcomingOnly, setUpcomingOnly] = useState(false)
+  const [timeScale, setTimeScale] = useState<AcceptanceTimelineScale>('month')
+  const [scopeFilter, setScopeFilter] = useState<'all' | (typeof SCOPE_LEVEL_ORDER)[number]>('all')
+  const [buildingFilter, setBuildingFilter] = useState('all')
+  const [viewMode, setViewMode] = useState<AcceptanceTimelineViewMode>(() => {
+    if (typeof window === 'undefined' || !projectId) return 'graph'
+    const persisted = safeStorageGet(window.sessionStorage, `acceptanceView:${projectId}`)
+    return persisted === 'list' || persisted === 'graph' ? persisted : 'graph'
+  })
 
-  const loadData = async () => {
-    if (!id) {
-      setLoading(false);
-      return;
+  const loadData = useCallback(async () => {
+    if (!projectId) {
+      setLoading(false)
+      return
     }
-    setLoading(true);
+    setLoading(true)
     try {
-      const [plansData, typesData] = await Promise.all([
-        acceptanceApi.getPlans(id),
-        acceptanceApi.getCustomTypes(id)
-      ]);
-      setPlans(plansData);
-      setCustomTypes(typesData);
-      
-      // 转换验收计划为节点
-      const acceptanceNodes: AcceptanceNode[] = plansData.map((plan, index) => ({
-        id: plan.id,
-        acceptance_plan_id: plan.id,
-        name: plan.name,
-        description: plan.description,
-        status: plan.status,
-        planned_date: plan.planned_date,
-        actual_date: plan.actual_date,
-        typeId: plan.type_id,
-        sort_order: index,
-        created_at: plan.created_at,
-        updated_at: plan.updated_at,
-        x: plan.position?.x || 400 + (index % 3) * 200,
-        y: plan.position?.y || 200 + Math.floor(index / 3) * 150
-      }));
-      setNodes(acceptanceNodes);
-      
-      // 转换依赖关系
-      const acceptanceLinks: AcceptanceLink[] = [];
-      plansData.forEach(plan => {
-        plan.depends_on.forEach(depId => {
-          acceptanceLinks.push({
-            id: `${depId}-${plan.id}`,
-            source: depId,
-            target: plan.id,
-            type: 'strong'
-          });
-        });
-      });
-      setLinks(acceptanceLinks);
+      const [snapshot, typeRows] = await Promise.all([acceptanceApi.getFlowSnapshot(projectId), acceptanceApi.getCustomTypes(projectId)])
+      setPlans(snapshot.plans)
+      setCustomTypes(typeRows)
     } catch (error) {
-      toast({
-        title: '加载失败',
-        description: '无法加载验收计划数据',
-        variant: 'destructive'
-      });
+      toast({ title: '加载失败', description: error instanceof Error ? error.message : '无法加载验收时间轴', variant: 'destructive' })
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
-  };
+  }, [projectId, toast])
 
-  // 计算统计数据
-const stats = useMemo(() => summarizeAcceptancePlans(plans), [plans]);
-  const phaseGroups = useMemo(() => groupAcceptanceByPhase(plans), [plans]);
+  useEffect(() => {
+    void loadData()
+  }, [loadData])
 
-  // 所有验收类型
-  const allTypes = useMemo(() => [
-    ...DEFAULT_ACCEPTANCE_TYPES,
-    ...customTypes
-  ], [customTypes]);
+  useEffect(() => {
+    if (!projectId || typeof window === 'undefined') return
+    safeStorageSet(window.sessionStorage, `acceptanceView:${projectId}`, viewMode)
+  }, [projectId, viewMode])
 
-  // 处理节点更新
-  const handleNodeUpdate = useCallback(async (nodeId: string, updates: Partial<AcceptanceNode>) => {
-    setNodes(prev => prev.map(n => 
-      n.id === nodeId ? { ...n, ...updates } : n
-    ));
-    
-    // 保存位置到后端
-    if (updates.x !== undefined || updates.y !== undefined) {
-      try {
-        await acceptanceApi.updatePosition(nodeId, { 
-          x: updates.x, 
-          y: updates.y 
-        });
-      } catch (error) {
-        console.error('保存位置失败:', error);
-      }
+  const allTypes = useMemo(() => [...DEFAULT_ACCEPTANCE_TYPES, ...customTypes], [customTypes])
+  const buildingOptions = useMemo(() => [...new Set(plans.map((plan) => String(plan.building_id ?? '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-CN')), [plans])
+  const scopeOptions = useMemo(() => {
+    const values = [...new Set(plans.map((plan) => normalizeScopeLevel(plan.scope_level)))]
+    return values.sort((a, b) => SCOPE_LEVEL_ORDER.indexOf(a) - SCOPE_LEVEL_ORDER.indexOf(b))
+  }, [plans])
+  const visiblePlans = useMemo(() => plans.filter((plan) => {
+    if (scopeFilter !== 'all' && normalizeScopeLevel(plan.scope_level) !== scopeFilter) return false
+    if (buildingFilter !== 'all' && String(plan.building_id ?? '').trim() !== buildingFilter) return false
+    if (statusFilter !== 'all' && normalizeAcceptanceStatus(plan.status) !== statusFilter) return false
+    if (blockedOnly && !isAcceptanceBlocked(plan, plans)) return false
+    if (upcomingOnly) {
+      if (!plan.planned_date) return false
+      const d = new Date(plan.planned_date)
+      const now = Date.now()
+      const diff = d.getTime() - now
+      if (diff < 0 || diff > 14 * 24 * 60 * 60 * 1000) return false
     }
-  }, []);
+    return true
+  }), [blockedOnly, buildingFilter, plans, scopeFilter, statusFilter, upcomingOnly])
+  const visibleStats = useMemo(() => summarizeAcceptancePlans(visiblePlans), [visiblePlans])
+  const visiblePhaseGroups = useMemo(() => groupAcceptanceByPhase(visiblePlans), [visiblePlans])
+  const flowLayout = useMemo(() => buildAcceptanceFlowLayout(visiblePlans, timeScale), [timeScale, visiblePlans])
+  const selectedNode = useMemo(() => flowLayout.nodes.find((node) => node.id === selectedNodeId) || null, [flowLayout.nodes, selectedNodeId])
 
-  // 处理节点选择
-  const handleNodeSelect = useCallback((node: AcceptanceNode | null) => {
-    setSelectedNode(node);
-    if (node) {
-      setDetailOpen(true);
-    }
-  }, []);
-
-  // 处理创建依赖关系
-  const handleLinkCreate = useCallback(async (sourceId: string, targetId: string) => {
+  const refreshBundle = useCallback(async (planId: string) => {
+    if (!projectId) return
+    setDetailLoading(true)
     try {
-      await acceptanceApi.addDependency(targetId, sourceId);
-      setLinks(prev => [...prev, {
-        id: `${sourceId}-${targetId}`,
-        source: sourceId,
-        target: targetId,
-        type: 'strong'
-      }]);
-      toast({ title: '依赖关系已创建' });
+      setDetailContext(await acceptanceApi.getPlanRelationBundle(projectId, planId))
     } catch (error) {
-      toast({ title: '创建失败', variant: 'destructive' });
+      toast({ title: '详情加载失败', description: error instanceof Error ? error.message : '无法加载关联数据', variant: 'destructive' })
+    } finally {
+      setDetailLoading(false)
     }
-  }, []);
+  }, [projectId, toast])
 
-  // 处理删除依赖关系
-  const handleLinkDelete = useCallback(async (linkId: string) => {
-    try {
-      const link = links.find(l => l.id === linkId);
-      if (link) {
-        const sourceId = typeof link.source === 'string' ? link.source : link.source.id;
-        const targetId = typeof link.target === 'string' ? link.target : link.target.id;
-        await acceptanceApi.removeDependency(targetId, sourceId);
-        setLinks(prev => prev.filter(l => l.id !== linkId));
-        toast({ title: '依赖关系已删除' });
-      }
-    } catch (error) {
-      toast({ title: '删除失败', variant: 'destructive' });
-    }
-  }, [links]);
+  const reloadPlans = useCallback(async () => {
+    await loadData()
+  }, [loadData])
 
-  // 处理状态更新
-  const handleStatusChange = async (planId: string, newStatus: AcceptanceStatus) => {
-    try {
-      await acceptanceApi.updateStatus(planId, newStatus);
-      setNodes(prev => prev.map(n => 
-        n.id === planId ? { ...n, status: newStatus } : n
-      ));
-      setPlans(prev => prev.map(p => 
-        p.id === planId ? { ...p, status: newStatus } : p
-      ));
-      toast({ title: '状态已更新' });
-    } catch (error) {
-      toast({ title: '更新失败', variant: 'destructive' });
-    }
-  };
+  const handleNodeSelect = useCallback((node: AcceptanceNode) => {
+    setSelectedNodeId(node.id)
+    setDetailOpen(true)
+    setDetailContext(null)
+    void refreshBundle(node.id)
+  }, [refreshBundle])
 
-  // 添加自定义类型
-  const handleAddType = async (type: Partial<AcceptanceType>) => {
-    try {
-      const newType = await acceptanceApi.createCustomType(type, id!);
-      setCustomTypes(prev => [...prev, newType]);
-      toast({ title: '类型已创建' });
-    } catch (error) {
-      toast({ title: '创建失败', variant: 'destructive' });
-    }
-  };
+  const handleStatusChange = useCallback(async (nodeId: string, status: AcceptanceStatus) => {
+    await acceptanceApi.updateStatus(nodeId, status)
+    await reloadPlans()
+    await refreshBundle(nodeId)
+  }, [refreshBundle, reloadPlans])
 
-  // 删除自定义类型
-  const handleDeleteType = async (typeId: string) => {
-    try {
-      await acceptanceApi.deleteCustomType(typeId);
-      setCustomTypes(prev => prev.filter(t => t.id !== typeId));
-      toast({ title: '类型已删除' });
-    } catch (error) {
-      toast({ title: '删除失败', variant: 'destructive' });
-    }
-  };
+  const handleDateUpdate = useCallback(async (planId: string, plannedDate: string) => {
+    await acceptanceApi.updatePlan(planId, { planned_date: plannedDate })
+    await reloadPlans()
+  }, [reloadPlans])
 
-  // 添加验收计划处理
-  const handleAddPlan = async (planData: Partial<AcceptancePlan>) => {
-    if (!id) return;
-    try {
-      const newPlan = await acceptanceApi.createPlan({ ...planData, project_id: id });
-      setPlans(prev => [...prev, newPlan]);
-      const newNode: AcceptanceNode = {
-        id: newPlan.id,
-        acceptance_plan_id: newPlan.id,
-        name: newPlan.name,
-        description: newPlan.description,
-        status: newPlan.status,
-        planned_date: newPlan.planned_date,
-        actual_date: newPlan.actual_date,
-        typeId: newPlan.type_id,
-        sort_order: plans.length,
-        created_at: newPlan.created_at,
-        updated_at: newPlan.updated_at,
-        x: 400 + (plans.length % 3) * 200,
-        y: 200 + Math.floor(plans.length / 3) * 150
-      };
-      setNodes(prev => [...prev, newNode]);
-      setAddPlanOpen(false);
-      toast({ title: '验收计划已创建' });
-    } catch (error) {
-      toast({ title: '创建失败', description: String(error), variant: 'destructive' });
-    }
-  };
+  const handleDependencyAdd = useCallback(async (nodeId: string, dependsOnId: string) => {
+    await acceptanceApi.addDependency(projectId, nodeId, dependsOnId)
+    await reloadPlans()
+    await refreshBundle(nodeId)
+  }, [projectId, refreshBundle, reloadPlans])
+
+  const handleDependencyRemove = useCallback(async (nodeId: string, dependsOnId: string) => {
+    await acceptanceApi.removeDependency(nodeId, dependsOnId)
+    await reloadPlans()
+    await refreshBundle(nodeId)
+  }, [refreshBundle, reloadPlans])
+
+  const handleRequirementCreate = useCallback(async (
+    nodeId: string,
+    input: {
+      requirement_type: string
+      source_entity_type: string
+      source_entity_id: string
+      description?: string | null
+      status?: string | null
+    },
+  ) => {
+    await acceptanceApi.createPlanRequirement(projectId, nodeId, input)
+    await refreshBundle(nodeId)
+  }, [projectId, refreshBundle])
+
+  const handleRecordCreate = useCallback(async (
+    nodeId: string,
+    input: {
+      record_type: string
+      content: string
+      operator?: string | null
+      record_date?: string | null
+    },
+  ) => {
+    await acceptanceApi.createPlanRecord(projectId, nodeId, input)
+    await refreshBundle(nodeId)
+  }, [projectId, refreshBundle])
+
+  const handleAddType = useCallback(async (type: Partial<AcceptanceType>) => {
+    const created = await acceptanceApi.createCustomType(type, projectId)
+    setCustomTypes((current) => [...current, created])
+  }, [projectId])
+
+  const handleDeleteType = useCallback(async (typeId: string) => {
+    await acceptanceApi.deleteCustomType(typeId)
+    setCustomTypes((current) => current.filter((item) => item.id !== typeId))
+  }, [])
+
+  const handleAddPlan = useCallback(async (plan: Partial<AcceptancePlan>) => {
+    await acceptanceApi.createPlan({ ...plan, project_id: projectId, milestone_id: plan.milestone_id, status: plan.status || 'draft', scope_level: plan.scope_level || 'project' })
+    await reloadPlans()
+  }, [projectId, reloadPlans])
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-96">
-        <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
+      <div className="space-y-4 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm" data-testid="acceptance-loading-skeleton">
+        <div className="flex items-center justify-between gap-4">
+          <div className="space-y-2">
+            <Skeleton className="h-6 w-40" />
+            <Skeleton className="h-4 w-64" />
+          </div>
+          <div className="flex gap-2">
+            <Skeleton className="h-9 w-24 rounded-full" />
+            <Skeleton className="h-9 w-24 rounded-full" />
+          </div>
+        </div>
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+          {[1, 2, 3, 4, 5].map((item) => <div key={item} className="rounded-2xl border border-slate-100 bg-slate-50 p-4"><Skeleton className="h-4 w-20" /><Skeleton className="mt-3 h-8 w-16" /></div>)}
+        </div>
       </div>
-    );
+    )
   }
 
   return (
-    <div className="space-y-6 page-enter">
-      {/* 面包屑导航（N07/N08） */}
+    <div className="page-enter space-y-6">
       {currentProject && (
-        <Breadcrumb items={[
-          { label: '公司驾驶舱', href: '/company' },
-          { label: currentProject.name, href: `/projects/${id}` },
-          { label: '证照管理', href: `/projects/${id}/pre-milestones` },
-          { label: '验收时间轴' },
-        ]} />
+        <Breadcrumb
+          items={[
+            { label: '公司驾驶舱', href: '/company' },
+            { label: projectName, href: `/projects/${id}` },
+            { label: '证照与验收', href: `/projects/${id}/pre-milestones` },
+            { label: '验收时间轴' },
+          ]}
+        />
       )}
-      {/* 页面头部 */}
-      <PageHeader
-        eyebrow="证照管理"
-        title="验收时间轴"
-        subtitle={`证照管理父模块下的验收节点与时间线 · 共 ${stats.total} 项验收 · 完成率 ${stats.completionRate}%`}
-      >
-        <div className="flex items-center gap-3">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => id && navigate(`/projects/${id}/reports?view=acceptance`)}
-            className="gap-2"
+
+      <PageHeader eyebrow="证照与验收" title="验收时间轴">
+        <div className="flex items-center rounded-full border border-slate-200 bg-white p-1 shadow-sm">
+          <button
+            type="button"
+            onClick={() => setViewMode('graph')}
+            className={cn('inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm transition-colors', viewMode === 'graph' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900')}
+            data-testid="acceptance-view-graph"
           >
-            <BarChart3 className="w-4 h-4" />
-            验收进度分析
-          </Button>
-          {/* 视图切换 */}
-          <div className="flex items-center bg-gray-100 rounded-lg p-1">
-            <button
-              onClick={() => { setViewMode('graph'); try { sessionStorage.setItem(`acceptanceView:${id}`, 'graph') } catch {} }}
-              className={cn(
-                "px-3 py-1.5 rounded-md text-sm transition-all flex items-center gap-1.5",
-                viewMode === 'graph' 
-                  ? 'bg-white shadow-sm text-gray-900' 
-                  : 'text-gray-600 hover:text-gray-900'
-              )}
-            >
-              <Network className="w-4 h-4" />
-              网络图
-            </button>
-            <button
-              onClick={() => { setViewMode('list'); try { sessionStorage.setItem(`acceptanceView:${id}`, 'list') } catch {} }}
-              className={cn(
-                "px-3 py-1.5 rounded-md text-sm transition-all flex items-center gap-1.5",
-                viewMode === 'list' 
-                  ? 'bg-white shadow-sm text-gray-900' 
-                  : 'text-gray-600 hover:text-gray-900'
-              )}
-            >
-              <List className="w-4 h-4" />
-              列表
-            </button>
-          </div>
-          
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setTypeManagerOpen(true)}
-            className="gap-2"
+            <Network className="h-4 w-4" />
+            流程板
+          </button>
+          <button
+            type="button"
+            onClick={() => setViewMode('list')}
+            className={cn('inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm transition-colors', viewMode === 'list' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900')}
+            data-testid="acceptance-view-list"
           >
-            <Palette className="w-4 h-4" />
-            类型管理
-          </Button>
-          
-          <Button className="gap-2" onClick={() => setAddPlanOpen(true)}>
-            <Plus className="w-4 h-4" />
-            添加验收
-          </Button>
+            <List className="h-4 w-4" />
+            台账
+          </button>
         </div>
+        <Button variant="outline" size="sm" onClick={() => setTypeManagerOpen(true)} className="gap-2">
+          <Palette className="h-4 w-4" />
+          类型管理
+        </Button>
+        <Button size="sm" onClick={() => setAddPlanOpen(true)} className="gap-2">
+          <Plus className="h-4 w-4" />
+          新增验收
+        </Button>
       </PageHeader>
 
-      {/* 统计卡片 */}
-      <div className="grid grid-cols-5 gap-4">
-        <StatCard label="验收总数" value={stats.total} color="gray" />
-        <StatCard label="已通过" value={stats.passed} color="green" />
-        <StatCard label="验收中" value={stats.inProgress} color="blue" />
-        <StatCard label="未通过 / 需补充" value={stats.failed} color="amber" />
-        <StatCard label="完成率" value={`${stats.completionRate}%`} color="emerald" />
-      </div>
+      <section data-testid="acceptance-summary-panel" className="space-y-4 rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="text-sm font-semibold text-slate-900">摘要区</div>
+            <div className="text-xs text-slate-500">当前视图 {visiblePlans.length} / 全部 {plans.length}</div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Badge variant="outline" className="rounded-full px-3 py-1">项目：{projectName}</Badge>
+            <Badge variant="outline" className="rounded-full px-3 py-1">楼栋：{getBuildingLabel(buildingFilter === 'all' ? null : buildingFilter)}</Badge>
+            <Badge variant="outline" className="rounded-full px-3 py-1">范围：{scopeFilter === 'all' ? '全部范围' : getScopeLevelLabel(scopeFilter)}</Badge>
+          </div>
+        </div>
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+          <StatCard label="验收总数" value={visibleStats.total} tone="slate" />
+          <StatCard label="已通过 / 已备案" value={visibleStats.passed} tone="green" />
+          <StatCard label="推进中" value={visibleStats.inProgress} tone="blue" />
+          <StatCard label="未启动 / 整改中" value={visibleStats.pending + visibleStats.failed} tone="amber" />
+          <StatCard label="完成率" value={`${visibleStats.completionRate}%`} tone="emerald" />
+        </div>
+      </section>
 
-      {phaseGroups.length > 0 && (
-        <div className="flex flex-wrap gap-2">
-          {phaseGroups.map(phase => (
-            <Badge
-              key={phase.id}
-              variant="outline"
-              className="rounded-full px-3 py-1 bg-white/80"
+      <section data-testid="acceptance-filter-panel" className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="text-sm font-semibold text-slate-900">筛选区</div>
+            <div className="text-xs text-slate-500">支持项目、楼栋、范围、状态、阻塞和时间尺度联动筛选。</div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Badge variant="outline" className="rounded-full px-3 py-1">项目：{projectName}</Badge>
+            <Badge variant="outline" className="rounded-full px-3 py-1">楼栋：{getBuildingLabel(buildingFilter === 'all' ? null : buildingFilter)}</Badge>
+          </div>
+        </div>
+        <div className="mt-4 grid gap-3 lg:grid-cols-2 2xl:grid-cols-5">
+          <div className="space-y-1">
+            <Label htmlFor="acceptance-scope-select" className="text-xs text-slate-500">范围</Label>
+            <select
+              id="acceptance-scope-select"
+              value={scopeFilter}
+              onChange={(event) => setScopeFilter(event.target.value as 'all' | (typeof SCOPE_LEVEL_ORDER)[number])}
+              className="w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm"
+              data-testid="acceptance-scope-select"
             >
-              {phase.name} · {phase.plans.length}
-            </Badge>
-          ))}
+              <option value="all">全部范围</option>
+              {scopeOptions.map((scopeLevel) => <option key={scopeLevel} value={scopeLevel}>{getScopeLevelLabel(scopeLevel)}</option>)}
+            </select>
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="acceptance-building-select" className="text-xs text-slate-500">楼栋</Label>
+            <select
+              id="acceptance-building-select"
+              value={buildingFilter}
+              onChange={(event) => setBuildingFilter(event.target.value)}
+              className="w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm"
+              data-testid="acceptance-building-select"
+            >
+              <option value="all">全部楼栋</option>
+              {buildingOptions.map((buildingId) => <option key={buildingId} value={buildingId}>{buildingId}</option>)}
+            </select>
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="acceptance-status-select" className="text-xs text-slate-500">状态筛选</Label>
+            <select
+              id="acceptance-status-select"
+              value={statusFilter}
+              onChange={(event) => setStatusFilter(event.target.value as 'all' | AcceptanceStatus)}
+              className="w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm"
+              data-testid="acceptance-status-select"
+            >
+              <option value="all">全部状态</option>
+              {ACCEPTANCE_STATUS_OPTIONS.map((status) => <option key={status} value={status}>{ACCEPTANCE_STATUS_LABELS[status]}</option>)}
+            </select>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs text-slate-500">仅看阻塞</Label>
+            <button
+              type="button"
+              onClick={() => setBlockedOnly((current) => !current)}
+              className={cn('inline-flex w-full items-center justify-between rounded-md border px-3 py-2 text-sm transition-colors', blockedOnly ? 'border-amber-300 bg-amber-50 text-amber-800' : 'border-slate-200 bg-white text-slate-600')}
+              data-testid="acceptance-blocked-toggle"
+            >
+              <span>只看阻塞项</span>
+              <span>{blockedOnly ? '已启用' : '关闭'}</span>
+            </button>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs text-slate-500">仅看临期</Label>
+            <button
+              type="button"
+              onClick={() => setUpcomingOnly((current) => !current)}
+              className={cn('inline-flex w-full items-center justify-between rounded-md border px-3 py-2 text-sm transition-colors', upcomingOnly ? 'border-blue-300 bg-blue-50 text-blue-800' : 'border-slate-200 bg-white text-slate-600')}
+              data-testid="acceptance-upcoming-toggle"
+            >
+              <span>14天内到期</span>
+              <span>{upcomingOnly ? '已启用' : '关闭'}</span>
+            </button>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs text-slate-500">时间尺度</Label>
+            <div className="grid grid-cols-3 gap-2">
+              {[{ value: 'month', label: '月' }, { value: 'biweek', label: '双周' }, { value: 'week', label: '周' }].map((item) => (
+                <button
+                  key={item.value}
+                  type="button"
+                  onClick={() => setTimeScale(item.value as AcceptanceTimelineScale)}
+                  className={cn('rounded-md border px-3 py-2 text-sm transition-colors', timeScale === item.value ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-200 bg-white text-slate-600')}
+                  data-testid={`acceptance-time-scale-${item.value}`}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+        <div className="mt-3 text-xs text-slate-500">筛选口径已切到项目 / 楼栋 / 单位工程 / 专项四级范围，并统一使用新版验收状态。</div>
+      </section>
+
+      {visiblePhaseGroups.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {visiblePhaseGroups.map((phase) => <Badge key={phase.id} variant="outline" className="rounded-full px-3 py-1">{phase.name} 路 {phase.plans.length}</Badge>)}
         </div>
       )}
 
-      {/* 主内容区 */}
-      {plans.length === 0 ? (
+      {visiblePlans.length === 0 ? (
         <EmptyState
           icon={CheckCircle2}
           title="暂无验收记录"
-          description="该项目还没有创建任何验收计划，点击下方按钮开始"
-          action={
-            <Button className="gap-2" onClick={() => setAddPlanOpen(true)}>
-              <Plus className="w-4 h-4" />
-              添加验收
-            </Button>
-          }
+          description="当前筛选条件下没有验收计划，或者项目还未创建验收项。"
+          action={<Button className="gap-2" onClick={() => setAddPlanOpen(true)}><Plus className="h-4 w-4" />添加验收</Button>}
         />
       ) : viewMode === 'graph' ? (
-        <Card className="h-[600px]">
-          <CardContent className="p-0 h-full">
-            <ForceDirectedGraph
-              nodes={nodes}
-              links={links}
-              acceptanceTypes={allTypes}
-              onNodeUpdate={handleNodeUpdate}
-              onNodeSelect={handleNodeSelect}
-              onLinkCreate={handleLinkCreate}
-              onLinkDelete={handleLinkDelete}
-              selectedNodeId={selectedNode?.id}
-              width={1200}
-              height={600}
-            />
-          </CardContent>
-        </Card>
+        <AcceptanceFlowBoard layout={flowLayout} plans={visiblePlans} customTypes={allTypes} selectedNodeId={selectedNode?.id} onNodeClick={handleNodeSelect} />
       ) : (
-        <AcceptanceListView 
-          nodes={nodes}
-          onNodeClick={handleNodeSelect}
-          customTypes={allTypes}
-        />
+        <AcceptanceLedger plans={visiblePlans} nodes={flowLayout.nodes} customTypes={allTypes} onNodeClick={handleNodeSelect} onStatusChange={handleStatusChange} onDateUpdate={handleDateUpdate} timeScale={timeScale} />
       )}
 
-      {/* 节点详情弹窗 */}
-      <NodeDetailDialog
+      <AcceptanceDetailDrawer
         node={selectedNode}
+        allPlans={plans}
         open={detailOpen}
+        customTypes={allTypes}
+        detailContext={detailContext}
+        detailLoading={detailLoading}
+        projectId={projectId}
         onClose={() => {
-          setDetailOpen(false);
-          setSelectedNode(null);
+          setDetailOpen(false)
+          setSelectedNodeId(null)
         }}
         onStatusChange={handleStatusChange}
-        customTypes={allTypes}
+        onDependencyAdd={handleDependencyAdd}
+        onDependencyRemove={handleDependencyRemove}
+        onRequirementCreate={handleRequirementCreate}
+        onRecordCreate={handleRecordCreate}
+        onDateUpdate={handleDateUpdate}
       />
 
-      {/* 类型管理弹窗 */}
-      <TypeManagerDialog
-        open={typeManagerOpen}
-        onClose={() => {
-          setTypeManagerOpen(false);
-          setEditType(null);
-        }}
-        customTypes={customTypes}
-        onAddType={handleAddType}
-        onDeleteType={handleDeleteType}
-        editType={editType}
-        setEditType={setEditType}
-      />
-
-      {/* 添加验收弹窗 */}
-      <AddPlanDialog
-        open={addPlanOpen}
-        onClose={() => setAddPlanOpen(false)}
-        onSubmit={handleAddPlan}
-        acceptanceTypes={allTypes}
-      />
+      <TypeManagerDialog open={typeManagerOpen} customTypes={customTypes} onClose={() => setTypeManagerOpen(false)} onAddType={handleAddType} onDeleteType={handleDeleteType} />
+      <AddPlanDialog open={addPlanOpen} acceptanceTypes={allTypes} onClose={() => setAddPlanOpen(false)} onSubmit={handleAddPlan} />
     </div>
-  );
+  )
 }
 
-// 统计卡片组件
-function StatCard({ 
-  label, 
-  value, 
-  color 
-}: { 
-  label: string; 
-  value: string | number; 
-  color: 'gray' | 'green' | 'blue' | 'amber' | 'emerald';
-}) {
-  const colorClasses = {
-    gray: 'bg-gray-50 text-gray-700',
+function StatCard({ label, value, tone }: { label: string; value: number | string; tone: 'slate' | 'green' | 'blue' | 'amber' | 'emerald' }) {
+  const toneClass: Record<typeof tone, string> = {
+    slate: 'bg-slate-50 text-slate-800',
     green: 'bg-green-50 text-green-700',
     blue: 'bg-blue-50 text-blue-700',
     amber: 'bg-amber-50 text-amber-700',
-    emerald: 'bg-emerald-50 text-emerald-700'
-  };
-
-  return (
-    <div className={cn("rounded-xl p-5 border-0", colorClasses[color])}>
-      <div className="text-2xl font-bold">{value}</div>
-      <div className="text-sm text-gray-500 mt-0.5">{label}</div>
-    </div>
-  );
-}
-
-// 列表视图
-interface AcceptanceListViewProps {
-  nodes: AcceptanceNode[];
-  onNodeClick: (node: AcceptanceNode) => void;
-  customTypes: AcceptanceType[];
-}
-
-function AcceptanceListView({ nodes, onNodeClick, customTypes }: AcceptanceListViewProps) {
-  return (
-    <Card>
-      <CardContent className="p-0">
-        <div className="divide-y">
-          {nodes.map((node) => {
-            const statusConfig = ACCEPTANCE_STATUS_CONFIG[node.status];
-            const StatusIcon = getIcon(statusConfig.icon);
-            const type = customTypes.find(t => t.id === node.typeId) || 
-                        DEFAULT_ACCEPTANCE_TYPES.find(t => t.id === node.typeId);
-            
-            return (
-              <div
-                key={node.id}
-                onClick={() => onNodeClick(node)}
-                className="flex items-center justify-between p-4 hover:bg-gray-50 cursor-pointer transition-colors"
-              >
-                <div className="flex items-center gap-4">
-                  <div 
-                    className="w-10 h-10 rounded-lg flex items-center justify-center text-white"
-                    style={{ backgroundColor: type?.color || '#94a3b8' }}
-                  >
-                    <span className="text-lg">{type?.icon || '📋'}</span>
-                  </div>
-                  <div>
-                    <h3 className="font-medium">{node.name}</h3>
-                    <p className="text-sm text-gray-500">
-                      {type?.name || node.typeId} · 计划: {node.planned_date}
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-4">
-                  <Badge 
-                    variant="outline"
-                    className={cn(
-                      statusConfig.bg,
-                      statusConfig.textColor,
-                      statusConfig.borderColor
-                    )}
-                  >
-                    {ACCEPTANCE_STATUS_NAMES[node.status]}
-                  </Badge>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-// 节点详情弹窗
-interface NodeDetailDialogProps {
-  node: AcceptanceNode | null;
-  open: boolean;
-  onClose: () => void;
-  onStatusChange: (nodeId: string, status: AcceptanceStatus) => void;
-  customTypes: AcceptanceType[];
-}
-
-function NodeDetailDialog({
-  node,
-  open,
-  onClose,
-  onStatusChange,
-  customTypes
-}: NodeDetailDialogProps) {
-  if (!node) return null;
-
-  const statusConfig = ACCEPTANCE_STATUS_CONFIG[node.status];
-  const type = customTypes.find(t => t.id === node.typeId) || 
-              DEFAULT_ACCEPTANCE_TYPES.find(t => t.id === node.typeId);
-
-  return (
-    <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
-        <DialogHeader>
-          <div className="flex items-center justify-between">
-            <DialogTitle className="text-xl">{node.name}</DialogTitle>
-            <Badge 
-              variant="outline"
-              className={cn(
-                statusConfig.bg,
-                statusConfig.textColor,
-                statusConfig.borderColor
-              )}
-            >
-              {ACCEPTANCE_STATUS_NAMES[node.status]}
-            </Badge>
-          </div>
-          <p className="text-sm text-gray-500">
-            {type?.name || node.typeId}
-          </p>
-        </DialogHeader>
-
-        <div className="space-y-6 mt-4">
-          {/* 时间信息 */}
-          <div className="grid grid-cols-2 gap-4">
-            <div className="p-4 bg-gray-50 rounded-lg">
-              <p className="text-sm text-gray-500 mb-1">计划日期</p>
-              <p className="font-medium">{node.planned_date || '未设置'}</p>
-            </div>
-            <div className="p-4 bg-gray-50 rounded-lg">
-              <p className="text-sm text-gray-500 mb-1">实际日期</p>
-              <p className={cn(
-                "font-medium",
-                node.actual_date ? "text-green-600" : "text-gray-400"
-              )}>
-                {node.actual_date || '未完成'}
-              </p>
-            </div>
-          </div>
-
-          {/* 位置信息 */}
-          <div className="p-4 bg-gray-50 rounded-lg">
-            <p className="text-sm text-gray-500 mb-1">网络图位置</p>
-            <p className="font-medium text-gray-700">
-              X: {Math.round(node.x || 0)}, Y: {Math.round(node.y || 0)}
-            </p>
-            <p className="text-xs text-gray-400 mt-1">
-              在力导向图中拖拽节点可调整位置
-            </p>
-          </div>
-
-          {/* 操作按钮 */}
-          <div className="flex gap-3 pt-4 border-t">
-            {node.status !== 'passed' && (
-              <Button 
-                className="flex-1 bg-green-600 hover:bg-green-700"
-                onClick={() => onStatusChange(node.id, 'passed')}
-              >
-                <CheckCircle2 className="w-4 h-4 mr-2" />
-                标记通过
-              </Button>
-            )}
-            {node.status === 'pending' && (
-              <Button 
-                variant="outline"
-                className="flex-1"
-                onClick={() => onStatusChange(node.id, 'in_progress')}
-              >
-                <Loader2 className="w-4 h-4 mr-2" />
-                开始验收
-              </Button>
-            )}
-            <Button variant="outline">
-              <Edit3 className="w-4 h-4 mr-2" />
-              编辑
-            </Button>
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-// 类型管理弹窗
-interface TypeManagerDialogProps {
-  open: boolean;
-  onClose: () => void;
-  customTypes: AcceptanceType[];
-  onAddType: (type: Partial<AcceptanceType>) => void;
-  onDeleteType: (typeId: string) => void;
-  editType: AcceptanceType | null;
-  setEditType: (type: AcceptanceType | null) => void;
+    emerald: 'bg-emerald-50 text-emerald-700',
+  }
+  return <Card className={cn('border-0 shadow-sm', toneClass[tone])}><CardContent className="p-5"><div className="text-2xl font-semibold">{value}</div><div className="mt-1 text-sm text-slate-500">{label}</div></CardContent></Card>
 }
 
 function TypeManagerDialog({
   open,
-  onClose,
   customTypes,
+  onClose,
   onAddType,
   onDeleteType,
-  editType,
-  setEditType
-}: TypeManagerDialogProps) {
-  const [newTypeName, setNewTypeName] = useState('');
-  const [newTypeColor, setNewTypeColor] = useState('#3b82f6');
-  const [newTypeIcon, setNewTypeIcon] = useState('📋');
+}: {
+  open: boolean
+  customTypes: AcceptanceType[]
+  onClose: () => void
+  onAddType: (type: Partial<AcceptanceType>) => void
+  onDeleteType: (typeId: string) => void
+}) {
+  const [newTypeName, setNewTypeName] = useState('')
+  const [newTypeIcon, setNewTypeIcon] = useState('验')
+  const [newTypeColor, setNewTypeColor] = useState<(typeof CHART_PALETTE)[number]>(CHART_PALETTE[0])
+
+  const reset = () => {
+    setNewTypeName('')
+    setNewTypeIcon('验')
+    setNewTypeColor(CHART_PALETTE[0])
+  }
+
+  const handleClose = () => {
+    reset()
+    onClose()
+  }
 
   const handleSubmit = () => {
-    if (!newTypeName.trim()) return;
+    if (!newTypeName.trim()) return
     onAddType({
-      name: newTypeName,
-      shortName: newTypeName.slice(0, 4),
+      name: newTypeName.trim(),
+      shortName: newTypeName.trim().slice(0, 4),
       color: newTypeColor,
       icon: newTypeIcon,
       isSystem: false,
-      sortOrder: customTypes.length
-    });
-    setNewTypeName('');
-    setNewTypeColor('#3b82f6');
-    setNewTypeIcon('📋');
-  };
-
-  const colors = [
-    '#3b82f6', '#10b981', '#f59e0b', '#ef4444',
-    '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'
-  ];
+      sortOrder: customTypes.length,
+    })
+    reset()
+  }
 
   return (
-    <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-lg">
+    <Dialog open={open} onOpenChange={(next) => !next && handleClose()}>
+      <DialogContent className="max-h-[80vh] max-w-lg overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Palette className="w-5 h-5" />
+            <Palette className="h-5 w-5" />
             验收类型管理
           </DialogTitle>
+          <DialogDescription className="sr-only">管理系统默认类型和自定义验收类型。</DialogDescription>
         </DialogHeader>
-
-        <div className="space-y-6 mt-4">
-          {/* 现有类型列表 */}
+        <div className="mt-4 space-y-6">
           <div>
-            <h4 className="text-sm font-medium text-gray-700 mb-3">系统默认类型</h4>
+            <h4 className="mb-3 text-sm font-medium text-slate-700">系统默认类型</h4>
             <div className="flex flex-wrap gap-2">
-              {DEFAULT_ACCEPTANCE_TYPES.map(type => (
-                <div
-                  key={type.id}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm"
-                  style={{ 
-                    backgroundColor: `${type.color}20`,
-                    color: type.color 
-                  }}
-                >
+              {DEFAULT_ACCEPTANCE_TYPES.map((type) => (
+                <div key={type.id} className="flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm" style={{ backgroundColor: `${type.color}20`, color: type.color }}>
                   <span>{type.icon}</span>
                   <span>{type.name}</span>
                 </div>
@@ -770,24 +552,14 @@ function TypeManagerDialog({
 
           {customTypes.length > 0 && (
             <div>
-              <h4 className="text-sm font-medium text-gray-700 mb-3">自定义类型</h4>
+              <h4 className="mb-3 text-sm font-medium text-slate-700">自定义类型</h4>
               <div className="flex flex-wrap gap-2">
-                {customTypes.map(type => (
-                  <div
-                    key={type.id}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm group"
-                    style={{ 
-                      backgroundColor: `${type.color}20`,
-                      color: type.color 
-                    }}
-                  >
+                {customTypes.map((type) => (
+                  <div key={type.id} className="group flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm" style={{ backgroundColor: `${type.color}20`, color: type.color }}>
                     <span>{type.icon}</span>
                     <span>{type.name}</span>
-                    <button
-                      onClick={() => onDeleteType(type.id)}
-                      className="ml-1 opacity-0 group-hover:opacity-100 transition-opacity"
-                    >
-                      <XCircle className="w-4 h-4" />
+                    <button type="button" onClick={() => onDeleteType(type.id)} className="ml-1 rounded-full p-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+                      <CheckCircle2 className="h-4 w-4" />
                     </button>
                   </div>
                 ))}
@@ -795,49 +567,27 @@ function TypeManagerDialog({
             </div>
           )}
 
-          {/* 添加新类型 */}
-          <div className="pt-4 border-t">
-            <h4 className="text-sm font-medium text-gray-700 mb-3">添加新类型</h4>
+          <div className="border-t border-slate-100 pt-4">
+            <h4 className="mb-3 text-sm font-medium text-slate-700">新增类型</h4>
             <div className="space-y-3">
               <div>
                 <Label>类型名称</Label>
-                <Input
-                  value={newTypeName}
-                  onChange={(e) => setNewTypeName(e.target.value)}
-                  placeholder="例如：节能验收"
-                />
+                <Input value={newTypeName} onChange={(event) => setNewTypeName(event.target.value)} placeholder="例如：专项验收" className="mt-1" />
               </div>
               <div>
                 <Label>图标</Label>
-                <Input
-                  value={newTypeIcon}
-                  onChange={(e) => setNewTypeIcon(e.target.value)}
-                  placeholder="例如：🌿"
-                  maxLength={2}
-                />
+                <Input value={newTypeIcon} onChange={(event) => setNewTypeIcon(event.target.value)} placeholder="例如：验" maxLength={2} className="mt-1" />
               </div>
               <div>
                 <Label>颜色</Label>
-                <div className="flex flex-wrap gap-2 mt-2">
-                  {colors.map(color => (
-                    <button
-                      key={color}
-                      onClick={() => setNewTypeColor(color)}
-                      className={cn(
-                        "w-8 h-8 rounded-full transition-all",
-                        newTypeColor === color && "ring-2 ring-offset-2 ring-gray-400"
-                      )}
-                      style={{ backgroundColor: color }}
-                    />
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {CHART_PALETTE.map((color) => (
+                    <button key={color} type="button" onClick={() => setNewTypeColor(color)} className={cn('h-8 w-8 rounded-full transition-all', newTypeColor === color && 'ring-2 ring-slate-400 ring-offset-2')} style={{ backgroundColor: color }} />
                   ))}
                 </div>
               </div>
-              <Button 
-                onClick={handleSubmit}
-                disabled={!newTypeName.trim()}
-                className="w-full"
-              >
-                <Plus className="w-4 h-4 mr-2" />
+              <Button onClick={handleSubmit} disabled={!newTypeName.trim()} className="w-full gap-2">
+                <Plus className="h-4 w-4" />
                 添加类型
               </Button>
             </div>
@@ -845,137 +595,121 @@ function TypeManagerDialog({
         </div>
       </DialogContent>
     </Dialog>
-  );
+  )
 }
 
-// ─── 添加验收弹窗 ──────────────────────────────────────────────────────────────
+function AddPlanDialog({
+  open,
+  acceptanceTypes,
+  onClose,
+  onSubmit,
+}: {
+  open: boolean
+  acceptanceTypes: AcceptanceType[]
+  onClose: () => void
+  onSubmit: (plan: Partial<AcceptancePlan>) => Promise<void>
+}) {
+  const [name, setName] = useState('')
+  const [typeId, setTypeId] = useState('')
+  const [plannedDate, setPlannedDate] = useState('')
+  const [description, setDescription] = useState('')
+  const [phaseCode, setPhaseCode] = useState<(typeof ACCEPTANCE_PHASE_OPTIONS)[number]['value']>('special_acceptance')
+  const [scopeLevel, setScopeLevel] = useState<'project' | 'building' | 'unit' | 'specialty'>('project')
+  const [buildingId, setBuildingId] = useState('')
+  const [responsibleUnit, setResponsibleUnit] = useState('')
+  const [isHardPrerequisite, setIsHardPrerequisite] = useState(false)
+  const [category, setCategory] = useState('')
+  const [submitting, setSubmitting] = useState(false)
 
-interface AddPlanDialogProps {
-  open: boolean;
-  onClose: () => void;
-  onSubmit: (plan: Partial<AcceptancePlan>) => Promise<void>;
-  acceptanceTypes: AcceptanceType[];
-}
+  useEffect(() => {
+    if (!open) {
+      setName('')
+      setTypeId('')
+      setPlannedDate('')
+      setDescription('')
+      setPhaseCode('special_acceptance')
+      setScopeLevel('project')
+      setBuildingId('')
+      setResponsibleUnit('')
+      setIsHardPrerequisite(false)
+      setCategory('')
+      setSubmitting(false)
+    }
+  }, [open])
 
-function AddPlanDialog({ open, onClose, onSubmit, acceptanceTypes }: AddPlanDialogProps) {
-  const [name, setName] = useState('');
-  const [typeId, setTypeId] = useState('');
-  const [plannedDate, setPlannedDate] = useState('');
-  const [description, setDescription] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-
-  // 重置表单
-  const reset = () => {
-    setName('');
-    setTypeId('');
-    setPlannedDate('');
-    setDescription('');
-  };
-
-  const handleClose = () => {
-    reset();
-    onClose();
-  };
+  const defaultType = acceptanceTypes[0]
 
   const handleSubmit = async () => {
-    if (!name.trim()) return;
-    setSubmitting(true);
+    if (!name.trim()) return
+    setSubmitting(true)
     try {
-      // 未选类型时使用第一个可用类型作为默认值
-      const fallbackType = acceptanceTypes[0];
-      const resolvedTypeId = typeId || fallbackType?.id || 'pre_acceptance';
-      const selectedType = acceptanceTypes.find(t => t.id === resolvedTypeId) || fallbackType;
+      const resolvedTypeId = typeId || defaultType?.id || 'pre_acceptance'
+      const selectedType = acceptanceTypes.find((type) => type.id === resolvedTypeId) || defaultType
       await onSubmit({
         name: name.trim(),
         type_id: resolvedTypeId,
         type_name: selectedType?.name || resolvedTypeId,
-        type_color: selectedType?.color || 'bg-gray-500',
-        planned_date: plannedDate || new Date().toISOString().split('T')[0],
+        type_color: selectedType?.color || 'bg-slate-500',
+        planned_date: plannedDate || new Date().toISOString().slice(0, 10),
         description: description.trim() || undefined,
-        status: 'pending' as AcceptanceStatus,
-        depends_on: [],
-        depended_by: [],
+        status: 'draft',
+        phase_code: phaseCode,
         phase_order: 0,
-        is_system: false
-      });
-      reset();
+        predecessor_plan_ids: [],
+        successor_plan_ids: [],
+        display_badges: ['自定义'],
+        scope_level: scopeLevel,
+        building_id: buildingId.trim() || null,
+        responsible_unit: responsibleUnit.trim() || null,
+        is_hard_prerequisite: isHardPrerequisite,
+        category: category.trim() || null,
+        is_system: false,
+        is_custom: true,
+      })
+      onClose()
     } finally {
-      setSubmitting(false);
+      setSubmitting(false)
     }
-  };
+  }
+
+  const handlePickPreset = (presetName: string) => {
+    setName(presetName)
+    const resolvedTypeId = NAME_TO_TYPE[presetName]
+    if (resolvedTypeId) setTypeId(resolvedTypeId)
+  }
 
   return (
-    <Dialog open={open} onOpenChange={handleClose}>
+    <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Plus className="w-5 h-5" />
-            添加验收计划
+            <Plus className="h-5 w-5" />
+            新增验收计划
           </DialogTitle>
+          <DialogDescription className="sr-only">创建验收计划，补充范围、楼栋和计划时间。</DialogDescription>
         </DialogHeader>
-
-        <div className="space-y-4 mt-4">
-          {/* 验收名称：合并类型和名称，支持选择或自定义输入 */}
+        <div className="mt-4 space-y-4">
           <div>
             <Label>验收名称 *</Label>
-            <div className="relative">
-              <Input
-                list="acceptance-name-options"
-                value={name}
-                onChange={e => {
-                  const value = e.target.value
-                  setName(value)
-                  // 自动从名称推断类型
-                  const typeMap: Record<string, string> = {
-                    '地基与基础验收': '地基与基础',
-                    '主体结构验收': '主体结构',
-                    '节能验收': '节能验收',
-                    '竣工验收': '竣工验收',
-                    '消防验收': '竣工验收',
-                    '环保验收': '竣工验收',
-                    '规划验收': '竣工验收',
-                    '人防验收': '竣工验收',
-                  }
-                  const inferredType = typeMap[value]
-                  if (inferredType && acceptanceTypes.length > 0) {
-                    const matchedType = acceptanceTypes.find(t => t.name === inferredType)
-                    if (matchedType) setTypeId(matchedType.id)
-                  }
-                }}
-                placeholder="选择或输入验收名称"
-                className="mt-1"
-              />
-              <datalist id="acceptance-name-options">
-                {acceptanceTypes.map(t => (
-                  <option key={t.id} value={t.name} />
-                ))}
-                <option value="地基与基础验收" />
-                <option value="主体结构验收" />
-                <option value="节能验收" />
-                <option value="竣工验收" />
-                <option value="消防验收" />
-                <option value="环保验收" />
-                <option value="规划验收" />
-                <option value="人防验收" />
-              </datalist>
-            </div>
-            {/* 快速选择按钮 */}
-            <div className="flex flex-wrap gap-1.5 mt-2">
-              {acceptanceTypes.slice(0, 8).map(t => (
-                <button
-                  key={t.id}
-                  type="button"
-                  onClick={() => {
-                    setName(t.name)
-                    setTypeId(t.id)
-                  }}
-                  className={`px-2 py-1 text-xs rounded-full border transition-colors ${
-                    name === t.name 
-                      ? 'bg-blue-500 text-white border-blue-500' 
-                      : 'bg-white text-gray-600 border-gray-300 hover:border-blue-400'
-                  }`}
-                >
-                  {t.name}
+            <Input
+              list="acceptance-name-options"
+              value={name}
+              onChange={(event) => {
+                const value = event.target.value
+                setName(value)
+                if (NAME_TO_TYPE[value]) setTypeId(NAME_TO_TYPE[value])
+              }}
+              placeholder="选择或输入验收名称"
+              className="mt-1"
+            />
+            <datalist id="acceptance-name-options">
+              {acceptanceTypes.map((type) => <option key={type.id} value={type.name} />)}
+              {PLAN_PRESETS.map((preset) => <option key={preset} value={preset} />)}
+            </datalist>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {PLAN_PRESETS.map((preset) => (
+                <button key={preset} type="button" onClick={() => handlePickPreset(preset)} className={cn('rounded-full border px-2 py-1 text-xs transition-colors', name === preset ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-200 bg-white text-slate-600 hover:border-blue-300')}>
+                  {preset}
                 </button>
               ))}
             </div>
@@ -983,36 +717,63 @@ function AddPlanDialog({ open, onClose, onSubmit, acceptanceTypes }: AddPlanDial
 
           <div>
             <Label>计划日期</Label>
-            <Input
-              type="date"
-              value={plannedDate}
-              onChange={e => setPlannedDate(e.target.value)}
-              className="mt-1"
-            />
+            <Input type="date" value={plannedDate} onChange={(event) => setPlannedDate(event.target.value)} className="mt-1" />
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <Label>范围层级</Label>
+              <select value={scopeLevel} onChange={(event) => setScopeLevel(event.target.value as 'project' | 'building' | 'unit' | 'specialty')} className="mt-1 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm">
+                {SCOPE_LEVEL_ORDER.map((level) => <option key={level} value={level}>{SCOPE_LEVEL_LABELS[level]}</option>)}
+              </select>
+            </div>
+            <div>
+              <Label>楼栋编号</Label>
+              <Input value={buildingId} onChange={(event) => setBuildingId(event.target.value)} placeholder="可选" className="mt-1" />
+            </div>
           </div>
 
           <div>
             <Label>备注说明</Label>
-            <Input
-              value={description}
-              onChange={e => setDescription(e.target.value)}
-              placeholder="可选备注"
-              className="mt-1"
+            <Input value={description} onChange={(event) => setDescription(event.target.value)} placeholder="可选备注" className="mt-1" />
+          </div>
+
+          <div>
+            <Label>阶段归属</Label>
+            <select value={phaseCode} onChange={(event) => setPhaseCode(event.target.value as (typeof ACCEPTANCE_PHASE_OPTIONS)[number]['value'])} className="mt-1 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm">
+              {ACCEPTANCE_PHASE_OPTIONS.map((phase) => <option key={phase.value} value={phase.value}>{phase.label}</option>)}
+            </select>
+          </div>
+
+          <div>
+            <Label>责任单位</Label>
+            <Input value={responsibleUnit} onChange={(event) => setResponsibleUnit(event.target.value)} placeholder="可选，填写参建单位名称" className="mt-1" />
+          </div>
+
+          <div>
+            <Label>验收类别</Label>
+            <Input value={category} onChange={(event) => setCategory(event.target.value)} placeholder="可选，如：结构验收、消防验收" className="mt-1" />
+          </div>
+
+          <div className="flex items-center gap-3 rounded-lg border border-slate-200 px-3 py-2">
+            <input
+              id="is-hard-prerequisite"
+              type="checkbox"
+              checked={isHardPrerequisite}
+              onChange={(event) => setIsHardPrerequisite(event.target.checked)}
+              className="h-4 w-4 rounded border-slate-300"
             />
+            <label htmlFor="is-hard-prerequisite" className="text-sm text-slate-700">强制前置（完成后方可推进后续工序）</label>
           </div>
         </div>
-
         <DialogFooter className="mt-6">
-          <Button variant="outline" onClick={handleClose} disabled={submitting}>取消</Button>
-          <Button
-            onClick={handleSubmit}
-            disabled={!name.trim() || submitting}
-          >
-            {submitting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Plus className="w-4 h-4 mr-2" />}
+          <Button variant="outline" onClick={onClose} disabled={submitting}>取消</Button>
+          <Button onClick={handleSubmit} loading={submitting} disabled={!name.trim()} className="gap-2">
+            <Plus className="h-4 w-4" />
             确认创建
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  );
+  )
 }

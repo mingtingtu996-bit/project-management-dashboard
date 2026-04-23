@@ -134,7 +134,7 @@ export function UnitProgressCard({
 
   if (units.length === 0) {
     return (
-      <Card className="rounded-xl border border-gray-200 shadow-sm bg-white hover:shadow-md hover:ring-1 ring-blue-100 transition-all">
+      <Card variant="metric">
         <CardHeader className="pb-2">
           <CardTitle className="text-base font-semibold">责任单位完成情况</CardTitle>
         </CardHeader>
@@ -148,7 +148,7 @@ export function UnitProgressCard({
   }
 
   return (
-    <Card className="rounded-xl border border-gray-200 shadow-sm bg-white hover:shadow-md hover:ring-1 ring-blue-100 transition-all">
+    <Card variant="metric">
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between">
           <div>

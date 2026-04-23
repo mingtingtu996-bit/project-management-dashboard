@@ -1,43 +1,1826 @@
 {
-  "last_updated": "2026-04-06T00:00:00",
-  "current_phase": 0,
+  "last_updated": "2026-04-19T12:15:00+08:00",
+  "current_phase": 10,
+  "execution_order": [
+    "10.1",
+    "10.2a-a-impl",
+    "10.2a-b-impl",
+    "10.2a-review",
+    "10.2b-a-test",
+    "10.2b-a-impl",
+    "10.2b-review",
+    "15.0",
+    "15.0a",
+    "10.2c-a-test",
+    "10.2c-a-impl",
+    "10.2c-b-test",
+    "10.2c-b-impl",
+    "10.2c-review",
+    "10.2d-a-contract-test",
+    "10.2d-a-impl",
+    "10.2d-b-contract-test",
+    "10.2d-b-impl",
+    "10.2d-review",
+    "10.2e",
+    "15.1a-test",
+    "15.1a-impl",
+    "15.1b-test",
+    "15.1b-impl",
+    "15.1-review",
+    "15.2a-impl",
+    "15.2b-impl",
+    "15.2-review",
+    "10.2f-a-contract-test",
+    "10.2f-a-impl",
+    "10.2f-b-contract-test",
+    "10.2f-b-impl",
+    "10.2f-review",
+    "10.2g-a-test",
+    "10.2g-a-impl",
+    "10.2g-b-contract-test",
+    "10.2g-b-impl",
+    "10.2g-review",
+    "14.3a-contract-test",
+    "14.3a-impl",
+    "14.3b-contract-test",
+    "14.3b-impl",
+    "14.3-review",
+    "14.4a-contract-test",
+    "14.4a-impl",
+    "10.8a",
+    "10.8b",
+    "10.8c",
+    "10.9",
+    "10.10x-contract-test",
+    "10.10x-impl",
+    "10.10x-review",
+    "10.10b-contract-test",
+    "10.10b-impl",
+    "10.10b-review",
+    "15.3a-contract-test",
+    "15.3a-impl",
+    "15.3b-contract-test",
+    "15.3b-impl",
+    "15.3c-contract-test",
+    "15.3c-impl",
+    "15.3-review",
+    "15.4a-contract-test",
+    "15.4a-impl",
+    "15.4b-contract-test",
+    "15.4b-impl",
+    "15.4-review",
+    "15.5a-contract-test",
+    "15.5a-impl",
+    "15.5b-contract-test",
+    "15.5b-impl",
+    "15.5c-story-e2e",
+    "15.5-review",
+    "15.6a-contract-test",
+    "15.6a-impl",
+    "15.6b-contract-test",
+    "15.6b-impl",
+    "15.6-review",
+    "14.4b-contract-test",
+    "14.4b-impl",
+    "14.4-review",
+    "14.5a-contract-test",
+    "14.5a-impl",
+    "14.5-review",
+    "15.7a-test",
+    "15.7a-impl",
+    "15.7b-test",
+    "15.7b-impl",
+    "15.7-review",
+    "15.8a-contract-test",
+    "15.8a-impl",
+    "15.8b-contract-test",
+    "15.8b-impl",
+    "15.8c-story-e2e",
+    "15.8-review",
+    "DW.0",
+    "DW.G1",
+    "DW.1",
+    "DW.2",
+    "DW.3",
+    "DW.4",
+    "DW.5",
+    "DW.6",
+    "DW.7",
+    "DW.8",
+    "DW.9",
+    "DW.9a",
+    "11.0",
+    "11.1",
+    "11.2",
+    "11.2-review",
+    "11.3",
+    "11.4",
+    "11.5",
+    "11.6",
+    "12.0",
+    "12.1",
+    "12.2",
+    "12.2-review",
+    "12.3",
+    "12.4",
+    "12.5",
+    "12.6",
+    "12.7",
+    "12.8",
+    "13.0",
+    "13.1",
+    "13.2",
+    "13.2-review",
+    "13.3",
+    "13.4",
+    "13.5",
+    "13.5-review",
+    "13.6",
+    "13.7",
+    "13.8",
+    "15.9a-contract-test",
+    "15.9a-impl",
+    "15.9b-story-e2e",
+    "15.9-review",
+    "15.10a-test",
+    "15.10a-impl",
+    "15.10b-test",
+    "15.10b-impl",
+    "15.10-review",
+    "15.11a-test",
+    "15.11a-impl",
+    "15.11b-test",
+    "15.11b-impl",
+    "15.11-review",
+    "14.1a-contract-test",
+    "14.1a-impl",
+    "14.1-review",
+    "14.2a-contract-test",
+    "14.2a-impl",
+    "14.2b-contract-test",
+    "14.2b-impl",
+    "14.2-review",
+    "14.6a-story-e2e",
+    "14.6a-impl",
+    "14.6-review"
+  ],
+  "current_execution_scope": {
+    "authoritative_queue": "execution_order",
+    "included_prefixes": [
+      "10.1",
+      "10.2",
+      "10.3",
+      "10.4",
+      "10.5",
+      "10.6",
+      "10.7",
+      "10.8",
+      "10.9",
+      "10.10",
+      "DW.",
+      "12.",
+      "11.",
+      "13.",
+      "14.",
+      "15."
+    ],
+    "excluded_prefixes": [
+      "10.0"
+    ],
+    "note": "current_execution_scope widened to allow 10.3-10.7 plus DW/11/12/13 entry; execution_order now carries the four special-plan main chains; step-level prerequisites and DW.G1 remain authoritative"
+  },
+  "execution_policy": {
+    "auto_continue": true,
+    "do_not_ask_after_each_step": true,
+    "preferred_batch_goal": "complete_current_parent_or_3_leaf_steps",
+    "stop_conditions": [
+      "step_blocked",
+      "review_checkpoint_reached",
+      "requires_user_decision",
+      "conflicting_requirement",
+      "destructive_action_needs_confirmation",
+      "context_limit_near",
+      "queue_exhausted"
+    ],
+    "ask_user_only_when": [
+      "blocked_with_clear_question",
+      "checkpoint_review_required",
+      "requirement_conflict_cannot_be_resolved_from_docs",
+      "high_risk_scope_change",
+      "user_requested_pause"
+    ],
+    "note": "execution_policy note normalized"
+  },
+  "review_checkpoints": [
+    {
+      "step": "10.2b-review",
+      "label": "checkpoint-10.2b",
+      "status": "reviewed",
+      "review_scope": "delay_requests change_logs snapshots actual_start actual_end",
+      "note": "10.2b review completed"
+    },
+    {
+      "step": "15.1-review",
+      "label": "checkpoint-15.1",
+      "status": "reviewed",
+      "review_scope": "planning data foundation routes locks scheduler",
+      "note": "15.1 review completed"
+    },
+    {
+      "step": "10.2g-review",
+      "label": "checkpoint-10.2g",
+      "status": "reviewed",
+      "review_scope": "warning chain notifications pending_manual_close",
+      "note": "10.2g review completed"
+    },
+    {
+      "step": "10.10x-review",
+      "label": "checkpoint-10.10x",
+      "status": "reviewed",
+      "review_scope": "shared store selectors cross-page truth",
+      "note": "10.10x review completed"
+    },
+    {
+      "step": "10.10b-review",
+      "label": "checkpoint-10.10b",
+      "status": "reviewed",
+      "review_scope": "shadow state cleanup explicit error states",
+      "note": "10.10b review completed"
+    },
+    {
+      "step": "15.5-review",
+      "label": "checkpoint-15.5",
+      "status": "reviewed",
+      "review_scope": "baseline monthly closeout integration",
+      "note": "15.5 review completed"
+    },
+    {
+      "step": "15.8-review",
+      "label": "checkpoint-15.8",
+      "status": "reviewed",
+      "review_scope": "deviation analysis end-to-end",
+      "note": "15.8 review PASSED with follow-ups: (1) scatter chart missing zero-deviation diagonal line, (2) empty-state text should be '已有N条任务有实际执行数据' not '暂无散点图数据' + missing deviation-empty-state testid, (3) missing deviation-reason-card testid, (4) missing baseline-switch-copy testid, (5) filter chips are static counts not event-click-formed, (6) ProgressDeviationPage.tsx not split out (acceptable). All non-blocking."
+    },
+    {
+      "step": "15.10-review",
+      "label": "checkpoint-15.10",
+      "status": "reviewed",
+      "review_scope": "scheduler integrity lifecycle anomalies",
+      "note": "15.10 review PASSED: governance snapshot wiring, passive reorder thresholds, closeout 3/5/7 governance states, reorder 3/5/7 governance states, ad_hoc cross-month reminders, dashboard signal consumption, and scheduler persistence are all connected. Residual note: reorder auto-end/change summary is represented by governance state + notification payload instead of a separate summary entity."
+    },
+    {
+      "step": "14.6-review",
+      "label": "checkpoint-14.6",
+      "status": "reviewed",
+      "review_scope": "navigation deep-links old-entry cleanup",
+      "note": "14.6 review PASSED: shared navigation labels, Header, Sidebar, Notifications, Reports, Dashboard, TaskSummary, Milestones, GanttView, and global shortcut descriptions are aligned; cross-page naming/deep-link regression suite passed."
+    },
+    {
+      "step": "11.2-review",
+      "label": "checkpoint-11.2",
+      "status": "reviewed",
+      "review_scope": "critical path backend snapshot overrides compatibility",
+      "note": "11.2 review completed"
+    },
+    {
+      "step": "DW.8",
+      "label": "checkpoint-DW.8",
+      "status": "completed",
+      "review_scope": "drawings task acceptance issue-risk linkage",
+      "note": "DW.8 completed"
+    },
+    {
+      "step": "DW.9a",
+      "label": "checkpoint-DW.9a",
+      "status": "completed",
+      "review_scope": "special management shell reports entry old-entry cleanup",
+      "note": "DW.9a completed"
+    },
+    {
+      "step": "12.2-review",
+      "label": "checkpoint-12.2",
+      "status": "reviewed",
+      "review_scope": "license shared-item dependency model compatibility",
+      "note": "12.2 review completed"
+    },
+    {
+      "step": "13.2-review",
+      "label": "checkpoint-13.2",
+      "status": "reviewed",
+      "review_scope": "acceptance timeline model compatibility state-machine writes",
+      "note": "13.2 review completed"
+    },
+    {
+      "step": "13.5-review",
+      "label": "checkpoint-13.5",
+      "status": "reviewed",
+      "review_scope": "dual-axis layout parallel groups dependency semantics",
+      "note": "13.5 review completed"
+    }
+  ],
+  "special_plan_rollup": {
+    "authoritative_for_11x_12x_13x_DWx": true,
+    "generated_at": "2026-04-15T12:20:00+08:00",
+    "summary": {
+      "parked_lines": 4,
+      "completed_lines": 4,
+      "completed_with_followups_lines": 0,
+      "active_model_lines": 0
+    },
+    "lines": [
+      {
+        "line": "11.x",
+        "owner": "B",
+        "status": "completed",
+        "parked": true,
+        "delivery_steps": [
+          "11.2",
+          "11.3",
+          "11.4",
+          "11.5",
+          "11.6"
+        ],
+        "review_checkpoints": [
+          "11.2-review"
+        ],
+        "excluded_raw_placeholders": [
+          "11.0",
+          "11.1"
+        ],
+        "note": "B line is closed on the backend CriticalPathSnapshot truth; store-level legacy criticalPathSummary has been removed and criticalPath.ts is now explicitly documented as snapshot/override/fallback utility only."
+      },
+      {
+        "line": "12.x",
+        "owner": "C",
+        "status": "completed",
+        "parked": true,
+        "delivery_steps": [
+          "12.2",
+          "12.3",
+          "12.4",
+          "12.5",
+          "12.6",
+          "12.7",
+          "12.8"
+        ],
+        "review_checkpoints": [
+          "12.2-review"
+        ],
+        "excluded_raw_placeholders": [
+          "12.0",
+          "12.1"
+        ],
+        "note": "C line is closed as a standalone license page; legacy certificate-approvals has been demoted to compatibility status and work-item creation is now atomic."
+      },
+      {
+        "line": "13.x",
+        "owner": "D",
+        "status": "completed",
+        "parked": true,
+        "delivery_steps": [
+          "13.2",
+          "13.3",
+          "13.4",
+          "13.5",
+          "13.6",
+          "13.7",
+          "13.8"
+        ],
+        "review_checkpoints": [
+          "13.2-review",
+          "13.5-review"
+        ],
+        "excluded_raw_placeholders": [
+          "13.0",
+          "13.1"
+        ],
+        "note": "D line is closed on the current acceptance timeline scope; dependency cycle detection, record updates, catalog-in-use protection, depends_on compatibility demotion, and H-D6 Phase 2 weak dual-axis flow-board layout have all landed."
+      },
+      {
+        "line": "DW.x",
+        "owner": "A",
+        "status": "completed",
+        "parked": true,
+        "delivery_steps": [
+          "DW.6",
+          "DW.7",
+          "DW.8",
+          "DW.9",
+          "DW.9a"
+        ],
+        "review_checkpoints": [
+          "DW.8",
+          "DW.9a"
+        ],
+        "excluded_raw_placeholders": [
+          "DW.1",
+          "DW.2",
+          "DW.3",
+          "DW.4",
+          "DW.5"
+        ],
+        "note": "A line is now closed through DW.9a; migration numbering is monotonic again and the special-management/reports old-entry cleanup has been absorbed back into the completed delivery line."
+      }
+    ],
+    "note": "Use special_plan_rollup as the authoritative four-line summary. Raw range counts across steps still include historical placeholder steps, so dashboards should prefer this rollup over naive prefix counting."
+  },
+  "hardening_backlog": {
+    "status": "future_only_remaining",
+    "note": "The active A/B/C/D hardening sprint is closed: repo-wide server build, client build, and client tsc are green, and H-D6 Phase 2 has landed. Remaining entries are future-only schema or UX follow-ups rather than current blockers.",
+    "items": [
+      {
+        "id": "H-S1",
+        "owner": "shared",
+        "severity": "high",
+        "status": "resolved",
+        "when_to_do": "done",
+        "scope": "migration numbering",
+        "summary": "Resolved: duplicate migration numbering was removed and the active sequence is now monotonic."
+      },
+      {
+        "id": "H-A1",
+        "owner": "A",
+        "severity": "medium",
+        "status": "resolved",
+        "when_to_do": "done",
+        "scope": "DW.9 / DW.9a entry cleanup",
+        "summary": "Resolved: special-management shell normalization, reports entry cleanup, and old Drawings entry cleanup were completed in DW.9 / DW.9a."
+      },
+      {
+        "id": "H-B1",
+        "owner": "B",
+        "severity": "medium",
+        "status": "resolved",
+        "when_to_do": "done",
+        "scope": "critical path store contract",
+        "summary": "Resolved: the legacy store-level criticalPathSummary string contract was removed."
+      },
+      {
+        "id": "H-B2",
+        "owner": "B",
+        "severity": "low",
+        "status": "resolved",
+        "when_to_do": "done",
+        "scope": "client CPM fallback",
+        "summary": "Resolved: criticalPath.ts is now explicitly positioned as snapshot/override/fallback utility rather than a main truth path."
+      },
+      {
+        "id": "H-C1",
+        "owner": "C",
+        "severity": "medium",
+        "status": "resolved",
+        "when_to_do": "done",
+        "scope": "license legacy approvals model",
+        "summary": "Resolved: certificate-approvals is now explicitly documented as a legacy compatibility route, not the license main chain."
+      },
+      {
+        "id": "H-C2",
+        "owner": "C",
+        "severity": "medium",
+        "status": "resolved",
+        "when_to_do": "done",
+        "scope": "certificate work-item writes",
+        "summary": "Resolved: certificate-work-items POST now uses an atomic database function instead of manual rollback."
+      },
+      {
+        "id": "H-C3",
+        "owner": "C",
+        "severity": "low",
+        "status": "resolved",
+        "when_to_do": "done",
+        "scope": "certificate type extensibility",
+        "summary": "Resolved: certificate type order/labels/display config now come from a shared registry with stable unknown-type fallback, and full client tsc is green again."
+      },
+      {
+        "id": "H-C4",
+        "owner": "C",
+        "severity": "medium",
+        "status": "resolved",
+        "when_to_do": "done",
+        "scope": "preMilestoneBoardService syntax/build integrity",
+        "summary": "Resolved: preMilestoneBoardService syntax/build integrity has been restored and server build is green again."
+      },
+      {
+        "id": "H-D1",
+        "owner": "D",
+        "severity": "medium",
+        "status": "resolved",
+        "when_to_do": "done",
+        "scope": "acceptance route contract",
+        "summary": "Resolved: canonical acceptance route mounting and compatibility aliases are now explicitly documented."
+      },
+      {
+        "id": "H-D2",
+        "owner": "D",
+        "severity": "medium",
+        "status": "resolved",
+        "when_to_do": "done",
+        "scope": "dependency write model",
+        "summary": "Resolved for current scope: acceptance_plans.depends_on has been demoted to compatibility sync, while acceptance_dependencies remains the canonical write path."
+      },
+      {
+        "id": "H-D3",
+        "owner": "D",
+        "severity": "medium",
+        "status": "resolved",
+        "when_to_do": "done",
+        "scope": "acceptance records editing",
+        "summary": "Resolved: acceptance-records now supports update writes."
+      },
+      {
+        "id": "H-D4",
+        "owner": "D",
+        "severity": "medium",
+        "status": "resolved",
+        "when_to_do": "done",
+        "scope": "dependency graph validation",
+        "summary": "Resolved: acceptance dependency creation now blocks cycles with DEPENDENCY_CYCLE_DETECTED."
+      },
+      {
+        "id": "H-D5",
+        "owner": "D",
+        "severity": "medium",
+        "status": "future",
+        "when_to_do": "future_schema_hardening",
+        "scope": "catalog integrity",
+        "summary": "Partially resolved: runtime CATALOG_IN_USE protection is in place; a future schema-hardening pass can still add a database-level FK/constraint."
+      },
+      {
+        "id": "H-D6",
+        "owner": "D",
+        "severity": "low",
+        "status": "phase2_completed_phase3_optional",
+        "when_to_do": "future_phase3_only_if_needed",
+        "scope": "flow-board visual depth",
+        "summary": "Phase 1 and Phase 2 are complete: AcceptanceTimeline now uses a thinner page shell plus FlowBoard/Ledger/DetailDrawer, the board has stronger unscheduled/blocked/dependency readability, and month/biweek/week time scales now drive a weak dual-axis layout with stable unscheduled placement. Any future Phase 3 work is optional deeper UX polish rather than a delivery blocker."
+      }
+    ]
+  },
+  "three_file_summary": {
+    "status": "completed",
+    "note": "This summary only covers the three execution documents: 业务流程优化实施专项方案.md, 页面导航收口实施专项方案.md, and 计划编制实施专项方案.md. It excludes DW/11/12/13 and excludes 10.0/10.3-10.7 from this three-file scope.",
+    "files": [
+      {
+        "file": "业务流程优化实施专项方案.md",
+        "scope": [
+          "10.1",
+          "10.2a",
+          "10.2b",
+          "10.2c",
+          "10.2d",
+          "10.2e",
+          "10.2f",
+          "10.2g",
+          "10.8a",
+          "10.8b",
+          "10.8c",
+          "10.9",
+          "10.10",
+          "10.10a"
+        ],
+        "status": "completed",
+        "note": "All in-scope steps from the business-flow execution document are completed. Raw pending 10.4/10.5/10.6 belong to v1结束阶段最终执行方案_20260406.md and are intentionally excluded here."
+      },
+      {
+        "file": "页面导航收口实施专项方案.md",
+        "scope": [
+          "14.1",
+          "14.2",
+          "14.3",
+          "14.4",
+          "14.5",
+          "14.6"
+        ],
+        "status": "completed",
+        "note": "All 14.x page/navigation consolidation steps are completed, including 14.6 review."
+      },
+      {
+        "file": "计划编制实施专项方案.md",
+        "scope": [
+          "15.0",
+          "15.0a",
+          "15.1",
+          "15.2",
+          "15.3",
+          "15.4",
+          "15.5",
+          "15.6",
+          "15.7",
+          "15.8",
+          "15.9",
+          "15.10",
+          "15.11"
+        ],
+        "status": "completed",
+        "note": "All 15.x planning steps are completed, including 15.11 review."
+      }
+    ]
+  },
+  "parent_steps": [
+    "10.2a",
+    "10.2b",
+    "10.2c",
+    "10.2d",
+    "10.2f",
+    "10.2g",
+    "10.10",
+    "10.10a",
+    "14.1",
+    "14.2",
+    "14.3",
+    "14.4",
+    "14.5",
+    "14.6",
+    "15.1",
+    "15.2",
+    "15.3",
+    "15.4",
+    "15.5",
+    "15.6",
+    "15.7",
+    "15.8",
+    "15.9",
+    "15.10",
+    "15.11"
+  ],
   "steps": {
-    "1.1": { "status": "pending", "note": "" },
-    "1.2": { "status": "pending", "note": "" },
-    "1.3": { "status": "pending", "note": "" },
-    "1.4": { "status": "pending", "note": "" },
-    "1.5": { "status": "pending", "note": "" },
-    "2.1": { "status": "pending", "note": "" },
-    "2.2": { "status": "pending", "note": "" },
-    "2.3": { "status": "pending", "note": "", "depends_on": ["2.2"] },
-    "2.4": { "status": "pending", "note": "" },
-    "2.5": { "status": "pending", "note": "", "depends_on": ["2.1"] },
-    "2.6": { "status": "pending", "note": "" },
-    "3.1": { "status": "pending", "note": "" },
-    "3.2": { "status": "pending", "note": "" },
-    "3.3": { "status": "pending", "note": "" },
-    "3.4": { "status": "pending", "note": "" },
-    "3.5": { "status": "pending", "note": "" },
-    "3.6": { "status": "pending", "note": "", "depends_on": ["3.1", "3.2"] },
-    "4.1": { "status": "pending", "note": "" },
-    "4.2": { "status": "pending", "note": "" },
-    "4.3": { "status": "pending", "note": "" },
-    "4.4": { "status": "pending", "note": "" },
-    "5.1": { "status": "pending", "note": "" },
-    "5.2": { "status": "pending", "note": "" },
-    "5.3": { "status": "pending", "note": "" },
-    "5.4": { "status": "pending", "note": "" },
-    "6.1": { "status": "pending", "note": "" },
-    "6.2": { "status": "pending", "note": "" },
-    "6.3": { "status": "pending", "note": "" },
-    "7.1": { "status": "pending", "note": "" },
-    "7.2": { "status": "pending", "note": "" },
-    "7.3": { "status": "pending", "note": "" },
-    "8.1": { "status": "pending", "note": "" },
-    "8.2": { "status": "pending", "note": "" },
-    "8.3": { "status": "pending", "note": "" },
-    "8.4": { "status": "pending", "note": "" },
-    "8.5": { "status": "pending", "note": "" },
-    "8.6": { "status": "pending", "note": "" }
+    "1.1": {
+      "status": "completed",
+      "note": "1.1 note normalized"
+    },
+    "1.2": {
+      "status": "completed",
+      "note": "1.2 note normalized"
+    },
+    "1.3": {
+      "status": "completed",
+      "note": "1.3 note normalized"
+    },
+    "1.4": {
+      "status": "completed",
+      "note": "1.4 note normalized"
+    },
+    "1.5": {
+      "status": "completed",
+      "note": "1.5 note normalized"
+    },
+    "2.1": {
+      "status": "completed",
+      "note": "2.1 note normalized"
+    },
+    "2.2": {
+      "status": "completed",
+      "note": "2.2 note normalized"
+    },
+    "2.3": {
+      "status": "completed",
+      "note": "2.3 note normalized"
+    },
+    "2.4": {
+      "status": "completed",
+      "note": "2.4 note normalized"
+    },
+    "2.5": {
+      "status": "completed",
+      "note": "2.5 note normalized"
+    },
+    "2.6": {
+      "status": "completed",
+      "note": "2.6 note normalized"
+    },
+    "3.1": {
+      "status": "completed",
+      "note": "3.1 note normalized"
+    },
+    "3.2": {
+      "status": "completed",
+      "note": "3.2 note normalized"
+    },
+    "3.3": {
+      "status": "completed",
+      "note": "3.3 note normalized"
+    },
+    "3.4": {
+      "status": "completed",
+      "note": "3.4 note normalized"
+    },
+    "3.5": {
+      "status": "completed",
+      "note": "3.5 note normalized"
+    },
+    "3.6": {
+      "status": "completed",
+      "note": "3.6 note normalized"
+    },
+    "4.1": {
+      "status": "completed",
+      "note": "4.1 note normalized"
+    },
+    "4.2": {
+      "status": "completed",
+      "note": "4.2 note normalized"
+    },
+    "4.3": {
+      "status": "completed",
+      "note": "4.3 note normalized"
+    },
+    "4.4": {
+      "status": "completed",
+      "note": "4.4 note normalized"
+    },
+    "5.1": {
+      "status": "completed",
+      "note": "5.1 note normalized"
+    },
+    "5.2": {
+      "status": "completed",
+      "note": "5.2 note normalized"
+    },
+    "5.3": {
+      "status": "completed",
+      "note": "5.3 note normalized"
+    },
+    "5.4": {
+      "status": "completed",
+      "note": "5.4 note normalized"
+    },
+    "6.1": {
+      "status": "completed",
+      "note": "6.1 note normalized"
+    },
+    "6.2": {
+      "status": "completed",
+      "note": "6.2 note normalized"
+    },
+    "6.3": {
+      "status": "completed",
+      "note": "6.3 note normalized"
+    },
+    "7.1": {
+      "status": "completed",
+      "note": "7.1 note normalized"
+    },
+    "7.2": {
+      "status": "completed",
+      "note": "7.2 note normalized"
+    },
+    "7.3": {
+      "status": "completed",
+      "note": "7.3 note normalized"
+    },
+    "8.1": {
+      "status": "completed",
+      "note": "8.1 note normalized"
+    },
+    "8.1.0": {
+      "status": "completed",
+      "note": "8.1.0 note normalized"
+    },
+    "8.1.1": {
+      "status": "completed",
+      "note": "8.1.1 note normalized"
+    },
+    "8.1.2": {
+      "status": "completed",
+      "note": "8.1.2 note normalized"
+    },
+    "8.1.3": {
+      "status": "completed",
+      "note": "8.1.3 note normalized"
+    },
+    "8.1.3-prep": {
+      "status": "completed",
+      "note": "8.1.3-prep note normalized"
+    },
+    "8.1.3-a": {
+      "status": "completed",
+      "note": "8.1.3-a note normalized"
+    },
+    "8.1.3-b": {
+      "status": "completed",
+      "note": "8.1.3-b note normalized"
+    },
+    "8.1.3-c": {
+      "status": "completed",
+      "note": "8.1.3-c note normalized"
+    },
+    "8.1.4a": {
+      "status": "completed",
+      "note": "8.1.4a note normalized"
+    },
+    "8.1.4b": {
+      "status": "completed",
+      "note": "8.1.4b note normalized"
+    },
+    "8.1.4c": {
+      "status": "completed",
+      "note": "8.1.4c note normalized"
+    },
+    "8.2b.0": {
+      "status": "completed",
+      "note": "8.2b.0 note normalized"
+    },
+    "8.2b": {
+      "status": "completed",
+      "note": "8.2b note normalized"
+    },
+    "8.4.0": {
+      "status": "completed",
+      "note": "8.4.0 note normalized"
+    },
+    "8.4.1": {
+      "status": "completed",
+      "note": "8.4.1 note normalized"
+    },
+    "8.4.2": {
+      "status": "completed",
+      "note": "8.4.2 note normalized"
+    },
+    "8.4.3": {
+      "status": "completed",
+      "note": "8.4.3 note normalized"
+    },
+    "8.4.4": {
+      "status": "completed",
+      "note": "8.4.4 note normalized"
+    },
+    "8.2": {
+      "status": "completed",
+      "note": "8.2 note normalized"
+    },
+    "8.3": {
+      "status": "completed",
+      "note": "8.3 note normalized"
+    },
+    "8.4": {
+      "status": "completed",
+      "note": "8.4 note normalized"
+    },
+    "8.5": {
+      "status": "completed",
+      "note": "8.5 note normalized"
+    },
+    "8.6": {
+      "status": "completed",
+      "note": "8.6 note normalized"
+    },
+    "9.0": {
+      "status": "completed",
+      "note": "9.0 note normalized"
+    },
+    "9.1": {
+      "status": "completed",
+      "note": "9.1 note normalized"
+    },
+    "9.2": {
+      "status": "completed",
+      "note": "9.2 note normalized"
+    },
+    "9.3": {
+      "status": "completed",
+      "note": "9.3 note normalized"
+    },
+    "9.4": {
+      "status": "completed",
+      "note": "9.4 note normalized"
+    },
+    "9.5": {
+      "status": "completed",
+      "note": "9.5 note normalized"
+    },
+    "9.6": {
+      "status": "completed",
+      "note": "9.6 note normalized"
+    },
+    "9.7": {
+      "status": "completed",
+      "note": "9.7 note normalized"
+    },
+    "9.8": {
+      "status": "completed",
+      "note": "9.8 note normalized"
+    },
+    "9.9": {
+      "status": "completed",
+      "note": "9.9 note normalized"
+    },
+    "10.0": {
+      "status": "completed",
+      "note": "10.0 note normalized"
+    },
+    "10.1": {
+      "status": "completed",
+      "note": "10.1 note normalized"
+    },
+    "10.2a": {
+      "status": "completed",
+      "note": "10.2a note normalized"
+    },
+    "10.2b": {
+      "status": "completed",
+      "note": "10.2b note normalized"
+    },
+    "10.2c": {
+      "status": "completed",
+      "note": "10.2c note normalized"
+    },
+    "10.2d": {
+      "status": "completed",
+      "note": "10.2d note normalized"
+    },
+    "10.2e": {
+      "status": "completed",
+      "note": "10.2e note normalized"
+    },
+    "10.2a-a-impl": {
+      "status": "completed",
+      "note": "10.2a-a-impl note normalized"
+    },
+    "10.2a-b-impl": {
+      "status": "completed",
+      "note": "10.2a-b-impl note normalized"
+    },
+    "10.2a-review": {
+      "status": "completed",
+      "note": "10.2a-review note normalized"
+    },
+    "10.3": {
+      "status": "completed",
+      "note": "10.3 note normalized"
+    },
+    "DW.0": {
+      "status": "completed",
+      "note": "DW.0 completed: 已建立施工图纸专项基线，记录当前 Drawings 页壳、路由、导航入口与 construction-drawings 现状"
+    },
+    "DW.G1": {
+      "status": "completed",
+      "note": "DW.G1 completed: 真实环境 Supabase/Postgres 已连通，construction_drawings 表存在并可查询；已成功完成一次临时施工图纸插入、读取与删除，校验到 status=编制中、review_status=未提交 可写入，未发现 gate 阻断"
+    },
+    "DW.1": {
+      "status": "completed",
+      "note": "DW.1 completed: 图纸对象已统一为专业/用途/图纸包三层（discipline_type + document_purpose + package_id/code/name），11个收口字段全部就位，旧字段 drawing_type 通过 discipline_type ?? drawing_type 兼容，无冗余候选字段残留，客户端/服务端类型检查通过"
+    },
+    "DW.2": {
+      "status": "completed",
+      "note": "DW.2 completed: 图纸包(drawing_packages)、应有项(drawing_package_items)、版本链(drawing_versions)、送审规则(drawing_review_rules)四表已建立(migration 069)；drawingPackageService.ts 提供完整的看板/台账/详情/版本/齐套/送审判定逻辑(1901行)；drawing-packages.ts 提供CRUD API(1046行)；construction_drawings 保持兼容；25个测试全部通过"
+    },
+    "DW.3": {
+      "status": "completed",
+      "note": "DW.3 completed: DrawingsPage.tsx(1087行)独立页面含总览/看板/台账/详情抽屉/版本弹窗，路由/projects/:id/drawings已注册，Sidebar入口归属专项管理，PageHeader+Breadcrumb已就位，视觉统一到slate+blue+white card系统语言"
+    },
+    "DW.4": {
+      "status": "completed",
+      "note": "DW.4 completed: PreMilestones 已为纯前期证照页面，无图纸tab/CRUD/组件残留；图纸入口收口为'查看施工图纸'按钮跳转到/projects/:id/drawings；Drawings成为唯一图纸主承载页"
+    },
+    "10.4": {
+      "status": "pending",
+      "note": "10.4 note normalized"
+    },
+    "10.5": {
+      "status": "pending",
+      "note": "10.5 note normalized"
+    },
+    "DW.5": {
+      "status": "completed",
+      "note": "DW.5 completed: 图纸准备度总览(DrawingReadinessSummary,7项指标)、按专业分组的图纸包看板(DrawingPackageBoard,214行)、单图台账(DrawingLedger,193行)、按用途/属性筛选、sessionStorage筛选记忆已就位；首页按包展示不平铺单图"
+    },
+    "DW.6": {
+      "status": "completed",
+      "note": "DW.6 completed: current-version semantics are unified to 'there must always be one current'; construction-drawings write paths now block clearing the last current, auto-recover to a current when a package would otherwise have none, prevent package-move orphaning of the source package current, and focused server tests plus server build passed without touching DW.8"
+    },
+    "DW.7": {
+      "status": "completed",
+      "note": "DW.7 completed: package review rules, missing-required detection, completeness scoring, and the Drawings missing/review focus views are wired through the shared package read model; focused client/server tests and server build passed"
+    },
+    "DW.8": {
+      "status": "completed",
+      "note": "DW.8 completed: 图纸与任务/验收联动、自动问题识别与 issue/risk 升级已打通"
+    },
+    "10.6": {
+      "status": "pending",
+      "note": "10.6 note normalized"
+    },
+    "10.7": {
+      "status": "completed",
+      "note": "special-management three-child-page shell closed: PreMilestones keeps license-only main view, AcceptanceTimeline uses title-only PageHeader plus page skeleton, reports entry stays in Sidebar, scattered analysis actions removed"
+    },
+    "DW.9": {
+      "status": "completed",
+      "note": "DW.9 completed: special-management shell and reports entry cleanup are aligned on the unified 专项管理 wording, and old entry semantics no longer collapse Drawings/License/Acceptance back into a single legacy license meaning"
+    },
+    "DW.9a": {
+      "status": "completed",
+      "note": "DW.9a completed: shared navigation/notifications/reports old-entry cleanup is closed, the special-management host language is normalized, and focused client/server checks stayed green"
+    },
+    "10.8a": {
+      "status": "completed",
+      "note": "10.8a note normalized"
+    },
+    "10.8b": {
+      "status": "completed",
+      "note": "10.8b note normalized"
+    },
+    "10.8c": {
+      "status": "completed",
+      "note": "10.8c note normalized"
+    },
+    "10.9": {
+      "status": "completed",
+      "note": "10.9 note normalized"
+    },
+    "10.10": {
+      "status": "completed",
+      "note": "10.10 note normalized"
+    },
+    "11.0": {
+      "status": "completed",
+      "note": "11.0 completed: 已建立关键路径专项基线，记录 cpm.ts/criticalPath.ts/CriticalPathGraph/buildCriticalPathLayout 现状与 11.x 步骤"
+    },
+    "11.1": {
+      "status": "completed",
+      "note": "11.1 completed: 前端 criticalPath.ts(194行) 已输出 CriticalPathSnapshot 含 primaryChain/alternateChains/edges/displayTaskIds；cpm.ts 保持兼容层；5个测试通过"
+    },
+    "11.2": {
+      "status": "completed",
+      "note": "11.2 completed: projectCriticalPathService now assembles the backend critical-path snapshot and override model as the shared truth; routes, client criticalPath fetch layer, CriticalPathGraph, and GanttView are wired to consume the snapshot ahead of legacy is_critical flags, with focused service and Gantt integration coverage in place"
+    },
+    "11.2-review": {
+      "status": "reviewed",
+      "note": "critical-path snapshot/override compatibility review passed: GanttView, Dashboard, and Reports still share the backend CriticalPathSnapshot -> CriticalPathSummaryModel path, legacy is_critical has now been further deactivated inside GanttView, and riskAlert no longer participates in critical-path truth"
+    },
+    "11.3": {
+      "status": "completed",
+      "note": "11.3 completed: GanttView now loads backend CriticalPathSnapshot plus overrides, prefers the backend snapshot over legacy is_critical flags when rendering critical markers, and exposes the critical-path entry from the task management page with focused Gantt integration coverage"
+    },
+    "11.4": {
+      "status": "completed",
+      "note": "11.4 completed: CriticalPathDialog and CriticalPathGraph are wired into GanttView, showing primary chain, alternate chains, override records, and manual attention/manual insert actions against the overrides API"
+    },
+    "11.5": {
+      "status": "completed",
+      "note": "11.5 completed: Dashboard and Reports now consume the shared critical-path summary model from DashboardApiService, and riskAlert has downgraded critical-path detection out of local alert truth into read-only adoption"
+    },
+    "11.6": {
+      "status": "completed",
+      "note": "11.6 completed: critical-path line stays on backend snapshot truth across GanttView, Dashboard, and Reports; legacy task is_critical and the old handleToggleCritical path have been removed from the Gantt cleanup flow, the store-level criticalPathSummary string contract is gone, criticalPath.ts is explicitly fallback-only, and B-line focused tests plus client build are green. Current full client tsc regression sits outside B, in the C-side PreMilestones constants path."
+    },
+    "12.0": {
+      "status": "completed",
+      "note": "12.0 completed: 已建立前期证照专项基线，PreMilestones.tsx(645行)+11组件+types.ts(356行)+constants.ts(7256B)已为独立四证推进页面，不混承图纸，字段口径含9状态/4证/共享事项/依赖已就位"
+    },
+    "12.1": {
+      "status": "completed",
+      "note": "12.1 completed: 前期证照四证字段口径已统一，9状态枚举(pending→voided)就位，CERTIFICATE_STATUS_LABELS映射报审中/报批中/待补正/已批复/已领证/已失效/已作废，CertificateBoardItem含approving_authority/next_action/is_blocked等完整字段"
+    },
+    "12.2": {
+      "status": "completed",
+      "note": "12.2 completed: certificate-work-items and certificate-dependencies routes, preMilestoneBoardService, and server contracts now assemble board/ledger/detail read models from the shared license truth, including multi-certificate shared items and dependency matrix payloads"
+    },
+    "12.2-review": {
+      "status": "reviewed",
+      "note": "shared-item/dependency-model review passed; the mixed-tab compatibility path has been removed, legacy drawing helper/types have been cleaned out of the PreMilestones runtime, and board/ledger/detail matrix plus linked-signal consumers remain on the same certificate truth"
+    },
+    "12.3": {
+      "status": "completed",
+      "note": "12.3 completed: PreMilestones has been reshaped into the four-certificate shell with PageHeader/Breadcrumb framing, lifecycle summary cards, and the opening-readiness overview instead of the old mixed surface"
+    },
+    "12.4": {
+      "status": "completed",
+      "note": "12.4 completed: FourCertificateBoard and CertificateSharedRibbon now provide the fixed four-row certificate board, shared-item ribbon, cross-certificate highlighting, blocking cues, and detail entry from the main page"
+    },
+    "12.5": {
+      "status": "completed",
+      "note": "12.5 completed: CertificateLedger, CertificateDetailDrawer, and CertificateDependencyMatrix now form the ledger/detail workflow with shared-item context, lightweight dependency matrix, status records, and read-only linked-signal detail consumption"
+    },
+    "12.6": {
+      "status": "completed",
+      "note": "12.6 completed: PreMilestones detail now consumes linkedWarnings / linkedIssues / linkedRisks from the backend closure model and keeps warning / issue / risk pages as the source-of-truth write surfaces"
+    },
+    "12.7": {
+      "status": "completed",
+      "note": "12.7 completed: PreMilestones remains a standalone license page, did not regress to a license/drawings mixed tab, and the sibling split left App.tsx / navigation.ts / Drawings.tsx / AcceptanceTimeline.tsx shared entry points untouched"
+    },
+    "12.8": {
+      "status": "completed",
+      "note": "12.8 completed: linked signal consumption, sibling split closeout, legacy drawing cleanup, LicenseManagement test repair, legacy certificate-approvals demotion, atomic certificate-work-item creation, and certificate-type registry extraction are all landed; PreMilestones remains a standalone license page, server build and full client tsc are green again, and only the environment-sensitive preMilestoneBoardService vitest path may still require Supabase test setup."
+    },
+    "13.0": {
+      "status": "completed",
+      "note": "13.0 completed: 已建立验收流程轴专项基线，AcceptanceTimeline.tsx(746行)+5组件+types(637行)+services(708行)已就位，8状态/流程板/台账/详情抽屉/SVG连线已有"
+    },
+    "13.1": {
+      "status": "completed",
+      "note": "13.1 completed: 已收口验收新旧字段与API映射，统一catalog_id/acceptance_name/phase_code/scope_level/planned_finish_date，8状态枚举(draft→archived)已稳定，normalizeAcceptanceStatus处理旧值别名兼容"
+    },
+    "13.2": {
+      "status": "completed",
+      "note": "13.2 completed: acceptanceFlowService now exposes the shared acceptance snapshot plus dependency synchronization to acceptance_plans.depends_on, AcceptanceTimeline consumes the relation bundle read model, and focused tests cover dependency sync plus relation-bundle rendering"
+    },
+    "13.2-review": {
+      "status": "reviewed",
+      "note": "13.2-review passed: acceptance timeline compatibility/state-machine review confirms the shared relation-bundle model, dependency sync writes, flow-board/list/drawer chaining, and linked warning/issue/risk read consumption now close on one acceptance truth"
+    },
+    "13.3": {
+      "status": "completed",
+      "note": "13.3 completed: plan.position no longer acts as live layout truth in AcceptanceTimeline, the page derives flow-board/ledger layout locally, and acceptanceApi.updatePosition remains only as a compatibility path rather than the main view driver"
+    },
+    "13.4": {
+      "status": "completed",
+      "note": "13.4 completed: AcceptanceTimeline shell now includes summary panel, view switching, status filtering, blocked-only filtering, time-scale controls, and a minimum viable scope/range filter instead of abstract placeholders"
+    },
+    "13.5": {
+      "status": "completed",
+      "note": "13.5 completed: AcceptanceTimeline graph mode now renders AcceptanceFlowBoard instead of ForceDirectedGraph, keeping the flow-board as the main acceptance surface while preserving node selection and dependency visibility"
+    },
+    "13.5-review": {
+      "status": "reviewed",
+      "note": "13.5-review passed: the flow-board is now the main acceptance surface, dependency semantics stay aligned across graph/list/detail, and the old ForceDirectedGraph-led layout no longer serves as the acceptance master view"
+    },
+    "13.6": {
+      "status": "completed",
+      "note": "13.6 completed: the ledger-to-drawer workflow is now self-consistent for status handling, dependency add/remove, and linked prerequisite/record/warning/issue/risk viewing, and focused AcceptanceTimeline tests are green"
+    },
+    "13.7": {
+      "status": "completed",
+      "note": "13.7 completed: linkedWarnings/linkedIssues/linkedRisks are consumed read-only in the AcceptanceTimeline detail drawer through relation-bundle filtering, and the flow-board/list/drawer chain stays aligned after dependency edits"
+    },
+    "13.8": {
+      "status": "completed",
+      "note": "13.8 completed: focused AcceptanceTimeline coverage is green for graph/list/detail chaining, dependency edits, and compatibility fallbacks; cycle detection, records update writes, catalog-in-use protection, depends_on compatibility demotion, and H-D6 Phase 1/2 flow-board improvements are all landed. The flow board now has a thinner shell, stronger unscheduled/blocked/dependency readability, and a weak dual-axis layout driven by month/biweek/week buckets. Repo-wide server build, client build, and client tsc are green."
+    },
+    "10.2b-a-test": {
+      "status": "completed",
+      "note": "10.2b-a-test note normalized"
+    },
+    "10.2b-a-impl": {
+      "status": "completed",
+      "note": "10.2b-a-impl note normalized"
+    },
+    "10.2b-review": {
+      "status": "completed",
+      "note": "10.2b-review note normalized"
+    },
+    "10.2c-a-test": {
+      "status": "completed",
+      "note": "10.2c-a-test note normalized"
+    },
+    "10.2c-a-impl": {
+      "status": "completed",
+      "note": "10.2c-a-impl note normalized"
+    },
+    "10.2c-b-test": {
+      "status": "completed",
+      "note": "10.2c-b-test note normalized"
+    },
+    "10.2c-b-impl": {
+      "status": "completed",
+      "note": "10.2c-b-impl note normalized"
+    },
+    "10.2c-review": {
+      "status": "completed",
+      "note": "10.2c-review note normalized"
+    },
+    "10.2d-a-contract-test": {
+      "status": "completed",
+      "note": "10.2d-a-contract-test note normalized"
+    },
+    "10.2d-a-impl": {
+      "status": "completed",
+      "note": "10.2d-a-impl note normalized"
+    },
+    "10.2d-b-contract-test": {
+      "status": "completed",
+      "note": "10.2d-b-contract-test note normalized"
+    },
+    "10.2d-b-impl": {
+      "status": "completed",
+      "note": "10.2d-b-impl note normalized"
+    },
+    "10.2d-review": {
+      "status": "completed",
+      "note": "10.2d-review note normalized"
+    },
+    "10.2f": {
+      "status": "completed",
+      "note": "10.2f completed; parent status backfilled after 10.2f-a / 10.2f-b / 10.2f-review all passed."
+    },
+    "10.2f-a-contract-test": {
+      "status": "completed",
+      "note": "10.2f-a-contract-test note normalized"
+    },
+    "10.2f-a-impl": {
+      "status": "completed",
+      "note": "10.2f-a-impl note normalized"
+    },
+    "10.2f-b-contract-test": {
+      "status": "completed",
+      "note": "10.2f-b-contract-test note normalized"
+    },
+    "10.2f-b-impl": {
+      "status": "completed",
+      "note": "10.2f-b-impl note normalized"
+    },
+    "10.2f-review": {
+      "status": "completed",
+      "note": "10.2f-review note normalized"
+    },
+    "10.2g": {
+      "status": "completed",
+      "note": "10.2g note normalized"
+    },
+    "10.2g-a-test": {
+      "status": "completed",
+      "note": "10.2g-a-test note normalized"
+    },
+    "10.2g-a-impl": {
+      "status": "completed",
+      "note": "10.2g-a-impl note normalized"
+    },
+    "10.2g-b-contract-test": {
+      "status": "completed",
+      "note": "10.2g-b-contract-test note normalized"
+    },
+    "10.2g-b-impl": {
+      "status": "completed",
+      "note": "10.2g-b-impl note normalized"
+    },
+    "10.2g-review": {
+      "status": "completed",
+      "note": "10.2g-review note normalized"
+    },
+    "10.10x-contract-test": {
+      "status": "completed",
+      "note": "10.10x-contract-test note normalized"
+    },
+    "10.10x-impl": {
+      "status": "completed",
+      "note": "10.10x-impl note normalized"
+    },
+    "10.10x-review": {
+      "status": "completed",
+      "note": "10.10x-review note normalized"
+    },
+    "10.10a": {
+      "status": "completed",
+      "note": "10.10a note normalized"
+    },
+    "10.10b-contract-test": {
+      "status": "completed",
+      "note": "10.10b-contract-test note normalized"
+    },
+    "10.10b-impl": {
+      "status": "completed",
+      "note": "10.10b-impl note normalized"
+    },
+    "10.10b-review": {
+      "status": "completed",
+      "note": "10.10b-review note normalized"
+    },
+    "14.1": {
+      "status": "completed",
+      "note": "14.1 completed: Dashboard four-block structure, hero cards, planning summary, closeout summary, and snapshot skeleton are in place"
+    },
+    "14.1a-contract-test": {
+      "status": "completed",
+      "note": "14.1a contract completed"
+    },
+    "14.1a-impl": {
+      "status": "completed",
+      "note": "14.1a implementation completed"
+    },
+    "14.1-review": {
+      "status": "completed",
+      "note": "14.1 review completed"
+    },
+    "14.2": {
+      "status": "completed",
+      "note": "14.2 completed: TaskSummary results summary, monthly fulfillment section, and responsibility analysis section are all connected in-page"
+    },
+    "14.2a-contract-test": {
+      "status": "completed",
+      "note": "14.2a contract completed"
+    },
+    "14.2a-impl": {
+      "status": "completed",
+      "note": "14.2a implementation completed"
+    },
+    "14.2b-contract-test": {
+      "status": "completed",
+      "note": "14.2b contract completed"
+    },
+    "14.2b-impl": {
+      "status": "completed",
+      "note": "14.2b implementation completed"
+    },
+    "14.2-review": {
+      "status": "completed",
+      "note": "14.2 review completed"
+    },
+    "14.3": {
+      "status": "completed",
+      "note": "14.3 note normalized"
+    },
+    "14.3a-contract-test": {
+      "status": "completed",
+      "note": "14.3a-contract-test note normalized"
+    },
+    "14.3a-impl": {
+      "status": "completed",
+      "note": "14.3a-impl note normalized"
+    },
+    "14.3b-contract-test": {
+      "status": "completed",
+      "note": "14.3b-contract-test note normalized"
+    },
+    "14.3b-impl": {
+      "status": "completed",
+      "note": "14.3b-impl note normalized"
+    },
+    "14.3-review": {
+      "status": "completed",
+      "note": "14.3-review note normalized"
+    },
+    "14.4": {
+      "status": "completed",
+      "note": "14.4 completed"
+    },
+    "14.4a-contract-test": {
+      "status": "completed",
+      "note": "14.4a-contract-test note normalized"
+    },
+    "14.4a-impl": {
+      "status": "completed",
+      "note": "14.4a-impl note normalized"
+    },
+    "14.4b-contract-test": {
+      "status": "completed",
+      "note": "14.4b contract completed"
+    },
+    "14.4b-impl": {
+      "status": "completed",
+      "note": "14.4b implementation completed"
+    },
+    "14.4-review": {
+      "status": "completed",
+      "note": "14.4 review completed"
+    },
+    "14.5": {
+      "status": "completed",
+      "note": "14.5 note normalized"
+    },
+    "14.5a-contract-test": {
+      "status": "completed",
+      "note": "14.5a-contract-test note normalized"
+    },
+    "14.5a-impl": {
+      "status": "completed",
+      "note": "14.5a-impl note normalized"
+    },
+    "14.5-review": {
+      "status": "completed",
+      "note": "14.5-review note normalized"
+    },
+    "14.6": {
+      "status": "completed",
+      "note": "14.6 completed: navigation metadata, deep-link labels, shortcut descriptions, and page-level naming cleanup are aligned."
+    },
+    "14.6a-story-e2e": {
+      "status": "completed",
+      "note": "14.6a story/e2e suite passed across Header/Sidebar/Notifications/Reports/Dashboard/TaskSummary/Milestones/Gantt."
+    },
+    "14.6a-impl": {
+      "status": "completed",
+      "note": "14.6a minimal navigation cleanup landed and final follow-up copy fixes were applied across GanttView and shared shortcut descriptions."
+    },
+    "14.6-review": {
+      "status": "completed",
+      "note": "14.6 review completed: final cross-page naming cleanup and deep-link regression checks passed."
+    },
+    "15.0": {
+      "status": "completed",
+      "note": "15.0 note normalized",
+      "contracts": {
+        "types": [
+          "BaselineVersion",
+          "BaselineItem",
+          "MonthlyPlanVersion",
+          "MonthlyPlanItem",
+          "CarryoverItem",
+          "RevisionPoolCandidate",
+          "PlanningStatus",
+          "PlanningEvent"
+        ],
+        "endpoints": [
+          {
+            "method": "POST",
+            "path": "/api/task-baselines/:id/confirm",
+            "requestShape": "{ version: number }",
+            "responseShape": "{ id: string, status: 'confirmed' }",
+            "errorCodes": [
+              "VERSION_CONFLICT",
+              "BLOCKING_ISSUES_EXIST"
+            ]
+          },
+          {
+            "method": "POST",
+            "path": "/api/monthly-plans/:id/confirm",
+            "requestShape": "{ version: number, month: string }",
+            "responseShape": "{ id: string, status: 'confirmed' }",
+            "errorCodes": [
+              "VERSION_CONFLICT",
+              "BLOCKING_ISSUES_EXIST"
+            ]
+          },
+          {
+            "method": "POST",
+            "path": "/api/monthly-plans/:id/close",
+            "requestShape": "{ month: string, version: number }",
+            "responseShape": "{ month: string, status: 'closed' }",
+            "errorCodes": [
+              "VERSION_CONFLICT",
+              "BLOCKING_ISSUES_EXIST"
+            ]
+          },
+          {
+            "method": "POST",
+            "path": "/api/task-baselines/:id/revisions",
+            "requestShape": "{ baseline_version_id: string, reason: string }",
+            "responseShape": "{ revision_id: string, status: 'revising' }",
+            "errorCodes": [
+              "INVALID_STATE",
+              "LOCK_HELD"
+            ]
+          },
+          {
+            "method": "GET",
+            "path": "/api/task-baselines/:id/revision-pool",
+            "requestShape": "{ project_id: string, baseline_version_id?: string }",
+            "responseShape": "{ items: RevisionPoolCandidate[], total: number }",
+            "errorCodes": [
+              "NOT_FOUND"
+            ]
+          },
+          {
+            "method": "POST",
+            "path": "/api/task-baselines/:id/revision-pool",
+            "requestShape": "{ project_id: string, baseline_version_id?: string, items: [...] }",
+            "responseShape": "{ submitted_count: number, candidate_ids: string[] }",
+            "errorCodes": [
+              "VALIDATION_ERROR"
+            ]
+          },
+          {
+            "method": "GET",
+            "path": "/api/progress-deviation",
+            "requestShape": "{ project_id: string, baseline_version_id: string }",
+            "responseShape": "{ summary: {...}, rows: [...] }",
+            "errorCodes": [
+              "NOT_FOUND",
+              "DEVIATION_ANALYSIS_UNAVAILABLE"
+            ]
+          }
+        ],
+        "stateMachine": {
+          "states": [
+            "draft",
+            "confirmed",
+            "closed",
+            "revising",
+            "pending_realign"
+          ],
+          "events": [
+            "CONFIRM",
+            "CLOSE_MONTH",
+            "START_REVISION",
+            "SUBMIT_REVISION",
+            "QUEUE_REALIGNMENT",
+            "RESOLVE_REALIGNMENT"
+          ],
+          "transitions": [
+            "draft + CONFIRM -> confirmed",
+            "confirmed + CLOSE_MONTH -> closed",
+            "confirmed + START_REVISION -> revising",
+            "closed + START_REVISION -> revising",
+            "pending_realign + START_REVISION -> revising",
+            "revising + SUBMIT_REVISION -> confirmed",
+            "confirmed + QUEUE_REALIGNMENT -> pending_realign",
+            "revising + QUEUE_REALIGNMENT -> pending_realign",
+            "pending_realign + RESOLVE_REALIGNMENT -> confirmed"
+          ]
+        }
+      }
+    },
+    "15.0a": {
+      "status": "completed",
+      "note": "15.0a note normalized"
+    },
+    "15.1": {
+      "status": "completed",
+      "note": "15.1 note normalized"
+    },
+    "15.1a-test": {
+      "status": "completed",
+      "note": "15.1a-test note normalized"
+    },
+    "15.1a-impl": {
+      "status": "completed",
+      "note": "15.1a-impl note normalized"
+    },
+    "15.1b-test": {
+      "status": "completed",
+      "note": "15.1b-test note normalized"
+    },
+    "15.1b-impl": {
+      "status": "completed",
+      "note": "15.1b-impl note normalized"
+    },
+    "15.1-review": {
+      "status": "completed",
+      "note": "15.1-review note normalized"
+    },
+    "15.2": {
+      "status": "completed",
+      "note": "15.2 note normalized"
+    },
+    "15.2a-impl": {
+      "status": "completed",
+      "note": "15.2a-impl note normalized"
+    },
+    "15.2b-impl": {
+      "status": "completed",
+      "note": "15.2b-impl note normalized"
+    },
+    "15.2-review": {
+      "status": "completed",
+      "note": "15.2-review note normalized"
+    },
+    "15.3": {
+      "status": "completed",
+      "note": "15.3 note normalized"
+    },
+    "15.3a-contract-test": {
+      "status": "completed",
+      "note": "15.3a-contract-test note normalized"
+    },
+    "15.3a-impl": {
+      "status": "completed",
+      "note": "15.3a-impl note normalized"
+    },
+    "15.3b-contract-test": {
+      "status": "completed",
+      "note": "15.3b-contract-test note normalized"
+    },
+    "15.3b-impl": {
+      "status": "completed",
+      "note": "15.3b-impl note normalized"
+    },
+    "15.3c-contract-test": {
+      "status": "completed",
+      "note": "15.3c-contract-test note normalized"
+    },
+    "15.3c-impl": {
+      "status": "completed",
+      "note": "15.3c-impl note normalized"
+    },
+    "15.3-review": {
+      "status": "completed",
+      "note": "15.3-review note normalized"
+    },
+    "15.4": {
+      "status": "completed",
+      "note": "15.4 note normalized"
+    },
+    "15.4a-contract-test": {
+      "status": "completed",
+      "note": "15.4a-contract-test note normalized"
+    },
+    "15.4a-impl": {
+      "status": "completed",
+      "note": "15.4a-impl note normalized"
+    },
+    "15.4b-contract-test": {
+      "status": "completed",
+      "note": "15.4b-contract-test note normalized"
+    },
+    "15.4b-impl": {
+      "status": "completed",
+      "note": "15.4b-impl note normalized"
+    },
+    "15.4-review": {
+      "status": "completed",
+      "note": "15.4-review note normalized"
+    },
+    "15.5": {
+      "status": "completed",
+      "note": "15.5 note normalized"
+    },
+    "15.5a-contract-test": {
+      "status": "completed",
+      "note": "15.5a-contract-test note normalized"
+    },
+    "15.5a-impl": {
+      "status": "completed",
+      "note": "15.5a-impl note normalized"
+    },
+    "15.5b-contract-test": {
+      "status": "completed",
+      "note": "15.5b-contract-test note normalized"
+    },
+    "15.5b-impl": {
+      "status": "completed",
+      "note": "15.5b-impl note normalized"
+    },
+    "15.5c-story-e2e": {
+      "status": "completed",
+      "note": "15.5c-story-e2e note normalized"
+    },
+    "15.5-review": {
+      "status": "completed",
+      "note": "15.5-review note normalized"
+    },
+    "15.6": {
+      "status": "completed",
+      "note": "15.6 completed; parent status backfilled after 15.6a / 15.6b / 15.6-review all passed."
+    },
+    "15.6a-contract-test": {
+      "status": "completed",
+      "note": "15.6a contract completed"
+    },
+    "15.6a-impl": {
+      "status": "completed",
+      "note": "15.6a implementation completed"
+    },
+    "15.6b-contract-test": {
+      "status": "completed",
+      "note": "15.6b contract completed"
+    },
+    "15.6b-impl": {
+      "status": "completed",
+      "note": "15.6b implementation completed"
+    },
+    "15.6-review": {
+      "status": "completed",
+      "note": "15.6 review completed"
+    },
+    "15.7": {
+      "status": "completed",
+      "note": "15.7 completed"
+    },
+    "15.7a-test": {
+      "status": "completed",
+      "note": "15.7a test completed"
+    },
+    "15.7a-impl": {
+      "status": "completed",
+      "note": "15.7a implementation completed"
+    },
+    "15.7b-test": {
+      "status": "completed",
+      "note": "15.7b test completed"
+    },
+    "15.7b-impl": {
+      "status": "completed",
+      "note": "15.7b implementation completed"
+    },
+    "15.7-review": {
+      "status": "completed",
+      "note": "15.7 review completed"
+    },
+    "15.8": {
+      "status": "completed",
+      "note": "15.8 completed"
+    },
+    "15.8a-contract-test": {
+      "status": "completed",
+      "note": "15.8a contract completed"
+    },
+    "15.8a-impl": {
+      "status": "completed",
+      "note": "15.8a implementation completed"
+    },
+    "15.8b-contract-test": {
+      "status": "completed",
+      "note": "15.8b contract completed"
+    },
+    "15.8b-impl": {
+      "status": "completed",
+      "note": "15.8b implementation completed"
+    },
+    "15.8c-story-e2e": {
+      "status": "completed",
+      "note": "15.8c story/e2e completed"
+    },
+    "15.8-review": {
+      "status": "completed",
+      "note": "15.8 review completed"
+    },
+    "15.9": {
+      "status": "completed",
+      "note": "15.9 completed"
+    },
+    "15.9a-contract-test": {
+      "status": "completed",
+      "note": "15.9a contract completed"
+    },
+    "15.9a-impl": {
+      "status": "completed",
+      "note": "15.9a implementation completed"
+    },
+    "15.9b-story-e2e": {
+      "status": "completed",
+      "note": "15.9b story/e2e completed"
+    },
+    "15.9-review": {
+      "status": "completed",
+      "note": "15.9-review completed; client tsc still has unrelated PreMilestones errors outside 15.9 scope"
+    },
+    "15.10": {
+      "status": "completed",
+      "note": "15.10 completed: governance snapshot wiring, passive reorder thresholds, closeout/reorder 3/5/7 governance states, ad_hoc cross-month reminders, dashboard signal consumption, and scheduler persistence are connected"
+    },
+    "15.10a-test": {
+      "status": "completed",
+      "note": "15.10a test completed"
+    },
+    "15.10a-impl": {
+      "status": "completed",
+      "note": "15.10a impl completed; server tsc still has unrelated preMilestoneBoardService test type errors outside 15.10a scope"
+    },
+    "15.10b-test": {
+      "status": "completed",
+      "note": "15.10b test completed"
+    },
+    "15.10b-impl": {
+      "status": "completed",
+      "note": "15.10b impl completed; client tsc still has unrelated PreMilestones type errors outside 15.10b scope"
+    },
+    "15.10-review": {
+      "status": "completed",
+      "note": "15.10 review completed; governance states, dashboard signals, scheduler persistence, and planning workspace backend-driven governance panels verified"
+    },
+    "15.11": {
+      "status": "completed",
+      "note": "15.11 completed: reference_days now participates in template_to_baseline plan generation, completed_project_to_template refreshes/selects the created template, and WBS template governance chain is usable end-to-end"
+    },
+    "15.11a-test": {
+      "status": "completed",
+      "note": "15.11a test completed"
+    },
+    "15.11a-impl": {
+      "status": "completed",
+      "note": "15.11a implementation completed"
+    },
+    "15.11b-test": {
+      "status": "completed",
+      "note": "15.11b test completed"
+    },
+    "15.11b-impl": {
+      "status": "completed",
+      "note": "15.11b implementation completed"
+    },
+    "15.11-review": {
+      "status": "completed",
+      "note": "15.11 review completed; reference_days now drives baseline planned dates during template application and completed-project template generation is visible in the governance UI"
+    }
+  },
+  "model_ownership": {
+    "A": {
+      "owner_scope": "???????????",
+      "step_prefixes": [
+        "10.1",
+        "10.2",
+        "10.8",
+        "10.9",
+        "10.10",
+        "15.0",
+        "15.1",
+        "15.2",
+        "15.11",
+        "15.7",
+        "15.10"
+      ],
+      "notes": "???? server/*?migrations?scheduler?routes?planning backend?"
+    },
+    "B": {
+      "owner_scope": "Reports ?????",
+      "step_prefixes": [
+        "14.3",
+        "15.8"
+      ],
+      "notes": "???? Reports ????????????????????????????????"
+    },
+    "C": {
+      "owner_scope": "Milestones / Gantt / RiskManagement / ??????",
+      "step_prefixes": [
+        "14.1",
+        "14.2",
+        "14.4",
+        "14.5",
+        "14.6",
+        "15.9"
+      ],
+      "notes": "????????????????????????????"
+    },
+    "dispatch_rule": "???????????????????????????? execution_order ????????????????????????"
   }
 }

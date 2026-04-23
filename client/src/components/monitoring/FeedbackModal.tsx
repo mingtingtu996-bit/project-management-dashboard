@@ -5,6 +5,8 @@
 
 import { useState } from 'react'
 import { MessageSquare, Send, X, CheckCircle } from 'lucide-react'
+import { z } from 'zod'
+import { getBrowserStorage, safeJsonParse, safeStorageGet, safeStorageSet } from '@/lib/browserStorage'
 import { cn } from '@/lib/utils'
 
 interface FeedbackData {
@@ -22,6 +24,18 @@ interface FeedbackModalProps {
   onClose: () => void
   onSubmit?: (feedback: FeedbackData) => void
 }
+
+const FeedbackDataSchema = z.object({
+  type: z.enum(['bug', 'feature', 'improvement', 'other']),
+  title: z.string(),
+  description: z.string(),
+  contact: z.string().optional(),
+  screenshots: z.array(z.string()).optional(),
+  timestamp: z.number(),
+  userId: z.string().optional(),
+})
+
+const FeedbackDataListSchema = z.array(FeedbackDataSchema)
 
 export default function FeedbackModal({ isOpen, onClose, onSubmit }: FeedbackModalProps) {
   const [type, setType] = useState<FeedbackData['type']>('improvement')
@@ -42,14 +56,19 @@ export default function FeedbackModal({ isOpen, onClose, onSubmit }: FeedbackMod
     }
 
     // 保存到本地存储
-    let existingFeedback: FeedbackData[] = []
-    try {
-      existingFeedback = JSON.parse(localStorage.getItem('user_feedback') || '[]')
-    } catch {
-      existingFeedback = []
+    const storage = getBrowserStorage()
+    if (storage) {
+      const existingFeedback = FeedbackDataListSchema.safeParse(
+        safeJsonParse<unknown>(
+          safeStorageGet(storage, 'user_feedback'),
+          [],
+          'user_feedback',
+        ),
+      )
+      const nextFeedback = existingFeedback.success ? existingFeedback.data : []
+      nextFeedback.push(feedback)
+      safeStorageSet(storage, 'user_feedback', JSON.stringify(nextFeedback))
     }
-    existingFeedback.push(feedback)
-    localStorage.setItem('user_feedback', JSON.stringify(existingFeedback))
 
     // 回调
     onSubmit?.(feedback)

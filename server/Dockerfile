@@ -1,49 +1,45 @@
 # ============================================
-# 后端服务 Dockerfile
-# 多阶段构建：构建 → 运行
+# Backend Dockerfile
+# Multi-stage build: npm ci -> tsc -> runtime
 # ============================================
 
-# 构建阶段
-FROM node:20-alpine AS builder
+FROM node:20-alpine AS deps
 
 WORKDIR /app
 
-# 先复制依赖文件（利用缓存）
-COPY package.json package-lock.json* ./
-RUN npm ci --only=production && \
-    cp -R node_modules prod_modules && \
-    npm ci
+COPY package.json package-lock.json ./
+RUN npm ci --ignore-scripts
 
-# 复制源代码
-COPY tsconfig.json ./
-COPY src/ ./src/
+FROM deps AS builder
 
-# 构建 TypeScript
-RUN npx tsc --outDir dist
+COPY tsconfig.json tsconfig.build.json ./
+COPY src ./src
 
-# 运行阶段
+RUN npm run build
+
+FROM node:20-alpine AS prod-deps
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts
+
 FROM node:20-alpine AS runtime
 
 WORKDIR /app
+ENV NODE_ENV=production
 
-# 从构建阶段复制依赖和编译产物
-COPY --from=builder /app/prod_modules ./node_modules
+COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/package.json ./
+COPY package.json ./
 
-# 创建非 root 用户
-RUN addgroup -g 1001 -S nodejs && \
-    adduser -S appuser -u 1001
+RUN addgroup -S nodejs && adduser -S appuser -G nodejs
 
-# 切换用户
 USER appuser
 
-# 暴露端口
 EXPOSE 3001
 
-# 健康检查
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
   CMD wget --no-verbose --tries=1 --spider http://localhost:3001/api/health || exit 1
 
-# 启动服务
 CMD ["node", "dist/index.js"]

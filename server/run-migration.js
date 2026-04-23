@@ -1,10 +1,11 @@
-// run-migration.js — 通过 Supabase REST API 执行迁移 SQL
+// run-migration.js — 指向规范 CLEAN bundle 的人工执行指引
 // 用法: node run-migration.js
 // 前提: .env 中有 SUPABASE_URL 和 SUPABASE_SERVICE_KEY
 
 const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
+const CANONICAL_CLEAN_BUNDLE = 'CLEAN_MIGRATION_V4.sql';
 
 // 从 .env 读取配置
 const envPath = path.join(__dirname, '.env');
@@ -24,7 +25,7 @@ console.log('Service Key:', SERVICE_KEY ? SERVICE_KEY.substring(0, 15) + '...' :
 console.log('DB Password:', DB_PASSWORD ? '***found***' : 'NOT FOUND');
 
 // 读取迁移 SQL
-const sqlPath = path.join(__dirname, 'migrations', 'CLEAN_MIGRATION_V4.sql');
+const sqlPath = path.join(__dirname, 'migrations', CANONICAL_CLEAN_BUNDLE);
 const sql = fs.readFileSync(sqlPath, 'utf-8');
 console.log(`\nMigration SQL loaded: ${sql.length} chars, ${sql.split('\n').length} lines`);
 

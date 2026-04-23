@@ -243,8 +243,8 @@ export class BusinessStatusService {
         throw new Error('阻碍记录不存在')
       }
 
-      // 如果已经是"已解决"或"无法解决"状态，不允许重复解决
-      if (current.status === '已解决' || current.status === '无法解决') {
+      // 如果已经是"已解决"状态，不允许重复解决
+      if (current.status === '已解决') {
         throw new Error(`阻碍已处于${current.status}状态，无需重复操作`)
       }
 

@@ -143,7 +143,6 @@ export function useConflictDetection(): UseConflictDetectionReturn {
  * 智能合并算法
  * 自动合并两个版本的数据
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function smartMerge(localData: VersionedEntity, serverData: VersionedEntity): VersionedEntity {
   const result: VersionedEntity = { ...serverData } // 以服务器数据为基础
 

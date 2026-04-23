@@ -1,174 +1,207 @@
-/**
- * RiskBubbleMatrix.tsx
- *
- * 风险来源气泡热力图组件
- *
- * 功能：展示风险按来源和等级的分布情况
- * X轴：风险来源（技术/管理/外部/合规/资源）
- * Y轴：风险等级（低/中/高/严重）
- * 气泡大小：风险影响范围（受影响任务数）
- * 气泡颜色：风险等级
- */
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import type { Issue, Risk } from '@/lib/supabase'
 
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import type { Risk } from '@/lib/supabase';
+import type { ProjectRow } from '../types'
 
 interface RiskBubbleMatrixProps {
-  risks: Risk[];
+  risks: Risk[]
+  issues: Issue[]
+  projectRows: ProjectRow[]
 }
 
-// 风险来源分类
-const RISK_SOURCES = ['技术', '管理', '外部', '合规', '资源'] as const;
-
-// 风险等级
-const RISK_LEVELS = [
+const SIGNAL_SOURCES = ['风险', '问题', '前置条件', '阻碍'] as const
+const SIGNAL_LEVELS = [
   { key: 'low', label: '低', color: 'bg-blue-400', textColor: 'text-blue-600' },
   { key: 'medium', label: '中', color: 'bg-amber-400', textColor: 'text-amber-600' },
   { key: 'high', label: '高', color: 'bg-orange-500', textColor: 'text-orange-600' },
   { key: 'critical', label: '严重', color: 'bg-red-500', textColor: 'text-red-600' },
-] as const;
+] as const
 
-// 风险来源映射（从风险标题/描述推断）
-function inferRiskSource(risk: Risk): string {
-  const title = (risk.title || '').toLowerCase();
-  const desc = (risk.description || '').toLowerCase();
-  const text = title + ' ' + desc;
+type SignalLevelKey = (typeof SIGNAL_LEVELS)[number]['key']
 
-  // 技术风险关键词
-  if (/技术|设计|施工|质量|安全|设备|材料|工艺|方案/.test(text)) return '技术';
-  // 管理风险关键词
-  if (/管理|协调|沟通|组织|计划|进度|人员|团队/.test(text)) return '管理';
-  // 外部风险关键词
-  if (/天气|气候|地质|环境|市场|供应商|客户|政策/.test(text)) return '外部';
-  // 合规风险关键词
-  if (/法规|法律|合规|许可|审批|证照|环保|验收/.test(text)) return '合规';
-  // 资源风险关键词
-  if (/资金|成本|预算|人力|资源|材料|设备短缺/.test(text)) return '资源';
-
-  // 默认根据ID分配，确保分布均匀
-  const hash = risk.id.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-  return RISK_SOURCES[hash % RISK_SOURCES.length];
+type UnifiedSignal = {
+  source: (typeof SIGNAL_SOURCES)[number]
+  level: SignalLevelKey
+  weight: number
 }
 
-// 计算气泡大小（基于风险影响）
-function calcBubbleSize(risk: Risk): number {
-  // 基础大小 + 根据等级调整
-  const baseSize = 24;
-  const levelMultiplier = {
-    low: 1,
-    medium: 1.3,
-    high: 1.6,
-    critical: 2,
-  };
-  return Math.round(baseSize * (levelMultiplier[risk.level as keyof typeof levelMultiplier] || 1));
+function normalizeRiskLevel(level?: string | null): SignalLevelKey {
+  switch (String(level ?? '').trim().toLowerCase()) {
+    case 'critical':
+      return 'critical'
+    case 'high':
+      return 'high'
+    case 'medium':
+      return 'medium'
+    default:
+      return 'low'
+  }
 }
 
-export function RiskBubbleMatrix({ risks }: RiskBubbleMatrixProps) {
-  // 只统计未缓解的风险
-  const activeRisks = risks.filter(r => r.status !== 'mitigated');
+function normalizeIssueLevel(severity?: string | null): SignalLevelKey {
+  switch (String(severity ?? '').trim().toLowerCase()) {
+    case 'critical':
+      return 'critical'
+    case 'high':
+      return 'high'
+    case 'medium':
+      return 'medium'
+    default:
+      return 'low'
+  }
+}
 
-  // 按来源和等级分组统计
-  const matrix = RISK_SOURCES.map(source => {
-    const sourceRisks = activeRisks.filter(r => inferRiskSource(r) === source);
+function classifyCountLevel(count: number, thresholds: { critical: number; high: number; medium: number }): SignalLevelKey {
+  if (count >= thresholds.critical) return 'critical'
+  if (count >= thresholds.high) return 'high'
+  if (count >= thresholds.medium) return 'medium'
+  return 'low'
+}
+
+function buildUnifiedSignals(input: RiskBubbleMatrixProps): UnifiedSignal[] {
+  const activeRiskSignals = input.risks
+    .filter((risk) => !['mitigated', 'closed', 'resolved'].includes(String(risk.status ?? '').trim().toLowerCase()))
+    .map<UnifiedSignal>((risk) => ({
+      source: '风险',
+      level: normalizeRiskLevel(risk.level),
+      weight: 1,
+    }))
+
+  const activeIssueSignals = input.issues
+    .filter((issue) => !['closed', 'resolved'].includes(String(issue.status ?? '').trim().toLowerCase()))
+    .map<UnifiedSignal>((issue) => ({
+      source: '问题',
+      level: normalizeIssueLevel(issue.severity),
+      weight: 1,
+    }))
+
+  const conditionSignals = input.projectRows
+    .filter((row) => (row.summary?.pendingConditionCount ?? 0) > 0)
+    .map<UnifiedSignal>((row) => {
+      const count = row.summary?.pendingConditionCount ?? 0
+      return {
+        source: '前置条件',
+        level: classifyCountLevel(count, { critical: 6, high: 4, medium: 1 }),
+        weight: count,
+      }
+    })
+
+  const obstacleSignals = input.projectRows
+    .filter((row) => (row.summary?.activeObstacles ?? row.summary?.activeObstacleCount ?? 0) > 0)
+    .map<UnifiedSignal>((row) => {
+      const count = row.summary?.activeObstacles ?? row.summary?.activeObstacleCount ?? 0
+      return {
+        source: '阻碍',
+        level: classifyCountLevel(count, { critical: 4, high: 2, medium: 1 }),
+        weight: count,
+      }
+    })
+
+  return [
+    ...activeRiskSignals,
+    ...activeIssueSignals,
+    ...conditionSignals,
+    ...obstacleSignals,
+  ]
+}
+
+function calcBubbleSize(count: number): number {
+  return Math.min(42, 20 + count * 4)
+}
+
+export function RiskBubbleMatrix({ risks, issues, projectRows }: RiskBubbleMatrixProps) {
+  const signals = buildUnifiedSignals({ risks, issues, projectRows })
+  const matrix = SIGNAL_SOURCES.map((source) => {
+    const sourceSignals = signals.filter((signal) => signal.source === source)
     return {
       source,
-      counts: RISK_LEVELS.map(level => ({
-        level: level.key,
-        label: level.label,
-        color: level.color,
-        textColor: level.textColor,
-        risks: sourceRisks.filter(r => r.level === level.key),
-        count: sourceRisks.filter(r => r.level === level.key).length,
-      })),
-      total: sourceRisks.length,
-    };
-  });
+      counts: SIGNAL_LEVELS.map((level) => {
+        const items = sourceSignals.filter((signal) => signal.level === level.key)
+        return {
+          level: level.key,
+          label: level.label,
+          color: level.color,
+          textColor: level.textColor,
+          count: items.length,
+          weight: items.reduce((sum, item) => sum + item.weight, 0),
+        }
+      }),
+      total: sourceSignals.length,
+    }
+  })
 
-  const totalRisks = activeRisks.length;
+  const totalSignals = signals.length
 
   return (
-    <Card className="rounded-xl border border-gray-200 shadow-sm bg-white">
-      <CardHeader className="pb-2">
-        <CardTitle className="text-base font-semibold text-gray-800 flex items-center justify-between">
-          <span>风险来源分布</span>
-          {totalRisks > 0 && (
-            <span className="text-xs font-normal text-gray-500">
-              共 {totalRisks} 个活跃风险
+    <Card className="rounded-[24px] border border-slate-100 bg-slate-50 shadow-none">
+      <CardHeader className="space-y-1 pb-3">
+        <CardTitle className="flex items-center justify-between text-base font-semibold text-slate-900">
+          <span>风险 / 问题 / 阻碍分布</span>
+          {totalSignals > 0 && (
+            <span className="text-xs font-normal text-slate-500">
+              共 {totalSignals} 个活跃信号
             </span>
           )}
         </CardTitle>
+        <p className="text-xs leading-5 text-slate-500">
+          数据源对齐统一风险底座，合并风险、问题、前置条件和阻碍，便于在公司层快速识别高密度异常来源。
+        </p>
       </CardHeader>
       <CardContent className="pt-0">
-        {/* 图例 */}
-        <div className="flex items-center justify-center gap-3 mb-4 text-xs">
-          {RISK_LEVELS.map(l => (
-            <span key={l.key} className="flex items-center gap-1">
-              <span className={`w-3 h-3 rounded-full ${l.color}`} />
-              <span className="text-gray-500">{l.label}</span>
+        <div className="mb-4 flex items-center justify-center gap-3 text-xs">
+          {SIGNAL_LEVELS.map((level) => (
+            <span key={level.key} className="flex items-center gap-1">
+              <span className={`h-3 w-3 rounded-full ${level.color}`} />
+              <span className="text-slate-500">{level.label}</span>
             </span>
           ))}
         </div>
 
-        {/* 矩阵网格 */}
         <div className="relative">
-          {/* Y轴标签（等级） */}
-          <div className="absolute left-0 top-0 bottom-0 w-8 flex flex-col justify-around text-[10px] text-gray-400 py-2">
-            {[...RISK_LEVELS].reverse().map(l => (
-              <span key={l.key} className="text-center">{l.label}</span>
+          <div className="absolute bottom-0 left-0 top-0 flex w-10 flex-col justify-around py-2 text-[10px] text-slate-400">
+            {[...SIGNAL_LEVELS].reverse().map((level) => (
+              <span key={level.key} className="text-center">{level.label}</span>
             ))}
           </div>
 
-          {/* 矩阵内容 */}
-          <div className="ml-8">
-            {/* 表头（来源） */}
-            <div className="grid grid-cols-5 gap-1 mb-1">
-              {RISK_SOURCES.map(s => (
-                <div key={s} className="text-center text-[10px] text-gray-500 py-1">
-                  {s}
+          <div className="ml-10">
+            <div className="mb-1 grid grid-cols-4 gap-2">
+              {SIGNAL_SOURCES.map((source) => (
+                <div key={source} className="py-1 text-center text-[10px] text-slate-500">
+                  {source}
                 </div>
               ))}
             </div>
 
-            {/* 矩阵行 */}
-            <div className="space-y-1">
-              {[...RISK_LEVELS].reverse().map((level, rowIdx) => (
-                <div key={level.key} className="grid grid-cols-5 gap-1">
-                  {RISK_SOURCES.map((source, colIdx) => {
-                    const cell = matrix[colIdx].counts.find(c => c.level === level.key);
-                    const count = cell?.count || 0;
-                    const cellRisks = cell?.risks || [];
-
-                    // 计算气泡大小
-                    const maxSize = cellRisks.length > 0
-                      ? Math.max(...cellRisks.map(calcBubbleSize))
-                      : 0;
+            <div className="space-y-2">
+              {[...SIGNAL_LEVELS].reverse().map((level) => (
+                <div key={level.key} className="grid grid-cols-4 gap-2">
+                  {SIGNAL_SOURCES.map((source, index) => {
+                    const cell = matrix[index].counts.find((item) => item.level === level.key)
+                    const count = cell?.count ?? 0
+                    const weight = cell?.weight ?? 0
 
                     return (
                       <div
                         key={`${source}-${level.key}`}
-                        className="aspect-square bg-gray-50 rounded-lg flex items-center justify-center relative hover:bg-gray-100 transition-colors"
-                        title={count > 0 ? `${source}风险 · ${level.label}等级: ${count}个` : `${source}风险 · ${level.label}等级`}
+                        className="relative aspect-square rounded-xl bg-white transition-colors hover:bg-slate-100"
+                        title={count > 0 ? `${source} · ${level.label}：${count} 个信号` : `${source} · ${level.label}`}
                       >
-                        {count > 0 && (
-                          <>
-                            {/* 气泡 */}
+                        <div className="flex h-full items-center justify-center">
+                          {count > 0 ? (
                             <div
-                              className={`rounded-full ${level.color} opacity-80 flex items-center justify-center text-white text-[10px] font-bold shadow-sm`}
+                              className={`flex items-center justify-center rounded-full text-[10px] font-semibold text-white shadow-sm ${level.color}`}
                               style={{
-                                width: Math.min(maxSize, 36),
-                                height: Math.min(maxSize, 36),
+                                width: `${calcBubbleSize(Math.max(count, weight))}px`,
+                                height: `${calcBubbleSize(Math.max(count, weight))}px`,
                               }}
                             >
-                              {count > 1 ? count : ''}
+                              {count}
                             </div>
-                            {/* 多个风险时的指示器 */}
-                            {count > 1 && (
-                              <div className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-red-400 rounded-full" />
-                            )}
-                          </>
-                        )}
+                          ) : null}
+                        </div>
                       </div>
-                    );
+                    )
                   })}
                 </div>
               ))}
@@ -176,32 +209,26 @@ export function RiskBubbleMatrix({ risks }: RiskBubbleMatrixProps) {
           </div>
         </div>
 
-        {/* 统计摘要 */}
-        {totalRisks > 0 && (
-          <div className="mt-4 pt-3 border-t border-gray-100">
+        {totalSignals > 0 ? (
+          <div className="mt-4 border-t border-slate-200 pt-3">
             <div className="flex flex-wrap gap-2">
               {matrix
-                .filter(m => m.total > 0)
-                .sort((a, b) => b.total - a.total)
-                .slice(0, 3)
-                .map(m => (
+                .filter((item) => item.total > 0)
+                .sort((left, right) => right.total - left.total)
+                .map((item) => (
                   <span
-                    key={m.source}
-                    className="text-xs bg-gray-50 text-gray-600 px-2 py-1 rounded-full"
+                    key={item.source}
+                    className="rounded-full bg-white px-3 py-1 text-xs text-slate-600"
                   >
-                    {m.source}: {m.total}个
+                    {item.source}: {item.total} 个
                   </span>
                 ))}
             </div>
           </div>
-        )}
-
-        {totalRisks === 0 && (
-          <div className="text-center py-8 text-gray-400 text-sm">
-            暂无活跃风险
-          </div>
+        ) : (
+          <div className="py-8 text-center text-sm text-slate-400">暂无活跃风险信号</div>
         )}
       </CardContent>
     </Card>
-  );
+  )
 }

@@ -4,9 +4,15 @@ import App from "./App"
 import "./index.css"
 import { storageService } from "./lib/storageService"
 import { initMonitoring } from "./lib/monitoring"
+import { bindStorageWarningToToast } from "./lib/browserStorage"
+import { bindApiErrorToToast } from "./lib/apiClient"
+import { installGlobalRuntimeErrorHandlers } from "./lib/runtimeErrorReporter"
 
 // 初始化存储服务（尝试连接Supabase，成功则自动切换到同步模式）
 storageService.initialize()
+bindStorageWarningToToast()
+bindApiErrorToToast()
+installGlobalRuntimeErrorHandlers()
 
 // 初始化监控系统
 initMonitoring({
@@ -17,8 +23,10 @@ initMonitoring({
   enablePerformanceMonitoring: true,
 })
 
-ReactDOM.createRoot(document.getElementById("root")!).render(
+const appTree = import.meta.env.DEV ? <App /> : (
   <React.StrictMode>
     <App />
-  </React.StrictMode>,
+  </React.StrictMode>
 )
+
+ReactDOM.createRoot(document.getElementById("root")!).render(appTree)

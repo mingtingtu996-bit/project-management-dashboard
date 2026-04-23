@@ -1,280 +1,727 @@
-/**
- * 验收计划 API 服务 - V2 (Express API 版)
- *
- * 已从 Supabase 直接查询迁移为通过 Express API 调用。
- * 后端路由: server/src/routes/acceptance-plans.ts
- *
- * - GET  /api/acceptance-plans?projectId=xxx
- * - GET  /api/acceptance-plans/:id
- * - POST /api/acceptance-plans
- * - PUT  /api/acceptance-plans/:id
- * - DELETE /api/acceptance-plans/:id
- */
-
+import { authFetch } from '../lib/apiClient'
+import { safeJsonParse } from '@/lib/browserStorage'
 import type {
+  AcceptanceDependencyKind,
+  AcceptanceDocument,
+  AcceptanceLinkedIssue,
+  AcceptanceLinkedRisk,
+  AcceptanceLinkedWarning,
+  AcceptanceOverlayTag,
   AcceptancePlan,
+  AcceptanceRequirementStatus,
+  AcceptancePlanDependencyRecord,
+  AcceptancePlanRelationBundle,
+  AcceptanceRecordEntry,
+  AcceptanceRequirementRecord,
   AcceptanceStatus,
-  AcceptanceType
-} from '@/types/acceptance';
-import { authFetch } from '../lib/apiClient';
+  AcceptanceType,
+} from '@/types/acceptance'
+import {
+  normalizeAcceptanceDependencyKind,
+  normalizeAcceptanceStatus,
+} from '@/types/acceptance'
 
-const API_BASE = '/api';
+const API_BASE = '/api'
 
-/** 内部：解析后端响应，失败时抛错 */
-async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
-  return authFetch<T>(url, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(options?.headers || {})
-    }
-  });
+type UnknownRecord = Record<string, unknown>
+
+type AcceptancePlanRow = {
+  id: string
+  project_id: string
+  task_id?: string | null
+  milestone_id?: string | null
+  catalog_id?: string | null
+  type_id?: string | null
+  type_name?: string | null
+  type_color?: string | null
+  acceptance_type?: string | null
+  plan_name?: string | null
+  acceptance_name?: string | null
+  name?: string | null
+  description?: string | null
+  planned_date?: string | null
+  actual_date?: string | null
+  building_id?: string | null
+  scope_level?: string | null
+  participant_unit_id?: string | null
+  status?: string | null
+  phase?: string | null
+  phase_code?: string | null
+  phase_order?: number | null
+  sort_order?: number | null
+  parallel_group_id?: string | null
+  predecessor_plan_ids?: string[] | string | null
+  successor_plan_ids?: string[] | string | null
+  requirement_ready_percent?: number | null
+  upstream_unfinished_count?: number | null
+  downstream_block_count?: number | null
+  can_submit?: boolean | null
+  is_overdue?: boolean | null
+  days_to_due?: number | null
+  display_badges?: string[] | string | null
+  overlay_tags?: string[] | string | null
+  is_blocked?: boolean | null
+  block_reason_summary?: string | null
+  warning_level?: string | null
+  is_custom?: boolean | null
+  documents?: unknown[] | string | null
+  is_system?: boolean | null
+  created_at?: string
+  updated_at?: string
+  created_by?: string | null
+  responsible_user_id?: string | null
+}
+
+type AcceptancePlanFilters = {
+  taskId?: string | null
+  buildingId?: string | null
+  scopeLevel?: string | null
+  participantUnitId?: string | null
+  catalogId?: string | null
+  phaseCode?: string | null
+  status?: AcceptanceStatus | AcceptanceStatus[] | null
+  overlayTag?: string | null
+  blockedOnly?: boolean
+}
+
+type AcceptanceFlowSnapshotRow = {
+  catalogs: UnknownRecord[]
+  plans: AcceptancePlanRow[]
+  dependencies: UnknownRecord[]
+  requirements: UnknownRecord[]
+  records: UnknownRecord[]
+}
+
+type AcceptanceRequirementMutation = {
+  requirement_type: string
+  source_entity_type: string
+  source_entity_id: string
+  drawing_package_id?: string | null
+  description?: string | null
+  status?: string | null
+  is_required?: boolean
+  is_satisfied?: boolean
+}
+
+type AcceptanceRecordMutation = {
+  record_type: string
+  content: string
+  operator?: string | null
+  record_date?: string | null
+  attachments?: unknown[] | null
+}
+
+function parseJson<T>(value: unknown, fallback: T): T {
+  if (value == null) return fallback
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (!trimmed) return fallback
+    return safeJsonParse(trimmed, fallback, 'acceptance api payload')
+  }
+  return value as T
+}
+
+function parseStringArray(value: unknown): string[] {
+  const parsed = parseJson<unknown[]>(value, [])
+  if (!Array.isArray(parsed)) return []
+  return parsed
+    .map((item) => String(item ?? '').trim())
+    .filter(Boolean)
+}
+
+function parseDocuments(value: unknown) {
+  const parsed = parseJson<unknown[]>(value, [])
+  if (!Array.isArray(parsed)) return []
+
+  return parsed.flatMap((entry, index) => {
+    if (!entry || typeof entry !== 'object') return []
+    const row = entry as Record<string, unknown>
+    const name = typeof row.name === 'string' ? row.name.trim() : ''
+    const url = typeof row.url === 'string' ? row.url.trim() : ''
+    if (!name || !url) return []
+
+    const uploadedAt =
+      typeof row.uploaded_at === 'string' && row.uploaded_at.trim()
+        ? row.uploaded_at
+        : new Date(0).toISOString()
+
+    return [{
+      id:
+        typeof row.id === 'string' && row.id.trim()
+          ? row.id
+          : `document-${index}`,
+      name,
+      url,
+      file_type: typeof row.file_type === 'string' ? row.file_type : undefined,
+      uploaded_at: uploadedAt,
+      uploaded_by: typeof row.uploaded_by === 'string' ? row.uploaded_by : undefined,
+    } satisfies AcceptanceDocument]
+  })
+}
+
+function parseNumber(value: unknown, fallback = 0) {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : fallback
+}
+
+function parseNullableNumber(value: unknown): number | null {
+  if (value == null || value === '') return null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function parseBoolean(value: unknown, fallback = false) {
+  return typeof value === 'boolean' ? value : fallback
+}
+
+function parseBooleanLike(value: unknown, fallback = false) {
+  if (value === true || value === 1 || value === '1') return true
+  if (value === false || value === 0 || value === '0') return false
+  return fallback
+}
+
+function normalizeOverlayBadges(input: string[]): AcceptanceOverlayTag[] {
+  return [...new Set(input.filter(Boolean))]
+}
+
+function deriveDaysToDue(plannedDate?: string | null) {
+  if (!plannedDate) return null
+  const planned = new Date(`${plannedDate}T00:00:00Z`)
+  if (Number.isNaN(planned.getTime())) return null
+  const today = new Date()
+  const current = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate())
+  return Math.floor((planned.getTime() - current) / (24 * 60 * 60 * 1000))
+}
+
+function buildDerivedOverlayBadges(input: {
+  isOverdue: boolean
+  daysToDue: number | null
+  isBlocked: boolean
+  upstreamUnfinishedCount: number
+  requirementReadyPercent: number
+  isCustom: boolean
+}) {
+  const badges: AcceptanceOverlayTag[] = []
+
+  if (input.isBlocked) badges.push('受阻')
+  if (input.upstreamUnfinishedCount > 0) badges.push('前置未满足')
+  if (input.requirementReadyPercent < 100) badges.push('资料缺失')
+  if (input.isOverdue) {
+    badges.push('逾期')
+  } else if (input.daysToDue != null && input.daysToDue >= 0 && input.daysToDue <= 7) {
+    badges.push('临期')
+  }
+  if (input.isCustom) badges.push('自定义')
+
+  return badges
+}
+
+function mapDbToPlan(row: AcceptancePlanRow): AcceptancePlan {
+  const raw = row as UnknownRecord
+  const typeId = String(row.type_id ?? row.acceptance_type ?? row.type_name ?? '')
+  const typeName = String(row.type_name ?? row.acceptance_type ?? row.plan_name ?? row.acceptance_name ?? '')
+  const acceptanceName = String(row.acceptance_name ?? row.plan_name ?? row.name ?? '').trim()
+  const phaseOrder = Number(row.phase_order ?? row.sort_order ?? 0)
+  const predecessorPlanIds = parseStringArray(row.predecessor_plan_ids)
+  const successorPlanIds = parseStringArray(row.successor_plan_ids)
+  const requirementReadyPercent = parseNumber(row.requirement_ready_percent, 100)
+  const upstreamUnfinishedCount = parseNumber(row.upstream_unfinished_count, predecessorPlanIds.length)
+  const downstreamBlockCount = parseNumber(row.downstream_block_count, 0)
+  const daysToDue = row.days_to_due != null ? parseNullableNumber(row.days_to_due) : deriveDaysToDue(row.planned_date)
+  const isOverdue = typeof row.is_overdue === 'boolean'
+    ? row.is_overdue
+    : typeof daysToDue === 'number' && daysToDue < 0 && !['passed', 'archived'].includes(normalizeAcceptanceStatus(String(row.status ?? 'draft')))
+  const isBlocked = typeof row.is_blocked === 'boolean'
+    ? row.is_blocked
+    : upstreamUnfinishedCount > 0
+  const isCustom = Boolean(row.is_custom) || (!row.is_system && Boolean(row.catalog_id))
+  const displayBadges = normalizeOverlayBadges([
+    ...parseStringArray(row.display_badges),
+    ...parseStringArray(row.overlay_tags),
+    ...buildDerivedOverlayBadges({
+      isOverdue,
+      daysToDue,
+      isBlocked,
+      upstreamUnfinishedCount,
+      requirementReadyPercent,
+      isCustom,
+    }),
+  ])
+
+  return {
+    id: String(row.id),
+    project_id: String(row.project_id),
+    milestone_id: row.task_id ?? row.milestone_id ?? null,
+    catalog_id: row.catalog_id ?? null,
+    type_id: typeId,
+    type_name: typeName,
+    type_color: String(row.type_color ?? 'bg-slate-500'),
+    acceptance_type: row.acceptance_type ?? row.type_name ?? null,
+    acceptance_name: row.acceptance_name ?? row.plan_name ?? null,
+    name: acceptanceName || typeName || String(row.id),
+    description: row.description ?? null,
+    planned_date: row.planned_date ?? null,
+    actual_date: row.actual_date ?? null,
+    building_id: row.building_id ?? null,
+    scope_level: row.scope_level ?? null,
+    participant_unit_id: row.participant_unit_id ?? null,
+    status: normalizeAcceptanceStatus(String(row.status ?? 'draft')),
+    phase_code: row.phase_code ?? row.phase ?? null,
+    phase_order: Number.isFinite(phaseOrder) ? phaseOrder : 0,
+    sort_order: Number.isFinite(Number(row.sort_order ?? phaseOrder)) ? Number(row.sort_order ?? phaseOrder) : 0,
+    parallel_group_id: row.parallel_group_id ?? null,
+    predecessor_plan_ids: predecessorPlanIds,
+    successor_plan_ids: successorPlanIds,
+    can_submit: row.can_submit ?? (upstreamUnfinishedCount === 0 && requirementReadyPercent >= 100),
+    is_overdue: isOverdue,
+    days_to_due: daysToDue,
+    requirement_ready_percent: requirementReadyPercent,
+    upstream_unfinished_count: upstreamUnfinishedCount,
+    downstream_block_count: downstreamBlockCount,
+    display_badges: displayBadges,
+    overlay_tags: displayBadges,
+    is_blocked: isBlocked,
+    block_reason_summary: row.block_reason_summary ?? null,
+    warning_level: row.warning_level ?? (isOverdue ? 'critical' : displayBadges.includes('临期') ? 'warning' : 'info'),
+    is_custom: isCustom,
+    responsible_user_id: row.responsible_user_id ?? null,
+    documents: parseDocuments(row.documents),
+    nodes: undefined,
+    is_system: Boolean(row.is_system),
+    created_at: String(row.created_at ?? ''),
+    updated_at: String(row.updated_at ?? row.created_at ?? ''),
+    created_by: row.created_by ?? null,
+  }
+}
+
+function compactObject<T extends Record<string, unknown>>(value: T): T {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, entry]) => entry !== undefined),
+  ) as T
+}
+
+const FRESH_ACCEPTANCE_READ_OPTIONS = {
+  headers: { 'Content-Type': 'application/json' },
+  cache: 'no-store' as RequestCache,
+}
+
+function buildPlanWriteBody(plan: Partial<AcceptancePlan>): Record<string, unknown> {
+  return compactObject({
+    project_id: plan.project_id,
+    task_id: plan.milestone_id,
+    catalog_id: plan.catalog_id,
+    type_id: plan.type_id,
+    type_name: plan.type_name,
+    acceptance_type: plan.acceptance_type ?? plan.type_name,
+    acceptance_name: plan.acceptance_name ?? plan.name,
+    description: plan.description,
+    planned_date: plan.planned_date,
+    actual_date: plan.actual_date,
+    building_id: plan.building_id,
+    scope_level: plan.scope_level,
+    participant_unit_id: plan.participant_unit_id,
+    status: plan.status ? normalizeAcceptanceStatus(plan.status) : undefined,
+    phase: plan.phase_code,
+    phase_order: plan.phase_order,
+    sort_order: plan.sort_order,
+    parallel_group_id: plan.parallel_group_id,
+    documents: plan.documents,
+    created_by: plan.created_by,
+  })
+}
+
+function buildPlanQuery(projectId: string, filters?: AcceptancePlanFilters) {
+  const params = new URLSearchParams()
+  params.set('projectId', projectId)
+
+  if (filters?.taskId) params.set('taskId', filters.taskId)
+  if (filters?.buildingId) params.set('buildingId', filters.buildingId)
+  if (filters?.scopeLevel) params.set('scopeLevel', filters.scopeLevel)
+  if (filters?.participantUnitId) params.set('participantUnitId', filters.participantUnitId)
+  if (filters?.catalogId) params.set('catalogId', filters.catalogId)
+  if (filters?.phaseCode) params.set('phaseCode', filters.phaseCode)
+  if (filters?.overlayTag) params.set('overlayTag', filters.overlayTag)
+  if (filters?.blockedOnly) params.set('blockedOnly', 'true')
+
+  const statuses = Array.isArray(filters?.status)
+    ? filters?.status
+    : filters?.status
+      ? [filters.status]
+      : []
+  if (statuses.length > 0) {
+    params.set('status', statuses.map((status) => normalizeAcceptanceStatus(status)).join(','))
+  }
+
+  return params.toString()
+}
+
+function mapRequirement(row: UnknownRecord): AcceptanceRequirementRecord {
+  const status = row.status == null ? null : String(row.status).trim().toLowerCase() as AcceptanceRequirementStatus
+  const isRequired = row.is_required == null ? status !== 'closed' : parseBooleanLike(row.is_required, status !== 'closed')
+  const isSatisfied = row.is_satisfied == null ? status === 'met' || status === 'closed' : parseBooleanLike(row.is_satisfied, status === 'met' || status === 'closed')
+  return {
+    id: String(row.id ?? ''),
+    plan_id: String(row.plan_id ?? ''),
+    requirement_type: String(row.requirement_type ?? ''),
+    source_entity_type: String(row.source_entity_type ?? ''),
+    source_entity_id: String(row.source_entity_id ?? ''),
+    drawing_package_id: row.drawing_package_id ? String(row.drawing_package_id) : undefined,
+    description: row.description == null ? null : String(row.description),
+    status,
+    is_required: isRequired,
+    is_satisfied: isSatisfied,
+    created_at: row.created_at ? String(row.created_at) : undefined,
+    updated_at: row.updated_at ? String(row.updated_at) : undefined,
+  }
+}
+
+function mapDependency(row: UnknownRecord): AcceptancePlanDependencyRecord {
+  const dependencyKind = normalizeAcceptanceDependencyKind(String(row.dependency_kind ?? 'hard'))
+  return {
+    id: String(row.id ?? ''),
+    project_id: String(row.project_id ?? ''),
+    source_plan_id: String(row.source_plan_id ?? ''),
+    target_plan_id: String(row.target_plan_id ?? ''),
+    dependency_kind: dependencyKind,
+    status: row.status == null ? null : String(row.status),
+    created_at: row.created_at ? String(row.created_at) : undefined,
+    updated_at: row.updated_at ? String(row.updated_at) : undefined,
+  }
+}
+
+function mapRecord(row: UnknownRecord): AcceptanceRecordEntry {
+  return {
+    id: String(row.id ?? ''),
+    plan_id: String(row.plan_id ?? ''),
+    record_type: String(row.record_type ?? ''),
+    content: String(row.content ?? ''),
+    operator: row.operator == null ? null : String(row.operator),
+    record_date: row.record_date == null ? null : String(row.record_date),
+    attachments: Array.isArray(row.attachments) ? row.attachments : parseJson<unknown[] | null>(row.attachments, null),
+    created_at: row.created_at ? String(row.created_at) : undefined,
+    updated_at: row.updated_at ? String(row.updated_at) : undefined,
+  }
+}
+
+function mapWarning(row: UnknownRecord): AcceptanceLinkedWarning {
+  return {
+    id: String(row.id ?? ''),
+    task_id: row.task_id ? String(row.task_id) : undefined,
+    warning_signature: row.warning_signature ? String(row.warning_signature) : undefined,
+    warning_type: String(row.warning_type ?? ''),
+    warning_level: (row.warning_level || 'info') as AcceptanceLinkedWarning['warning_level'],
+    title: String(row.title ?? ''),
+    description: String(row.description ?? ''),
+    is_acknowledged: Boolean(row.is_acknowledged),
+    status: row.status == null ? null : String(row.status),
+    source_entity_type: row.source_entity_type == null ? null : String(row.source_entity_type),
+    source_entity_id: row.source_entity_id == null ? null : String(row.source_entity_id),
+    created_at: row.created_at ? String(row.created_at) : undefined,
+  }
+}
+
+function mapIssue(row: UnknownRecord): AcceptanceLinkedIssue {
+  return {
+    id: String(row.id ?? ''),
+    task_id: row.task_id == null ? null : String(row.task_id),
+    title: String(row.title ?? ''),
+    description: row.description == null ? null : String(row.description),
+    severity: (row.severity || 'medium') as AcceptanceLinkedIssue['severity'],
+    status: (row.status || 'open') as AcceptanceLinkedIssue['status'],
+    source_type: String(row.source_type ?? 'manual'),
+    source_id: row.source_id == null ? null : String(row.source_id),
+    source_entity_type: row.source_entity_type == null ? null : String(row.source_entity_type),
+    source_entity_id: row.source_entity_id == null ? null : String(row.source_entity_id),
+    chain_id: row.chain_id == null ? null : String(row.chain_id),
+    pending_manual_close: Boolean(row.pending_manual_close),
+    closed_reason: row.closed_reason == null ? null : String(row.closed_reason),
+    closed_at: row.closed_at == null ? null : String(row.closed_at),
+    version: typeof row.version === 'number' ? row.version : undefined,
+    created_at: row.created_at ? String(row.created_at) : undefined,
+    updated_at: row.updated_at ? String(row.updated_at) : undefined,
+  }
+}
+
+function mapRisk(row: UnknownRecord): AcceptanceLinkedRisk {
+  return {
+    id: String(row.id ?? ''),
+    task_id: row.task_id == null ? null : String(row.task_id),
+    title: String(row.title ?? ''),
+    description: row.description == null ? undefined : String(row.description),
+    level: row.level == null ? String(row.severity ?? 'medium') : String(row.level),
+    status: row.status == null ? 'identified' : String(row.status),
+    source_type: row.source_type == null ? 'manual' : String(row.source_type),
+    source_id: row.source_id == null ? null : String(row.source_id),
+    source_entity_type: row.source_entity_type == null ? null : String(row.source_entity_type),
+    source_entity_id: row.source_entity_id == null ? null : String(row.source_entity_id),
+    chain_id: row.chain_id == null ? null : String(row.chain_id),
+    linked_issue_id: row.linked_issue_id == null ? null : String(row.linked_issue_id),
+    pending_manual_close: Boolean(row.pending_manual_close),
+    closed_reason: row.closed_reason == null ? null : String(row.closed_reason),
+    closed_at: row.closed_at == null ? null : String(row.closed_at),
+    version: typeof row.version === 'number' ? row.version : undefined,
+    created_at: row.created_at ? String(row.created_at) : undefined,
+    updated_at: row.updated_at ? String(row.updated_at) : undefined,
+  }
 }
 
 export const acceptanceApi = {
-  /**
-   * 获取项目的验收计划列表
-   */
-  async getPlans(projectId: string): Promise<AcceptancePlan[]> {
-    const data = await apiFetch<any[]>(
-      `${API_BASE}/acceptance-plans?projectId=${encodeURIComponent(projectId)}`
-    );
+  async getPlans(projectId: string, filters?: AcceptancePlanFilters): Promise<AcceptancePlan[]> {
+    const query = buildPlanQuery(projectId, filters)
+    const data = await authFetch<AcceptancePlanRow[]>(
+      `${API_BASE}/acceptance-plans?${query}`,
+      FRESH_ACCEPTANCE_READ_OPTIONS,
+    )
 
-    return (data || []).map(mapDbToPlan);
+    return (data || []).map(mapDbToPlan)
   },
 
-  /**
-   * 获取单个验收计划
-   */
-  async getPlan(planId: string): Promise<AcceptancePlan> {
-    const data = await apiFetch<any>(
-      `${API_BASE}/acceptance-plans/${encodeURIComponent(planId)}`
-    );
-    return mapDbToPlan(data);
-  },
+  async getFlowSnapshot(projectId: string, filters?: AcceptancePlanFilters) {
+    const query = buildPlanQuery(projectId, filters)
+    const data = await authFetch<AcceptanceFlowSnapshotRow>(
+      `${API_BASE}/acceptance-plans/flow-snapshot?${query}`,
+      FRESH_ACCEPTANCE_READ_OPTIONS,
+    )
 
-  /**
-   * 创建验收计划
-   */
-  async createPlan(plan: Partial<AcceptancePlan>): Promise<AcceptancePlan> {
-    const body: Record<string, any> = {
-      project_id: plan.project_id,
-      task_id: plan.milestone_id,          // 后端字段名
-      type_id: plan.type_id,               // 修复：直接发送 type_id，触发后端新模型校验
-      acceptance_name: plan.type_name,
-      type_color: plan.type_color,
-      name: plan.name,
-      description: plan.description,
-      planned_date: plan.planned_date,
-      status: plan.status || 'pending',  // F-8修复：统一发送英文状态值
-      phase: plan.phase,
-      phase_order: plan.phase_order,
-      responsible_user_id: plan.responsible_user_id,
-      created_by: plan.created_by
-    };
-
-    // 去掉 undefined 字段，同时显式删除旧模型字段 acceptance_type（防止前端对象污染）
-    Object.keys(body).forEach(k => body[k] === undefined && delete body[k]);
-    delete body['acceptance_type']; // 强制走新模型路径，后端按 type_id 校验
-
-    const data = await apiFetch<any>(`${API_BASE}/acceptance-plans`, {
-      method: 'POST',
-      body: JSON.stringify(body)
-    });
-    return mapDbToPlan(data);
-  },
-
-  /**
-   * 更新验收计划
-   */
-  async updatePlan(planId: string, updates: Partial<AcceptancePlan>): Promise<AcceptancePlan> {
-    const body: Record<string, any> = {};
-
-    if (updates.name !== undefined) body.name = updates.name;
-    if (updates.description !== undefined) body.description = updates.description;
-    if (updates.planned_date !== undefined) body.planned_date = updates.planned_date;
-    if (updates.actual_date !== undefined) body.actual_date = updates.actual_date;
-    if (updates.status !== undefined) body.status = updates.status;
-    if (updates.phase !== undefined) body.phase = updates.phase;
-    if (updates.phase_order !== undefined) body.phase_order = updates.phase_order;
-    if (updates.responsible_user_id !== undefined) body.responsible_user_id = updates.responsible_user_id;
-    if (updates.documents !== undefined) body.documents = JSON.stringify(updates.documents);
-
-    const data = await apiFetch<any>(
-      `${API_BASE}/acceptance-plans/${encodeURIComponent(planId)}`,
-      { method: 'PUT', body: JSON.stringify(body) }
-    );
-    return mapDbToPlan(data);
-  },
-
-  /**
-   * 更新验收状态（便捷方法）
-   */
-  async updateStatus(planId: string, status: AcceptanceStatus): Promise<void> {
-    const body: Record<string, any> = { status };
-    if (status === 'passed') {
-      body.actual_date = new Date().toISOString().split('T')[0];
+    return {
+      catalogs: data?.catalogs || [],
+      plans: (data?.plans || []).map(mapDbToPlan),
+      dependencies: (data?.dependencies || []).map(mapDependency),
+      requirements: (data?.requirements || []).map(mapRequirement),
+      records: (data?.records || []).map(mapRecord),
     }
-    await apiFetch<any>(
-      `${API_BASE}/acceptance-plans/${encodeURIComponent(planId)}`,
-      { method: 'PUT', body: JSON.stringify(body) }
-    );
   },
 
-  /**
-   * 删除验收计划
-   */
+  async getPlan(planId: string): Promise<AcceptancePlan> {
+    const data = await authFetch<AcceptancePlanRow>(
+      `${API_BASE}/acceptance-plans/${encodeURIComponent(planId)}`,
+      FRESH_ACCEPTANCE_READ_OPTIONS,
+    )
+    return mapDbToPlan(data)
+  },
+
+  async createPlan(plan: Partial<AcceptancePlan>): Promise<AcceptancePlan> {
+    const data = await authFetch<AcceptancePlanRow>(`${API_BASE}/acceptance-plans`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(buildPlanWriteBody(plan)),
+    })
+    return mapDbToPlan(data)
+  },
+
+  async updatePlan(planId: string, updates: Partial<AcceptancePlan>): Promise<AcceptancePlan> {
+    const data = await authFetch<AcceptancePlanRow>(
+      `${API_BASE}/acceptance-plans/${encodeURIComponent(planId)}`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(buildPlanWriteBody(updates)),
+      },
+    )
+    return mapDbToPlan(data)
+  },
+
+  async updateStatus(planId: string, status: AcceptanceStatus, actualDate?: string | null): Promise<void> {
+    const normalizedStatus = normalizeAcceptanceStatus(status)
+    const payload = compactObject({
+      status: normalizedStatus,
+      actual_date:
+        actualDate !== undefined
+          ? actualDate
+          : normalizedStatus === 'passed'
+            ? new Date().toISOString().split('T')[0]
+            : undefined,
+    })
+
+    await authFetch<AcceptancePlanRow>(`${API_BASE}/acceptance-plans/${encodeURIComponent(planId)}/status`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+  },
+
   async deletePlan(planId: string): Promise<void> {
-    await apiFetch<any>(
-      `${API_BASE}/acceptance-plans/${encodeURIComponent(planId)}`,
-      { method: 'DELETE' }
-    );
+    await authFetch(`${API_BASE}/acceptance-plans/${encodeURIComponent(planId)}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+    })
   },
 
-  // ─── 以下为兼容性方法 (acceptance_types 表可选) ──────────────────────────
-
-  /**
-   * 获取自定义验收类型
-   * 注意：当前后端无此路由，返回空数组作为降级处理
-   */
   async getCustomTypes(_projectId: string): Promise<AcceptanceType[]> {
-    // 后端尚未实现 acceptance_types 查询路由，返回空数组
-    // 系统默认类型由前端 DEFAULT_ACCEPTANCE_TYPES 常量维护
-    return [];
+    return []
   },
 
-  /**
-   * 创建自定义验收类型（暂不支持，降级）
-   */
   async createCustomType(type: Partial<AcceptanceType>, _projectId: string): Promise<AcceptanceType> {
-    // 后端无此路由，本地模拟
     return {
       id: `custom_${Date.now()}`,
       name: type.name || '自定义类型',
-      shortName: (type.name || '').slice(0, 4),
+      shortName: (type.shortName || type.name || '自定义').slice(0, 4),
       color: type.color || '#6b7280',
       icon: type.icon,
       isSystem: false,
       description: type.description,
       defaultDependsOn: type.defaultDependsOn,
-      sortOrder: type.sortOrder ?? 99
-    };
+      sortOrder: type.sortOrder ?? 99,
+    }
   },
 
-  /**
-   * 删除自定义验收类型（暂不支持，空操作）
-   */
-  async deleteCustomType(_typeId: string): Promise<void> {
-    // 后端无此路由，空操作
+  async deleteCustomType(_typeId: string): Promise<void> {},
+  async addDependency(projectId: string, planId: string, dependsOnId: string): Promise<void> {
+    await authFetch(`${API_BASE}/acceptance-dependencies`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_id: projectId,
+        source_plan_id: dependsOnId,
+        target_plan_id: planId,
+        dependency_kind: 'hard' as AcceptanceDependencyKind,
+      }),
+    })
   },
 
-  /**
-   * 更新节点位置（保存到 position 字段）
-   */
-  async updatePosition(planId: string, position: { x?: number; y?: number }): Promise<void> {
-    await apiFetch<any>(
-      `${API_BASE}/acceptance-plans/${encodeURIComponent(planId)}`,
+  async removeDependency(planId: string, dependsOnId: string): Promise<void> {
+    const dependencies = await this.getPlanDependencies(planId)
+    const dependency = dependencies.find(
+      (item) => item.source_plan_id === dependsOnId && item.target_plan_id === planId,
+    )
+    if (!dependency) return
+
+    await authFetch(`${API_BASE}/acceptance-dependencies/${encodeURIComponent(dependency.id)}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+    })
+  },
+
+  async createDefaultPlans(projectId: string): Promise<AcceptancePlan[]> {
+    return this.getPlans(projectId)
+  },
+
+  async getPlanRequirements(planId: string): Promise<AcceptanceRequirementRecord[]> {
+    const data = await authFetch<UnknownRecord[]>(
+      `${API_BASE}/acceptance-requirements?planId=${encodeURIComponent(planId)}`,
+      FRESH_ACCEPTANCE_READ_OPTIONS,
+    )
+    return (data || []).map(mapRequirement)
+  },
+
+  async createPlanRequirement(projectId: string, planId: string, input: AcceptanceRequirementMutation) {
+    const data = await authFetch<UnknownRecord>(`${API_BASE}/acceptance-requirements`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_id: projectId,
+        plan_id: planId,
+        ...input,
+      }),
+    })
+    return mapRequirement(data)
+  },
+
+  async updatePlanRequirement(requirementId: string, updates: Partial<AcceptanceRequirementMutation>) {
+    const data = await authFetch<UnknownRecord>(
+      `${API_BASE}/acceptance-requirements/${encodeURIComponent(requirementId)}`,
       {
         method: 'PUT',
-        body: JSON.stringify({ position: JSON.stringify(position) })
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates),
+      },
+    )
+    return mapRequirement(data)
+  },
+
+  async getPlanDependencies(planId: string): Promise<AcceptancePlanDependencyRecord[]> {
+    const data = await authFetch<UnknownRecord[]>(
+      `${API_BASE}/acceptance-dependencies?planId=${encodeURIComponent(planId)}`,
+      FRESH_ACCEPTANCE_READ_OPTIONS,
+    )
+    return (data || []).map(mapDependency)
+  },
+
+  async getPlanRecords(planId: string): Promise<AcceptanceRecordEntry[]> {
+    const data = await authFetch<UnknownRecord[]>(
+      `${API_BASE}/acceptance-records?planId=${encodeURIComponent(planId)}`,
+      FRESH_ACCEPTANCE_READ_OPTIONS,
+    )
+    return (data || []).map(mapRecord)
+  },
+
+  async createPlanRecord(projectId: string, planId: string, input: AcceptanceRecordMutation) {
+    const data = await authFetch<UnknownRecord>(`${API_BASE}/acceptance-records`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_id: projectId,
+        plan_id: planId,
+        ...input,
+      }),
+    })
+    return mapRecord(data)
+  },
+
+  async updatePlanRecord(recordId: string, updates: Partial<AcceptanceRecordMutation>) {
+    const data = await authFetch<UnknownRecord>(
+      `${API_BASE}/acceptance-records/${encodeURIComponent(recordId)}`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates),
+      },
+    )
+    return mapRecord(data)
+  },
+
+  async getProjectWarnings(projectId: string): Promise<AcceptanceLinkedWarning[]> {
+    const data = await authFetch<UnknownRecord[]>(
+      `${API_BASE}/warnings?projectId=${encodeURIComponent(projectId)}`,
+      FRESH_ACCEPTANCE_READ_OPTIONS,
+    )
+    return (data || []).map(mapWarning)
+  },
+
+  async getProjectIssues(projectId: string): Promise<AcceptanceLinkedIssue[]> {
+    const data = await authFetch<UnknownRecord[]>(
+      `${API_BASE}/issues?projectId=${encodeURIComponent(projectId)}`,
+      FRESH_ACCEPTANCE_READ_OPTIONS,
+    )
+    return (data || []).map(mapIssue)
+  },
+
+  async getProjectRisks(projectId: string): Promise<AcceptanceLinkedRisk[]> {
+    const data = await authFetch<UnknownRecord[]>(
+      `${API_BASE}/risks?projectId=${encodeURIComponent(projectId)}`,
+      FRESH_ACCEPTANCE_READ_OPTIONS,
+    )
+    return (data || []).map(mapRisk)
+  },
+
+  async getPlanRelationBundle(projectId: string | null | undefined, planId: string): Promise<AcceptancePlanRelationBundle> {
+    if (!projectId) {
+      return {
+        requirements: [],
+        dependencies: [],
+        records: [],
+        linkedWarnings: [],
+        linkedIssues: [],
+        linkedRisks: [],
       }
-    );
-  },
+    }
 
-  /**
-   * 添加依赖关系（通过更新 depends_on 字段）
-   */
-  async addDependency(planId: string, dependsOnId: string): Promise<void> {
-    // 先获取当前的 depends_on
-    const current = await this.getPlan(planId);
-    const deps = current.depends_on || [];
-    if (!deps.includes(dependsOnId)) {
-      await this.updatePlan(planId, {
-        depends_on: [...deps, dependsOnId]
-      });
+    const [requirements, dependencies, records, linkedWarnings, linkedIssues, linkedRisks] = await Promise.all([
+      this.getPlanRequirements(planId),
+      this.getPlanDependencies(planId),
+      this.getPlanRecords(planId),
+      this.getProjectWarnings(projectId),
+      this.getProjectIssues(projectId),
+      this.getProjectRisks(projectId),
+    ])
+
+    return {
+      requirements,
+      dependencies,
+      records,
+      linkedWarnings,
+      linkedIssues,
+      linkedRisks,
     }
   },
-
-  /**
-   * 移除依赖关系
-   */
-  async removeDependency(planId: string, dependsOnId: string): Promise<void> {
-    const current = await this.getPlan(planId);
-    const deps = (current.depends_on || []).filter((id: string) => id !== dependsOnId);
-    await this.updatePlan(planId, { depends_on: deps });
-  },
-
-  /**
-   * 为项目创建默认验收计划（批量）
-   */
-  async createDefaultPlans(_projectId: string): Promise<AcceptancePlan[]> {
-    // 后端无 RPC，返回当前列表
-    return this.getPlans(_projectId);
-  }
-};
-
-// ─── 数据映射 ────────────────────────────────────────────────────────────────
-
-/** 中文→英文状态映射（数据库可能存中文或英文） */
-const STATUS_CN_TO_EN: Record<string, string> = {
-  '待验收': 'pending',
-  '验收中': 'in_progress',
-  '已通过': 'passed',
-  '未通过': 'failed',
-  '需补充': 'needs_revision',
-};
-
-/** 将后端 DB 行映射为前端 AcceptancePlan 格式 */
-function mapDbToPlan(item: any): AcceptancePlan {
-  let position: { x: number; y: number } | undefined;
-  if (item.position) {
-    try {
-      position = typeof item.position === 'string'
-        ? JSON.parse(item.position)
-        : item.position;
-    } catch {
-      position = undefined;
-    }
-  }
-
-  let dependsOn: string[] = [];
-  if (item.depends_on) {
-    try {
-      dependsOn = typeof item.depends_on === 'string'
-        ? JSON.parse(item.depends_on)
-        : item.depends_on;
-    } catch {
-      dependsOn = [];
-    }
-  }
-
-  return {
-    id: item.id,
-    project_id: item.project_id,
-    milestone_id: item.task_id || item.milestone_id,
-    type_id: item.acceptance_type || item.type_id || '',
-    type_name: item.acceptance_name || item.type_name || '',
-    type_color: item.type_color || 'bg-gray-500',
-    name: item.name || item.acceptance_name || '',
-    description: item.description,
-    planned_date: item.planned_date,
-    actual_date: item.actual_date,
-    status: item.status
-      ? (STATUS_CN_TO_EN[item.status] || item.status)
-      : 'pending',
-    depends_on: dependsOn,
-    depended_by: [],
-    phase: item.phase,
-    phase_order: item.phase_order ?? 0,
-    position,
-    responsible_user_id: item.responsible_user_id,
-    documents: item.documents
-      ? (typeof item.documents === 'string' ? JSON.parse(item.documents) : item.documents)
-      : undefined,
-    nodes: undefined,
-    is_system: item.is_system ?? false,
-    created_at: item.created_at,
-    updated_at: item.updated_at,
-    created_by: item.created_by
-  };
 }

@@ -1,243 +1,195 @@
-﻿/**
- * 项目健康度服务
- * 负责计算项目健康度分数、状态，并维护月度历史快照
+/**
+ * 项目健康度统一真值服务
+ * 统一复用 PlanningHealthService 的评分结果，避免 health-score/dashboard/autoAlert 各算一套。
  */
 
-import { supabase } from './dbService.js';
+import { logger } from '../middleware/logger.js'
+import { supabase } from './dbService.js'
+import { PlanningHealthService } from './planningHealthService.js'
+import { isProjectActiveStatus } from '../utils/projectStatus.js'
 
-// 健康度状态枚举（与数据库 check constraint 保持一致）
-export type HealthStatus = '健康' | '亚健康' | '预警' | '危险';
+export type HealthStatus = '健康' | '亚健康' | '预警' | '危险'
 
-// 健康度明细接口
 export interface HealthDetails {
-  baseScore: number;            // 基础分 (50)
-  taskCompletionScore: number;  // 任务完成分 (+2分/任务)
-  milestoneBonusScore: number;  // 里程碑奖分 (+5分/里程碑)
-  delayPenaltyScore: number;    // 延期惩罚分 (-1分/天)
-  riskPenaltyScore: number;     // 风险惩罚分 (高=-10/中=-5/低=-2)
-  totalScore: number;           // 总分
-  healthStatus: HealthStatus;   // 健康状态
+  dataIntegrityScore: number
+  mappingIntegrityScore: number
+  systemConsistencyScore: number
+  milestoneIntegrityScore: number
+  passiveReorderPenalty: number
+  totalScore: number
+  healthStatus: HealthStatus
 }
 
-// 健康度计算结果接口
 export interface HealthScoreResult {
-  score: number;
-  details: HealthDetails;
+  score: number
+  details: HealthDetails
 }
 
-// 月度快照结果接口
 export interface HealthSnapshotResult {
-  recorded: number;
-  failed: number;
-  period: string;
+  recorded: number
+  failed: number
+  period: string
+}
+
+const planningHealthService = new PlanningHealthService()
+
+function mapHealthStatus(score: number): HealthStatus {
+  if (score >= 80) return '健康'
+  if (score >= 60) return '亚健康'
+  if (score >= 40) return '预警'
+  return '危险'
+}
+
+function toHealthDetails(score: number, breakdown: {
+  data_integrity_score: number
+  mapping_integrity_score: number
+  system_consistency_score: number
+  m1_m9_score: number
+  passive_reorder_penalty: number
+}) {
+  return {
+    dataIntegrityScore: breakdown.data_integrity_score,
+    mappingIntegrityScore: breakdown.mapping_integrity_score,
+    systemConsistencyScore: breakdown.system_consistency_score,
+    milestoneIntegrityScore: breakdown.m1_m9_score,
+    passiveReorderPenalty: breakdown.passive_reorder_penalty,
+    totalScore: score,
+    healthStatus: mapHealthStatus(score),
+  } satisfies HealthDetails
 }
 
 export function getHealthHistoryPeriod(date = new Date()): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
 }
 
-/**
- * 计算项目健康度分数和状态
- * @param projectId 项目ID
- * @returns 健康度计算结果
- */
 export async function calculateProjectHealth(projectId: string): Promise<HealthScoreResult> {
-  // 1. 基础分 (50分起始)
-  const baseScore = 50;
-
-  // 2. 获取任务数据并计算任务完成分 (+2分/任务)
-  const { data: tasks } = await supabase
-    .from('tasks')
-    .select('status')
-    .eq('project_id', projectId);
-
-  const completedTasks = tasks?.filter(t => t.status === 'completed').length || 0;
-  const taskCompletionScore = completedTasks * 2;
-
-  // 3. 获取里程碑数据并计算里程碑奖分 (+5分/里程碑)
-  const { data: milestones } = await supabase
-    .from('milestones')
-    .select('status')
-    .eq('project_id', projectId);
-
-  const completedMilestones = milestones?.filter(m => m.status === 'completed').length || 0;
-  const milestoneBonusScore = completedMilestones * 5;
-
-  // 4. 获取延期天数并计算延期惩罚分 (-1分/天)
-  const { data: delayHistory } = await supabase
-    .from('task_delay_history')
-    .select('delay_days')
-    .eq('project_id', projectId);
-
-  const delayDays = delayHistory?.reduce((sum, d) => sum + (d.delay_days || 0), 0) || 0;
-  const delayPenaltyScore = -Math.abs(delayDays) * 1;
-
-  // 5. 获取风险数据并计算风险惩罚分 (高=-10/中=-5/低=-2)
-  const { data: risks } = await supabase
-    .from('risks')
-    .select('level, status')
-    .eq('project_id', projectId);
-
-  const riskPenaltyScore = risks?.reduce((total, risk) => {
-    if (risk.status === 'closed') return total; // 已关闭的风险不计惩罚
-    switch (risk.level) {
-      case 'critical':
-      case 'high':
-        return total - 10;
-      case 'medium':
-        return total - 5;
-      case 'low':
-        return total - 2;
-      default:
-        return total;
-    }
-  }, 0) || 0;
-
-  // 6. 计算总分
-  const totalScore = baseScore + taskCompletionScore + milestoneBonusScore + delayPenaltyScore + riskPenaltyScore;
-  const clampedScore = Math.max(0, Math.min(100, totalScore));
-
-  // 7. 确定健康状态 (UI设计稿4档)
-  let healthStatus: HealthStatus;
-  if (clampedScore >= 80) {
-    healthStatus = '健康';
-  } else if (clampedScore >= 60) {
-    healthStatus = '亚健康';
-  } else if (clampedScore >= 40) {
-    healthStatus = '预警';
-  } else {
-    healthStatus = '危险';
-  }
-
-  const details: HealthDetails = {
-    baseScore,
-    taskCompletionScore,
-    milestoneBonusScore,
-    delayPenaltyScore,
-    riskPenaltyScore,
-    totalScore: clampedScore,
-    healthStatus,
-  };
-
+  const report = await planningHealthService.evaluateProjectHealth(projectId)
   return {
-    score: clampedScore,
-    details,
-  };
+    score: report.score,
+    details: toHealthDetails(report.score, report.breakdown),
+  }
 }
 
-/**
- * 更新项目的健康度分数和状态到数据库
- * @param projectId 项目ID
- * @returns 更新结果
- */
-export async function updateProjectHealth(projectId: string): Promise<HealthScoreResult> {
-  // 1. 计算健康度
-  const healthResult = await calculateProjectHealth(projectId);
-
-  // 2. 更新到数据库
+async function persistProjectHealth(projectId: string, result: HealthScoreResult) {
   const { error } = await supabase
     .from('projects')
     .update({
-      health_score: healthResult.score,
-      health_status: healthResult.details.healthStatus,
+      health_score: result.score,
+      health_status: result.details.healthStatus,
     })
-    .eq('id', projectId);
+    .eq('id', projectId)
 
   if (error) {
-    throw new Error(`更新项目健康度失败: ${error.message}`);
+    throw new Error(`更新项目健康度失败: ${error.message}`)
   }
 
-  console.log(`项目 ${projectId} 健康度已更新: ${healthResult.score}分 (${healthResult.details.healthStatus})`);
-
-  return healthResult;
+  return result
 }
 
-/**
- * 批量更新所有项目的健康度
- * @returns 更新的项目数量
- */
+export async function updateProjectHealth(projectId: string): Promise<HealthScoreResult> {
+  const result = await calculateProjectHealth(projectId)
+  await persistProjectHealth(projectId, result)
+
+  logger.info('[projectHealthService] project health refreshed', {
+    projectId,
+    score: result.score,
+    status: result.details.healthStatus,
+  })
+
+  return result
+}
+
 export async function updateAllProjectsHealth(): Promise<number> {
-  // 1. 获取所有项目
   const { data: projects, error } = await supabase
     .from('projects')
-    .select('id');
+    .select('id')
 
   if (error) {
-    throw new Error(`获取项目列表失败: ${error.message}`);
+    throw new Error(`获取项目列表失败: ${error.message}`)
   }
 
   if (!projects || projects.length === 0) {
-    console.log('没有找到需要更新的项目');
-    return 0;
+    return 0
   }
 
-  // 2. 逐个更新项目健康度
-  let updatedCount = 0;
+  let updatedCount = 0
   for (const project of projects) {
     try {
-      await updateProjectHealth(project.id);
-      updatedCount++;
+      await updateProjectHealth(project.id)
+      updatedCount += 1
     } catch (error) {
-      console.error(`更新项目 ${project.id} 健康度失败:`, error);
+      logger.warn('[projectHealthService] failed to refresh project health', {
+        projectId: project.id,
+        error: error instanceof Error ? error.message : String(error),
+      })
     }
   }
 
-  console.log(`成功更新 ${updatedCount}/${projects.length} 个项目的健康度`);
-  return updatedCount;
+  return updatedCount
 }
 
-/**
- * 记录当前所有活跃项目的健康度月度快照
- * @param period 周期（格式 YYYY-MM），默认取当前月份
- */
 export async function recordProjectHealthSnapshots(period = getHealthHistoryPeriod()): Promise<HealthSnapshotResult> {
   const { data: projects, error } = await supabase
     .from('projects')
-    .select('id, name')
-    .eq('status', 'active');
+    .select('id, name, status')
 
   if (error) {
-    throw new Error(`获取活跃项目列表失败: ${error.message}`);
+    throw new Error(`获取活跃项目列表失败: ${error.message}`)
   }
 
-  if (!projects || projects.length === 0) {
-    console.log('没有活跃项目需要记录健康度快照');
-    return { recorded: 0, failed: 0, period };
+  const activeProjects = ((projects ?? []) as Array<{ id: string; name?: string | null; status?: string | null }>).filter(
+    (project) => isProjectActiveStatus(project.status),
+  )
+
+  if (activeProjects.length === 0) {
+    return { recorded: 0, failed: 0, period }
   }
 
-  let recorded = 0;
-  let failed = 0;
+  let recorded = 0
+  let failed = 0
 
-  for (const project of projects) {
+  for (const project of activeProjects) {
     try {
-      const healthResult = await calculateProjectHealth(project.id);
+      const result = await calculateProjectHealth(project.id)
+      await persistProjectHealth(project.id, result)
+
       const { error: upsertError } = await supabase
         .from('project_health_history')
         .upsert({
           project_id: project.id,
-          health_score: healthResult.score,
-          health_status: healthResult.details.healthStatus,
+          health_score: result.score,
+          health_status: result.details.healthStatus,
           period,
-          details: healthResult.details,
+          details: result.details,
           recorded_at: new Date().toISOString(),
-        }, { onConflict: 'project_id,period' });
+        }, { onConflict: 'project_id,period' })
 
       if (upsertError) {
-        throw upsertError;
+        throw upsertError
       }
 
-      recorded++;
+      recorded += 1
     } catch (error) {
-      failed++;
-      console.warn(`记录项目 ${project.name ?? project.id} 健康度快照失败:`, error);
+      failed += 1
+      logger.warn('[projectHealthService] failed to record health snapshot', {
+        projectId: project.id,
+        projectName: project.name ?? null,
+        error: error instanceof Error ? error.message : String(error),
+      })
     }
   }
 
-  console.log(`健康度月快照记录完成：成功 ${recorded} 个，失败 ${failed} 个，周期 ${period}`);
+  return { recorded, failed, period }
+}
 
-  return {
-    recorded,
-    failed,
-    period,
-  };
+export function enqueueProjectHealthUpdate(projectId: string, trigger = 'event') {
+  if (!projectId) return
+
+  void updateProjectHealth(projectId).catch((error) => {
+    logger.warn('[projectHealthService] async health refresh failed', {
+      projectId,
+      trigger,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  })
 }

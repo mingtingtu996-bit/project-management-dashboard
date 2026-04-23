@@ -70,7 +70,7 @@ CREATE TABLE IF NOT EXISTS acceptance_plans (
 CREATE TABLE IF NOT EXISTS wbs_templates (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   template_name TEXT NOT NULL,
-  template_type TEXT NOT NULL CHECK (template_type IN ('住宅', '商业', '工业', '市政')),
+  template_type TEXT NOT NULL CHECK (template_type IN ('住宅', '商业', '工业', '公共建筑', '市政')),
   description TEXT,
   wbs_nodes JSONB NOT NULL DEFAULT '[]',
   is_default BOOLEAN DEFAULT FALSE,
@@ -90,7 +90,7 @@ CREATE TABLE IF NOT EXISTS pre_milestones (
   issue_date DATE,
   expiry_date DATE,
   status TEXT NOT NULL DEFAULT '待申请' CHECK (status IN ('待申请', '办理中', '已取得', '已过期', '需延期')),
-  document_no TEXT,
+  certificate_no TEXT,
   notes TEXT,
   created_by UUID NOT NULL REFERENCES users(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ DEFAULT NOW(),

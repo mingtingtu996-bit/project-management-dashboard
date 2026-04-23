@@ -4,14 +4,18 @@
  */
 
 import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react'
-import { getAuthHeaders, persistAuthToken } from '@/lib/apiClient'
+import { apiGet, apiPost, apiPut, getApiErrorMessage, persistAuthToken } from '@/lib/apiClient'
+import type { GlobalRole } from '@/lib/roleLabels'
 
 export interface User {
   id: string
   username: string
   display_name: string
   email?: string
-  role: 'owner' | 'member'
+  role?: string
+  globalRole: GlobalRole
+  joined_at?: string | null
+  last_active?: string | null
 }
 
 export interface AuthState {
@@ -20,27 +24,39 @@ export interface AuthState {
   loading: boolean
 }
 
-interface LoginResponse {
-  success: boolean
+interface AuthSessionDto {
   token?: string
-  user?: User
+  user: User
+}
+
+interface AuthStatusDto {
+  authenticated: boolean
+  user: User | null
+}
+
+interface AuthMessageDto {
+  message: string
+}
+
+interface AuthActionResult {
+  success: boolean
   message?: string
+}
+
+interface ProfileActionResult extends AuthActionResult {
+  user?: User
 }
 
 interface AuthContextType {
   authState: AuthState
-  login: (username: string, password: string) => Promise<LoginResponse>
+  login: (username: string, password: string) => Promise<AuthActionResult>
   logout: () => Promise<void>
-  register: (username: string, password: string, displayName?: string, email?: string) => Promise<LoginResponse>
-  changePassword: (oldPassword: string, newPassword: string) => Promise<{ success: boolean; message?: string }>
-  updateProfile: (data: { display_name?: string; email?: string }) => Promise<{ success: boolean; user?: User; message?: string }>
+  register: (username: string, password: string, displayName?: string, email?: string) => Promise<AuthActionResult>
+  changePassword: (oldPassword: string, newPassword: string) => Promise<AuthActionResult>
+  updateProfile: (data: { display_name?: string; email?: string }) => Promise<ProfileActionResult>
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
-
-const getApiUrl = () => {
-  return (import.meta as any).env?.VITE_API_URL || ''
-}
 
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [authState, setAuthState] = useState<AuthState>({
@@ -51,25 +67,17 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const fetchCurrentUser = useCallback(async () => {
     try {
-      const response = await fetch(`${getApiUrl()}/api/auth/me`, {
-        method: 'GET',
-        credentials: 'include',
-        headers: {
-          ...getAuthHeaders(),
-        },
-      })
+      const data = await apiGet<AuthStatusDto>('/api/auth/me')
+      if (data.authenticated && data.user) {
+        setAuthState({
+          isAuthenticated: true,
+          user: data.user,
+          loading: false,
+        })
+        return
+      }
 
-      if (response.ok) {
-        const data = await response.json()
-        if (data.success && data.user) {
-          setAuthState({
-            isAuthenticated: true,
-            user: data.user,
-            loading: false,
-          })
-          return
-        }
-      } else if (response.status === 401) {
+      if (data.authenticated === false) {
         persistAuthToken(null)
       }
 
@@ -80,47 +88,25 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   }, [])
 
-  const login = async (username: string, password: string): Promise<LoginResponse> => {
+  const login = async (username: string, password: string): Promise<AuthActionResult> => {
     try {
-      const apiUrl = getApiUrl()
-      const loginUrl = `${apiUrl}/api/auth/login`
-
-      const response = await fetch(loginUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-        body: JSON.stringify({ username, password }),
+      const data = await apiPost<AuthSessionDto>('/api/auth/login', { username, password })
+      persistAuthToken(data.token || null)
+      setAuthState({
+        isAuthenticated: true,
+        user: data.user,
+        loading: false,
       })
-
-      const data: LoginResponse = await response.json()
-
-      if (data.success) {
-        persistAuthToken(data.token || null)
-        setAuthState({
-          isAuthenticated: true,
-          user: data.user || null,
-          loading: false,
-        })
-      }
-
-      return data
+      return { success: true }
     } catch (error) {
       console.error('登录错误:', error)
-      return { success: false, message: '登录失败，请稍后重试' }
+      return { success: false, message: getApiErrorMessage(error, '登录失败，请稍后重试') }
     }
   }
 
   const logout = async (): Promise<void> => {
     try {
-      await fetch(`${getApiUrl()}/api/auth/logout`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-          ...getAuthHeaders(),
-        },
-      })
+      await apiPost<AuthMessageDto>('/api/auth/logout')
     } catch (error) {
       console.error('Logout error:', error)
     } finally {
@@ -134,82 +120,54 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     password: string,
     displayName?: string,
     email?: string
-  ): Promise<LoginResponse> => {
+  ): Promise<AuthActionResult> => {
     try {
-      const response = await fetch(`${getApiUrl()}/api/auth/register`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-        body: JSON.stringify({ username, password, display_name: displayName, email }),
+      const data = await apiPost<AuthSessionDto>('/api/auth/register', {
+        username,
+        password,
+        display_name: displayName,
+        email,
       })
-
-      const data: LoginResponse = await response.json()
-
-      if (data.success) {
-        persistAuthToken(data.token || null)
-        setAuthState({
-          isAuthenticated: true,
-          user: data.user || null,
-          loading: false,
-        })
-      }
-
-      return data
+      persistAuthToken(data.token || null)
+      setAuthState({
+        isAuthenticated: true,
+        user: data.user,
+        loading: false,
+      })
+      return { success: true }
     } catch (error) {
       console.error('Register error:', error)
-      return { success: false, message: '注册失败，请稍后重试' }
+      return { success: false, message: getApiErrorMessage(error, '注册失败，请稍后重试') }
     }
   }
 
   const changePassword = async (
     oldPassword: string,
     newPassword: string
-  ): Promise<{ success: boolean; message?: string }> => {
+  ): Promise<AuthActionResult> => {
     try {
-      const response = await fetch(`${getApiUrl()}/api/auth/change-password`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...getAuthHeaders(),
-        },
-        credentials: 'include',
-        body: JSON.stringify({ oldPassword, newPassword }),
-      })
-      const data = await response.json()
-      return data
+      const data = await apiPost<AuthMessageDto>('/api/auth/change-password', { oldPassword, newPassword })
+      return { success: true, message: data.message }
     } catch (error) {
       console.error('Change password error:', error)
-      return { success: false, message: '修改密码失败' }
+      return { success: false, message: getApiErrorMessage(error, '修改密码失败') }
     }
   }
 
   const updateProfile = async (
     data: { display_name?: string; email?: string }
-  ): Promise<{ success: boolean; user?: User; message?: string }> => {
+  ): Promise<ProfileActionResult> => {
     try {
-      const response = await fetch(`${getApiUrl()}/api/auth/profile`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          ...getAuthHeaders(),
-        },
-        credentials: 'include',
-        body: JSON.stringify(data),
-      })
-      const result = await response.json()
-      if (result.success && result.user) {
-        persistAuthToken(result.token || null)
-        setAuthState(prev => ({
-          ...prev,
-          user: { ...prev.user!, ...result.user },
-        }))
-      }
-      return result
+      const result = await apiPut<AuthSessionDto>('/api/auth/profile', data)
+      persistAuthToken(result.token || null)
+      setAuthState((prev) => ({
+        ...prev,
+        user: result.user,
+      }))
+      return { success: true, user: result.user, message: '个人信息已更新' }
     } catch (error) {
       console.error('Update profile error:', error)
-      return { success: false, message: '更新信息失败' }
+      return { success: false, message: getApiErrorMessage(error, '更新信息失败') }
     }
   }
 

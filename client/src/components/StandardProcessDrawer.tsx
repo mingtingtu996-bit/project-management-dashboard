@@ -1,5 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
-import React from 'react'
+import React, { useCallback, useEffect, useState } from 'react'
+
+import { useDialogFocusRestore } from '@/hooks/useDialogFocusRestore'
+import { useDebounce } from '@/hooks/useDebounce'
+import { LoadingState } from '@/components/ui/loading-state'
 
 const API_BASE = ''
 
@@ -67,7 +71,9 @@ export default function StandardProcessDrawer({
   onClose,
   onSelect,
 }: StandardProcessDrawerProps) {
+  useDialogFocusRestore(open)
   const [keyword, setKeyword] = useState('')
+  const debouncedKeyword = useDebounce(keyword, 300)
   const [activeCategory, setActiveCategory] = useState('all')
   const [processes, setProcesses] = useState<StandardProcess[]>([])
   const [loading, setLoading] = useState(false)
@@ -100,14 +106,10 @@ export default function StandardProcessDrawer({
 
   // 打开时加载数据
   useEffect(() => {
-    if (open) fetchProcesses(keyword, activeCategory)
-  }, [open])
-
-  // 搜索防抖
-  useEffect(() => {
-    const timer = setTimeout(() => fetchProcesses(keyword, activeCategory), 300)
-    return () => clearTimeout(timer)
-  }, [keyword, activeCategory, fetchProcesses])
+    if (open) {
+      void fetchProcesses(debouncedKeyword, activeCategory)
+    }
+  }, [activeCategory, debouncedKeyword, fetchProcesses, open])
 
   if (!open) return null
 
@@ -198,10 +200,11 @@ export default function StandardProcessDrawer({
         {/* 列表内容 */}
         <div className="flex-1 overflow-y-auto px-6 py-4">
           {loading ? (
-            <div className="flex flex-col items-center justify-center py-16">
-              <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-              <p className="mt-3 text-sm text-gray-400">加载中...</p>
-            </div>
+            <LoadingState
+              label="标准工序加载中"
+              description="正在读取可复用的标准工序清单"
+              className="min-h-48"
+            />
           ) : processes.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-center">
               <svg className="w-12 h-12 text-gray-200 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">

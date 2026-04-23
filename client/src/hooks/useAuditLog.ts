@@ -31,8 +31,8 @@ export function useAuditLog(options: UseAuditLogOptions = {}) {
     
     auditDb.create({
       project_id: projectId,
-      user_id: currentUser.id,
-      user_name: currentUser.display_name,
+      user_id: currentUser.id!,
+      user_name: currentUser.display_name!,
       action,
       resource_type: resourceType,
       resource_id: options?.resourceId,

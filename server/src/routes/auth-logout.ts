@@ -1,42 +1,33 @@
 /**
- * 用户登出API路由
+ * 用户登出 API 路由
  */
 
-import express from 'express';
-import { verifyToken, extractTokenFromRequest } from '../auth/jwt';
-import { logLogout } from '../utils/operationLog.js';
+import express from 'express'
 
-const router = express.Router();
+import { clearAuthTokenCookie, authSuccess } from '../auth/http.js'
+import { extractTokenFromRequest, verifyToken } from '../auth/jwt.js'
+import type { AuthMessageData } from '../auth/types.js'
+import { logLogout } from '../utils/operationLog.js'
+import { asyncHandler } from '../middleware/errorHandler.js'
 
-/**
- * POST /api/auth/logout - 用户登出
- */
-router.post('/', (req, res) => {
-  try {
-    // 记录日志（尝试从token获取用户信息）
-    const token = extractTokenFromRequest(req);
-    if (token) {
-      const payload = verifyToken(token);
-      if (payload) {
-        logLogout(payload.userId, payload.username, req).catch(() => {});
-      }
+const router = express.Router()
+
+router.post('/', asyncHandler(async (req, res) => {
+  const token = extractTokenFromRequest(req)
+  if (token) {
+    const payload = verifyToken(token)
+    if (payload) {
+      void logLogout(payload.userId, payload.username, req).catch(() => {})
     }
-
-    // 清除Cookie
-    res.clearCookie('auth_token', {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      path: '/',
-    });
-
-    return res.json({ success: true, message: '已登出' });
-  } catch (error) {
-    console.error('Logout error:', error);
-    res.status(500).json(
-      { success: false, message: '登出失败' }
-    );
   }
-});
 
-export default router;
+  clearAuthTokenCookie(res)
+
+  const response: AuthMessageData = {
+    message: '已登出',
+  }
+
+  return res.json(authSuccess(response))
+}))
+
+export default router

@@ -1,201 +1,228 @@
-/**
- * LoginDialog组件 - 登录/注册弹窗
- */
+import { useEffect, useId, useRef, useState } from 'react'
 
-import { useState } from 'react';
-import { useAuth } from '../hooks/useAuth';
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { useAuth } from '@/hooks/useAuth'
+import { useDialogFocusRestore } from '@/hooks/useDialogFocusRestore'
 
 interface LoginDialogProps {
-  isOpen: boolean;
-  onClose: () => void;
+  isOpen: boolean
+  onClose: () => void
 }
 
-export const LoginDialog: React.FC<LoginDialogProps> = ({ isOpen, onClose }) => {
-  const [mode, setMode] = useState<'login' | 'register'>('login');
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [displayName, setDisplayName] = useState('');
-  const [email, setEmail] = useState('');
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
+export function LoginDialog({ isOpen, onClose }: LoginDialogProps) {
+  const [mode, setMode] = useState<'login' | 'register'>('login')
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [displayName, setDisplayName] = useState('')
+  const [email, setEmail] = useState('')
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+  const { login, register } = useAuth()
+  const titleId = useId()
+  const descriptionId = useId()
+  const dialogRef = useRef<HTMLDivElement | null>(null)
+  const usernameInputRef = useRef<HTMLInputElement | null>(null)
 
-  const { login, register } = useAuth();
+  useDialogFocusRestore(isOpen)
 
-  if (!isOpen) return null;
+  useEffect(() => {
+    if (!isOpen) return
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-    setLoading(true);
+    const getFocusableElements = () => {
+      const root = dialogRef.current
+      if (!root) return [] as HTMLElement[]
+
+      return Array.from(
+        root.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"]), [contenteditable="true"]',
+        ),
+      ).filter((element) => {
+        if (element.hasAttribute('disabled')) return false
+        if (element.getAttribute('aria-hidden') === 'true') return false
+        if (element.tabIndex < 0) return false
+        const style = window.getComputedStyle(element)
+        if (style.display === 'none' || style.visibility === 'hidden') return false
+        return true
+      })
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      usernameInputRef.current?.focus()
+    })
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onClose()
+        return
+      }
+
+      if (event.key !== 'Tab') return
+
+      const focusable = getFocusableElements()
+      if (focusable.length === 0) {
+        event.preventDefault()
+        dialogRef.current?.focus()
+        return
+      }
+
+      const currentIndex = focusable.indexOf(document.activeElement as HTMLElement)
+      if (event.shiftKey) {
+        if (currentIndex === 0 || currentIndex === -1) {
+          event.preventDefault()
+          focusable[focusable.length - 1]?.focus()
+        }
+        return
+      }
+
+      if (currentIndex === focusable.length - 1) {
+        event.preventDefault()
+        focusable[0]?.focus()
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => {
+      window.cancelAnimationFrame(frame)
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [isOpen, onClose])
+
+  if (!isOpen) return null
+
+  const resetForm = () => {
+    setUsername('')
+    setPassword('')
+    setDisplayName('')
+    setEmail('')
+    setError('')
+  }
+
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault()
+    setError('')
+    setLoading(true)
 
     try {
       if (mode === 'login') {
-        const result = await login(username, password);
-        if (result.success) {
-          onClose();
-          // 清空表单
-          setUsername('');
-          setPassword('');
-        } else {
-          setError(result.message || '登录失败');
+        const result = await login(username, password)
+        if (!result.success) {
+          setError(result.message || '登录失败')
+          return
         }
       } else {
-        const result = await register(username, password, displayName, email);
-        if (result.success) {
-          onClose();
-          // 清空表单
-          setUsername('');
-          setPassword('');
-          setDisplayName('');
-          setEmail('');
-        } else {
-          setError(result.message || '注册失败');
+        const result = await register(username, password, displayName, email)
+        if (!result.success) {
+          setError(result.message || '注册失败')
+          return
         }
       }
-    } catch (err) {
-      setError(mode === 'login' ? '登录失败，请稍后重试' : '注册失败，请稍后重试');
-    } finally {
-      setLoading(false);
-    }
-  };
 
-  const switchMode = () => {
-    setError('');
-    setUsername('');
-    setPassword('');
-    setDisplayName('');
-    setEmail('');
-    setMode(mode === 'login' ? 'register' : 'login');
-  };
+      resetForm()
+      onClose()
+    } catch {
+      setError(mode === 'login' ? '登录失败，请稍后重试' : '注册失败，请稍后重试')
+    } finally {
+      setLoading(false)
+    }
+  }
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 p-6">
-        <div className="flex justify-between items-center mb-6">
-          <h2 className="text-2xl font-bold text-gray-800">
-            {mode === 'login' ? '登录' : '注册'}
-          </h2>
-          <button
-            onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 text-2xl leading-none"
-          >
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 px-4 py-6"
+      data-testid="login-dialog-overlay"
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={descriptionId}
+        ref={dialogRef}
+        tabIndex={-1}
+        data-testid="login-dialog"
+        className="w-full max-w-md rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="mb-6 flex items-start justify-between">
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-400">登录系统</div>
+            <h2 id={titleId} className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">
+              {mode === 'login' ? '登录账号' : '注册账号'}
+            </h2>
+            <p id={descriptionId} className="mt-2 text-sm leading-6 text-slate-500">
+              {mode === 'login' ? '登录后即可按公司级和项目级角色获取对应权限。' : '首个注册用户将自动成为公司管理员。'}
+            </p>
+          </div>
+          <button onClick={onClose} className="rounded-full p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700" aria-label="关闭登录弹窗">
             ×
           </button>
         </div>
 
-        {error && (
-          <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded">
+        {error ? (
+          <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
             {error}
           </div>
-        )}
+        ) : null}
 
-        <form onSubmit={handleSubmit}>
-          {/* 用户名 */}
-          <div className="mb-4">
-            <label htmlFor="username" className="block text-sm font-medium text-gray-700 mb-1">
-              用户名
-            </label>
-            <input
-              type="text"
-              id="username"
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="login-username">用户名</Label>
+            <Input
+              id="login-username"
+              ref={usernameInputRef}
               value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+              onChange={(event) => setUsername(event.target.value)}
               placeholder="请输入用户名"
-              required
               disabled={loading}
+              required
             />
           </div>
 
-          {/* 密码 */}
-          <div className="mb-4">
-            <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1">
-              密码
-            </label>
-            <input
-              type="password"
-              id="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="请输入密码"
-              required
-              disabled={loading}
-            />
+          <div className="space-y-2">
+            <Label htmlFor="login-password">密码</Label>
+            <Input id="login-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="请输入密码" disabled={loading} required />
           </div>
 
-          {/* 注册模式下的额外字段 */}
-          {mode === 'register' && (
+          {mode === 'register' ? (
             <>
-              <div className="mb-4">
-                <label htmlFor="displayName" className="block text-sm font-medium text-gray-700 mb-1">
-                  显示名称（可选）
-                </label>
-                <input
-                  type="text"
-                  id="displayName"
-                  value={displayName}
-                  onChange={(e) => setDisplayName(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="请输入显示名称"
-                  disabled={loading}
-                />
+              <div className="space-y-2">
+                <Label htmlFor="login-display-name">显示名称</Label>
+                <Input id="login-display-name" value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="可选，默认为用户名" disabled={loading} />
               </div>
-
-              <div className="mb-4">
-                <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
-                  邮箱（可选）
-                </label>
-                <input
-                  type="email"
-                  id="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="请输入邮箱"
-                  disabled={loading}
-                />
+              <div className="space-y-2">
+                <Label htmlFor="login-email">邮箱</Label>
+                <Input id="login-email" type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="可选，用于联系与找回" disabled={loading} />
               </div>
             </>
-          )}
+          ) : null}
 
-          {/* 提交按钮 */}
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full bg-blue-600 text-white py-2 px-4 rounded hover:bg-blue-700 disabled:bg-blue-300 disabled:cursor-not-allowed transition-colors"
-          >
-            {loading ? '处理中...' : mode === 'login' ? '登录' : '注册'}
-          </button>
+          <Button type="submit" className="w-full" loading={loading}>
+            {mode === 'login' ? '登录' : '注册'}
+          </Button>
         </form>
 
-        {/* 切换模式 */}
-        <div className="mt-4 text-center text-sm text-gray-600">
-          {mode === 'login' ? (
-            <>
-              还没有账户？{' '}
-              <button
-                type="button"
-                onClick={switchMode}
-                className="text-blue-600 hover:text-blue-800 font-medium"
-              >
-                立即注册
-              </button>
-            </>
-          ) : (
-            <>
-              已有账户？{' '}
-              <button
-                type="button"
-                onClick={switchMode}
-                className="text-blue-600 hover:text-blue-800 font-medium"
-              >
-                立即登录
-              </button>
-            </>
-          )}
+        {mode === 'login' ? (
+          <p className="mt-4 rounded-2xl bg-slate-50 px-4 py-3 text-xs leading-6 text-slate-500">
+            忘记密码？请联系公司管理员为你重置密码并获取临时密码。
+          </p>
+        ) : null}
+
+        <div className="mt-5 text-center text-sm text-slate-600">
+          {mode === 'login' ? '还没有账号？' : '已经有账号？'}{' '}
+          <button
+            type="button"
+            className="font-medium text-blue-600 transition hover:text-blue-700"
+            onClick={() => {
+              resetForm()
+              setMode(mode === 'login' ? 'register' : 'login')
+            }}
+          >
+            {mode === 'login' ? '立即注册' : '立即登录'}
+          </button>
         </div>
       </div>
     </div>
-  );
-};
+  )
+}

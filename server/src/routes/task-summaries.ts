@@ -1,12 +1,18 @@
 ﻿// 任务完成总结API路由 - Phase 3.6
 
 import { Router } from 'express'
+import { z } from 'zod'
 import { TaskSummaryService } from '../services/taskSummaryService.js'
 import { getProjectTimelineEvents, isTaskTimelineEventStoreReady } from '../services/taskTimelineService.js'
 import { executeSQL, supabase } from '../services/dbService.js'
+import { getApprovedDelayRequestsByTaskIds } from '../services/delayRequests.js'
+import {
+  normalizeTaskSummaryCompareGranularity,
+  normalizeTaskSummaryComparePeriods,
+} from '../services/taskSummaryCompareService.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import { authenticate } from '../middleware/auth.js'
-import { validateIdParam } from '../middleware/validation.js'
+import { validate, validateIdParam } from '../middleware/validation.js'
 import { logger } from '../middleware/logger.js'
 import type { ApiResponse } from '../types/index.js'
 import type { TaskCompletionReport } from '../types/db.js'
@@ -15,8 +21,93 @@ const router = Router()
 router.use(authenticate)
 const summaryService = new TaskSummaryService()
 
+const taskIdParamSchema = z.object({
+  taskId: z.string().trim().min(1),
+})
+
+const projectIdParamSchema = z.object({
+  projectId: z.string().trim().min(1),
+})
+
+const generateTaskSummaryBodySchema = z.object({
+  userId: z.string().trim().optional(),
+}).passthrough()
+
+const projectSummariesQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+  offset: z.coerce.number().int().min(0).optional(),
+}).passthrough()
+
+const summaryStatsQuerySchema = z.object({
+  projectId: z.string().trim().min(1).optional(),
+  project_id: z.string().trim().min(1).optional(),
+}).passthrough()
+
+function normalizeText(value: unknown) {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+async function loadParticipantUnitNameMap(unitIds: string[]) {
+  const uniqueIds = Array.from(new Set(unitIds.filter(Boolean)))
+  if (uniqueIds.length === 0) return new Map<string, string>()
+
+  const { data, error } = await supabase
+    .from('participant_units')
+    .select('id, unit_name')
+    .in('id', uniqueIds)
+
+  if (error) throw new Error(`[participant-units] 查询失败: ${error.message}`)
+
+  return new Map((data || []).map((row: any) => [String(row.id), normalizeText(row.unit_name)]))
+}
+
+function isMissingParticipantUnitIdColumn(error: unknown) {
+  if (!error) return false
+  const text = typeof error === 'string'
+    ? error
+    : [
+        (error as { message?: unknown })?.message,
+        (error as { details?: unknown })?.details,
+        (error as { hint?: unknown })?.hint,
+        String(error),
+      ].filter(Boolean).join(' ')
+
+  return /participant_unit_id/i.test(text)
+}
+
+async function fetchTaskSummaryRows(
+  buildQuery: (selectClause: string) => Promise<{ data: any[] | null; error: any }>,
+  primarySelect: string,
+  fallbackSelect: string,
+  retryLabel: string,
+) : Promise<any[]> {
+  const runQuery = async (selectClause: string) => {
+    try {
+      return await buildQuery(selectClause)
+    } catch (error) {
+      return { data: null, error }
+    }
+  }
+
+  let result: { data: any[] | null; error: any } = await runQuery(primarySelect)
+
+  if (isMissingParticipantUnitIdColumn(result.error)) {
+    logger.warn('task-summary query missing participant_unit_id column, retrying without it', {
+      retryLabel,
+      error: result.error?.message,
+    })
+    result = await runQuery(fallbackSelect)
+  }
+
+  if (result.error) {
+    throw new Error(result.error.message)
+  }
+
+  return result.data ?? []
+}
+
 // 获取任务总结
-router.get('/tasks/:taskId/summary', asyncHandler(async (req, res) => {
+router.get('/tasks/:taskId/summary', validate(taskIdParamSchema, 'params'), asyncHandler(async (req, res) => {
   const { taskId } = req.params
   logger.info('Fetching task summary', { taskId })
 
@@ -40,7 +131,7 @@ router.get('/tasks/:taskId/summary', asyncHandler(async (req, res) => {
 }))
 
 // 手动生成任务总结
-router.post('/tasks/:taskId/summary/generate', asyncHandler(async (req, res) => {
+router.post('/tasks/:taskId/summary/generate', validate(taskIdParamSchema, 'params'), validate(generateTaskSummaryBodySchema), asyncHandler(async (req, res) => {
   const { taskId } = req.params
   // 优先从请求头获取 userId（更安全），降级到 body
   const userId = (req.headers['x-user-id'] as string) || req.body.userId || 'system'
@@ -67,7 +158,7 @@ router.post('/tasks/:taskId/summary/generate', asyncHandler(async (req, res) => 
 }))
 
 // 获取项目总结列表（支持分页）
-router.get('/projects/:projectId/summaries', asyncHandler(async (req, res) => {
+router.get('/projects/:projectId/summaries', validate(projectIdParamSchema, 'params'), validate(projectSummariesQuerySchema, 'query'), asyncHandler(async (req, res) => {
   const { projectId } = req.params
   
   // P1-003修复: 添加分页参数支持
@@ -93,8 +184,8 @@ router.get('/projects/:projectId/summaries', asyncHandler(async (req, res) => {
 }))
 
 // 获取总结统计数据（Dashboard卡片用）
-router.get('/summaries/stats', asyncHandler(async (req, res) => {
-  const projectId = req.query.projectId as string
+router.get('/summaries/stats', validate(summaryStatsQuerySchema, 'query'), asyncHandler(async (req, res) => {
+  const projectId = String(req.query.projectId ?? req.query.project_id ?? '').trim()
 
   if (!projectId) {
     const response: ApiResponse = {
@@ -126,69 +217,87 @@ router.get('/projects/:id/task-summary', validateIdParam, asyncHandler(async (re
 
   logger.info('Fetching project task summary', { projectId, type, milestone_id })
 
-  // 1. 从 milestones 表获取项目里程碑
-  //    milestones 表字段: id, title, target_date, status, completed_at
-  let msQuery = supabase
-    .from('milestones')
-    .select('id, title, status, target_date, completed_at')
-    .eq('project_id', projectId)
-    .order('target_date', { ascending: true })
+  const milestonesPromise = (async () => {
+    let msQuery = supabase
+      .from('milestones')
+      .select('id, title, status, target_date, completed_at')
+      .eq('project_id', projectId)
+      .order('target_date', { ascending: true })
 
-  if (milestone_id && milestone_id !== 'all') {
-    msQuery = msQuery.eq('id', milestone_id)
-  }
+    if (milestone_id && milestone_id !== 'all') {
+      msQuery = msQuery.eq('id', milestone_id)
+    }
 
-  const { data: milestones, error: msErr } = await msQuery
-  if (msErr) throw new Error(`[task-summary] 里程碑查询失败: ${msErr.message}`)
+    const { data, error } = await msQuery
+    if (error) throw new Error(`[task-summary] 里程碑查询失败: ${error.message}`)
+    return data ?? []
+  })()
 
-  // 2. 获取已完成任务（兼容中英文状态值）
-  //    tasks 表字段: id, title, assignee, status, start_date, end_date, progress, is_milestone
-  let tasksQuery = supabase
-    .from('tasks')
-    .select('id, title, assignee, assignee_unit, status, start_date, end_date, progress, is_milestone, updated_at')
-    .eq('project_id', projectId)
-    .in('status', ['已完成', 'completed'])
-    .order('updated_at', { ascending: false })
+  const tasksPromise = fetchTaskSummaryRows(
+    async (selectClause) => {
+      let tasksQuery = supabase
+        .from('tasks')
+        .select(selectClause)
+        .eq('project_id', projectId)
+        .in('status', ['已完成', 'completed'])
+        .order('updated_at', { ascending: false })
 
-  if (date_from) {
-    tasksQuery = tasksQuery.gte('end_date', date_from)
-  }
-  if (date_to) {
-    tasksQuery = tasksQuery.lte('end_date', date_to)
-  }
-  const { data: tasks, error: taskErr } = await tasksQuery
-  if (taskErr) throw new Error(`[task-summary] 任务查询失败: ${taskErr.message}`)
+      if (date_from) {
+        tasksQuery = tasksQuery.gte('end_date', date_from)
+      }
+      if (date_to) {
+        tasksQuery = tasksQuery.lte('end_date', date_to)
+      }
+
+      const { data, error } = await tasksQuery
+      return { data, error }
+    },
+    'id, title, assignee, assignee_unit, participant_unit_id, status, start_date, end_date, progress, is_milestone, updated_at',
+    'id, title, assignee, assignee_unit, status, start_date, end_date, progress, is_milestone, updated_at',
+    `task-summary:${projectId}`,
+  )
+
+  const timelineReadyPromise = isTaskTimelineEventStoreReady(projectId)
+
+  const [milestones, tasks, timelineReady] = await Promise.all([
+    milestonesPromise,
+    tasksPromise,
+    timelineReadyPromise,
+  ])
+
+  const taskIds = (tasks || []).map((t: any) => t.id)
+  const participantUnitIds = Array.from(
+    new Set((tasks || []).map((task: any) => task.participant_unit_id).filter(Boolean)),
+  )
+
+  const [participantUnitNameMap, taskMilestoneRows, delays, timelineEvents] = await Promise.all([
+    loadParticipantUnitNameMap(participantUnitIds),
+    taskIds.length > 0
+      ? supabase
+          .from('task_milestones')
+          .select('task_id, milestone_id')
+          .in('task_id', taskIds)
+          .then(({ data, error }) => {
+            if (error) throw error
+            return data ?? []
+          })
+      : Promise.resolve([]),
+    taskIds.length > 0 ? getApprovedDelayRequestsByTaskIds(taskIds) : Promise.resolve([]),
+    timelineReady ? getProjectTimelineEvents(projectId) : Promise.resolve([]),
+  ])
 
   // 3. 获取 task_milestones 关联表 — 建立 taskId → milestoneId 映射
-  const taskIds = (tasks || []).map((t: any) => t.id)
   let taskMsMap: Record<string, string[]> = {} // taskId → milestoneId[]
-  if (taskIds.length > 0) {
-    const { data: tmRows } = await supabase
-      .from('task_milestones')
-      .select('task_id, milestone_id')
-      .in('task_id', taskIds)
-    if (tmRows) {
-      for (const row of tmRows) {
-        if (!taskMsMap[row.task_id]) taskMsMap[row.task_id] = []
-        taskMsMap[row.task_id].push(row.milestone_id)
-      }
-    }
+  for (const row of taskMilestoneRows) {
+    if (!taskMsMap[row.task_id]) taskMsMap[row.task_id] = []
+    taskMsMap[row.task_id].push(row.milestone_id)
   }
 
   // 4. 获取延期记录
   let delayMap: Record<string, any[]> = {}
-  if (taskIds.length > 0) {
-    const { data: delays } = await supabase
-      .from('task_delay_history')
-      .select('task_id, delay_days, reason, delay_reason, created_at')
-      .in('task_id', taskIds)
-      .order('created_at', { ascending: false })
-    if (delays) {
-      for (const d of delays) {
-        if (!delayMap[d.task_id]) delayMap[d.task_id] = []
-        delayMap[d.task_id].push(d)
-      }
-    }
+  for (const delay of delays) {
+    if (!delayMap[delay.task_id]) delayMap[delay.task_id] = []
+    delayMap[delay.task_id].push(delay)
   }
 
   // 5. 组装分组数据（按里程碑分组）
@@ -222,7 +331,8 @@ router.get('/projects/:id/task-summary', validateIdParam, asyncHandler(async (re
           id: t.id,
           title: t.title,
           assignee: t.assignee,
-          assignee_unit: t.assignee_unit,
+          assignee_unit: t.assignee_unit || participantUnitNameMap.get(t.participant_unit_id) || null,
+          participant_unit_id: t.participant_unit_id || null,
           completed_at: completedAt?.slice(0, 10) || endDate,
           planned_end_date: endDate,
           actual_duration: null,
@@ -261,7 +371,8 @@ router.get('/projects/:id/task-summary', validateIdParam, asyncHandler(async (re
         id: t.id,
         title: t.title,
         assignee: t.assignee,
-        assignee_unit: t.assignee_unit,
+        assignee_unit: t.assignee_unit || participantUnitNameMap.get(t.participant_unit_id) || null,
+        participant_unit_id: t.participant_unit_id || null,
         completed_at: completedAt?.slice(0, 10) || endDate,
         planned_end_date: endDate,
         actual_duration: null,
@@ -296,9 +407,6 @@ router.get('/projects/:id/task-summary', validateIdParam, asyncHandler(async (re
       m.status === '已完成' || m.status === 'completed'
     ).length,
   }
-
-  const timelineReady = await isTaskTimelineEventStoreReady(projectId)
-  const timelineEvents = timelineReady ? await getProjectTimelineEvents(projectId) : []
 
   const response: ApiResponse = {
     success: true,
@@ -390,7 +498,7 @@ router.get('/projects/:id/task-summary/assignees', validateIdParam, asyncHandler
 }))
 
 // GET /projects/:id/task-summary/compare — N段时段对比（进度变化量对比）
-// 参数: periods (JSON数组，每个元素 {label, from, to})，granularity ("day"|"week")
+// 参数: periods (JSON数组，每个元素 {label, from, to})，granularity ("day"|"week"|"month")
 // 返回: 每个时段的进度变化统计
 router.get('/projects/:id/task-summary/compare', validateIdParam, asyncHandler(async (req, res) => {
   const { id: projectId } = req.params
@@ -416,8 +524,13 @@ router.get('/projects/:id/task-summary/compare', validateIdParam, asyncHandler(a
     })
   }
 
+  const normalizedPeriods = normalizeTaskSummaryComparePeriods(
+    periods,
+    normalizeTaskSummaryCompareGranularity(granularity),
+  )
+
   // 校验每个时段
-  for (const p of periods) {
+  for (const p of normalizedPeriods) {
     if (!p.from || !p.to || !p.label) {
       return res.status(400).json({
         success: false,
@@ -428,23 +541,30 @@ router.get('/projects/:id/task-summary/compare', validateIdParam, asyncHandler(a
   }
 
   // 获取所有时段覆盖的日期范围
-  const allFroms = periods.map((p) => p.from)
-  const allTos = periods.map((p) => p.to)
+  const allFroms = normalizedPeriods.map((p) => p.from)
+  const allTos = normalizedPeriods.map((p) => p.to)
   const globalFrom = allFroms.sort()[0]
   const globalTo = allTos.sort().reverse()[0]
 
   // 1. 先获取项目下的所有任务ID
-  const { data: projectTasks, error: tasksErr } = await supabase
-    .from('tasks')
-    .select('id, title, assignee, status')
-    .eq('project_id', projectId)
-
-  if (tasksErr) {
-    logger.warn('project tasks query failed', { error: tasksErr.message })
-  }
+  const projectTasks = await fetchTaskSummaryRows(
+    async (selectClause) => {
+      const { data, error } = await supabase
+        .from('tasks')
+        .select(selectClause)
+        .eq('project_id', projectId)
+      return { data, error }
+    },
+    'id, title, assignee, assignee_unit, participant_unit_id, status',
+    'id, title, assignee, assignee_unit, status',
+    `task-summary-compare:${projectId}`,
+  )
 
   const taskIds = (projectTasks || []).map(t => t.id)
   const taskMap = new Map((projectTasks || []).map(t => [t.id, t]))
+  const participantUnitNameMap = await loadParticipantUnitNameMap(
+    (projectTasks || []).map((task: any) => task.participant_unit_id).filter(Boolean),
+  )
 
   // 2. 从 task_progress_snapshots 获取所有快照
   const { data: snapshots, error: snapErr } = await supabase
@@ -475,7 +595,7 @@ router.get('/projects/:id/task-summary/compare', validateIdParam, asyncHandler(a
   }
 
   // 4. 对每个时段计算进度变化
-  const results = periods.map((p) => {
+  const results = normalizedPeriods.map((p) => {
     const { label, from, to } = p
     
     // 筛选该时段内的快照
@@ -505,7 +625,7 @@ router.get('/projects/:id/task-summary/compare', validateIdParam, asyncHandler(a
         taskChanges.set(taskId, {
           task_id: taskId,
           task_title: task?.title || '未命名任务',
-          assignee: task?.assignee || '',
+          assignee: task?.assignee || participantUnitNameMap.get(task?.participant_unit_id) || task?.assignee_unit || '',
           progress_before: baselineProgress,
           progress_after: progress,
           progress_delta: progress - baselineProgress,
@@ -566,24 +686,58 @@ router.get('/projects/:id/task-summary/compare', validateIdParam, asyncHandler(a
 router.get('/projects/:id/daily-progress', validateIdParam, asyncHandler(async (req, res) => {
   const { id: projectId } = req.params
   const targetDate = (req.query.date as string) || new Date().toISOString().slice(0, 10)
+  const previousDate = new Date(`${targetDate}T00:00:00`)
+  previousDate.setDate(previousDate.getDate() - 1)
+  const previousDateStr = previousDate.toISOString().slice(0, 10)
+
+  const { data: projectTaskRows, error: projectTaskErr } = await supabase
+    .from('tasks')
+    .select('id')
+    .eq('project_id', projectId)
+
+  if (projectTaskErr) throw new Error(`[daily-progress] 任务ID查询失败: ${projectTaskErr.message}`)
+
+  const projectTaskIds = (projectTaskRows || []).map((row: any) => row.id)
 
   // 1. 获取当日更新的所有任务（包括进度变化）
-  // 使用 task_progress_snapshots 表记录每日进度快照
-  const { data: snapshots, error: snapErr } = await supabase
-    .from('task_progress_snapshots')
-    .select(`
-      task_id,
-      progress,
-      snapshot_date,
-      tasks!inner(id, title, assignee, status, progress as current_progress)
-    `)
-    .eq('tasks.project_id', projectId)
-    .eq('snapshot_date', targetDate)
+  // 这里先按项目任务ID过滤快照，避免 PostgREST 在嵌套 tasks 关联上生成异常 SQL。
+  const snapshotResult = projectTaskIds.length === 0
+    ? { data: [], error: null }
+    : await supabase
+        .from('task_progress_snapshots')
+        .select(`
+          task_id,
+          progress,
+          snapshot_date,
+          conditions_met_count,
+          conditions_total_count,
+          obstacles_active_count,
+          created_at
+        `)
+        .in('task_id', projectTaskIds)
+        .gte('snapshot_date', previousDateStr)
+        .lte('snapshot_date', targetDate)
+        .order('snapshot_date', { ascending: true })
+        .order('created_at', { ascending: true })
+
+  const { data: snapshots, error: snapErr } = snapshotResult
 
   if (snapErr) {
     // 如果快照表不存在或为空，降级为从 tasks 表获取当日更新的任务
     logger.warn('task_progress_snapshots query failed, falling back to tasks table', { error: snapErr.message })
   }
+
+  const snapshotByDateAndTask = new Map<string, Map<string, any>>()
+  for (const snapshot of (snapshots || [])) {
+    const snapshotDate = snapshot.snapshot_date as string
+    if (!snapshotByDateAndTask.has(snapshotDate)) {
+      snapshotByDateAndTask.set(snapshotDate, new Map())
+    }
+    snapshotByDateAndTask.get(snapshotDate)!.set(snapshot.task_id as string, snapshot)
+  }
+
+  const todaySnapshotMap = snapshotByDateAndTask.get(targetDate) ?? new Map<string, any>()
+  const previousSnapshotMap = snapshotByDateAndTask.get(previousDateStr) ?? new Map<string, any>()
 
   // 2. 降级方案：从 tasks 表获取当日更新的任务
   const dayStart = `${targetDate} 00:00:00`
@@ -615,18 +769,49 @@ router.get('/projects/:id/daily-progress', validateIdParam, asyncHandler(async (
 
   let totalProgressChange = 0
   let tasksCompleted = 0
+  let conditionsAdded = 0
+  let conditionsClosed = 0
+  let obstaclesAdded = 0
+  let obstaclesClosed = 0
+
+  const allTaskIds = new Set<string>([
+    ...Array.from(todaySnapshotMap.keys()),
+    ...Array.from(previousSnapshotMap.keys()),
+  ])
+
+  for (const taskId of allTaskIds) {
+    const todaySnapshot = todaySnapshotMap.get(taskId)
+    const previousSnapshot = previousSnapshotMap.get(taskId)
+    const todayConditions = Number(todaySnapshot?.conditions_total_count ?? 0)
+    const previousConditions = Number(previousSnapshot?.conditions_total_count ?? 0)
+    const todayObstacles = Number(todaySnapshot?.obstacles_active_count ?? 0)
+    const previousObstacles = Number(previousSnapshot?.obstacles_active_count ?? 0)
+
+    if (todayConditions > previousConditions) {
+      conditionsAdded += todayConditions - previousConditions
+    } else {
+      conditionsClosed += previousConditions - todayConditions
+    }
+
+    if (todayObstacles > previousObstacles) {
+      obstaclesAdded += todayObstacles - previousObstacles
+    } else {
+      obstaclesClosed += previousObstacles - todayObstacles
+    }
+  }
 
   for (const task of (updatedTasks || [])) {
     // 简化计算：当天更新的任务，进度变化基于当前状态
     // 对于已完成的任务，假设进度从更新前变为100%
     // 对于进行中的任务，假设进度有变化（实际应该从快照表对比）
     
-    const currentProgress = task.progress || 0
+    const todaySnapshot = todaySnapshotMap.get(task.id) as any
+    const previousSnapshot = previousSnapshotMap.get(task.id) as any
+    const currentProgress = todaySnapshot?.progress ?? task.progress ?? 0
     const isCompleted = task.status === '已完成' || task.status === 'completed'
     
     // 尝试从快照获取之前的进度
-    const prevSnapshot = (snapshots || []).find((s: any) => s.task_id === task.id) as any
-    const prevProgress = prevSnapshot?.progress ?? Math.max(0, currentProgress - 10) // 降级：假设进度增加10%
+    const prevProgress = previousSnapshot?.progress ?? Math.max(0, currentProgress - 10) // 降级：假设进度增加10%
     
     const progressDelta = currentProgress - prevProgress
     
@@ -652,9 +837,21 @@ router.get('/projects/:id/daily-progress', validateIdParam, asyncHandler(async (
   // 4. 返回结果
   const result = {
     date: targetDate,
+    previous_date: previousDateStr,
     progress_change: totalProgressChange,
     tasks_updated: details.length,
     tasks_completed: tasksCompleted,
+    snapshot_summary: {
+      conditions_added: conditionsAdded,
+      conditions_closed: conditionsClosed,
+      obstacles_added: obstaclesAdded,
+      obstacles_closed: obstaclesClosed,
+      delayed_tasks: (updatedTasks || []).filter((task: any) => {
+        const endDate = task.end_date ? String(task.end_date).slice(0, 10) : ''
+        const isCompleted = task.status === '已完成' || task.status === 'completed'
+        return Boolean(endDate) && !isCompleted && endDate <= targetDate
+      }).length,
+    },
     details: details.sort((a, b) => Math.abs(b.progress_delta) - Math.abs(a.progress_delta)),
   }
 

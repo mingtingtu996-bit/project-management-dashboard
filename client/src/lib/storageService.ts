@@ -8,6 +8,7 @@ import {
   ProjectMemberSchema, InvitationSchema,
   projectDb, taskDb, riskDb, milestoneDb, memberDb, invitationDb
 } from './localDb'
+import { safeJsonParse, safeStorageGet, safeStorageSet } from '@/lib/browserStorage'
 
 // ============================================
 // 存储模式枚举
@@ -49,6 +50,14 @@ export interface PendingOperation {
   table: string
   data: any
   timestamp: number
+}
+
+type MutationAction = PendingOperation['type'] | SyncQueueItem['action']
+
+function getSyncItemEntityId(data: unknown): string | null {
+  if (!data || typeof data !== 'object') return null
+  const record = data as { id?: unknown }
+  return typeof record.id === 'string' && record.id ? record.id : null
 }
 
 // ============================================
@@ -152,8 +161,11 @@ class StorageServiceImpl implements StorageAdapter {
   private networkStatus: NetworkStatus = navigator.onLine ? NetworkStatus.ONLINE : NetworkStatus.OFFLINE
   private onlineHandler: () => void
   private offlineHandler: () => void
+  private visibilityHandler: () => void
   private syncListeners: Array<(status: SyncStatus) => void> = []  // 兼容旧版 offlineCache
   private lastSyncTime: number | null = null
+  private isDocumentVisible = typeof document === 'undefined' ? true : !document.hidden
+  private resumeSyncPromise: Promise<void> | null = null
 
   constructor(config: Partial<StorageServiceConfig> = {}) {
     this.config = { ...DEFAULT_STORAGE_CONFIG, ...config }
@@ -163,11 +175,15 @@ class StorageServiceImpl implements StorageAdapter {
     // 绑定事件处理器（用于后续清理）
     this.onlineHandler = () => this.handleOnline()
     this.offlineHandler = () => this.handleOffline()
+    this.visibilityHandler = () => this.handleVisibilityChange()
     
     // 监听网络状态变化
     if (typeof window !== 'undefined') {
       window.addEventListener('online', this.onlineHandler)
       window.addEventListener('offline', this.offlineHandler)
+    }
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', this.visibilityHandler)
     }
     
     // 加载同步队列和离线操作
@@ -175,11 +191,142 @@ class StorageServiceImpl implements StorageAdapter {
     this.loadPendingOps()
   }
 
+  private getEntityIdFromPayload(value: unknown): string | null {
+    if (!value || typeof value !== 'object') return null
+    const id = (value as { id?: unknown }).id
+    return typeof id === 'string' && id.trim() ? id.trim() : null
+  }
+
+  private getPendingOperationKey(operation: PendingOperation): string | null {
+    const entityId = this.getEntityIdFromPayload(operation.data)
+    return entityId ? `${operation.table}:${entityId}` : null
+  }
+
+  private getSyncQueueEntityKey(item: Pick<SyncQueueItem, 'type' | 'data'>): string | null {
+    const entityId = this.getEntityIdFromPayload(item.data)
+    return entityId ? `${item.type}:${entityId}` : null
+  }
+
+  private mergeMutation(existingAction: MutationAction, existingData: any, incomingAction: MutationAction, incomingData: any) {
+    const entityId = this.getEntityIdFromPayload(incomingData) ?? this.getEntityIdFromPayload(existingData)
+
+    if (existingAction === 'create') {
+      if (incomingAction === 'delete') {
+        return null
+      }
+      return {
+        action: 'create' as MutationAction,
+        data: { ...(existingData ?? {}), ...(incomingData ?? {}) },
+      }
+    }
+
+    if (incomingAction === 'delete') {
+      return {
+        action: 'delete' as MutationAction,
+        data: entityId ? { id: entityId } : { ...(incomingData ?? {}) },
+      }
+    }
+
+    if (incomingAction === 'create') {
+      return {
+        action: 'create' as MutationAction,
+        data: { ...(existingData ?? {}), ...(incomingData ?? {}) },
+      }
+    }
+
+    return {
+      action: 'update' as MutationAction,
+      data: { ...(existingData ?? {}), ...(incomingData ?? {}) },
+    }
+  }
+
+  private compactPendingOperations(operations: PendingOperation[]): PendingOperation[] {
+    const deduped = new Map<string, PendingOperation>()
+    const passthrough: PendingOperation[] = []
+
+    for (const operation of [...operations].sort((left, right) => left.timestamp - right.timestamp)) {
+      const key = this.getPendingOperationKey(operation)
+      if (!key) {
+        passthrough.push(operation)
+        continue
+      }
+
+      const existing = deduped.get(key)
+      if (!existing) {
+        deduped.set(key, { ...operation })
+        continue
+      }
+
+      const merged = this.mergeMutation(existing.type, existing.data, operation.type, operation.data)
+      if (!merged) {
+        deduped.delete(key)
+        continue
+      }
+
+      deduped.set(key, {
+        ...existing,
+        id: operation.id,
+        timestamp: operation.timestamp,
+        type: merged.action as PendingOperation['type'],
+        data: merged.data,
+      })
+    }
+
+    return [...passthrough, ...deduped.values()].sort((left, right) => left.timestamp - right.timestamp)
+  }
+
+  private compactSyncQueue(items: SyncQueueItem[]): SyncQueueItem[] {
+    const sticky: SyncQueueItem[] = []
+    const deduped = new Map<string, SyncQueueItem>()
+    const passthrough: SyncQueueItem[] = []
+
+    for (const item of [...items].sort((left, right) => left.timestamp - right.timestamp)) {
+      if (item.status === 'syncing' || item.status === 'completed') {
+        sticky.push(item)
+        continue
+      }
+
+      const key = this.getSyncQueueEntityKey(item)
+      if (!key) {
+        passthrough.push(item)
+        continue
+      }
+
+      const existing = deduped.get(key)
+      if (!existing) {
+        deduped.set(key, { ...item })
+        continue
+      }
+
+      const merged = this.mergeMutation(existing.action, existing.data, item.action, item.data)
+      if (!merged) {
+        deduped.delete(key)
+        continue
+      }
+
+      deduped.set(key, {
+        ...existing,
+        id: item.id,
+        timestamp: item.timestamp,
+        retries: Math.max(existing.retries, item.retries),
+        status: existing.status === 'failed' && item.status === 'failed' ? 'failed' : 'pending',
+        action: merged.action as SyncQueueItem['action'],
+        data: merged.data,
+      })
+    }
+
+    return [...sticky, ...passthrough, ...deduped.values()].sort((left, right) => left.timestamp - right.timestamp)
+  }
+
   // 清理事件监听器（防止内存泄漏）
   destroy(): void {
     if (typeof window !== 'undefined') {
       window.removeEventListener('online', this.onlineHandler)
       window.removeEventListener('offline', this.offlineHandler)
+      this.syncQueueAbortController?.abort()
+    }
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', this.visibilityHandler)
     }
     this.syncListeners = []  // 清理所有监听器
     console.log('[StorageService] 已清理事件监听器')
@@ -202,7 +349,7 @@ class StorageServiceImpl implements StorageAdapter {
       timestamp: Date.now()
     }
 
-    this.pendingOps.push(operation)
+    this.pendingOps = this.compactPendingOperations([...this.pendingOps, operation])
     this.savePendingOps()
 
     // 如果在线，立即尝试同步
@@ -218,7 +365,8 @@ class StorageServiceImpl implements StorageAdapter {
    * 同步待处理操作到数据库（兼容旧版 offlineCache）
    */
   async syncPendingOps(): Promise<{ success: number; failed: number }> {
-    if (!this.isNetworkOnline() || this.pendingOps.length === 0) {
+    this.pendingOps = this.compactPendingOperations(this.pendingOps)
+    if (!this.isSyncAllowed() || this.pendingOps.length === 0) {
       return { success: 0, failed: 0 }
     }
 
@@ -303,9 +451,11 @@ class StorageServiceImpl implements StorageAdapter {
    */
   private loadPendingOps() {
     try {
-      const stored = localStorage.getItem('pending_sync_ops')
+      const stored = safeStorageGet(localStorage, 'pending_sync_ops')
       if (stored) {
-        this.pendingOps = JSON.parse(stored)
+        this.pendingOps = this.compactPendingOperations(
+          safeJsonParse<PendingOperation[]>(stored, [], 'pending sync ops'),
+        )
         console.log(`[StorageService] 加载了 ${this.pendingOps.length} 个离线待同步操作`)
       }
     } catch (e) {
@@ -319,7 +469,8 @@ class StorageServiceImpl implements StorageAdapter {
    */
   private savePendingOps() {
     try {
-      localStorage.setItem('pending_sync_ops', JSON.stringify(this.pendingOps))
+      this.pendingOps = this.compactPendingOperations(this.pendingOps)
+      safeStorageSet(localStorage, 'pending_sync_ops', JSON.stringify(this.pendingOps))
     } catch (e) {
       console.error('[StorageService] 保存离线待同步操作失败:', e)
     }
@@ -340,6 +491,10 @@ class StorageServiceImpl implements StorageAdapter {
    * 手动触发同步（兼容旧版 offlineCache API）
    */
   async manualSync(): Promise<{ success: number; failed: number }> {
+    if (!this.isSyncAllowed()) {
+      return { success: 0, failed: 0 }
+    }
+
     // 同时处理离线操作和同步队列
     const offlineResult = await this.syncPendingOps()
     await this.processSyncQueue()
@@ -388,6 +543,14 @@ class StorageServiceImpl implements StorageAdapter {
     return this.networkStatus !== NetworkStatus.OFFLINE && navigator.onLine
   }
 
+  isTabVisible(): boolean {
+    return this.isDocumentVisible
+  }
+
+  private isSyncAllowed(): boolean {
+    return this.isNetworkOnline() && this.isDocumentVisible
+  }
+
   // 网络恢复时触发同步
   private handleOnline() {
     console.log('[StorageService] 网络已恢复在线')
@@ -395,12 +558,9 @@ class StorageServiceImpl implements StorageAdapter {
     this.notifySyncListeners()
 
     // 自动同步待处理的队列
-    if (this.config.autoSync) {
+    if (this.config.autoSync && this.isDocumentVisible) {
       // 同时处理离线操作和同步队列
-      this.syncPendingOps()
-      if (this.syncQueue.length > 0) {
-        this.processSyncQueue()
-      }
+      void this.resumeSyncAfterVisibility()
     }
   }
 
@@ -412,6 +572,47 @@ class StorageServiceImpl implements StorageAdapter {
   }
 
   // 获取当前网络状态
+  private handleVisibilityChange() {
+    if (typeof document === 'undefined') return
+
+    this.isDocumentVisible = !document.hidden
+
+    if (!this.isDocumentVisible) {
+      console.log('[StorageService] Tab hidden, pause sync processing')
+      this.syncQueueAbortController?.abort()
+      return
+    }
+
+    console.log('[StorageService] Tab visible again, reconcile before incremental sync')
+    this.notifySyncListeners()
+
+    if (this.config.autoSync) {
+      void this.resumeSyncAfterVisibility()
+    }
+  }
+
+  private async resumeSyncAfterVisibility(): Promise<void> {
+    if (this.resumeSyncPromise) {
+      return this.resumeSyncPromise
+    }
+
+    this.resumeSyncPromise = (async () => {
+      this.loadPendingOps()
+      this.loadSyncQueue()
+      this.notifySyncListeners()
+
+      if (!this.isSyncAllowed()) {
+        return
+      }
+
+      await this.manualSync()
+    })().finally(() => {
+      this.resumeSyncPromise = null
+    })
+
+    return this.resumeSyncPromise
+  }
+
   getNetworkStatus(): NetworkStatus {
     return this.networkStatus
   }
@@ -422,6 +623,11 @@ class StorageServiceImpl implements StorageAdapter {
 
   // 处理同步队列（带并发控制）
   private async processSyncQueue(): Promise<void> {
+    this.syncQueue = this.compactSyncQueue(this.syncQueue)
+    if (!this.isSyncAllowed()) {
+      return
+    }
+
     // 如果正在处理，则取消当前操作并重新启动
     if (this.isProcessingSyncQueue) {
       console.log('[StorageService] 同步队列正在处理中，取消当前操作')
@@ -436,8 +642,11 @@ class StorageServiceImpl implements StorageAdapter {
 
     try {
       const pendingItems = this.syncQueue.filter(item => item.status === 'pending')
-      
+
       for (const item of pendingItems) {
+        if (!this.isSyncAllowed()) {
+          break
+        }
         // 检查是否被取消
         if (signal.aborted) {
           console.log('[StorageService] 同步队列处理被取消')
@@ -575,7 +784,7 @@ class StorageServiceImpl implements StorageAdapter {
     
     return {
       getProjects: async () => projectDb.getAll(),
-      getProject: async (id) => projectDb.getById(id),
+      getProject: async (id) => projectDb.getById(id) ?? null,
       createProject: async (p) => projectDb.create(p),
       updateProject: async (id, u) => projectDb.update(id, u),
       deleteProject: async (id) => projectDb.delete(id),
@@ -627,7 +836,7 @@ class StorageServiceImpl implements StorageAdapter {
   // 设置存储模式
   setMode(mode: StorageMode): void {
     this.mode = mode
-    localStorage.setItem('storage_mode', mode)
+    safeStorageSet(localStorage, 'storage_mode', mode)
   }
 
   // 获取当前模式
@@ -644,24 +853,21 @@ class StorageServiceImpl implements StorageAdapter {
       retries: 0,
       status: 'pending'
     }
-    this.syncQueue.push(queueItem)
+    this.syncQueue = this.compactSyncQueue([...this.syncQueue, queueItem as SyncQueueItem])
     this.persistSyncQueue()
   }
 
   // 持久化同步队列
   private persistSyncQueue(): void {
-    localStorage.setItem('pm_sync_queue', JSON.stringify(this.syncQueue))
+    this.syncQueue = this.compactSyncQueue(this.syncQueue)
+    safeStorageSet(localStorage, 'pm_sync_queue', JSON.stringify(this.syncQueue))
   }
 
   // 加载同步队列
   private loadSyncQueue(): void {
-    const data = localStorage.getItem('pm_sync_queue')
+    const data = safeStorageGet(localStorage, 'pm_sync_queue')
     if (data) {
-      try {
-        this.syncQueue = JSON.parse(data)
-      } catch {
-        this.syncQueue = []
-      }
+      this.syncQueue = this.compactSyncQueue(safeJsonParse<SyncQueueItem[]>(data, [], 'sync queue'))
     }
   }
 
@@ -952,31 +1158,34 @@ class StorageServiceImpl implements StorageAdapter {
 
   // 处理同步队列项
   async processSyncItem(itemId: string): Promise<void> {
+    if (!this.isSyncAllowed()) return
+
     const item = this.syncQueue.find(i => i.id === itemId)
     if (!item) return
 
     try {
       // 根据类型和动作执行同步
       const data = item.data as { id: string; [key: string]: unknown }
+      const payload = item.data
       switch (item.type) {
         case 'task':
-          if (item.action === 'create') await this.cloudAdapter?.createTask(item.data)
-          else if (item.action === 'update') await this.cloudAdapter?.updateTask(data.id, item.data)
+          if (item.action === 'create') await this.cloudAdapter?.createTask(payload as Task)
+          else if (item.action === 'update') await this.cloudAdapter?.updateTask(data.id, payload as Partial<Task>)
           else if (item.action === 'delete') await this.cloudAdapter?.deleteTask(data.id)
           break
         case 'project':
-          if (item.action === 'create') await this.cloudAdapter?.createProject(item.data)
-          else if (item.action === 'update') await this.cloudAdapter?.updateProject(data.id, item.data)
+          if (item.action === 'create') await this.cloudAdapter?.createProject(payload as Project)
+          else if (item.action === 'update') await this.cloudAdapter?.updateProject(data.id, payload as Partial<Project>)
           else if (item.action === 'delete') await this.cloudAdapter?.deleteProject(data.id)
           break
         case 'risk':
-          if (item.action === 'create') await this.cloudAdapter?.createRisk(item.data)
-          else if (item.action === 'update') await this.cloudAdapter?.updateRisk(data.id, item.data)
+          if (item.action === 'create') await this.cloudAdapter?.createRisk(payload as Risk)
+          else if (item.action === 'update') await this.cloudAdapter?.updateRisk(data.id, payload as Partial<Risk>)
           else if (item.action === 'delete') await this.cloudAdapter?.deleteRisk(data.id)
           break
         case 'milestone':
-          if (item.action === 'create') await this.cloudAdapter?.createMilestone(item.data)
-          else if (item.action === 'update') await this.cloudAdapter?.updateMilestone(data.id, item.data)
+          if (item.action === 'create') await this.cloudAdapter?.createMilestone(payload as Milestone)
+          else if (item.action === 'update') await this.cloudAdapter?.updateMilestone(data.id, payload as Partial<Milestone>)
           else if (item.action === 'delete') await this.cloudAdapter?.deleteMilestone(data.id)
           break
       }
@@ -1021,7 +1230,7 @@ class StorageServiceImpl implements StorageAdapter {
   // 强制使用本地版本（增加版本号后重试）
   forceUpdate(entityId: string): void {
     // 从同步队列中找到该项目，增加版本号后重试
-    const item = this.syncQueue.find(i => (i.data as any)?.id === entityId)
+    const item = this.syncQueue.find((queuedItem) => getSyncItemEntityId(queuedItem.data) === entityId)
     if (item && item.data) {
       const d = item.data as { id: string; version?: number }
       d.version = (d.version || 1) + 1
@@ -1034,7 +1243,7 @@ class StorageServiceImpl implements StorageAdapter {
   // 应用服务器数据
   applyServerData(entityId: string): void {
     // 从同步队列中移除该项（因为要使用服务器版本）
-    this.syncQueue = this.syncQueue.filter(i => (i.data as any)?.id !== entityId)
+    this.syncQueue = this.syncQueue.filter((queuedItem) => getSyncItemEntityId(queuedItem.data) !== entityId)
     this.persistSyncQueue()
   }
 
@@ -1053,6 +1262,15 @@ class StorageServiceImpl implements StorageAdapter {
   // 初始化
   async initialize(): Promise<void> {
     this.loadSyncQueue()
+
+    const configuredMode = (import.meta.env.VITE_STORAGE_MODE || '').trim().toLowerCase()
+    if (configuredMode === 'backend') {
+      if (import.meta.env.DEV) {
+        console.log('[StorageService] backend mode enabled, skip direct Supabase bootstrap')
+      }
+      this.isInitialized = true
+      return
+    }
     
     // 尝试连接Supabase
     const supabaseUrl = import.meta.env.VITE_SUPABASE_URL

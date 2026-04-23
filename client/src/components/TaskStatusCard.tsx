@@ -13,8 +13,10 @@
 import { useState, useEffect, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { StatusBadge } from '@/components/ui/status-badge'
 import { CheckCircle2, Clock, ListTodo, AlertTriangle, ChevronRight, TrendingUp, User } from 'lucide-react'
 import { useCountUp } from '@/hooks/useCountUp'
+import { CHART_AXIS_COLORS, TASK_STAGE_COLORS } from '@/lib/chartPalette'
 
 interface TaskStatusCardProps {
   completed: number
@@ -141,7 +143,7 @@ export function TaskStatusCard({
   const summaryHref = projectId ? `/projects/${projectId}/task-summary` : '/task-summary'
 
   return (
-    <Card className="rounded-xl border border-gray-200 shadow-sm bg-white hover:shadow-md hover:ring-1 ring-blue-100 transition-all">
+    <Card variant="metric">
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between">
           <CardTitle className="text-base font-semibold text-gray-800">任务执行概况</CardTitle>
@@ -171,17 +173,17 @@ export function TaskStatusCard({
           {/* 右侧环形图 */}
           <div className="w-28 h-28 relative flex-shrink-0">
             <svg viewBox="0 0 100 100" className="w-full h-full -rotate-90">
-              <circle cx="50" cy="50" r={radius} fill="none" stroke="#f3f4f6" strokeWidth="10" />
+              <circle cx="50" cy="50" r={radius} fill="none" stroke={CHART_AXIS_COLORS.neutralStroke} strokeWidth="10" />
               {completed > 0 && (
                 <circle
-                  cx="50" cy="50" r={radius} fill="none" stroke="#10b981" strokeWidth="10"
+                  cx="50" cy="50" r={radius} fill="none" stroke={TASK_STAGE_COLORS.completed} strokeWidth="10"
                   strokeDasharray={circumference} strokeDashoffset={completedOffset}
                   strokeLinecap="round" className="transition-all duration-1000 ease-out"
                 />
               )}
               {inProgress > 0 && (
                 <circle
-                  cx="50" cy="50" r={radius} fill="none" stroke="#3b82f6" strokeWidth="10"
+                  cx="50" cy="50" r={radius} fill="none" stroke={TASK_STAGE_COLORS.inProgress} strokeWidth="10"
                   strokeDasharray={circumference} strokeDashoffset={inProgressOffset}
                   strokeLinecap="round" className="transition-all duration-1000 ease-out"
                   style={{ transform: `rotate(${(completed / total) * 360}deg)`, transformOrigin: 'center' }}
@@ -189,7 +191,7 @@ export function TaskStatusCard({
               )}
               {notStarted > 0 && (
                 <circle
-                  cx="50" cy="50" r={radius} fill="none" stroke="#f59e0b" strokeWidth="10"
+                  cx="50" cy="50" r={radius} fill="none" stroke={TASK_STAGE_COLORS.notStarted} strokeWidth="10"
                   strokeDasharray={circumference} strokeDashoffset={notStartedOffset}
                   strokeLinecap="round" className="transition-all duration-1000 ease-out"
                   style={{ transform: `rotate(${((completed + inProgress) / total) * 360}deg)`, transformOrigin: 'center' }}
@@ -197,7 +199,7 @@ export function TaskStatusCard({
               )}
               {delayed > 0 && (
                 <circle
-                  cx="50" cy="50" r={radius} fill="none" stroke="#ef4444" strokeWidth="10"
+                  cx="50" cy="50" r={radius} fill="none" stroke={TASK_STAGE_COLORS.delayed} strokeWidth="10"
                   strokeDasharray={circumference} strokeDashoffset={0}
                   strokeLinecap="round" className="transition-all duration-1000 ease-out"
                   style={{ transform: `rotate(${((completed + inProgress + notStarted) / total) * 360}deg)`, transformOrigin: 'center' }}
@@ -266,15 +268,11 @@ export function TaskStatusCard({
                         </span>
                       )}
                       {quality.last_completed_status && (
-                        <span
-                          className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
-                            quality.last_completed_status === 'on_time'
-                              ? 'bg-emerald-100 text-emerald-700'
-                              : 'bg-amber-100 text-amber-700'
-                          }`}
-                        >
-                          {quality.last_completed_status === 'on_time' ? '按时完成' : '延期完成'}
-                        </span>
+                        <StatusBadge
+                          status={quality.last_completed_status}
+                          fallbackLabel={quality.last_completed_status === 'on_time' ? '按时完成' : '延期完成'}
+                          className="px-1.5 py-0.5 text-[10px] font-medium"
+                        />
                       )}
                     </div>
                   </div>

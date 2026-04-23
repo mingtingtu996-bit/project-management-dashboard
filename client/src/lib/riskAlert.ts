@@ -1,11 +1,11 @@
-/**
+﻿/**
  * 风险预警系统
  * 自动识别项目风险并触发预警
  */
 
 import type { Task } from './localDb'
 
-// 兼容旧数据：获取任务名称，支持 name 或 title 字段
+// 历史数据读取：任务名同时支持 name 和 title 字段
 const getTaskName = (task: Task & { name?: string }): string => {
   return task.title || task.name || '未知任务'
 }
@@ -16,7 +16,6 @@ export type RiskType =
   | 'dependency'    // 依赖关系风险
   | 'resource'      // 资源风险
   | 'progress'      // 进度风险
-  | 'critical_path' // 关键路径风险
   | 'milestone'     // 里程碑风险（P1-05新增）
 
 // 风险严重程度
@@ -31,7 +30,7 @@ export interface RiskAlert {
   description: string
   relatedTaskId?: string
   relatedTaskName?: string
-  taskId?: string        // relatedTaskId 的别名，兼容旧代码
+  taskId?: string        // relatedTaskId 的历史别名
   task?: unknown             // 关联任务对象
   建议?: string
   createdAt?: Date
@@ -65,6 +64,7 @@ function calculateDuration(startDate?: string, endDate?: string): number {
 
 /**
  * 检查截止日期风险
+ * @deprecated
  */
 function checkDeadlineRisks(tasks: Task[], config: RiskAlertConfig): RiskAlert[] {
   const alerts: RiskAlert[] = []
@@ -114,6 +114,7 @@ function checkDeadlineRisks(tasks: Task[], config: RiskAlertConfig): RiskAlert[]
 
 /**
  * 检查进度风险
+ * @deprecated
  */
 function checkProgressRisks(tasks: Task[], config: RiskAlertConfig): RiskAlert[] {
   const alerts: RiskAlert[] = []
@@ -157,6 +158,7 @@ function checkProgressRisks(tasks: Task[], config: RiskAlertConfig): RiskAlert[]
 
 /**
  * 检查依赖关系风险
+ * @deprecated
  */
 function checkDependencyRisks(tasks: Task[], config: RiskAlertConfig): RiskAlert[] {
   if (!config.dependencyCheckEnabled) return []
@@ -199,54 +201,36 @@ function checkDependencyRisks(tasks: Task[], config: RiskAlertConfig): RiskAlert
 }
 
 /**
- * 检查关键路径风险
- */
-function checkCriticalPathRisks(tasks: Task[], criticalTaskIds: string[]): RiskAlert[] {
-  const alerts: RiskAlert[] = []
-  const criticalSet = new Set(criticalTaskIds)
-
-  tasks.forEach(task => {
-    if (!criticalSet.has(task.id)) return
-    if (!task.end_date || task.status === 'completed') return
-
-    const endDate = new Date(task.end_date)
-    const today = new Date()
-    const daysUntilDeadline = Math.ceil((endDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
-
-    // 关键路径上的任务如果有风险，提高严重程度
-    if (daysUntilDeadline > 0 && daysUntilDeadline <= 3) {
-      alerts.push({
-        id: `critical-path-risk-${task.id}`,
-        type: 'critical_path',
-        severity: daysUntilDeadline <= 1 ? 'critical' : 'high',
-        title: `关键路径风险: ${getTaskName(task)}`,
-        description: `该任务位于关键路径上，延期将影响项目整体工期`,
-        relatedTaskId: task.id,
-        relatedTaskName: getTaskName(task),
-        建议: '优先保障，关键路径任务不容有失'
-      })
-    }
-  })
-
-  return alerts
-}
-
-/**
  * 综合风险评估
+ * @param displayTaskIds 关键路径任务ID集合（来自 CriticalPathSnapshot.displayTaskIds）
+ *   传入后仅用于在返回的 alert 上附加 isCriticalPath 标志，供调用方决定如何展示，
+ *   不再在此处独立修改 severity 或 title，避免与后端快照判定不一致。
  */
 export function analyzeRisks(
   tasks: Task[],
-  criticalTaskIds: string[] = [],
-  config: Partial<RiskAlertConfig> = {}
+  config: Partial<RiskAlertConfig> = {},
+  displayTaskIds?: Set<string> | string[]
 ): RiskAlert[] {
   const finalConfig = { ...DEFAULT_CONFIG, ...config }
+  const criticalIds = displayTaskIds
+    ? new Set(Array.isArray(displayTaskIds) ? displayTaskIds : [...displayTaskIds])
+    : new Set<string>()
   const allAlerts: RiskAlert[] = []
 
   // 执行各项风险检查
   allAlerts.push(...checkDeadlineRisks(tasks, finalConfig))
   allAlerts.push(...checkProgressRisks(tasks, finalConfig))
   allAlerts.push(...checkDependencyRisks(tasks, finalConfig))
-  allAlerts.push(...checkCriticalPathRisks(tasks, criticalTaskIds))
+
+  // 只读标注：在 displayTaskIds 集合中的任务打标，不改变 severity 或 title
+  if (criticalIds.size > 0) {
+    for (const alert of allAlerts) {
+      const taskId = alert.relatedTaskId ?? alert.taskId
+      if (taskId && criticalIds.has(taskId)) {
+        ;(alert as RiskAlert & { isCriticalPath?: boolean }).isCriticalPath = true
+      }
+    }
+  }
 
   // 按严重程度排序
   const severityOrder: Record<RiskSeverity, number> = {
@@ -279,7 +263,6 @@ export function getRiskStatistics(alerts: RiskAlert[]): {
     dependency: 0,
     resource: 0,
     progress: 0,
-    critical_path: 0,
     milestone: 0,
   }
 
@@ -450,10 +433,9 @@ export function scanMilestoneWarnings(
  */
 export function analyzeAllWarnings(
   tasks: (Task & { is_milestone?: boolean; milestone_level?: number })[],
-  criticalTaskIds: string[] = [],
   config: Partial<RiskAlertConfig> = {}
 ): RiskAlert[] {
-  const taskAlerts = analyzeRisks(tasks, criticalTaskIds, config)
+  const taskAlerts = analyzeRisks(tasks, config)
   const milestoneAlerts = scanMilestoneWarnings(tasks)
   
   // 合并，去重（里程碑任务可能同时触发 deadline 和 milestone 两类预警）

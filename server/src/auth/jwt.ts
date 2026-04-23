@@ -4,8 +4,8 @@
 
 import jwt from 'jsonwebtoken';
 import type { Request } from 'express';
-import { JWT_CONFIG } from './config';
-import { JWTPayload, AuthUser } from './types';
+import { JWT_CONFIG } from './config.js';
+import { JWTPayload, AuthUser } from './types.js';
 
 /**
  * 生成JWT令牌
@@ -15,6 +15,7 @@ export function generateToken(user: AuthUser): string {
     userId: user.id,
     username: user.username,
     role: user.role,
+    globalRole: user.globalRole,
   };
 
   return jwt.sign(payload, JWT_CONFIG.secret, {

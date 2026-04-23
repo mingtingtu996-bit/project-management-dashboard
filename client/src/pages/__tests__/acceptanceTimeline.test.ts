@@ -13,12 +13,12 @@ function makePlan(overrides: Partial<AcceptancePlan>): AcceptancePlan {
     description: '',
     planned_date: '2026-04-01',
     actual_date: undefined,
-    status: 'pending',
-    depends_on: [],
-    depended_by: [],
-    phase: 'phase1',
+    status: 'draft',
+    phase_code: 'phase1',
     phase_order: 1,
-    position: { x: 0, y: 0 },
+    predecessor_plan_ids: [],
+    successor_plan_ids: [],
+    display_badges: [],
     responsible_user_id: undefined,
     documents: [],
     nodes: [],
@@ -33,9 +33,9 @@ function makePlan(overrides: Partial<AcceptancePlan>): AcceptancePlan {
 describe('acceptance timeline contract', () => {
   it('groups acceptance items by phase', () => {
     const groups = groupAcceptanceByPhase([
-      makePlan({ id: 'a', phase: 'phase1', phase_order: 1 }),
-      makePlan({ id: 'b', phase: 'phase2', phase_order: 1 }),
-      makePlan({ id: 'c', phase: 'phase1', phase_order: 2 }),
+      makePlan({ id: 'a', phase_code: 'phase1', phase_order: 1 }),
+      makePlan({ id: 'b', phase_code: 'phase2', phase_order: 1 }),
+      makePlan({ id: 'c', phase_code: 'phase1', phase_order: 2 }),
     ]);
 
     expect(groups.map(group => group.id)).toEqual(['phase1', 'phase2']);
@@ -46,7 +46,7 @@ describe('acceptance timeline contract', () => {
   it('derives dependencies from plan status', () => {
     const plans = [
       makePlan({ id: 'passed', status: 'passed' }),
-      makePlan({ id: 'pending', status: 'pending', depends_on: ['passed'] }),
+      makePlan({ id: 'pending', status: 'draft', predecessor_plan_ids: ['passed'] }),
     ];
 
     const deps = calculateDependencies(plans);
@@ -58,18 +58,18 @@ describe('acceptance timeline contract', () => {
 
   it('counts shared acceptance statuses consistently', () => {
     const stats = summarizeAcceptancePlans([
-      makePlan({ id: 'pending', status: 'pending' }),
-      makePlan({ id: 'in-progress', status: 'in_progress' }),
+      makePlan({ id: 'pending', status: 'draft' }),
+      makePlan({ id: 'in-progress', status: 'inspecting' }),
       makePlan({ id: 'passed', status: 'passed' }),
-      makePlan({ id: 'failed', status: 'failed' }),
-      makePlan({ id: 'needs-revision', status: 'needs_revision' }),
-      makePlan({ id: 'zh-needs-revision', status: '\u9700\u8865\u5145' as AcceptancePlan['status'] }),
+      makePlan({ id: 'failed', status: 'rectifying' }),
+      makePlan({ id: 'needs-revision', status: 'rectifying' }),
+      makePlan({ id: 'zh-needs-revision', status: '整改中' as AcceptancePlan['status'] }),
     ]);
 
     expect(stats).toEqual({
       total: 6,
       passed: 1,
-      inProgress: 2,
+      inProgress: 1,
       pending: 1,
       failed: 3,
       completionRate: 17,

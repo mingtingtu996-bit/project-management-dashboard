@@ -2,9 +2,175 @@
 // 已迁移至直接使用 Supabase SDK（不再依赖 executeSQL 包装层）
 
 import { supabase } from './dbService.js'
+import { hasChangeLog, writeLog } from './changeLogs.js'
 import type { Warning, Reminder, Notification } from '../types/db.js'
 import { calculateDueStatus } from './dueDateService.js'
 import { generateId } from '../utils/id.js'
+import {
+  collapseWarningRedundancy,
+  dedupeNotifications,
+  escalateObstacleSeverity,
+  normalizeNotificationPayload,
+  resolvePendingDelayWarningSeverity,
+} from './warningChainService.js'
+import { getProjectCriticalPathSnapshot } from './projectCriticalPathService.js'
+import {
+  acceptanceStatusLabel as getAcceptanceStatusLabel,
+  ACTIVE_ACCEPTANCE_STATUSES,
+  normalizeAcceptanceStatus,
+} from '../utils/acceptanceStatus.js'
+import {
+  acknowledgeWarningNotification,
+  syncAcceptanceExpiredIssues as syncAcceptanceExpiredIssuesOnChain,
+  autoEscalateRisksToIssues as autoEscalateRisksToIssuesOnChain,
+  autoEscalateWarnings as autoEscalateWarningsOnChain,
+  confirmWarningAsRisk as confirmWarningAsRiskOnChain,
+  ensureObstacleEscalatedIssue,
+  markObstacleEscalatedIssuePendingManualClose,
+  muteWarningNotification,
+  syncConditionExpiredIssues as syncConditionExpiredIssuesOnChain,
+  syncWarningNotifications,
+} from './upgradeChainService.js'
+import { scanPreMilestoneWarnings as scanPreMilestoneWarningsFromService } from './preMilestoneWarningService.js'
+import { logger } from '../middleware/logger.js'
+import { dataQualityService } from './dataQualityService.js'
+import { isProjectActiveStatus } from '../utils/projectStatus.js'
+
+export interface WarningEvaluationEvent {
+  type:
+    | 'obstacle'
+    | 'delay_request'
+    | 'delay_request_submitted'
+    | 'delay_approved'
+    | 'task'
+  projectId?: string
+  taskId?: string
+  obstacle?: {
+    id: string
+    project_id?: string | null
+    task_id?: string | null
+    title?: string | null
+    description?: string | null
+    severity?: 'low' | 'medium' | 'high' | 'warning' | 'critical'
+    status?: string | null
+    expected_resolution_date?: string | null
+    severity_manually_overridden?: boolean | number | string | null
+    severity_escalated_at?: string | null
+  }
+  delayRequest?: {
+    id: string
+    task_id: string
+    status: string
+    project_id?: string | null
+  }
+  task?: {
+    id: string
+    status?: string | null
+    progress?: number | null
+  }
+}
+
+function normalizeObstacleSeverityForEvaluation(value?: string | null): 'warning' | 'critical' {
+  const normalized = String(value ?? '').trim().toLowerCase()
+  if (['critical', '严重'].includes(normalized)) return 'critical'
+  return 'warning'
+}
+
+function buildObstacleSeverityEscalationReason(obstacle: WarningEvaluationEvent['obstacle'], storedSeverity: string) {
+  return [
+    'overdue_auto_escalation',
+    String(obstacle?.expected_resolution_date ?? '').trim(),
+    storedSeverity,
+  ].join('|')
+}
+
+function normalizeAcceptanceWarningStatus(value?: string | null) {
+  return normalizeAcceptanceStatus(value)
+}
+
+function acceptanceWarningStatusLabel(value?: string | null) {
+  return getAcceptanceStatusLabel(value)
+}
+
+function resolveDelayRequestEvaluationKind(
+  event: WarningEvaluationEvent,
+): 'submitted' | 'approved_assessment' | 'generic' {
+  if (event.type === 'delay_request_submitted') return 'submitted'
+  if (event.type === 'delay_approved') {
+    return 'approved_assessment'
+  }
+
+  if (event.type === 'delay_request') {
+    if (event.delayRequest?.status === 'pending') return 'submitted'
+    if (event.delayRequest?.status === 'approved') return 'approved_assessment'
+  }
+
+  return 'generic'
+}
+
+const ACCEPTANCE_WARNING_QUERY_STATUSES = [
+  ...ACTIVE_ACCEPTANCE_STATUSES,
+]
+
+function getAcceptanceWarningName(row: Record<string, unknown>) {
+  return String(row.acceptance_name ?? row.plan_name ?? row.type_name ?? row.id ?? '未命名验收').trim() || '未命名验收'
+}
+
+function getAcceptanceWarningType(row: Record<string, unknown>) {
+  return String(row.type_name ?? row.acceptance_type ?? '验收').trim() || '验收'
+}
+
+type ConditionWarningRow = {
+  id: string
+  task_id?: string | null
+  name?: string | null
+  target_date?: string | null
+  tasks?: {
+    project_id?: string | null
+    title?: string | null
+  } | null
+}
+
+type ObstacleWarningRow = {
+  id: string
+  task_id?: string | null
+  obstacle_type?: string | null
+  description?: string | null
+  severity?: string | null
+  status?: string | null
+  expected_resolution_date?: string | null
+  created_at?: string | null
+  tasks?: {
+    project_id?: string | null
+    title?: string | null
+  } | null
+}
+
+type DelayWarningTaskRow = {
+  id: string
+  project_id?: string | null
+  title?: string | null
+  delay_count?: number | null
+  milestones?: { name?: string | null } | Array<{ name?: string | null }> | null
+}
+
+type PendingDelayTaskRow = {
+  task_id?: string | null
+}
+
+function resolveMilestoneName(
+  milestones: DelayWarningTaskRow['milestones'],
+): string | null {
+  if (Array.isArray(milestones)) {
+    return String(milestones[0]?.name ?? '').trim() || null
+  }
+
+  if (milestones && typeof milestones === 'object') {
+    return String(milestones.name ?? '').trim() || null
+  }
+
+  return null
+}
 
 export class WarningService {
   /**
@@ -26,7 +192,7 @@ export class WarningService {
     }
 
     const { data: conditionsRaw } = await condQuery
-    const conditions = (conditionsRaw || []).map((c: any) => ({
+    const conditions = ((conditionsRaw || []) as ConditionWarningRow[]).map((c) => ({
       id: c.id,
       task_id: c.task_id,
       condition_name: c.name,
@@ -44,24 +210,172 @@ export class WarningService {
         todayLabel: '今天到期',
       })
 
-      if (dueResult.due_status === 'normal') continue
+      if (dueResult.due_status === 'normal' || dueResult.due_status === 'overdue') continue
 
-      const isUrgent = dueResult.due_status === 'urgent' || dueResult.due_status === 'overdue'
+      const isUrgent = dueResult.due_status === 'urgent'
 
       warnings.push({
         id: generateId(),
         project_id: condition.project_id,
         task_id: condition.task_id,
-        warning_type: 'condition_expired',
+        warning_type: 'condition_due',
         warning_level: isUrgent ? 'critical' : 'warning',
-        title: isUrgent ? '条件即将到期（紧急）' : '条件即将到期',
-        description: `任务"${condition.task_title}"的条件"${condition.condition_name}"${dueResult.due_label}${isUrgent ? '，请立即处理' : ''}`,
+        title: isUrgent ? '开工窗口即将关闭（紧急）' : '开工窗口即将关闭',
+        description: `任务"${condition.task_title}"的开工窗口${dueResult.due_label}，当前条件"${condition.condition_name}"仍未满足${isUrgent ? '，请立即处理' : ''}`,
         is_acknowledged: false,
         created_at: new Date().toISOString(),
       })
     }
 
     return warnings
+  }
+
+  async scanCriticalPathStagnationWarnings(projectId?: string): Promise<Warning[]> {
+    const projectIds = projectId
+      ? [projectId]
+      : (
+        ((await supabase.from('projects').select('id, status')).data ?? []) as Array<{ id: string; status?: string | null }>
+      )
+        .filter((row) => isProjectActiveStatus(row.status))
+        .map((row) => String(row.id))
+
+    if (projectIds.length === 0) return []
+
+    const warnings: Warning[] = []
+
+    for (const currentProjectId of projectIds) {
+      const criticalPathSnapshot = await getProjectCriticalPathSnapshot(currentProjectId)
+      const criticalTaskIds = criticalPathSnapshot.displayTaskIds
+      if (!criticalTaskIds.length) continue
+
+      const { data: tasks, error: taskError } = await supabase
+        .from('tasks')
+        .select('id, project_id, title, progress, status')
+        .eq('project_id', currentProjectId)
+        .in('id', criticalTaskIds)
+        .neq('status', 'completed')
+        .neq('status', '已完成')
+
+      if (taskError) throw new Error(taskError.message)
+
+      const criticalTasks = (tasks || []) as Array<{
+        id: string
+        project_id: string
+        title: string
+        progress?: number | null
+        status?: string | null
+      }>
+      if (!criticalTasks.length) continue
+
+      const taskIds = criticalTasks.map((task) => task.id)
+      const { data: snapshots, error: snapshotError } = await supabase
+        .from('task_progress_snapshots')
+        .select('task_id, progress, snapshot_date, created_at')
+        .in('task_id', taskIds)
+        .order('snapshot_date', { ascending: false })
+
+      if (snapshotError) throw new Error(snapshotError.message)
+
+      const threshold = Date.now() - 7 * 24 * 60 * 60 * 1000
+      const baselineProgress = new Map<string, number>()
+
+      for (const snapshot of (snapshots || []) as Array<Record<string, unknown>>) {
+        const taskId = String(snapshot.task_id ?? '')
+        if (!taskId || baselineProgress.has(taskId)) continue
+        const snapshotAt = new Date(String(snapshot.snapshot_date ?? snapshot.created_at ?? '')).getTime()
+        if (!Number.isFinite(snapshotAt) || snapshotAt > threshold) continue
+        baselineProgress.set(taskId, Number(snapshot.progress ?? 0))
+      }
+
+      warnings.push(
+        ...criticalTasks
+          .filter((task) => baselineProgress.has(task.id) && Number(task.progress ?? 0) === baselineProgress.get(task.id))
+          .map((task) => ({
+            id: generateId(),
+            project_id: task.project_id,
+            task_id: task.id,
+            warning_type: 'critical_path_stagnation',
+            warning_level: 'critical' as const,
+            title: '关键路径任务连续 7 天无进度变化',
+            description: `关键路径任务"${task.title}"近 7 天进度没有变化，请立即处理`,
+            is_acknowledged: false,
+            created_at: new Date().toISOString(),
+          })),
+      )
+    }
+
+    return warnings
+  }
+
+  async scanCriticalPathDelayWarnings(projectId?: string): Promise<Warning[]> {
+    const projectIds = projectId
+      ? [projectId]
+      : (
+        ((await supabase.from('projects').select('id, status')).data ?? []) as Array<{ id: string; status?: string | null }>
+      )
+        .filter((row) => isProjectActiveStatus(row.status))
+        .map((row) => String(row.id))
+
+    if (projectIds.length === 0) return []
+
+    const warnings: Warning[] = []
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+
+    for (const currentProjectId of projectIds) {
+      const criticalPathSnapshot = await getProjectCriticalPathSnapshot(currentProjectId)
+      const criticalTaskIds = criticalPathSnapshot.displayTaskIds
+      if (!criticalTaskIds.length) continue
+
+      const { data: tasks, error } = await supabase
+        .from('tasks')
+        .select('id, project_id, title, planned_end_date, status')
+        .eq('project_id', currentProjectId)
+        .in('id', criticalTaskIds)
+        .neq('status', 'completed')
+        .neq('status', '已完成')
+        .not('planned_end_date', 'is', null)
+
+      if (error) throw new Error(error.message)
+
+      for (const task of (tasks || []) as Array<{ id: string; project_id: string; title: string; planned_end_date: string; status?: string | null }>) {
+        const endDate = new Date(task.planned_end_date)
+        endDate.setHours(0, 0, 0, 0)
+        const delayDays = Math.round((today.getTime() - endDate.getTime()) / 86400000)
+        if (delayDays <= 0) continue
+
+        let level: 'info' | 'warning' | 'critical'
+        let title: string
+        if (delayDays >= 20) {
+          level = 'critical'
+          title = `关键路径任务已延期 ${delayDays} 天（严重）`
+        } else if (delayDays >= 10) {
+          level = 'warning'
+          title = `关键路径任务已延期 ${delayDays} 天`
+        } else {
+          level = 'info'
+          title = `关键路径任务已延期 ${delayDays} 天（关注）`
+        }
+
+        warnings.push({
+          id: generateId(),
+          project_id: task.project_id,
+          task_id: task.id,
+          warning_type: 'critical_path_delay',
+          warning_level: level,
+          title,
+          description: `关键路径任务"${task.title}"已超出计划完成日期 ${delayDays} 天`,
+          is_acknowledged: false,
+          created_at: new Date().toISOString(),
+        })
+      }
+    }
+
+    return warnings
+  }
+
+  async scanProgressTrendWarnings(projectId?: string): Promise<Warning[]> {
+    return await dataQualityService.scanTrendWarnings(projectId)
   }
 
   /**
@@ -72,7 +386,7 @@ export class WarningService {
     // status 不等于 '已解决'：Supabase 用 .neq()
     let obsQuery = supabase
       .from('task_obstacles')
-      .select('id, task_id, obstacle_type, description, severity, status, created_at, tasks!inner(project_id, title)')
+      .select('id, task_id, obstacle_type, description, severity, status, expected_resolution_date, created_at, tasks!inner(project_id, title)')
       .neq('status', '已解决')
 
     if (projectId) {
@@ -80,13 +394,14 @@ export class WarningService {
     }
 
     const { data: obstaclesRaw } = await obsQuery
-    const obstacles = (obstaclesRaw || []).map((o: any) => ({
+    const obstacles = ((obstaclesRaw || []) as ObstacleWarningRow[]).map((o) => ({
       id: o.id,
       task_id: o.task_id,
       obstacle_type: o.obstacle_type,
       obstacle_desc: o.description,
       severity: o.severity,
       status: o.status,
+      expected_resolution_date: o.expected_resolution_date ?? null,
       created_at: o.created_at,
       project_id: o.tasks?.project_id || '',
       task_title: o.tasks?.title || '',
@@ -98,6 +413,13 @@ export class WarningService {
     for (const obstacle of obstacles) {
       const createdAt = new Date(obstacle.created_at)
       const daysElapsed = Math.ceil((now.getTime() - createdAt.getTime()) / (1000 * 60 * 60 * 24))
+      const escalation = escalateObstacleSeverity({
+        severity: normalizeObstacleSeverityForEvaluation(obstacle.severity),
+        status: obstacle.status,
+        expected_resolution_date: obstacle.expected_resolution_date,
+        now: now.toISOString(),
+      })
+      const warningLevel = escalation.severity === 'critical' ? 'critical' : 'warning'
 
       // 3天预警
       if (daysElapsed >= 3 && daysElapsed < 7) {
@@ -106,7 +428,7 @@ export class WarningService {
           project_id: obstacle.project_id,
           task_id: obstacle.task_id,
           warning_type: 'obstacle_timeout',
-          warning_level: 'warning',
+          warning_level: warningLevel,
           title: '阻碍已持续3天',
           description: `任务"${obstacle.task_title}"的阻碍"${obstacle.obstacle_desc}"已持续${daysElapsed}天，请尽快处理`,
           is_acknowledged: false,
@@ -138,28 +460,59 @@ export class WarningService {
    * 预警规则：验收到期前7天/3天/1天提醒
    */
   async scanAcceptanceWarnings(projectId?: string): Promise<Warning[]> {
-    const now = new Date().toISOString()
-
-    // status IN ('待验收', '验收中')：Supabase 用 .in()
     let acQuery = supabase
       .from('acceptance_plans')
-      .select('id, project_id, task_id, plan_name, acceptance_type, planned_date, status')
-      .in('status', ['待验收', '验收中'])
-      .gt('planned_date', now)
+      .select('id, project_id, task_id, acceptance_name, acceptance_type, type_name, planned_date, status')
+      .in('status', ACCEPTANCE_WARNING_QUERY_STATUSES)
 
     if (projectId) {
       acQuery = acQuery.eq('project_id', projectId)
     }
 
     const { data: acceptances } = await acQuery
-
     const warnings: Warning[] = []
 
     for (const acceptance of (acceptances || [])) {
-      const dueResult = calculateDueStatus((acceptance as any).planned_date, {
+      const row = acceptance as Record<string, unknown>
+      const plannedDate = String(row.planned_date ?? '').trim()
+      const normalizedStatus = normalizeAcceptanceWarningStatus(String(row.status ?? ''))
+      const acceptanceName = getAcceptanceWarningName(row)
+      const acceptanceType = getAcceptanceWarningType(row)
+
+      if (normalizedStatus === 'rectifying') {
+        const rectificationDue = plannedDate
+          ? calculateDueStatus(plannedDate, {
+            urgentDays: 3,
+            approachingDays: 7,
+            overdueLabel: '已逾期',
+            dueLabel: '天后到期',
+            todayLabel: '今天到期',
+          })
+          : null
+
+        const overdue = rectificationDue?.due_status === 'overdue'
+        warnings.push({
+          id: generateId(),
+          project_id: String(row.project_id ?? ''),
+          task_id: row.task_id ? String(row.task_id) : undefined,
+          warning_type: 'acceptance_expired',
+          warning_level: overdue ? 'critical' : 'warning',
+          title: overdue ? '验收整改已逾期' : '验收整改待处理',
+          description: plannedDate
+            ? `${acceptanceType}“${acceptanceName}”当前为${acceptanceWarningStatusLabel(String(row.status ?? ''))}，${rectificationDue?.due_label || '请尽快处理'}`
+            : `${acceptanceType}“${acceptanceName}”当前为${acceptanceWarningStatusLabel(String(row.status ?? ''))}，请尽快补正`,
+          is_acknowledged: false,
+          created_at: new Date().toISOString(),
+        })
+        continue
+      }
+
+      if (!plannedDate) continue
+
+      const dueResult = calculateDueStatus(plannedDate, {
         urgentDays: 3,
         approachingDays: 7,
-        overdueLabel: '已延期',
+        overdueLabel: '已逾期',
         dueLabel: '天后到期',
         todayLabel: '今天到期',
       })
@@ -167,22 +520,21 @@ export class WarningService {
       if (dueResult.due_status === 'normal') continue
 
       const daysUntil = dueResult.days_until_due ?? 0
-      let warningLevel: 'info' | 'warning' | 'critical' = 'info'
-
-      if (dueResult.due_status === 'overdue' || dueResult.due_status === 'urgent') {
-        warningLevel = daysUntil <= 1 ? 'critical' : 'warning'
-      } else if (dueResult.due_status === 'approaching') {
-        warningLevel = 'info'
-      }
+      const warningLevel: 'info' | 'warning' | 'critical' =
+        dueResult.due_status === 'approaching'
+          ? 'info'
+          : dueResult.due_status === 'overdue' || daysUntil <= 1
+            ? 'critical'
+            : 'warning'
 
       warnings.push({
         id: generateId(),
-        project_id: (acceptance as any).project_id,
-        task_id: (acceptance as any).task_id,
+        project_id: String(row.project_id ?? ''),
+        task_id: row.task_id ? String(row.task_id) : undefined,
         warning_type: 'acceptance_expired',
         warning_level: warningLevel,
-        title: '验收即将到期',
-        description: `${(acceptance as any).acceptance_type}验收"${(acceptance as any).plan_name}"${dueResult.due_label}`,
+        title: dueResult.due_status === 'overdue' ? '验收已逾期' : '验收即将到期',
+        description: `${acceptanceType}“${acceptanceName}”当前为${acceptanceWarningStatusLabel(String(row.status ?? ''))}，${dueResult.due_label}`,
         is_acknowledged: false,
         created_at: new Date().toISOString(),
       })
@@ -212,15 +564,31 @@ export class WarningService {
     }
 
     const { data: tasks } = await taskQuery
+    const taskRows = (tasks || []) as DelayWarningTaskRow[]
+    const taskIds = taskRows.map((task) => task.id)
+    let pendingTaskIds = new Set<string>()
+
+    if (taskIds.length > 0) {
+      const { data: pendingRows } = await supabase
+        .from('delay_requests')
+        .select('task_id')
+        .in('task_id', taskIds)
+        .eq('status', 'pending')
+
+      pendingTaskIds = new Set(
+        ((pendingRows || []) as PendingDelayTaskRow[])
+          .map((row) => String(row.task_id ?? '').trim())
+          .filter(Boolean),
+      )
+    }
 
     const warnings: Warning[] = []
     const now = new Date()
 
-    for (const task of (tasks || [])) {
-      const t = task as any
-      const delayCount = t.delay_count || 0
+    for (const task of taskRows) {
+      const delayCount = Number(task.delay_count ?? 0)
 
-      let warningLevel: 'warning' | 'critical' = 'warning'
+      let warningLevel: 'info' | 'warning' | 'critical' = 'warning'
       let title = '延期次数较多'
 
       if (delayCount >= 5) {
@@ -231,17 +599,29 @@ export class WarningService {
         title = '连续延期 - 需关注'
       }
 
-      let description = `任务"${t.title}"已延期${delayCount}次`
-      const milestoneName = t.milestones?.name
+      if (pendingTaskIds.has(task.id)) {
+        const pendingSeverity = resolvePendingDelayWarningSeverity({
+          warning_level: warningLevel,
+          has_pending_request: true,
+        })
+        warningLevel = pendingSeverity.severity
+        title = pendingSeverity.note || '延期审批中'
+      }
+
+      let description = `任务"${task.title}"已延期${delayCount}次`
+      const milestoneName = resolveMilestoneName(task.milestones)
       if (milestoneName) {
         description += `，属于里程碑"${milestoneName}"`
+      }
+      if (pendingTaskIds.has(task.id)) {
+        description += '，延期审批中'
       }
       description += '，建议尽快调整计划或采取措施'
 
       warnings.push({
         id: generateId(),
-        project_id: t.project_id || '',
-        task_id: t.id,
+        project_id: task.project_id || '',
+        task_id: task.id,
         warning_type: 'delay_exceeded',
         warning_level: warningLevel,
         title,
@@ -252,6 +632,10 @@ export class WarningService {
     }
 
     return warnings
+  }
+
+  async scanPreMilestoneWarnings(projectId?: string): Promise<Warning[]> {
+    return scanPreMilestoneWarningsFromService(projectId)
   }
 
   /**
@@ -267,7 +651,7 @@ export class WarningService {
 
     // P0-1: 条件到期提醒（1天/3天弹窗）
     for (const warning of conditionWarnings) {
-      if (warning.warning_type === 'condition_expired') {
+      if (warning.warning_type === 'condition_due') {
         const daysMatch = warning.description.match(/将于(\d+)天/)
         const days = daysMatch ? parseInt(daysMatch[1]) : 0
         reminders.push({
@@ -337,46 +721,221 @@ export class WarningService {
    * 生成通知
    */
   async generateNotifications(projectId?: string): Promise<Notification[]> {
-    const warnings = [
-      ...await this.scanConditionWarnings(projectId),
-      ...await this.scanObstacleWarnings(projectId),
-      ...await this.scanAcceptanceWarnings(projectId),
-      ...await this.scanDelayExceededWarnings(projectId),
-    ]
+    const warnings = await this.scanAll(projectId)
 
-    const notifications: Notification[] = []
-    const now = new Date()
+    return dedupeNotifications(
+      warnings.map((warning) =>
+        normalizeNotificationPayload({
+          ...warning,
+          category: warning.warning_type,
+          source_entity_id: warning.task_id,
+        }),
+      ),
+    ) as Notification[]
+  }
 
-    for (const warning of warnings) {
-      let type = 'system'
+  async scanAll(projectId?: string): Promise<Warning[]> {
+    const [conditionWarnings, obstacleWarnings, acceptanceWarnings, delayExceededWarnings, preMilestoneWarnings, criticalPathStagnationWarnings, criticalPathDelayWarnings, progressTrendWarnings] = await Promise.all([
+      this.scanConditionWarnings(projectId),
+      this.scanObstacleWarnings(projectId),
+      this.scanAcceptanceWarnings(projectId),
+      this.scanDelayExceededWarnings(projectId),
+      this.scanPreMilestoneWarnings(projectId),
+      this.scanCriticalPathStagnationWarnings(projectId),
+      this.scanCriticalPathDelayWarnings(projectId),
+      this.scanProgressTrendWarnings(projectId),
+    ])
 
-      switch (warning.warning_type) {
-        case 'condition_expired':
-          type = 'condition_reminder'
-          break
-        case 'obstacle_timeout':
-          type = warning.warning_level === 'critical' ? 'obstacle_7day' : 'obstacle_3day'
-          break
-        case 'acceptance_expired':
-          type = 'acceptance_approaching'
-          break
+    return collapseWarningRedundancy([
+      ...conditionWarnings,
+      ...obstacleWarnings,
+      ...acceptanceWarnings,
+      ...delayExceededWarnings,
+      ...preMilestoneWarnings,
+      ...criticalPathStagnationWarnings,
+      ...criticalPathDelayWarnings,
+      ...progressTrendWarnings,
+    ])
+  }
+
+  async syncActiveWarnings(projectId?: string): Promise<Warning[]> {
+    const warnings = await this.scanAll(projectId)
+    return await syncWarningNotifications(warnings, projectId)
+  }
+
+  async acknowledgeWarning(id: string, actorId?: string) {
+    return acknowledgeWarningNotification(id, actorId)
+  }
+
+  async muteWarning(id: string, hours = 24, actorId?: string) {
+    return muteWarningNotification(id, hours, actorId)
+  }
+
+  async confirmWarningAsRisk(id: string, actorId?: string) {
+    return confirmWarningAsRiskOnChain(id, actorId)
+  }
+
+  async syncConditionExpiredIssues(projectId?: string) {
+    return await syncConditionExpiredIssuesOnChain(projectId)
+  }
+
+  async syncAcceptanceExpiredIssues(projectId?: string) {
+    return await syncAcceptanceExpiredIssuesOnChain(projectId)
+  }
+
+  async autoEscalateWarnings(projectId?: string) {
+    return await autoEscalateWarningsOnChain(projectId)
+  }
+
+  async autoEscalateRisksToIssues(projectId?: string) {
+    return await autoEscalateRisksToIssuesOnChain(projectId)
+  }
+
+  async evaluate(event: WarningEvaluationEvent): Promise<{
+    severity?: 'info' | 'warning' | 'critical'
+    note?: string | null
+    escalated?: boolean
+    resolved?: boolean
+  }> {
+    if (event.type === 'obstacle' && event.obstacle) {
+      const obstacle = event.obstacle
+      const result = escalateObstacleSeverity({
+        severity: normalizeObstacleSeverityForEvaluation(obstacle.severity),
+        status: obstacle.status,
+        expected_resolution_date: obstacle.expected_resolution_date,
+        now: new Date().toISOString(),
+      })
+
+      if (result.escalated && obstacle.id) {
+        if (Boolean(obstacle.severity_manually_overridden)) {
+          return {
+            severity: result.severity === 'critical' ? 'critical' : 'warning',
+            escalated: false,
+          }
+        }
+
+        const nextSeverity = result.severity
+        const storedSeverity = nextSeverity === 'critical' ? '严重' : obstacle.severity ?? '中'
+        const escalationReason = buildObstacleSeverityEscalationReason(obstacle, storedSeverity)
+        const escalationTimestamp = new Date().toISOString()
+        const hasEscalationTimestamp = Boolean(obstacle.severity_escalated_at)
+        const hasEscalationMarker = hasEscalationTimestamp || await hasChangeLog({
+          entity_type: 'task_obstacle',
+          entity_id: obstacle.id,
+          field_name: 'severity_auto_escalation',
+          new_value: storedSeverity,
+          change_source: 'system_auto',
+          change_reason: escalationReason,
+        })
+
+        if (String(obstacle.severity ?? '').trim() !== storedSeverity) {
+          const { error } = await supabase
+            .from('task_obstacles')
+            .update({
+              severity: storedSeverity,
+              severity_escalated_at: obstacle.severity_escalated_at ?? escalationTimestamp,
+              severity_manually_overridden: false,
+              updated_at: escalationTimestamp,
+            })
+            .eq('id', obstacle.id)
+
+          if (error) {
+            throw new Error(error.message)
+          }
+
+          await writeLog({
+            entity_type: 'task_obstacle',
+            entity_id: obstacle.id,
+            field_name: 'severity',
+            old_value: obstacle.severity ?? null,
+            new_value: storedSeverity,
+            change_source: 'system_auto',
+            change_reason: escalationReason,
+          })
+        } else if (!obstacle.severity_escalated_at) {
+          const { error } = await supabase
+            .from('task_obstacles')
+            .update({
+              severity_escalated_at: escalationTimestamp,
+              severity_manually_overridden: false,
+              updated_at: escalationTimestamp,
+            })
+            .eq('id', obstacle.id)
+
+          if (error) {
+            throw new Error(error.message)
+          }
+        }
+
+        if (!hasEscalationMarker) {
+          await writeLog({
+            entity_type: 'task_obstacle',
+            entity_id: obstacle.id,
+            field_name: 'severity_auto_escalation',
+            old_value: null,
+            new_value: storedSeverity,
+            change_source: 'system_auto',
+            change_reason: escalationReason,
+          })
+        }
+
+        await ensureObstacleEscalatedIssue({
+          id: obstacle.id,
+          project_id: obstacle.project_id,
+          task_id: obstacle.task_id,
+          severity: storedSeverity,
+          status: obstacle.status,
+          description: obstacle.description ?? null,
+        })
       }
 
-      notifications.push({
-        id: generateId(),
-        project_id: warning.project_id,
-        type,
-        severity: warning.warning_level,
-        title: warning.title,
-        content: warning.description,
-        is_read: false,
-        is_broadcast: warning.warning_level === 'critical',
-        source_entity_type: 'task',
-        source_entity_id: warning.task_id,
-        created_at: now.toISOString(),
-      })
+      // GAP-10.2g-01: 阻碍解决后，触发关联 obstacle_escalated issue 的来源解除联动
+      const resolvedStatuses = ['已解决', 'resolved']
+      if (obstacle.id && resolvedStatuses.includes(String(obstacle.status ?? '').toLowerCase())) {
+        try {
+          await markObstacleEscalatedIssuePendingManualClose(obstacle.id)
+        } catch (linkErr) {
+          // 联动失败不阻断主链，仅记录
+          console.warn('[warningService] obstacle->issue 来源解除联动失败', linkErr)
+        }
+      }
+
+      return {
+        severity: result.severity === 'critical' ? 'critical' : 'warning',
+        escalated: result.escalated,
+      }
     }
 
-    return notifications
+    if (
+      ['delay_request', 'delay_request_submitted', 'delay_approved'].includes(event.type)
+      && event.delayRequest
+    ) {
+      const evaluationKind = resolveDelayRequestEvaluationKind(event)
+      if (evaluationKind === 'approved_assessment') {
+        return {
+          severity: 'warning',
+          note: '延期审批通过，已进入后续评估链',
+          escalated: false,
+        }
+      }
+
+      const pending = event.delayRequest.status === 'pending'
+      const downgraded = resolvePendingDelayWarningSeverity({
+        warning_level: 'warning',
+        has_pending_request: pending,
+      })
+
+      return {
+        severity: downgraded.severity,
+        note: downgraded.note,
+        escalated: false,
+      }
+    }
+
+    if (event.type === 'task' && ['completed', '已完成'].includes(String(event.task?.status ?? ''))) {
+      return { resolved: true }
+    }
+
+    return {}
   }
 }

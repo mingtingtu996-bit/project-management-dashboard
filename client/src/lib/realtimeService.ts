@@ -19,8 +19,8 @@ export interface OnlineMember {
 export interface RealtimeEvent {
   type: 'INSERT' | 'UPDATE' | 'DELETE'
   table: string
-  record: any
-  old_record?: any
+  record: unknown
+  old_record?: unknown
   timestamp: string
 }
 
@@ -41,6 +41,12 @@ class RealtimeService {
 
   // 初始化
   initialize() {
+    const configuredMode = (import.meta.env.VITE_STORAGE_MODE || '').trim().toLowerCase()
+    if (configuredMode === 'backend') {
+      if (import.meta.env.DEV) console.log('backend mode enabled, skip direct Supabase realtime bootstrap')
+      return
+    }
+
     const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
     const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY
 
@@ -174,14 +180,22 @@ class RealtimeService {
         const members: OnlineMember[] = []
 
         for (const id in state) {
-          const presences = state[id] as any[]
+          const presences = Array.isArray(state[id]) ? state[id] : []
           if (presences.length > 0) {
             const presence = presences[0]
+            if (!presence || typeof presence !== 'object') continue
+            const record = presence as Record<string, unknown>
             members.push({
               id,
-              display_name: presence.display_name || '未知用户',
-              avatar_url: presence.avatar_url,
-              last_active: presence.last_active || new Date().toISOString(),
+              display_name:
+                typeof record.display_name === 'string' && record.display_name.trim()
+                  ? record.display_name
+                  : '未知用户',
+              avatar_url: typeof record.avatar_url === 'string' ? record.avatar_url : undefined,
+              last_active:
+                typeof record.last_active === 'string' && record.last_active.trim()
+                  ? record.last_active
+                  : new Date().toISOString(),
               is_online: true
             })
           }

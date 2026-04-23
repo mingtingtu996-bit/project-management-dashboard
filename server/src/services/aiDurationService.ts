@@ -3,6 +3,22 @@
 import { executeSQL, executeSQLOne } from './dbService.js'
 import type { AIDurationEstimate, Task } from '../types/db.js'
 
+function isMissingAIDurationEstimatesTable(error: unknown) {
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === 'string'
+        ? error
+        : ''
+
+  if (!message) return false
+
+  return message.includes('ai_duration_estimates') && (
+    /could not find the table/i.test(message) ||
+    /does not exist/i.test(message)
+  )
+}
+
 export interface DurationEstimateInput {
   task_id: string
   task_type?: string
@@ -121,8 +137,14 @@ export class AIDurationService {
       updated_at: new Date().toISOString(),
     }
 
-    // 保存估算结果到数据库
-    await this.saveEstimate(estimate)
+    // live 库若尚未补齐 AI 估算历史表，不阻断前台拿到估算结果
+    try {
+      await this.saveEstimate(estimate)
+    } catch (error) {
+      if (!isMissingAIDurationEstimatesTable(error)) {
+        throw error
+      }
+    }
 
     return estimate
   }
@@ -163,12 +185,19 @@ export class AIDurationService {
    * 获取工期置信度
    */
   async getConfidence(taskId: string): Promise<AIDurationEstimate | null> {
-    const data = await executeSQLOne<AIDurationEstimate>(
-      'SELECT * FROM ai_duration_estimates WHERE task_id = ? ORDER BY created_at DESC LIMIT 1',
-      [taskId]
-    )
+    try {
+      const data = await executeSQLOne<AIDurationEstimate>(
+        'SELECT * FROM ai_duration_estimates WHERE task_id = ? ORDER BY created_at DESC LIMIT 1',
+        [taskId]
+      )
 
-    return data ?? null
+      return data ?? null
+    } catch (error) {
+      if (isMissingAIDurationEstimatesTable(error)) {
+        return null
+      }
+      throw error
+    }
   }
 
   /**

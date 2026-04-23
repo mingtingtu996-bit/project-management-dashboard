@@ -6,15 +6,21 @@
     "dev": "tsx -r dotenv/config src/index.ts",
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "guard:execute-sql": "vitest run src/__tests__/executeSqlGuard.test.ts",
     "test": "vitest --run",
     "test:watch": "vitest",
-    "health:snapshot": "tsx -r dotenv/config run-health-history-snapshot.ts"
+    "health:snapshot": "tsx -r dotenv/config run-health-history-snapshot.ts",
+    "migrate:pending": "tsx -r dotenv/config src/scripts/run-pending-migrations.ts",
+    "migrate:plan": "tsx -r dotenv/config src/scripts/run-pending-migrations.ts --plan",
+    "migrate:adopt-baseline": "tsx -r dotenv/config src/scripts/adopt-migration-baseline.ts --through 084",
+    "migrate:adopt-baseline:plan": "tsx -r dotenv/config src/scripts/adopt-migration-baseline.ts --through 084 --plan"
   },
-
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",
     "@types/pg": "^8.20.0",
     "bcryptjs": "^2.4.3",
+    "compression": "^1.8.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
@@ -24,12 +30,15 @@
     "multer": "^1.4.5-lts.1",
     "node-cron": "^3.0.3",
     "pg": "^8.20.0",
+    "pino": "^9.9.4",
     "uuid": "^9.0.1",
+    "ws": "^8.20.0",
     "xlsx": "^0.18.5",
     "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
+    "@types/compression": "^1.8.1",
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
     "@types/jsonwebtoken": "^9.0.6",

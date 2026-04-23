@@ -40,8 +40,23 @@ const mocks = vi.hoisted(() => {
       ],
       error: null,
     },
-    task_delay_history: {
-      data: [],
+    delay_requests: {
+      data: [
+        {
+          id: 'legacy-delay-1',
+          project_id: 'project-1',
+          task_id: '22222222-2222-4222-8222-222222222222',
+          original_date: '2026-04-10',
+          delayed_date: '2026-04-12',
+          delay_days: 2,
+          delay_type: '主动延期',
+          reason: '材料到货延迟',
+          delay_reason: '材料到货延迟',
+          status: 'approved',
+          created_at: '2026-04-02T00:00:00.000Z',
+          updated_at: '2026-04-02T00:00:00.000Z',
+        },
+      ],
       error: null,
     },
   }

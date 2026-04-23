@@ -64,8 +64,8 @@ CREATE TABLE IF NOT EXISTS pre_milestone_dependencies (
     REFERENCES pre_milestones(id) ON DELETE CASCADE,
   
   -- 依赖类型
-  dependency_type VARCHAR(20) DEFAULT 'sequential'
-    CHECK (dependency_type IN ('sequential', 'parallel', 'conditional')),
+  dependency_kind VARCHAR(20) DEFAULT 'hard'
+    CHECK (dependency_kind IN ('hard', 'soft')),
   
   -- 描述
   description TEXT,

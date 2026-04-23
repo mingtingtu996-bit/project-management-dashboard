@@ -50,4 +50,34 @@ describe('ConditionWarningModal', () => {
     expect(document.body.textContent).not.toContain('提醒汇总')
     expect(document.body.textContent).not.toContain('去问题与风险')
   })
+
+  it('supports a controlled open state and routes to the project risk page', async () => {
+    await act(async () => {
+      root?.render(
+        <ConditionWarningModal
+          projectId="project-1"
+          open
+          taskTitle="主体结构施工"
+          pendingConditionCount={2}
+        />,
+      )
+      await Promise.resolve()
+    })
+
+    expect(document.body.textContent).toContain('提醒汇总')
+    expect(document.body.textContent).toContain('主体结构施工')
+    expect(document.body.textContent).toContain('仍有 2 项未满足开工条件')
+
+    const goButton = Array.from(document.body.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('去问题与风险'),
+    )
+    expect(goButton).toBeTruthy()
+
+    await act(async () => {
+      goButton?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+      await Promise.resolve()
+    })
+
+    expect(navigateMock).toHaveBeenCalledWith('/projects/project-1/risks')
+  })
 })

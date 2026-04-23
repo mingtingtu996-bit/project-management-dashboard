@@ -3,6 +3,7 @@
 // 类型安全版本
 
 import { z } from 'zod'
+import { safeJsonParse, safeStorageGet, safeStorageSet } from '@/lib/browserStorage'
 
 // ============================================
 // 存储键定义
@@ -75,6 +76,7 @@ export const TaskSchema = z.object({
   end_date: z.string().optional(),
   progress: z.number().min(0).max(100).default(0),
   assignee: z.string().optional(),
+  assignee_user_id: z.string().uuid().optional().nullable(),
   assignee_unit: z.string().optional(),
   dependencies: z.array(z.string().uuid()).default([]),
   is_milestone: z.boolean().default(false),
@@ -121,7 +123,7 @@ export const ProjectMemberSchema = z.object({
   project_id: z.string().uuid(),
   user_id: z.string().uuid(),
   invitation_code_id: z.string().uuid().optional(),
-  permission_level: z.enum(['viewer', 'editor', 'admin']).default('editor'),
+  permission_level: z.enum(['viewer', 'editor', 'owner']).default('editor'),
   joined_at: z.string().datetime(),
   last_activity: z.string().datetime(),
   is_active: z.boolean().default(true),
@@ -132,7 +134,7 @@ export const InvitationSchema = z.object({
   id: z.string().uuid(),
   project_id: z.string().uuid(),
   invitation_code: z.string(),
-  permission_level: z.enum(['viewer', 'editor', 'admin']).default('editor'),
+  permission_level: z.enum(['viewer', 'editor', 'owner']).default('editor'),
   created_by: z.string().uuid().optional(),
   created_at: z.string().datetime(),
   expires_at: z.string().datetime().optional(),
@@ -158,17 +160,12 @@ export type Invitation = z.infer<typeof InvitationSchema>
 // ============================================
 
 function getItems<T>(key: string): T[] {
-  try {
-    const data = localStorage.getItem(key)
-    return data ? JSON.parse(data) : []
-  } catch {
-    console.error(`Failed to parse localStorage key: ${key}`)
-    return []
-  }
+  const data = safeStorageGet(localStorage, key)
+  return safeJsonParse<T[]>(data, [], key)
 }
 
 function setItems<T>(key: string, items: T[]): void {
-  localStorage.setItem(key, JSON.stringify(items))
+  safeStorageSet(localStorage, key, JSON.stringify(items))
 }
 
 // 生成UUID

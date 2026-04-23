@@ -1,5 +1,11 @@
-import { apiGet } from '@/lib/apiClient'
+import { apiGet, isAbortError } from '@/lib/apiClient'
 import type { MilestoneOverview } from '@/lib/milestoneOverview'
+import {
+  buildCriticalPathSummaryModel,
+  fetchCriticalPathSnapshot,
+  type CriticalPathSummaryModel,
+} from '@/lib/criticalPath'
+export type { CriticalPathSummaryModel } from '@/lib/criticalPath'
 
 export interface NextMilestoneSummary {
   id: string
@@ -45,10 +51,33 @@ export interface ProjectSummary {
   constructionDrawingCount: number
   issuedConstructionDrawingCount: number
   reviewingConstructionDrawingCount: number
+  attentionRequired?: boolean
+  scheduleVarianceDays?: number
+  activeDelayRequests?: number
+  activeObstacles?: number
+  monthlyCloseStatus?: '未开始' | '进行中' | '已完成' | '已超期'
+  closeoutOverdueDays?: number
+  unreadWarningCount?: number
+  highestWarningLevel?: 'info' | 'warning' | 'critical' | null
+  highestWarningSummary?: string | null
+  shiftedMilestoneCount?: number
+  criticalPathAffectedTasks?: number
   healthScore: number
   healthStatus: '健康' | '亚健康' | '预警' | '危险'
   nextMilestone: NextMilestoneSummary | null
   milestoneOverview: MilestoneOverview
+  planningGovernance?: {
+    activeCount: number
+    closeoutOverdueSignalCount: number
+    closeoutForceUnlockCount: number
+    reorderReminderCount: number
+    reorderEscalationCount: number
+    reorderSummaryCount: number
+    adHocReminderCount: number
+    dashboardCloseoutOverdue: boolean
+    dashboardForceUnlockAvailable: boolean
+    hasActiveGovernanceSignal: boolean
+  }
 }
 
 export interface MilestoneSummary {
@@ -88,20 +117,51 @@ function normalizeSummaryStatus(status?: string | null): string {
   }
 }
 
+function withFreshSummaryOptions(options?: RequestInit): RequestInit {
+  return {
+    ...(options ?? {}),
+    cache: 'no-store',
+  }
+}
+
 export class DashboardApiService {
-  static async getAllProjectsSummary(): Promise<ProjectSummary[]> {
-    const data = await apiGet<ProjectSummary[]>('/api/dashboard/projects-summary')
+  static async getAllProjectsSummary(options?: RequestInit): Promise<ProjectSummary[]> {
+    const data = await apiGet<ProjectSummary[]>(
+      '/api/dashboard/projects-summary',
+      withFreshSummaryOptions(options),
+    )
     return normalizeArray(data)
   }
 
-  static async getProjectSummary(projectId: string): Promise<ProjectSummary | null> {
+  static async getProjectSummary(projectId: string, options?: RequestInit): Promise<ProjectSummary | null> {
     if (!projectId) return null
 
     try {
-      const data = await apiGet<ProjectSummary>(`/api/dashboard/project-summary?projectId=${encodeURIComponent(projectId)}`)
+      const data = await apiGet<ProjectSummary>(
+        `/api/dashboard/project-summary?projectId=${encodeURIComponent(projectId)}`,
+        withFreshSummaryOptions(options),
+      )
       return data ?? null
     } catch (error) {
+      if (isAbortError(error)) {
+        throw error
+      }
       console.error('[DashboardApiService] Failed to fetch project summary:', error)
+      return null
+    }
+  }
+
+  static async getProjectCriticalPathSummary(projectId: string, options?: RequestInit): Promise<CriticalPathSummaryModel | null> {
+    if (!projectId) return null
+
+    try {
+      const snapshot = await fetchCriticalPathSnapshot(projectId, options)
+      return buildCriticalPathSummaryModel(snapshot)
+    } catch (error) {
+      if (isAbortError(error)) {
+        throw error
+      }
+      console.error('[DashboardApiService] Failed to fetch project critical path summary:', error)
       return null
     }
   }
@@ -137,7 +197,7 @@ export class DashboardApiService {
 
     const projectNameMap = new Map(summaries.map((summary) => [summary.id, summary.name]))
 
-    return normalizeArray(risks).map((risk) => ({
+    return normalizeArray<any>(risks).map((risk: any) => ({
       ...risk,
       projectName: projectNameMap.get(risk.project_id || risk.projectId) || '',
     }))

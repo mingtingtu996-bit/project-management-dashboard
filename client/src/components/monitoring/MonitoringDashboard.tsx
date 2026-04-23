@@ -17,11 +17,11 @@ export default function MonitoringDashboard() {
   const [activeTab, setActiveTab] = useState<MonitoringTab>('api')
 
   return (
-    <div className="space-y-6 page-enter">
+    <div className="space-y-6 page-enter" data-testid="monitoring-dashboard-page">
       <PageHeader
         eyebrow="隐藏工具"
         title="监控中心"
-        subtitle="当前页仅承接系统监控、性能追踪和错误排查，不进入主导航，也不改变监控数据来源或计算逻辑。"
+        subtitle="当前页仅展示系统监控、性能追踪和错误排查，不进入主导航，也不改变监控数据来源或计算逻辑。"
       >
         <Badge variant="outline" className="border-slate-200 bg-slate-50 text-slate-600">
           隐藏路由
@@ -31,40 +31,45 @@ export default function MonitoringDashboard() {
         </Badge>
       </PageHeader>
 
-      <div className="grid gap-4 md:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-4" data-testid="monitoring-dashboard-stats">
         <StatCard
           icon={<BarChart3 className="h-5 w-5" />}
           label="接口请求"
           value={localMonitor.getApiMetrics().length}
           color="blue"
+          testId="monitoring-stat-api"
         />
         <StatCard
           icon={<Clock className="h-5 w-5" />}
           label="平均响应"
           value={`${localMonitor.getAverageResponseTime().toFixed(0)}ms`}
           color="green"
+          testId="monitoring-stat-response"
         />
         <StatCard
           icon={<AlertTriangle className="h-5 w-5" />}
           label="错误率"
           value={`${(localMonitor.getErrorRate() * 100).toFixed(1)}%`}
           color={localMonitor.getErrorRate() > 0.1 ? 'red' : 'green'}
+          testId="monitoring-stat-error-rate"
         />
         <StatCard
           icon={<Zap className="h-5 w-5" />}
           label="慢请求"
           value={localMonitor.getSlowRequests(3000).length}
           color={localMonitor.getSlowRequests(3000).length > 0 ? 'red' : 'green'}
+          testId="monitoring-stat-slow"
         />
       </div>
 
-      <section className="shell-surface overflow-hidden">
+      <section className="shell-surface overflow-hidden" data-testid="monitoring-dashboard-panel">
         <div className="border-b border-slate-100 px-6 pt-5">
           <nav className="flex flex-wrap gap-2">
             {tabs.map((tab) => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
+                data-testid={`monitoring-tab-${tab.id}`}
                 className={`flex items-center gap-2 rounded-t-xl border border-b-0 px-4 py-2 text-sm transition-colors ${
                   activeTab === tab.id
                     ? 'border-slate-200 bg-white text-slate-900 shadow-sm'
@@ -80,8 +85,8 @@ export default function MonitoringDashboard() {
 
         <div className="p-6 md:p-7">
           {activeTab === 'api' && (
-            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50/70 p-8 text-center text-slate-500">
-              接口监控暂时由本地监控数据承接
+            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50/70 p-8 text-center text-slate-500" data-testid="monitoring-tabpanel-api">
+              接口监控暂时由本地监控数据提供
             </div>
           )}
 
@@ -99,11 +104,13 @@ function StatCard({
   label,
   value,
   color = 'blue',
+  testId,
 }: {
   icon: ReactNode
   label: string
   value: string | number
   color?: 'blue' | 'green' | 'red' | 'orange'
+  testId?: string
 }) {
   const colorClasses = {
     blue: 'bg-blue-50 border-blue-200 text-blue-600',
@@ -113,7 +120,7 @@ function StatCard({
   }
 
   return (
-    <div className={`border rounded-2xl p-4 shadow-sm ${colorClasses[color]}`}>
+    <div className={`border rounded-2xl p-4 shadow-sm ${colorClasses[color]}`} data-testid={testId}>
       <div className="flex items-center gap-2">
         {icon}
         <span className="text-sm opacity-70">{label}</span>
@@ -128,7 +135,7 @@ function PerformanceMetrics() {
 
   if (metrics.length === 0) {
     return (
-      <div className="py-12 text-center text-slate-500">
+      <div className="py-12 text-center text-slate-500" data-testid="monitoring-tabpanel-performance-empty">
         <Zap className="mx-auto mb-4 h-12 w-12 opacity-50" />
         <p>暂无性能指标</p>
         <p className="mt-1 text-sm">使用系统后会自动采集性能记录</p>
@@ -138,7 +145,7 @@ function PerformanceMetrics() {
 
   return (
     <div className="space-y-4">
-      <div className="shell-surface overflow-hidden">
+      <div className="shell-surface overflow-hidden" data-testid="monitoring-tabpanel-performance">
         <div className="border-b border-slate-100 px-4 py-3">
           <span className="text-sm font-medium text-slate-700">性能记录</span>
         </div>
@@ -167,7 +174,7 @@ function ErrorTracker() {
 
   if (errorMetrics.length === 0) {
     return (
-      <div className="py-12 text-center text-slate-500">
+      <div className="py-12 text-center text-slate-500" data-testid="monitoring-tabpanel-errors-empty">
         <Bug className="mx-auto mb-4 h-12 w-12 opacity-50" />
         <p>暂无错误记录</p>
         <p className="mt-1 text-sm">出现异常时会自动进入错误追踪</p>
@@ -177,7 +184,7 @@ function ErrorTracker() {
 
   return (
     <div className="space-y-4">
-      <div className="shell-surface overflow-hidden">
+      <div className="shell-surface overflow-hidden" data-testid="monitoring-tabpanel-errors">
         <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
           <span className="text-sm font-medium text-slate-700">错误记录</span>
           <span className="text-sm text-red-500">{errorMetrics.length} 条</span>

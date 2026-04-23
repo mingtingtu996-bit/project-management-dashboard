@@ -1,104 +1,59 @@
-/**
- * 认证API路由
- */
+import express from 'express'
 
-import express from 'express';
-import { generateToken } from '../auth/jwt';
-import { hashPassword, verifyPassword } from '../auth/password';
-import { validatePasswordStrength, validateUsername } from '../auth/password';
-import { LoginRequest, LoginResponse } from '../auth/types';
-import { query } from '../database';
+import { z } from 'zod'
 
-const router = express.Router();
+import { generateToken } from '../auth/jwt.js'
+import { authError, authSuccess, setAuthTokenCookie } from '../auth/http.js'
+import { verifyPassword } from '../auth/password.js'
+import type { AuthSessionData, LoginRequest } from '../auth/types.js'
+import { getAuthUserByUsername, toAuthUserView } from '../auth/session.js'
+import { query } from '../database.js'
+import { asyncHandler } from '../middleware/errorHandler.js'
+import { logger } from '../middleware/logger.js'
+import { validate } from '../middleware/validation.js'
 
-/**
- * POST /api/auth/login - 用户登录
- */
-router.post('/', async (req, res) => {
-  try {
-    const body: LoginRequest = req.body;
-    const { username, password } = body;
+const router = express.Router()
 
-    // 参数验证
-    if (!username || !password) {
-      return res.status(400).json(
-        { success: false, message: '请输入用户名和密码' }
-      );
-    }
+const loginSchema = z.object({
+  username: z.string().trim().min(1, '请输入用户名'),
+  password: z.string().min(1, '请输入密码'),
+})
 
-    // 查询用户
-    const userResult = await query(
-      'SELECT * FROM public.users WHERE username = $1',
-      [username]
-    );
+router.post('/', validate(loginSchema), asyncHandler(async (req, res) => {
+  const body: LoginRequest = req.body
+  const username = String(body.username ?? '').trim()
+  const password = String(body.password ?? '')
 
-    const user = userResult.rows[0];
-
-    if (!user) {
-      return res.status(401).json(
-        { success: false, message: '用户名或密码错误' }
-      );
-    }
-
-    // 验证密码
-    const isPasswordValid = await verifyPassword(password, user.password_hash);
-
-    if (!isPasswordValid) {
-      return res.status(401).json(
-        { success: false, message: '用户名或密码错误' }
-      );
-    }
-
-    // 生成JWT令牌
-    const token = generateToken({
-      id: user.id,
-      username: user.username,
-      display_name: user.display_name,
-      email: user.email,
-      role: user.role || 'member',
-    });
-
-    // 更新最后活跃时间（如果表有此字段）
-    try {
-      await query(
-        'UPDATE public.users SET last_active = NOW() WHERE id = $1',
-        [user.id]
-      );
-    } catch (e) {
-      // 忽略字段不存在错误
-      console.warn('Failed to update last_active:', e);
-    }
-
-    // 构建响应
-    const response: LoginResponse = {
-      success: true,
-      token,
-      user: {
-        id: user.id,
-        username: user.username,
-        display_name: user.display_name,
-        email: user.email,
-        role: user.role || 'member',
-      },
-    };
-
-    // 设置Cookie
-    res.cookie('auth_token', token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      maxAge: 7 * 24 * 60 * 60 * 1000, // 7天
-      path: '/',
-    });
-
-    return res.json(response);
-  } catch (error) {
-    console.error('Login error:', error);
-    res.status(500).json({
-      success: false,
-      message: '登录失败，请稍后重试'
-    });
+  const user = await getAuthUserByUsername(username)
+  if (!user?.password_hash) {
+    return res.status(401).json(authError('INVALID_CREDENTIALS', '用户名或密码错误'))
   }
-});
 
-export default router;
+  const isPasswordValid = await verifyPassword(password, user.password_hash)
+  if (!isPasswordValid) {
+    return res.status(401).json(authError('INVALID_CREDENTIALS', '用户名或密码错误'))
+  }
+
+  const responseUser = toAuthUserView(user)
+  const token = generateToken({
+    ...responseUser,
+    role: user.role || 'member',
+  })
+
+  try {
+    await query('UPDATE public.users SET last_active = NOW() WHERE id = $1', [user.id])
+  } catch (error) {
+    logger.warn('Failed to update last_active', { userId: user.id, error })
+  }
+
+  setAuthTokenCookie(res, token)
+
+  const response: AuthSessionData = {
+    token,
+    user: responseUser,
+  }
+
+  return res.json(authSuccess(response))
+}))
+
+export default router

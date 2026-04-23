@@ -3,6 +3,8 @@
 
 import * as XLSX from 'xlsx'
 
+import { APP_STORAGE_KEY_PREFIXES, clearAppStorage, listAppStorageKeys, safeJsonParse, safeStorageGet } from '@/lib/browserStorage'
+import { apiGet } from '@/lib/apiClient'
 import { projectDb, taskDb, riskDb, milestoneDb, memberDb, invitationDb, generateId } from './localDb'
 import { Project, Task, Risk, Milestone, ProjectMember, Invitation } from './localDb'
 
@@ -86,6 +88,16 @@ export function exportProjectData(projectId: string): ExportData | null {
     members: memberDb.getByProject(projectId),
     invitations: invitationDb.getByProject(projectId)
   }
+}
+
+export async function exportProjectDataFromApi(projectId: string): Promise<ExportData> {
+  return await apiGet<ExportData>(`/api/projects/${projectId}/export`)
+}
+
+function getCellText(row: Record<string, unknown>, key: string): string {
+  const value = row[key]
+  if (value == null) return ''
+  return typeof value === 'string' ? value : String(value)
 }
 
 // ============================================
@@ -195,7 +207,10 @@ export function importFromJSON(file: File): Promise<ImportResult> {
     
     reader.onload = (e) => {
       try {
-        const data = JSON.parse(e.target?.result as string) as ExportData
+        const data = safeJsonParse<ExportData | null>(String(e.target?.result ?? ''), null, 'import-json')
+        if (!data) {
+          throw new Error('无效的 JSON 文件')
+        }
         const result = importData(data)
         resolve(result)
       } catch (error) {
@@ -222,8 +237,11 @@ export function importFromJSON(file: File): Promise<ImportResult> {
 // ============================================
 // 清除全部数据（谨慎使用）
 // ============================================
-export function clearAllData(): void {
-  localStorage.clear()
+export function clearAllData(options: { projectName: string; confirmationText: string }): number {
+  return clearAppStorage({
+    projectName: options.projectName,
+    confirmationText: options.confirmationText,
+  })
 }
 
 // ============================================
@@ -232,11 +250,12 @@ export function clearAllData(): void {
 export function getStorageUsage(): { used: number; quota: number; percentage: number } {
   let used = 0
   
-  for (const key in localStorage) {
-    if (localStorage.hasOwnProperty(key)) {
-      used += localStorage[key].length + key.length
-    }
-  }
+  listAppStorageKeys(localStorage)
+    .filter((key) => APP_STORAGE_KEY_PREFIXES.some((prefix) => key.startsWith(prefix)))
+    .forEach((key) => {
+      const value = safeStorageGet(localStorage, key)
+      used += (value?.length ?? 0) + key.length
+    })
   
   // 估算 quota (大多数浏览器提供5MB)
   const quota = 5 * 1024 * 1024
@@ -378,7 +397,7 @@ export function importTasksFromExcel(file: File, projectId: string): Promise<Imp
         const workbook = XLSX.read(data, { type: 'binary' })
         const sheetName = workbook.SheetNames[0]
         const sheet = workbook.Sheets[sheetName]
-        const jsonData = XLSX.utils.sheet_to_json(sheet) as any[]
+        const jsonData = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet)
         
         const result: ImportResult = {
           success: true,
@@ -391,7 +410,8 @@ export function importTasksFromExcel(file: File, projectId: string): Promise<Imp
           const row = jsonData[i]
           
           // 验证必填字段
-          if (!row['任务名称']) {
+          const taskTitle = getCellText(row, '任务名称').trim()
+          if (!taskTitle) {
             result.errors.push(`第${i + 2}行：缺少任务名称`)
             continue
           }
@@ -399,24 +419,27 @@ export function importTasksFromExcel(file: File, projectId: string): Promise<Imp
           const task = {
             id: generateId(),
             project_id: projectId,
-            title: row['任务名称'],
-            description: row['描述'] || '',
-            status: parseTaskStatus(row['状态']),
-            priority: parsePriority(row['优先级']),
-            start_date: row['开始日期'] || null,
-            end_date: row['结束日期'] || null,
-            progress: parseInt(row['进度(%)']) || 0,
-            assignee: row['责任人'] || '',
-            assignee_unit: row['责任单位'] || '',
+            title: taskTitle,
+            description: getCellText(row, '描述'),
+            status: parseTaskStatus(getCellText(row, '状态')),
+            priority: parsePriority(getCellText(row, '优先级')),
+            start_date: getCellText(row, '开始日期') || undefined,
+            end_date: getCellText(row, '结束日期') || undefined,
+            progress: parseInt(getCellText(row, '进度(%)'), 10) || 0,
+            assignee: getCellText(row, '责任人'),
+            assignee_unit: getCellText(row, '责任单位'),
             dependencies: [],
-            is_milestone: row['是否为里程碑'] === '是',
-            created_at: new Date().toISOString()
+            is_milestone: getCellText(row, '是否为里程碑') === '是',
+            milestone_order: 0,
+            version: 1,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
           }
-          
+
           taskDb.create(task)
           result.imported.tasks++
         }
-        
+
         if (result.imported.tasks === 0) {
           result.errors.push('没有有效的任务数据')
           result.success = false

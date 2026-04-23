@@ -2,7 +2,7 @@
 # 简化部署流程，从手动15分钟 → 一键3分钟
 
 param(
-    [string]$Environment = "vercel",  # vercel, cloudbase, local
+    [string]$Environment = "vercel",  # vercel, local（cloudbase 已废弃）
     [switch]$Production = $false,
     [switch]$SkipTests = $false,
     [switch]$SkipBuild = $false
@@ -25,8 +25,7 @@ function Check-Config {
     $requiredFiles = @(
         "client/package.json",
         "server/package.json",
-        "vercel.json",
-        "cloudbaserc.json"
+        "vercel.json"
     )
     
     foreach ($file in $requiredFiles) {
@@ -168,54 +167,13 @@ function Deploy-Vercel {
     }
 }
 
-# 腾讯云部署
+# 腾讯云 CloudBase 部署（已废弃，不再支持，仅保留存根以防旧调用入口报错）
+# DEPRECATED: CloudBase 部署链已于 2026-04-07 清理，server/functions/ 目录已删除。
+# 当前部署方式：vercel（前端）+ server npm run start（后端）
 function Deploy-CloudBase {
-    Write-Host "☁️  部署到腾讯云CloudBase..." -ForegroundColor Yellow
-    
-    try {
-        # 检查CloudBase CLI
-        if (-not (Get-Command cloudbase -ErrorAction SilentlyContinue)) {
-            Write-Host "   📦 安装CloudBase CLI..." -ForegroundColor Gray
-            npm install -g @cloudbase/cli
-        }
-        
-        # 读取环境ID
-        $envConfig = Get-Content "cloudbaserc.json" | ConvertFrom-Json
-        $envId = $envConfig.envId
-        Write-Host "   🏷️  环境ID: $envId" -ForegroundColor Gray
-        
-        # 登录检查
-        Write-Host "   🔐 检查CloudBase登录状态..." -ForegroundColor Gray
-        $cloudbaseStatus = cloudbase env:list 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "   ⚠️  未登录CloudBase，请先运行: cloudbase login" -ForegroundColor Yellow
-            Write-Host "   🔑 正在打开浏览器登录..." -ForegroundColor Gray
-            cloudbase login
-        }
-        
-        # 构建云函数
-        Write-Host "   🔨 构建云函数..." -ForegroundColor Gray
-        Set-Location "server/functions/api"
-        if (-not (Test-Path "node_modules")) {
-            npm ci
-        }
-        Set-Location "../../../"
-        
-        # 部署前端
-        Write-Host "   🚀 部署前端静态资源..." -ForegroundColor Gray
-        cloudbase hosting:deploy "client/dist"
-        
-        # 部署云函数
-        Write-Host "   🚀 部署API云函数..." -ForegroundColor Gray
-        cloudbase functions:deploy api
-        
-        Write-Host "   ✅ CloudBase部署成功！" -ForegroundColor Green
-        Write-Host "   🌐 访问地址: https://$envId.tcloudbaseapp.com" -ForegroundColor Cyan
-        return $true
-    } catch {
-        Write-Host "   ❌ CloudBase部署失败: $_" -ForegroundColor Red
-        return $false
-    }
+    Write-Host "❌ CloudBase 部署已废弃，请改用 vercel 或 local 环境" -ForegroundColor Red
+    Write-Host "   当前有效环境: vercel, local" -ForegroundColor Yellow
+    return $false
 }
 
 # 本地开发环境
@@ -287,7 +245,7 @@ function Main {
         }
         default {
             Write-Host "❌ 未知环境: $Environment" -ForegroundColor Red
-            Write-Host "可用环境: vercel, cloudbase, local" -ForegroundColor Yellow
+            Write-Host "可用环境: vercel, local（cloudbase 已废弃）" -ForegroundColor Yellow
             exit 1
         }
     }

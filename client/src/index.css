@@ -78,35 +78,22 @@
 
 @layer components {
 
-  /* 标准卡片（V4 规范：rounded-xl shadow-sm border-gray-100） */
-  .card-v4 {
-    @apply bg-white rounded-2xl shadow-sm border border-slate-100 p-6
-           transition-all duration-200
-           hover:shadow-md hover:ring-1 hover:ring-blue-100;
-  }
-
-  /* 紧凑卡片（p-4，用于统计卡片） */
-  .card-v4-sm {
-    @apply bg-white rounded-2xl shadow-sm border border-slate-100 p-4
-           transition-all duration-200;
-  }
-
   /* ── 卡片阴影分层（L10） ─────────────────────────────────── */
   /* card-l1：基础卡片，大量使用 */
   .card-l1 {
-    @apply bg-white rounded-2xl border border-slate-100 shadow-sm
+    @apply bg-white rounded-card border border-slate-100 shadow-sm
            transition-all duration-200
            hover:ring-1 hover:ring-blue-100;
   }
   /* card-l2：重要信息卡片（如统计指标） */
   .card-l2 {
-    @apply bg-white rounded-2xl border border-slate-100 shadow
+    @apply bg-white rounded-card border border-slate-100 shadow
            transition-all duration-200
            hover:shadow-md hover:ring-1 hover:ring-blue-100;
   }
   /* card-l3：强调卡片（如弹窗内容区、高亮数据） */
   .card-l3 {
-    @apply bg-white rounded-2xl border border-slate-100 shadow-md
+    @apply bg-white rounded-card border border-slate-100 shadow-md
            transition-all duration-200
            hover:shadow-lg hover:ring-1 hover:ring-blue-100;
   }
@@ -135,7 +122,7 @@
   }
 
   .shell-surface {
-    @apply rounded-2xl border border-slate-100 bg-white shadow-sm;
+    @apply rounded-card border border-slate-100 bg-white shadow-sm;
   }
 
   .shell-section-title {
@@ -229,5 +216,24 @@
   /* 页面淡入 */
   .page-enter {
     @apply animate-fade-in;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html:focus-within {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .page-enter {
+    animation: none !important;
   }
 }

@@ -8,6 +8,7 @@
  */
 
 import { calculateHealthScore, calculateHealthDetails, type HealthScoreParams, type HealthDetails } from './healthScore';
+import { CHART_SERIES } from './chartPalette';
 import type { Task, Risk, Milestone } from './localDb';
 
 /**
@@ -123,10 +124,11 @@ function convertToHealthParams(
   // 只有已完成的任务才计算延期天数（基于实际完成日期与计划日期的差值）
   const now = new Date();
   let totalDelayDays = 0;
-  tasks.forEach(t => {
+  tasks.forEach((task) => {
+    const t = task as RawTask;
     const status = t.status?.toLowerCase();
     const progress = t.progress || 0;
-    
+
     // 只有"已完成"状态的任务才计入延期
     if (status === 'completed' || status === '已完成' || progress === 100) {
       // 计算实际完成日期与计划日期的差值
@@ -179,25 +181,25 @@ export function getHealthLevelAdapter(score: number): {
     bg: 'bg-emerald-500', 
     text: 'text-emerald-600', 
     label: '健康',
-    color: '#10b981'
+    color: CHART_SERIES.success
   };
   if (score >= 60) return { 
     bg: 'bg-blue-500', 
     text: 'text-blue-600', 
     label: '亚健康',
-    color: '#3b82f6'
+    color: CHART_SERIES.primary
   };
   if (score >= 40) return { 
     bg: 'bg-amber-500', 
     text: 'text-amber-600', 
     label: '预警',
-    color: '#f59e0b'
+    color: CHART_SERIES.warning
   };
   return { 
     bg: 'bg-red-500', 
     text: 'text-red-600', 
     label: '危险',
-    color: '#ef4444'
+    color: CHART_SERIES.danger
   };
 }
 

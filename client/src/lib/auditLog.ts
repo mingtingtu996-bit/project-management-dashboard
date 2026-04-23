@@ -2,6 +2,7 @@
 // 第三阶段：安全与测试 - 审计日志
 
 import { z } from 'zod'
+import { getBrowserStorage, safeJsonParse, safeStorageGet, safeStorageSet } from './browserStorage'
 import { generateId } from './localDb'
 
 // ============================================
@@ -24,6 +25,7 @@ export const AuditLogSchema = z.object({
 })
 
 export type AuditLog = z.infer<typeof AuditLogSchema>
+const AuditLogListSchema = z.array(AuditLogSchema)
 
 // ============================================
 // 操作类型定义
@@ -75,18 +77,22 @@ const AUDIT_LOG_KEY = 'pm_audit_logs'
 const MAX_LOGS = 10000 // 最多保存 10000 条日志
 
 function getLogs(): AuditLog[] {
-  try {
-    const data = localStorage.getItem(AUDIT_LOG_KEY)
-    return data ? JSON.parse(data) : []
-  } catch {
-    return []
-  }
+  const storage = getBrowserStorage()
+  const parsed = safeJsonParse<unknown>(
+    safeStorageGet(storage, AUDIT_LOG_KEY),
+    [],
+    AUDIT_LOG_KEY,
+  )
+  const validated = AuditLogListSchema.safeParse(parsed)
+  return validated.success ? validated.data : []
 }
 
 function saveLogs(logs: AuditLog[]): void {
+  const storage = getBrowserStorage()
+  if (!storage) return
   // 只保留最近的日志
   const trimmed = logs.slice(-MAX_LOGS)
-  localStorage.setItem(AUDIT_LOG_KEY, JSON.stringify(trimmed))
+  safeStorageSet(storage, AUDIT_LOG_KEY, JSON.stringify(trimmed))
 }
 
 export const auditDb = {
@@ -200,7 +206,7 @@ export function logAction(
   options?: {
     resourceId?: string
     resourceName?: string
-    details?: Record<string, any>
+    details?: Record<string, unknown>
   }
 ): void {
   auditDb.create({

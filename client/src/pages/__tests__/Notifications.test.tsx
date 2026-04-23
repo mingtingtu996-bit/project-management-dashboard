@@ -1,6 +1,6 @@
-import { act } from 'react'
+﻿import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { useNavigate } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import Notifications from '../Notifications'
@@ -28,6 +28,16 @@ const mockedUseApi = vi.mocked(useApi)
 
 function flush() {
   return new Promise((resolve) => setTimeout(resolve, 0))
+}
+
+function renderNotifications(root: Root | null, initialEntry = '/notifications') {
+  root?.render(
+    <MemoryRouter initialEntries={[initialEntry]}>
+      <Routes>
+        <Route path="/notifications" element={<Notifications />} />
+      </Routes>
+    </MemoryRouter>,
+  )
 }
 
 async function waitForCondition(condition: () => boolean) {
@@ -114,7 +124,7 @@ describe('Notifications', () => {
     ])
 
     await act(async () => {
-      root?.render(<Notifications />)
+      renderNotifications(root)
       await flush()
     })
 
@@ -123,9 +133,10 @@ describe('Notifications', () => {
     expect(container.textContent).toContain('提醒中心')
     expect(container.textContent).toContain('公司级第二入口')
     expect(container.textContent).toContain('提醒设置')
-    expect(container.textContent).toContain('风险 / 问题')
-    expect(container.textContent).toContain('关键跟进')
-    expect(container.textContent).toContain('系统 / 广播')
+    expect(container.textContent).toContain('业务预警')
+    expect(container.textContent).toContain('流程催办')
+    expect(container.textContent).toContain('系统异常')
+    expect(container.textContent).toContain('映射孤立')
     expect(container.textContent).toContain('应出现在提醒中心')
     expect(container.textContent).not.toContain('导出数据')
     expect(container.textContent).not.toContain('导入数据')
@@ -133,7 +144,7 @@ describe('Notifications', () => {
     expect(container.textContent).not.toContain('下载模板')
 
     const goButton = Array.from(container.querySelectorAll('button')).find((button) =>
-      button.textContent?.includes('去处理'),
+      button.textContent?.includes('前往处理'),
     ) as HTMLButtonElement | undefined
 
     expect(goButton).toBeTruthy()
@@ -172,14 +183,14 @@ describe('Notifications', () => {
     ])
 
     await act(async () => {
-      root?.render(<Notifications />)
+      renderNotifications(root)
       await flush()
     })
 
     await waitForCondition(() => container.textContent?.includes('风险预警'))
 
     const riskTab = Array.from(container.querySelectorAll('button')).find((button) =>
-      button.textContent?.includes('风险 / 问题'),
+      button.textContent?.includes('业务预警'),
     ) as HTMLButtonElement | undefined
 
     expect(riskTab).toBeTruthy()
@@ -190,6 +201,46 @@ describe('Notifications', () => {
     })
 
     expect(container.textContent).toContain('风险预警')
+  })
+
+  it('keeps material arrival reminders visible and routes them to materials page', async () => {
+    apiMock.get.mockResolvedValue([
+      {
+        id: 'material-1',
+        title: '幕墙单位材料到场提醒',
+        message: '铝板预计 2026-04-25 到场，请及时确认施工条件。',
+        category: 'materials',
+        type: 'material_arrival_reminder',
+        notificationType: 'material_arrival_reminder',
+        sourceEntityType: 'project_material',
+        read: false,
+        projectId,
+        createdAt: '2026-04-01T09:00:00.000Z',
+      },
+    ])
+
+    await act(async () => {
+      renderNotifications(root)
+      await flush()
+    })
+
+    await waitForCondition(() => container.textContent?.includes('幕墙单位材料到场提醒') === true)
+
+    expect(container.textContent).toContain('幕墙单位材料到场提醒')
+    expect(container.textContent).toContain('流程催办')
+
+    const goButton = Array.from(container.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('前往处理'),
+    ) as HTMLButtonElement | undefined
+
+    expect(goButton).toBeTruthy()
+
+    await act(async () => {
+      goButton?.click()
+      await flush()
+    })
+
+    expect(String(navigateMock.mock.calls.at(-1)?.[0] ?? '')).toContain(`/projects/${projectId}/materials`)
   })
 
   it('routes reminder items to the correct project module by payload', async () => {
@@ -229,14 +280,14 @@ describe('Notifications', () => {
     ])
 
     await act(async () => {
-      root?.render(<Notifications />)
+      renderNotifications(root)
       await flush()
     })
 
     await waitForCondition(() => container.textContent?.includes('任务延期提醒'))
 
     const goButtons = Array.from(container.querySelectorAll('button')).filter((button) =>
-      button.textContent?.includes('去处理'),
+      button.textContent?.includes('前往处理'),
     ) as HTMLButtonElement[]
 
     expect(goButtons).toHaveLength(3)
@@ -250,6 +301,107 @@ describe('Notifications', () => {
 
     expect(navigateMock.mock.calls.some((call) => call[0] === `/projects/${projectId}/gantt`)).toBe(true)
     expect(navigateMock.mock.calls.some((call) => call[0] === `/projects/${projectId}/risks`)).toBe(true)
-    expect(navigateMock.mock.calls.some((call) => call[0] === `/projects/${projectId}/pre-milestones`)).toBe(true)
+    expect(navigateMock.mock.calls.some((call) => call[0] === `/projects/${projectId}/acceptance`)).toBe(true)
+  })
+
+  it('keeps S2 mapping orphan notifications in an isolated tab and routes them to planning baseline', async () => {
+    apiMock.get.mockResolvedValue([
+      {
+        id: 'mapping-1',
+        title: '规划映射存在孤立指针',
+        message: '映射孤立指针 2 条，需要回到 Planning 基线收口。',
+        category: 'planning_mapping_orphan',
+        notificationType: 'planning-governance-mapping',
+        type: 'planning_gov_mapping_orphan_pointer',
+        read: false,
+        projectId,
+        sourceEntityType: 'planning_governance',
+        createdAt: '2026-04-01T13:00:00.000Z',
+      },
+    ])
+
+    await act(async () => {
+      renderNotifications(root)
+      await flush()
+    })
+
+    await waitForCondition(() => container.textContent?.includes('规划映射存在孤立指针'))
+
+    const mappingTab = Array.from(container.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('映射孤立'),
+    ) as HTMLButtonElement | undefined
+
+    expect(mappingTab).toBeTruthy()
+
+    await act(async () => {
+      mappingTab?.click()
+      await flush()
+    })
+
+    expect(container.textContent).toContain('规划映射存在孤立指针')
+    expect(container.textContent).toContain('S2 mapping')
+
+    const goButton = Array.from(container.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('前往处理'),
+    ) as HTMLButtonElement | undefined
+
+    expect(goButton).toBeTruthy()
+
+    await act(async () => {
+      goButton?.click()
+      await flush()
+    })
+
+    expect(navigateMock).toHaveBeenCalledWith(`/projects/${projectId}/planning/baseline`)
+  })
+
+  it('opens the delete guard and removes the reminder only after confirm', async () => {
+    apiMock.get.mockResolvedValue([
+      {
+        id: 'risk-1',
+        title: '风险预警',
+        message: '需要删除这条提醒',
+        category: 'risk',
+        type: 'warning',
+        read: false,
+        projectId,
+        createdAt: '2026-04-01T09:00:00.000Z',
+      },
+    ])
+
+    await act(async () => {
+      renderNotifications(root)
+      await flush()
+    })
+
+    await waitForCondition(() => container.textContent?.includes('风险预警') === true)
+
+    const deleteButton = container.querySelector('[data-testid="notification-delete-action-risk-1"]') as HTMLButtonElement | null
+    expect(deleteButton).toBeTruthy()
+
+    await act(async () => {
+      deleteButton?.click()
+      await flush()
+    })
+
+    await waitForCondition(
+      () =>
+        Boolean(document.body.querySelector('[data-testid="notification-delete-guard"]'))
+        && document.body.textContent?.includes('确认删除“风险预警”这条提醒？') === true,
+    )
+
+    const confirmButton = Array.from(document.body.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('确认删除'),
+    ) as HTMLButtonElement | undefined
+    expect(confirmButton).toBeTruthy()
+
+    await act(async () => {
+      confirmButton?.click()
+      await flush()
+      await flush()
+    })
+
+    expect(apiMock.delete).toHaveBeenCalledWith('/api/notifications/risk-1')
+    await waitForCondition(() => container.textContent?.includes('风险预警') === false)
   })
 })

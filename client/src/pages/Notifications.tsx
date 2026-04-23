@@ -1,28 +1,34 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { format } from 'date-fns'
 import { zhCN } from 'date-fns/locale'
 
 import { EmptyState } from '@/components/EmptyState'
 import { PageHeader } from '@/components/PageHeader'
+import { DeleteProtectionDialog } from '@/components/DeleteProtectionDialog'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import { LoadingState } from '@/components/ui/loading-state'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useApi } from '@/hooks/useApi'
-import { useStore } from '@/hooks/useStore'
+import {
+  useConnectionMode,
+  useCurrentProject,
+  useLastRealtimeEvent,
+  useNotifications,
+  useSetConnectionMode,
+  useSetCurrentProject,
+  useRealtimeConnectionState,
+  useStore,
+} from '@/hooks/useStore'
 import { toast } from '@/hooks/use-toast'
 import { getApiErrorMessage, isBackendUnavailableError } from '@/lib/apiClient'
-import {
-  exportTasksToExcel,
-  exportRisksToExcel,
-  exportMilestonesToExcel,
-  importTasksFromExcel,
-  downloadTaskTemplate,
-  exportToJSON,
-  exportAllData,
-} from '@/lib/dataExport'
+import { buildMutedUntil, getMuteDurationActionLabel, MUTE_DURATION_OPTIONS, type AllowedMuteHours } from '@/lib/muteDurations'
+import { getCachedProjects } from '@/lib/projectPersistence'
+import { isRealtimeNotificationEvent } from '@/lib/realtime'
+import { PROJECT_NAVIGATION_LABELS, resolveNotificationTarget } from '@/config/navigation'
 import {
   AlertTriangle,
   ArrowRight,
@@ -30,8 +36,6 @@ import {
   CheckCircle2,
   ChevronDown,
   Clock,
-  Download,
-  FileSpreadsheet,
   GanttChart,
   Info,
   LayoutDashboard,
@@ -39,7 +43,6 @@ import {
   Settings,
   ShieldAlert,
   Trash2,
-  Upload,
   User,
   Wifi,
   WifiOff,
@@ -47,13 +50,22 @@ import {
 import type { LucideIcon } from 'lucide-react'
 
 type ReminderScope = 'company' | 'current-project'
-type ReminderTab = 'all' | 'unread' | 'risk-issues' | 'follow-up' | 'system'
+type ReminderTab =
+  | 'all'
+  | 'unread'
+  | 'business-warning'
+  | 'system-exception'
+  | 'flow-reminder'
+  | 'planning-mapping'
+type NotificationTargetKey = 'dashboard' | 'reports' | 'tasks' | 'task-summary' | 'planning' | 'risks' | 'license' | 'special' | 'project-home'
 
 interface NotificationApiItem {
   id: string
   project_id?: string
   projectId?: string
   type?: string
+  notification_type?: string
+  notificationType?: string
   severity?: string
   title: string
   content?: string
@@ -61,6 +73,7 @@ interface NotificationApiItem {
   is_read?: boolean
   read?: boolean
   is_broadcast?: boolean
+  status?: string
   source_entity_type?: string
   source_entity_id?: string
   sourceEntityType?: string
@@ -73,6 +86,9 @@ interface NotificationApiItem {
   milestone_id?: string
   milestoneId?: string
   data?: Record<string, unknown>
+  metadata?: Record<string, unknown>
+  resolved_source?: string | null
+  resolvedSource?: string | null
   created_at?: string
   createdAt?: string
   updated_at?: string
@@ -83,10 +99,14 @@ interface NormalizedNotification {
   id: string
   projectId?: string
   type: string
+  notificationType?: string
   severity?: string
   title: string
   content: string
   isRead: boolean
+  isMuted: boolean
+  muteExpired?: boolean
+  mutedUntil?: string
   isBroadcast?: boolean
   sourceEntityType?: string
   sourceEntityId?: string
@@ -95,33 +115,94 @@ interface NormalizedNotification {
   taskId?: string
   milestoneId?: string
   data?: Record<string, unknown>
+  metadata?: Record<string, unknown>
+  resolvedSource?: string | null
   createdAt: string
   updatedAt?: string
+  status?: string
 }
 
 interface NotificationTarget {
-  key: 'dashboard' | 'tasks' | 'risks' | 'license' | 'project-home'
+  key: NotificationTargetKey
   label: string
   href: string
+}
+
+interface DecoratedNotification extends NormalizedNotification {
+  target: NotificationTarget
+  groupKey: string
+  groupLabel: string
+}
+
+interface NotificationGroup {
+  key: string
+  label: string
+  target: NotificationTarget
+  items: DecoratedNotification[]
+  unreadCount: number
+  mutedCount: number
+  expiredMuteCount: number
+  highestSeverityRank: number
+  latestCreatedAt: string
+}
+
+interface NotificationDeleteTarget {
+  id: string
+  title: string
+  targetLabel: string
 }
 
 const TAB_OPTIONS: Array<{ value: ReminderTab; label: string }> = [
   { value: 'all', label: '全部' },
   { value: 'unread', label: '未读' },
-  { value: 'risk-issues', label: '风险 / 问题' },
-  { value: 'follow-up', label: '关键跟进' },
-  { value: 'system', label: '系统 / 广播' },
+  { value: 'business-warning', label: '业务预警' },
+  { value: 'system-exception', label: '系统异常' },
+  { value: 'flow-reminder', label: '流程催办' },
+  { value: 'planning-mapping', label: '映射孤立' },
 ]
 
+function isPlanningMappingNotification(notification: Pick<
+  NormalizedNotification,
+  'category' | 'notificationType' | 'type' | 'title' | 'content' | 'sourceEntityType'
+>) {
+  const token = `${notification.category || ''} ${notification.notificationType || ''} ${notification.type || ''} ${notification.title} ${notification.content}`.toLowerCase()
+  return (
+    notification.category === 'planning_mapping_orphan' ||
+    notification.notificationType === 'planning-governance-mapping' ||
+    notification.type === 'planning_gov_mapping_orphan_pointer' ||
+    (
+      notification.sourceEntityType === 'planning_governance' &&
+      /(mapping|orphan|孤立|映射)/.test(token)
+    )
+  )
+}
+
 function normalizeNotification(raw: NotificationApiItem): NormalizedNotification {
+  const updatedAt = raw.updated_at ?? raw.updatedAt
+  const metadata = raw.metadata && typeof raw.metadata === 'object' ? raw.metadata : undefined
+  const mutedUntilValue = metadata?.muted_until ?? metadata?.mutedUntil
+  const mutedUntil = typeof mutedUntilValue === 'string' ? mutedUntilValue : undefined
+  const mutedUntilTimestamp = mutedUntil ? new Date(mutedUntil).getTime() : Number.NaN
+  const muteExpired =
+    raw.status === 'muted' &&
+    Number.isFinite(mutedUntilTimestamp) &&
+    Date.now() >= mutedUntilTimestamp
+  const isMuted =
+    raw.status === 'muted' &&
+    (!Number.isFinite(mutedUntilTimestamp) || Date.now() < mutedUntilTimestamp)
+
   return {
     id: raw.id,
     projectId: raw.project_id ?? raw.projectId,
     type: raw.type || 'system',
+    notificationType: raw.notification_type ?? raw.notificationType,
     severity: raw.severity,
     title: raw.title,
     content: raw.content ?? raw.message ?? '',
-    isRead: raw.is_read ?? raw.read ?? false,
+    isRead: Boolean(raw.is_read ?? raw.read ?? ['acknowledged', 'read'].includes(raw.status ?? '')),
+    isMuted,
+    muteExpired,
+    mutedUntil,
     isBroadcast: raw.is_broadcast,
     sourceEntityType: raw.source_entity_type ?? raw.sourceEntityType,
     sourceEntityId: raw.source_entity_id ?? raw.sourceEntityId,
@@ -130,19 +211,41 @@ function normalizeNotification(raw: NotificationApiItem): NormalizedNotification
     taskId: raw.task_id ?? raw.taskId,
     milestoneId: raw.milestone_id ?? raw.milestoneId,
     data: raw.data,
+    metadata,
+    resolvedSource: raw.resolved_source ?? raw.resolvedSource ?? null,
     createdAt: raw.created_at ?? raw.createdAt ?? new Date().toISOString(),
-    updatedAt: raw.updated_at ?? raw.updatedAt,
+    updatedAt,
+    status: raw.status,
   }
 }
 
 function isReminderNotification(notification: NormalizedNotification) {
+  if (isPlanningMappingNotification(notification)) {
+    return true
+  }
+
+  if (
+    notification.notificationType === 'business-warning' ||
+    notification.notificationType === 'system-exception' ||
+    notification.notificationType === 'flow-reminder'
+  ) {
+    return true
+  }
+
   const token = `${notification.category || ''} ${notification.type || ''} ${notification.title} ${notification.content}`.toLowerCase()
 
   return (
+    notification.category === 'materials' ||
+    notification.sourceEntityType === 'project_material' ||
+    notification.notificationType === 'material_arrival_reminder' ||
+    notification.notificationType === 'material_arrival_overdue' ||
+    notification.type === 'material_arrival_reminder' ||
+    notification.type === 'material_arrival_overdue' ||
     notification.category === 'system' ||
     notification.category === 'risk' ||
     notification.category === 'problem' ||
     !notification.category ||
+    /(材料|到场|逾期未到)/.test(token) ||
     token.includes('reminder') ||
     token.includes('warning') ||
     token.includes('risk') ||
@@ -155,74 +258,27 @@ function isReminderNotification(notification: NormalizedNotification) {
   )
 }
 
-function resolveTarget(notification: NormalizedNotification, currentProjectId?: string): NotificationTarget {
-  const projectId = notification.projectId || currentProjectId
-  const token = `${notification.title} ${notification.content} ${notification.type} ${notification.category}`.toLowerCase()
+const PLANNING_SOURCE_ENTITY_TYPES = new Set(['planning', 'baseline', 'monthly_plan', 'closeout'])
 
-  if (!projectId) {
-    return {
-      key: 'project-home',
-      label: '提醒中心',
-      href: '/notifications',
-    }
-  }
-
-  if (notification.sourceEntityType === 'task' || notification.taskId || /任务|wbs|条件|阻碍|延期/.test(token)) {
-    return {
-      key: 'tasks',
-      label: '任务管理',
-      href: `/projects/${projectId}/gantt`,
-    }
-  }
-
-  if (notification.sourceEntityType === 'milestone' || notification.milestoneId || /里程碑|节点/.test(token)) {
-    return {
-      key: 'project-home',
-      label: '里程碑',
-      href: `/projects/${projectId}/milestones`,
-    }
-  }
-
-  if (/(风险|问题|预警|告警)/.test(token) || notification.severity === 'warning' || notification.severity === 'critical') {
-    return {
-      key: 'risks',
-      label: '风险与问题',
-      href: `/projects/${projectId}/risks`,
-    }
-  }
-
-  if (/(证照|验收|图纸|许可|施工证|备案)/.test(token)) {
-    return {
-      key: 'license',
-      label: '证照管理',
-      href: `/projects/${projectId}/pre-milestones`,
-    }
-  }
-
-  if (/(dashboard|总览|概览|汇总|驾驶舱)/.test(token)) {
-    return {
-      key: 'dashboard',
-      label: 'Dashboard',
-      href: `/projects/${projectId}/dashboard`,
-    }
-  }
-
-  return {
-    key: 'project-home',
-    label: '项目总览',
-    href: `/projects/${projectId}`,
-  }
+function isPlanningSourceEntityType(sourceEntityType?: string) {
+  return Boolean(sourceEntityType && PLANNING_SOURCE_ENTITY_TYPES.has(sourceEntityType))
 }
 
 function getTargetIcon(target: NotificationTarget): LucideIcon {
   switch (target.key) {
     case 'dashboard':
+    case 'reports':
       return LayoutDashboard
+    case 'task-summary':
+      return GanttChart
+    case 'planning':
+      return GanttChart
     case 'tasks':
       return GanttChart
     case 'risks':
       return AlertTriangle
     case 'license':
+    case 'special':
       return ShieldAlert
     default:
       return Bell
@@ -232,11 +288,19 @@ function getTargetIcon(target: NotificationTarget): LucideIcon {
 function getTargetTone(target: NotificationTarget) {
   switch (target.key) {
     case 'dashboard':
+    case 'reports':
       return {
         icon: 'text-slate-600',
         bg: 'bg-slate-100',
         badge: 'secondary' as const,
       }
+    case 'task-summary':
+      return {
+        icon: 'text-orange-600',
+        bg: 'bg-orange-50',
+        badge: 'outline' as const,
+      }
+    case 'planning':
     case 'tasks':
       return {
         icon: 'text-blue-600',
@@ -250,6 +314,7 @@ function getTargetTone(target: NotificationTarget) {
         badge: 'destructive' as const,
       }
     case 'license':
+    case 'special':
       return {
         icon: 'text-emerald-600',
         bg: 'bg-emerald-50',
@@ -273,18 +338,46 @@ function getNotificationLevelLabel(notification: NormalizedNotification) {
 }
 
 function getNotificationReadBadge(notification: NormalizedNotification) {
-  return notification.isRead ? '已处理' : '未读'
+  return getNotificationStateLabel(notification)
 }
 
 function getReminderTab(notification: NormalizedNotification): Exclude<ReminderTab, 'all' | 'unread'> {
+  if (isPlanningMappingNotification(notification)) {
+    return 'planning-mapping'
+  }
+
+  if (
+    notification.notificationType === 'business-warning' ||
+    notification.notificationType === 'system-exception' ||
+    notification.notificationType === 'flow-reminder'
+  ) {
+    return notification.notificationType
+  }
+
   const token = `${notification.category || ''} ${notification.type || ''} ${notification.title} ${notification.content}`.toLowerCase()
+
+  if (isPlanningSourceEntityType(notification.sourceEntityType)) {
+    return 'flow-reminder'
+  }
 
   if (
     notification.category === 'risk' ||
     notification.category === 'problem' ||
     /(风险|问题|预警|告警)/.test(token)
   ) {
-    return 'risk-issues'
+    return 'business-warning'
+  }
+
+  if (
+    notification.category === 'materials' ||
+    notification.sourceEntityType === 'project_material' ||
+    notification.notificationType === 'material_arrival_reminder' ||
+    notification.notificationType === 'material_arrival_overdue' ||
+    notification.type === 'material_arrival_reminder' ||
+    notification.type === 'material_arrival_overdue' ||
+    /(材料|到场|逾期未到)/.test(token)
+  ) {
+    return 'flow-reminder'
   }
 
   if (
@@ -292,18 +385,46 @@ function getReminderTab(notification: NormalizedNotification): Exclude<ReminderT
     Boolean(notification.taskId) ||
     Boolean(notification.milestoneId)
   ) {
-    return 'follow-up'
+    return 'flow-reminder'
   }
 
-  return 'system'
+  return 'system-exception'
+}
+
+function getSeverityRank(notification: NormalizedNotification) {
+  if (notification.severity === 'critical') return 3
+  if (notification.severity === 'warning') return 2
+  if (notification.severity === 'info') return 1
+  return 0
+}
+
+function getNotificationStateLabel(notification: NormalizedNotification) {
+  if (notification.isMuted) return '静音中'
+  if (notification.muteExpired) return '静音已到期'
+  if (notification.status === 'acknowledged') return '已知悉'
+  if (notification.isRead) return '已处理'
+  return '未读'
 }
 
 export default function Notifications() {
-  const { currentProject, connectionMode, setConnectionMode } = useStore()
+  const currentProject = useCurrentProject()
+  const setCurrentProject = useSetCurrentProject()
+  const connectionMode = useConnectionMode()
+  const realtimeConnectionState = useRealtimeConnectionState()
+  const lastRealtimeEvent = useLastRealtimeEvent()
+  const setConnectionMode = useSetConnectionMode()
+  const notifications = useNotifications()
+  const setNotifications = useStore((state) => state.setNotifications)
+  const setSharedSliceStatus = useStore((state) => state.setSharedSliceStatus)
   const api = useApi()
+  const location = useLocation()
   const navigate = useNavigate()
+  const projectIdFromQuery = useMemo(() => {
+    const nextProjectId = new URLSearchParams(location.search).get('projectId')
+    const trimmed = nextProjectId?.trim()
+    return trimmed ? trimmed : undefined
+  }, [location.search])
 
-  const [notifications, setNotifications] = useState<NormalizedNotification[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [scope, setScope] = useState<ReminderScope>('company')
@@ -311,8 +432,13 @@ export default function Notifications() {
   const [assigneeFilter, setAssigneeFilter] = useState<string>('all')
   const [assigneeDropdownOpen, setAssigneeDropdownOpen] = useState(false)
   const [settingsPanelOpen, setSettingsPanelOpen] = useState(false)
+  const [muteDurationHours, setMuteDurationHours] = useState<AllowedMuteHours>(24)
+  const [deleteTarget, setDeleteTarget] = useState<NotificationDeleteTarget | null>(null)
+  const [deleteSubmitting, setDeleteSubmitting] = useState(false)
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({})
   const assigneeDropdownRef = useRef<HTMLDivElement>(null)
   const settingsPanelRef = useRef<HTMLDivElement>(null)
+  const realtimeRefreshTimeoutRef = useRef<number | null>(null)
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -328,45 +454,168 @@ export default function Notifications() {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
-  const loadNotifications = useCallback(async () => {
+  useEffect(() => {
+    const searchParams = new URLSearchParams(location.search)
+    const nextScope = searchParams.get('scope')
+    const nextProjectId = searchParams.get('projectId')
+
+    if (nextScope === 'company') {
+      setScope('company')
+      return
+    }
+
+    if (!nextProjectId) return
+
+    const cachedProject = getCachedProjects().find((project) => project.id === nextProjectId) ?? null
+    if (cachedProject) {
+      setCurrentProject(cachedProject as never)
+    }
+    setScope('current-project')
+  }, [location.search, setCurrentProject])
+
+  const loadNotifications = useCallback(async (options?: { silent?: boolean }) => {
+    const silent = options?.silent === true
     try {
-      setLoading(true)
+      if (!silent) {
+        setLoading(true)
+      }
       setLoadError(null)
+      setSharedSliceStatus('notifications', { loading: !silent, error: null })
+
+      const effectiveProjectId = scope === 'current-project'
+        ? currentProject?.id ?? projectIdFromQuery
+        : undefined
 
       let url = '/api/notifications?limit=100'
-      if (scope === 'current-project' && currentProject?.id) {
-        url += `&projectId=${currentProject.id}`
+      if (effectiveProjectId) {
+        url += `&projectId=${effectiveProjectId}`
       }
 
       const response = await api.get<NotificationApiItem[]>(url)
-      const normalized = (Array.isArray(response) ? response : [])
+      if (!Array.isArray(response)) {
+        throw new Error('\u63d0\u9192\u6570\u636e\u683c\u5f0f\u4e0d\u6b63\u786e')
+      }
+      const normalized = response
         .map(normalizeNotification)
         .filter(isReminderNotification)
 
       setNotifications(normalized)
+      setSharedSliceStatus('notifications', { loading: false, error: null })
     } catch (error) {
       console.error('Failed to load notifications:', error)
       const message = isBackendUnavailableError(error)
-        ? '提醒中心依赖后端接口，请先确认本地后端已启动（默认 3001），再刷新重试。'
-        : getApiErrorMessage(error, '提醒加载失败，请稍后重试。')
+        ? `${PROJECT_NAVIGATION_LABELS.notifications}\u4f9d\u8d56\u540e\u7aef\u63a5\u53e3\uff0c\u8bf7\u5148\u786e\u8ba4\u672c\u5730\u540e\u7aef\u5df2\u542f\u52a8\uff08\u9ed8\u8ba4 3001\uff09\uff0c\u518d\u5237\u65b0\u91cd\u8bd5\u3002`
+        : getApiErrorMessage(error, '\u63d0\u9192\u52a0\u8f7d\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002')
 
-      setLoadError(message)
-      toast({ title: '加载失败', description: message, variant: 'destructive' })
+      // 10.10b: 不清空 store 数据，保留上次成功加载的内容；仅设置 error 状态
+      setSharedSliceStatus('notifications', { loading: false, error: message })
+      if (!silent) {
+        setLoadError(message)
+        toast({ title: '加载失败', description: message, variant: 'destructive' })
+      }
     } finally {
-      setLoading(false)
+      if (!silent) {
+        setLoading(false)
+      }
     }
-  }, [api, currentProject?.id, scope])
+  }, [api, currentProject?.id, projectIdFromQuery, scope, setNotifications, setSharedSliceStatus])
 
   useEffect(() => {
     void loadNotifications()
   }, [loadNotifications])
 
-  const markAsRead = async (id: string) => {
+  useEffect(() => {
+    if (connectionMode !== 'polling') {
+      return
+    }
+
+    const interval = window.setInterval(() => {
+      void loadNotifications({ silent: true })
+    }, 30000)
+
+    return () => window.clearInterval(interval)
+  }, [connectionMode, loadNotifications])
+
+  useEffect(() => {
+    if (connectionMode !== 'websocket') {
+      return
+    }
+
+    const matchesScope =
+      scope === 'company'
+        ? isRealtimeNotificationEvent(lastRealtimeEvent)
+        : isRealtimeNotificationEvent(lastRealtimeEvent, currentProject?.id)
+
+    if (!matchesScope) {
+      return
+    }
+
+    if (realtimeRefreshTimeoutRef.current !== null) {
+      window.clearTimeout(realtimeRefreshTimeoutRef.current)
+    }
+
+    realtimeRefreshTimeoutRef.current = window.setTimeout(() => {
+      void loadNotifications({ silent: true })
+    }, 250)
+
+    return () => {
+      if (realtimeRefreshTimeoutRef.current !== null) {
+        window.clearTimeout(realtimeRefreshTimeoutRef.current)
+        realtimeRefreshTimeoutRef.current = null
+      }
+    }
+  }, [connectionMode, currentProject?.id, lastRealtimeEvent, loadNotifications, scope])
+
+  const patchNotifications = useCallback((ids: string[], patch: Partial<NormalizedNotification>) => {
+    const idSet = new Set(ids)
+    setNotifications(notifications.map((item) => (idSet.has(item.id) ? { ...item, ...patch } : item)))
+  }, [notifications, setNotifications])
+
+  const acknowledgeNotification = async (id: string) => {
     try {
-      await api.put(`/api/notifications/${id}/read`)
-      setNotifications((prev) => prev.map((item) => (item.id === id ? { ...item, isRead: true } : item)))
+      await api.put(`/api/notifications/${id}/acknowledge`)
+      patchNotifications([id], { isRead: true, isMuted: false, muteExpired: false, mutedUntil: undefined, status: 'acknowledged' })
     } catch (error) {
-      console.error('Failed to mark notification as read:', error)
+      console.error('Failed to acknowledge notification:', error)
+    }
+  }
+
+  const muteNotification = async (id: string, muteHours = muteDurationHours) => {
+    try {
+      await api.put(`/api/notifications/${id}/mute`, { mutedHours: muteHours })
+      patchNotifications([id], {
+        isMuted: true,
+        muteExpired: false,
+        mutedUntil: buildMutedUntil(muteHours),
+        status: 'muted',
+      })
+    } catch (error) {
+      console.error('Failed to mute notification:', error)
+    }
+  }
+
+  const acknowledgeNotifications = async (ids: string[]) => {
+    if (ids.length === 0) return
+    try {
+      await api.put('/api/notifications/acknowledge-group', { ids })
+      patchNotifications(ids, { isRead: true, isMuted: false, muteExpired: false, mutedUntil: undefined, status: 'acknowledged' })
+    } catch (error) {
+      console.error('Failed to acknowledge notifications:', error)
+    }
+  }
+
+  const muteNotifications = async (ids: string[], muteHours = muteDurationHours) => {
+    if (ids.length === 0) return
+    try {
+      await Promise.all(ids.map((id) => api.put(`/api/notifications/${id}/mute`, { mutedHours: muteHours })))
+      patchNotifications(ids, {
+        isMuted: true,
+        muteExpired: false,
+        mutedUntil: buildMutedUntil(muteHours),
+        status: 'muted',
+      })
+    } catch (error) {
+      console.error('Failed to mute notifications:', error)
     }
   }
 
@@ -377,34 +626,67 @@ export default function Notifications() {
         url += `?projectId=${currentProject.id}`
       }
       await api.put(url)
-      setNotifications((prev) => prev.map((item) => ({ ...item, isRead: true })))
+      setNotifications(notifications.map((item) => ({ ...item, isRead: true, isMuted: false, muteExpired: false, mutedUntil: undefined, status: 'read' })))
     } catch (error) {
       console.error('Failed to mark all as read:', error)
     }
   }
 
-  const deleteNotification = async (id: string) => {
+  const requestDeleteNotification = (item: DecoratedNotification) => {
+    setDeleteTarget({
+      id: item.id,
+      title: item.title,
+      targetLabel: item.target.label,
+    })
+  }
+
+  const deleteNotification = async () => {
+    if (!deleteTarget) return
+
     try {
-      await api.delete(`/api/notifications/${id}`)
-      setNotifications((prev) => prev.filter((item) => item.id !== id))
+      setDeleteSubmitting(true)
+      await api.delete(`/api/notifications/${deleteTarget.id}`)
+      setNotifications(notifications.filter((item) => item.id !== deleteTarget.id))
+      setDeleteTarget(null)
+      toast({
+        title: '提醒已删除',
+        description: `“${deleteTarget.title}”已从提醒中心移除，不会影响原业务数据。`,
+      })
     } catch (error) {
       console.error('Failed to delete notification:', error)
+      toast({
+        title: '删除提醒失败',
+        description: getApiErrorMessage(error, '请稍后重试。'),
+        variant: 'destructive',
+      })
+    } finally {
+      setDeleteSubmitting(false)
     }
   }
 
   const decoratedNotifications = useMemo(
     () =>
-      notifications.map((item) => ({
-        ...item,
-        target: resolveTarget(item, currentProject?.id),
-      })),
+      notifications.map((item) => {
+        const target = resolveNotificationTarget(item, currentProject?.id)
+        const groupLabel = target.label
+        const groupKey = `${getReminderTab(item)}:${target.key}`
+
+        return {
+          ...item,
+          target,
+          groupKey,
+          groupLabel,
+        }
+      }),
     [currentProject?.id, notifications],
   )
 
-  const pendingCount = decoratedNotifications.filter((item) => !item.isRead).length
-  const processedCount = decoratedNotifications.filter((item) => item.isRead).length
-  const riskIssueCount = decoratedNotifications.filter((item) => getReminderTab(item) === 'risk-issues').length
-  const followUpCount = decoratedNotifications.filter((item) => getReminderTab(item) === 'follow-up').length
+  const pendingCount = decoratedNotifications.filter((item) => !item.isRead && !item.isMuted).length
+  const processedCount = decoratedNotifications.filter((item) => item.isRead || item.isMuted).length
+  const businessWarningCount = decoratedNotifications.filter((item) => getReminderTab(item) === 'business-warning').length
+  const systemExceptionCount = decoratedNotifications.filter((item) => getReminderTab(item) === 'system-exception').length
+  const flowReminderCount = decoratedNotifications.filter((item) => getReminderTab(item) === 'flow-reminder').length
+  const planningMappingCount = decoratedNotifications.filter((item) => getReminderTab(item) === 'planning-mapping').length
   const linkedProjectCount = decoratedNotifications.filter((item) => Boolean(item.projectId)).length
   const allCount = decoratedNotifications.length
 
@@ -418,12 +700,73 @@ export default function Notifications() {
       const assigneeMatch = assigneeFilter === 'all' || item.assignee === assigneeFilter
       const tabMatch =
         tab === 'all' ||
-        (tab === 'unread' && !item.isRead) ||
-        (tab !== 'all' && tab !== 'unread' && getReminderTab(item) === tab)
+        (tab === 'unread' && !item.isRead && !item.isMuted) ||
+        getReminderTab(item) === tab
 
       return assigneeMatch && tabMatch
     })
   }, [assigneeFilter, decoratedNotifications, tab])
+
+  const groupedNotifications = useMemo(() => {
+    const groups = new Map<string, NotificationGroup>()
+
+    for (const item of filteredNotifications) {
+      const existing = groups.get(item.groupKey)
+      if (!existing) {
+        groups.set(item.groupKey, {
+          key: item.groupKey,
+          label: item.groupLabel,
+          target: item.target,
+          items: [item],
+          unreadCount: !item.isRead && !item.isMuted ? 1 : 0,
+          mutedCount: item.isMuted ? 1 : 0,
+          expiredMuteCount: item.muteExpired ? 1 : 0,
+          highestSeverityRank: getSeverityRank(item),
+          latestCreatedAt: item.createdAt,
+        })
+        continue
+      }
+
+      existing.items.push(item)
+      existing.unreadCount += !item.isRead && !item.isMuted ? 1 : 0
+      existing.mutedCount += item.isMuted ? 1 : 0
+      existing.expiredMuteCount += item.muteExpired ? 1 : 0
+      existing.highestSeverityRank = Math.max(existing.highestSeverityRank, getSeverityRank(item))
+      if (item.createdAt > existing.latestCreatedAt) {
+        existing.latestCreatedAt = item.createdAt
+      }
+    }
+
+    return Array.from(groups.values())
+      .map((group) => ({
+        ...group,
+        items: [...group.items].sort((left, right) => {
+          const severityDelta = getSeverityRank(right) - getSeverityRank(left)
+          if (severityDelta !== 0) return severityDelta
+          return right.createdAt.localeCompare(left.createdAt)
+        }),
+      }))
+      .sort((left, right) => {
+        if (right.highestSeverityRank !== left.highestSeverityRank) {
+          return right.highestSeverityRank - left.highestSeverityRank
+        }
+
+        const unreadDelta = right.unreadCount - left.unreadCount
+        if (unreadDelta !== 0) return unreadDelta
+
+        return right.latestCreatedAt.localeCompare(left.latestCreatedAt)
+      })
+  }, [filteredNotifications])
+
+  useEffect(() => {
+    setExpandedGroups((current) => {
+      const next: Record<string, boolean> = {}
+      groupedNotifications.forEach((group) => {
+        next[group.key] = current[group.key] ?? true
+      })
+      return next
+    })
+  }, [groupedNotifications])
 
   const scopeLabel = scope === 'company' ? '\u516c\u53f8\u7ea7\u805a\u5408' : '\u5f53\u524d\u9879\u76ee\u805a\u7126'
   const legacyScopeDescription =
@@ -443,96 +786,24 @@ export default function Notifications() {
   void legacyScopeDescription
 
   const currentTabCount = filteredNotifications.length
+  const connectionLabel =
+    connectionMode === 'polling'
+      ? '轮询同步'
+      : realtimeConnectionState === 'connected'
+        ? '实时同步'
+        : realtimeConnectionState === 'connecting' || realtimeConnectionState === 'reconnecting'
+          ? '实时重连中'
+          : '实时已断开'
 
-  // 数据导出/导入处理器（复用自 Settings 页，逻辑无独占状态，可安全迁入）
-  const handleExportTasks = async () => {
-    if (!currentProject) {
-      toast({ title: '请先选择一个项目', variant: 'destructive' })
-      return
-    }
-    try {
-      exportTasksToExcel(currentProject.id)
-      toast({ title: '任务导出成功' })
-    } catch (e) {
-      toast({ title: '导出失败', description: String(e), variant: 'destructive' })
-    }
-  }
-
-  const handleExportRisks = async () => {
-    if (!currentProject) {
-      toast({ title: '请先选择一个项目', variant: 'destructive' })
-      return
-    }
-    try {
-      exportRisksToExcel(currentProject.id)
-      toast({ title: '风险导出成功' })
-    } catch (e) {
-      toast({ title: '导出失败', description: String(e), variant: 'destructive' })
-    }
-  }
-
-  const handleExportMilestones = async () => {
-    if (!currentProject) {
-      toast({ title: '请先选择一个项目', variant: 'destructive' })
-      return
-    }
-    try {
-      exportMilestonesToExcel(currentProject.id)
-      toast({ title: '里程碑导出成功' })
-    } catch (e) {
-      toast({ title: '导出失败', description: String(e), variant: 'destructive' })
-    }
-  }
-
-  const handleExportJSON = () => {
-    try {
-      const data = exportAllData()
-      exportToJSON(data)
-      toast({ title: 'JSON备份导出成功' })
-    } catch (e) {
-      toast({ title: '导出失败', description: String(e), variant: 'destructive' })
-    }
-  }
-
-  const handleImportTasks = async () => {
-    if (!currentProject) {
-      toast({ title: '请先选择一个项目', variant: 'destructive' })
-      return
-    }
-    const input = document.createElement('input')
-    input.type = 'file'
-    input.accept = '.xlsx,.xls'
-    input.onchange = async (e) => {
-      const file = (e.target as HTMLInputElement).files?.[0]
-      if (!file) return
-      try {
-        const result = await importTasksFromExcel(file, currentProject.id)
-        if (result.success) {
-          toast({ title: `导入成功，共导入 ${result.imported.tasks} 个任务` })
-        } else {
-          toast({ title: '导入部分成功', description: result.errors.join(', '), variant: 'destructive' })
-        }
-      } catch (e) {
-        toast({ title: '导入失败', description: String(e), variant: 'destructive' })
-      }
-    }
-    input.click()
-  }
-
-  const handleDownloadTemplate = () => {
-    downloadTaskTemplate()
-    toast({ title: '模板下载成功' })
-  }
-
-  const handleGoProcess = async (item: (typeof decoratedNotifications)[number]) => {
+  const handleGoProcess = async (item: DecoratedNotification) => {
     if (item.projectId) {
       navigate(item.target.href)
     } else {
       navigate('/notifications')
     }
 
-    if (!item.isRead) {
-      await markAsRead(item.id)
+    if (!item.isRead || item.isMuted) {
+      await acknowledgeNotification(item.id)
     }
   }
 
@@ -541,11 +812,11 @@ export default function Notifications() {
       <div className="page-enter space-y-6 p-6">
         <Card className="overflow-hidden">
           <CardContent className="pt-6">
-            <div className="flex h-40 items-center justify-center">
-              <div className="animate-spin">
-                <RefreshCw className="h-6 w-6 text-slate-500" />
-              </div>
-            </div>
+            <LoadingState
+              label="通知加载中"
+              description="正在同步风险、问题、预警与关键提醒"
+              className="h-40 min-h-40 border-0 bg-transparent shadow-none"
+            />
           </CardContent>
         </Card>
       </div>
@@ -553,15 +824,15 @@ export default function Notifications() {
   }
 
   return (
-    <div className="page-enter space-y-6 p-6">
+    <div className="page-enter space-y-6 p-6" data-testid="notifications-page">
       <PageHeader
         eyebrow={'\u516c\u53f8\u7ea7\u7b2c\u4e8c\u5165\u53e3'}
-        title={'\u63d0\u9192\u4e2d\u5fc3'}
+        title={PROJECT_NAVIGATION_LABELS.notifications}
         subtitle={`${scopeDescription} ${'\u8fd9\u91cc\u96c6\u4e2d\u67e5\u770b\u98ce\u9669\u3001\u95ee\u9898\u3001\u9884\u8b66\u4e0e\u5173\u952e\u8ddf\u8fdb\uff0c\u518d\u8fdb\u5165\u9879\u76ee\u5904\u7406\u3002'}`}
       >
         <Badge variant="secondary">{scopeLabel}</Badge>
         <Badge variant="secondary">
-          {connectionMode === 'websocket' ? '\u5b9e\u65f6\u540c\u6b65' : '\u8f6e\u8be2\u540c\u6b65'}
+          {connectionLabel}
         </Badge>
 
         <div className="relative" ref={assigneeDropdownRef}>
@@ -681,57 +952,33 @@ export default function Notifications() {
                     </Button>
                   </div>
                   <p className="mt-2 text-xs leading-5 text-slate-500">
-                    {'\u8fd9\u91cc\u4ec5\u4fdd\u7559\u63d0\u9192\u5904\u7406\u76f8\u5173\u64cd\u4f5c\uff0c\u6570\u636e\u5de5\u5177\u5df2\u4e0b\u6c89\u5230\u5404\u4e1a\u52a1\u6a21\u5757\u3002'}
+                    {connectionMode === 'websocket'
+                      ? `当前连接状态：${connectionLabel}。服务端事件会自动刷新提醒列表，断线后会自动重连。`
+                      : '轮询模式下每 30 秒自动刷新一次提醒列表，也可手动点击右上角刷新按钮。'}
                   </p>
                 </div>
 
                 <div className="border-t border-slate-100 pt-4">
                   <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
-                    {'\u6570\u636e\u5bfc\u5165\u5bfc\u51fa'}
+                    {'\u9759\u97f3\u65f6\u957f'}
                   </div>
-                  <div className="mt-2 space-y-3">
-                    <div>
-                      <p className="mb-1.5 text-xs text-slate-500">{'Excel \u5bfc\u51fa'}</p>
-                      <div className="flex flex-wrap gap-1.5">
-                        <Button variant="outline" size="sm" onClick={() => void handleExportTasks()}>
-                          <Download className="mr-1.5 h-3.5 w-3.5" />
-                          {'\u5bfc\u51fa\u4efb\u52a1'}
-                        </Button>
-                        <Button variant="outline" size="sm" onClick={() => void handleExportRisks()}>
-                          <Download className="mr-1.5 h-3.5 w-3.5" />
-                          {'\u5bfc\u51fa\u98ce\u9669'}
-                        </Button>
-                        <Button variant="outline" size="sm" onClick={() => void handleExportMilestones()}>
-                          <Download className="mr-1.5 h-3.5 w-3.5" />
-                          {'\u5bfc\u51fa\u91cc\u7a0b\u7891'}
-                        </Button>
-                      </div>
-                    </div>
-                    <div>
-                      <p className="mb-1.5 text-xs text-slate-500">{'\u6570\u636e\u5907\u4efd'}</p>
-                      <Button variant="outline" size="sm" onClick={handleExportJSON}>
-                        <Download className="mr-1.5 h-3.5 w-3.5" />
-                        {'\u5bfc\u51fa JSON \u5907\u4efd'}
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {MUTE_DURATION_OPTIONS.map((option) => (
+                      <Button
+                        key={option.hours}
+                        variant={muteDurationHours === option.hours ? 'default' : 'outline'}
+                        size="sm"
+                        onClick={() => setMuteDurationHours(option.hours)}
+                      >
+                        {option.label}
                       </Button>
-                    </div>
-                    <div>
-                      <p className="mb-1.5 text-xs text-slate-500">{'Excel \u5bfc\u5165'}</p>
-                      <div className="flex flex-wrap gap-1.5">
-                        <Button variant="outline" size="sm" onClick={() => void handleImportTasks()}>
-                          <Upload className="mr-1.5 h-3.5 w-3.5" />
-                          {'\u5bfc\u5165\u4efb\u52a1'}
-                        </Button>
-                        <Button variant="outline" size="sm" onClick={handleDownloadTemplate}>
-                          <FileSpreadsheet className="mr-1.5 h-3.5 w-3.5" />
-                          {'\u4e0b\u8f7d\u6a21\u677f'}
-                        </Button>
-                      </div>
-                      <p className="mt-1.5 text-xs text-slate-400">
-                        {'\u5bfc\u5165\u524d\u8bf7\u5148\u9009\u62e9\u9879\u76ee\uff0c\u518d\u4e0b\u8f7d\u6a21\u677f\u6309\u683c\u5f0f\u586b\u5199'}
-                      </p>
-                    </div>
+                    ))}
                   </div>
+                  <p className="mt-2 text-xs leading-5 text-slate-500">
+                    当前批量与单条提醒默认使用 {getMuteDurationActionLabel(muteDurationHours)}。
+                  </p>
                 </div>
+
               </div>
             </div>
           )}
@@ -746,7 +993,7 @@ export default function Notifications() {
       ) : null}
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <Card className="card-v4-sm">
+        <Card className="rounded-xl border border-slate-200 bg-white p-4" data-testid="notifications-summary-total">
           <CardContent className="space-y-3 p-5">
             <div className="flex items-center justify-between">
               <span className="text-sm font-medium text-slate-500">{'\u63d0\u9192\u603b\u6570'}</span>
@@ -759,7 +1006,7 @@ export default function Notifications() {
           </CardContent>
         </Card>
 
-        <Card className="card-v4-sm">
+        <Card className="rounded-xl border border-slate-200 bg-white p-4">
           <CardContent className="space-y-3 p-5">
             <div className="flex items-center justify-between">
               <span className="text-sm font-medium text-slate-500">{'\u672a\u8bfb'}</span>
@@ -772,32 +1019,33 @@ export default function Notifications() {
           </CardContent>
         </Card>
 
-        <Card className="card-v4-sm">
+        <Card className="rounded-xl border border-slate-200 bg-white p-4">
           <CardContent className="space-y-3 p-5">
             <div className="flex items-center justify-between">
-              <span className="text-sm font-medium text-slate-500">{'\u98ce\u9669 / \u95ee\u9898'}</span>
+              <span className="text-sm font-medium text-slate-500">{'\u4e1a\u52a1\u9884\u8b66'}</span>
               <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-rose-50">
                 <AlertTriangle className="h-5 w-5 text-rose-600" />
               </div>
             </div>
-            <div className="text-3xl font-semibold tracking-tight text-rose-600">{riskIssueCount}</div>
-            <p className="text-xs text-slate-500">{'\u805a\u5408\u98ce\u9669\u3001\u95ee\u9898\u4e0e\u9884\u8b66\u578b\u63d0\u9192'}</p>
+            <div className="text-3xl font-semibold tracking-tight text-rose-600">{businessWarningCount}</div>
+            <p className="text-xs text-slate-500">{`\u805a\u5408\u98ce\u9669\u3001\u95ee\u9898\u4e0e\u4e1a\u52a1\u9884\u8b66\u63d0\u9192\uff0c\u7cfb\u7edf\u5f02\u5e38 ${systemExceptionCount} \u6761`}</p>
           </CardContent>
         </Card>
 
-        <Card className="card-v4-sm">
+        <Card className="rounded-xl border border-slate-200 bg-white p-4">
           <CardContent className="space-y-3 p-5">
             <div className="flex items-center justify-between">
-              <span className="text-sm font-medium text-slate-500">{'\u5173\u952e\u8ddf\u8fdb'}</span>
+              <span className="text-sm font-medium text-slate-500">{'\u6d41\u7a0b\u50ac\u529e'}</span>
               <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-blue-50">
                 <LayoutDashboard className="h-5 w-5 text-blue-600" />
               </div>
             </div>
-            <div className="text-3xl font-semibold tracking-tight text-blue-600">{followUpCount}</div>
+            <div className="text-3xl font-semibold tracking-tight text-blue-600">{flowReminderCount}</div>
             <p className="text-xs text-slate-500">
               {linkedProjectCount > 0
                 ? `${linkedProjectCount} \u6761\u53ef\u76f4\u63a5\u8fdb\u5165\u9879\u76ee\u6a21\u5757\u5904\u7406\uff0c${processedCount} \u6761\u5df2\u5904\u7406`
-                : '\u805a\u5408\u5ef6\u671f\u3001\u6761\u4ef6\u3001\u963b\u788d\u548c\u4e34\u671f\u4e8b\u9879'}
+                : '\u805a\u5408\u5ef6\u671f\u3001\u6761\u4ef6\u3001\u963b\u788d\u3001\u91cc\u7a0b\u7891\u548c\u8ba1\u5212\u7f16\u5236\u63d0\u9192'}
+              {planningMappingCount > 0 ? ` | S2 mapping isolated ${planningMappingCount}` : ''}
             </p>
           </CardContent>
         </Card>
@@ -826,7 +1074,7 @@ export default function Notifications() {
             </div>
           </div>
 
-          {filteredNotifications.length === 0 ? (
+          {groupedNotifications.length === 0 ? (
             <div className="px-6 py-8">
               <EmptyState
                 icon={Bell}
@@ -858,84 +1106,186 @@ export default function Notifications() {
             </div>
           ) : (
             <div className="divide-y divide-slate-100">
-              {filteredNotifications.map((item) => {
-                const target = item.target
-                const targetIcon = getTargetIcon(target)
-                const tone = getTargetTone(target)
-                const TargetIcon = targetIcon
-                const timestamp = format(new Date(item.createdAt), 'MM\u6708dd\u65e5 HH:mm', { locale: zhCN })
+              {groupedNotifications.map((group) => {
+                const tone = getTargetTone(group.target)
+                const GroupIcon = getTargetIcon(group.target)
+                const isExpanded = expandedGroups[group.key] ?? true
 
                 return (
-                  <div
-                    key={item.id}
-                    className={`flex flex-col gap-4 px-6 py-5 transition-colors hover:bg-slate-50 lg:flex-row lg:items-start lg:justify-between ${
-                      item.isRead ? 'bg-white' : 'bg-blue-50/30'
-                    }`}
-                  >
-                    <div className="flex min-w-0 flex-1 gap-4">
-                      <div className="mt-0.5 flex-shrink-0">
-                        <div className={`flex h-12 w-12 items-center justify-center rounded-2xl ${tone.bg}`}>
-                          <TargetIcon className={`h-5 w-5 ${tone.icon}`} />
+                  <section key={group.key} className="px-6 py-5 transition-colors hover:bg-slate-50">
+                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                      <div className="flex min-w-0 flex-1 gap-4">
+                        <div className="mt-0.5 flex-shrink-0">
+                          <div className={`flex h-12 w-12 items-center justify-center rounded-2xl ${tone.bg}`}>
+                            <GroupIcon className={`h-5 w-5 ${tone.icon}`} />
+                          </div>
+                        </div>
+
+                        <div className="min-w-0 flex-1 space-y-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h3 className="text-sm font-semibold text-slate-900">{group.label}</h3>
+                            <Badge variant={tone.badge}>{group.target.label}</Badge>
+                            {group.items.some((item) => getReminderTab(item) === 'planning-mapping') ? (
+                              <Badge variant="outline">S2 mapping</Badge>
+                            ) : null}
+                            <Badge variant="secondary">{`${group.items.length} 条同类提醒`}</Badge>
+                            {group.unreadCount > 0 && <Badge variant="destructive">{`未读 ${group.unreadCount}`}</Badge>}
+                            {group.mutedCount > 0 && <Badge variant="outline">{`静音 ${group.mutedCount}`}</Badge>}
+                            {group.expiredMuteCount > 0 && <Badge variant="outline">{`静音到期 ${group.expiredMuteCount}`}</Badge>}
+                          </div>
+                          <p className="text-sm leading-6 text-slate-600">按最高优先级置顶，同类提醒自动聚合。</p>
                         </div>
                       </div>
 
-                      <div className="min-w-0 flex-1 space-y-2">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <h3 className="text-sm font-semibold text-slate-900">{item.title}</h3>
-                          <Badge variant={tone.badge}>{target.label}</Badge>
-                          <Badge variant={item.isRead ? 'secondary' : 'default'}>{getNotificationReadBadge(item)}</Badge>
-                          <Badge variant="outline">{getNotificationLevelLabel(item)}</Badge>
-                          {item.assignee && <Badge variant="secondary">{`\u8d1f\u8d23\u4eba ${item.assignee}`}</Badge>}
-                        </div>
-
-                        <p className="text-sm leading-6 text-slate-600">{item.content}</p>
-
-                        <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
-                          <span className="inline-flex items-center gap-1">
-                            <Clock className="h-3.5 w-3.5" />
-                            {timestamp}
-                          </span>
-                          {item.projectId && <span>{`\u9879\u76ee ${item.projectId}`}</span>}
-                          {item.sourceEntityType && <span>{`\u6765\u6e90 ${item.sourceEntityType}`}</span>}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="flex flex-shrink-0 items-center gap-2 lg:pt-1">
-                      <Button variant="outline" size="sm" onClick={() => void handleGoProcess(item)}>
-                        {'\u53bb\u5904\u7406'}
-                        <ArrowRight className="ml-2 h-4 w-4" />
-                      </Button>
-
-                      {!item.isRead && (
-                        <Button variant="ghost" size="icon" onClick={() => void markAsRead(item.id)} title={'\u6807\u8bb0\u5df2\u8bfb'}>
-                          <CheckCircle2 className="h-4 w-4" />
+                      <div className="flex flex-shrink-0 flex-wrap items-center gap-2 lg:pt-1">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          data-testid={`notification-group-toggle-${group.target.key}`}
+                          onClick={() => setExpandedGroups((current) => ({ ...current, [group.key]: !isExpanded }))}
+                        >
+                          {isExpanded ? '收起' : '展开'}
+                          <ChevronDown className={`ml-2 h-4 w-4 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
                         </Button>
-                      )}
-
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => void deleteNotification(item.id)}
-                        title={'\u5220\u9664'}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => void acknowledgeNotifications(group.items.map((item) => item.id))}
+                        >
+                          {'整组已知悉'}
+                          <CheckCircle2 className="ml-2 h-4 w-4" />
+                        </Button>
+                        <Button variant="ghost" size="sm" onClick={() => void muteNotifications(group.items.map((item) => item.id), muteDurationHours)}>
+                          {getMuteDurationActionLabel(muteDurationHours)}
+                        </Button>
+                      </div>
                     </div>
-                  </div>
+
+                    {isExpanded ? <div className="mt-4 space-y-4">
+                      {group.items.map((item) => {
+                        const target = item.target
+                        const tone = getTargetTone(target)
+                        const TargetIcon = getTargetIcon(target)
+                        const timestamp = format(new Date(item.createdAt), 'MM\u6708dd\u65e5 HH:mm', { locale: zhCN })
+
+                        return (
+                          <div
+                            key={item.id}
+                            className={`flex flex-col gap-4 rounded-2xl border border-slate-100 bg-white px-4 py-4 transition-colors hover:border-slate-200 ${
+                              item.isMuted ? 'opacity-85' : item.isRead ? 'bg-white' : 'bg-blue-50/30'
+                            }`}
+                          >
+                            <div className="flex min-w-0 flex-1 gap-4">
+                              <div className="mt-0.5 flex-shrink-0">
+                                <div className={`flex h-10 w-10 items-center justify-center rounded-2xl ${tone.bg}`}>
+                                  <TargetIcon className={`h-4 w-4 ${tone.icon}`} />
+                                </div>
+                              </div>
+
+                              <div className="min-w-0 flex-1 space-y-2">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <h4 className="text-sm font-semibold text-slate-900">{item.title}</h4>
+                                  <Badge variant={tone.badge}>{target.label}</Badge>
+                                  <Badge variant={item.isRead ? 'secondary' : 'default'}>{getNotificationStateLabel(item)}</Badge>
+                                  <Badge variant="outline">{getNotificationLevelLabel(item)}</Badge>
+                                  {item.muteExpired ? <Badge variant="outline">静音已到期</Badge> : null}
+                                  {item.assignee && <Badge variant="secondary">{`\u8d1f\u8d23\u4eba ${item.assignee}`}</Badge>}
+                                </div>
+
+                                <p className="text-sm leading-6 text-slate-600">{item.content}</p>
+                                {item.muteExpired ? (
+                                  <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                                    静音已到期，提醒已自动恢复。
+                                    {item.mutedUntil ? ` 到期时间：${format(new Date(item.mutedUntil), 'MM\\u6708dd\\u65e5 HH:mm', { locale: zhCN })}` : ''}
+                                  </div>
+                                ) : null}
+
+                                <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
+                                  <span className="inline-flex items-center gap-1">
+                                    <Clock className="h-3.5 w-3.5" />
+                                    {timestamp}
+                                  </span>
+                                  {item.projectId && <span>{`\u9879\u76ee ${item.projectId}`}</span>}
+                                  {item.sourceEntityType && <span>{`\u6765\u6e90 ${item.sourceEntityType}`}</span>}
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="flex flex-shrink-0 flex-wrap items-center gap-2">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                data-testid={`notification-go-process-${item.id}`}
+                                onClick={() => void handleGoProcess(item)}
+                              >
+                                {'前往处理'}
+                                <ArrowRight className="ml-2 h-4 w-4" />
+                              </Button>
+
+                              {!item.isRead && !item.isMuted && (
+                                <Button variant="ghost" size="sm" onClick={() => void acknowledgeNotification(item.id)}>
+                                  <CheckCircle2 className="mr-2 h-4 w-4" />
+                                  {'已知悉'}
+                                </Button>
+                              )}
+
+                              <Button variant="ghost" size="sm" onClick={() => void muteNotification(item.id, muteDurationHours)}>
+                                {getMuteDurationActionLabel(muteDurationHours)}
+                              </Button>
+
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                title={'删除提醒'}
+                                aria-label={`删除提醒 ${item.title}`}
+                                data-testid={`notification-delete-action-${item.id}`}
+                                onClick={() => requestDeleteNotification(item)}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div> : null}
+                  </section>
                 )
               })}
             </div>
           )}
 
-          {filteredNotifications.length > 0 && (
+          {groupedNotifications.length > 0 && (
             <div className="flex items-center justify-between border-t border-slate-100 px-6 py-4 text-sm text-slate-500">
-              <span>{`\u5171 ${filteredNotifications.length} \u6761\u63d0\u9192`}</span>
+              <span>{`\u5171 ${currentTabCount} \u6761\u63d0\u9192`}</span>
               <span>{'\u4ec5\u4fdd\u7559\u63d0\u9192\u5904\u7406\u76f8\u5173\u64cd\u4f5c\uff0c\u6570\u636e\u5de5\u5177\u5df2\u4e0b\u6c89\u5230\u5bf9\u5e94\u6a21\u5757\u3002'}</span>
             </div>
           )}
         </CardContent>
       </Card>
+
+      <DeleteProtectionDialog
+        open={Boolean(deleteTarget)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDeleteTarget(null)
+          }
+        }}
+        title="删除提醒"
+        description={
+          deleteTarget
+            ? `确认删除“${deleteTarget.title}”这条提醒？删除后只会从提醒中心移除，不会删除对应业务数据。`
+            : '确认删除当前提醒。'
+        }
+        warning={
+          deleteTarget
+            ? `来源模块：${deleteTarget.targetLabel}。这一步只删除提醒视图中的这条消息，请确认当前不再需要保留留痕入口。`
+            : undefined
+        }
+        confirmLabel={deleteSubmitting ? '删除中...' : '确认删除'}
+        loading={deleteSubmitting}
+        onConfirm={() => void deleteNotification()}
+        testId="notification-delete-guard"
+      />
     </div>
   )
 }

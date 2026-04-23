@@ -12,17 +12,27 @@ export interface Task {
   priority?: string
   start_date?: string | null
   end_date?: string | null
+  planned_start_date?: string | null
+  planned_end_date?: string | null
+  delay_reason?: string | null
   progress?: number
   assignee?: string
+  assignee_user_id?: string | null
   assignee_name?: string
   assignee_unit?: string
   responsible_unit?: string
+  participant_unit_id?: string | null
+  participant_unit_name?: string | null
   dependencies?: string[]
   parent_id?: string | null   // WBS父节点ID
+  milestone_id?: string | null
   wbs_code?: string           // WBS编码（如1.2.3）
   wbs_level?: number          // WBS层级
   sort_order?: number         // 同级排序
-  is_critical?: boolean  // 手动标记的关键任务
+  is_critical?: boolean
+  baseline_start?: string | null
+  baseline_end?: string | null
+  baseline_is_critical?: boolean | null
   is_milestone?: boolean  // 是否为里程碑节点
   milestone_level?: number  // 里程碑层级：1=一级(amber)/2=二级(blue)/3=三级(gray)
   milestone_order?: number  // 同级排序
@@ -31,6 +41,9 @@ export interface Task {
   ai_duration?: number          // AI推荐工期（天）
   // #11: 首次填报时间
   first_progress_at?: string | null
+  // 实际开始/结束日期
+  actual_start_date?: string | null
+  actual_end_date?: string | null
   // #12: 专项工程分类
   specialty_type?: string | null
   version?: number
@@ -78,7 +91,11 @@ export interface TaskCondition {
   condition_type?: ConditionTypeValue | string
   target_date?: string | null   // P1: 目标解决日期
   description?: string
+  satisfied_reason?: string | null
+  satisfied_reason_note?: string | null
+  satisfied_at?: string | null
   created_at: string
+  updated_at?: string
 }
 
 // 阻碍记录
@@ -89,6 +106,12 @@ export interface TaskObstacle {
   description?: string
   is_resolved: boolean
   severity?: string
+  status?: string
+  obstacle_type?: string | null
+  expected_resolution_date?: string | null
+  resolution_notes?: string | null
+  severity_escalated_at?: string | null
+  severity_manually_overridden?: boolean | null
   created_at: string
 }
 
@@ -164,6 +187,30 @@ export function flattenTree(nodes: WBSNode[], collapsed: Set<string>): WBSNode[]
     result.push(n)
     if (!collapsed.has(n.id) && n.children.length > 0) {
       result.push(...flattenTree(n.children, collapsed))
+    }
+  }
+  return result
+}
+
+/**
+ * 递归收集 taskId 的全量前向依赖链（含自身），防环限深
+ */
+export function getDependencyChain(taskId: string, taskMap: Map<string, Task>, maxDepth = 20): Set<string> {
+  const result = new Set<string>()
+  const queue = [taskId]
+  let depth = 0
+  while (queue.length > 0 && depth < maxDepth) {
+    const batch = queue.splice(0, queue.length)
+    depth++
+    for (const id of batch) {
+      if (result.has(id)) continue
+      result.add(id)
+      const task = taskMap.get(id)
+      if (task?.dependencies) {
+        for (const depId of task.dependencies) {
+          if (!result.has(depId)) queue.push(depId)
+        }
+      }
     }
   }
   return result

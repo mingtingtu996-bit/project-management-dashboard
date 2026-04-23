@@ -47,7 +47,6 @@ const mocks = vi.hoisted(() => {
         milestone_id: '11111111-1111-4111-8111-111111111111',
       },
     ],
-    task_delay_history: [],
   }
 
   const createQuery = (table: string) => {
@@ -60,6 +59,12 @@ const mocks = vi.hoisted(() => {
       lte: () => query,
       not: () => query,
       limit: () => query,
+      insert: (row: Record<string, unknown>) => {
+        if (table === 'task_conditions') {
+          conditionStore.set(String(row.id ?? ''), { ...row })
+        }
+        return Promise.resolve({ data: null, error: null })
+      },
       then: (resolve: (value: any) => void, reject: (reason?: any) => void) =>
         Promise.resolve({ data: supabaseTables[table] || [], error: null }).then(resolve, reject),
     }
@@ -69,6 +74,7 @@ const mocks = vi.hoisted(() => {
   return {
     conditionStore,
     obstacleStore,
+    writeLog: vi.fn(async (..._args: any[]) => undefined),
     executeSQL: vi.fn(async (query: string, params: any[] = []) => {
       const sql = query.toLowerCase()
 
@@ -120,7 +126,25 @@ const mocks = vi.hoisted(() => {
       }
 
       if (sql.includes('insert into task_obstacles')) {
-        const [id, taskId, projectId, obstacleType, description, status, severity, resolution, resolvedBy, resolvedAt, createdBy, createdAt, updatedAt] = params
+        const [
+          id,
+          taskId,
+          projectId,
+          obstacleType,
+          description,
+          status,
+          severity,
+          severityEscalatedAt,
+          severityManuallyOverridden,
+          resolution,
+          resolvedBy,
+          resolvedAt,
+          estimatedResolveDate,
+          notes,
+          createdBy,
+          createdAt,
+          updatedAt,
+        ] = params
         obstacleStore.set(id, {
           id,
           task_id: taskId,
@@ -129,9 +153,13 @@ const mocks = vi.hoisted(() => {
           description,
           status,
           severity,
+          severity_escalated_at: severityEscalatedAt,
+          severity_manually_overridden: severityManuallyOverridden,
           resolution,
           resolved_by: resolvedBy,
           resolved_at: resolvedAt,
+          estimated_resolve_date: estimatedResolveDate,
+          notes,
           created_by: createdBy,
           created_at: createdAt,
           updated_at: updatedAt,
@@ -148,6 +176,8 @@ const mocks = vi.hoisted(() => {
           if (sql.includes('description = ?')) current.description = params[p++]
           if (sql.includes('status = ?')) current.status = params[p++]
           if (sql.includes('severity = ?')) current.severity = params[p++]
+          if (sql.includes('estimated_resolve_date = ?')) current.estimated_resolve_date = params[p++]
+          if (sql.includes('notes = ?')) current.notes = params[p++]
           if (sql.includes('resolution = ?')) current.resolution = params[p++]
           if (sql.includes('resolved_by = ?')) current.resolved_by = params[p++]
           if (sql.includes('resolved_at = ?')) current.resolved_at = params[p++]
@@ -174,7 +204,21 @@ const mocks = vi.hoisted(() => {
       const id = params[0]
 
       if (sql.includes('select * from task_conditions')) {
-        return conditionStore.get(id) || null
+        const current = conditionStore.get(id)
+        return current ? { ...current } : null
+      }
+
+      if (sql.includes('select id, project_id, is_satisfied')) {
+        const current = conditionStore.get(id)
+        return current
+          ? {
+            id: current.id,
+            project_id: current.project_id,
+            is_satisfied: current.is_satisfied,
+            satisfied_reason: current.satisfied_reason ?? null,
+            satisfied_reason_note: current.satisfied_reason_note ?? null,
+          }
+          : null
       }
 
       if (sql.includes('select project_id from task_conditions')) {
@@ -183,7 +227,13 @@ const mocks = vi.hoisted(() => {
       }
 
       if (sql.includes('select * from task_obstacles')) {
-        return obstacleStore.get(id) || null
+        const current = obstacleStore.get(id)
+        return current ? { ...current } : null
+      }
+
+      if (sql.includes('select id, project_id, status from task_obstacles')) {
+        const current = obstacleStore.get(id)
+        return current ? { id: current.id, project_id: current.project_id, status: current.status } : null
       }
 
       if (sql.includes('select project_id from task_obstacles')) {
@@ -227,6 +277,12 @@ vi.mock('../services/dbService.js', () => ({
   executeSQL: mocks.executeSQL,
   executeSQLOne: mocks.executeSQLOne,
   supabase: mocks.supabase,
+  SupabaseService: vi.fn().mockImplementation(() => ({
+    query: vi.fn(async () => []),
+    create: vi.fn(async (_table: string, payload: Record<string, unknown>) => payload),
+    update: vi.fn(async (_table: string, _id: string, payload: Record<string, unknown>) => payload),
+    delete: vi.fn(async () => undefined),
+  })),
 }))
 
 vi.mock('../services/supabaseService.js', () => ({
@@ -248,6 +304,53 @@ vi.mock('../middleware/logger.js', () => ({
   requestLogger: (_req: unknown, _res: unknown, next: () => void) => next(),
 }))
 
+vi.mock('../services/changeLogs.js', () => ({
+  writeLog: mocks.writeLog,
+  writeLifecycleLog: vi.fn(async (params: Record<string, any>) => {
+      await (mocks.writeLog as any)({
+      entity_type: params.entity_type,
+      entity_id: params.entity_id,
+      field_name: 'lifecycle',
+      new_value: params.action,
+      changed_by: params.changed_by ?? null,
+      change_source: params.change_source ?? 'manual_adjusted',
+    })
+  }),
+  writeStatusTransitionLog: vi.fn(async (params: Record<string, any>) => {
+      await (mocks.writeLog as any)({
+      entity_type: params.entity_type,
+      entity_id: params.entity_id,
+      field_name: 'status',
+      old_value: params.old_status ?? null,
+      new_value: params.new_status,
+      changed_by: params.changed_by ?? null,
+      change_source: params.change_source ?? 'manual_adjusted',
+    })
+  }),
+}))
+
+vi.mock('../services/warningService.js', () => ({
+  WarningService: vi.fn().mockImplementation(() => ({
+    evaluate: vi.fn(async () => []),
+  })),
+}))
+
+vi.mock('../services/projectHealthService.js', () => ({
+  enqueueProjectHealthUpdate: vi.fn(),
+}))
+
+vi.mock('../middleware/auth.js', () => ({
+  authenticate: vi.fn((req: any, _res: any, next: () => void) => {
+    req.user = { id: 'test-user-id', role: 'owner', globalRole: 'company_admin' }
+    next()
+  }),
+  optionalAuthenticate: vi.fn((_req: any, _res: any, next: () => void) => next()),
+  requireProjectMember: vi.fn(() => (_req: any, _res: any, next: () => void) => next()),
+  requireProjectEditor: vi.fn(() => (_req: any, _res: any, next: () => void) => next()),
+  requireProjectOwner: vi.fn(() => (_req: any, _res: any, next: () => void) => next()),
+  checkResourceAccess: vi.fn((_req: any, _res: any, next: () => void) => next()),
+}))
+
 import { request } from './testSetup.js'
 
 describe('phase 6 stability smoke', () => {
@@ -267,6 +370,7 @@ describe('phase 6 stability smoke', () => {
       condition_name: '材料到场',
       condition_type: 'material',
       description: '钢筋已到场',
+      target_date: '2026-05-01',
       is_satisfied: false,
     })
     expect(conditionCreate.status).toBe(201)
@@ -274,10 +378,21 @@ describe('phase 6 stability smoke', () => {
 
     const conditionUpdate = await request.put(`/api/task-conditions/${conditionCreate.body.data.id}`).send({
       description: '钢筋已全部到场',
+      target_date: '2026-05-02',
       is_satisfied: true,
     })
     expect(conditionUpdate.status).toBe(200)
     expect(conditionUpdate.body.success).toBe(true)
+    expect(mocks.writeLog).toHaveBeenCalledWith(expect.objectContaining({
+      entity_type: 'task_condition',
+      field_name: 'lifecycle',
+      new_value: 'created',
+    }))
+    expect(mocks.writeLog).toHaveBeenCalledWith(expect.objectContaining({
+      entity_type: 'task_condition',
+      field_name: 'status',
+      new_value: '已确认',
+    }))
 
     const obstacleCreate = await request.post('/api/task-obstacles').send({
       project_id: projectId,
@@ -286,17 +401,35 @@ describe('phase 6 stability smoke', () => {
       obstacle_type: 'material',
       severity: '中',
       status: 'pending',
+      expected_resolution_date: '2026-04-08',
+      resolution_notes: '等待供应商补货',
     })
     expect(obstacleCreate.status).toBe(201)
     expect(obstacleCreate.body.success).toBe(true)
+    expect(obstacleCreate.body.data.expected_resolution_date).toBe('2026-04-08')
+    expect(obstacleCreate.body.data.resolution_notes).toBe('等待供应商补货')
 
     const obstacleUpdate = await request.put(`/api/task-obstacles/${obstacleCreate.body.data.id}`).send({
       status: 'resolved',
       resolution: '已协调到货',
       resolved_by: 'test-user-id',
+      expected_resolution_date: '2026-04-09',
+      resolution_notes: '现场已完成协调',
     })
     expect(obstacleUpdate.status).toBe(200)
     expect(obstacleUpdate.body.success).toBe(true)
+    expect(obstacleUpdate.body.data.expected_resolution_date).toBe('2026-04-09')
+    expect(obstacleUpdate.body.data.resolution_notes).toBe('现场已完成协调')
+    expect(mocks.writeLog).toHaveBeenCalledWith(expect.objectContaining({
+      entity_type: 'task_obstacle',
+      field_name: 'lifecycle',
+      new_value: 'created',
+    }))
+    expect(mocks.writeLog).toHaveBeenCalledWith(expect.objectContaining({
+      entity_type: 'task_obstacle',
+      field_name: 'status',
+      new_value: '已解决',
+    }))
 
     const riskCreate = await request.post('/api/risks').send({
       project_id: projectId,

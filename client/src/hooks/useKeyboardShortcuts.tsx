@@ -1,4 +1,5 @@
-// 键盘快捷键 Hook
+﻿// 键盘快捷键 Hook
+import { PROJECT_NAVIGATION_LABELS } from '@/config/navigation'
 import { useEffect, useCallback } from 'react'
 
 interface Shortcut {
@@ -77,13 +78,13 @@ export function ShortcutsHelp({ open, onOpenChange }: ShortcutsHelpProps) {
   const shortcuts = [
     { key: 'Ctrl + K', description: '聚焦搜索框' },
     { key: 'Ctrl + F', description: '聚焦搜索框' },
-    { key: 'Ctrl + 1', description: '跳转：项目 Dashboard' },
-    { key: 'Ctrl + 2', description: '跳转：里程碑' },
-    { key: 'Ctrl + 3', description: '跳转：任务管理' },
-    { key: 'Ctrl + 4', description: '跳转：风险与问题' },
-    { key: 'Ctrl + 5', description: '跳转：证照管理' },
-    { key: 'Ctrl + 6', description: '跳转：任务总结' },
-    { key: 'Ctrl + 7', description: '跳转：提醒中心' },
+    { key: 'Ctrl + 1', description: `跳转：${PROJECT_NAVIGATION_LABELS.dashboard}` },
+    { key: 'Ctrl + 2', description: `跳转：${PROJECT_NAVIGATION_LABELS.milestones}` },
+    { key: 'Ctrl + 3', description: `跳转：${PROJECT_NAVIGATION_LABELS.tasks}` },
+    { key: 'Ctrl + 4', description: `跳转：${PROJECT_NAVIGATION_LABELS.risks}` },
+    { key: 'Ctrl + 5', description: `跳转：${PROJECT_NAVIGATION_LABELS.preMilestones}` },
+    { key: 'Ctrl + 6', description: `跳转：${PROJECT_NAVIGATION_LABELS.taskSummary}` },
+    { key: 'Ctrl + 7', description: `跳转：${PROJECT_NAVIGATION_LABELS.notifications}` },
     { key: 'Escape', description: '关闭对话框 / 取消' },
     { key: '?', description: '显示快捷键帮助面板' },
   ]
@@ -113,3 +114,4 @@ export function ShortcutsHelp({ open, onOpenChange }: ShortcutsHelpProps) {
     </Dialog>
   )
 }
+
