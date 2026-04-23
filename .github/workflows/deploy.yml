@@ -34,18 +34,17 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
-          run_install: false
-
       - name: Setup Node.js 20
         uses: actions/setup-node@v6
         with:
           node-version: '20'
           cache: pnpm
           cache-dependency-path: client/pnpm-lock.yaml
+
+      - name: Enable pnpm via Corepack
+        run: |
+          corepack enable
+          corepack prepare pnpm@9 --activate
 
       - name: Install client dependencies
         run: pnpm --dir client install --frozen-lockfile
@@ -102,18 +101,17 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
-          run_install: false
-
       - name: Setup Node.js 20
         uses: actions/setup-node@v6
         with:
           node-version: '20'
           cache: pnpm
           cache-dependency-path: client/pnpm-lock.yaml
+
+      - name: Enable pnpm via Corepack
+        run: |
+          corepack enable
+          corepack prepare pnpm@9 --activate
 
       - name: Install client dependencies
         run: pnpm --dir client install --frozen-lockfile

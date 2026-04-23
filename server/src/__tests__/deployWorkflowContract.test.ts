@@ -21,7 +21,8 @@ describe('deploy workflow contract', () => {
     expect(workflow).toContain('actions/cache@v5')
     expect(workflow).toContain("node-version: '20'")
 
-    expect(workflow).toContain('pnpm/action-setup@v4')
+    expect(workflow).toContain('Enable pnpm via Corepack')
+    expect(workflow).toContain('corepack prepare pnpm@9 --activate')
     expect(workflow).toContain('pnpm-lock.yaml')
     expect(workflow).toContain('pnpm --dir client run lint')
     expect(workflow).toContain('pnpm --dir client run test:run')
