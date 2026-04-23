@@ -7,7 +7,7 @@
 - 前端：React 18、TypeScript、Vite 5、Tailwind CSS、Zustand、Chart.js、D3
 - 后端：Express、TypeScript、PostgreSQL/Supabase、Zod
 - 测试：Vitest
-- 工程化：GitHub Actions、Vercel、CloudBase、Docker
+- 工程化：GitHub Actions、CloudBase、Docker
 
 ## 仓库结构
 
@@ -110,6 +110,8 @@ npm run migrate:pending
 
 - 发布 Runbook：[`docs/release-runbook.md`](docs/release-runbook.md)
 - GitHub Actions 工作流：[`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)
+- 当前正式发布链：`CloudBase Hosting + CloudRun`
+- `Vercel` 不再作为正式部署目标，不需要维护 `VERCEL_*` secrets
 
 ## 当前工程化约定
 

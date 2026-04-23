@@ -2,7 +2,7 @@ import { Client } from 'pg';
 
 // 数据库连接配置
 const client = new Client({
-  connectionString: 'postgresql://postgres.project_owner:Oo4JmfUzmAEkRSTy@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres'
+  connectionString: 'postgresql://postgres.project_owner:<db-password>@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres'
 });
 
 async function verifyWarningsTable() {
