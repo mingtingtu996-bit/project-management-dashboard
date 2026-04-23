@@ -9,6 +9,7 @@ import {
   discoverMigrationFiles,
   getPendingMigrations,
   resolveMigrationConnectionConfig,
+  resolveMigrationRuntimeConnectionConfig,
   selectMigrationsThroughVersion,
   shouldBlockUnsafeMigrationReplay,
 } from '../services/migrationRunner.js'
@@ -131,6 +132,42 @@ describe('migration runner contract', () => {
 
     expect(resolveMigrationConnectionConfig()).toEqual({
       connectionString: 'postgresql://postgres:secret@db.example.supabase.co:5432/postgres',
+      family: 4,
+      ssl: { rejectUnauthorized: false },
+    })
+  })
+
+  it('resolves host-based migration config to an ipv4 address before connecting', async () => {
+    delete process.env.DATABASE_URL
+    process.env.SUPABASE_HOST = 'db.example.supabase.co'
+    process.env.SUPABASE_PASSWORD = 'secret-value'
+
+    const dnsLookup = async (hostname: string) => {
+      expect(hostname).toBe('db.example.supabase.co')
+      return { address: '203.0.113.24', family: 4 }
+    }
+
+    await expect(resolveMigrationRuntimeConnectionConfig(dnsLookup)).resolves.toEqual({
+      host: '203.0.113.24',
+      port: 5432,
+      family: 4,
+      database: 'postgres',
+      user: 'postgres',
+      password: 'secret-value',
+      ssl: { rejectUnauthorized: false },
+    })
+  })
+
+  it('resolves connection-string migration config to an ipv4 address before connecting', async () => {
+    process.env.DATABASE_URL = 'postgresql://postgres:secret@db.example.supabase.co:5432/postgres'
+
+    const dnsLookup = async (hostname: string) => {
+      expect(hostname).toBe('db.example.supabase.co')
+      return { address: '203.0.113.42', family: 4 }
+    }
+
+    await expect(resolveMigrationRuntimeConnectionConfig(dnsLookup)).resolves.toEqual({
+      connectionString: 'postgresql://postgres:secret@203.0.113.42:5432/postgres',
       family: 4,
       ssl: { rejectUnauthorized: false },
     })

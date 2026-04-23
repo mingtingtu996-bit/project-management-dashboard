@@ -10,7 +10,7 @@ import {
   getPendingMigrations,
   listExistingBaselineTables,
   listAppliedMigrations,
-  resolveMigrationConnectionConfig,
+  resolveMigrationRuntimeConnectionConfig,
   shouldBlockUnsafeMigrationReplay,
 } from '../services/migrationRunner.js'
 
@@ -24,7 +24,7 @@ async function main() {
   setDefaultResultOrder('ipv4first')
   const discovered = await discoverMigrationFiles(migrationsDir)
 
-  const client = new Client(resolveMigrationConnectionConfig())
+  const client = new Client(await resolveMigrationRuntimeConnectionConfig())
   await client.connect()
 
   try {

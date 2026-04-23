@@ -1,4 +1,5 @@
 import { promises as fs } from 'node:fs'
+import { lookup } from 'node:dns/promises'
 import { resolve } from 'node:path'
 import { createHash } from 'node:crypto'
 
@@ -23,6 +24,13 @@ export type AppliedMigration = {
   checksum: string
   applied_at: string
 }
+
+type DnsLookupResult = {
+  address: string
+  family: number
+}
+
+type DnsLookupFn = (hostname: string, options: { family: 4 }) => Promise<DnsLookupResult>
 
 function isCanonicalMigrationFile(filename: string) {
   if (!MIGRATION_FILE_PATTERN.test(filename)) {
@@ -185,6 +193,29 @@ export function resolveMigrationConnectionConfig() {
     password,
     ssl,
     family: 4 as const,
+  }
+}
+
+export async function resolveMigrationRuntimeConnectionConfig(
+  dnsLookup: DnsLookupFn = lookup,
+) {
+  const baseConfig = resolveMigrationConnectionConfig()
+
+  if ('connectionString' in baseConfig) {
+    const parsed = new URL(baseConfig.connectionString)
+    const resolved = await dnsLookup(parsed.hostname, { family: 4 })
+    parsed.hostname = resolved.address
+
+    return {
+      ...baseConfig,
+      connectionString: parsed.toString(),
+    }
+  }
+
+  const resolved = await dnsLookup(baseConfig.host, { family: 4 })
+  return {
+    ...baseConfig,
+    host: resolved.address,
   }
 }
 
