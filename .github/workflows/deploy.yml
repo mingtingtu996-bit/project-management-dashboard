@@ -182,14 +182,14 @@ jobs:
 
       - name: Publish browser suite summary
         if: always()
-        run: node scripts/write-browser-suite-summary.mjs tmp-browser-checks/suite-manifest.json >> $GITHUB_STEP_SUMMARY
+        run: node scripts/write-browser-suite-summary.mjs artifacts/browser-checks/suite-manifest.json >> $GITHUB_STEP_SUMMARY
 
       - name: Upload browser suite artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: browser-check-${{ matrix.suite.key }}
-          path: tmp-browser-checks
+          path: artifacts/browser-checks
           if-no-files-found: error
           retention-days: 5
 
