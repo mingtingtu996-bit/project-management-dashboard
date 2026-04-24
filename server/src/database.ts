@@ -28,23 +28,24 @@ function resolveConnectionConfig() {
     return {
       connectionString: process.env.DB_CONNECTION_STRING,
       ssl: { rejectUnauthorized: false },
+      family: 4 as const,
       max: DB_POOL_MAX,
       idleTimeoutMillis: DB_IDLE_TIMEOUT_MS,
       connectionTimeoutMillis: DB_CONNECTION_TIMEOUT_MS,
     };
   }
 
-  const dbPassword = process.env.DB_PASSWORD || '';
   const supabaseUrl = process.env.SUPABASE_URL || '';
   const projectRef = supabaseUrl.match(/^https:\/\/([^.]+)\.supabase\.co$/)?.[1];
 
   return {
-    host: projectRef ? `db.${projectRef}.supabase.co` : process.env.DB_HOST || '127.0.0.1',
-    port: Number(process.env.DB_PORT || 5432),
-    database: process.env.DB_NAME || 'postgres',
-    user: process.env.DB_USER || 'postgres',
-    password: dbPassword,
+    host: process.env.DB_HOST || process.env.SUPABASE_HOST || (projectRef ? `db.${projectRef}.supabase.co` : '127.0.0.1'),
+    port: Number(process.env.DB_PORT || process.env.SUPABASE_PORT || 5432),
+    database: process.env.DB_NAME || process.env.SUPABASE_DATABASE || 'postgres',
+    user: process.env.DB_USER || process.env.SUPABASE_USER || 'postgres',
+    password: process.env.DB_PASSWORD || process.env.SUPABASE_PASSWORD || '',
     ssl: { rejectUnauthorized: false },
+    family: 4 as const,
     max: DB_POOL_MAX,
     idleTimeoutMillis: DB_IDLE_TIMEOUT_MS,
     connectionTimeoutMillis: DB_CONNECTION_TIMEOUT_MS,
