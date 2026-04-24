@@ -125,9 +125,6 @@ export async function auditLogger(req: Request, res: Response, next: NextFunctio
     return next();
   }
 
-  // 异步确保表存在
-  ensureTableOnce();
-
   const requestPath = getRequestPath(req)
 
   // 检查是否需要记录
@@ -138,6 +135,9 @@ export async function auditLogger(req: Request, res: Response, next: NextFunctio
   if (!matched) {
     return next();
   }
+
+  // 只在真正命中的写操作接口上做一次表结构兜底，避免健康检查和读接口反复触发数据库噪音。
+  void ensureTableOnce();
 
   // 提取用户信息
   const token = extractTokenFromRequest(req);
