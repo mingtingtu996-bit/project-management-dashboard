@@ -2,6 +2,7 @@ import express from 'express'
 import supertest from 'supertest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 process.env.NODE_ENV = 'test'
@@ -158,7 +159,7 @@ vi.mock('../services/dbService.js', () => ({
 
 const { default: certificateWorkItemsRouter } = await import('../routes/certificate-work-items.js')
 
-const serverRoot = process.cwd().endsWith('\\server') ? process.cwd() : resolve(process.cwd(), 'server')
+const serverRoot = fileURLToPath(new URL('../..', import.meta.url))
 
 function readServerFile(...segments: string[]) {
   return readFileSync(resolve(serverRoot, ...segments), 'utf8')

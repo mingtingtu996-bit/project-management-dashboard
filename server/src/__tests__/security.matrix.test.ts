@@ -7,12 +7,11 @@
  */
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 
-const SERVER_ROOT = /[\\/]server$/.test(process.cwd())
-  ? process.cwd()
-  : join(process.cwd(), 'server')
+const SERVER_ROOT = fileURLToPath(new URL('../..', import.meta.url))
 
 function readServerSource(relPath: string): string {
   const full = join(SERVER_ROOT, 'src', relPath)
@@ -159,8 +158,8 @@ describe('§7.3 /api/* global rate limiting', () => {
 describe('§7.3 XSS protection', () => {
   it('containsXss detects <script> tags', async () => {
     const { containsXss } = await import('../middleware/xssProtection.js').catch(
-      () => require(join(SERVER_ROOT, 'middleware/xssProtection.ts')),
-    ).catch(() => ({ containsXss: null }))
+      () => ({ containsXss: null }),
+    )
 
     if (!containsXss) {
       // Static source check fallback

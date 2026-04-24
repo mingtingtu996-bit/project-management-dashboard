@@ -11,11 +11,11 @@ const mocks = vi.hoisted(() => {
     progress: 0,
   }
   const taskFallbackEq = vi.fn(async () => ({ error: null }))
-  const databaseQuery = vi.fn<(sql: string, params?: unknown[]) => Promise<{ rows: any[]; rowCount: number }>>(async () => ({ rows: [], rowCount: 0 }))
+  const databaseQuery = vi.fn(async (_sql: string, _params: unknown[] = []): Promise<{ rows: any[]; rowCount: number }> => ({ rows: [], rowCount: 0 }))
 
   return {
-    executeSQL: vi.fn<(sql: string, params?: unknown[]) => Promise<any[]>>(async () => []),
-    executeSQLOne: vi.fn<(sql: string, params?: unknown[]) => Promise<any>>(async () => null),
+    executeSQL: vi.fn(async (_sql: string, _params: unknown[] = []): Promise<any[]> => []),
+    executeSQLOne: vi.fn(async (_sql: string, _params: unknown[] = []): Promise<any> => null),
     databaseQuery,
     taskFallbackEq,
     supabase: {
