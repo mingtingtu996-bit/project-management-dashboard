@@ -72,6 +72,18 @@ describe('deploy workflow contract', () => {
     expect(workflow).toContain('steps.deployment-eligibility.outputs.can_deploy == \'true\'')
     expect(workflow).toContain("needs.database-migration.result == 'skipped'")
 
+    const deployScript = readFileSync(resolve(workspaceRoot, 'scripts', 'deploy-lighthouse-server.sh'), 'utf8')
+
+    expect(deployScript).toContain('ALLOW_DIRTY_DEPLOY')
+    expect(deployScript).toContain('git status --porcelain --untracked-files=no')
+    expect(deployScript).toContain('Refusing to overwrite')
+    expect(deployScript).toContain('sudo -n docker info')
+    expect(deployScript).toContain('sudo -n env')
+    expect(deployScript).toContain('run_docker_compose')
+    expect(deployScript).toContain('read_env_value SUPABASE_URL')
+    expect(deployScript).toContain('read_env_value SUPABASE_ANON_KEY')
+    expect(deployScript).toContain('export VITE_SUPABASE_URL VITE_SUPABASE_ANON_KEY')
+
     expect(workflow).not.toContain('passWithNoTests')
     expect(workflow).toContain('npm run migrate:pending')
     expect(workflow).not.toContain('npm ci --prefix server')
