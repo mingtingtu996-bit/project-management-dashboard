@@ -4,6 +4,7 @@
 
 import { z } from 'zod'
 import { safeJsonParse, safeStorageGet, safeStorageSet } from '@/lib/browserStorage'
+import { generateUuid } from '@/lib/utils'
 
 // ============================================
 // 存储键定义
@@ -170,7 +171,7 @@ function setItems<T>(key: string, items: T[]): void {
 
 // 生成UUID
 export function generateId(): string {
-  return crypto.randomUUID()
+  return generateUuid()
 }
 
 // ============================================

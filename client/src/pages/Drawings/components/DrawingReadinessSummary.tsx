@@ -18,6 +18,8 @@ function SummaryTile({
   tone: 'blue' | 'amber' | 'red' | 'emerald' | 'slate'
   icon: ElementType
 }) {
+  void hint
+
   const toneClasses = {
     blue: 'border-blue-200 bg-blue-50 text-blue-700',
     amber: 'border-amber-200 bg-amber-50 text-amber-700',
@@ -44,7 +46,6 @@ function SummaryTile({
           </div>
         </div>
         <div className={`text-3xl font-semibold tracking-tight ${valueClasses[tone]}`}>{value}</div>
-        <div className={`rounded-2xl border px-3 py-2 text-xs leading-5 ${toneClasses[tone]}`}>{hint}</div>
       </CardContent>
     </Card>
   )
@@ -57,19 +58,13 @@ export function DrawingReadinessSummary({
   summary: DrawingBoardSummary
   projectName?: string
 }) {
+  void projectName
+
   return (
     <section className="space-y-4">
       <div className="flex items-end justify-between gap-4">
         <div>
           <h2 className="text-lg font-semibold text-slate-900">图纸准备度总览</h2>
-          <p className="mt-1 text-sm text-slate-500">
-            {projectName ? `${projectName} · ` : ''}
-            图纸包缺漏、送审、齐套与工期影响在这里统一看。
-          </p>
-        </div>
-        <div className="hidden items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500 md:flex">
-          <RefreshCw className="h-3.5 w-3.5" />
-          以图纸包为主对象
         </div>
       </div>
 

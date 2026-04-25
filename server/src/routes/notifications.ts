@@ -42,6 +42,29 @@ const warningService = new WarningService()
 const operationalNotificationService = new OperationalNotificationService()
 const DEFAULT_PAGE_SIZE = 20
 const MAX_PAGE_SIZE = 100
+const DEFAULT_READ_SYNC_TTL_MS = process.env.NODE_ENV === 'test' ? 0 : 60_000
+const DEFAULT_READ_SYNC_DELAY_MS = process.env.NODE_ENV === 'test' ? 0 : 250
+
+interface NotificationReadSyncCacheEntry {
+  lastAttemptAt: number
+  pending?: Promise<void>
+}
+
+function parsePositiveInteger(value: string | undefined, fallback: number) {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+}
+
+const notificationReadSyncTtlMs = parsePositiveInteger(
+  process.env.NOTIFICATION_READ_SYNC_TTL_MS,
+  DEFAULT_READ_SYNC_TTL_MS,
+)
+const notificationReadSyncDelayMs = parsePositiveInteger(
+  process.env.NOTIFICATION_READ_SYNC_DELAY_MS,
+  DEFAULT_READ_SYNC_DELAY_MS,
+)
+const notificationReadSyncCache = new Map<string, NotificationReadSyncCacheEntry>()
+const shouldAwaitReadSync = process.env.NODE_ENV === 'test'
 
 const notificationIdParamSchema = z.object({
   id: z.string().trim().min(1, 'id 不能为空'),
@@ -171,6 +194,10 @@ async function listPersistedNotifications() {
   return await listNotifications()
 }
 
+async function listPersistedNotificationsForScope(projectId?: string) {
+  return await listNotifications(projectId ? { projectId } : {})
+}
+
 async function syncNotificationState(projectId?: string) {
   const syncTasks = [
     ['condition_expired_issue_sync', () => warningService.syncConditionExpiredIssues(projectId)],
@@ -204,19 +231,57 @@ async function syncNotificationStateForRead(projectId?: string) {
     return
   }
 
-  try {
-    await runWithRequestBudget(
-      {
-        operation: 'notifications.state_sync',
-        timeoutMs: REQUEST_TIMEOUT_BUDGETS.notificationReadMs,
-      },
-      () => syncNotificationState(projectId),
-    )
-  } catch (error) {
-    logger.warn('Notification state sync budget exceeded, falling back to persisted notifications', {
+  const now = Date.now()
+  const cached = notificationReadSyncCache.get(projectId)
+  if (cached?.pending) {
+    if (shouldAwaitReadSync) {
+      await cached.pending
+    }
+    return
+  }
+
+  if (cached && now - cached.lastAttemptAt < notificationReadSyncTtlMs) {
+    logger.debug('Skipping on-read notification sync within freshness window', {
       projectId,
-      error: error instanceof Error ? error.message : String(error),
+      ageMs: now - cached.lastAttemptAt,
+      ttlMs: notificationReadSyncTtlMs,
     })
+    return
+  }
+
+  const entry: NotificationReadSyncCacheEntry = { lastAttemptAt: now }
+  const runSync = () => runWithRequestBudget(
+    {
+      operation: 'notifications.state_sync',
+      timeoutMs: REQUEST_TIMEOUT_BUDGETS.notificationReadMs,
+    },
+    () => syncNotificationState(projectId),
+  )
+    .catch((error) => {
+      logger.warn('Notification state sync budget exceeded, falling back to persisted notifications', {
+        projectId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    })
+    .finally(() => {
+      const latest = notificationReadSyncCache.get(projectId)
+      if (latest) {
+        latest.pending = undefined
+      }
+    })
+
+  const pending = shouldAwaitReadSync
+    ? runSync()
+    : new Promise<void>((resolve) => {
+      setTimeout(() => {
+        runSync().then(resolve)
+      }, notificationReadSyncDelayMs)
+    })
+
+  entry.pending = pending
+  notificationReadSyncCache.set(projectId, entry)
+  if (shouldAwaitReadSync) {
+    await pending
   }
 }
 
@@ -236,7 +301,7 @@ router.get('/', validate(notificationsQuerySchema, 'query'), asyncHandler(async 
   logger.info('Fetching notifications', { projectId, userId, limit, offset, unreadOnly })
 
   await syncNotificationStateForRead(projectId)
-  const persistedNotifications = await listPersistedNotifications()
+  const persistedNotifications = await listPersistedNotificationsForScope(projectId)
   const notifications = applyNotificationFilters(persistedNotifications, {
     projectId,
     userId,
@@ -265,7 +330,7 @@ router.get('/unread', validate(notificationsQuerySchema, 'query'), asyncHandler(
   logger.info('Fetching unread count', { projectId, userId })
 
   await syncNotificationStateForRead(projectId)
-  const notifications = await listPersistedNotifications()
+  const notifications = await listPersistedNotificationsForScope(projectId)
   const count = notifications
     .filter((item) => !projectId || item.project_id === projectId)
     .filter((item) => matchesNotificationRecipient(item, userId))
@@ -464,7 +529,7 @@ router.put('/read-all', validate(notificationsQuerySchema, 'query'), asyncHandle
 
   logger.info('Marking all notifications as read', { projectId, userId })
 
-  const notifications = await listPersistedNotifications()
+  const notifications = await listPersistedNotificationsForScope(projectId)
   const targetIds = notifications
     .filter((item) => !projectId || item.project_id === projectId)
     .filter((item) => matchesNotificationRecipient(item, userId))

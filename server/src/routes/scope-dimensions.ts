@@ -127,14 +127,14 @@ function validationError(message: string): ApiResponse {
 }
 
 async function ensureDefaultScopeRows() {
+  const timestamp = now()
   const { error } = await supabase.from('scope_dimensions').upsert(
     DEFAULT_SCOPE_ROWS.map((row) => ({
-      id: uuidv4(),
       ...row,
-      created_at: now(),
-      updated_at: now(),
+      created_at: timestamp,
+      updated_at: timestamp,
     })),
-    { onConflict: 'dimension_key,label' },
+    { onConflict: 'dimension_key,label', ignoreDuplicates: true },
   )
 
   if (error) {

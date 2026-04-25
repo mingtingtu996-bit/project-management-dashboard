@@ -132,19 +132,19 @@ function buildCloseoutGroups(items: CloseoutItem[], mode: CloseoutGroupingMode):
           {
             id: 'closeout-processing-escalated',
             title: '升级关注',
-            description: '第 3 / 5 / 7 日梯度升级项，优先补齐处理与留痕。',
+            description: '',
             badge: '梯度升级',
           },
           {
             id: 'closeout-processing-pending',
             title: '待处理',
-            description: '仍在正常处理窗口内，可按系统建议逐条处理。',
+            description: '',
             badge: '处理中',
           },
           {
             id: 'closeout-processing-processed',
             title: '已处理',
-            description: '已经完成逐条处理或批量补录的事项。',
+            description: '',
             badge: '已落账',
           },
         ] as const)
@@ -153,32 +153,32 @@ function buildCloseoutGroups(items: CloseoutItem[], mode: CloseoutGroupingMode):
             {
               id: 'closeout-commitment-completed',
               title: '已完成承诺',
-              description: '本月已完成的承诺事项，通常优先进入关闭确认。',
+              description: '',
               badge: '完成态',
             },
             {
               id: 'closeout-commitment-planned',
               title: '本月承诺',
-              description: '仍属于本月承诺，需要判断是否滚入下月或继续追踪。',
+              description: '',
               badge: '本月承诺',
             },
             {
               id: 'closeout-commitment-carry',
               title: '滚入下月',
-              description: '已明确需要滚入下一月计划继续处理的事项。',
+              description: '',
               badge: '滚入态',
             },
             {
               id: 'closeout-commitment-cancelled',
               title: '已取消 / 其他',
-              description: '不再按原承诺执行，需要人工补充收口说明。',
+              description: '',
               badge: '人工判断',
             },
           ] as const)
         : ([
-            { id: 'closeout-close', title: '建议关闭处理', description: '本月已完成或可直接关闭的事项。', badge: '关闭优先' },
-            { id: 'closeout-carry', title: '建议滚入下月', description: '需要继续进入下月草稿跟进的事项。', badge: '滚入下月' },
-            { id: 'closeout-manual', title: '需要人工判断', description: '建议不足，需要人工补充判断和原因。', badge: '人工判断' },
+            { id: 'closeout-close', title: '建议关闭处理', description: '', badge: '关闭优先' },
+            { id: 'closeout-carry', title: '建议滚入下月', description: '', badge: '滚入下月' },
+            { id: 'closeout-manual', title: '需要人工判断', description: '', badge: '人工判断' },
           ] as const)
 
   return groups
@@ -422,7 +422,6 @@ export default function CloseoutPage() {
               <Badge variant="outline">{activePlan ? getMonthlyPlanStatusLabel(activePlan.status) : '暂无可关账月份'}</Badge>
             </div>
             <h2 className="text-lg font-semibold text-slate-900">月末待处理事项</h2>
-            <p className="text-sm leading-6 text-slate-600">当前工作台按真实月度计划条目生成处理清单，不再使用硬编码的静态关账项。</p>
           </div>
           {forceCloseUnlocked ? <Badge variant="secondary">已到第 7 日，可强制发起关账</Badge> : null}
         </div>
@@ -435,17 +434,14 @@ export default function CloseoutPage() {
             {
               day: 3,
               title: '+3 天提醒',
-              description: '第 3 日起开始催办待处理项，优先清理滚入与人工判断条目。',
             },
             {
               day: 5,
               title: '+5 天升级',
-              description: '第 5 日起进入升级催办，列表按升级关注高亮并收口风险。',
             },
             {
               day: 7,
               title: '+7 天强制关账窗口',
-              description: '第 7 日仅解锁“强制发起关账”，不替代逐条处理与原因补录。',
             },
           ].map((step) => {
             const active = overdueDays >= step.day
@@ -460,7 +456,6 @@ export default function CloseoutPage() {
                   <div className="text-sm font-semibold">{step.title}</div>
                   <Badge variant={active ? 'secondary' : 'outline'}>{active ? '当前已触发' : '未触发'}</Badge>
                 </div>
-                <p className="mt-2 text-xs leading-5">{step.description}</p>
               </div>
             )
           })}
@@ -499,7 +494,6 @@ export default function CloseoutPage() {
                 <div className="text-lg font-semibold text-slate-900">
                   当前月份数据置信度 {Math.round(dataQualitySummary.confidence.score)}%
                 </div>
-                <div className="text-sm leading-6 text-slate-600">{dataQualitySummary.confidence.note}</div>
               </div>
               {activePlan?.data_confidence_score ? (
                 <Badge variant="outline">已写入关账记录 {Math.round(activePlan.data_confidence_score)}%</Badge>
@@ -574,7 +568,6 @@ export default function CloseoutPage() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="space-y-1">
             <div className="text-sm font-medium text-slate-900">关账分组与状态</div>
-            <div className="text-sm text-slate-500">支持按系统建议、处理状态、承诺类型三种维度切换查看，批量补录与逐条处理共用同一真实清单。</div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant="outline">{processedCount}/{items.length} 已处理</Badge>
@@ -607,7 +600,7 @@ export default function CloseoutPage() {
   const main = pageLoading ? (
     <LoadingState
       label="月末关账加载中"
-      description="正在同步月度计划版本与关账清单。"
+      description=""
       className="min-h-32 rounded-2xl border border-slate-200 bg-white"
     />
   ) : activePlan ? (
@@ -631,7 +624,6 @@ export default function CloseoutPage() {
       <Card data-testid="closeout-empty-state" className="border-dashed border-slate-300 bg-slate-50">
         <CardContent className="space-y-3 p-6">
           <div className="text-lg font-semibold text-slate-900">当前筛选下没有匹配条目</div>
-          <p className="text-sm leading-6 text-slate-600">可以调整筛选条件或清空搜索词，继续回到账清单逐条处理。</p>
           <div className="flex flex-wrap gap-2">
             <Button type="button" variant="outline" onClick={() => setActiveFilter('all')}>
               显示全部
@@ -647,7 +639,6 @@ export default function CloseoutPage() {
     <Card className="border-dashed border-slate-300 bg-slate-50">
       <CardContent className="space-y-3 p-6">
         <div className="text-lg font-semibold text-slate-900">当前没有可关账的已确认月份</div>
-        <p className="text-sm leading-6 text-slate-600">请先在月度计划页确认一个月份，再回到这里处理月末待处理事项。</p>
         <Button type="button" onClick={() => navigate(`/projects/${projectId}/planning/monthly`)}>
           去月度计划
         </Button>
@@ -711,7 +702,7 @@ export default function CloseoutPage() {
     <PlanningPageShell
       projectName={currentProject.name ?? '未命名项目'}
       title="月末关账"
-      description="在这里处理真实月度计划的月末待处理事项，并用真实 close API 完成关账。"
+      description=""
       tabs={tabs}
       actions={
         <>

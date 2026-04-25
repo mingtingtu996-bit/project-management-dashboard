@@ -89,8 +89,8 @@ const REVISION_CANDIDATES: BaselineRevisionCandidate[] = [
   },
   {
     id: 'revision-candidate-3',
-    title: '风险缓冲说明补录',
-    summary: '建议补录暂缓处理原因，为后续修订草稿留痕。',
+    title: '风险缓冲备注补录',
+    summary: '补录暂缓处理原因。',
     source: '来自月度复盘',
     tag: '留痕补录',
   },
@@ -188,7 +188,7 @@ function buildGovernanceFallbackCloseoutItems(params: {
     })),
     ...params.issues.map((issue) => ({
       title: issue.title,
-      summary: issue.detail ?? '需要继续补录说明后再推进处理。',
+      summary: issue.detail ?? '需要继续补录备注后再推进处理。',
       severity: issue.level === 'error' ? 'critical' : issue.level === 'warning' ? 'warning' : 'info',
     })),
   ]
@@ -529,21 +529,21 @@ function PlanningWorkspaceInner() {
         {
           id: 'closeout-normal',
           title: '系统建议可直接采纳',
-          description: '正常月份下，多数事项可一键采纳。',
+          description: '',
           badge: '一键采纳',
           items: closeoutItems.filter((item) => item.groupId === 'closeout-normal'),
         },
         {
           id: 'closeout-manual',
           title: '需要关闭原因补录',
-          description: '这部分事项需要先补齐原因再进入最终关闭。',
+          description: '',
           badge: '补录原因',
           items: closeoutItems.filter((item) => item.groupId === 'closeout-manual'),
         },
         {
           id: 'closeout-risk',
           title: '并发 / 过期 / 超期',
-          description: '存在协作、时效或升级风险的事项会展示额外提示。',
+          description: '',
           badge: '优先处理',
           items: closeoutItems.filter((item) => item.groupId === 'closeout-risk'),
         },
@@ -906,7 +906,7 @@ function PlanningWorkspaceInner() {
 
         <PlanningTreeView
           title="计划树"
-          description="计划树已接入统一勾选、批量条和快捷键规则。"
+          description=""
           rows={rows}
           selectedCount={selectedCount}
           onToggleRow={toggleSelectedItem}
@@ -923,7 +923,7 @@ function PlanningWorkspaceInner() {
               onClick: () =>
                 openConfirmDialog('revision', {
                   title: '生成修订候选',
-                  description: '将所选条目送入计划修订候选，供本次修订统一处理。',
+                  description: '',
                 }),
               icon: RotateCcw,
               variant: 'secondary',
@@ -933,7 +933,7 @@ function PlanningWorkspaceInner() {
               onClick: () =>
                 openConfirmDialog('monthly', {
                   title: '确认月度计划',
-                  description: '确认后将冻结当前月度计划，并切换到只读查看态。',
+                  description: '',
                 }),
               icon: CheckCircle2,
             },
@@ -1030,7 +1030,6 @@ function PlanningWorkspaceInner() {
           <div className="space-y-1">
             <div className="text-sm font-medium text-slate-900">基线计划修订候选</div>
             <div className="text-sm text-slate-500">
-              在这里汇总候选项、修订篮和暂缓说明，再带着上下文进入修订草稿。
             </div>
           </div>
           <Button
@@ -1051,7 +1050,6 @@ function PlanningWorkspaceInner() {
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <div className="text-sm font-semibold text-slate-900">修订草稿上下文</div>
-                <p className="text-xs text-slate-500">带候选进入修订草稿时会携带的结构位。</p>
               </div>
               <Badge variant="secondary">深链预置</Badge>
             </div>
@@ -1146,7 +1144,7 @@ function PlanningWorkspaceInner() {
         <PlanningIntegrityPanel
           status={governanceStatus}
           summary={governanceIntegritySummary}
-          detail="完整性、映射完整性和 M1-M9 一致性统一在此查看。"
+          detail=""
           errorMessage={governanceErrorMessage}
           onOpenDetail={handleGovernanceOpenDetail}
           onGoProcess={handleGovernanceOpenDetail}
@@ -1165,9 +1163,6 @@ function PlanningWorkspaceInner() {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="space-y-1">
               <div className="text-sm font-medium text-slate-900">异常与留痕快链</div>
-              <div className="text-sm text-slate-500">
-                条件、阻碍、延期和变更记录统一从这里跳到真实处理页，不再停留在治理提示层。
-              </div>
             </div>
             <Badge variant="outline">Planning shared links</Badge>
           </div>
@@ -1246,9 +1241,6 @@ function PlanningWorkspaceInner() {
               </div>
               <div className="space-y-1">
                 <div className="text-lg font-semibold text-slate-900">月末待处理事项</div>
-                <p className="text-sm text-slate-500">
-                  处理必须修正项 → 处理建议修正项 → 确认并关闭，抽屉动作与批量补录共用同一草稿源。
-                </p>
               </div>
             </div>
 
@@ -1266,15 +1258,15 @@ function PlanningWorkspaceInner() {
           <div className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 sm:grid-cols-3">
             <div className="space-y-1">
               <div className="text-xs uppercase tracking-[0.18em] text-slate-500">系统建议采纳率</div>
-              <div className="text-sm font-medium text-slate-900">多数事项可一键采纳</div>
+              <div className="text-sm font-medium text-slate-900">{closeoutItems.length ? `${closeoutProcessedCount}/${closeoutItems.length}` : '暂无'}</div>
             </div>
             <div className="space-y-1">
               <div className="text-xs uppercase tracking-[0.18em] text-slate-500">人工工作量预期</div>
-              <div className="text-sm font-medium text-slate-900">重变更月份建议逐条确认</div>
+              <div className="text-sm font-medium text-slate-900">{closeoutSelectedItems.length} 项</div>
             </div>
             <div className="space-y-1">
               <div className="text-xs uppercase tracking-[0.18em] text-slate-500">处理节奏</div>
-              <div className="text-sm font-medium text-slate-900">批量补录后再进入最终确认</div>
+              <div className="text-sm font-medium text-slate-900">{closeoutProcessedCount} 已处理</div>
             </div>
           </div>
         </CardContent>
@@ -1355,7 +1347,7 @@ function PlanningWorkspaceInner() {
     <PlanningPageShell
       projectName={currentProject?.name ?? `项目 ${params.id}`}
       title="计划编制"
-      description="统一查看项目基线、月度计划、计划修订候选和偏差分析的共享工作台。"
+      description=""
       tabs={tabsWithHandlers}
       actions={
         planningSurface === 'closeout'

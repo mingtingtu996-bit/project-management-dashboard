@@ -1238,7 +1238,7 @@ export default function BaselinePage() {
       <PlanningPageShell
         projectName={currentProject?.name ?? '项目'}
         title="基线编辑"
-        description="当前项目还没有正式基线，先选择首版编制入口，再进入标准校核链路。"
+        description=""
         tabs={tabs}
       >
         {statusNotice ? (
@@ -1256,24 +1256,18 @@ export default function BaselinePage() {
               <button
                 type="button"
                 data-testid="baseline-entry-blank"
-                onClick={() => setStatusNotice('已选择“新建空白基线”，后续将从空白骨架开始编制。')}
+                onClick={() => setStatusNotice('已选择“新建空白基线”')}
                 className="rounded-2xl border border-slate-200 bg-white px-4 py-4 text-left transition hover:border-slate-300"
               >
                 <div className="text-sm font-medium text-slate-900">新建空白基线</div>
-                <p className="mt-2 text-sm leading-6 text-slate-600">
-                  从空白范围开始梳理主骨架，适合先搭版本框架。
-                </p>
               </button>
               <button
                 type="button"
                 data-testid="baseline-entry-schedule"
-                onClick={() => setStatusNotice('已选择“从当前排期生成”，后续会按真实任务排期组织首版基线。')}
+                onClick={() => setStatusNotice('已选择“从当前排期生成”')}
                 className="rounded-2xl border border-cyan-200 bg-cyan-50 px-4 py-4 text-left transition hover:border-cyan-300"
               >
                 <div className="text-sm font-medium text-slate-900">从当前排期生成</div>
-                <p className="mt-2 text-sm leading-6 text-slate-600">
-                  先沿用现有任务排期，再在基线树里做筛选和冻结。
-                </p>
               </button>
               <button
                 type="button"
@@ -1285,19 +1279,15 @@ export default function BaselinePage() {
                   <span>导入计划文件</span>
                   <FileSpreadsheet className="h-4 w-4 text-amber-700" />
                 </div>
-                <p className="mt-2 text-sm leading-6 text-slate-600">
-                  支持 .xlsx / .xls，先预览导入条目，再生成导入版基线草稿。
-                </p>
               </button>
             </CardContent>
           </Card>
 
           <Card className="border-slate-200 shadow-sm">
             <CardHeader>
-              <CardTitle className="text-base">下一步建议</CardTitle>
+              <CardTitle className="text-base">下一步</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3 text-sm leading-6 text-slate-600">
-              <p>先确定首版来源，再进入月计划、修订候选和变更记录的共享链路。</p>
               <div className="grid gap-2">
                 <Button
                   type="button"
@@ -1333,7 +1323,7 @@ export default function BaselinePage() {
         {importParsing ? (
           <LoadingState
             label="正在解析计划文件"
-            description="准备导入预览、映射日期和进度字段。"
+            description=""
             className="min-h-32 rounded-2xl border border-slate-200 bg-white"
           />
         ) : null}
@@ -1413,7 +1403,7 @@ export default function BaselinePage() {
     <PlanningPageShell
       projectName={currentProject?.name ?? '项目'}
       title="基线编辑"
-      description="围绕项目基线版本完成勾选、校核、确认与版本衔接。"
+      description=""
       tabs={tabs}
       actions={
         <div className="flex flex-wrap items-center gap-2">
@@ -1661,12 +1651,9 @@ export default function BaselinePage() {
                 className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
               >
                 <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <div className="text-sm font-medium text-slate-900">异常校核区</div>
-                    <p className="mt-1 text-sm leading-6 text-slate-600">
-                      这里改成树下方可折叠面板，方便一边看基线树一边定位阻断项。
-                    </p>
-                  </div>
+                <div>
+                  <div className="text-sm font-medium text-slate-900">异常校核区</div>
+                </div>
                   <Button
                     type="button"
                     variant="outline"
@@ -1690,9 +1677,6 @@ export default function BaselinePage() {
                 <CardTitle className="text-base">历史版本对比</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
-                <p className="text-sm leading-6 text-slate-600">
-                  点击版本芯片可直接切换查看，当前差异摘要会基于所选版本重算。
-                </p>
                 <div className="flex flex-wrap gap-2">
                   {versions.map((version) => (
                     <Button
@@ -1747,9 +1731,7 @@ export default function BaselinePage() {
                       />
                     </div>
                     {diffItems.length > 3 ? (
-                      <p className="text-xs leading-5 text-slate-500">
-                        当前先预览前 3 条差异，完整清单可在确认发布里继续查看。
-                      </p>
+                      <div className="text-xs leading-5 text-slate-500">仅显示前 3 条</div>
                     ) : null}
                     <Button type="button" variant="outline" className="w-full" onClick={() => setConfirmOpen(true)}>
                       <FileDiff className="mr-2 h-4 w-4" />
@@ -1783,9 +1765,7 @@ export default function BaselinePage() {
                       ))}
                     </div>
                   ) : (
-                    <div className="mt-3 text-xs leading-5 text-slate-500">
-                      当前先用版本差异预览兜底。如果后端已经落了 baseline change log，这里会自动消费最近留痕。
-                    </div>
+                    <div className="mt-3 text-xs leading-5 text-slate-500">暂无变更留痕</div>
                   )}
                 </div>
               </CardContent>

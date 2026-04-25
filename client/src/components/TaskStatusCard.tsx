@@ -14,6 +14,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { StatusBadge } from '@/components/ui/status-badge'
+import { apiGet } from '@/lib/apiClient'
 import { CheckCircle2, Clock, ListTodo, AlertTriangle, ChevronRight, TrendingUp, User } from 'lucide-react'
 import { useCountUp } from '@/hooks/useCountUp'
 import { CHART_AXIS_COLORS, TASK_STAGE_COLORS } from '@/lib/chartPalette'
@@ -48,8 +49,9 @@ export function TaskStatusCard({
   // 异步加载完成质量数据
   useEffect(() => {
     if (!projectId) return
-    fetch(`/api/task-summaries/projects/${projectId}/task-summary?limit=1`)
-      .then(r => r.ok ? r.json() : null)
+    apiGet<{ stats?: QualityStats; groups?: Array<{ tasks?: Array<{ title?: string; completed_at?: string; status_label?: 'on_time' | 'delayed' }> }> } | null>(
+      `/api/task-summaries/projects/${projectId}/task-summary?limit=1`,
+    )
       .then(data => {
         if (!data) return
         const stats = data.stats as QualityStats | undefined

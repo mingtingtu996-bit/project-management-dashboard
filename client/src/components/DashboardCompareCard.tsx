@@ -14,6 +14,7 @@ import { useState, useEffect } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { LoadingState } from '@/components/ui/loading-state'
+import { apiGet } from '@/lib/apiClient'
 import {
   TrendingUp,
   BarChart3,
@@ -81,6 +82,22 @@ interface CompareResult {
   task_details: TaskDetail[]
 }
 
+function normalizeDailyProgress(payload: DailyProgress | null | undefined): DailyProgress | null {
+  if (!payload || typeof payload !== 'object') return null
+
+  return {
+    date: String(payload.date ?? ''),
+    progress_change: typeof payload.progress_change === 'number' ? payload.progress_change : 0,
+    tasks_updated: typeof payload.tasks_updated === 'number' ? payload.tasks_updated : 0,
+    tasks_completed: typeof payload.tasks_completed === 'number' ? payload.tasks_completed : 0,
+    details: Array.isArray(payload.details) ? payload.details : [],
+  }
+}
+
+function normalizeCompareResults(payload: CompareResult[] | null | undefined): CompareResult[] {
+  return Array.isArray(payload) ? payload : []
+}
+
 // ─── 本地日期格式化工具 ───────────────────────────────────
 
 const fmt = (d: Date) => {
@@ -115,10 +132,9 @@ function DailyProgressSection({ projectId }: { projectId?: string }) {
     // 获取今天的日期
     const today = fmt(new Date())
     
-    fetch(`/api/task-summaries/projects/${projectId}/daily-progress?date=${today}`)
-      .then(r => r.json())
-      .then(j => {
-        if (j.success) setData(j.data)
+    apiGet<DailyProgress | null>(`/api/task-summaries/projects/${projectId}/daily-progress?date=${today}`)
+      .then((payload) => {
+        setData(normalizeDailyProgress(payload))
       })
       .catch(console.error)
       .finally(() => setLoading(false))
@@ -128,7 +144,7 @@ function DailyProgressSection({ projectId }: { projectId?: string }) {
     return (
       <LoadingState
         label="每日进度加载中"
-        description="正在读取当天的进度变化数据"
+        description=""
         className="min-h-20"
       />
     )
@@ -346,10 +362,12 @@ function CompareView({ projectId }: { projectId?: string }) {
       periods: JSON.stringify(validPeriods),
       granularity,
     })
-    fetch(`/api/task-summaries/projects/${projectId}/task-summary/compare?${params}`)
-      .then(r => r.json()).then(j => {
-        if (j.success) setResults(j.data || [])
-      }).catch(console.error).finally(() => setLoading(false))
+    apiGet<CompareResult[]>(`/api/task-summaries/projects/${projectId}/task-summary/compare?${params}`)
+      .then((data) => {
+        setResults(normalizeCompareResults(data))
+      })
+      .catch(console.error)
+      .finally(() => setLoading(false))
   }
 
   // 计算相邻时段之间的进度变化差异
@@ -453,7 +471,7 @@ function CompareView({ projectId }: { projectId?: string }) {
       {loading && (
         <LoadingState
           label="时间段对比加载中"
-          description="正在计算所选时间段的进度变化"
+          description=""
           className="h-32 min-h-32"
         />
       )}
@@ -557,16 +575,13 @@ function CompareView({ projectId }: { projectId?: string }) {
             </div>
           )}
 
-          {results.length === 1 && (
-            <p className="text-xs text-gray-400 text-center py-2">添加更多时段查看变化量对比</p>
-          )}
+          {results.length === 1 && <div className="py-2" />}
         </div>
       )}
 
       {!loading && results.length === 0 && (
         <div className="flex flex-col items-center justify-center py-8 text-gray-400">
           <BarChart3 className="w-10 h-10 mb-2 text-gray-200" />
-          <p className="text-sm">选择时间段后点击「开始对比」查看结果</p>
         </div>
       )}
     </div>

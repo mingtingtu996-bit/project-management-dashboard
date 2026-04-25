@@ -354,9 +354,7 @@ export function TaskDetailPanel({
                 </div>
               </>
             ) : (
-              <p className="text-xs text-slate-500">
-                当前任务还不在关键路径快照中，可打开图谱后设置手动关注或插链。
-              </p>
+              <div className="h-1" />
             )}
 
             {criticalPathError && <p className="text-xs text-amber-700">{criticalPathError}</p>}
@@ -381,9 +379,6 @@ export function TaskDetailPanel({
             <div className="flex items-center justify-between gap-2">
               <div>
                 <p className="text-xs font-medium text-orange-700">延期申请</p>
-                <p className="text-[11px] text-orange-700/80">
-                  统一走延期申请流程，支持待审批锁定、撤回和驳回后重新提交提醒。
-                </p>
               </div>
               {pendingDelayRequest ? (
                 <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-700">
@@ -413,7 +408,7 @@ export function TaskDetailPanel({
                     data-testid="gantt-delay-request-rejected-hint"
                   >
                     最近一次驳回原因：
-                    {rejectedDelayRequest.reason ?? rejectedDelayRequest.delay_reason ?? '未说明'}
+                    {rejectedDelayRequest.reason ?? rejectedDelayRequest.delay_reason ?? '未填写'}
                   </div>
                 )}
 
@@ -456,9 +451,7 @@ export function TaskDetailPanel({
                       <p className="text-xs text-red-600">{delayFormErrors.baselineVersionId}</p>
                     )}
                     {baselineOptions.length === 0 && !baselineLoading && (
-                      <p className="text-xs text-orange-700">
-                        当前项目还没有已确认的基线版本，延期申请暂不支持提交。
-                      </p>
+                      <p className="text-xs text-orange-700" />
                     )}
                   </div>
 
@@ -500,26 +493,17 @@ export function TaskDetailPanel({
                   <p
                     className="text-xs text-amber-700"
                     data-testid="gantt-delay-request-pending-hint"
-                  >
-                    已有待审批申请，提交按钮已禁用。
-                  </p>
+                  />
                 )}
 
-                {pendingDelayRequest ? (
-                  <p
-                    className="text-xs text-sky-700"
-                    data-testid="gantt-delay-request-warning-downgrade"
-                  >
-                    审批中：同类延期预警按“提示”口径降级展示，审批完成后恢复正常风险级别。
-                  </p>
-                ) : null}
+                {pendingDelayRequest ? <p className="text-xs text-sky-700" data-testid="gantt-delay-request-warning-downgrade" /> : null}
 
                 {showApprovalReminder ? (
                   <p
                     className="text-xs text-red-600"
                     data-testid="gantt-delay-request-reminder"
                   >
-                    当前申请已待审批 {pendingDelayRequestAgeDays} 天，建议尽快催办审批人。
+                    已待审批 {pendingDelayRequestAgeDays} 天
                   </p>
                 ) : null}
 
@@ -534,7 +518,7 @@ export function TaskDetailPanel({
 
                 <div className="rounded-md border border-orange-200 bg-white px-2.5 py-2 text-xs text-orange-800" data-testid="gantt-delay-impact-summary">
                   <div className="font-medium">工期影响评估</div>
-                  <div className="mt-1">{delayImpactSummary || '选择延期后的日期后，将自动估算对总工期的影响。'}</div>
+                  {delayImpactSummary ? <div className="mt-1">{delayImpactSummary}</div> : null}
                   {typeof delayImpactDays === 'number' && delayImpactDays > 0 ? (
                     <div className="mt-1 text-red-600">关键路径已无法完全吸收本次延期。</div>
                   ) : null}

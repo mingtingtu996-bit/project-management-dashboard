@@ -133,7 +133,7 @@ function AppContent() {
   const navigate = useNavigate()
   const { isAuthenticated, loading: authLoading, user } = useAuth()
   const hasStoredToken = Boolean(getAuthToken())
-  useRealtimeConnection()
+  useRealtimeConnection({ enabled: isAuthenticated && !authLoading, authenticatedUserId: user?.id ?? null })
 
   const projectMatch = location.pathname.match(/\/projects\/([^/]+)/)
   const projectId = projectMatch?.[1] ?? null
@@ -227,6 +227,10 @@ function AppContent() {
 
   useEffect(() => {
     if (authLoading) return undefined
+    if (!isAuthenticated) {
+      setProjects(getCachedProjects())
+      return undefined
+    }
 
     let cancelled = false
     const syncKey = user?.id ? `user:${user.id}` : isAuthenticated ? 'auth' : 'anon'

@@ -1,4 +1,4 @@
-import { executeSQL, getProject, getProjects, getRisks, getTasks } from './dbService.js'
+import { executeSQL, getProject, getRisks, getTasks } from './dbService.js'
 import { calculateProjectHealth } from './projectHealthService.js'
 import { logger } from '../middleware/logger.js'
 import type {
@@ -832,6 +832,29 @@ async function resolveSummaryHealth(
   }
 }
 
+async function loadSummaryProjects(): Promise<Project[]> {
+  return executeSQL<Project>(
+    `SELECT id, name, status, planned_end_date, end_date, health_score, health_status
+       FROM projects`,
+  )
+}
+
+async function loadSummaryTasks(): Promise<Task[]> {
+  return executeSQL<Task>(
+    `SELECT id, project_id, parent_id, title, description, status, progress, is_milestone,
+            planned_end_date, end_date, actual_end_date, delay_count, is_critical,
+            created_at, updated_at
+       FROM tasks`,
+  )
+}
+
+async function loadSummaryRisks(): Promise<Risk[]> {
+  return executeSQL<Risk>(
+    `SELECT id, project_id, status
+       FROM risks`,
+  )
+}
+
 export async function getProjectExecutionSummary(projectId: string): Promise<ProjectExecutionSummary | null> {
   const project = await getProject(projectId)
   if (!project) return null
@@ -897,17 +920,17 @@ export async function getAllProjectExecutionSummaries(): Promise<ProjectExecutio
     constructionDrawings,
     governanceStates,
   ] = await Promise.all([
-    getProjects(),
-    getTasks(),
-    getRisks(),
-    executeSQL<TaskConditionRow>('SELECT * FROM task_conditions ORDER BY created_at ASC'),
-    executeSQL<TaskObstacleRow>('SELECT * FROM task_obstacles ORDER BY created_at DESC'),
-    executeSQL<DelayRequestRow>('SELECT id, project_id, task_id, status, created_at, updated_at FROM delay_requests ORDER BY created_at DESC'),
-    executeSQL<MonthlyPlanRow>('SELECT id, project_id, status, month, closeout_at, created_at, updated_at FROM monthly_plans ORDER BY month DESC, updated_at DESC, created_at DESC'),
-    executeSQL<NotificationRow>('SELECT id, project_id, severity, level, title, content, status, is_read, created_at FROM notifications ORDER BY created_at DESC'),
-    executeSQL<PreMilestoneRow>('SELECT id, project_id, status FROM pre_milestones ORDER BY created_at ASC'),
-    executeSQL<AcceptancePlanRow>('SELECT id, project_id, status FROM acceptance_plans ORDER BY created_at ASC'),
-    executeSQL<ConstructionDrawingRow>('SELECT id, project_id, status, review_status FROM construction_drawings ORDER BY created_at ASC'),
+    loadSummaryProjects(),
+    loadSummaryTasks(),
+    loadSummaryRisks(),
+    executeSQL<TaskConditionRow>('SELECT id, project_id, task_id, is_satisfied, status FROM task_conditions'),
+    executeSQL<TaskObstacleRow>('SELECT id, project_id, task_id, is_resolved, status FROM task_obstacles'),
+    executeSQL<DelayRequestRow>('SELECT id, project_id, task_id, status, created_at, updated_at FROM delay_requests'),
+    executeSQL<MonthlyPlanRow>('SELECT id, project_id, status, month, closeout_at, created_at, updated_at FROM monthly_plans'),
+    executeSQL<NotificationRow>('SELECT id, project_id, severity, level, title, content, status, is_read, created_at FROM notifications'),
+    executeSQL<PreMilestoneRow>('SELECT id, project_id, status FROM pre_milestones'),
+    executeSQL<AcceptancePlanRow>('SELECT id, project_id, status FROM acceptance_plans'),
+    executeSQL<ConstructionDrawingRow>('SELECT id, project_id, status, review_status FROM construction_drawings'),
     loadPlanningGovernanceStates(),
   ])
 

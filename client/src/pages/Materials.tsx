@@ -20,7 +20,6 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -363,9 +362,6 @@ function MaterialDetailDialog({
       <DialogContent className="max-w-2xl border-slate-200" data-testid="material-detail-dialog">
         <DialogHeader>
           <DialogTitle>{readOnly ? '材料详情' : '编辑材料详情'}</DialogTitle>
-          <DialogDescription>
-            统一维护材料名称、归属单位、预计到场、实际到场、定样与送检状态。
-          </DialogDescription>
         </DialogHeader>
 
         <div className="grid gap-4 py-2 md:grid-cols-2">
@@ -498,9 +494,6 @@ function MaterialDetailDialog({
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <div className="text-sm font-semibold text-blue-900">AI 到货建议</div>
-                  <div className="mt-1 text-xs text-blue-700">
-                    按关联参建单位的最早开工任务推导材料到货窗口，并复用既有 AI 工期/风险分析结果。
-                  </div>
                 </div>
                 <Button
                   type="button"
@@ -547,16 +540,14 @@ function MaterialDetailDialog({
                     </div>
                   ) : (
                     !aiLoading && (
-                      <div className="rounded-2xl border border-dashed border-blue-200 bg-white/70 px-4 py-3 text-xs text-blue-700">
-                        点击“获取 AI 建议”后，会展示关联任务的 AI 工期估算。
-                      </div>
+                      <div className="rounded-2xl border border-dashed border-blue-200 bg-white/70 px-4 py-3" />
                     )
                   )}
 
                   {delayRiskInsight ? (
                     <div className="rounded-2xl border border-blue-100 bg-white px-4 py-3">
                       <div className="flex flex-wrap items-center gap-2">
-                        <div className="text-sm font-semibold text-slate-900">AI 排程建议：{formatDelayRiskLabel(delayRiskInsight.delay_risk)}</div>
+                        <div className="text-sm font-semibold text-slate-900">AI 排程：{formatDelayRiskLabel(delayRiskInsight.delay_risk)}</div>
                         <span className="rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-600">
                           延期概率 {Math.round(delayRiskInsight.delay_probability)}%
                         </span>
@@ -597,9 +588,7 @@ function MaterialDetailDialog({
                   ) : null}
                 </div>
               ) : (
-                <div className="mt-4 rounded-2xl border border-dashed border-blue-200 bg-white/70 px-4 py-3 text-sm text-blue-700">
-                  当前没有可关联的在施任务，AI 建议暂不可用。
-                </div>
+                <div className="mt-4 rounded-2xl border border-dashed border-blue-200 bg-white/70 px-4 py-3" />
               )}
             </div>
 
@@ -607,7 +596,6 @@ function MaterialDetailDialog({
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <div className="text-sm font-semibold text-slate-900">变更日志</div>
-                  <div className="mt-1 text-xs text-slate-500">查看材料创建、编辑与 AI 建议采纳后的最近留痕。</div>
                 </div>
                 <Button
                   type="button"
@@ -636,7 +624,7 @@ function MaterialDetailDialog({
                   ))
                 ) : (
                   <div className="rounded-2xl border border-dashed border-slate-200 bg-white px-4 py-6 text-sm text-slate-500">
-                    {changeLogLoading ? '正在加载变更日志...' : '当前还没有材料变更记录。'}
+                    {changeLogLoading ? '加载中...' : '暂无记录'}
                   </div>
                 )}
               </div>
@@ -1079,7 +1067,6 @@ export default function Materials() {
       <LoadingState
         className="mx-auto mt-12 max-w-sm"
         label="材料清单加载中"
-        description="正在同步材料记录和参建单位信息"
       />
     )
   }
@@ -1110,7 +1097,6 @@ export default function Materials() {
       <PageHeader
         eyebrow="专项管理"
         title={PROJECT_NAVIGATION_LABELS.materials}
-        subtitle={`${currentProject?.name || '当前项目'}的材料到场、送检与单位归属统一在这里维护。`}
       >
         <Button variant="outline" onClick={() => void loadPage(undefined, true)} disabled={refreshing}>
           <RefreshCw className={`mr-2 h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
@@ -1177,9 +1163,6 @@ export default function Materials() {
             </div>
             <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-900">
               当前材料准时到场率 {weeklySummary.arrivalRate}%。
-              {latestDigest
-                ? ' 项目级周报已生成，可结合“材料到场率分析”和提醒列表一起复核。'
-                : ' 项目级周报尚未生成，当前先用最新材料真值快照展示。'}
             </div>
           </CardContent>
         </Card>
@@ -1189,9 +1172,6 @@ export default function Materials() {
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <CardTitle className="text-base text-slate-900">提醒列表</CardTitle>
-                <div className="mt-1 text-sm text-slate-500">
-                  已按参建单位聚合材料到场提醒，逾期项会继续追踪。
-                </div>
               </div>
               <Button asChild variant="outline" size="sm">
                 <Link to={`/notifications?scope=current-project&projectId=${encodeURIComponent(projectId)}`}>查看全部提醒</Link>
@@ -1214,9 +1194,7 @@ export default function Materials() {
                 </div>
               ))
             ) : (
-              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-                当前暂无材料提醒，待每日扫描命中后会在这里汇总展示。
-              </div>
+              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6" />
             )}
           </CardContent>
         </Card>
@@ -1628,7 +1606,6 @@ export default function Materials() {
         <EmptyState
           icon={Boxes}
           title="当前没有符合筛选条件的材料"
-          description="可以先切换筛选条件，或者直接新增材料记录。"
         />
       ) : (
         <div className="space-y-4">

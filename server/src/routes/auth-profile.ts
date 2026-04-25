@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { authError, authSuccess, setAuthTokenCookie } from '../auth/http.js'
 import { extractTokenFromRequest, generateToken, verifyToken } from '../auth/jwt.js'
 import type { AuthSessionData } from '../auth/types.js'
-import { hasUsersUpdatedAtColumn, toAuthUserView } from '../auth/session.js'
+import { toAuthUserView } from '../auth/session.js'
 import { query } from '../database.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import { validate } from '../middleware/validation.js'
@@ -35,8 +35,6 @@ router.put('/', validate(updateProfileSchema), asyncHandler(async (req, res) => 
   const display_name = typeof rawBody.display_name === 'string' ? rawBody.display_name.trim() : rawBody.display_name
   const email = typeof rawBody.email === 'string' ? rawBody.email : rawBody.email
   const normalizedEmail = typeof email === 'string' && email.trim() ? email.trim() : null
-  const shouldWriteUpdatedAt = await hasUsersUpdatedAtColumn()
-
   const updates: string[] = []
   const params: unknown[] = []
   let paramIndex = 1
@@ -51,9 +49,7 @@ router.put('/', validate(updateProfileSchema), asyncHandler(async (req, res) => 
     params.push(normalizedEmail)
   }
 
-  if (shouldWriteUpdatedAt) {
-    updates.push('updated_at = NOW()')
-  }
+  updates.push('updated_at = NOW()')
   params.push(payload.userId)
 
   const result = await query(

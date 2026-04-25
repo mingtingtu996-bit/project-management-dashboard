@@ -14,19 +14,31 @@ import { buildRealtimeWebSocketUrl } from '@/lib/realtime'
 const RECONNECT_BASE_DELAY_MS = 1000
 const RECONNECT_MAX_DELAY_MS = 15000
 
+interface UseRealtimeConnectionOptions {
+  enabled?: boolean
+  authenticatedUserId?: string | null
+}
+
 function getReconnectDelay(attempt: number) {
   return Math.min(RECONNECT_BASE_DELAY_MS * (2 ** attempt), RECONNECT_MAX_DELAY_MS)
 }
 
-export function useRealtimeConnection() {
+export function useRealtimeConnection(options: UseRealtimeConnectionOptions = {}) {
   const connectionMode = useConnectionMode()
   const currentProject = useCurrentProject()
   const currentUser = useCurrentUser()
   const setRealtimeConnectionState = useSetRealtimeConnectionState()
   const setLastRealtimeEvent = useSetLastRealtimeEvent()
+  const enabled = options.enabled ?? true
+  const userId = options.authenticatedUserId ?? currentUser?.id ?? null
 
   useEffect(() => {
     if (typeof window === 'undefined') {
+      return
+    }
+
+    if (!enabled) {
+      setRealtimeConnectionState('idle')
       return
     }
 
@@ -57,7 +69,7 @@ export function useRealtimeConnection() {
         socket = new window.WebSocket(
           buildRealtimeWebSocketUrl({
             projectId: currentProject?.id ?? null,
-            userId: currentUser?.id ?? null,
+            userId,
           }),
         )
       } catch {
@@ -140,9 +152,10 @@ export function useRealtimeConnection() {
   }, [
     connectionMode,
     currentProject?.id,
-    currentUser?.id,
+    enabled,
     setLastRealtimeEvent,
     setRealtimeConnectionState,
+    userId,
   ])
 }
 

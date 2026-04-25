@@ -13,7 +13,7 @@ import { LoadingState } from '@/components/ui/loading-state'
 import { PROJECT_NAVIGATION_LABELS } from '@/config/navigation'
 import { useCurrentProject } from '@/hooks/useStore'
 import { toast } from '@/hooks/use-toast'
-import { isAbortError } from '@/lib/apiClient'
+import { apiGet, getApiErrorMessage, isAbortError } from '@/lib/apiClient'
 import { CheckSquare, Download, RefreshCw } from 'lucide-react'
 
 import TaskSummaryResultsSection from './TaskSummary/components/TaskSummaryResultsSection'
@@ -39,17 +39,7 @@ type AssigneeSummaryRow = {
 }
 
 async function fetchTaskSummarySection<T>(url: string, signal?: AbortSignal): Promise<T> {
-  const response = await fetch(url, { signal })
-  if (!response.ok) {
-    throw new Error('任务总结数据加载失败')
-  }
-
-  const payload = await response.json()
-  if (!payload?.success) {
-    throw new Error(payload?.error?.message || '任务总结数据加载失败')
-  }
-
-  return (payload.data ?? null) as T
+  return apiGet<T>(url, { signal })
 }
 
 function escapeCsvCell(value: string | number | boolean | null | undefined) {
@@ -102,7 +92,7 @@ export default function TaskSummary() {
     } catch (error) {
       if (isAbortError(error)) return
 
-      const message = error instanceof Error ? error.message : '无法加载任务完成总结'
+      const message = getApiErrorMessage(error, '无法加载任务完成总结')
       setStats(null)
       setAssignees([])
       setLoadError(message)

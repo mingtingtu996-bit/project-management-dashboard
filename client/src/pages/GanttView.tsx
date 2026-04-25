@@ -2316,7 +2316,6 @@ export default function GanttView() {
     }
   }, [id, loadTasks, participantUnits, setParticipantUnits])
 
-  // AI 工期建议：依据历史数据给出参考时长
   const fetchAiDurationSuggestion = useCallback(async () => {
     if (!editingTask?.id || !id) return
     setAiDurationLoading(true)
@@ -2632,7 +2631,7 @@ export default function GanttView() {
       )
     : 0
   const delayImpactSummary = requestedDelayDays <= 0
-    ? '选择延期后的日期后，将自动估算对总工期的影响。'
+    ? ''
     : delayImpactDays > 0
       ? `预计会把项目总工期推迟 ${delayImpactDays} 天。`
       : `当前浮时 ${selectedTaskFloatDays} 天，可吸收本次延期。`
@@ -3490,7 +3489,7 @@ export default function GanttView() {
           <summary className="cursor-pointer list-none space-y-2">
             <div className="flex flex-wrap items-center gap-2">
               <span className="inline-flex items-center rounded-full bg-sky-100 px-2.5 py-1 text-xs font-semibold text-sky-800">
-                任务列表非常态提示
+                数据异常
               </span>
               <span className="inline-flex items-center rounded-full bg-white px-2.5 py-1 text-xs font-medium text-sky-800">
                 {dataQualitySummary.prompt.count} 条数据矛盾待确认
@@ -3508,7 +3507,6 @@ export default function GanttView() {
                   </span>
                 </div>
                 <div className="mt-1 text-sm leading-6 text-slate-700">{item.summary}</div>
-                <div className="mt-2 text-xs leading-5 text-slate-500">建议：{item.recommendation}</div>
               </div>
             ))}
           </div>

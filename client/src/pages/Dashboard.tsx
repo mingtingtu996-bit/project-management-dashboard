@@ -7,7 +7,7 @@ import { DataConfidenceBreakdown } from '@/components/DataConfidenceBreakdown'
 import DashboardMilestoneCard from '@/components/DashboardMilestoneCard'
 import { EmptyState } from '@/components/EmptyState'
 import { PageHeader } from '@/components/PageHeader'
-import ProjectInfoCard, { type ScopeDimensionSection, type ScopeDraft } from '@/components/ProjectInfoCard'
+import ProjectInfoCard, { type ScopeDimensionSection } from '@/components/ProjectInfoCard'
 import RecentTasksCard from '@/components/RecentTasksCard'
 import { TaskStatusCard } from '@/components/TaskStatusCard'
 import { Badge } from '@/components/ui/badge'
@@ -20,7 +20,7 @@ import { StatusBadge } from '@/components/ui/status-badge'
 import { useStore } from '@/hooks/useStore'
 import { useToast } from '@/hooks/use-toast'
 import { PROJECT_NAVIGATION_LABELS } from '@/config/navigation'
-import { apiGet, apiPut, getApiErrorMessage, isAbortError } from '@/lib/apiClient'
+import { apiGet, getApiErrorMessage, isAbortError } from '@/lib/apiClient'
 import { getStatusTheme } from '@/lib/statusTheme'
 import { getTaskDisplayStatus, isCompletedTask, isDelayedTask } from '@/lib/dashboardStatus'
 import { USER_FACING_TERMS } from '@/lib/userFacingTerms'
@@ -114,6 +114,18 @@ type TodayLiveItem = {
   meta: string
 }
 
+function normalizeWeeklyDigestData<T extends { project_id?: string | null }>(value: T | null | undefined): T | null {
+  if (!value || typeof value !== 'object') return null
+  const projectId = typeof value.project_id === 'string' ? value.project_id.trim() : ''
+  return projectId ? value : null
+}
+
+function normalizeTrendRows<T extends { month: string; total: number; on_time: number; delayed: number }>(
+  value: T[] | null | undefined,
+): T[] {
+  return Array.isArray(value) ? value : []
+}
+
 type CurrentProjectEntity = NonNullable<ReturnType<typeof useStore.getState>['currentProject']>
 
 function normalizeProjectStatus(status?: string | null): ProjectStatus {
@@ -188,8 +200,8 @@ function formatDeliveryHint(summary: ProjectSummary | null, plannedEndDate?: str
 }
 
 function buildHealthSummary(summary: ProjectSummary | null) {
-  if (!summary) return '等待摘要返回健康状态'
-  return summary.healthStatus || '暂无健康状态说明'
+  if (!summary) return ''
+  return summary.healthStatus || ''
 }
 
 function buildGovernanceSignalSummary(summary: ProjectSummary | null) {
@@ -340,6 +352,7 @@ function TodayLiveCard({
   items: TodayLiveItem[]
 }) {
   const previewItems = items.slice(0, 2)
+  void hint
 
   return (
     <Card variant="detail" className="rounded-[24px] border-slate-100">
@@ -347,7 +360,6 @@ function TodayLiveCard({
         <div className="flex items-start justify-between gap-3">
           <div>
             <CardTitle className="text-base text-slate-900">{title}</CardTitle>
-            <p className="mt-1 text-xs leading-5 text-slate-500">{hint}</p>
           </div>
           <Badge variant="secondary">{count}</Badge>
         </div>
@@ -356,7 +368,7 @@ function TodayLiveCard({
         {loading ? (
           <LoadingState
             label="今日动态加载中"
-            description="正在刷新项目的最新提醒与活动"
+            description=""
             className="min-h-24 border-0 bg-transparent px-0 py-2 shadow-none"
           />
         ) : previewItems.length > 0 ? (
@@ -465,9 +477,6 @@ function DashboardHero({
                 </div>
                 <div>
                   <h1 className="shell-section-title">{currentProject.name}</h1>
-                  <p className="shell-subtitle max-w-3xl">
-                    查看项目健康度、执行概况、关键节点和偏差信号的综合视图。
-                  </p>
                 </div>
               </div>
             </div>
@@ -486,7 +495,6 @@ function DashboardHero({
                   </div>
                 </div>
                 <div className="mt-3 text-3xl font-semibold tracking-tight text-slate-900">{item.value}</div>
-                <p className="mt-2 text-xs text-slate-500">{item.hint}</p>
               </div>
             ))}
           </div>
@@ -520,9 +528,6 @@ function DashboardHero({
                     <DialogTitle>数据置信度维度分解</DialogTitle>
                   </DialogHeader>
                   <div className="space-y-4">
-                    <p className="text-sm leading-6 text-slate-600">
-                      展示各维度对本月数据置信度下降的贡献，帮助快速判断当前最需要优先修正的填报问题。
-                    </p>
                     <DataConfidenceBreakdown confidence={confidence} title="本月各维度降分贡献" />
                   </div>
                 </DialogContent>
@@ -583,7 +588,6 @@ function DashboardHero({
 
       {summaryLoading && (
         <div className="border-t border-slate-100 bg-white px-6 py-3 text-xs text-slate-500">
-          摘要正在刷新中，当前保留已有页面内容。
         </div>
       )}
     </section>
@@ -641,14 +645,9 @@ function CriticalPathSummaryCard({
                 <div className="mt-1 text-xl font-semibold text-slate-900">{summary.manualInsertedCount}</div>
               </div>
             </div>
-            <div className="text-xs text-slate-400">
-              只读查看 · 数据来自关键路径快照
-            </div>
           </>
         ) : (
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
-            关键路径摘要正在同步，当前仍以共享摘要为准。
-          </div>
+          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5" />
         )}
       </CardContent>
     </Card>
@@ -673,9 +672,8 @@ function WeeklyDigestPanel({ projectId }: { projectId: string }) {
   useEffect(() => {
     let cancelled = false
     setLoading(true)
-    fetch(`/api/projects/${projectId}/weekly-digest/latest`)
-      .then(r => r.json())
-      .then(json => { if (!cancelled) setDigest(json.data ?? null) })
+    apiGet<DigestData | null>(`/api/projects/${projectId}/weekly-digest/latest`)
+      .then((data) => { if (!cancelled) setDigest(normalizeWeeklyDigestData(data)) })
       .catch(() => {})
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
@@ -686,7 +684,6 @@ function WeeklyDigestPanel({ projectId }: { projectId: string }) {
   if (!digest) {
     return (
       <div data-testid="dashboard-weekly-digest" className="flex h-12 w-full items-center justify-center rounded-2xl border border-slate-100 bg-slate-50 text-sm text-slate-400">
-        周报将在每周一自动生成，当前暂无数据
       </div>
     )
   }
@@ -724,7 +721,7 @@ function WeeklyDigestPanel({ projectId }: { projectId: string }) {
             <div className="text-xs font-medium text-slate-500">关键路径</div>
             <div className="mt-2 text-2xl font-semibold text-slate-900">关键任务 {digest.critical_tasks_count ?? 0} 个</div>
             <div className="mt-1 text-xs text-slate-500">
-              受阻 {digest.critical_blocked_count ?? 0} 个
+              <Link to={`/projects/${projectId}/gantt?filterCritical=true`} className="text-blue-600 hover:underline">受阻 {digest.critical_blocked_count ?? 0} 个</Link>
               {digest.critical_nearest_delay_days ? `　最近节点偏差 +${digest.critical_nearest_delay_days} 天` : ''}
             </div>
           </div>
@@ -795,9 +792,10 @@ function DashboardMonthlyTrend({ projectId }: { projectId: string }) {
   useEffect(() => {
     let cancelled = false
     setLoading(true)
-    fetch(`/api/task-summaries/projects/${projectId}/task-summary/trend`)
-      .then(r => r.json())
-      .then(json => { if (!cancelled) setTrendData(json.data ?? []) })
+    apiGet<Array<{ month: string; total: number; on_time: number; delayed: number }>>(
+      `/api/task-summaries/projects/${projectId}/task-summary/trend`,
+    )
+      .then((data) => { if (!cancelled) setTrendData(normalizeTrendRows(data)) })
       .catch(() => {})
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
@@ -833,7 +831,7 @@ function DashboardMonthlyTrend({ projectId }: { projectId: string }) {
         {loading ? (
           <div className="flex h-32 items-center justify-center text-sm text-slate-400">加载中…</div>
         ) : months.length === 0 ? (
-          <div className="flex h-32 items-center justify-center text-sm text-slate-400">月度趋势将在任务完成后自动生成</div>
+          <div className="flex h-32 items-center justify-center text-sm text-slate-400" />
         ) : (
           <div className="relative w-full overflow-hidden">
             <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: H }}>
@@ -968,9 +966,6 @@ function IssueRiskGrid({ summaryData, projectId }: { summaryData: ProjectSummary
             </Link>
           ))}
         </div>
-        <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-600">
-          首页只保留当前优先级信号快照，不展开 Top-5 明细；具体处置请进入风险与问题或任务模块继续处理。
-        </div>
       </CardContent>
     </Card>
   )
@@ -1005,7 +1000,6 @@ function DashboardSupport({
               <div key={item.label} className="rounded-2xl bg-slate-50 p-4">
                 <div className="text-sm text-slate-500">{item.label}</div>
                 <div className="mt-2 text-2xl font-semibold text-slate-900">{item.value}</div>
-                <p className="mt-2 text-xs text-slate-500">{item.hint}</p>
               </div>
             ))}
           </CardContent>
@@ -1032,7 +1026,6 @@ function DashboardSupport({
                     </span>
                     <span className="flex flex-col">
                       <span className="text-sm font-medium text-slate-900">{item.label}</span>
-                      <span className="text-xs text-slate-500">{item.description}</span>
                     </span>
                   </span>
                   <ArrowRight className="h-4 w-4 text-slate-400" />
@@ -1049,8 +1042,6 @@ function DashboardSupport({
 export default function Dashboard() {
   const { toast } = useToast()
   const currentProject = useStore((state) => state.currentProject)
-  const projects = useStore((state) => state.projects)
-  const setProjects = useStore((state) => state.setProjects)
   const tasks = useStore((state) => state.tasks)
   const warnings = useStore((state) => state.warnings)
   const issueRows = useStore((state) => state.issueRows)
@@ -1065,7 +1056,6 @@ export default function Dashboard() {
   const [criticalPathLoading, setCriticalPathLoading] = useState(false)
   const [scopeSections, setScopeSections] = useState<ScopeDimensionSection[]>([])
   const [scopeLoading, setScopeLoading] = useState(false)
-  const [scopeSaving, setScopeSaving] = useState(false)
   const summaryAbortRef = useRef<AbortController | null>(null)
   const dataQualityAbortRef = useRef<AbortController | null>(null)
   const criticalPathAbortRef = useRef<AbortController | null>(null)
@@ -1211,50 +1201,6 @@ export default function Dashboard() {
       setScopeLoading(false)
     }
   }, [projectId, toast])
-
-  const saveScopeDimensions = useCallback(async (sections: ScopeDraft) => {
-    if (!projectId) return
-
-    setScopeSaving(true)
-    try {
-      const response = await apiPut<{ project_id: string; sections: ScopeDimensionSection[] }>(
-        `/api/scope-dimensions/${projectId}`,
-        { sections },
-      )
-      const nextSections = response.sections ?? []
-      setScopeSections(nextSections)
-
-      if (currentProject) {
-        const selectedBuilding = nextSections.find((section) => section.key === 'building')?.selected ?? []
-        const selectedSpecialty = nextSections.find((section) => section.key === 'specialty')?.selected ?? []
-        const nextProjects = projects.map((project) => (
-          project.id === currentProject.id
-            ? {
-                ...project,
-                building_type: selectedBuilding.join(' / ') || project.building_type,
-                structure_type: selectedSpecialty.join(' / ') || project.structure_type,
-              }
-            : project
-        ))
-        setProjects(nextProjects)
-      }
-
-      toast({
-        title: '范围维度已保存',
-        description: '楼栋、专业、阶段和区域配置已同步更新。',
-      })
-    } catch (error) {
-      console.error('Failed to save scope dimensions:', error)
-      toast({
-        title: '保存失败',
-        description: getApiErrorMessage(error, '范围维度保存失败，请稍后重试。'),
-        variant: 'destructive',
-      })
-      throw error
-    } finally {
-      setScopeSaving(false)
-    }
-  }, [currentProject, projectId, projects, setProjects, toast])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -1443,7 +1389,7 @@ export default function Dashboard() {
         .map<TodayLiveItem>((item) => ({
           id: item.id,
           title: item.title,
-          detail: item.description || (item.task_id ? `关联任务 ${item.task_id}` : '未填写补充说明'),
+          detail: item.description || (item.task_id ? `关联任务 ${item.task_id}` : '未填写备注'),
           meta: `${formatLiveTime(item.created_at)} · ${item.severity === 'critical' ? '严重' : item.severity === 'high' ? '高' : item.severity === 'low' ? '低' : '中'}`,
         })),
     [liveIssues, todayKey],
@@ -1490,7 +1436,7 @@ export default function Dashboard() {
         <PageHeader
           eyebrow="项目工作台"
           title={currentProject.name || '项目'}
-          subtitle="查看当前项目的健康度、执行概况、近期变化和专项准备度，并快速跳转到各管理模块。"
+          subtitle=""
         >
           <Badge variant="secondary">{summaryData?.statusLabel || currentStatus}</Badge>
           <Button
@@ -1532,9 +1478,7 @@ export default function Dashboard() {
           healthStatus={summaryData?.healthStatus === '健康' ? 'excellent' : summaryData?.healthStatus === '亚健康' ? 'good' : summaryData?.healthStatus === '预警' ? 'warning' : summaryData?.healthStatus === '危险' ? 'critical' : undefined}
           status={currentProject.status}
           scopeSections={scopeSections}
-          onSaveScope={currentStatus === '已暂停' ? undefined : saveScopeDimensions}
           scopeLoading={scopeLoading}
-          scopeSaving={scopeSaving}
         />
 
         <DashboardHero
@@ -1560,9 +1504,6 @@ export default function Dashboard() {
           <div>
             <div className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">今日现场</div>
             <h2 className="mt-2 text-[26px] font-semibold tracking-tight text-slate-900">当日摘要</h2>
-            <p className="mt-2 text-sm leading-6 text-slate-500">
-              先用 4 项紧凑指标看今天的现场压力，再结合任务状态和关键节点判断节奏。
-            </p>
           </div>
 
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -1602,9 +1543,6 @@ export default function Dashboard() {
 
           <div>
             <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">现场指标</div>
-            <p className="mt-2 text-sm leading-6 text-slate-500">
-              按项目范围内的实际任务状态汇总，口径为当前快照，不含已归档任务。
-            </p>
           </div>
 
           <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
@@ -1646,9 +1584,6 @@ export default function Dashboard() {
           <div>
             <div className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">当下优先级信号区</div>
             <h2 className="mt-2 text-[26px] font-semibold tracking-tight text-slate-900">导流与变化快照</h2>
-            <p className="mt-2 text-sm leading-6 text-slate-500">
-              把问题与风险快照、对比卡和近期任务放在同一层，先判断优先级，再决定进入哪个模块。
-            </p>
           </div>
 
           <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
@@ -1663,9 +1598,6 @@ export default function Dashboard() {
           <div>
             <div className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">导流快照</div>
             <h2 className="mt-2 text-[26px] font-semibold tracking-tight text-slate-900">项目导流面</h2>
-            <p className="mt-2 text-sm leading-6 text-slate-500">
-              这里保留项目资料、关键路径、专项准备度和常用入口，不把首页扩成深分析页。
-            </p>
           </div>
           <DashboardSupport
             currentProject={currentProject}

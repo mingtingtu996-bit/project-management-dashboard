@@ -8,7 +8,6 @@ import { z } from 'zod'
 import { authError, authSuccess } from '../auth/http.js'
 import { extractTokenFromRequest, verifyToken } from '../auth/jwt.js'
 import { hashPassword, validatePasswordStrength, verifyPassword } from '../auth/password.js'
-import { hasUsersUpdatedAtColumn } from '../auth/session.js'
 import type { AuthMessageData } from '../auth/types.js'
 import { query } from '../database.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
@@ -54,11 +53,8 @@ router.post('/', validate(changePasswordSchema), asyncHandler(async (req, res) =
   }
 
   const newHash = await hashPassword(newPassword)
-  const shouldWriteUpdatedAt = await hasUsersUpdatedAtColumn()
   await query(
-    shouldWriteUpdatedAt
-      ? 'UPDATE public.users SET password_hash = $1, updated_at = NOW() WHERE id = $2'
-      : 'UPDATE public.users SET password_hash = $1 WHERE id = $2',
+    'UPDATE public.users SET password_hash = $1, updated_at = NOW() WHERE id = $2',
     [newHash, payload.userId],
   )
 

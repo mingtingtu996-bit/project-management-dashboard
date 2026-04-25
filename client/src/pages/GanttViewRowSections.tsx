@@ -257,7 +257,7 @@ export function TaskRowMetaChips({
                 ? 'bg-emerald-50 text-emerald-600 border-emerald-200 hover:bg-emerald-100'
                 : 'bg-orange-50 text-orange-600 border-orange-200 hover:bg-orange-100'
           }`}
-          title={'开工条件 ' + conditionSummary.satisfied + '/' + conditionSummary.total + '，点击展开详情'}
+          title={'开工条件 ' + conditionSummary.satisfied + '/' + conditionSummary.total}
         >
           <ShieldCheck className="h-2.5 w-2.5" />
           {conditionSummary.satisfied}/{conditionSummary.total}
@@ -268,7 +268,7 @@ export function TaskRowMetaChips({
       {obstacleCount > 0 && (
         <span
           className="flex-shrink-0 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-50 text-amber-700 border border-amber-200"
-          title={`${obstacleCount} 个未解决阻碍，点击操作按钮管理`}
+          title={`${obstacleCount} 个未解决阻碍`}
         >
           <AlertOctagon className="h-2.5 w-2.5" />
           阻碍{obstacleCount}
@@ -373,7 +373,6 @@ export function TaskRowDetailCells({
           status={task.status ?? 'pending'}
           fallbackLabel="待开始"
           className="text-xs font-medium"
-          title="状态会根据进度、开工条件和阻碍自动切换"
         />
       </div>
 
@@ -411,7 +410,7 @@ export function TaskRowDetailCells({
         ) : (
           <div
             className="flex items-center gap-1.5 cursor-pointer group/prog"
-            title={hasChildren ? '实际进度 ' + actualProgress + '% / 子任务汇总 ' + rolledProgress + '%' : '点击快速编辑进度'}
+            title={hasChildren ? '实际进度 ' + actualProgress + '% / 子任务汇总 ' + rolledProgress + '%' : '实际进度 ' + actualProgress + '%'}
             onClick={() => onStartInlineProgressEdit(task)}
             data-testid={`gantt-task-progress-display-${task.id}`}
           >

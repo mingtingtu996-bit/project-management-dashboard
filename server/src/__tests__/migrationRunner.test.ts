@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve, sep } from 'node:path'
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   compareMigrationVersions,
@@ -21,6 +21,7 @@ const serverRoot = process.cwd().endsWith(`${sep}server`)
 const originalEnv = { ...process.env }
 
 afterEach(() => {
+  vi.restoreAllMocks()
   process.env = { ...originalEnv }
 })
 
@@ -158,6 +159,28 @@ describe('migration runner contract', () => {
     })
   })
 
+  it('falls back to runtime DNS when host-based migration config has no ipv4 record', async () => {
+    delete process.env.DATABASE_URL
+    process.env.SUPABASE_HOST = 'db.ipv6-only.supabase.co'
+    process.env.SUPABASE_PASSWORD = 'secret-value'
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+
+    const dnsLookup = async (hostname: string) => {
+      expect(hostname).toBe('db.ipv6-only.supabase.co')
+      throw Object.assign(new Error('getaddrinfo ENOTFOUND'), { code: 'ENOTFOUND' })
+    }
+
+    await expect(resolveMigrationRuntimeConnectionConfig(dnsLookup)).resolves.toEqual({
+      host: 'db.ipv6-only.supabase.co',
+      port: 5432,
+      database: 'postgres',
+      user: 'postgres',
+      password: 'secret-value',
+      ssl: { rejectUnauthorized: false },
+    })
+    expect(warnSpy).toHaveBeenCalledOnce()
+  })
+
   it('resolves connection-string migration config to an ipv4 address before connecting', async () => {
     process.env.DATABASE_URL = 'postgresql://postgres:secret@db.example.supabase.co:5432/postgres'
 
@@ -171,5 +194,21 @@ describe('migration runner contract', () => {
       family: 4,
       ssl: { rejectUnauthorized: false },
     })
+  })
+
+  it('falls back to runtime DNS when connection-string migration config has no ipv4 record', async () => {
+    process.env.DATABASE_URL = 'postgresql://postgres:secret@db.ipv6-only.supabase.co:5432/postgres'
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+
+    const dnsLookup = async (hostname: string) => {
+      expect(hostname).toBe('db.ipv6-only.supabase.co')
+      throw Object.assign(new Error('getaddrinfo ENOTFOUND'), { code: 'ENOTFOUND' })
+    }
+
+    await expect(resolveMigrationRuntimeConnectionConfig(dnsLookup)).resolves.toEqual({
+      connectionString: 'postgresql://postgres:secret@db.ipv6-only.supabase.co:5432/postgres',
+      ssl: { rejectUnauthorized: false },
+    })
+    expect(warnSpy).toHaveBeenCalledOnce()
   })
 })

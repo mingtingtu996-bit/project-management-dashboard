@@ -12,6 +12,48 @@ import { getVisibleProjectIds } from '../auth/access.js'
 
 const router = Router()
 const supabase = new SupabaseService()
+const PROJECT_LIST_CACHE_TTL_MS = Number(process.env.PROJECT_LIST_CACHE_TTL_MS ?? 15_000)
+
+let projectListCache: { expiresAt: number; projects: Project[] } | null = null
+
+async function getCachedProjects() {
+  const now = Date.now()
+  if (projectListCache && projectListCache.expiresAt > now) {
+    return projectListCache.projects
+  }
+
+  const projects = await supabase.getProjects()
+  projectListCache = {
+    expiresAt: now + (Number.isFinite(PROJECT_LIST_CACHE_TTL_MS) && PROJECT_LIST_CACHE_TTL_MS > 0 ? PROJECT_LIST_CACHE_TTL_MS : 0),
+    projects,
+  }
+  return projects
+}
+
+function clearProjectListCache() {
+  projectListCache = null
+}
+
+function refreshProjectListCache(projects: Project[]) {
+  const ttlMs = Number.isFinite(PROJECT_LIST_CACHE_TTL_MS) && PROJECT_LIST_CACHE_TTL_MS > 0
+    ? PROJECT_LIST_CACHE_TTL_MS
+    : 0
+  projectListCache = {
+    expiresAt: Date.now() + ttlMs,
+    projects,
+  }
+}
+
+function upsertProjectListCache(project: Project | null) {
+  if (!projectListCache || !project) return
+  const nextProjects = projectListCache.projects.filter((item) => item.id !== project.id)
+  refreshProjectListCache([project, ...nextProjects])
+}
+
+function removeProjectFromListCache(projectId: string) {
+  if (!projectListCache) return
+  refreshProjectListCache(projectListCache.projects.filter((item) => item.id !== projectId))
+}
 
 // 所有路由都需要认证
 router.use(authenticate)
@@ -19,7 +61,7 @@ router.use(authenticate)
 // 获取所有项目
 router.get('/', asyncHandler(async (req, res) => {
   logger.info('Fetching all projects')
-  let projects = await supabase.getProjects()
+  let projects = await getCachedProjects()
 
   if (req.user?.id) {
     const visibleProjectIds = await getVisibleProjectIds(req.user.id, req.user.globalRole)
@@ -120,6 +162,7 @@ router.post('/', validate(projectSchema), asyncHandler(async (req, res) => {
     owner_id: req.user?.id,
     created_by: req.user?.id,
   })
+  upsertProjectListCache(project)
   
   const response: ApiResponse<Project> = {
     success: true,
@@ -138,6 +181,7 @@ router.post('/with-id', validate(projectSchema), asyncHandler(async (req, res) =
     owner_id: req.user?.id,
     created_by: req.user?.id,
   })
+  upsertProjectListCache(project)
   
   const response: ApiResponse<Project> = {
     success: true,
@@ -157,6 +201,7 @@ router.put('/:id', validateIdParam, requireProjectOwner(req => req.params.id), v
 
   try {
     const project = await supabase.updateProject(id, updates, expectedVersion)
+    upsertProjectListCache(project)
     
     if (!project) {
       const response: ApiResponse = {
@@ -192,6 +237,7 @@ router.delete('/:id', validateIdParam, requireProjectOwner(req => req.params.id)
   logger.info('Deleting project', { id })
   
   await supabase.deleteProject(id)
+  removeProjectFromListCache(id)
   
   const response: ApiResponse = {
     success: true,

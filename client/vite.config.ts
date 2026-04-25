@@ -14,16 +14,12 @@ export default defineConfig({
     },
   },
   build: {
-    // 代码分割优化
+    // 关闭首屏 modulepreload，避免公网环境首屏并发拉取过多静态资源
+    modulePreload: false,
+    // 公网环境偶发静态资源请求失败时，优先保证首屏只依赖单一入口脚本
     rollupOptions: {
       output: {
-        manualChunks: {
-          vendor: ['react', 'react-dom', 'react-router-dom'],
-          ui: ['@radix-ui/react-dialog', '@radix-ui/react-dropdown-menu', '@radix-ui/react-select'],
-          charts: ['chart.js'],
-          icons: ['lucide-react'],
-          utils: ['date-fns', 'clsx', 'tailwind-merge'],
-        },
+        inlineDynamicImports: true,
       },
     },
     // 启用CSS代码分割

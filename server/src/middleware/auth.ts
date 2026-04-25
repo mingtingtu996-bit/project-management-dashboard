@@ -8,7 +8,7 @@ import { logger } from './logger.js'
 import { executeSQL, executeSQLOne, supabase } from '../services/dbService.js'
 import { extractTokenFromRequest, verifyToken } from '../auth/jwt.js'
 import { JWT_CONFIG } from '../auth/config.js'
-import { getProjectPermissionLevel, isUuidLike } from '../auth/access.js'
+import { getProjectPermissionLevel, isCompanyAdminRole, isUuidLike } from '../auth/access.js'
 import { query } from '../database.js'
 
 // 扩展Express Request类型
@@ -330,6 +330,12 @@ export const requireProjectMember = (getProjectId: (req: Request) => string | un
           })
           return
         }
+      }
+
+      const isReadRequest = ['GET', 'HEAD', 'OPTIONS'].includes(String(req.method ?? 'GET').toUpperCase())
+      if (isReadRequest && isCompanyAdminRole(req.user.globalRole)) {
+        next()
+        return
       }
 
       const hasAccess = await isProjectMemberOrOwner(userId, projectId)

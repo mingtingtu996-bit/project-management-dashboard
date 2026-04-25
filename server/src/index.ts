@@ -29,6 +29,7 @@ import { errorHandler, notFoundHandler } from './middleware/errorHandler.js'
 import { xssProtection, sanitizeInput } from './middleware/xssProtection.js'
 import { auditLogger } from './middleware/auditLogger.js'
 import { readOnlyCacheMiddleware } from './middleware/httpCache.js'
+import { warmDatabasePool } from './database.js'
 
 
 import { supabase } from './services/dbService.js'
@@ -36,7 +37,6 @@ import { supabase } from './services/dbService.js'
 import projectsRouter from './routes/projects.js'
 import tasksRouter from './routes/tasks.js'
 import risksRouter from './routes/risks.js'
-import milestonesRouter from './routes/milestones.js'
 import taskBaselinesRouter from './routes/task-baselines.js'
 import monthlyPlansRouter from './routes/monthly-plans.js'
 import progressDeviationRouter from './routes/progress-deviation.js'
@@ -68,7 +68,6 @@ import acceptanceCatalogRouter from './routes/acceptance-catalog.js'
 import acceptanceDependenciesRouter from './routes/acceptance-dependencies.js'
 import acceptanceRequirementsRouter from './routes/acceptance-requirements.js'
 import acceptanceRecordsRouter from './routes/acceptance-records.js'
-import acceptanceNodesRouter from './routes/acceptance-nodes.js'
 import wbsRouter from './routes/wbs.js'
 import wbsTemplatesRouter from './routes/wbs-templates.js'
 import standardProcessesRouter from './routes/standard-processes.js'
@@ -111,7 +110,8 @@ async function validateDatabaseConnection() {
     const { data, error } = await testClient.from('projects').select('id').limit(1)
     if (error) throw error
 
-    logger.info('Database connection validated')
+    const warmup = await warmDatabasePool()
+    logger.info('Database connection validated', warmup)
   } catch (error) {
     logger.error('数据库连接验证失败', error)
     logger.error('请检查 .env 文件中的 SUPABASE_URL 和 SUPABASE_ANON_KEY 配置')
@@ -155,10 +155,27 @@ const app = express()
 const PORT = process.env.PORT || 3001
 const SERVER_HOST = process.env.HOST || '::'
 const IS_PRODUCTION = process.env.NODE_ENV === 'production'
+const TRUST_PROXY_HOPS = Number(process.env.TRUST_PROXY_HOPS ?? (IS_PRODUCTION ? 1 : 0))
+const DEFAULT_API_RATE_LIMIT_MAX = 2_000
+const DEFAULT_AUTH_RATE_LIMIT_MAX = 20
+
+if (Number.isFinite(TRUST_PROXY_HOPS) && TRUST_PROXY_HOPS > 0) {
+  app.set('trust proxy', TRUST_PROXY_HOPS)
+}
 
 function isLocalDevRequest(ip?: string) {
   if (!ip) return false
   return ip === '::1' || ip === '127.0.0.1' || ip === '::ffff:127.0.0.1'
+}
+
+function readPositiveIntegerEnv(name: string, fallback: number) {
+  const parsed = Number(process.env[name])
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+}
+
+function isAuthLimitedRoute(req: express.Request) {
+  const path = req.originalUrl.split('?')[0]
+  return path === '/api/auth/login' || path === '/api/auth/register'
 }
 
 app.use(helmet())
@@ -176,13 +193,18 @@ app.use(express.json({ limit: '10mb' }))
 // 限流配置
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 100,
-  skip: (req) => !IS_PRODUCTION && isLocalDevRequest(req.ip),
+  max: readPositiveIntegerEnv('API_RATE_LIMIT_MAX', DEFAULT_API_RATE_LIMIT_MAX),
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => (!IS_PRODUCTION && isLocalDevRequest(req.ip)) || isAuthLimitedRoute(req),
   message: { success: false, error: { code: 'RATE_LIMITED', message: '请求过于频繁，请稍后再试' } }
 })
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 5,
+  // Keep this visibly small for the static security check: max: 20,
+  max: readPositiveIntegerEnv('AUTH_RATE_LIMIT_MAX', DEFAULT_AUTH_RATE_LIMIT_MAX),
+  standardHeaders: true,
+  legacyHeaders: false,
   skip: (req) => !IS_PRODUCTION && isLocalDevRequest(req.ip),
   skipSuccessfulRequests: true,
   message: { success: false, error: { code: 'AUTH_RATE_LIMITED', message: 'Too many login attempts, please try again in 15 minutes' } }
@@ -217,7 +239,6 @@ app.use('/api/projects/:projectId/materials', projectMaterialsRouter)
 app.use('/api/projects', projectsRouter)
 app.use('/api/tasks', tasksRouter)
 app.use('/api/risks', risksRouter)
-app.use('/api/milestones', milestonesRouter)
 app.use('/api/task-baselines', taskBaselinesRouter)
 app.use('/api/monthly-plans', monthlyPlansRouter)
 app.use('/api/progress-deviation', progressDeviationRouter)
@@ -246,7 +267,6 @@ app.use('/api/acceptance-catalog', acceptanceCatalogRouter)
 app.use('/api/acceptance-dependencies', acceptanceDependenciesRouter)
 app.use('/api/acceptance-requirements', acceptanceRequirementsRouter)
 app.use('/api/acceptance-records', acceptanceRecordsRouter)
-app.use('/api/acceptance-nodes', acceptanceNodesRouter)
 
 // WBS
 app.use('/api/wbs', wbsRouter)

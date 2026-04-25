@@ -1434,13 +1434,13 @@ export default function RiskManagement() {
   }
 
   if (!projectId) {
-    return <div className="min-h-screen bg-slate-50"><PageHeader eyebrow="风险管理" title="风险与问题" subtitle="当前没有可用的项目上下文。" /><div className="mx-auto max-w-7xl px-6 py-6"><EmptyState icon={AlertTriangle} title="未找到当前项目" description="请先选择一个项目后再查看风险与问题。" action={<Button onClick={goBack}><ArrowLeft className="mr-2 h-4 w-4" />返回</Button>} /></div></div>
+    return <div className="min-h-screen bg-slate-50"><PageHeader eyebrow="风险管理" title="风险与问题" subtitle="" /><div className="mx-auto max-w-7xl px-6 py-6"><EmptyState icon={AlertTriangle} title="未找到当前项目" action={<Button onClick={goBack}><ArrowLeft className="mr-2 h-4 w-4" />返回</Button>} /></div></div>
   }
 
   return (
     <div className="min-h-screen bg-slate-50">
       <div className="mx-auto max-w-7xl space-y-6 px-6 py-6">
-        <PageHeader eyebrow="风险管理" title="风险与问题" subtitle={`${projectName} 的预警确认、风险处置与问题闭环工作台`}>
+        <PageHeader eyebrow="风险管理" title="风险与问题" subtitle="">
           <div className="flex flex-wrap items-center gap-2">
             {MUTE_DURATION_OPTIONS.map((option) => (
               <Button
@@ -1482,13 +1482,13 @@ export default function RiskManagement() {
 
         <div className="grid gap-4 lg:grid-cols-3">
           <OverviewCard title="预警" count={activeWarnings.length} hint="待确认或待处理的业务预警" icon={Bell} actionLabel="查看预警" onAction={() => setActiveStream('warnings')}>
-            {activeWarnings.length === 0 ? <EmptyState icon={Bell} title="暂无预警" description="当前项目暂无命中需要人工确认的业务预警。" className="py-8" /> : <div className="space-y-3">{activeWarnings.slice(0, 3).map((item) => <div key={item.id}>{renderWarningEntry(item)}</div>)}</div>}
+            {activeWarnings.length === 0 ? <EmptyState icon={Bell} title="暂无预警" className="py-8" /> : <div className="space-y-3">{activeWarnings.slice(0, 3).map((item) => <div key={item.id}>{renderWarningEntry(item)}</div>)}</div>}
           </OverviewCard>
           <OverviewCard title="风险" count={activeRisks.length} hint="风险主数据源使用 /api/risks" icon={ShieldAlert} actionLabel="查看风险" onAction={() => setActiveStream('risks')}>
-            {activeRisks.length === 0 ? <EmptyState icon={ShieldAlert} title="暂无风险" description="当前还没有需要跟踪的风险条目，可以按实际情况手动补录。" className="py-8" /> : <div className="space-y-3">{activeRisks.slice(0, 3).map((row) => <div key={row.id}>{renderRiskEntry(row)}</div>)}</div>}
+            {activeRisks.length === 0 ? <EmptyState icon={ShieldAlert} title="暂无风险" className="py-8" /> : <div className="space-y-3">{activeRisks.slice(0, 3).map((row) => <div key={row.id}>{renderRiskEntry(row)}</div>)}</div>}
           </OverviewCard>
           <OverviewCard title="问题" count={activeIssues.length} hint="问题主数据源使用 /api/issues，并按优先级排序" icon={XCircle} actionLabel="查看问题" onAction={() => setActiveStream('problems')}>
-            {activeIssues.length === 0 ? <EmptyState icon={XCircle} title="暂无问题" description="当前没有待跟进的问题条目，闭环状态良好。" className="py-8" /> : <div className="space-y-3">{activeIssues.slice(0, 3).map((row) => <div key={row.id}>{renderIssueEntry(row)}</div>)}</div>}
+            {activeIssues.length === 0 ? <EmptyState icon={XCircle} title="暂无问题" className="py-8" /> : <div className="space-y-3">{activeIssues.slice(0, 3).map((row) => <div key={row.id}>{renderIssueEntry(row)}</div>)}</div>}
           </OverviewCard>
         </div>
 
@@ -1512,7 +1512,6 @@ export default function RiskManagement() {
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="space-y-1">
                 <CardTitle className="text-base">链路双视图工作区</CardTitle>
-                <p className="text-sm text-slate-500">概览卡保留为常驻摘要，下面统一切换预警、风险和问题链，并按任务归类或时间轴查看。</p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <Button variant={activeStream === 'warnings' ? 'default' : 'outline'} size="sm" onClick={() => setActiveStream('warnings')} data-testid="risk-stream-warnings">预警链</Button>
@@ -1551,7 +1550,7 @@ export default function RiskManagement() {
                   </div>
                 </div>
                 {filteredWarnings.length === 0 ? (
-                  <EmptyState icon={Bell} title="暂无预警" description="调整筛选条件后仍没有结果，说明当前没有命中的预警记录。" className="py-12" />
+                  <EmptyState icon={Bell} title="暂无预警" className="py-12" />
                 ) : (
                   groupedWarnings.map((group) => (
                     <Card key={group.title} className="border-slate-200 shadow-sm">
@@ -1583,7 +1582,7 @@ export default function RiskManagement() {
                   onPendingFilterToggle={() => setShowPendingManualCloseOnly((value) => !value)}
                   action={<ReadOnlyGuard action="create" message="请登录后新建风险"><Button size="sm" onClick={() => { resetManualForms(); setDialogState({ type: 'create-manual-risk' }) }} data-testid="manual-risk-create">新建风险</Button></ReadOnlyGuard>}
                 />
-                {groupedRisks.length === 0 ? <EmptyState icon={ShieldAlert} title="暂无风险" description="当前筛选范围内没有风险记录，可以切换来源或直接新建风险。" className="py-12" /> : (
+                {groupedRisks.length === 0 ? <EmptyState icon={ShieldAlert} title="暂无风险" className="py-12" /> : (
                   <div className={chainViewMode === 'timeline' ? 'relative pl-6 before:absolute before:left-2 before:top-0 before:h-full before:w-0.5 before:bg-slate-200' : 'space-y-3'}>
                     {groupedRisks.map((group) => (
                       <div key={group.title} className={chainViewMode === 'timeline' ? 'relative mb-4' : ''}>
@@ -1651,7 +1650,7 @@ export default function RiskManagement() {
                     </CardContent>
                   </Card>
                 ) : null}
-                {groupedIssues.length === 0 ? <EmptyState icon={XCircle} title="暂无问题" description="当前筛选范围内没有问题记录，可以切换链路视角或手动补录。" className="py-12" /> : (
+                {groupedIssues.length === 0 ? <EmptyState icon={XCircle} title="暂无问题" className="py-12" /> : (
                   <div className={chainViewMode === 'timeline' ? 'relative pl-6 before:absolute before:left-2 before:top-0 before:h-full before:w-0.5 before:bg-slate-200' : 'space-y-3'}>
                     {groupedIssues.map((group) => (
                       <div key={group.title} className={chainViewMode === 'timeline' ? 'relative mb-4' : ''}>
@@ -1669,9 +1668,9 @@ export default function RiskManagement() {
       </div>
 
       <Dialog open={dialogState !== null} onOpenChange={(open) => !open && setDialogState(null)}>
-        {dialogState?.type === 'convert-risk' ? <DialogContent className="sm:max-w-lg"><DialogHeader><DialogTitle>转为问题</DialogTitle><DialogDescription>将当前风险转入问题主数据源，并回写升级链追踪字段。</DialogDescription></DialogHeader><div className="space-y-3 text-sm text-slate-600"><div><span className="font-medium text-slate-900">标题：</span>{dialogState.row.title}</div>{dialogState.row.description ? <div>{dialogState.row.description}</div> : null}</div><DialogFooter><Button variant="outline" onClick={() => setDialogState(null)} disabled={saving}>取消</Button><Button onClick={() => void handleConvertRiskToIssue()} loading={saving}>确认转入</Button></DialogFooter></DialogContent> : null}
-        {dialogState?.type === 'create-manual-risk' ? <DialogContent className="sm:max-w-lg"><DialogHeader><DialogTitle>新建风险</DialogTitle><DialogDescription>手动创建独立风险，写入 risks 主数据源。</DialogDescription></DialogHeader><div className="space-y-4 text-sm text-slate-600"><label className="block space-y-2"><span className="font-medium text-slate-900">风险标题</span><input value={manualRiskTitle} onChange={(event) => setManualRiskTitle(event.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400" placeholder="例如：主体结构窗口受天气影响" /></label><label className="block space-y-2"><span className="font-medium text-slate-900">严重程度</span><select value={manualRiskSeverity} onChange={(event) => setManualRiskSeverity(event.target.value as RiskRow['severity'])} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400"><option value="low">低</option><option value="medium">中</option><option value="high">高</option><option value="critical">严重</option></select></label><label className="block space-y-2"><span className="font-medium text-slate-900">风险描述</span><textarea value={manualRiskDescription} onChange={(event) => setManualRiskDescription(event.target.value)} className="min-h-24 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400" placeholder="补充背景、影响和当前判断" /></label></div><DialogFooter><Button variant="outline" onClick={() => setDialogState(null)} disabled={saving}>取消</Button><Button onClick={() => void handleCreateManualRisk()} loading={saving}>确认创建</Button></DialogFooter></DialogContent> : null}
-        {dialogState?.type === 'create-manual-issue' ? <DialogContent className="sm:max-w-lg"><DialogHeader><DialogTitle>新建问题</DialogTitle><DialogDescription>手动创建独立问题，并按来源与严重度计算优先级。</DialogDescription></DialogHeader><div className="space-y-4 text-sm text-slate-600"><label className="block space-y-2"><span className="font-medium text-slate-900">问题标题</span><input value={manualIssueTitle} onChange={(event) => setManualIssueTitle(event.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400" placeholder="例如：专项审批资料缺失" /></label><label className="block space-y-2"><span className="font-medium text-slate-900">严重程度</span><select value={manualIssueSeverity} onChange={(event) => setManualIssueSeverity(event.target.value as IssueRow['severity'])} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400"><option value="low">低</option><option value="medium">中</option><option value="high">高</option><option value="critical">严重</option></select></label><label className="block space-y-2"><span className="font-medium text-slate-900">问题描述</span><textarea value={manualIssueDescription} onChange={(event) => setManualIssueDescription(event.target.value)} className="min-h-24 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400" placeholder="补充背景、影响和当前处理建议" /></label><div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">实时优先级分：<span className="font-semibold text-slate-900">{calculateIssuePriorityScore('manual', manualIssueSeverity)}</span></div></div><DialogFooter><Button variant="outline" onClick={() => setDialogState(null)} disabled={saving}>取消</Button><Button onClick={() => void handleCreateManualIssue()} loading={saving}>确认创建</Button></DialogFooter></DialogContent> : null}
+        {dialogState?.type === 'convert-risk' ? <DialogContent className="sm:max-w-lg"><DialogHeader><DialogTitle>转为问题</DialogTitle><DialogDescription className="sr-only">转为问题</DialogDescription></DialogHeader><div className="space-y-3 text-sm text-slate-600"><div><span className="font-medium text-slate-900">标题：</span>{dialogState.row.title}</div>{dialogState.row.description ? <div>{dialogState.row.description}</div> : null}</div><DialogFooter><Button variant="outline" onClick={() => setDialogState(null)} disabled={saving}>取消</Button><Button onClick={() => void handleConvertRiskToIssue()} loading={saving}>确认转入</Button></DialogFooter></DialogContent> : null}
+        {dialogState?.type === 'create-manual-risk' ? <DialogContent className="sm:max-w-lg"><DialogHeader><DialogTitle>新建风险</DialogTitle><DialogDescription className="sr-only">新建风险</DialogDescription></DialogHeader><div className="space-y-4 text-sm text-slate-600"><label className="block space-y-2"><span className="font-medium text-slate-900">风险标题</span><input value={manualRiskTitle} onChange={(event) => setManualRiskTitle(event.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400" placeholder="例如：主体结构窗口受天气影响" /></label><label className="block space-y-2"><span className="font-medium text-slate-900">严重程度</span><select value={manualRiskSeverity} onChange={(event) => setManualRiskSeverity(event.target.value as RiskRow['severity'])} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400"><option value="low">低</option><option value="medium">中</option><option value="high">高</option><option value="critical">严重</option></select></label><label className="block space-y-2"><span className="font-medium text-slate-900">风险描述</span><textarea value={manualRiskDescription} onChange={(event) => setManualRiskDescription(event.target.value)} className="min-h-24 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400" placeholder="补充内容" /></label></div><DialogFooter><Button variant="outline" onClick={() => setDialogState(null)} disabled={saving}>取消</Button><Button onClick={() => void handleCreateManualRisk()} loading={saving}>确认创建</Button></DialogFooter></DialogContent> : null}
+        {dialogState?.type === 'create-manual-issue' ? <DialogContent className="sm:max-w-lg"><DialogHeader><DialogTitle>新建问题</DialogTitle><DialogDescription className="sr-only">新建问题</DialogDescription></DialogHeader><div className="space-y-4 text-sm text-slate-600"><label className="block space-y-2"><span className="font-medium text-slate-900">问题标题</span><input value={manualIssueTitle} onChange={(event) => setManualIssueTitle(event.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400" placeholder="例如：专项审批资料缺失" /></label><label className="block space-y-2"><span className="font-medium text-slate-900">严重程度</span><select value={manualIssueSeverity} onChange={(event) => setManualIssueSeverity(event.target.value as IssueRow['severity'])} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400"><option value="low">低</option><option value="medium">中</option><option value="high">高</option><option value="critical">严重</option></select></label><label className="block space-y-2"><span className="font-medium text-slate-900">问题描述</span><textarea value={manualIssueDescription} onChange={(event) => setManualIssueDescription(event.target.value)} className="min-h-24 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400" placeholder="补充内容" /></label><div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">实时优先级分：<span className="font-semibold text-slate-900">{calculateIssuePriorityScore('manual', manualIssueSeverity)}</span></div></div><DialogFooter><Button variant="outline" onClick={() => setDialogState(null)} disabled={saving}>取消</Button><Button onClick={() => void handleCreateManualIssue()} loading={saving}>确认创建</Button></DialogFooter></DialogContent> : null}
       </Dialog>
 
       <Dialog open={detailDialog !== null} onOpenChange={(open) => !open && setDetailDialog(null)}>
@@ -1686,7 +1685,7 @@ export default function RiskManagement() {
                   <Eye className="h-5 w-5 text-slate-400" />
                   记录详情
                 </DialogTitle>
-                <DialogDescription>
+                <DialogDescription className="sr-only">
                   {detailDialog.entityType === 'warning'
                     ? '查看预警来源、状态和操作入口。'
                     : detailDialog.entityType === 'risk'
@@ -1931,10 +1930,14 @@ export default function RiskManagement() {
 }
 
 function OverviewCard({ title, count, hint, icon: Icon, actionLabel, onAction, children }: { title: string; count: number; hint: string; icon: typeof Bell; actionLabel: string; onAction: () => void; children: ReactNode }) {
-  return <Card className="overflow-hidden border-slate-200 shadow-sm"><CardHeader className="pb-3"><div className="flex items-start justify-between gap-3"><div className="space-y-1"><CardTitle className="flex items-center gap-2 text-base"><Icon className="h-4 w-4" />{title}</CardTitle><p className="text-sm text-slate-500">{hint}</p></div><div className="rounded-2xl bg-slate-50 px-3 py-2 text-right"><div className="text-2xl font-semibold text-slate-900">{count}</div><div className="text-xs text-slate-500">条</div></div></div></CardHeader><CardContent className="space-y-4 pt-0">{children}<Button variant="outline" size="sm" onClick={onAction}>{actionLabel}</Button></CardContent></Card>
+  void hint
+
+  return <Card className="overflow-hidden border-slate-200 shadow-sm"><CardHeader className="pb-3"><div className="flex items-start justify-between gap-3"><div className="space-y-1"><CardTitle className="flex items-center gap-2 text-base"><Icon className="h-4 w-4" />{title}</CardTitle></div><div className="rounded-2xl bg-slate-50 px-3 py-2 text-right"><div className="text-2xl font-semibold text-slate-900">{count}</div><div className="text-xs text-slate-500">条</div></div></div></CardHeader><CardContent className="space-y-4 pt-0">{children}<Button variant="outline" size="sm" onClick={onAction}>{actionLabel}</Button></CardContent></Card>
 }
 
 function SummaryMetricCard({ title, value, hint, icon: Icon }: { title: string; value: string | number; hint: string; icon: typeof Activity }) {
+  void hint
+
   return (
     <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
       <div className="flex items-start justify-between gap-3">
@@ -1946,7 +1949,6 @@ function SummaryMetricCard({ title, value, hint, icon: Icon }: { title: string; 
           <Icon className="h-4 w-4" />
         </div>
       </div>
-      <div className="mt-2 text-xs leading-5 text-slate-500">{hint}</div>
     </div>
   )
 }

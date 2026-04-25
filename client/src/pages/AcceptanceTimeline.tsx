@@ -339,7 +339,6 @@ export default function AcceptanceTimeline() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <div className="text-sm font-semibold text-slate-900">筛选区</div>
-            <div className="text-xs text-slate-500">支持项目、楼栋、范围、状态、阻塞和时间尺度联动筛选。</div>
           </div>
           <div className="flex flex-wrap gap-2">
             <Badge variant="outline" className="rounded-full px-3 py-1">项目：{projectName}</Badge>
@@ -427,7 +426,6 @@ export default function AcceptanceTimeline() {
             </div>
           </div>
         </div>
-        <div className="mt-3 text-xs text-slate-500">筛选口径已切到项目 / 楼栋 / 单位工程 / 专项四级范围，并统一使用新版验收状态。</div>
       </section>
 
       {visiblePhaseGroups.length > 0 && (
@@ -440,7 +438,7 @@ export default function AcceptanceTimeline() {
         <EmptyState
           icon={CheckCircle2}
           title="暂无验收记录"
-          description="当前筛选条件下没有验收计划，或者项目还未创建验收项。"
+          description=""
           action={<Button className="gap-2" onClick={() => setAddPlanOpen(true)}><Plus className="h-4 w-4" />添加验收</Button>}
         />
       ) : viewMode === 'graph' ? (
@@ -734,7 +732,7 @@ function AddPlanDialog({
           </div>
 
           <div>
-            <Label>备注说明</Label>
+            <Label>备注</Label>
             <Input value={description} onChange={(event) => setDescription(event.target.value)} placeholder="可选备注" className="mt-1" />
           </div>
 

@@ -154,7 +154,7 @@ export default function RiskTrendChart({ defaultExpanded = true }: RiskTrendChar
           {loading ? (
             <LoadingState
               label="风险趋势加载中"
-              description="正在读取最近 30 天的风险变化数据"
+              description=""
               className="min-h-32 py-8"
             />
           ) : !data?.trend?.length ? (

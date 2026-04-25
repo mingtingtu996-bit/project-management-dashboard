@@ -31,11 +31,11 @@ export interface BaselineTreeEditorProps {
 
 export function BaselineTreeEditor({
   title = '基线树编辑器',
-  description = '这里维护项目基线树、层级结构和节点勾选，确认前可以先完成主干编辑与版本复核准备。',
+  description = '',
   summaryLabel = '基线草稿收口',
   unlockLabel = '强制解锁入口',
   treeTitle = '基线树',
-  treeDescription = 'L1-L5 结构树已接入统一勾选、批量条和只读控制。',
+  treeDescription = '',
   treeEmptyLabel = '暂时没有基线条目',
   testId = 'baseline-tree-editor',
   rows,
@@ -51,6 +51,8 @@ export function BaselineTreeEditor({
   onRedo,
   onForceUnlock,
 }: BaselineTreeEditorProps) {
+  void description
+
   const stateLabel = useMemo(() => {
     if (readOnly) return '只读查看态'
     if (isDirty) return '有未保存更改'
@@ -63,7 +65,6 @@ export function BaselineTreeEditor({
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="space-y-1">
             <CardTitle className="text-xl">{title}</CardTitle>
-            <p className="text-sm leading-6 text-slate-600">{description}</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant="outline">{summaryLabel}</Badge>
@@ -104,11 +105,7 @@ export function BaselineTreeEditor({
       </CardHeader>
 
       <CardContent className="p-0">
-        {readOnly ? (
-          <div className="border-b border-slate-100 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-            当前为只读查看态，先看结构，不直接改动。
-          </div>
-        ) : null}
+        {readOnly ? <div className="border-b border-slate-100 bg-slate-50 px-4 py-3" /> : null}
 
         <PlanningTreeView
           title={treeTitle}

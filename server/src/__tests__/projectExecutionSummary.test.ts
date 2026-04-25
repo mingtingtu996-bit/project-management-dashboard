@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 import {
@@ -7,6 +9,12 @@ import {
   summarizePlanningGovernanceStates,
   summarizeSupplementaryProjectData,
 } from '../services/projectExecutionSummaryService.js'
+
+const serverRoot = process.cwd().endsWith('\\server') ? process.cwd() : resolve(process.cwd(), 'server')
+
+function readServerFile(...segments: string[]) {
+  return readFileSync(resolve(serverRoot, ...segments), 'utf8')
+}
 
 describe('summarizeSupplementaryProjectData', () => {
   it('counts certificate, acceptance and drawing summaries by project consistently', () => {
@@ -232,5 +240,16 @@ describe('summarizeUnreadWarningSignals', () => {
       highestWarningLevel: 'critical',
       highestWarningSummary: '关键路径任务受阻',
     })
+  })
+})
+
+describe('projects summary query shape', () => {
+  it('keeps all-project dashboard summaries on narrow unordered queries', () => {
+    const source = readServerFile('src', 'services', 'projectExecutionSummaryService.ts')
+
+    expect(source).toContain('async function loadSummaryTasks()')
+    expect(source).toContain('SELECT id, project_id, parent_id, title, description, status, progress, is_milestone')
+    expect(source).toContain('loadSummaryTasks(),')
+    expect(source).not.toContain('getTasks(),')
   })
 })

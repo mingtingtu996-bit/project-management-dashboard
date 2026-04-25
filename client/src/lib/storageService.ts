@@ -9,6 +9,7 @@ import {
   projectDb, taskDb, riskDb, milestoneDb, memberDb, invitationDb
 } from './localDb'
 import { safeJsonParse, safeStorageGet, safeStorageSet } from '@/lib/browserStorage'
+import { generateUuid } from '@/lib/utils'
 
 // ============================================
 // 存储模式枚举
@@ -342,7 +343,7 @@ class StorageServiceImpl implements StorageAdapter {
    */
   addOperation(type: PendingOperation['type'], table: string, data: any): string {
     const operation: PendingOperation = {
-      id: crypto.randomUUID(),
+      id: generateUuid(),
       type,
       table,
       data,
@@ -848,7 +849,7 @@ class StorageServiceImpl implements StorageAdapter {
   addToSyncQueue<T>(item: Omit<SyncQueueItem<T>, 'id' | 'timestamp' | 'retries' | 'status'>): void {
     const queueItem: SyncQueueItem<T> = {
       ...item,
-      id: crypto.randomUUID(),
+      id: generateUuid(),
       timestamp: Date.now(),
       retries: 0,
       status: 'pending'

@@ -13,6 +13,8 @@ import { Card, CardContent } from '@/components/ui/card'
 import { LoadingState } from '@/components/ui/loading-state'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useApi } from '@/hooks/useApi'
+import { useAuth } from '@/hooks/useAuth'
+import { useAuthDialog } from '@/hooks/useAuthDialog'
 import {
   useConnectionMode,
   useCurrentProject,
@@ -30,6 +32,7 @@ import { getCachedProjects } from '@/lib/projectPersistence'
 import { isRealtimeNotificationEvent } from '@/lib/realtime'
 import { PROJECT_NAVIGATION_LABELS, resolveNotificationTarget } from '@/config/navigation'
 import {
+  AlertCircle,
   AlertTriangle,
   ArrowRight,
   Bell,
@@ -409,6 +412,8 @@ function getNotificationStateLabel(notification: NormalizedNotification) {
 export default function Notifications() {
   const currentProject = useCurrentProject()
   const setCurrentProject = useSetCurrentProject()
+  const { isAuthenticated, loading: authLoading } = useAuth()
+  const { openLoginDialog } = useAuthDialog()
   const connectionMode = useConnectionMode()
   const realtimeConnectionState = useRealtimeConnectionState()
   const lastRealtimeEvent = useLastRealtimeEvent()
@@ -474,6 +479,15 @@ export default function Notifications() {
   }, [location.search, setCurrentProject])
 
   const loadNotifications = useCallback(async (options?: { silent?: boolean }) => {
+    if (authLoading || !isAuthenticated) {
+      setLoadError(null)
+      setSharedSliceStatus('notifications', { loading: false, error: null })
+      if (!options?.silent) {
+        setLoading(false)
+      }
+      return
+    }
+
     const silent = options?.silent === true
     try {
       if (!silent) {
@@ -518,14 +532,21 @@ export default function Notifications() {
         setLoading(false)
       }
     }
-  }, [api, currentProject?.id, projectIdFromQuery, scope, setNotifications, setSharedSliceStatus])
+  }, [api, authLoading, currentProject?.id, isAuthenticated, projectIdFromQuery, scope, setNotifications, setSharedSliceStatus])
 
   useEffect(() => {
+    if (authLoading) return
+    if (!isAuthenticated) {
+      setLoading(false)
+      setLoadError(null)
+      setSharedSliceStatus('notifications', { loading: false, error: null })
+      return
+    }
     void loadNotifications()
-  }, [loadNotifications])
+  }, [authLoading, isAuthenticated, loadNotifications, setSharedSliceStatus])
 
   useEffect(() => {
-    if (connectionMode !== 'polling') {
+    if (!isAuthenticated || connectionMode !== 'polling') {
       return
     }
 
@@ -534,10 +555,10 @@ export default function Notifications() {
     }, 30000)
 
     return () => window.clearInterval(interval)
-  }, [connectionMode, loadNotifications])
+  }, [connectionMode, isAuthenticated, loadNotifications])
 
   useEffect(() => {
-    if (connectionMode !== 'websocket') {
+    if (!isAuthenticated || connectionMode !== 'websocket') {
       return
     }
 
@@ -564,7 +585,7 @@ export default function Notifications() {
         realtimeRefreshTimeoutRef.current = null
       }
     }
-  }, [connectionMode, currentProject?.id, lastRealtimeEvent, loadNotifications, scope])
+  }, [connectionMode, currentProject?.id, isAuthenticated, lastRealtimeEvent, loadNotifications, scope])
 
   const patchNotifications = useCallback((ids: string[], patch: Partial<NormalizedNotification>) => {
     const idSet = new Set(ids)
@@ -819,6 +840,55 @@ export default function Notifications() {
             />
           </CardContent>
         </Card>
+      </div>
+    )
+  }
+
+  if (!authLoading && !isAuthenticated) {
+    const redirectTarget = `${location.pathname}${location.search}`
+
+    return (
+      <div className="page-enter space-y-6 p-6" data-testid="notifications-login-required">
+        <PageHeader
+          eyebrow={'公司级第二入口'}
+          title={PROJECT_NAVIGATION_LABELS.notifications}
+          subtitle="提醒中心需要登录后才会加载你的个人提醒、分派记录和处理状态。登录成功后会自动回到当前页面。"
+        >
+          <Badge variant="secondary">登录后可用</Badge>
+        </PageHeader>
+
+        <Alert>
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription className="space-y-4">
+            <div>
+              <strong>登录后继续查看提醒中心</strong>
+              <br />
+              当前页面依赖带鉴权的提醒接口。登录后会自动回到提醒中心，并继续加载你的待办、预警和跟进提醒。
+            </div>
+            <div className="flex flex-wrap gap-3">
+              <Button
+                type="button"
+                onClick={() => {
+                  try {
+                    window.sessionStorage.setItem('pending_auth_redirect', redirectTarget)
+                  } catch {
+                    // sessionStorage 不可用时静默跳过
+                  }
+                  openLoginDialog()
+                }}
+              >
+                登录后继续
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => navigate(`/company?login=1&redirect=${encodeURIComponent(redirectTarget)}`)}
+              >
+                前往登录入口
+              </Button>
+            </div>
+          </AlertDescription>
+        </Alert>
       </div>
     )
   }

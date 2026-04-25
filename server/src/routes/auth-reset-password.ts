@@ -5,7 +5,7 @@ import { authError, authSuccess } from '../auth/http.js'
 import { extractTokenFromRequest, verifyToken } from '../auth/jwt.js'
 import { hashPassword, validateUsername } from '../auth/password.js'
 import type { PasswordResetData } from '../auth/types.js'
-import { getAuthUserById, hasUsersUpdatedAtColumn } from '../auth/session.js'
+import { getAuthUserById } from '../auth/session.js'
 import { query } from '../database.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import { validate } from '../middleware/validation.js'
@@ -61,12 +61,8 @@ router.post('/', validate(resetPasswordSchema), asyncHandler(async (req, res) =>
 
   const temporaryPassword = generateTemporaryPassword()
   const passwordHash = await hashPassword(temporaryPassword)
-  const shouldWriteUpdatedAt = await hasUsersUpdatedAtColumn()
-
   await query(
-    shouldWriteUpdatedAt
-      ? 'UPDATE public.users SET password_hash = $1, updated_at = NOW() WHERE id = $2'
-      : 'UPDATE public.users SET password_hash = $1 WHERE id = $2',
+    'UPDATE public.users SET password_hash = $1, updated_at = NOW() WHERE id = $2',
     [passwordHash, targetUser.id],
   )
 
