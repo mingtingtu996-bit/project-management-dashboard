@@ -26,9 +26,9 @@ export function DrawingPackageBoard({
   onSelectPackage,
   onOpenVersions,
   title = '图纸包主视图',
-  subtitle = '按专业分组，优先看包级状态、应有项缺漏和当前有效版。',
+  subtitle = '',
   emptyTitle = '当前没有图纸包',
-  emptyDescription = '可以先新建图纸包，或者把现有单图补录到对应包里。',
+  emptyDescription = '',
 }: {
   groups: DrawingPackageGroup[]
   onSelectPackage: (pkg: DrawingPackageCard) => void
@@ -39,6 +39,8 @@ export function DrawingPackageBoard({
   emptyDescription?: string
 }) {
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
+  void subtitle
+  void emptyDescription
 
   function toggleGroup(disciplineType: string) {
     setCollapsedGroups((prev) => {
@@ -54,7 +56,6 @@ export function DrawingPackageBoard({
       <div className="flex items-end justify-between gap-4">
         <div>
           <h2 className="text-lg font-semibold text-slate-900">{title}</h2>
-          <p className="mt-1 text-sm text-slate-500">{subtitle}</p>
         </div>
         <div className="hidden items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500 md:flex">
           <Layers3 className="h-3.5 w-3.5" />
@@ -67,7 +68,6 @@ export function DrawingPackageBoard({
           <CardContent className="flex flex-col items-center justify-center gap-3 py-14 text-center">
             <FileWarning className="h-10 w-10 text-slate-300" />
             <div className="text-base font-medium text-slate-900">{emptyTitle}</div>
-            <div className="text-sm text-slate-500">{emptyDescription}</div>
           </CardContent>
         </Card>
       ) : (

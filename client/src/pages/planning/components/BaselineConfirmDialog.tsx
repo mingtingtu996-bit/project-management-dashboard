@@ -12,7 +12,7 @@ import {
 } from '@/components/ui/dialog'
 import { Card, CardContent } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
-import { AlertTriangle, CheckCircle2, Clock3, FileDiff, FolderGit2, RotateCcw, ShieldAlert } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, FileDiff, FolderGit2, RotateCcw, ShieldAlert } from 'lucide-react'
 
 import { BaselineDiffView, type BaselineDiffItem, type BaselineDiffKind } from './BaselineDiffView'
 
@@ -139,21 +139,21 @@ export function BaselineConfirmDialog({
       label: '可确认',
       tone: 'secondary' as const,
       icon: CheckCircle2,
-      description: '先看数字摘要和分类计数，再决定是否展开完整差异。',
+      description: '',
     },
     stale: {
       label: '版本过期并发态',
       tone: 'outline' as const,
       icon: ShieldAlert,
-      description: '当前版本已过期，请先刷新或重新载入后再继续确认。',
+      description: '',
     },
     failed: {
       label: '发布失败态',
       tone: 'destructive' as const,
       icon: AlertTriangle,
       description: isRealignmentFailure
-        ? '当前版本已触发待重整阈值，请先处理重排或修订动作，再回到确认流程。'
-        : '上次发布失败，草稿已保留，可在修正后重试。',
+        ? ''
+        : '',
     },
   }[state]
   const StatusIcon = statusMeta.icon
@@ -183,14 +183,6 @@ export function BaselineConfirmDialog({
             <Badge variant="secondary">{counts.total} 处变更</Badge>
           </div>
 
-          <Alert
-            variant={state === 'failed' ? 'destructive' : 'default'}
-            className={cn(state === 'stale' ? 'border-amber-200 bg-amber-50 text-amber-900' : '')}
-          >
-            <Clock3 className="h-4 w-4" />
-            <AlertDescription>{statusMeta.description}</AlertDescription>
-          </Alert>
-
           {state === 'failed' && failureMessage ? (
             <Alert
               className={cn(
@@ -210,9 +202,6 @@ export function BaselineConfirmDialog({
                     >
                       <div>
                         <div className="text-sm font-medium text-slate-900">触发摘要</div>
-                        <p className="text-xs leading-5 text-slate-600">
-                          系统已判定当前版本需要先进入待重整处理，先看下面这些关键指标，再决定走重排还是修订。
-                        </p>
                       </div>
                       {realignmentSummary.metrics.length ? (
                         <div className="grid gap-2 md:grid-cols-3">
@@ -317,9 +306,6 @@ export function BaselineConfirmDialog({
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <div className="text-sm font-medium text-slate-900">首屏摘要</div>
-                <p className="text-sm leading-6 text-slate-600">
-                  这里先展示数字摘要和分类计数，不在首屏直接塞对比表。
-                </p>
               </div>
               <Button type="button" variant="outline" size="sm" className="gap-2" onClick={openDiff}>
                 <FileDiff className="h-4 w-4" />

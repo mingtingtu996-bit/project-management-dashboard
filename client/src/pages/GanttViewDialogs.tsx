@@ -344,13 +344,12 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
                         置信度 {Math.round((props.aiDurationSuggestion.confidence_score || 0) * 100)}%
                       </span>
                     </div>
-                    <p className="text-xs text-blue-600">基于历史相似任务估算，仅供参考。</p>
                     <Button type="button" size="sm" className="h-6 px-2 text-xs" onClick={props.applyAiDuration}>
                       应用此工期
                     </Button>
                   </div>
                 ) : (
-                  !props.aiDurationLoading && <p className="text-xs text-blue-500">点击“获取建议”，AI 会基于同类任务历史数据估算工期。</p>
+                  !props.aiDurationLoading && <div className="h-1" />
                 )}
               </div>
             )}
@@ -445,7 +444,6 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
                         </span>
                       </div>
                       <div className="mt-1 text-xs leading-5 text-slate-600">{item.summary}</div>
-                      <div className="mt-1 text-xs leading-5 text-slate-500">建议：{item.recommendation}</div>
                     </div>
                   ))}
                 </div>
@@ -553,9 +551,6 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
                     placeholder="输入责任单位或部门"
                   />
                 )}
-                <p className="text-xs text-muted-foreground">
-                  项目级参建单位会同步到材料、责任单位分析等链路；历史临时部门仍可继续手工录入。
-                </p>
               </div>
             </div>
 
@@ -568,7 +563,6 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
               >
                 <div>
                   <p className="text-sm font-medium text-slate-900">更多字段</p>
-                  <p className="mt-1 text-xs text-slate-500">用于补充专业属性、父子关系、所属里程碑和前置任务。</p>
                 </div>
                 {advancedOpen ? <ChevronUp className="h-4 w-4 text-slate-500" /> : <ChevronDown className="h-4 w-4 text-slate-500" />}
               </button>
@@ -629,7 +623,6 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
                         ))}
                     </SelectContent>
                   </Select>
-                  <p className="text-xs text-muted-foreground">{zhCN.gantt.parentTaskHelp}</p>
                 </div>
 
                 <div className="space-y-2">
@@ -652,7 +645,6 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
                         ))}
                     </SelectContent>
                   </Select>
-                  <p className="text-xs text-muted-foreground">任务完成度会按所属里程碑进行聚合展示。</p>
                 </div>
 
                 {props.tasks.length > 1 && (
@@ -779,7 +771,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
                   </SelectContent>
                 </Select>
                 <Input
-                  placeholder="输入开工条件描述"
+                  placeholder="输入开工条件"
                   value={props.newConditionName}
                   onChange={(event) => props.setNewConditionName(event.target.value)}
                   onKeyDown={(event) => event.key === 'Enter' && props.handleAddCondition()}
@@ -787,7 +779,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
                 />
               </div>
               <Input
-                placeholder="详细说明（可选）"
+                placeholder="备注（可选）"
                 value={props.newConditionDescription}
                 onChange={(event) => props.setNewConditionDescription(event.target.value)}
                 className="h-7 text-xs"
@@ -875,11 +867,10 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
               {props.conditionsLoading ? (
                 <LoadingState
                   label="开工条件加载中"
-                  description="正在读取当前任务的条件与前置关系"
                   className="min-h-24 py-4"
                 />
               ) : props.taskConditions.length === 0 ? (
-                <p className="text-sm text-muted-foreground text-center py-4">暂无开工条件，点击上方添加</p>
+                <p className="text-sm text-muted-foreground text-center py-4">暂无开工条件</p>
               ) : (
                 props.taskConditions.map((condition) => {
                   const typeConfig = CONDITION_TYPES.find((item) => item.value === condition.condition_type)
@@ -986,17 +977,11 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
               强制满足条件
             </DialogTitle>
             <DialogDescription className="sr-only">管理员强制标记开工条件为已满足</DialogDescription>
-            <p className="text-xs leading-5 text-muted-foreground">
-              仅用于管理员确认条件已具备的场景。提交后会同步 satisfied_reason 和变更留痕。
-            </p>
           </DialogHeader>
 
           <div className="space-y-3 py-1">
             <div className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-900">
               <div className="font-medium">{props.forceSatisfyCondition?.name ?? '当前条件'}</div>
-              <div className="mt-1 text-xs leading-5 text-amber-800">
-                本次操作只做“强制满足”，不会再出现解除或反向语义。
-              </div>
             </div>
             <div className="space-y-2">
               <Label htmlFor="gantt-force-satisfy-reason">强制满足原因</Label>
@@ -1049,7 +1034,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
           <div className="py-2 space-y-3">
             <div className="flex gap-2">
               <Input
-                placeholder="描述阻碍（如：材料未到场，无法施工）"
+                placeholder="阻碍备注"
                 value={props.newObstacleTitle}
                 onChange={(event) => props.setNewObstacleTitle(event.target.value)}
                 onKeyDown={(event) => event.key === 'Enter' && props.handleAddObstacle()}
@@ -1085,7 +1070,6 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
               {props.obstaclesLoading ? (
                 <LoadingState
                   label="阻碍记录加载中"
-                  description="正在读取当前任务的阻碍事项"
                   className="min-h-24 py-4"
                 />
               ) : props.taskObstacles.length === 0 ? (
@@ -1334,9 +1318,6 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
             </DialogTitle>
             <DialogDescription className="sr-only">新任务创建后选择是否添加开工条件</DialogDescription>
           </DialogHeader>
-          <p className="text-sm text-muted-foreground py-2">
-            任务已创建。如果该任务有尚未满足的前提条件（如材料到位、许可证办理等），可以现在添加开工条件来跟踪进度。
-          </p>
           <DialogFooter className="gap-2">
             <Button variant="outline" onClick={() => props.setNewTaskConditionPromptId(null)}>
               暂不设置
@@ -1362,7 +1343,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
         <DialogContent className="max-w-sm">
           <DialogHeader>
             <DialogTitle>{props.confirmDialog.title}</DialogTitle>
-            <DialogDescription className="sr-only">确认操作提示</DialogDescription>
+            <DialogDescription className="sr-only">确认</DialogDescription>
           </DialogHeader>
           <p className="text-sm text-muted-foreground py-2">{props.confirmDialog.message}</p>
           <DialogFooter className="gap-2">

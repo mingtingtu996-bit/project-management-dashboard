@@ -15,7 +15,7 @@ export function ProjectTeamManagementDrawer({ open, onOpenChange, projectId, pro
         <div className="border-b border-slate-200 bg-white px-6 py-5">
           <DialogHeader>
             <DialogTitle>团队管理</DialogTitle>
-            <DialogDescription>团队管理已并入 Header 用户菜单，成员管理、负责人转让、邀请码和密码重置都在这里完成。</DialogDescription>
+            <DialogDescription className="sr-only">团队管理</DialogDescription>
           </DialogHeader>
         </div>
         <div className="p-6">

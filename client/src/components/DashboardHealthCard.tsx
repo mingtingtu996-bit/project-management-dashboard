@@ -188,7 +188,7 @@ export default function DashboardHealthCard({
             {loading ? (
               <LoadingState
                 label="健康度加载中"
-                description="正在读取项目健康明细"
+                description=""
                 className="min-h-24 py-4"
               />
             ) : progressDetails ? (
@@ -261,11 +261,6 @@ export default function DashboardHealthCard({
                   ) : (
                     <div className="text-sm text-gray-500 py-2">
                       暂无分项进度数据
-                      {progressDetails.hasRealData === false && (
-                        <span className="block mt-1 text-xs text-gray-400">
-                          （请在任务中设置WBS编码以查看楼栋进度）
-                        </span>
-                      )}
                     </div>
                   )}
                 </div>

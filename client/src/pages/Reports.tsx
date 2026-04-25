@@ -163,6 +163,8 @@ type ChangeLogRecord = {
 }
 
 function MetricCard({ title, value, hint, icon }: MetricItem) {
+  void hint
+
   return (
     <Card className="border-slate-200 shadow-sm">
       <CardContent className="pt-6">
@@ -170,7 +172,6 @@ function MetricCard({ title, value, hint, icon }: MetricItem) {
           <div>
             <p className="text-sm text-muted-foreground">{title}</p>
             <div className="mt-2 text-2xl font-bold">{value}</div>
-            {hint ? <p className="mt-1 text-xs text-muted-foreground">{hint}</p> : null}
           </div>
           {icon ? <div className="rounded-lg bg-primary/10 p-2 text-primary">{icon}</div> : null}
         </div>
@@ -180,11 +181,12 @@ function MetricCard({ title, value, hint, icon }: MetricItem) {
 }
 
 function DetailStatCard({ label, value, hint }: DetailStat) {
+  void hint
+
   return (
     <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
       <div className="text-xs text-slate-500">{label}</div>
       <div className="mt-2 text-2xl font-semibold text-slate-900">{value}</div>
-      <div className="mt-2 text-xs leading-5 text-slate-500">{hint}</div>
     </div>
   )
 }
@@ -206,6 +208,8 @@ function AnalysisEntryCard({
   icon: ReactNode
   testId?: string
 }) {
+  void description
+
   return (
     <button
       data-testid={testId}
@@ -218,7 +222,6 @@ function AnalysisEntryCard({
           <div>
             <div className="text-xs font-medium uppercase tracking-[0.12em] text-slate-400">{moduleLabel}</div>
             <div className="text-base font-semibold text-slate-900">{title}</div>
-            <p className="mt-1 text-sm leading-6 text-slate-500">{description}</p>
           </div>
         </div>
       </div>
@@ -776,7 +779,7 @@ export default function Reports() {
       return {
         eyebrow: '里程碑分析',
         title: '项目进度总览分析',
-        subtitle: `${projectName} 的整体进度、里程碑、专项准备度、验收推进和关键路径在这里集中查看。`,
+        subtitle: '',
         backLabel: '返回里程碑',
         backTo: projectId ? `/projects/${projectId}/milestones` : undefined,
         metrics: [
@@ -792,7 +795,7 @@ export default function Reports() {
       return {
         eyebrow: '偏差分析',
         title: '进度偏差分析',
-        subtitle: `${projectName} 的基线偏差、月度完成情况与执行偏差在这里统一下钻。`,
+        subtitle: '',
         backLabel: '返回项目总览',
         backTo: projectId ? `/projects/${projectId}/dashboard` : undefined,
         metrics: [
@@ -808,7 +811,7 @@ export default function Reports() {
       return {
         eyebrow: '风险分析',
         title: '风险与问题分析',
-        subtitle: `${projectName} 的风险压力、问题存量、条件未满足和阻碍事项在这里集中查看。`,
+        subtitle: '',
         backLabel: '返回风险与问题',
         backTo: projectId ? `/projects/${projectId}/risks` : undefined,
         metrics: [
@@ -824,7 +827,7 @@ export default function Reports() {
       return {
         eyebrow: '任务管理分析',
         title: '变更记录分析',
-        subtitle: `${projectName} 的范围、计划和执行变更入口在这里集中查看。`,
+        subtitle: '',
         backLabel: '返回任务管理',
         backTo: projectId ? `/projects/${projectId}/gantt` : undefined,
         metrics: [
@@ -839,7 +842,7 @@ export default function Reports() {
     return {
       eyebrow: '里程碑分析',
       title: '项目进度总览分析',
-      subtitle: `${projectName} 的整体进度、里程碑、专项准备度、验收推进和关键路径在这里集中查看。`,
+      subtitle: '',
       backLabel: '返回里程碑',
       backTo: projectId ? `/projects/${projectId}/milestones` : undefined,
       metrics: [
@@ -923,11 +926,6 @@ export default function Reports() {
             <DetailStatCard label="里程碑完成率" value={`${summary?.milestoneProgress ?? 0}%`} hint={`${summary?.completedMilestones ?? 0}/${summary?.totalMilestones ?? 0}`} />
             <DetailStatCard label="延期任务" value={summary?.delayedTaskCount ?? delayedTasks.length} hint={`累计延期 ${summary?.delayDays ?? 0} 天`} />
             <DetailStatCard label="下一里程碑" value={summary?.nextMilestone?.daysRemaining ?? '--'} hint={summary?.nextMilestone?.name || '待识别关键节点'} />
-          </div>
-          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-800">
-            {delayedTasks.length > 0
-              ? `当前共有 ${delayedTasks.length} 个延期任务，建议优先处理与“${summary?.nextMilestone?.name || '下一里程碑'}”直接相关的节点。`
-              : '当前未发现明显延期任务，可以继续按现有节奏推进。'}
           </div>
         </CardContent>
       </Card>
@@ -1085,8 +1083,8 @@ export default function Reports() {
             </div>
             <div className="text-sm text-slate-600">
               {activeDeviationLock?.is_locked
-                ? `${baselineLabel} 当前已锁定，持有人 ${activeDeviationLock.locked_by || '系统'}。`
-                : `${baselineLabel} 当前未持有版本锁，可直接查看偏差分析。`}
+                ? `${baselineLabel} 已锁定 · ${activeDeviationLock.locked_by || '系统'}`
+                : `${baselineLabel} 未锁定`}
             </div>
             {deviationLockError ? (
               <div className="text-xs text-amber-700">{deviationLockError}</div>
@@ -1108,7 +1106,6 @@ export default function Reports() {
       ) : deviationLoading && !deviationData ? (
         <LoadingState
           label="偏差分析加载中"
-          description="正在读取基线、月计划与执行偏差数据"
           className="min-h-40"
         />
       ) : (
@@ -1133,14 +1130,10 @@ export default function Reports() {
                     <div key={card.title} className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
                       <div className="text-sm font-medium text-slate-900">{card.title}</div>
                       <div className="mt-2 text-2xl font-semibold text-slate-900">{card.value}</div>
-                      <div className="mt-2 text-xs leading-5 text-slate-500">{card.description}</div>
-                      <div className="mt-2 text-xs text-slate-400">{card.hint}</div>
                     </div>
                   ))
                 ) : (
-                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-5 text-sm leading-6 text-slate-500">
-                    非主线摘要默认折叠，点击上方按钮即可查看基线偏差与月度完成情况概览。
-                  </div>
+                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-5" />
                 )}
               </CardContent>
             </Card>
@@ -1158,9 +1151,7 @@ export default function Reports() {
                     </div>
                   ))
                 ) : (
-                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                    当前暂无可归因的偏差任务。
-                  </div>
+                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4" />
                 )}
               </CardContent>
             </Card>
@@ -1185,9 +1176,7 @@ export default function Reports() {
                     </div>
                   ))
                 ) : (
-                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                    当前没有需要展示的延期任务统计。
-                  </div>
+                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4" />
                 )}
               </CardContent>
             </Card>
@@ -1283,16 +1272,18 @@ export default function Reports() {
 
         <Card className="border-slate-200 shadow-sm">
           <CardHeader className="pb-4">
-            <CardTitle className="text-base">处置建议</CardTitle>
+            <CardTitle className="text-base">处置入口</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3 text-sm leading-6 text-slate-600">
-            <div className="rounded-2xl border border-red-200 bg-red-50 p-4">
-              当前优先关注 {focusRisks.length > 0 ? `“${focusRisks[0].title || '最高风险事项'}”` : '风险与问题联动'}，
-              先排查高等级风险，再同步确认条件与阻碍的解除节奏。
-            </div>
-            <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-              如果需要继续处置，请回到“风险与问题”主模块执行，不在本页直接写入业务数据。
-            </div>
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full justify-between"
+              onClick={() => navigate(projectId ? `/projects/${projectId}/risks` : '/company')}
+            >
+              风险与问题
+              <ShieldAlert className="h-4 w-4" />
+            </Button>
           </CardContent>
         </Card>
 
@@ -1310,7 +1301,7 @@ export default function Reports() {
                 <div key={risk.id} className="grid gap-3 rounded-2xl border border-slate-100 bg-white px-4 py-4 md:grid-cols-[minmax(0,1.3fr)_140px_140px_140px]">
                   <div>
                     <div className="text-sm font-medium text-slate-900">{risk.title || '未命名风险'}</div>
-                    <div className="mt-1 text-xs text-slate-500">{risk.description || '暂无补充说明'}</div>
+                    <div className="mt-1 text-xs text-slate-500">{risk.description || '暂无备注'}</div>
                   </div>
                   <div className="text-sm text-slate-700">等级 {risk.level || '未分类'}</div>
                   <div className="text-sm text-slate-700">来源 {summarizeRiskSource(risk)}</div>
@@ -1393,9 +1384,7 @@ export default function Reports() {
                 </div>
               </>
             ) : (
-              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
-                材料到场率数据正在准备中，稍后会在这里展示按参建单位和月度趋势的分析结果。
-              </div>
+              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5" />
             )}
           </CardContent>
         </Card>
@@ -1433,13 +1422,10 @@ export default function Reports() {
         ) : changeLogLoading ? (
           <LoadingState
             label="变更记录加载中"
-            description="正在读取当前项目最近的范围、计划与执行变更。"
             className="min-h-24 rounded-2xl border border-dashed border-slate-200 bg-slate-50"
           />
         ) : recentChangeLogs.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm leading-6 text-slate-500">
-            当前项目还没有变更记录，后续范围、计划和执行调整会在这里统一展示。
-          </div>
+          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4" />
         ) : (
           <>
             <div className="flex flex-wrap gap-2">
@@ -1539,7 +1525,6 @@ export default function Reports() {
           <Card data-testid="reports-data-quality-banner" className="border-sky-200 bg-sky-50 shadow-sm">
             <CardContent className="flex flex-col gap-3 p-5 md:flex-row md:items-center md:justify-between">
               <div className="space-y-1">
-                <div className="text-xs font-semibold uppercase tracking-[0.14em] text-sky-700">分析前提说明</div>
                 <div className="text-base font-semibold text-sky-950">
                   本次分析基于数据置信度 {Math.round(dataQualitySummary.confidence.score)}% 的数据集
                 </div>
@@ -1599,7 +1584,7 @@ export default function Reports() {
         ) : loading ? (
           <LoadingState
             label="偏差分析加载中"
-            description="正在整理当前项目的偏差分析结果。"
+            description=""
             className="min-h-32 rounded-2xl border border-slate-200 bg-white"
           />
         ) : (
@@ -1630,7 +1615,7 @@ function CriticalPathSummaryCard({
           <>
             <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
               <div className="text-xs text-slate-500">共享摘要口径</div>
-              <div className="mt-2 text-sm leading-6 text-slate-700">{summary.summaryText || '暂无可用摘要'}</div>
+              {summary.summaryText ? <div className="mt-2 text-sm leading-6 text-slate-700">{summary.summaryText}</div> : null}
             </div>
             <div className="flex flex-wrap gap-2">
               <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
@@ -1646,12 +1631,9 @@ function CriticalPathSummaryCard({
                 手动插链 {summary.manualInsertedCount}
               </span>
             </div>
-            <div className="text-xs text-slate-400">只读查看 · 与项目仪表盘共享同一份快照</div>
           </>
         ) : (
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
-            关键路径摘要正在同步，请稍后查看关键路径明细。
-          </div>
+          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5" />
         )}
       </CardContent>
     </Card>

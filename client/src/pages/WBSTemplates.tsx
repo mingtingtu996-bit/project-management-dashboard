@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowRight, BookOpen, FileSymlink, Layers3, Sparkles, WandSparkles } from 'lucide-react'
+import { ArrowRight, FileSymlink, Layers3, Sparkles, WandSparkles } from 'lucide-react'
 
 import { Breadcrumb } from '@/components/Breadcrumb'
 import { PageHeader } from '@/components/PageHeader'
@@ -257,22 +257,22 @@ function buildFallbackGuide(params: {
     status_label: params.statusLabel,
     mode: params.mode,
     title: '计划编制启用与 WBS 模板',
-    subtitle: '把 WBS 模板并入计划编制，统一处理启用、冷启动和在建项目补基线。',
+    subtitle: '',
     quickActions: [
       {
         path: 'template_to_baseline',
         label: 'WBS 模板 -> 项目基线',
-        description: '把可复用的结构整理成可直接确认的项目基线。',
+        description: '',
       },
       {
         path: 'completed_project_to_template',
         label: '已完成项目 -> WBS 模板',
-        description: '把已跑通的项目沉淀成可复用的模板资产。',
+        description: '',
       },
       {
         path: 'ongoing_project_to_baseline',
         label: '在建项目 -> 初始化基线',
-        description: '自动补建初始基线，并把待确认项一次性列出来。',
+        description: '',
       },
     ],
     checklist: [
@@ -518,26 +518,12 @@ export default function WBSTemplates() {
     setSelectedSuggestionPaths(allSuggestionPaths)
   }, [allSuggestionPaths])
 
-  const guideTriggerRef = useRef<HTMLButtonElement | null>(null)
-
-  const handleOpenGuide = useCallback((event?: React.MouseEvent<HTMLButtonElement>) => {
-    if (event?.currentTarget) {
-      guideTriggerRef.current = event.currentTarget
-    }
-    setGuideOpen(true)
-  }, [])
-
   const handleGuideOpenChange = useCallback((open: boolean) => {
     setGuideOpen(open)
     if (!open) {
       if (projectId) {
         safeStorageSet(window.localStorage, `${GUIDE_KEY_PREFIX}:${projectId}`, '1')
       }
-      requestAnimationFrame(() => {
-        const target = guideTriggerRef.current
-          ?? (document.querySelector<HTMLButtonElement>('[data-testid="wbs-guide-trigger"]'))
-        target?.focus()
-      })
     }
   }, [projectId])
 
@@ -724,7 +710,7 @@ export default function WBSTemplates() {
       <PageHeader
         eyebrow="计划编制"
         title="WBS 模板"
-        subtitle="把模板、基线和在建项目启用放进同一套入口里，先把可复用结构整理清楚，再进入月度计划。"
+        subtitle=""
       />
 
       <div className="mt-6 grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
@@ -741,12 +727,7 @@ export default function WBSTemplates() {
               </Badge>
             </div>
 
-            <div className="space-y-2">
-              <h2 className="text-xl font-semibold text-slate-900">先把现有工作整理成能直接用的骨架</h2>
-              <p className="text-sm leading-6 text-slate-600">
-                {guide.subtitle}
-              </p>
-            </div>
+            <h2 className="text-xl font-semibold text-slate-900">计划编制入口</h2>
 
             <div className="grid gap-3 md:grid-cols-3">
               {guide.quickActions.map((action) => (
@@ -760,7 +741,6 @@ export default function WBSTemplates() {
                     <WandSparkles className="h-4 w-4 text-slate-500" />
                     {action.label}
                   </div>
-                  <div className="text-sm leading-6 text-slate-600">{action.description}</div>
                 </button>
               ))}
             </div>
@@ -771,12 +751,8 @@ export default function WBSTemplates() {
                 {guide.mode === 'completed_project_to_template'
                   ? '沉淀为模板'
                   : guide.mode === 'template_to_baseline'
-                    ? '选择模板后生成'
+                    ? '生成基线'
                     : '在建项目一键启用'}
-              </Button>
-              <Button type="button" variant="outline" className="gap-2" data-testid="wbs-guide-trigger" onClick={handleOpenGuide}>
-                <BookOpen className="h-4 w-4" />
-                了解更多
               </Button>
             </div>
           </CardContent>
@@ -785,24 +761,11 @@ export default function WBSTemplates() {
         <Card className="border-slate-200 bg-gradient-to-br from-white to-slate-50 shadow-sm">
           <CardHeader>
             <CardTitle className="text-base">当前项目状态</CardTitle>
-            <CardDescription>冷启动和在建项目启用都会先看这一层。</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="rounded-xl border border-slate-200 bg-white p-4">
               <div className="text-sm font-medium text-slate-900">{projectName}</div>
               <div className="mt-1 text-sm text-slate-600">状态：{projectStatusLabel}</div>
-            </div>
-            <div className="rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm leading-6 text-blue-900">
-            现在这页只作为计划编制里的结构资产入口，不再单独拆成一层主导航。
-            </div>
-            <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-white p-4">
-              <div>
-                <div className="text-sm font-medium text-slate-900">首次引导</div>
-                <div className="text-sm text-slate-500">第一次进入时会先说明四层时间线。</div>
-              </div>
-              <Button type="button" variant="outline" size="sm" data-testid="wbs-guide-trigger" onClick={handleOpenGuide}>
-                了解更多
-              </Button>
             </div>
           </CardContent>
         </Card>
@@ -837,13 +800,11 @@ export default function WBSTemplates() {
         <Card className="border-slate-200 bg-white shadow-sm">
           <CardHeader>
             <CardTitle className="text-base">模板列表</CardTitle>
-            <CardDescription>这里显示可复用结构，新的入口直接走计划编制路径。</CardDescription>
           </CardHeader>
           <CardContent data-testid="wbs-template-list">
             {loading ? (
               <LoadingState
                 label="模板列表加载中"
-                description="正在读取可复用模板"
                 className="min-h-40 border-slate-200 bg-slate-50/50"
               />
             ) : templates.length === 0 ? (
@@ -852,9 +813,6 @@ export default function WBSTemplates() {
                   <Layers3 className="h-5 w-5" />
                 </div>
                 <div className="text-sm font-medium text-slate-800">当前还没有模板</div>
-                <div className="mt-1 text-sm leading-6 text-slate-500">
-                  可以先用在建项目一键启用，或者把已完成项目沉淀成模板。
-                </div>
               </div>
             ) : (
               <div className="grid gap-4 md:grid-cols-2">
@@ -869,25 +827,6 @@ export default function WBSTemplates() {
                 ))}
               </div>
             )}
-          </CardContent>
-        </Card>
-
-        <Card className="border-slate-200 bg-white shadow-sm">
-          <CardHeader>
-            <CardTitle className="text-base">四层时间线</CardTitle>
-            <CardDescription>用户侧只看白话，不直接暴露内部术语。</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {guide.learnMore.sections.map((section) => (
-              <div key={section.heading} className="rounded-xl border border-slate-200 p-3">
-                <div className="text-sm font-semibold text-slate-900">{section.heading}</div>
-                <div className="mt-1 text-sm leading-6 text-slate-600">{section.body}</div>
-              </div>
-            ))}
-            <Button type="button" variant="outline" className="w-full gap-2" data-testid="wbs-guide-trigger" onClick={handleOpenGuide}>
-              <BookOpen className="h-4 w-4" />
-              了解更多
-            </Button>
           </CardContent>
         </Card>
       </div>

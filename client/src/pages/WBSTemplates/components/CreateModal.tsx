@@ -24,7 +24,7 @@ export function CreateModal({ onClose, onSuccess }: { onClose: () => void; onSuc
         </svg>
       ),
       title: '新建空白模板',
-      desc: '从空白开始，手动添加任务节点和层级结构',
+      desc: '',
       badge: '完全自定义',
       badgeColor: 'bg-gray-100 text-gray-500',
     },
@@ -36,7 +36,7 @@ export function CreateModal({ onClose, onSuccess }: { onClose: () => void; onSuc
         </svg>
       ),
       title: '导入 Excel 模板',
-      desc: '上传 Excel 文件，自动识别任务层级和工期数据',
+      desc: '',
       badge: '快速导入',
       badgeColor: 'bg-emerald-50 text-emerald-600',
     },
@@ -48,7 +48,7 @@ export function CreateModal({ onClose, onSuccess }: { onClose: () => void; onSuc
         </svg>
       ),
       title: '从现有项目生成',
-      desc: '将已有项目的任务结构保存为可复用模板',
+      desc: '',
       badge: '快速复用',
       badgeColor: 'bg-blue-50 text-blue-600',
     },
@@ -193,7 +193,7 @@ export function CreateModal({ onClose, onSuccess }: { onClose: () => void; onSuc
                     </div>
                     <div>
                       <p className="text-sm font-semibold text-gray-800 mb-1">{card.title}</p>
-                      <p className="text-xs text-gray-500 leading-relaxed">{card.desc}</p>
+                      {card.desc ? <p className="text-xs text-gray-500 leading-relaxed">{card.desc}</p> : null}
                     </div>
                     <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${card.badgeColor}`}>
                       {card.badge}
@@ -219,10 +219,9 @@ export function CreateModal({ onClose, onSuccess }: { onClose: () => void; onSuc
                       {excelFile ? (
                         <span className="text-emerald-600 font-medium">✓ {excelFile.name}</span>
                       ) : (
-                        '点击选择 Excel 文件，或拖拽到此处'
+                        'Excel 文件'
                       )}
                     </span>
-                    <span className="text-xs text-gray-400">支持 .xlsx / .xls / .csv</span>
                     <input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={handleExcelFileChange} />
                   </label>
                 </div>
@@ -232,7 +231,6 @@ export function CreateModal({ onClose, onSuccess }: { onClose: () => void; onSuc
 
           {step === 2 && (
             <div className="space-y-4">
-              <p className="text-sm font-medium text-gray-700">填写模板基本信息</p>
               <div>
                 <label className="block text-xs text-gray-500 mb-1">模板名称 *</label>
                 <input

@@ -275,7 +275,7 @@ function buildValidationIssues(params: {
           id: 'monthly-obstacle',
           level: 'warning' as const,
           title: `${activeObstacles.length} 条阻碍仍在处理中`,
-          detail: '建议先处理障碍或补充说明，再进入月度计划确认。',
+          detail: '建议先处理障碍或补充备注，再进入月度计划确认。',
         }
       : null,
     delayedTasks.length
@@ -1410,7 +1410,6 @@ export default function MonthlyPlanPage() {
                     ) : null}
                   </div>
                   <h2 className="text-lg font-semibold text-slate-900">月份带与编制信息带</h2>
-                  <p className="text-sm leading-6 text-slate-600">当前页面按真实月度计划版本、真实任务数据和真实确认接口组织。</p>
                 </div>
                 <Badge variant="outline">锁剩余：{lockRemainingLabel}</Badge>
               </div>
@@ -1518,7 +1517,6 @@ export default function MonthlyPlanPage() {
               {activePlan ? <Badge variant="outline">{getMonthlyPlanStatusLabel(activePlan.status)}</Badge> : null}
             </div>
             <div className="text-lg font-semibold text-slate-900">草稿来源与版本动作</div>
-            <p className="text-sm leading-6 text-slate-600">当前月份可以基于项目基线或当前任务列表生成真实草稿；已有草稿时支持保存新快照。</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Button type="button" variant="outline" size="sm" className="gap-2" onClick={() => void handleForceUnlock()} disabled={!activePlan} loading={actionLoading === 'unlock'}>
@@ -1589,7 +1587,6 @@ export default function MonthlyPlanPage() {
                   <div className="font-medium text-slate-900">{option.title}</div>
                   {active ? <Badge variant="secondary">当前选择</Badge> : null}
                 </div>
-                <p className="mt-2 text-sm leading-6 text-slate-600">{option.description}</p>
                 <div className="mt-2 text-xs text-slate-500">
                   {option.key === 'baseline'
                     ? latestConfirmedBaseline
@@ -1610,9 +1607,6 @@ export default function MonthlyPlanPage() {
       <CardContent className="space-y-4 p-6 text-center">
         <div className="space-y-2">
           <div className="text-lg font-semibold text-amber-900">当前项目还没有正式基线</div>
-          <p className="text-sm leading-6 text-amber-800">
-            标准月计划编制需要先有确认基线。你可以先回到项目基线建立主骨架，或者临时按当前任务列表预编制。
-          </p>
         </div>
         <div className="flex flex-wrap justify-center gap-2">
           <Button type="button" onClick={() => navigateWithGuard(`/projects/${projectId}/planning/baseline`)}>
@@ -1627,7 +1621,7 @@ export default function MonthlyPlanPage() {
   ) : pageLoading ? (
     <LoadingState
       label="月度计划加载中"
-      description="正在同步月度计划版本、任务列表和校核状态。"
+      description=""
       className="min-h-32 rounded-2xl border border-slate-200 bg-white"
     />
   ) : activePlan ? (
@@ -1675,9 +1669,6 @@ export default function MonthlyPlanPage() {
                   <Badge variant="outline">{isDirty ? '草稿已调整' : '草稿未调整'}</Badge>
                 </div>
                 <div className="text-sm font-medium text-slate-900">编制范围与确认条</div>
-                <p className="text-sm leading-6 text-slate-600">
-                  这里集中展示当前已选范围、已调整条目、撤销重做和确认入口提示，让月计划编辑态保持四块主区结构。
-                </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <Button type="button" variant="outline" size="sm" onClick={handleUndo} disabled={!canUndo || readOnly}>
@@ -1702,7 +1693,7 @@ export default function MonthlyPlanPage() {
                 <div className="mt-1 text-sm font-semibold text-slate-900">{editedEntryCount}</div>
               </div>
               <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
-                <div className="text-xs text-slate-500">确认建议</div>
+                <div className="text-xs text-slate-500">确认模式</div>
                 <div className="mt-1 text-sm font-semibold text-slate-900">{quickAvailable ? '可快速确认' : '建议走标准确认'}</div>
               </div>
             </div>
@@ -1716,18 +1707,15 @@ export default function MonthlyPlanPage() {
               <Badge variant="secondary">L5 编制树</Badge>
               <Badge variant="outline">{rows.length} 项</Badge>
             </div>
-            <div className="mt-2 text-sm leading-6 text-slate-600">
-              月计划编制态继续复用基线树编辑器，保持列宽、关键路径标记、里程碑样式和撤销重做口径一致。
-            </div>
           </div>
         </div>
         <BaselineTreeEditor
           title={`${formatMonthLabel(activePlan.month)} 编制树`}
-          description="月计划编制态直接复用基线树编辑器的结构、列宽和撤销重做能力，统一树表交互口径。"
+          description=""
           summaryLabel="月计划编制收口"
           unlockLabel="编辑锁管理"
           treeTitle={`${formatMonthLabel(activePlan.month)} 执行树`}
-          treeDescription="当前树行来自真实月度计划条目，月计划与基线共用统一树表列宽、关键路径色线和里程碑样式。"
+          treeDescription=""
           treeEmptyLabel="当前月份还没有月度计划条目"
           testId="monthly-plan-tree-editor"
           rows={rows}
@@ -1749,7 +1737,6 @@ export default function MonthlyPlanPage() {
     <Card className="border-dashed border-slate-300 bg-slate-50">
       <CardContent className="space-y-3 p-6">
         <div className="text-lg font-semibold text-slate-900">{formatMonthLabel(selectedMonth)} 尚未生成月度草稿</div>
-        <p className="text-sm leading-6 text-slate-600">当前月份还没有服务端月度计划版本。先选择来源，再生成真实草稿进入后续确认链路。</p>
         <div className="flex flex-wrap gap-2">
           <Button type="button" onClick={() => void handleGenerateDraft()} loading={actionLoading === 'generate'}>
             生成本月草稿
@@ -1778,12 +1765,9 @@ export default function MonthlyPlanPage() {
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <div className="flex flex-wrap items-center gap-2">
-                    <Badge variant="secondary">L6 校验与确认区</Badge>
-                    <Badge variant="outline">7 项确认摘要</Badge>
-                  </div>
-                  <div className="mt-2 text-sm leading-6 text-slate-600">
-                    确认前统一查看月份、版本、来源、确认范围、条件、阻碍和延期 7 项固定摘要，再决定走快速或标准确认。
-                  </div>
+                  <Badge variant="secondary">L6 校验与确认区</Badge>
+                  <Badge variant="outline">7 项确认摘要</Badge>
+                </div>
                 </div>
                 <Badge variant={quickAvailable ? 'secondary' : 'outline'}>{quickAvailable ? '快确认可用' : '建议标准确认'}</Badge>
               </div>
@@ -1816,9 +1800,6 @@ export default function MonthlyPlanPage() {
               <div className="flex items-center justify-between gap-3">
                 <div className="text-sm font-medium text-slate-900">变更留痕入口</div>
                 <Badge variant="outline">共享分析</Badge>
-              </div>
-              <div className="text-sm leading-6 text-slate-600">
-                月计划确认、后续修正和延期链留痕统一回到分析页查看，方便和风险、偏差口径一起复核。
               </div>
               <div className="grid gap-2 sm:grid-cols-2">
                 <Button
@@ -1898,7 +1879,7 @@ export default function MonthlyPlanPage() {
     <PlanningPageShell
       projectName={currentProject.name ?? '未命名项目'}
       title="月度计划"
-      description="在这里查看真实月度计划版本、生成草稿、完成确认，并为后续月末关账准备真实数据。"
+      description=""
       tabs={tabs}
       actions={
         <>

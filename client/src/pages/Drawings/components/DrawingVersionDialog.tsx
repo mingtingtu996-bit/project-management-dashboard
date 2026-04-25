@@ -146,9 +146,6 @@ export function DrawingVersionDialog({
           <DialogTitle className="text-slate-900">
             {packageCard?.packageName ? `${packageCard.packageName} 版本窗口` : '版本变更窗口'}
           </DialogTitle>
-          <DialogDescription className="text-slate-500">
-            当前有效版、历史版本链和切换动作都在这里处理，不塞进普通详情里。
-          </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-3">
@@ -248,13 +245,13 @@ export function DrawingVersionDialog({
                     </div>
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="drawing-version-create-reason">变更说明</Label>
+                    <Label htmlFor="drawing-version-create-reason">变更备注</Label>
                     <Textarea
                       id="drawing-version-create-reason"
                       data-testid="drawing-version-create-reason"
                       value={createDraft.changeReason}
                       onChange={(event) => setCreateDraft((current) => ({ ...current, changeReason: event.target.value }))}
-                      placeholder="例如：补充梁板节点说明"
+                      placeholder="例如：补充梁板节点"
                       rows={4}
                     />
                   </div>
@@ -328,7 +325,7 @@ export function DrawingVersionDialog({
                 </div>
               ) : (
                 <div className="flex h-full min-h-[120px] items-center justify-center text-sm text-slate-500">
-                  点击左侧版本行查看详情
+                  未选择版本
                 </div>
               )}
             </div>

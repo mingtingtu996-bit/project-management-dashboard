@@ -392,7 +392,6 @@ export default function AcceptanceDetailDrawer({
 
         <div className="mt-4 rounded-2xl border border-blue-100 bg-blue-50/40 p-4" data-testid="acceptance-task-linkage">
           <h4 className="mb-2 text-sm font-semibold text-slate-900">任务联动</h4>
-          <p className="mb-3 text-xs text-slate-500">当前验收节点与施工计划任务的关联状态，包括里程碑挂靠、楼栋归属和前置任务触发。</p>
           <div className="grid gap-3 md:grid-cols-3">
             <CompactMetric label="楼栋归属" value={planRow?.building_id || '项目级'} />
             <CompactMetric label="里程碑挂靠" value={planRow?.milestone_id ? '已挂靠' : '未挂靠'} />
@@ -420,15 +419,17 @@ export default function AcceptanceDetailDrawer({
           )}
         </div>
 
-        <div className="mt-4 rounded-2xl bg-slate-50 p-4">
-          <div className="mb-1 text-sm font-medium text-slate-700">说明</div>
-          <p className="text-sm text-slate-600">{node.description || '暂无说明'}</p>
-        </div>
+        {node.description ? (
+          <div className="mt-4 rounded-2xl bg-slate-50 p-4">
+            <div className="mb-1 text-sm font-medium text-slate-700">备注</div>
+            <p className="text-sm text-slate-600">{node.description}</p>
+          </div>
+        ) : null}
 
         <div className="mt-4 grid gap-4 xl:grid-cols-2">
           <LinkedBundleSection
             title="前置与依赖"
-            subtitle="前置链、结构依赖和阻塞说明在这里统一查看"
+            subtitle=""
             data-testid="acceptance-external-prerequisites"
           >
             <div className="grid gap-3 md:grid-cols-3">
@@ -439,7 +440,7 @@ export default function AcceptanceDetailDrawer({
 
             {planRow?.block_reason_summary ? (
               <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-                阻塞说明：{planRow.block_reason_summary}
+                阻塞备注：{planRow.block_reason_summary}
               </div>
             ) : null}
 
@@ -490,13 +491,13 @@ export default function AcceptanceDetailDrawer({
                 </label>
               </div>
               <label className="grid gap-1 text-xs text-slate-500">
-                说明
+                备注
                 <textarea
                   value={requirementDraft.description}
                   onChange={(event) => setRequirementDraft((current) => ({ ...current, description: event.target.value }))}
                   className="min-h-20 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
                   data-testid="acceptance-requirement-description-input"
-                  placeholder="补充验收条件、前置判断或共享来源说明"
+                  placeholder="补充内容"
                 />
               </label>
               <div className="flex justify-end">
@@ -579,7 +580,7 @@ export default function AcceptanceDetailDrawer({
                 <LinkedRow
                   key={item.id}
                   title={planLookup.get(item.source_plan_id)?.name || item.source_plan_id}
-                  subtitle="当前节点的前置项"
+                  subtitle=""
                   description={item.dependency_kind}
                   meta={formatLinkedStatus(item.status)}
                 />
@@ -590,7 +591,7 @@ export default function AcceptanceDetailDrawer({
                 <LinkedRow
                   key={item.id}
                   title={planLookup.get(item.target_plan_id)?.name || item.target_plan_id}
-                  subtitle="当前节点会阻塞的后续项"
+                  subtitle=""
                   description={item.dependency_kind}
                   meta={formatLinkedStatus(item.status)}
                 />
@@ -600,7 +601,7 @@ export default function AcceptanceDetailDrawer({
 
           <LinkedBundleSection
             title="过程记录"
-            subtitle="状态记录区承接申报、预约、整改、复验和备案留痕"
+            subtitle=""
             data-testid="acceptance-records"
           >
             <div className="grid gap-3 rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-3">
@@ -673,7 +674,7 @@ export default function AcceptanceDetailDrawer({
         <div className="mt-4 grid gap-4 xl:grid-cols-3">
           <LinkedBundleSection
             title="预警信号"
-            subtitle="临期、逾期和整改类预警统一在这里汇总"
+            subtitle=""
             data-testid="linked-warnings"
           >
             <div className="space-y-3">
@@ -698,7 +699,7 @@ export default function AcceptanceDetailDrawer({
 
           <LinkedBundleSection
             title="问题标记区"
-            subtitle="长期卡点、升级问题和处置状态在这里聚合"
+            subtitle=""
             data-testid="linked-issues"
           >
             <div className="space-y-3">
@@ -723,7 +724,7 @@ export default function AcceptanceDetailDrawer({
 
           <LinkedBundleSection
             title="风险联动"
-            subtitle="风险条目与问题链按软链接和 issue 链路聚合"
+            subtitle=""
             data-testid="linked-risks"
           >
             <div className="space-y-3">
@@ -751,7 +752,6 @@ export default function AcceptanceDetailDrawer({
           <div className="flex items-center justify-between gap-3">
             <div>
               <h4 className="text-sm font-semibold text-slate-900">结构维护</h4>
-              <p className="text-xs text-slate-500">依赖矩阵只维护前置关系，不再维护并行组或自由坐标字段。</p>
             </div>
             <Badge variant="outline">{dependencies.length}</Badge>
           </div>
@@ -981,11 +981,11 @@ function LinkedBundleSection(
   },
 ) {
   const { title, subtitle, children, ...rest } = props
+  void subtitle
   return (
     <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm" {...rest}>
       <div className="mb-3 space-y-1">
         <h4 className="text-sm font-semibold text-slate-900">{title}</h4>
-        <p className="text-xs text-slate-500">{subtitle}</p>
       </div>
       <div className="space-y-3">{children}</div>
     </section>

@@ -421,7 +421,7 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
   }
 
   if (loading) {
-    return <LoadingState label="团队信息加载中" description="正在同步成员、角色和邀请码" className={layout === 'drawer' ? 'min-h-[320px] border-0 bg-transparent shadow-none' : undefined} />
+    return <LoadingState label="团队信息加载中" description="" className={layout === 'drawer' ? 'min-h-[320px] border-0 bg-transparent shadow-none' : undefined} />
   }
 
   return (
@@ -452,7 +452,7 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
 
       {!canManageTeam ? (
         <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-          当前账号不是项目负责人，因此这里仅展示成员列表，不显示成员管理与邀请码操作入口。
+          只读成员列表
         </div>
       ) : null}
 
@@ -547,7 +547,6 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
                     <CheckCircle2 className="h-4 w-4" />
                     所有责任人均已关联账号
                   </div>
-                  <div className="mt-2 text-emerald-700">后续新增成员时，如果发现同名责任人，系统也会给出自动关联提示。</div>
                 </div>
               ) : (
                 unlinkedAssignees.map((item) => {
@@ -718,7 +717,7 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
         <DialogContent>
           <DialogHeader>
             <DialogTitle>临时密码已生成</DialogTitle>
-            <DialogDescription>临时密码属于敏感信息，只在这里展示一次，请通过安全方式转达给对应成员。</DialogDescription>
+            <DialogDescription className="sr-only">临时密码</DialogDescription>
           </DialogHeader>
           <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
             <div className="text-sm text-slate-500">目标账号</div>

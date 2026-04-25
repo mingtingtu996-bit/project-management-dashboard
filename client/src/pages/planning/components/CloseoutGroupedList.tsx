@@ -69,7 +69,6 @@ export function CloseoutGroupedList({
                     <h3 className="text-sm font-semibold text-slate-900">{group.title}</h3>
                     <Badge variant="outline">{group.badge}</Badge>
                   </div>
-                  <p className="text-xs text-slate-500">{group.description}</p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
                   <span>{selectedCount} 项已选</span>
@@ -129,7 +128,6 @@ export function CloseoutGroupedList({
                       </div>
 
                       <div className="flex flex-col items-end gap-1 text-right text-xs text-slate-500">
-                        <span>点击标题展开抽屉</span>
                         <span className={cn('rounded-full border px-2 py-0.5', STATUS_TONES[item.status])}>
                           {item.status === 'normal'
                             ? '正常'

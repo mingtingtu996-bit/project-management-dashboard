@@ -43,7 +43,7 @@ const LEVEL_META: Record<ValidationLevel, Omit<ValidationGroup, 'issues' | 'icon
   info: {
     level: 'info',
     label: '信息级',
-    helper: '用于辅助说明和补充提示。',
+    helper: '',
     perItemMinutes: 5,
     badgeClassName: 'border-slate-200 bg-slate-50 text-slate-700',
   },
@@ -65,13 +65,6 @@ function groupIssues(issues: PlanningValidationIssue[]) {
     icon: LEVEL_ICON[level],
     issues: issues.filter((issue) => issue.level === level),
   }))
-}
-
-function buildProcessingSummary(group: ValidationGroup) {
-  if (group.issues.length === 0) return '暂无待处理项'
-  const titles = group.issues.slice(0, 2).map((issue) => issue.title)
-  const moreLabel = group.issues.length > 2 ? `等 ${group.issues.length} 项` : `共 ${group.issues.length} 项`
-  return `处理摘要：${titles.join('、')}${group.issues.length > 2 ? '……' : ''}${moreLabel}`
 }
 
 function locateTreeRow(issueId: string, setSelectedItemIds: (ids: string[]) => void) {
@@ -97,9 +90,6 @@ export function BaselineValidationPanel({ issues, emptyLabel = '当前没有待�
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="space-y-1">
             <CardTitle className="text-lg">异常校核区</CardTitle>
-            <p className="text-sm leading-6 text-slate-600">
-              先处理阻断级，再处理建议级，最后看信息级，保持基线冻结前的校核顺序。
-            </p>
           </div>
           <div className="flex flex-wrap gap-2">
             <Badge variant="destructive">{blockingCount} 阻断</Badge>
@@ -108,14 +98,6 @@ export function BaselineValidationPanel({ issues, emptyLabel = '当前没有待�
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-cyan-100 bg-cyan-50/80 px-3 py-2 text-sm text-cyan-900">
-          <LocateFixed className="h-4 w-4" />
-          <span>处理必须修正项</span>
-          <span className="text-cyan-500">-&gt;</span>
-          <span>处理建议修正项</span>
-          <span className="text-cyan-500">-&gt;</span>
-          <span>确认并发布</span>
-        </div>
       </CardHeader>
 
       <CardContent className="space-y-4 p-4">
@@ -142,8 +124,6 @@ export function BaselineValidationPanel({ issues, emptyLabel = '当前没有待�
                         {group.issues.length} 项
                       </Badge>
                     </div>
-                    <p className="text-sm text-slate-600">{group.helper}</p>
-                    <p className="text-xs text-slate-500">{buildProcessingSummary(group)}</p>
                   </div>
                   <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 text-right">
                     <div className="text-xs text-slate-500">预计处理时间</div>

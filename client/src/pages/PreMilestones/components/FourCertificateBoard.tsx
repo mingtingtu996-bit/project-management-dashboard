@@ -46,9 +46,7 @@ export function FourCertificateBoard({
       <div className="flex items-center justify-between gap-3 mb-4">
         <div>
           <h3 className="text-sm font-semibold text-slate-900">四证推进看板</h3>
-          <p className="text-xs text-slate-500 mt-1">四行固定展示，状态统一用“报审中 / 报批中”口径</p>
         </div>
-        <div className="text-xs text-slate-500">点击证件或共享事项可联动高亮</div>
       </div>
 
       <div className="grid gap-3">
@@ -114,7 +112,7 @@ export function FourCertificateBoard({
                           type="button"
                           onClick={(e) => { e.stopPropagation(); onClickBlockedTag?.() }}
                           className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-700 hover:bg-amber-200"
-                          title="点击跳转到台账阻塞项"
+                          title="台账阻塞项"
                           data-testid="certificate-blocked-tag"
                         >
                           <BadgeAlert className="h-3 w-3" />
@@ -126,7 +124,7 @@ export function FourCertificateBoard({
                           type="button"
                           onClick={(e) => { e.stopPropagation(); onClickBlockedTag?.() }}
                           className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-0.5 text-[11px] font-medium text-rose-700 hover:bg-rose-200"
-                          title="点击跳转到台账阻塞项"
+                          title="台账阻塞项"
                         >
                           <AlertTriangle className="h-3 w-3" />
                           共享事项阻塞

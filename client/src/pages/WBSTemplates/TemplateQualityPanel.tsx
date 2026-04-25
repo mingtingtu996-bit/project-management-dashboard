@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowRight, CheckCircle2, Layers3, Sparkles } from 'lucide-react'
+import { ArrowRight, CheckCircle2, Layers3, Sparkles } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -64,6 +64,8 @@ function MetricCard({
   detail: string
   tone: 'amber' | 'emerald' | 'rose'
 }) {
+  void detail
+
   const toneClass = tone === 'amber'
     ? 'border-amber-200 bg-amber-50 text-amber-700'
     : tone === 'emerald'
@@ -77,7 +79,6 @@ function MetricCard({
     >
       <div className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</div>
       <div className="mt-2 text-2xl font-semibold text-slate-900">{value}</div>
-      <div className="mt-2 text-sm leading-6 text-slate-600">{detail}</div>
     </div>
   )
 }
@@ -117,7 +118,7 @@ export function TemplateQualityPanel({
         {loading && !quality ? (
           <LoadingState
             label="模板质量加载中"
-            description="正在读取模板质量评估结果"
+            description=""
             className="min-h-32"
           />
         ) : quality ? (
@@ -136,14 +137,14 @@ export function TemplateQualityPanel({
                 testId="wbs-template-quality-missing-standard-steps"
                 label="缺少标准工序节点"
                 value={formatNumber(quality.missing_standard_step_count)}
-                detail="按标准工序目录比对，查看还缺哪些节点"
+                detail=""
                 tone="emerald"
               />
               <MetricCard
                 testId="wbs-template-quality-structure-anomalies"
                 label="结构异常"
                 value={formatNumber(quality.structure_anomaly_count)}
-                detail="检查重复命名、空标题和异常层级"
+                detail=""
                 tone="rose"
               />
             </div>
@@ -232,11 +233,7 @@ export function TemplateQualityPanel({
                     ))}
                   </div>
                 ) : (
-                  <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
-                    {hasCompletedSamples
-                      ? '当前样本还没有形成可直接采纳的模板校正建议。'
-                      : '当前还没有已完成项目样本参与校准，先使用模板默认工期参考。'}
-                  </div>
+                  <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4" />
                 )}
               </div>
 
@@ -262,23 +259,11 @@ export function TemplateQualityPanel({
                   {applyingFeedback ? '正在确认...' : `确认采纳已选建议${selectedSuggestionCount > 0 ? `（${selectedSuggestionCount}）` : ''}`}
                   <CheckCircle2 className="h-4 w-4" />
                 </Button>
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm leading-6 text-slate-600">
-                  <div className="mb-2 flex items-center gap-2 font-medium text-slate-900">
-                    <AlertTriangle className="h-4 w-4 text-amber-500" />
-                    校核结果说明
-                  </div>
-                  这里集中展示缺少 reference_days、标准工序节点、结构异常和已完成项目反馈。
-                  {canGenerateFromCompleted
-                    ? ' 先看问题，再决定是否把当前项目沉淀成模板并采纳工期建议。'
-                    : ' 当前项目未完成，所以只开放模板校核与历史工期参考，不开放“从当前项目沉淀模板”。'}
-                </div>
               </div>
             </div>
           </>
         ) : (
-          <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-            暂无模板质量数据，请先选择一个模板。
-          </div>
+          <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6" />
         )}
       </CardContent>
     </Card>

@@ -574,9 +574,6 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
                 <CardTitle className="text-sm">DAG 图谱</CardTitle>
                 {primaryChain && <Badge variant="outline">{primaryChain.displayLabel}</Badge>}
               </div>
-              <div className="text-xs text-slate-500">
-                以后端快照的主链、备选链和关系边为真值，按 DAG 方式展示节点位置与依赖方向。
-              </div>
             </CardHeader>
             <CardContent className="space-y-4 p-4">
               {layout.nodes.length ? (
@@ -832,9 +829,6 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
                 <CardTitle className="text-sm">关系边</CardTitle>
                 <Badge variant="outline">{snapshotEdges.length} 条</Badge>
               </div>
-              <div className="text-xs text-slate-500">
-                这里展示关键路径依赖和手动插链关系，方便直接核对任务之间的前后约束。
-              </div>
             </CardHeader>
             <CardContent className="space-y-3 p-4" data-testid="critical-path-edge-list">
               {snapshotEdges.length ? (
@@ -917,7 +911,7 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
                           className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500"
                           data-testid={`critical-path-alternate-collapsed-${chain.id}`}
                         >
-                          已折叠，点击标题展开查看链路节点。
+                          已折叠
                         </div>
                       )}
                     </div>
@@ -941,7 +935,7 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
                   </div>
                 ) : (
                   <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                    目前没有手动关注项。可在下方选中任务节点后，点击“手动关注”将其纳入重点跟踪范围。
+                    暂无手动关注项。
                   </div>
                 )}
               </CardContent>
@@ -992,10 +986,9 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
           <Card variant="detail">
             <CardHeader className="border-b border-slate-100 pb-4">
               <div className="flex items-center justify-between gap-3">
-                <CardTitle className="text-sm">交互承载位</CardTitle>
+                <CardTitle className="text-sm">操作区</CardTitle>
                 <Badge variant="outline">{selectedTask ? '已选中任务' : '待选择'}</Badge>
               </div>
-              <div className="text-xs text-slate-500">选择任意节点后，可直接发起手动关注或插链操作。</div>
             </CardHeader>
             <CardContent className="space-y-4 p-4" data-testid="critical-path-action-panel">
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
@@ -1146,22 +1139,7 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
                 </div>
               </div>
 
-              {selectedOverride && (
-                <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-3 text-sm text-slate-600">
-                  当前选中任务已经存在覆盖记录，如需修改请先删除旧记录再重新提交。
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card variant="detail">
-            <CardHeader className="border-b border-slate-100 pb-4">
-              <CardTitle className="text-sm">视图说明</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2 p-4 text-sm text-slate-600">
-              <p>关键路径以后端快照中的主链、备选链和关系边为真值，图中所有坐标均由 DAG 布局器生成。</p>
-              <p>同一泳道代表同一条链或同一类人工干预，边的箭头表示依赖方向，虚线代表手动插链。</p>
-              <p>点击任意节点即可切换当前操作对象，右侧面板会同步更新。</p>
+              {selectedOverride && <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-3" />}
             </CardContent>
           </Card>
         </div>

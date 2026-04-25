@@ -21,7 +21,7 @@ export default function MonitoringDashboard() {
       <PageHeader
         eyebrow="隐藏工具"
         title="监控中心"
-        subtitle="当前页仅展示系统监控、性能追踪和错误排查，不进入主导航，也不改变监控数据来源或计算逻辑。"
+        subtitle=""
       >
         <Badge variant="outline" className="border-slate-200 bg-slate-50 text-slate-600">
           隐藏路由

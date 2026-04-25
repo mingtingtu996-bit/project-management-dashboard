@@ -193,9 +193,11 @@ function MetricCard({
 }: {
   title: string
   value: string | number
-  hint: string
+  hint?: string
   icon: React.ReactNode
 }) {
+  void hint
+
   return (
     <Card variant="metric">
       <CardContent className="space-y-3 pt-5">
@@ -204,7 +206,6 @@ function MetricCard({
           <span className="text-slate-400">{icon}</span>
         </div>
         <div className="text-3xl font-semibold text-slate-900">{value}</div>
-        <p className="text-xs leading-5 text-slate-500">{hint}</p>
       </CardContent>
     </Card>
   )
@@ -365,7 +366,6 @@ export default function ResponsibilityView() {
         <EmptyState
           icon={Users}
           title="未找到当前项目"
-          description="请先选择一个项目，再查看责任主体分析。"
         />
       </div>
     )
@@ -385,7 +385,6 @@ export default function ResponsibilityView() {
       <PageHeader
         eyebrow="责任主体"
         title="任务管理 / 责任主体"
-        subtitle="按责任人和责任单位双维度观察履约状态，支持交叉筛查、关注名单和恢复确认。"
       >
         <Button
           variant="outline"
@@ -415,9 +414,6 @@ export default function ResponsibilityView() {
       {summary.abnormal > 0 && (
         <Alert>
           <ShieldAlert className="h-4 w-4" />
-          <AlertDescription>
-            当前维度共有 {summary.abnormal} 个责任主体处于异常状态，请优先处理延期任务和重点承诺缺口。
-          </AlertDescription>
         </Alert>
       )}
 
@@ -425,25 +421,22 @@ export default function ResponsibilityView() {
         <MetricCard
           title={dimension === 'person' ? '责任人对象数' : '责任单位对象数'}
           value={summary.total}
-          hint="当前筛选条件下的责任主体数量"
           icon={dimension === 'person' ? <Users className="h-5 w-5" /> : <Building2 className="h-5 w-5" />}
         />
         <MetricCard
           title="异常主体"
           value={summary.abnormal}
-          hint="包含连续低按时率、活跃延期和重点项未兑现"
           icon={<AlertTriangle className="h-5 w-5" />}
         />
         <MetricCard
           title="关注名单"
           value={summary.watched}
-          hint={`全项目累计 ${data?.watchlist.filter((item) => item.status === 'active').length ?? 0} 条关注记录`}
+          hint={`${data?.watchlist.filter((item) => item.status === 'active').length ?? 0} 条`}
           icon={<ShieldAlert className="h-5 w-5" />}
         />
         <MetricCard
           title="待确认恢复"
           value={summary.recoveryPending}
-          hint="责任主体恢复后，需要人工确认清理关注"
           icon={<CheckCheck className="h-5 w-5" />}
         />
       </div>
@@ -491,13 +484,11 @@ export default function ResponsibilityView() {
       {loading ? (
         <LoadingState
           label="责任主体分析加载中"
-          description="正在汇总责任人、责任单位、关注名单和异常状态。"
         />
       ) : filteredRows.length === 0 ? (
         <EmptyState
           icon={Users}
           title="暂无匹配的责任主体"
-          description="当前筛选条件下没有匹配结果，可以切换维度或清空筛选条件后重试。"
           action={
             <Button
               variant="outline"
@@ -606,7 +597,6 @@ export default function ResponsibilityView() {
                   <div className="rounded-2xl border border-slate-200 bg-white">
                     <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
                       <div className="text-sm font-medium text-slate-900">关联任务</div>
-                      <div className="text-xs text-slate-500">展示前 6 项，点击可定位到任务台账</div>
                     </div>
                     <div className="divide-y divide-slate-100">
                       {row.tasks.slice(0, 6).map((task) => (
