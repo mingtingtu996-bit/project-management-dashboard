@@ -7,7 +7,7 @@
 - 前端：React 18、TypeScript、Vite 5、Tailwind CSS、Zustand、Chart.js、D3
 - 后端：Express、TypeScript、PostgreSQL/Supabase、Zod
 - 测试：Vitest
-- 工程化：GitHub Actions、CloudBase、Docker
+- 工程化：GitHub Actions、自有服务器 Docker Compose、Docker
 
 ## 仓库结构
 
@@ -113,7 +113,8 @@ CI 中的自动迁移优先使用 `SUPABASE_MIGRATION_URL`。它应当配置为 
 
 - 发布 Runbook：[`docs/release-runbook.md`](docs/release-runbook.md)
 - GitHub Actions 工作流：[`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)
-- 当前正式发布链：`CloudBase Hosting + CloudRun`
+- 当前正式发布链：`自有服务器 + Docker Compose`
+- 服务器部署 Runbook：[`docs/lighthouse-server-runbook.md`](docs/lighthouse-server-runbook.md)
 - `Vercel` 不再作为正式部署目标，不需要维护 `VERCEL_*` secrets
 
 ## 当前工程化约定

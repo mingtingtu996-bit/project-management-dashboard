@@ -9,7 +9,7 @@ on:
       - 'server/src/__tests__/deployWorkflowContract.test.ts'
       - 'package.json'
       - 'server/package-lock.json'
-      - 'scripts/deploy-cloudbase-backend.mjs'
+      - 'scripts/deploy-lighthouse-server.sh'
       - 'scripts/write-browser-suite-summary.mjs'
       - 'scripts/write-browser-overview-summary.mjs'
   pull_request:
@@ -19,7 +19,7 @@ on:
       - 'server/src/__tests__/deployWorkflowContract.test.ts'
       - 'package.json'
       - 'server/package-lock.json'
-      - 'scripts/deploy-cloudbase-backend.mjs'
+      - 'scripts/deploy-lighthouse-server.sh'
       - 'scripts/write-browser-suite-summary.mjs'
       - 'scripts/write-browser-overview-summary.mjs'
   workflow_dispatch:

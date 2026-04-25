@@ -1,6 +1,6 @@
 # 工程化发布 Runbook
 
-本文档对应当前正式发布链，覆盖 `CI/CD`、`Migration`、`Node 版本统一`、`CloudBase 部署`、`Secrets` 和发布操作清单。
+本文档对应当前正式发布链，覆盖 `CI/CD`、`Migration`、`Node 版本统一`、`自有服务器部署`、`Secrets` 和发布操作清单。
 
 ## 1. 基线约定
 
@@ -74,10 +74,11 @@ npm run migrate:plan
    - 生产 / staging 级部署前自动执行未应用 migration
    - 调用 `npm run migrate:pending`
 
-5. `deploy-cloudbase`
+5. `deploy-server`
    - 当前唯一正式部署链
-   - 部署前端静态资源到 CloudBase Hosting
-   - 通过 `CloudRun + server/Dockerfile` 部署后端服务
+   - 通过 SSH 登录自有服务器
+   - 在服务器仓库目录执行 `scripts/deploy-lighthouse-server.sh`
+   - 使用 `deploy/docker-compose.lighthouse.yml` 重新构建并启动前后端容器
 
 ## 4. 数据迁移机制
 
@@ -107,7 +108,7 @@ npm run migrate:pending
 
 ## 5. Secrets 清单
 
-### 前端构建 / CloudBase Hosting
+### 前端构建
 
 - `SUPABASE_URL`
 - `SUPABASE_ANON_KEY`
@@ -120,13 +121,20 @@ npm run migrate:pending
 
 如果未配置 `SUPABASE_MIGRATION_URL`，当前工作流会明确记录“migration skipped”并继续部署；此时请确保发布前已经在可连通环境中执行过 `npm run migrate:plan` / `npm run migrate:pending`。
 
-### CloudBase 部署
+### 自有服务器部署
 
-- `CLOUDBASE_SECRET_ID` 或 `TENCENT_SECRET_ID`
-- `CLOUDBASE_SECRET_KEY` 或 `TENCENT_SECRET_KEY`
-- `CLOUDBASE_ENV_ID`
+- `DEPLOY_HOST`
+- `DEPLOY_USER`
+- `DEPLOY_PATH`
+- `DEPLOY_SSH_PRIVATE_KEY`
 
-这组密钥除了能访问环境本身，还必须具备 CloudRun 相关权限；否则前端能发，后端会在 CloudRun 预检阶段失败。
+可选：
+
+- `DEPLOY_PORT`，默认 `22`
+- `DEPLOY_KNOWN_HOSTS`，不配置时 workflow 会用 `ssh-keyscan`
+- `DEPLOY_HEALTH_URL`，默认 `http://127.0.0.1/api/health`
+
+`DEPLOY_PATH` 建议使用服务器上的绝对路径，例如 `/home/deploy/project-management-dashboard`。服务器目录内必须已经存在仓库和 `deploy/env/server.production.env`。
 
 ### 通知
 
@@ -134,39 +142,42 @@ npm run migrate:pending
 
 建议在 GitHub 仓库的 `Actions secrets and variables` 中统一维护，并按环境最小授权。
 
-## 6. CloudBase 后端部署说明
+## 6. 自有服务器部署说明
 
-后端当前不再走旧的 `server/functions/api` 云函数目录，而是走 `CloudBase CloudRun`。
+正式部署不再走 CloudBase Hosting / CloudRun。前后端统一由自有服务器上的 Docker Compose 编排。
 
 核心文件：
 
+- [`deploy/docker-compose.lighthouse.yml`](../deploy/docker-compose.lighthouse.yml)
+- [`deploy/nginx/lighthouse.conf`](../deploy/nginx/lighthouse.conf)
+- [`deploy/env/server.production.example`](../deploy/env/server.production.example)
+- [`scripts/deploy-lighthouse-server.sh`](../scripts/deploy-lighthouse-server.sh)
 - [`server/Dockerfile`](../server/Dockerfile)
-- [`scripts/deploy-cloudbase-backend.mjs`](../scripts/deploy-cloudbase-backend.mjs)
+- [`client/Dockerfile`](../client/Dockerfile)
 
 ### 运行方式
 
-- CloudBase Hosting：托管 `client/dist`
-- CloudBase CloudRun：从 `server/` 源码目录构建并部署后端镜像
+- Web 容器：构建 `client/Dockerfile`，由 nginx 提供静态站点，并代理 `/api`、`/ws`
+- API 容器：构建 `server/Dockerfile`，运行 Express 服务
 - 数据库：继续使用 `Supabase`
 
-### CloudRun 服务默认约定
+### 服务默认约定
 
-- 服务名：`project-management-api`
-- 端口：`3001`
+- API 容器名：`project-management-api`
+- Web 容器名：`project-management-web`
+- API 端口：`3001`
+- Web 端口：由 `WEB_PORT` 控制，默认 `80`
 
-### CloudRun 权限前提
+### 服务器前提
 
-CloudBase 部署后端前，当前使用的腾讯云访问密钥必须至少能完成：
+- 已安装 `Docker` 与 `docker compose`
+- 服务器仓库目录能从 GitHub 拉取代码
+- `deploy/env/server.production.env` 已配置并保留在服务器上
+- 部署用户具备运行 `docker compose` 的权限
 
-- 查询 CloudRun 服务
-- 创建或更新 CloudRun 服务
-- 读取 CloudRun 部署结果
+### 运行时环境变量
 
-如果缺失这类权限，部署脚本会在预检阶段直接失败，并提示当前缺少的 CloudRun 能力。
-
-### CloudRun 运行时环境变量
-
-CloudRun 服务需要预先在 CloudBase 控制台配置运行时环境变量，至少包括：
+服务器上的 `deploy/env/server.production.env` 至少包括：
 
 - `PORT=3001`
 - `NODE_ENV=production`
@@ -183,13 +194,14 @@ CloudRun 服务需要预先在 CloudBase 控制台配置运行时环境变量，
 
 可参考 [`server/.env.example`](../server/.env.example) 维护同一套口径。
 
-### 本地手动发布后端
+### 手动发布
 
 ```bash
-node scripts/deploy-cloudbase-backend.mjs
+git pull
+docker compose --env-file deploy/env/server.production.env -f deploy/docker-compose.lighthouse.yml up -d --build
 ```
 
-该脚本只更新 CloudRun 服务镜像，不会替你写入运行时 secrets。
+完整服务器初始化与故障处理见 [`docs/lighthouse-server-runbook.md`](./lighthouse-server-runbook.md)。
 
 ## 7. Docker 构建说明
 
@@ -238,7 +250,7 @@ docker build -f server/Dockerfile -t workbuddy-server:latest ./server
 2. 执行 `npm run migrate:plan`，确认 migration 列表符合预期
 3. 推送到 `main/master`，等待 GitHub Actions 通过
 4. 检查 `database-migration` 是否成功
-5. 检查 CloudBase Hosting / CloudRun 部署日志
+5. 检查 `Deploy To Self-hosted Server` 部署日志
 6. 完成线上健康检查
 
 ## 9. 发布后检查
@@ -246,7 +258,7 @@ docker build -f server/Dockerfile -t workbuddy-server:latest ./server
 ### API 健康检查
 
 ```bash
-curl http://localhost:3001/api/health
+curl http://127.0.0.1/api/health
 ```
 
 ### 前端静态资源检查
@@ -303,9 +315,9 @@ npm run migrate:plan
 
 如果开发机没有 Docker，可以先用 `build + typecheck + test + migrate:plan` 作为静态放行基线；镜像层验证交给 CI 或具备 Docker 的环境补跑。
 
-### 5. 为什么不再走 Vercel
+### 5. 为什么不再走 Vercel / CloudBase
 
-当前正式发布链已统一为 CloudBase，Vercel 不再作为正式部署目标。这样可以避免维护双平台 secrets、双套工作流和错误的部署认知。
+当前正式发布链已统一为自有服务器 Docker Compose。Vercel 和 CloudBase 不再作为正式部署目标，这样可以避免维护多平台 secrets、双套工作流和错误的部署认知。
 
 ## 11. 相关文件索引
 
@@ -313,5 +325,7 @@ npm run migrate:plan
 - [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml)
 - [`client/Dockerfile`](../client/Dockerfile)
 - [`server/Dockerfile`](../server/Dockerfile)
+- [`deploy/docker-compose.lighthouse.yml`](../deploy/docker-compose.lighthouse.yml)
+- [`scripts/deploy-lighthouse-server.sh`](../scripts/deploy-lighthouse-server.sh)
 - [`server/src/services/migrationRunner.ts`](../server/src/services/migrationRunner.ts)
 - [`server/src/scripts/run-pending-migrations.ts`](../server/src/scripts/run-pending-migrations.ts)

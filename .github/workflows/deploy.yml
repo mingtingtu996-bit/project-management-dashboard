@@ -266,8 +266,8 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.SUPABASE_MIGRATION_URL }}
 
-  deploy-cloudbase:
-    name: Deploy To CloudBase
+  deploy-server:
+    name: Deploy To Self-hosted Server
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: [build-frontend, browser-checks, browser-checks-summary, database-migration]
@@ -282,87 +282,68 @@ jobs:
       (needs.database-migration.result == 'success' || needs.database-migration.result == 'skipped') &&
       (
         (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')) ||
-        github.event_name == 'workflow_dispatch'
+        (github.event_name == 'workflow_dispatch' && github.event.inputs.environment != 'preview')
       )
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Setup Node.js 20
-        uses: actions/setup-node@v6
-        with:
-          node-version: '20'
-
-      - name: Download frontend build
-        uses: actions/download-artifact@v7
-        with:
-          name: frontend-build
-          path: dist
-
-      - name: Install CloudBase CLI
-        run: npm install -g @cloudbase/cli
-
-      - name: Check deployment credentials
+      - name: Check server deployment credentials
         id: deployment-eligibility
         env:
-          CLOUDBASE_ENV_ID: ${{ secrets.CLOUDBASE_ENV_ID }}
-          CLOUDBASE_SECRET_ID: ${{ secrets.CLOUDBASE_SECRET_ID }}
-          CLOUDBASE_SECRET_KEY: ${{ secrets.CLOUDBASE_SECRET_KEY }}
-          TENCENT_SECRET_ID: ${{ secrets.TENCENT_SECRET_ID }}
-          TENCENT_SECRET_KEY: ${{ secrets.TENCENT_SECRET_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
         run: |
-          HAS_ENV_ID=false
-          HAS_CLOUDBASE_CREDS=false
-          HAS_TENCENT_CREDS=false
-
-          if [ -n "$CLOUDBASE_ENV_ID" ]; then
-            HAS_ENV_ID=true
-          fi
-
-          if [ -n "$CLOUDBASE_SECRET_ID" ] && [ -n "$CLOUDBASE_SECRET_KEY" ]; then
-            HAS_CLOUDBASE_CREDS=true
-          fi
-
-          if [ -n "$TENCENT_SECRET_ID" ] && [ -n "$TENCENT_SECRET_KEY" ]; then
-            HAS_TENCENT_CREDS=true
-          fi
-
-          if [ "$HAS_ENV_ID" = true ] && { [ "$HAS_CLOUDBASE_CREDS" = true ] || [ "$HAS_TENCENT_CREDS" = true ]; }; then
+          if [ -n "$DEPLOY_HOST" ] && [ -n "$DEPLOY_USER" ] && [ -n "$DEPLOY_PATH" ] && [ -n "$DEPLOY_SSH_PRIVATE_KEY" ]; then
             echo "can_deploy=true" >> "$GITHUB_OUTPUT"
           else
             echo "can_deploy=false" >> "$GITHUB_OUTPUT"
-            echo "CloudBase deployment skipped because required secrets are missing."
-          fi
-
-      - name: Login CloudBase
-        if: ${{ steps.deployment-eligibility.outputs.can_deploy == 'true' }}
-        env:
-          CLOUDBASE_SECRET_ID: ${{ secrets.CLOUDBASE_SECRET_ID }}
-          CLOUDBASE_SECRET_KEY: ${{ secrets.CLOUDBASE_SECRET_KEY }}
-          TENCENT_SECRET_ID: ${{ secrets.TENCENT_SECRET_ID }}
-          TENCENT_SECRET_KEY: ${{ secrets.TENCENT_SECRET_KEY }}
-        run: |
-          API_KEY_ID="${CLOUDBASE_SECRET_ID:-$TENCENT_SECRET_ID}"
-          API_KEY="${CLOUDBASE_SECRET_KEY:-$TENCENT_SECRET_KEY}"
-          if [ -z "$API_KEY_ID" ] || [ -z "$API_KEY" ]; then
-            echo "CloudBase credentials are not configured."
+            {
+              echo "### Self-hosted deployment blocked"
+              echo ""
+              echo "- Missing one or more required GitHub secrets: \`DEPLOY_HOST\`, \`DEPLOY_USER\`, \`DEPLOY_PATH\`, \`DEPLOY_SSH_PRIVATE_KEY\`."
+              echo "- Quality gates and browser checks completed, but no server deployment was attempted."
+            } >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
-          tcb login \
-            --apiKeyId "$API_KEY_ID" \
-            --apiKey "$API_KEY"
 
-      - name: Deploy frontend
-        if: ${{ steps.deployment-eligibility.outputs.can_deploy == 'true' }}
-        run: tcb hosting:deploy dist --envId ${{ secrets.CLOUDBASE_ENV_ID }}
-
-      - name: Deploy backend CloudRun service
+      - name: Configure SSH
         if: ${{ steps.deployment-eligibility.outputs.can_deploy == 'true' }}
         env:
-          CLOUDBASE_ENV_ID: ${{ secrets.CLOUDBASE_ENV_ID }}
-          CLOUDBASE_BACKEND_SERVICE: project-management-api
-          CLOUDBASE_BACKEND_PORT: '3001'
-        run: node scripts/deploy-cloudbase-backend.mjs
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
+          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_PRIVATE_KEY" > ~/.ssh/project-management-deploy
+          chmod 600 ~/.ssh/project-management-deploy
+
+          if [ -n "$DEPLOY_KNOWN_HOSTS" ]; then
+            printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$DEPLOY_PORT" "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+          fi
+
+      - name: Deploy to self-hosted server
+        if: ${{ steps.deployment-eligibility.outputs.can_deploy == 'true' }}
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          DEPLOY_HEALTH_URL: ${{ secrets.DEPLOY_HEALTH_URL }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          ssh \
+            -i ~/.ssh/project-management-deploy \
+            -p "$DEPLOY_PORT" \
+            -o IdentitiesOnly=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "APP_DIR=\"$DEPLOY_PATH\" RELEASE_SHA=\"$RELEASE_SHA\" HEALTH_URL=\"${DEPLOY_HEALTH_URL:-http://127.0.0.1/api/health}\" bash -s" < scripts/deploy-lighthouse-server.sh
 
       - name: Send deployment notification
         if: ${{ env.HAS_SLACK_WEBHOOK == 'true' }}
@@ -371,5 +352,5 @@ jobs:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
           SLACK_CHANNEL: '#deployments'
           SLACK_COLOR: good
-          SLACK_TITLE: 'Project Management System deployed to CloudBase'
+          SLACK_TITLE: 'Project Management System deployed to self-hosted server'
           SLACK_MESSAGE: 'Commit: ${{ github.sha }}\nEnvironment: ${{ env.DEPLOY_TARGET }}'
