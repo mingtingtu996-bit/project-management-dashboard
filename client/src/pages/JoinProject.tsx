@@ -5,7 +5,7 @@ import { ArrowLeft, CheckCircle2, LogIn, Users, XCircle } from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth'
 import { useAuthDialog } from '@/hooks/useAuthDialog'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { LoadingState } from '@/components/ui/loading-state'
 import { getApiErrorMessage, getAuthHeaders } from '@/lib/apiClient'
 import { syncProjectCacheFromApi } from '@/lib/projectPersistence'
@@ -106,18 +106,16 @@ export default function JoinProject() {
             <Users className="h-6 w-6" />
             加入项目
           </CardTitle>
-          <CardDescription>通过邀请码加入团队项目</CardDescription>
         </CardHeader>
         <CardContent>
           {status === 'loading' ? (
-            <LoadingState label="正在验证邀请码" description="正在校验邀请链接，请稍候" className="min-h-48 border-0 bg-transparent shadow-none" />
+            <LoadingState label="正在验证邀请码" className="min-h-48 border-0 bg-transparent shadow-none" />
           ) : null}
 
           {status === 'invalid' ? (
             <div className="flex flex-col items-center justify-center py-12 text-center" data-testid="join-project-invalid-state">
               <XCircle className="mb-4 h-16 w-16 text-rose-500" />
               <h2 className="text-xl font-semibold text-slate-900">邀请码无效或已过期</h2>
-              <p className="mt-2 text-sm leading-6 text-slate-500">请联系项目负责人重新获取新的邀请链接。</p>
               <Button variant="outline" className="mt-6" onClick={() => navigate('/')}>
                 <ArrowLeft className="mr-2 h-4 w-4" />
                 返回首页
@@ -129,7 +127,6 @@ export default function JoinProject() {
             <div className="flex flex-col items-center justify-center py-12 text-center" data-testid="join-project-error-state">
               <XCircle className="mb-4 h-16 w-16 text-rose-500" />
               <h2 className="text-xl font-semibold text-slate-900">验证失败</h2>
-              <p className="mt-2 text-sm leading-6 text-slate-500">网络异常或后端暂不可用，请稍后重试。</p>
               <div className="mt-6 flex gap-3">
                 <Button variant="outline" onClick={() => code && validateCode(code)}>重新验证</Button>
                 <Button variant="outline" onClick={() => navigate('/')}>返回首页</Button>
@@ -141,11 +138,6 @@ export default function JoinProject() {
             <div className="flex flex-col items-center justify-center py-12 text-center" data-testid="join-project-joined-state">
               <CheckCircle2 className="mb-4 h-16 w-16 text-emerald-500" />
               <h2 className="text-xl font-semibold text-slate-900">{invitation?.alreadyJoined ? '你已加入该项目' : '加入成功'}</h2>
-              <p className="mt-2 text-sm leading-6 text-slate-500">
-                {invitation?.alreadyJoined
-                  ? `当前账号已是项目「${invitation?.projectName || '当前项目'}」的成员。`
-                  : `你已成功加入项目「${invitation?.projectName || '当前项目'}」。`}
-              </p>
               <Button className="mt-6" onClick={() => navigate(`/projects/${invitation?.projectId}/dashboard`)} data-testid="join-project-enter-project">
                 进入项目
               </Button>
@@ -167,7 +159,6 @@ export default function JoinProject() {
                 </>
               ) : (
                 <>
-                  <p className="mt-2 text-sm text-slate-500">请先登录，再完成加入项目。</p>
                   <Button className="mt-6" onClick={openLoginDialog} data-testid="join-project-login">
                     <LogIn className="mr-2 h-4 w-4" />
                     登录后加入

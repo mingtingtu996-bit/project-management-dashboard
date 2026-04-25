@@ -58,7 +58,6 @@ export function GanttViewHeader({
       <PageHeader
         eyebrow={PROJECT_NAVIGATION_LABELS.tasks}
         title={`${PROJECT_NAVIGATION_LABELS.tasks} / ${PROJECT_NAVIGATION_LABELS.taskList}`}
-        subtitle="统一查看任务录入、WBS 结构和执行维护；任务总结作为复盘子页单独呈现。"
       >
         <div className="inline-flex rounded-xl border border-slate-200 bg-white p-1">
           <button
@@ -128,11 +127,6 @@ export function GanttViewHeader({
                 </span>
               ) : null}
             </div>
-            <p className="leading-6">
-              {planningGovernance?.dashboardCloseoutOverdue
-                ? '当前项目存在月末关账超期信号，请尽快回到关账工作台处理剩余事项。'
-                : '当前项目已进入强制关账可用窗口，请在关账工作台核对并发起处理。'}
-            </p>
           </div>
           <Button
             data-testid="gantt-closeout-entry"

@@ -12,7 +12,9 @@ const mocks = vi.hoisted(() => {
     executeSQLOne: vi.fn(),
     supabaseFrom: vi.fn(() => supabaseBuilder),
     supabaseBuilder,
+    query: vi.fn(async () => ({ rows: [] })),
     getProjectPermissionLevel: vi.fn(async () => null),
+    isCompanyAdminRole: vi.fn((role?: string | null) => String(role ?? '').trim() === 'company_admin'),
     logger: {
       info: vi.fn(),
       warn: vi.fn(),
@@ -37,10 +39,15 @@ vi.mock('../middleware/logger.js', () => ({
 
 vi.mock('../auth/access.js', () => ({
   getProjectPermissionLevel: mocks.getProjectPermissionLevel,
+  isCompanyAdminRole: mocks.isCompanyAdminRole,
   isUuidLike: (value?: string | null) =>
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
       String(value ?? '').trim(),
     ),
+}))
+
+vi.mock('../database.js', () => ({
+  query: mocks.query,
 }))
 
 function createResponse() {
@@ -60,6 +67,8 @@ describe('auth permission fallback hardening', () => {
     mocks.supabaseBuilder.select.mockClear()
     mocks.supabaseBuilder.eq.mockClear()
     mocks.supabaseBuilder.limit.mockClear()
+    mocks.query.mockReset()
+    mocks.query.mockResolvedValue({ rows: [] })
   })
 
   it('injects a valid UUID fallback user in test mode even when DEV_USER_ID is invalid', async () => {
@@ -103,5 +112,56 @@ describe('auth permission fallback hardening', () => {
     // If project existed, invalid userId would yield 403. Either way no 500.
     const statusCode = (res.status as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]
     expect([403, 404]).toContain(statusCode)
+  })
+
+  it('allows company admins to read existing projects without project membership', async () => {
+    const { requireProjectMember } = await import('../middleware/auth.js')
+    mocks.query.mockResolvedValueOnce({ rows: [{ id: '2f72d68c-5173-4edf-a86b-b48396f8d5f3' }] })
+
+    const middleware = requireProjectMember((req) => req.params.id)
+    const req: any = {
+      method: 'GET',
+      user: {
+        id: '00000000-0000-4000-8000-000000000001',
+        globalRole: 'company_admin',
+      },
+      params: {
+        id: '2f72d68c-5173-4edf-a86b-b48396f8d5f3',
+      },
+    }
+    const res = createResponse()
+    const next = vi.fn()
+
+    await middleware(req, res, next)
+
+    expect(next).toHaveBeenCalledOnce()
+    expect(res.status).not.toHaveBeenCalled()
+  })
+
+  it('still blocks company admins from non-read project member routes without membership', async () => {
+    const { requireProjectMember } = await import('../middleware/auth.js')
+    mocks.query
+      .mockResolvedValueOnce({ rows: [{ id: '2f72d68c-5173-4edf-a86b-b48396f8d5f3' }] })
+      .mockResolvedValueOnce({ rows: [{ owner_id: '11111111-1111-4111-8111-111111111111' }] })
+      .mockResolvedValueOnce({ rows: [] })
+
+    const middleware = requireProjectMember((req) => req.params.id)
+    const req: any = {
+      method: 'POST',
+      user: {
+        id: '00000000-0000-4000-8000-000000000001',
+        globalRole: 'company_admin',
+      },
+      params: {
+        id: '2f72d68c-5173-4edf-a86b-b48396f8d5f3',
+      },
+    }
+    const res = createResponse()
+    const next = vi.fn()
+
+    await middleware(req, res, next)
+
+    expect(next).not.toHaveBeenCalled()
+    expect(res.status).toHaveBeenCalledWith(403)
   })
 })

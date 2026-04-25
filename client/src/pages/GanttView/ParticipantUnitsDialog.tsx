@@ -74,9 +74,7 @@ export function ParticipantUnitsDialog({
       <DialogContent className="max-w-4xl" aria-describedby={undefined}>
         <DialogHeader>
           <DialogTitle>参建单位台账</DialogTitle>
-          <DialogDescription>
-            这里统一维护项目级参建单位主数据，包括单位类型和联系人信息，后续任务与验收会复用同一套台账。
-          </DialogDescription>
+          <DialogDescription className="sr-only">参建单位台账</DialogDescription>
         </DialogHeader>
 
         <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
@@ -84,7 +82,6 @@ export function ParticipantUnitsDialog({
             <div className="flex items-center justify-between gap-3">
               <div>
                 <p className="text-sm font-medium">已维护单位</p>
-                <p className="text-xs text-muted-foreground">按台账维护，后续在任务页里直接复用。</p>
               </div>
               <Button size="sm" variant="outline" onClick={onCreateNew}>
                 <Plus className="mr-2 h-4 w-4" />
@@ -96,7 +93,6 @@ export function ParticipantUnitsDialog({
               {loading ? (
                 <LoadingState
                   label="参建单位加载中"
-                  description="正在读取项目参建单位台账。"
                   className="min-h-24 rounded-lg border border-dashed bg-transparent"
                 />
               ) : units.length > 0 ? (
@@ -131,7 +127,7 @@ export function ParticipantUnitsDialog({
                   </div>
                 ))
               ) : (
-                <div className="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">暂无参建单位，先新建一条试试。</div>
+                <div className="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">暂无参建单位</div>
               )}
             </div>
           </div>
@@ -210,16 +206,11 @@ export function ParticipantUnitsDialog({
               </div>
             </div>
 
-            <div className="rounded-lg border border-dashed bg-background px-3 py-2 text-xs text-muted-foreground">
-              联系人信息为项目级字段，和单位名称、单位类型一起存储，便于后续任务和验收计划直接引用。
-            </div>
           </div>
         </div>
 
         <DialogFooter className="gap-2 sm:justify-between">
-          <div className="text-xs text-muted-foreground">
-            当前仅保留台账主数据，不额外拆出独立页面。
-          </div>
+          <div />
           <div className="flex items-center gap-2">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               关闭

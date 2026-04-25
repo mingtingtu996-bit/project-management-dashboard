@@ -29,7 +29,6 @@ export function BaselineRevisionCandidateList({
     <div data-testid="baseline-revision-candidate-list" className="space-y-3">
       <div className="space-y-1">
         <div className="text-sm font-semibold text-slate-900">候选列表</div>
-        <p className="text-xs text-slate-500">统一列出待纳入修订的候选项，并明确当前操作对象。</p>
       </div>
 
       <div className="space-y-3">
@@ -69,7 +68,6 @@ export function BaselineRevisionCandidateList({
                     <p className="text-xs leading-5 text-slate-500">{candidate.summary}</p>
                     <div className="text-xs text-slate-500">{candidate.source}</div>
                   </div>
-                  <div className="text-xs text-slate-500">点击切换操作对象</div>
                 </div>
               </CardContent>
             </Card>

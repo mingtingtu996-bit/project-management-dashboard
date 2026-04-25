@@ -14,7 +14,6 @@ export function BaselineRevisionBasket({ items, onRemoveItem }: BaselineRevision
     <div data-testid="baseline-revision-basket" className="space-y-3">
       <div className="space-y-1">
         <div className="text-sm font-semibold text-slate-900">修订篮</div>
-        <p className="text-xs text-slate-500">这里收拢本次确定纳入修订的条目，便于统一带入草稿。</p>
       </div>
 
       <div className="space-y-3">
@@ -38,9 +37,7 @@ export function BaselineRevisionBasket({ items, onRemoveItem }: BaselineRevision
             </Card>
           ))
         ) : (
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-            当前修订篮为空，先从左侧候选列表选择要纳入本次修订的条目。
-          </div>
+          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4" />
         )}
       </div>
     </div>

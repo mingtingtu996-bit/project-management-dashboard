@@ -39,11 +39,9 @@ export function PlanningGovernanceBanner({
       : status === 'error'
         ? '治理快照暂不可用'
         : `健康评分 ${score}`
-  const subLabel = status === 'error' ? '请先补齐治理数据后再重新校核' : label
-  const bodyText =
-    status === 'error'
-      ? errorMessage || '治理快照暂时无法读取，请稍后重试。'
-      : summary
+  void label
+  void summary
+  void errorMessage
 
   return (
     <Card data-testid="planning-governance-banner" className="border-cyan-200 bg-slate-950 text-white shadow-sm">
@@ -62,9 +60,7 @@ export function PlanningGovernanceBanner({
             <div className="flex flex-wrap items-center gap-2">
               <AlertTriangle className="h-4 w-4 text-amber-300" />
               <span className="text-sm font-medium text-slate-100">{headline}</span>
-              <span className="text-sm text-slate-300">{subLabel}</span>
             </div>
-            <p className="max-w-3xl text-sm leading-6 text-slate-300">{bodyText}</p>
           </div>
         </div>
 

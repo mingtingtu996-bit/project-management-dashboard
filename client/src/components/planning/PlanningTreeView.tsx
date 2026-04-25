@@ -57,6 +57,8 @@ export function PlanningTreeView({
   emptyLabel = '暂无规划条目',
   readOnly = false,
 }: PlanningTreeViewProps) {
+  void description
+
   const allSelected = rows.length > 0 && rows.every((row) => row.selected)
   const someSelected = rows.some((row) => row.selected)
   const renderValue = (value?: string | null) => value?.trim() || '—'
@@ -67,7 +69,6 @@ export function PlanningTreeView({
         <div className="flex items-start justify-between gap-3">
           <div>
             <CardTitle className="text-xl">{title}</CardTitle>
-            {description ? <CardDescription className="mt-1">{description}</CardDescription> : null}
           </div>
           <Badge variant="outline" className="shrink-0">
             {selectedCount} 已选
@@ -88,7 +89,6 @@ export function PlanningTreeView({
               {allSelected ? '取消全选' : '全选当前视图'}
             </button>
           )}
-          <span>树表行高、缩进和关键节点锚点已按统一规范对齐</span>
         </div>
       </CardHeader>
 

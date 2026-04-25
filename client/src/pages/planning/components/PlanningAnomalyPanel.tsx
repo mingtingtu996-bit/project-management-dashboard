@@ -31,13 +31,6 @@ export function PlanningAnomalyPanel({
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <CardTitle className="text-base">异常治理</CardTitle>
-            <p className="mt-1 text-sm text-slate-500">
-              {status === 'loading'
-                ? '正在读取异常扫描结果...'
-                : status === 'error'
-                  ? errorMessage || '当前无法读取异常治理结果。'
-                  : '被动重排、治理异常和需要处理的系统信号会集中显示在这里。'}
-            </p>
           </div>
           <Badge variant={status === 'error' ? 'destructive' : empty ? 'outline' : 'secondary'}>{statusLabel}</Badge>
         </div>
@@ -48,7 +41,6 @@ export function PlanningAnomalyPanel({
             <AlertCircle className="h-4 w-4 text-slate-400" />
             <div>
               <div className="font-medium text-slate-800">正在扫描异常</div>
-              <div className="mt-1">治理后端仍在扫描被动重排与系统异常，请稍后查看结果。</div>
             </div>
           </div>
         ) : status === 'error' ? (
@@ -64,7 +56,6 @@ export function PlanningAnomalyPanel({
             <AlertCircle className="h-4 w-4 text-slate-400" />
             <div>
               <div className="font-medium text-slate-800">当前无异常</div>
-              <div className="mt-1">本次扫描没有发现需要立即处理的治理异常。</div>
             </div>
           </div>
         ) : (

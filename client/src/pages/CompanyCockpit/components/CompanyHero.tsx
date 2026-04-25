@@ -87,7 +87,6 @@ export function CompanyHero({
                   </div>
                 </div>
                 <div className="mt-3 text-4xl font-semibold tracking-tight text-slate-900">{item.value}</div>
-                <p className="mt-2 text-xs text-slate-500">{item.hint}</p>
               </CardContent>
             </Card>
           ))}

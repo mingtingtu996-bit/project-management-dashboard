@@ -8,17 +8,6 @@ process.env.SUPABASE_SERVICE_KEY = 'test-service-key'
 process.env.NODE_ENV = 'test'
 process.env.JWT_SECRET = 'test-jwt-secret'
 
-type AcceptanceNodeRow = {
-  id: string
-  acceptance_plan_id: string
-  node_name: string
-  planned_date: string
-  status: string
-  result: string
-  documents: string
-  created_at: string
-}
-
 type PreMilestoneConditionRow = {
   id: string
   pre_milestone_id: string
@@ -47,7 +36,6 @@ type PreMilestoneRow = {
 }
 
 const state = vi.hoisted(() => {
-  const acceptanceNodes: AcceptanceNodeRow[] = []
   const preMilestoneConditions: PreMilestoneConditionRow[] = []
   const preMilestoneDependencies: PreMilestoneDependencyRow[] = []
   const preMilestones: PreMilestoneRow[] = []
@@ -57,21 +45,9 @@ const state = vi.hoisted(() => {
   const clone = <T>(row: T | undefined) => (row ? JSON.parse(JSON.stringify(row)) as T : null)
 
   const reset = () => {
-    acceptanceNodes.splice(0, acceptanceNodes.length)
     preMilestoneConditions.splice(0, preMilestoneConditions.length)
     preMilestoneDependencies.splice(0, preMilestoneDependencies.length)
     preMilestones.splice(0, preMilestones.length)
-
-    acceptanceNodes.push({
-      id: 'node-1',
-      acceptance_plan_id: 'plan-1',
-      node_name: '资料审查',
-      planned_date: '2026-04-20',
-      status: 'pending',
-      result: '{}',
-      documents: '[]',
-      created_at: '2026-04-10T00:00:00.000Z',
-    })
 
     preMilestoneConditions.push({
       id: 'condition-1',
@@ -113,16 +89,6 @@ const state = vi.hoisted(() => {
   const executeSQLOne = vi.fn(async (sql: string, params: unknown[] = []) => {
     const normalized = normalizeSql(sql)
 
-    if (normalized === 'select count(*) as total from acceptance_nodes where acceptance_plan_id = ?') {
-      return {
-        total: acceptanceNodes.filter((row) => row.acceptance_plan_id === String(params[0] ?? '')).length,
-      }
-    }
-
-    if (includesSql(normalized, 'from acceptance_nodes where id = ? limit 1')) {
-      return clone(acceptanceNodes.find((row) => row.id === String(params[0] ?? '')))
-    }
-
     if (includesSql(normalized, 'from pre_milestone_conditions where id = ? limit 1')) {
       return clone(preMilestoneConditions.find((row) => row.id === String(params[0] ?? '')))
     }
@@ -136,17 +102,6 @@ const state = vi.hoisted(() => {
 
   const executeSQL = vi.fn(async (sql: string, params: unknown[] = []) => {
     const normalized = normalizeSql(sql)
-
-    if (includesSql(normalized, 'from acceptance_nodes where acceptance_plan_id = ?')) {
-      const planId = String(params[0] ?? '')
-      const limit = Number(params[1] ?? acceptanceNodes.length)
-      const offset = Number(params[2] ?? 0)
-      return acceptanceNodes
-        .filter((row) => row.acceptance_plan_id === planId)
-        .slice(offset, offset + limit)
-        .map((row) => clone(row))
-        .filter(Boolean)
-    }
 
     if (normalized === 'select * from pre_milestone_conditions where pre_milestone_id = ? order by created_at asc') {
       return preMilestoneConditions
@@ -174,7 +129,6 @@ const state = vi.hoisted(() => {
   })
 
   return {
-    acceptanceNodes,
     executeSQL,
     executeSQLOne,
     preMilestoneConditions,
@@ -204,7 +158,6 @@ vi.mock('../services/dbService.js', () => ({
   updateTask: vi.fn(async () => null),
 }))
 
-const { default: acceptanceNodesRouter } = await import('../routes/acceptance-nodes.js')
 const { default: preMilestoneConditionsRouter } = await import('../routes/pre-milestone-conditions.js')
 const { default: preMilestoneDependenciesRouter } = await import('../routes/pre-milestone-dependencies.js')
 const { errorHandler } = await import('../middleware/errorHandler.js')
@@ -212,7 +165,6 @@ const { errorHandler } = await import('../middleware/errorHandler.js')
 function buildApp() {
   const app = express()
   app.use(express.json())
-  app.use('/api/acceptance-nodes', acceptanceNodesRouter)
   app.use('/api/pre-milestone-conditions', preMilestoneConditionsRouter)
   app.use('/api/pre-milestone-dependencies', preMilestoneDependenciesRouter)
   app.use(errorHandler)
@@ -223,31 +175,6 @@ describe('ancillary route validation hardening', () => {
   beforeEach(() => {
     state.reset()
     vi.clearAllMocks()
-  })
-
-  it('accepts acceptance node list alias query without breaking existing reads', async () => {
-    const response = await supertest(buildApp())
-      .get('/api/acceptance-nodes')
-      .query({ plan_id: 'plan-1', limit: '20', offset: '0' })
-      .expect(200)
-
-    expect(response.body.success).toBe(true)
-    expect(response.body.data).toHaveLength(1)
-    expect(response.body.data[0]).toMatchObject({
-      id: 'node-1',
-      acceptance_plan_id: 'plan-1',
-      node_name: '资料审查',
-    })
-  })
-
-  it('keeps acceptance node create validation on required fields', async () => {
-    const response = await supertest(buildApp())
-      .post('/api/acceptance-nodes')
-      .send({ node_name: '仅名称无计划' })
-      .expect(400)
-
-    expect(response.body.success).toBe(false)
-    expect(response.body.error.code).toBe('VALIDATION_ERROR')
   })
 
   it('accepts pre-milestone condition alias query without breaking existing reads', async () => {

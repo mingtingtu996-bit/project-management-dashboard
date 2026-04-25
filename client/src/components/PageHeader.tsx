@@ -10,6 +10,8 @@ interface PageHeaderProps {
 }
 
 export function PageHeader({ title, subtitle, eyebrow, children, className }: PageHeaderProps) {
+  void subtitle
+
   return (
     <section className={cn('shell-surface px-6 py-5 md:px-7 md:py-6', className)}>
       <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
@@ -19,9 +21,6 @@ export function PageHeader({ title, subtitle, eyebrow, children, className }: Pa
             <h1 className="text-2xl font-semibold tracking-tight text-slate-900 md:text-[30px]">
               {title}
             </h1>
-            {subtitle && (
-              <p className="max-w-3xl text-sm leading-6 text-slate-500">{subtitle}</p>
-            )}
           </div>
         </div>
 

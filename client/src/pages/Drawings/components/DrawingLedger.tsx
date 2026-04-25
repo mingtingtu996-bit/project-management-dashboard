@@ -39,7 +39,6 @@ export function DrawingLedger({
       <div className="flex items-end justify-between gap-4">
         <div>
           <h2 className="text-lg font-semibold text-slate-900">图纸台账</h2>
-          <p className="mt-1 text-sm text-slate-500">这里是单图编辑与版本追踪的入口，仍然以图纸包为上层主对象。</p>
         </div>
         <div className="hidden items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500 md:flex">
           <Layers3 className="h-3.5 w-3.5" />
@@ -81,13 +80,11 @@ export function DrawingLedger({
             <div className="flex flex-col items-center justify-center gap-3 py-14 text-center">
               <Files className="h-10 w-10 text-slate-300" />
               <div className="text-base font-medium text-slate-900">暂无图纸台账</div>
-              <div className="text-sm text-slate-500">当前项目还没有可展示的单图记录。</div>
             </div>
           ) : displayRows.length === 0 ? (
             <div className="flex flex-col items-center justify-center gap-3 py-14 text-center">
               <Files className="h-10 w-10 text-slate-300" />
               <div className="text-base font-medium text-slate-900">没有匹配结果</div>
-              <div className="text-sm text-slate-500">没有符合搜索条件的图纸记录。</div>
             </div>
           ) : (
             <div className="overflow-x-auto">

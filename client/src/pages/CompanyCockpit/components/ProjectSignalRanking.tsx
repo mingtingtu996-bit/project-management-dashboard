@@ -57,9 +57,6 @@ export function ProjectSignalRanking({ projectRows, onNavigate }: ProjectSignalR
             <CardTitle className="text-base font-semibold text-slate-900" data-testid="company-signal-ranking-title">
               项目信号排行
             </CardTitle>
-            <p className="mt-1 text-xs leading-5 text-slate-500">
-              把跨项目的延期、关账、关键路径和预警信号收在同一处，方便管理层快速判断先看哪个项目。
-            </p>
           </div>
           <div className="flex flex-wrap justify-end gap-2 text-xs">
             <span className="rounded-full bg-red-50 px-3 py-1 text-red-700">需关注 {attentionProjectCount}</span>

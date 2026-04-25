@@ -9,6 +9,8 @@ interface LoadingStateProps {
 }
 
 export function LoadingState({ label, description, className }: LoadingStateProps) {
+  void description
+
   return (
     <div
       className={cn(
@@ -18,7 +20,6 @@ export function LoadingState({ label, description, className }: LoadingStateProp
     >
       <Loader2 className="h-5 w-5 animate-spin text-blue-500 motion-reduce:animate-none" />
       <p className="mt-3 font-medium text-slate-700">{label}</p>
-      {description ? <p className="mt-1 text-xs text-slate-400">{description}</p> : null}
     </div>
   )
 }

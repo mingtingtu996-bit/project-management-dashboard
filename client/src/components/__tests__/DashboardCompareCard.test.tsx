@@ -101,6 +101,7 @@ describe('DashboardCompareCard', () => {
 
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining('/api/task-summaries/projects/project-1/daily-progress'),
+      expect.anything(),
     )
 
     fetchMock.mockClear()

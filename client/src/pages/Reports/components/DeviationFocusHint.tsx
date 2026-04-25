@@ -22,6 +22,7 @@ export function DeviationFocusHint({
 }) {
   const defaultLabel = viewLabels[defaultView]
   const activeLabel = viewLabels[activeView]
+  void activeLabel
 
   return (
     <Card data-testid="deviation-focus-hint" className="border-slate-200 shadow-sm">
@@ -31,10 +32,6 @@ export function DeviationFocusHint({
             主次引导
           </div>
           <div className="text-sm font-semibold text-slate-900">默认主线：{defaultLabel}</div>
-          <div className="text-sm text-slate-600">当前视角：{activeLabel}，非主线摘要默认折叠。</div>
-          <div className="text-xs leading-5 text-slate-500">
-            这里优先展示当前主视角。你可以按需展开其他视角摘要，并继续下钻散点图、详情表和版本切换信息。
-          </div>
         </div>
         <Button type="button" variant="outline" onClick={onToggleSecondaryExpanded}>
           {secondaryExpanded ? '收起其他视角摘要' : '展开其他视角摘要'}

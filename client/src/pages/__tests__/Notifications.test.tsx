@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import Notifications from '../Notifications'
 import { useApi } from '@/hooks/useApi'
+import { useAuth } from '@/hooks/useAuth'
+import { useAuthDialog } from '@/hooks/useAuthDialog'
 import { useStore } from '@/hooks/useStore'
 
 vi.mock('@/hooks/use-toast', () => ({
@@ -13,6 +15,14 @@ vi.mock('@/hooks/use-toast', () => ({
 
 vi.mock('@/hooks/useApi', () => ({
   useApi: vi.fn(),
+}))
+
+vi.mock('@/hooks/useAuth', () => ({
+  useAuth: vi.fn(),
+}))
+
+vi.mock('@/hooks/useAuthDialog', () => ({
+  useAuthDialog: vi.fn(),
 }))
 
 vi.mock('react-router-dom', async () => {
@@ -25,6 +35,8 @@ vi.mock('react-router-dom', async () => {
 
 const mockedUseNavigate = vi.mocked(useNavigate)
 const mockedUseApi = vi.mocked(useApi)
+const mockedUseAuth = vi.mocked(useAuth)
+const mockedUseAuthDialog = vi.mocked(useAuthDialog)
 
 function flush() {
   return new Promise((resolve) => setTimeout(resolve, 0))
@@ -67,6 +79,7 @@ describe('Notifications', () => {
     put: vi.fn(),
     delete: vi.fn(),
   }
+  const openLoginDialogMock = vi.fn()
 
   beforeEach(() => {
     document.body.appendChild(container)
@@ -80,6 +93,15 @@ describe('Notifications', () => {
 
     mockedUseNavigate.mockReturnValue(navigateMock)
     mockedUseApi.mockReturnValue(apiMock as never)
+    mockedUseAuth.mockReturnValue({
+      isAuthenticated: true,
+      loading: false,
+    } as never)
+    mockedUseAuthDialog.mockReturnValue({
+      isOpen: false,
+      openLoginDialog: openLoginDialogMock,
+      closeLoginDialog: vi.fn(),
+    })
     apiMock.put.mockResolvedValue({})
     apiMock.delete.mockResolvedValue({})
   })
@@ -87,10 +109,13 @@ describe('Notifications', () => {
   afterEach(() => {
     mockedUseNavigate.mockReset()
     mockedUseApi.mockReset()
+    mockedUseAuth.mockReset()
+    mockedUseAuthDialog.mockReset()
     apiMock.get.mockReset()
     apiMock.put.mockReset()
     apiMock.delete.mockReset()
     navigateMock.mockReset()
+    openLoginDialogMock.mockReset()
     act(() => {
       root?.unmount()
     })
@@ -403,5 +428,35 @@ describe('Notifications', () => {
 
     expect(apiMock.delete).toHaveBeenCalledWith('/api/notifications/risk-1')
     await waitForCondition(() => container.textContent?.includes('风险预警') === false)
+  })
+
+  it('shows login guidance instead of requesting protected notifications when unauthenticated', async () => {
+    mockedUseAuth.mockReturnValue({
+      isAuthenticated: false,
+      loading: false,
+    } as never)
+
+    await act(async () => {
+      renderNotifications(root)
+      await flush()
+    })
+
+    await waitForCondition(() => container.textContent?.includes('登录后继续查看提醒中心') === true)
+
+    expect(apiMock.get).not.toHaveBeenCalled()
+    expect(container.textContent).toContain('提醒中心需要登录后才会加载你的个人提醒')
+
+    const loginButton = Array.from(container.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('登录后继续'),
+    ) as HTMLButtonElement | undefined
+
+    expect(loginButton).toBeTruthy()
+
+    await act(async () => {
+      loginButton?.click()
+      await flush()
+    })
+
+    expect(openLoginDialogMock).toHaveBeenCalled()
   })
 })

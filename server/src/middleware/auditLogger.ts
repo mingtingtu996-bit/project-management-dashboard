@@ -33,76 +33,6 @@ const LOGGED_PATTERNS: Array<{ method: string; pathRegex: RegExp; action: string
   { method: 'PUT', pathRegex: /\/api\/milestones\/[^/]+$/, action: '编辑里程碑' },
 ];
 
-/**
- * 确保操作日志表存在
- */
-async function ensureTable() {
-  await query(`
-    CREATE TABLE IF NOT EXISTS public.operation_logs (
-      id BIGSERIAL PRIMARY KEY,
-      user_id TEXT,
-      username TEXT,
-      project_id TEXT,
-      action TEXT NOT NULL,
-      resource_type TEXT,
-      resource_id TEXT,
-      method TEXT NOT NULL,
-      path TEXT NOT NULL,
-      status_code INTEGER,
-      ip_address TEXT,
-      user_agent TEXT,
-      request_body JSONB,
-      detail JSONB DEFAULT '{}'::jsonb,
-      created_at TIMESTAMPTZ DEFAULT NOW()
-    );
-  `);
-
-  // 历史环境里 operation_logs 可能被旧兜底逻辑提前建成“瘦表”，这里补齐当前运行时需要的列。
-  await query(`
-    ALTER TABLE IF EXISTS public.operation_logs
-      ADD COLUMN IF NOT EXISTS project_id TEXT,
-      ADD COLUMN IF NOT EXISTS resource_type TEXT,
-      ADD COLUMN IF NOT EXISTS resource_id TEXT,
-      ADD COLUMN IF NOT EXISTS method TEXT,
-      ADD COLUMN IF NOT EXISTS path TEXT,
-      ADD COLUMN IF NOT EXISTS status_code INTEGER,
-      ADD COLUMN IF NOT EXISTS request_body JSONB,
-      ADD COLUMN IF NOT EXISTS detail JSONB DEFAULT '{}'::jsonb;
-  `);
-
-  // 创建索引
-  await query(`CREATE INDEX IF NOT EXISTS idx_operation_logs_user_id ON public.operation_logs(user_id);`);
-  await query(`CREATE INDEX IF NOT EXISTS idx_operation_logs_project_id ON public.operation_logs(project_id);`);
-  await query(`CREATE INDEX IF NOT EXISTS idx_operation_logs_action ON public.operation_logs(action);`);
-  await query(`CREATE INDEX IF NOT EXISTS idx_operation_logs_created_at ON public.operation_logs(created_at);`);
-}
-
-// 初始化表（只执行一次）
-let tableEnsured = false;
-let tableEnsurePromise: Promise<void> | null = null;
-async function ensureTableOnce() {
-  if (tableEnsured) {
-    return;
-  }
-
-  if (!tableEnsurePromise) {
-    tableEnsurePromise = ensureTable()
-      .then(() => {
-        tableEnsured = true;
-      })
-      .catch((e) => {
-        console.error('Failed to ensure operation_logs table:', e);
-      })
-      .finally(() => {
-        if (!tableEnsured) {
-          tableEnsurePromise = null;
-        }
-      });
-  }
-
-  await tableEnsurePromise;
-}
-
 function shouldBypassAuditLoggingForTests() {
   return process.env.NODE_ENV === 'test' && process.env.ENABLE_AUDIT_LOGGER_IN_TESTS !== 'true';
 }
@@ -135,9 +65,6 @@ export async function auditLogger(req: Request, res: Response, next: NextFunctio
   if (!matched) {
     return next();
   }
-
-  // 只在真正命中的写操作接口上做一次表结构兜底，避免健康检查和读接口反复触发数据库噪音。
-  void ensureTableOnce();
 
   // 提取用户信息
   const token = extractTokenFromRequest(req);

@@ -21,9 +21,19 @@ function readPositiveIntEnv(name: string, fallback: number) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function readNonNegativeIntEnv(name: string, fallback: number) {
+  const raw = process.env[name];
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
 const DB_POOL_MAX = readPositiveIntEnv('DB_POOL_MAX', 20);
-const DB_IDLE_TIMEOUT_MS = readPositiveIntEnv('DB_IDLE_TIMEOUT_MS', 30000);
+const DB_IDLE_TIMEOUT_MS = readPositiveIntEnv('DB_IDLE_TIMEOUT_MS', 300000);
 const DB_CONNECTION_TIMEOUT_MS = readPositiveIntEnv('DB_CONNECTION_TIMEOUT_MS', 5000);
+const DB_POOL_WARM_CONNECTIONS = Math.min(
+  readNonNegativeIntEnv('DB_POOL_WARM_CONNECTIONS', Math.min(2, DB_POOL_MAX)),
+  DB_POOL_MAX,
+);
 
 async function resolveIPv4Host(host: string) {
   if (!host || isIP(host)) {
@@ -78,6 +88,22 @@ async function getPool() {
   }
 
   return poolPromise;
+}
+
+export async function warmDatabasePool() {
+  if (DB_POOL_WARM_CONNECTIONS <= 0) {
+    return { connections: 0, duration: 0 };
+  }
+
+  const start = Date.now();
+  const pool = await getPool();
+  await Promise.all(
+    Array.from({ length: DB_POOL_WARM_CONNECTIONS }, () => pool.query('SELECT 1')),
+  );
+  const duration = Date.now() - start;
+
+  console.log('Database pool warmed', { connections: DB_POOL_WARM_CONNECTIONS, duration });
+  return { connections: DB_POOL_WARM_CONNECTIONS, duration };
 }
 
 export async function query(text: string, params?: any[]) {

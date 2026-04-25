@@ -15,6 +15,7 @@ export function BaselineSwitchMarker({
   baselineLabel: string
 }) {
   const firstEvent = events[0] ?? null
+  void baselineLabel
 
   return (
     <Card data-testid="baseline-switch-marker" className="border-blue-200 shadow-sm">
@@ -22,12 +23,13 @@ export function BaselineSwitchMarker({
         <CardTitle className="text-base">基线版本切换标记</CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
-        <div data-testid="deviation-version-note" className="rounded-2xl border border-blue-100 bg-blue-50 p-4 text-sm leading-6 text-blue-900">
-          版本切换说明：
-          {firstEvent
-            ? ` ${firstEvent.switch_date} ${firstEvent.from_version} → ${firstEvent.to_version}，${firstEvent.explanation}`
-            : ` 当前基线为 ${baselineLabel}，暂无可视化切换事件。`}
-        </div>
+        {firstEvent ? (
+          <div data-testid="deviation-version-note" className="rounded-2xl border border-blue-100 bg-blue-50 p-4 text-sm leading-6 text-blue-900">
+            {firstEvent.switch_date} {firstEvent.from_version} → {firstEvent.to_version}，{firstEvent.explanation}
+          </div>
+        ) : (
+          <div data-testid="deviation-version-note" className="rounded-2xl border border-blue-100 bg-blue-50 p-4" />
+        )}
         <div className="space-y-2">
           {events.length > 0 ? (
             events.map((event) => (

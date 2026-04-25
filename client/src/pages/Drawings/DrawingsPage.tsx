@@ -441,18 +441,7 @@ export default function Drawings() {
   const packageGroups = useMemo(() => groupPackagesByDiscipline(focusedPackages), [focusedPackages])
 
   const boardTitle = getFocusViewLabel(focusView)
-  const boardSubtitle =
-    focusView === 'missing'
-      ? '只展示存在应有项缺漏的图纸包，方便优先补齐成套度。'
-      : focusView === 'review'
-        ? '只展示需要送审、正在送审或人工确认的图纸包。'
-        : focusView === 'changes'
-          ? '只展示含有变更记录的图纸包，快速定位版本变化。'
-          : focusView === 'taskImpact'
-            ? '按关联任务数倒排，只展示有任务关联的图纸包。'
-            : focusView === 'acceptanceImpact'
-              ? '按关联验收数倒排，只展示有验收关联的图纸包。'
-              : '按专业分组，优先看包级状态、应有项缺漏和当前有效版。'
+  const boardSubtitle = ''
 
   const openPackageDetail = useCallback(
     async (pkg: DrawingPackageCard) => {
@@ -884,7 +873,6 @@ export default function Drawings() {
       <PageHeader
         eyebrow="证照与验收"
         title="施工图纸"
-        subtitle="统一查看图纸包、台账、版本链、送审状态与任务联动，避免重复进入多个页面维护。"
       >
         <Button variant="ghost" size="sm" onClick={() => {
           if (filterStorageKey) {
@@ -996,11 +984,7 @@ export default function Drawings() {
               title={boardTitle}
               subtitle={boardSubtitle}
               emptyTitle={focusView === 'overview' ? '当前没有图纸包' : `${boardTitle}暂无数据`}
-              emptyDescription={
-                focusView === 'overview'
-                  ? '可以先新建图纸包，或把现有单图补录到对应包里。'
-                  : '请调整筛选条件，或返回概览查看全部图纸包。'
-              }
+              emptyDescription=""
             />
 
             <DrawingLedger
@@ -1066,9 +1050,7 @@ export default function Drawings() {
         <DialogContent className="max-w-2xl border-slate-200">
           <DialogHeader>
             <DialogTitle className="text-slate-900">新建图纸包</DialogTitle>
-            <DialogDescription className="text-slate-500">
-              按模板快速生成图纸包、应有项和默认审图规则，后续再补齐包号与版本台账。
-            </DialogDescription>
+            <DialogDescription className="sr-only">新建图纸包</DialogDescription>
           </DialogHeader>
 
           <div className="grid gap-4 py-2">

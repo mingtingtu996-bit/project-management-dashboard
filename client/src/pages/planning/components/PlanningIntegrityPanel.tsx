@@ -25,11 +25,8 @@ export function PlanningIntegrityPanel({
   onGoProcess,
 }: PlanningIntegrityPanelProps) {
   const statusLabel = status === 'loading' ? '同步中' : status === 'error' ? '暂不可用' : '已完成'
-  const body = status === 'loading'
-    ? '正在汇总完整性校核结果...'
-    : status === 'error'
-      ? errorMessage || '当前无法读取完整性校核结果。'
-      : detail
+  const errorBody = errorMessage || '完整性校核暂不可用'
+  void detail
 
   return (
     <Card data-testid="planning-integrity-panel" className="border-slate-200 shadow-sm">
@@ -37,19 +34,16 @@ export function PlanningIntegrityPanel({
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <CardTitle className="text-base">完整性校核</CardTitle>
-            <p className="mt-1 text-sm text-slate-500">{body}</p>
           </div>
           <Badge variant={status === 'error' ? 'destructive' : 'outline'}>{statusLabel}</Badge>
         </div>
       </CardHeader>
       <CardContent className="space-y-3 p-4">
         {status === 'loading' ? (
-          <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-500">
-            正在等待后端完整性结果...
-          </div>
+          <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-4" />
         ) : status === 'error' ? (
           <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-4 text-sm text-rose-700">
-            {body}
+            {errorBody}
           </div>
         ) : (
           <div className="grid gap-2 sm:grid-cols-2">

@@ -219,9 +219,7 @@ export default function ProjectInfoCard({
           <div className="flex items-center justify-between gap-3">
             <div>
               <p className="text-xs font-medium uppercase tracking-wide text-slate-500">范围摘要</p>
-              <p className="text-sm font-medium text-slate-900">
-                {scopeLoading ? '范围维度加载中' : '建筑 / 专业 / 阶段 / 区域统一挂接'}
-              </p>
+              <p className="text-sm font-medium text-slate-900">{scopeLoading ? '加载中' : '已配置'}</p>
             </div>
             {onSaveScope && (
               <Button

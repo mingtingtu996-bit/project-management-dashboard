@@ -143,7 +143,7 @@ export function CertificateWorkItemDialog({
               value={formData.block_reason}
               onChange={(event) => setFormData((previous) => ({ ...previous, block_reason: event.target.value }))}
               className="min-h-20 rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
-              placeholder="说明阻塞来源"
+              placeholder="阻塞来源"
             />
           </label>
 
@@ -153,7 +153,7 @@ export function CertificateWorkItemDialog({
               value={formData.notes}
               onChange={(event) => setFormData((previous) => ({ ...previous, notes: event.target.value }))}
               className="min-h-20 rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
-              placeholder="跟进说明 / 备注"
+              placeholder="跟进备注"
             />
           </label>
 

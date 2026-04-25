@@ -42,7 +42,7 @@ const REASON_TREE: Array<{
   {
     branch: 'manual',
     label: '补录关闭原因',
-    description: '适用于需要补充说明的事项。',
+    description: '',
     leaves: ['资料已补齐', '线下确认完成', '等待补件'],
   },
   {
@@ -70,7 +70,6 @@ function ReasonCascader({
     <div data-testid="closeout-reason-cascader" className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4">
       <div className="space-y-1">
         <div className="text-sm font-medium text-slate-900">关闭原因级联</div>
-        <p className="text-xs leading-5 text-slate-500">{active.description}</p>
       </div>
 
       <div className="flex flex-wrap gap-2">
@@ -154,7 +153,6 @@ export function CloseoutDetailDrawer({
       <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
         <div className="space-y-1">
           <div className="text-sm font-semibold text-slate-900">处理抽屉</div>
-          <div className="text-xs text-slate-500">逐条处理与批量补录共用同一套草稿源。</div>
         </div>
         <Button type="button" variant="ghost" size="sm" onClick={onClose} className="gap-2">
           <X className="h-4 w-4" />
@@ -168,7 +166,6 @@ export function CloseoutDetailDrawer({
             <Lock className="mt-0.5 h-5 w-5 shrink-0" />
             <div className="space-y-1">
               <div className="font-medium">第 7 日强制发起关账已解锁</div>
-              <p>该入口只解除发起权限，不会自动替代逐条处理和原因补录。</p>
             </div>
           </div>
         ) : null}
@@ -181,7 +178,6 @@ export function CloseoutDetailDrawer({
             <Users2 className="mt-0.5 h-5 w-5 shrink-0" />
             <div className="space-y-1">
               <div className="font-medium">他人已先处理</div>
-              <p>这条事项已经被其他成员处理，请刷新后再做最终确认。</p>
             </div>
           </div>
         ) : null}
@@ -194,7 +190,6 @@ export function CloseoutDetailDrawer({
             <RefreshCw className="mt-0.5 h-5 w-5 shrink-0" />
             <div className="space-y-1">
               <div className="font-medium">清单已过期</div>
-              <p>当前清单与最新关账状态存在时间偏移，需要重新校核后再继续。</p>
             </div>
           </div>
         ) : null}
@@ -207,7 +202,6 @@ export function CloseoutDetailDrawer({
             <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
             <div className="space-y-1">
               <div className="font-medium">已进入超期升级态</div>
-              <p>该事项已超过建议处理窗口，请优先完成升级确认或留痕。</p>
             </div>
           </div>
         ) : null}
@@ -217,9 +211,7 @@ export function CloseoutDetailDrawer({
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0 space-y-1">
                 <div className="text-sm font-semibold text-slate-900">{item?.title ?? '请选择关账事项'}</div>
-                <p className="text-xs leading-5 text-slate-500">
-                  {item?.summary ?? '抽屉会展示逐条处理、批量补录和确认动作。'}
-                </p>
+                {item?.summary ? <p className="text-xs leading-5 text-slate-500">{item.summary}</p> : null}
               </div>
               <Badge variant="outline">{item?.systemSuggestion ?? '待选择'}</Badge>
             </div>
@@ -276,9 +268,6 @@ export function CloseoutDetailDrawer({
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="space-y-1">
                 <div className="text-sm font-semibold text-slate-900">批量关闭补录层</div>
-                <p className="text-xs text-slate-500">
-                  已选择 {selectedItems.length} 项，强制关账也不会跳过逐条处理和原因补录。
-                </p>
               </div>
               <Badge variant="secondary">补录中</Badge>
             </div>
@@ -295,9 +284,7 @@ export function CloseoutDetailDrawer({
                   </div>
                 ))
               ) : (
-                <div className="rounded-xl border border-white/80 bg-white px-3 py-2 text-sm text-slate-500">
-                  尚未选择条目，先在左侧清单勾选后再进行批量关闭。
-                </div>
+                <div className="rounded-xl border border-white/80 bg-white px-3 py-2" />
               )}
             </div>
 

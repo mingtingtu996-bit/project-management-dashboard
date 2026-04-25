@@ -29,7 +29,6 @@ export function BaselineRevisionActions({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="space-y-1">
           <div className="text-sm font-semibold text-slate-900">动作区</div>
-          <p className="text-xs text-slate-500">在这里决定纳入本次修订、暂缓处理，或带着上下文进入修订草稿。</p>
         </div>
         <div className="text-xs text-slate-500">
           当前候选：{activeCandidate?.title ?? '未选择'}
@@ -61,7 +60,6 @@ export function BaselineRevisionActions({
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
                 <div className="text-sm font-semibold text-slate-900">暂不处理原因</div>
-                <p className="text-xs text-slate-500">用于记录本次修订暂缓的原因，便于后续回看和继续处理。</p>
               </div>
               <Button type="button" variant="ghost" size="sm" onClick={() => onDeferredReasonChange('')} className="gap-2">
                 <X className="h-4 w-4" />

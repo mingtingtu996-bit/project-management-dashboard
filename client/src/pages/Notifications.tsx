@@ -13,6 +13,8 @@ import { Card, CardContent } from '@/components/ui/card'
 import { LoadingState } from '@/components/ui/loading-state'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useApi } from '@/hooks/useApi'
+import { useAuth } from '@/hooks/useAuth'
+import { useAuthDialog } from '@/hooks/useAuthDialog'
 import {
   useConnectionMode,
   useCurrentProject,
@@ -30,6 +32,7 @@ import { getCachedProjects } from '@/lib/projectPersistence'
 import { isRealtimeNotificationEvent } from '@/lib/realtime'
 import { PROJECT_NAVIGATION_LABELS, resolveNotificationTarget } from '@/config/navigation'
 import {
+  AlertCircle,
   AlertTriangle,
   ArrowRight,
   Bell,
@@ -409,6 +412,8 @@ function getNotificationStateLabel(notification: NormalizedNotification) {
 export default function Notifications() {
   const currentProject = useCurrentProject()
   const setCurrentProject = useSetCurrentProject()
+  const { isAuthenticated, loading: authLoading } = useAuth()
+  const { openLoginDialog } = useAuthDialog()
   const connectionMode = useConnectionMode()
   const realtimeConnectionState = useRealtimeConnectionState()
   const lastRealtimeEvent = useLastRealtimeEvent()
@@ -474,6 +479,15 @@ export default function Notifications() {
   }, [location.search, setCurrentProject])
 
   const loadNotifications = useCallback(async (options?: { silent?: boolean }) => {
+    if (authLoading || !isAuthenticated) {
+      setLoadError(null)
+      setSharedSliceStatus('notifications', { loading: false, error: null })
+      if (!options?.silent) {
+        setLoading(false)
+      }
+      return
+    }
+
     const silent = options?.silent === true
     try {
       if (!silent) {
@@ -518,14 +532,21 @@ export default function Notifications() {
         setLoading(false)
       }
     }
-  }, [api, currentProject?.id, projectIdFromQuery, scope, setNotifications, setSharedSliceStatus])
+  }, [api, authLoading, currentProject?.id, isAuthenticated, projectIdFromQuery, scope, setNotifications, setSharedSliceStatus])
 
   useEffect(() => {
+    if (authLoading) return
+    if (!isAuthenticated) {
+      setLoading(false)
+      setLoadError(null)
+      setSharedSliceStatus('notifications', { loading: false, error: null })
+      return
+    }
     void loadNotifications()
-  }, [loadNotifications])
+  }, [authLoading, isAuthenticated, loadNotifications, setSharedSliceStatus])
 
   useEffect(() => {
-    if (connectionMode !== 'polling') {
+    if (!isAuthenticated || connectionMode !== 'polling') {
       return
     }
 
@@ -534,10 +555,10 @@ export default function Notifications() {
     }, 30000)
 
     return () => window.clearInterval(interval)
-  }, [connectionMode, loadNotifications])
+  }, [connectionMode, isAuthenticated, loadNotifications])
 
   useEffect(() => {
-    if (connectionMode !== 'websocket') {
+    if (!isAuthenticated || connectionMode !== 'websocket') {
       return
     }
 
@@ -564,7 +585,7 @@ export default function Notifications() {
         realtimeRefreshTimeoutRef.current = null
       }
     }
-  }, [connectionMode, currentProject?.id, lastRealtimeEvent, loadNotifications, scope])
+  }, [connectionMode, currentProject?.id, isAuthenticated, lastRealtimeEvent, loadNotifications, scope])
 
   const patchNotifications = useCallback((ids: string[], patch: Partial<NormalizedNotification>) => {
     const idSet = new Set(ids)
@@ -769,22 +790,6 @@ export default function Notifications() {
   }, [groupedNotifications])
 
   const scopeLabel = scope === 'company' ? '\u516c\u53f8\u7ea7\u805a\u5408' : '\u5f53\u524d\u9879\u76ee\u805a\u7126'
-  const legacyScopeDescription =
-    scope === 'company'
-      ? '\u9ed8\u8ba4\u5c55\u793a\u5168\u516c\u53f8\u63d0\u9192\uff0c\u4fbf\u4e8e\u4ece\u516c\u53f8\u9a7e\u9a76\u8231\u8fdb\u5165\u540e\u7edf\u4e00\u5904\u7406\u3002'
-      : currentProject
-        ? `\u5f53\u524d\u53ea\u67e5\u770b\u9879\u76ee\u201c${currentProject.name}\u201d\u76f8\u5173\u63d0\u9192\u3002`
-        : '\u5f53\u524d\u9879\u76ee\u4e3a\u7a7a\uff0c\u5df2\u56de\u9000\u5230\u516c\u53f8\u7ea7\u805a\u5408\u3002'
-
-  const scopeDescription =
-    scope === 'company'
-      ? '\u9ed8\u8ba4\u4ece\u516c\u53f8\u7ea7\u805a\u5408\u98ce\u9669\u3001\u95ee\u9898\u3001\u9884\u8b66\u4e0e\u5173\u952e\u8ddf\u8fdb\u63d0\u9192\uff0c\u5148\u5224\u65ad\u4f18\u5148\u7ea7\uff0c\u518d\u8fdb\u5165\u9879\u76ee\u5904\u7406\u3002'
-      : currentProject
-        ? `\u5f53\u524d\u53ea\u67e5\u770b\u9879\u76ee\u201c${currentProject.name}\u201d\u76f8\u5173\u7684\u98ce\u9669\u3001\u95ee\u9898\u548c\u5173\u952e\u8ddf\u8fdb\u63d0\u9192\u3002`
-        : '\u5f53\u524d\u9879\u76ee\u4e3a\u7a7a\uff0c\u5df2\u56de\u9000\u5230\u516c\u53f8\u7ea7\u805a\u5408\u3002'
-
-  void legacyScopeDescription
-
   const currentTabCount = filteredNotifications.length
   const connectionLabel =
     connectionMode === 'polling'
@@ -814,11 +819,54 @@ export default function Notifications() {
           <CardContent className="pt-6">
             <LoadingState
               label="通知加载中"
-              description="正在同步风险、问题、预警与关键提醒"
               className="h-40 min-h-40 border-0 bg-transparent shadow-none"
             />
           </CardContent>
         </Card>
+      </div>
+    )
+  }
+
+  if (!authLoading && !isAuthenticated) {
+    const redirectTarget = `${location.pathname}${location.search}`
+
+    return (
+      <div className="page-enter space-y-6 p-6" data-testid="notifications-login-required">
+        <PageHeader
+          eyebrow={'公司级第二入口'}
+          title={PROJECT_NAVIGATION_LABELS.notifications}
+          subtitle=""
+        >
+          <Badge variant="secondary">登录后可用</Badge>
+        </PageHeader>
+
+        <Alert>
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>
+            <div className="flex flex-wrap gap-3">
+              <Button
+                type="button"
+                onClick={() => {
+                  try {
+                    window.sessionStorage.setItem('pending_auth_redirect', redirectTarget)
+                  } catch {
+                    // sessionStorage 不可用时静默跳过
+                  }
+                  openLoginDialog()
+                }}
+              >
+                登录后继续
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => navigate(`/company?login=1&redirect=${encodeURIComponent(redirectTarget)}`)}
+              >
+                前往登录入口
+              </Button>
+            </div>
+          </AlertDescription>
+        </Alert>
       </div>
     )
   }
@@ -828,7 +876,7 @@ export default function Notifications() {
       <PageHeader
         eyebrow={'\u516c\u53f8\u7ea7\u7b2c\u4e8c\u5165\u53e3'}
         title={PROJECT_NAVIGATION_LABELS.notifications}
-        subtitle={`${scopeDescription} ${'\u8fd9\u91cc\u96c6\u4e2d\u67e5\u770b\u98ce\u9669\u3001\u95ee\u9898\u3001\u9884\u8b66\u4e0e\u5173\u952e\u8ddf\u8fdb\uff0c\u518d\u8fdb\u5165\u9879\u76ee\u5904\u7406\u3002'}`}
+        subtitle=""
       >
         <Badge variant="secondary">{scopeLabel}</Badge>
         <Badge variant="secondary">
@@ -926,7 +974,6 @@ export default function Notifications() {
                       {'\u5f53\u524d\u9879\u76ee'}
                     </Button>
                   </div>
-                  <p className="mt-2 text-xs leading-5 text-slate-500">{scopeDescription}</p>
                 </div>
 
                 <div className="border-t border-slate-100 pt-4">
@@ -951,11 +998,6 @@ export default function Notifications() {
                       {'\u8f6e\u8be2\u6a21\u5f0f'}
                     </Button>
                   </div>
-                  <p className="mt-2 text-xs leading-5 text-slate-500">
-                    {connectionMode === 'websocket'
-                      ? `当前连接状态：${connectionLabel}。服务端事件会自动刷新提醒列表，断线后会自动重连。`
-                      : '轮询模式下每 30 秒自动刷新一次提醒列表，也可手动点击右上角刷新按钮。'}
-                  </p>
                 </div>
 
                 <div className="border-t border-slate-100 pt-4">
@@ -974,9 +1016,6 @@ export default function Notifications() {
                       </Button>
                     ))}
                   </div>
-                  <p className="mt-2 text-xs leading-5 text-slate-500">
-                    当前批量与单条提醒默认使用 {getMuteDurationActionLabel(muteDurationHours)}。
-                  </p>
                 </div>
 
               </div>
@@ -1002,7 +1041,6 @@ export default function Notifications() {
               </div>
             </div>
             <div className="text-3xl font-semibold tracking-tight text-slate-900">{allCount}</div>
-            <p className="text-xs text-slate-500">{'\u5f53\u524d\u52a0\u8f7d\u7684\u63d0\u9192\u4e0e\u901a\u77e5\u603b\u91cf'}</p>
           </CardContent>
         </Card>
 
@@ -1015,7 +1053,6 @@ export default function Notifications() {
               </div>
             </div>
             <div className="text-3xl font-semibold tracking-tight text-amber-600">{pendingCount}</div>
-            <p className="text-xs text-slate-500">{'\u9700\u8981\u4f18\u5148\u5904\u7406\u7684\u63d0\u9192'}</p>
           </CardContent>
         </Card>
 
@@ -1028,7 +1065,7 @@ export default function Notifications() {
               </div>
             </div>
             <div className="text-3xl font-semibold tracking-tight text-rose-600">{businessWarningCount}</div>
-            <p className="text-xs text-slate-500">{`\u805a\u5408\u98ce\u9669\u3001\u95ee\u9898\u4e0e\u4e1a\u52a1\u9884\u8b66\u63d0\u9192\uff0c\u7cfb\u7edf\u5f02\u5e38 ${systemExceptionCount} \u6761`}</p>
+            <p className="text-xs text-slate-500">系统异常 {systemExceptionCount} 条</p>
           </CardContent>
         </Card>
 
@@ -1042,9 +1079,7 @@ export default function Notifications() {
             </div>
             <div className="text-3xl font-semibold tracking-tight text-blue-600">{flowReminderCount}</div>
             <p className="text-xs text-slate-500">
-              {linkedProjectCount > 0
-                ? `${linkedProjectCount} \u6761\u53ef\u76f4\u63a5\u8fdb\u5165\u9879\u76ee\u6a21\u5757\u5904\u7406\uff0c${processedCount} \u6761\u5df2\u5904\u7406`
-                : '\u805a\u5408\u5ef6\u671f\u3001\u6761\u4ef6\u3001\u963b\u788d\u3001\u91cc\u7a0b\u7891\u548c\u8ba1\u5212\u7f16\u5236\u63d0\u9192'}
+              {linkedProjectCount > 0 ? `${linkedProjectCount} 条 · 已处理 ${processedCount}` : ''}
               {planningMappingCount > 0 ? ` | S2 mapping isolated ${planningMappingCount}` : ''}
             </p>
           </CardContent>
@@ -1133,7 +1168,6 @@ export default function Notifications() {
                             {group.mutedCount > 0 && <Badge variant="outline">{`静音 ${group.mutedCount}`}</Badge>}
                             {group.expiredMuteCount > 0 && <Badge variant="outline">{`静音到期 ${group.expiredMuteCount}`}</Badge>}
                           </div>
-                          <p className="text-sm leading-6 text-slate-600">按最高优先级置顶，同类提醒自动聚合。</p>
                         </div>
                       </div>
 
@@ -1195,7 +1229,6 @@ export default function Notifications() {
                                 <p className="text-sm leading-6 text-slate-600">{item.content}</p>
                                 {item.muteExpired ? (
                                   <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                                    静音已到期，提醒已自动恢复。
                                     {item.mutedUntil ? ` 到期时间：${format(new Date(item.mutedUntil), 'MM\\u6708dd\\u65e5 HH:mm', { locale: zhCN })}` : ''}
                                   </div>
                                 ) : null}
@@ -1257,7 +1290,6 @@ export default function Notifications() {
           {groupedNotifications.length > 0 && (
             <div className="flex items-center justify-between border-t border-slate-100 px-6 py-4 text-sm text-slate-500">
               <span>{`\u5171 ${currentTabCount} \u6761\u63d0\u9192`}</span>
-              <span>{'\u4ec5\u4fdd\u7559\u63d0\u9192\u5904\u7406\u76f8\u5173\u64cd\u4f5c\uff0c\u6570\u636e\u5de5\u5177\u5df2\u4e0b\u6c89\u5230\u5bf9\u5e94\u6a21\u5757\u3002'}</span>
             </div>
           )}
         </CardContent>
@@ -1278,7 +1310,7 @@ export default function Notifications() {
         }
         warning={
           deleteTarget
-            ? `来源模块：${deleteTarget.targetLabel}。这一步只删除提醒视图中的这条消息，请确认当前不再需要保留留痕入口。`
+            ? `来源模块：${deleteTarget.targetLabel}`
             : undefined
         }
         confirmLabel={deleteSubmitting ? '删除中...' : '确认删除'}

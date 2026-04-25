@@ -142,14 +142,7 @@ function StatCard({
   hint: string
   tone: 'slate' | 'green' | 'amber' | 'red' | 'blue' | 'orange'
 }) {
-  const toneMap = {
-    slate: 'border-slate-200 bg-slate-50 text-slate-900',
-    green: 'border-emerald-200 bg-emerald-50 text-emerald-700',
-    amber: 'border-amber-200 bg-amber-50 text-amber-700',
-    red: 'border-red-200 bg-red-50 text-red-700',
-    blue: 'border-blue-200 bg-blue-50 text-blue-700',
-    orange: 'border-orange-200 bg-orange-50 text-orange-700',
-  } as const
+  void hint
 
   const textColorMap = {
     slate: 'text-slate-900',
@@ -165,7 +158,6 @@ function StatCard({
       <CardContent className="space-y-2 p-5">
         <p className="text-sm font-medium text-slate-500">{title}</p>
         <div className={`text-3xl font-semibold ${textColorMap[tone]}`}>{value}</div>
-        <div className={`rounded-2xl border px-3 py-2 text-xs ${toneMap[tone]}`}>{hint}</div>
       </CardContent>
     </Card>
   )
@@ -375,7 +367,6 @@ export default function Milestones() {
     if (!summary || filteredMilestones.length === 0) {
       toast({
         title: '暂无可导出节点',
-        description: '请先调整筛选条件，确保当前列表中有里程碑节点。',
         variant: 'destructive',
       })
       return
@@ -411,7 +402,7 @@ export default function Milestones() {
       'parent_id',
       'mapping_pending',
       'merged_into',
-      '说明',
+      '备注',
     ]
 
     const csv = [header, ...rows]
@@ -449,7 +440,7 @@ export default function Milestones() {
         <PageHeader
           eyebrow="关键节点偏差与兑现"
           title="关键节点偏差与兑现页"
-          subtitle="三时间表达、节点偏差详情和任务管理入口在这里集中查看。"
+          subtitle=""
         >
           <Button variant="outline" size="sm" onClick={() => navigate(`/projects/${id}/dashboard`)}>
             <ArrowLeft className="mr-2 h-4 w-4" />
@@ -496,7 +487,7 @@ export default function Milestones() {
         <PageHeader
           eyebrow="关键节点偏差与兑现"
           title="关键节点偏差与兑现页"
-          subtitle="三时间表达、节点偏差详情和任务管理入口在这里集中查看。"
+          subtitle=""
         >
           <Button variant="outline" size="sm" onClick={() => navigate(`/projects/${id}/dashboard`)}>
             <ArrowLeft className="mr-2 h-4 w-4" />
@@ -574,7 +565,6 @@ export default function Milestones() {
                     <EmptyState
                       icon={Flag}
                       title="暂无匹配的节点"
-                      description="可以尝试清空搜索词、切换筛选状态，或直接进入任务管理查看完整链路。"
                       action={<Button variant="outline" size="sm" onClick={() => { setSearch(''); setFilter('all') }}>重置筛选</Button>}
                       className="max-w-none py-8"
                     />
@@ -662,7 +652,7 @@ export default function Milestones() {
                             title="异常与对应关系"
                             rows={[
                               { label: '对应关系', value: anomalyLabel },
-                              { label: '节点说明', value: selectedMilestone.description || '暂无补充说明' },
+                              { label: '节点备注', value: selectedMilestone.description || '暂无备注' },
                               {
                                 label: '最近更新',
                                 value: selectedMilestone.updatedAt ? formatMilestoneDate(selectedMilestone.updatedAt) : '待补充',

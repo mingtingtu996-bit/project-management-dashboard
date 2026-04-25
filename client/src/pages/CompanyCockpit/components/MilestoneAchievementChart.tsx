@@ -168,9 +168,6 @@ export function MilestoneAchievementChart({ projects }: { projects: MilestoneCha
     return (
       <div className="flex h-64 flex-col items-center justify-center rounded-[24px] border border-dashed border-slate-200 bg-slate-50 px-6 text-center">
         <div className="text-base font-semibold text-slate-900">暂无里程碑趋势</div>
-        <p className="mt-2 max-w-md text-sm leading-6 text-slate-500">
-          当前项目还没有可汇总的里程碑达成或偏移信号，识别出关键节点后，这里会展示跨项目的达成率与偏移对比。
-        </p>
       </div>
     )
   }

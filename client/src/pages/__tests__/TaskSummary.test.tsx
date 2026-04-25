@@ -84,16 +84,6 @@ describe('TaskSummary page contract', () => {
         })
       }
 
-      if (url === `/api/task-summaries/projects/${projectId}/task-summary/assignees`) {
-        return jsonResponse({
-          success: true,
-          data: [
-            { assignee: '张三', total: 4, on_time: 3, delayed: 1, on_time_rate: 75 },
-            { assignee: '李四', total: 2, on_time: 2, delayed: 0, on_time_rate: 100 },
-          ],
-        })
-      }
-
       if (url.includes(`/api/task-summaries/projects/${projectId}/daily-progress?date=`)) {
         return jsonResponse({
           success: true,
@@ -118,7 +108,7 @@ describe('TaskSummary page contract', () => {
     vi.unstubAllGlobals()
   })
 
-  it('renders results summary, assignee analysis, and compare analysis in-page', async () => {
+  it('renders results summary and compare analysis in-page', async () => {
     act(() => {
       root?.render(
         <MemoryRouter initialEntries={[`/projects/${projectId}/task-summary`]}>
@@ -132,19 +122,11 @@ describe('TaskSummary page contract', () => {
     await waitForSelector(container, '[data-testid="task-summary-page"]')
     await waitForSelector(container, '[data-testid="task-summary-header-actions"]')
     await waitForSelector(container, '[data-testid="task-summary-results-section"]')
-    await waitForSelector(container, '[data-testid="task-summary-assignees-section"]')
     await waitForSelector(container, '[data-testid="task-summary-compare-section"]')
     await waitForSelector(container, '[data-testid="task-summary-export"]')
-    await waitForSelector(container, '[data-testid="task-summary-assignee-filter"]')
 
     expect(fetchMock).toHaveBeenCalledWith(
       `/api/task-summaries/projects/${projectId}/task-summary`,
-      expect.objectContaining({
-        signal: expect.any(AbortSignal),
-      }),
-    )
-    expect(fetchMock).toHaveBeenCalledWith(
-      `/api/task-summaries/projects/${projectId}/task-summary/assignees`,
       expect.objectContaining({
         signal: expect.any(AbortSignal),
       }),
@@ -155,8 +137,6 @@ describe('TaskSummary page contract', () => {
       ),
     ).toBe(true)
     expect(container.textContent).toContain('结果摘要')
-    expect(container.textContent).toContain('任务执行分析')
     expect(container.textContent).toContain('任务执行与对比分析')
-    expect(container.textContent).toContain('张三')
   })
 })

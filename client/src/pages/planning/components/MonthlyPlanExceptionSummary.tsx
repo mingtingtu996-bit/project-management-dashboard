@@ -72,9 +72,6 @@ export function MonthlyPlanExceptionSummary({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="space-y-2">
           <div className="text-sm font-medium text-slate-900">条件 / 阻碍 / 延期摘要</div>
-          <p className="text-sm leading-6 text-slate-600">
-            当前按月计划真实作用域汇总条件、阻碍和延期信号，并给出返回任务链或异常链路的处理入口。
-          </p>
         </div>
         <Badge variant={canQuickConfirm ? 'secondary' : 'outline'} className="text-xs">
           {canQuickConfirm ? '快速确认可用' : '建议走标准路径'}
@@ -103,9 +100,9 @@ export function MonthlyPlanExceptionSummary({
 
                 <div className="rounded-xl border border-white/80 bg-white/70 px-3 py-2">
                   <div className="text-xs font-medium text-slate-700">{topIssue ? topIssue.title : card.emptyLabel}</div>
-                  <p className="mt-1 text-xs leading-5 text-slate-500">
-                    {topIssue?.detail ?? '确认前会自动带入标准复核链路，不会在这里静默跳过。'}
-                  </p>
+                  {topIssue?.detail ? (
+                    <p className="mt-1 text-xs leading-5 text-slate-500">{topIssue.detail}</p>
+                  ) : null}
                 </div>
 
                 <Button

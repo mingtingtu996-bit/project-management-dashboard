@@ -24,11 +24,12 @@ function MetricCard({
   hint: string
   tone: string
 }) {
+  void hint
+
   return (
     <div className={`rounded-2xl border px-4 py-4 ${tone}`}>
       <div className="text-xs font-medium uppercase tracking-[0.18em] opacity-70">{label}</div>
       <div className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">{value}</div>
-      <p className="mt-2 text-xs leading-5 text-slate-600">{hint}</p>
     </div>
   )
 }
@@ -69,9 +70,6 @@ export function TaskSummaryResultsSection({ stats }: TaskSummaryResultsSectionPr
         <div>
           <div className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">结果摘要区</div>
           <h2 className="mt-2 text-[26px] font-semibold tracking-tight text-slate-900">结果摘要</h2>
-          <p className="mt-2 text-sm leading-6 text-slate-500">
-            这里仅展示任务总结的结果摘要；月度趋势已经迁移到 Dashboard 统一展示。
-          </p>
         </div>
         <Badge variant="secondary">已收口</Badge>
       </div>
@@ -86,9 +84,6 @@ export function TaskSummaryResultsSection({ stats }: TaskSummaryResultsSectionPr
         <Card className="border-slate-200 shadow-sm">
           <CardContent className="flex flex-col items-center justify-center gap-2 py-10 text-center">
             <div className="text-sm font-medium text-slate-900">暂无结果摘要数据</div>
-            <p className="text-sm text-slate-500">
-              页面会保留这块摘要区域，等待真实任务总结结果接入。
-            </p>
           </CardContent>
         </Card>
       )}

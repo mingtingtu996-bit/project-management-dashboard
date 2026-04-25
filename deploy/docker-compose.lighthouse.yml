@@ -4,6 +4,7 @@ services:
       context: ../server
       dockerfile: Dockerfile
     container_name: project-management-api
+    network_mode: host
     restart: unless-stopped
     env_file:
       - ./env/server.production.env
@@ -11,10 +12,10 @@ services:
       NODE_ENV: production
       HOST: 0.0.0.0
       PORT: 3001
+      LOG_DIR: /app/logs
+      LOG_FILE_PATH: /app/logs/server.log
     volumes:
       - ./data/logs:/app/logs
-    expose:
-      - "3001"
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:3001/api/health || exit 1"]
       interval: 30s
@@ -36,7 +37,9 @@ services:
     depends_on:
       api:
         condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
-      - "80:80"
+      - "${WEB_PORT:-80}:80"
     volumes:
       - ./nginx/lighthouse.conf:/etc/nginx/conf.d/default.conf:ro

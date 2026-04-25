@@ -143,9 +143,6 @@ export function RiskBubbleMatrix({ risks, issues, projectRows }: RiskBubbleMatri
             </span>
           )}
         </CardTitle>
-        <p className="text-xs leading-5 text-slate-500">
-          数据源对齐统一风险底座，合并风险、问题、前置条件和阻碍，便于在公司层快速识别高密度异常来源。
-        </p>
       </CardHeader>
       <CardContent className="pt-0">
         <div className="mb-4 flex items-center justify-center gap-3 text-xs">

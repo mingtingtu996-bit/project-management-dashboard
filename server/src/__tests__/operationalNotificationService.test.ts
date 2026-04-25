@@ -221,4 +221,62 @@ describe('operational notification service', () => {
       'milestone_needs_attention',
     ]))
   })
+
+  it('reuses project recipients within a single project sync', async () => {
+    state.executeSQL.mockImplementation(async (query: string) => {
+      if (query.includes('FROM tasks WHERE project_id = ?')) {
+        return [
+          {
+            id: 'task-1',
+            project_id: 'project-1',
+            title: '主体结构',
+            status: 'completed',
+            progress: 80,
+          },
+          {
+            id: 'task-2',
+            project_id: 'project-1',
+            title: '机电安装',
+            status: 'pending',
+            progress: 20,
+          },
+        ]
+      }
+
+      if (query.includes('FROM project_members WHERE project_id = ?')) {
+        return [
+          {
+            project_id: 'project-1',
+            user_id: 'owner-1',
+            role: 'owner',
+            permission_level: 'owner',
+          },
+        ]
+      }
+
+      return []
+    })
+    state.executeSQLOne.mockImplementation(async (query: string) => {
+      if (query.includes('FROM projects WHERE id = ?')) {
+        return {
+          id: 'project-1',
+          owner_id: 'owner-1',
+        }
+      }
+
+      return null
+    })
+    state.listNotifications.mockResolvedValue([])
+
+    const notifications = await new OperationalNotificationService().syncProjectNotifications('project-1')
+
+    expect(notifications).toHaveLength(2)
+    expect(state.insertNotification).toHaveBeenCalledTimes(2)
+    expect(
+      state.executeSQL.mock.calls.filter(([query]) => String(query).includes('FROM project_members WHERE project_id = ?')),
+    ).toHaveLength(1)
+    expect(
+      state.executeSQLOne.mock.calls.filter(([query]) => String(query).includes('FROM projects WHERE id = ?')),
+    ).toHaveLength(1)
+  })
 })

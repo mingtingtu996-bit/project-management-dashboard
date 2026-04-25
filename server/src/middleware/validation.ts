@@ -304,19 +304,6 @@ export const issueUpdateSchema = issueSchema.partial().extend({
   version: z.number().int().positive(),
 })
 
-export const milestoneSchema = z.object({
-  project_id: uuidSchema,
-  title: z.string().min(1).max(200),
-  description: z.string().optional(),
-  target_date: z.string().min(1),
-  status: z.enum(['pending', 'in_progress', 'completed', 'overdue']).default('pending'),
-  completion_rate: z.number().min(0).max(100).default(0),
-})
-
-export const milestoneUpdateSchema = milestoneSchema.partial().extend({
-  version: z.number().int().positive(),
-})
-
 export const memberSchema = z.object({
   project_id: uuidSchema,
   user_id: uuidSchema,

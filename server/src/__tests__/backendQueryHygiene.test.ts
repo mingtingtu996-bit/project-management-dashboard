@@ -11,7 +11,6 @@ const selectStarProtectedFiles = [
   ['src', 'services', 'acceptanceFlowService.ts'],
   ['src', 'routes', 'pre-milestones.ts'],
   ['src', 'routes', 'acceptance-plans.ts'],
-  ['src', 'routes', 'acceptance-nodes.ts'],
   ['src', 'routes', 'construction-drawings.ts'],
   ['src', 'routes', 'drawing-packages.ts'],
   ['src', 'routes', 'wbs-templates.ts'],

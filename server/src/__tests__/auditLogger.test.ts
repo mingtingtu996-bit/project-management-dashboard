@@ -83,7 +83,9 @@ describe('auditLogger test-mode guards', () => {
 
     expect(next).toHaveBeenCalledOnce()
     expect(mocks.query).toHaveBeenCalled()
-    expect(mocks.query.mock.calls.some(([sql]) => String(sql).includes('CREATE TABLE IF NOT EXISTS public.operation_logs'))).toBe(true)
+    expect(mocks.query.mock.calls.some(([sql]) => String(sql).includes('CREATE TABLE IF NOT EXISTS public.operation_logs'))).toBe(false)
+    expect(mocks.query.mock.calls.some(([sql]) => String(sql).includes('ALTER TABLE IF EXISTS public.operation_logs'))).toBe(false)
+    expect(mocks.query.mock.calls.some(([sql]) => String(sql).includes('CREATE INDEX IF NOT EXISTS idx_operation_logs'))).toBe(false)
     expect(mocks.query.mock.calls.some(([sql]) => String(sql).includes('INSERT INTO public.operation_logs'))).toBe(true)
   })
 

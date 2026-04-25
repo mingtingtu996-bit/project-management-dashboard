@@ -42,18 +42,6 @@ const state = vi.hoisted(() => {
     updated_at: '2026-04-15T00:00:00.000Z',
   }
 
-  const acceptanceNode = {
-    id: nodeId,
-    acceptance_plan_id: planId,
-    node_name: 'main-structure-node',
-    status: 'in_acceptance',
-    actual_date: null,
-    accepted_by: null,
-    accepted_at: null,
-    created_at: '2026-04-15T00:00:00.000Z',
-    updated_at: '2026-04-15T00:00:00.000Z',
-  }
-
   const oldTask = {
     id: taskId,
     project_id: projectId,
@@ -124,23 +112,6 @@ const state = vi.hoisted(() => {
       return { ...acceptancePlan }
     }
 
-    if (normalized.includes('from acceptance_nodes where id = ? limit 1')) {
-      return { ...acceptanceNode }
-    }
-
-    if (normalized === 'select status, actual_date, accepted_by, accepted_at from acceptance_nodes where id = ? limit 1') {
-      return {
-        status: acceptanceNode.status,
-        actual_date: acceptanceNode.actual_date,
-        accepted_by: acceptanceNode.accepted_by,
-        accepted_at: acceptanceNode.accepted_at,
-      }
-    }
-
-    if (normalized === 'select acceptance_plan_id from acceptance_nodes where id = ? limit 1') {
-      return { acceptance_plan_id: planId }
-    }
-
     if (normalized === 'select * from task_obstacles where id = ? limit 1') {
       return params[0] === obstacleId ? { ...obstacle } : null
     }
@@ -187,21 +158,6 @@ const state = vi.hoisted(() => {
         ;(acceptancePlan as Record<string, unknown>)[field] = params[index] as never
       })
       return []
-    }
-
-    if (normalized.startsWith('update acceptance_nodes set ') && normalized.endsWith(' where id = ?')) {
-      const clauseList = normalized
-        .slice('update acceptance_nodes set '.length, -' where id = ?'.length)
-        .split(', ')
-        .map((item) => item.replace(' = ?', ''))
-      clauseList.forEach((field, index) => {
-        ;(acceptanceNode as Record<string, unknown>)[field] = params[index] as never
-      })
-      return []
-    }
-
-    if (normalized === 'select status from acceptance_nodes where acceptance_plan_id = ?') {
-      return [{ status: acceptanceNode.status }]
     }
 
     if (normalized === 'select id from tasks where preceding_task_id = ?') {
@@ -312,11 +268,6 @@ const state = vi.hoisted(() => {
     acceptancePlan.status = 'submitted'
     acceptancePlan.actual_date = null
     acceptancePlan.updated_at = '2026-04-15T00:00:00.000Z'
-    acceptanceNode.status = 'in_acceptance'
-    acceptanceNode.actual_date = null
-    acceptanceNode.accepted_by = null
-    acceptanceNode.accepted_at = null
-    acceptanceNode.updated_at = '2026-04-15T00:00:00.000Z'
     obstacle.status = '待处理'
     obstacle.resolution = null
     obstacle.resolved_by = null
@@ -339,7 +290,6 @@ const state = vi.hoisted(() => {
     ids: { projectId, drawingId, taskId, dependentTaskId, conditionId, planId, nodeId, obstacleId },
     drawing,
     acceptancePlan,
-    acceptanceNode,
     obstacle,
     persistNotification,
     closeDelaySourceRisksForCompletedTask,
@@ -450,7 +400,6 @@ vi.mock('../routes/drawing-review-rules.js', () => ({
 
 const { default: constructionDrawingsRouter } = await import('../routes/construction-drawings.js')
 const { default: acceptancePlansRouter } = await import('../routes/acceptance-plans.js')
-const { default: acceptanceNodesRouter } = await import('../routes/acceptance-nodes.js')
 const { default: tasksRouter } = await import('../routes/tasks.js')
 
 function buildApp() {
@@ -458,7 +407,6 @@ function buildApp() {
   app.use(express.json())
   app.use('/api/projects/:projectId/construction-drawings', constructionDrawingsRouter)
   app.use('/api/acceptance-plans', acceptancePlansRouter)
-  app.use('/api/acceptance-nodes', acceptanceNodesRouter)
   app.use('/api/tasks', tasksRouter)
   app.use((error: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     res.status(500).json({ success: false, error: { message: error?.message ?? 'unknown error' } })
@@ -535,23 +483,6 @@ describe('workflow notification triggers', () => {
         status: 'completed',
         progress: 100,
         actual_end_date: '2026-04-16',
-      }),
-    )
-  })
-
-  it('syncs the linked task when acceptance nodes auto-complete the plan', async () => {
-    const request = supertest(buildApp())
-
-    const response = await request
-      .put(`/api/acceptance-nodes/${state.ids.nodeId}`)
-      .send({ status: 'passed', user_id: 'user-1' })
-
-    expect(response.status).toBe(200)
-    expect(state.updateTask).toHaveBeenCalledWith(
-      state.ids.taskId,
-      expect.objectContaining({
-        status: 'completed',
-        progress: 100,
       }),
     )
   })

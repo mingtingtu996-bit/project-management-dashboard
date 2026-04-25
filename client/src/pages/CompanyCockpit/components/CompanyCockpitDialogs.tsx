@@ -49,11 +49,7 @@ export function CompanyCockpitDialogs({
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{isEditMode ? '编辑项目' : '新建项目'}</DialogTitle>
-            <DialogDescription>
-              {isEditMode
-                ? '更新项目名称、当前状态和补充说明，保存后会同步刷新公司驾驶舱。'
-                : '填写项目名称、当前状态和补充说明，创建后会自动同步到公司驾驶舱。'}
-            </DialogDescription>
+            <DialogDescription className="sr-only">{isEditMode ? '编辑项目' : '新建项目'}</DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4">

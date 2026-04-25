@@ -70,9 +70,6 @@ export function DrawingDetailDrawer({
                 <DialogTitle className="text-xl text-slate-900">
                   {packageCard?.packageName ?? '图纸包详情'}
                 </DialogTitle>
-                <DialogDescription className="mt-2 text-sm text-slate-500">
-                  这里集中查看图纸包、应有项、版本记录、任务联动、验收前置以及自动识别信号。
-                </DialogDescription>
               </div>
               {packageCard && (
                 <Badge variant="secondary" className="rounded-full px-3 py-1 text-xs">
@@ -89,9 +86,7 @@ export function DrawingDetailDrawer({
           </DialogHeader>
 
           {!detail ? (
-            <div className="flex flex-1 items-center justify-center p-8 text-sm text-slate-500">
-              请选择一个图纸包查看详情。
-            </div>
+            <div className="flex flex-1 items-center justify-center p-8" />
           ) : (
             <div className="flex-1 overflow-y-auto px-6 py-5">
               <div className="grid gap-4 lg:grid-cols-[1.25fr_0.75fr]">
@@ -126,19 +121,6 @@ export function DrawingDetailDrawer({
                       )}
                     </div>
 
-                    <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-                      <div className="flex items-center gap-2 text-sm font-medium text-slate-900">
-                        <TriangleAlert className="h-4 w-4 text-amber-500" />
-                        处理建议
-                      </div>
-                      <p className="mt-2 text-sm leading-6 text-slate-600">
-                        {packageCard?.missingRequiredCount
-                          ? '先补齐应有项，再判断当前有效版本是否具备施工条件。'
-                          : packageCard?.requiresReview
-                            ? '当前图纸包仍需遵循送审规则，建议优先关注审图状态。'
-                            : '当前图纸包已具备基础施工可用条件，可以继续推进版本维护和台账联动。'}
-                      </p>
-                    </div>
                   </CardContent>
                 </Card>
 

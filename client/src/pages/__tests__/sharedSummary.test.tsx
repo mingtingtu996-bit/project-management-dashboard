@@ -156,6 +156,22 @@ describe('shared summary dashboards', () => {
         ] as never
       }
 
+      if (url === '/api/projects/project-1/weekly-digest/latest') {
+        return null as never
+      }
+
+      if (url === '/api/task-summaries/projects/project-1/task-summary/trend') {
+        return [] as never
+      }
+
+      if (url === '/api/task-summaries/projects/project-1/task-summary?limit=1') {
+        return null as never
+      }
+
+      if (url.startsWith('/api/task-summaries/projects/project-1/daily-progress?date=')) {
+        return null as never
+      }
+
       throw new Error(`Unexpected url: ${url}`)
     })
     syncProjectCacheFromApiSpy.mockResolvedValue([

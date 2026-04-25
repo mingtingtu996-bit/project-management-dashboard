@@ -12,6 +12,8 @@ interface EmptyStateProps {
 }
 
 export function EmptyState({ icon: Icon, title, description, action, className }: EmptyStateProps) {
+  void description
+
   return (
     <div
       className={cn(
@@ -26,8 +28,6 @@ export function EmptyState({ icon: Icon, title, description, action, className }
       )}
 
       <h2 className="text-lg font-semibold text-slate-900 sm:text-xl">{title}</h2>
-
-      {description && <p className="mt-2 max-w-md text-sm leading-6 text-slate-500">{description}</p>}
 
       {action && <div className="mt-7 flex flex-wrap items-center justify-center gap-3">{action}</div>}
     </div>

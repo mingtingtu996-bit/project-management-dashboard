@@ -142,7 +142,6 @@ export function ApplyModal({
                 </div>
                 <div>
                   <p className="text-sm font-medium text-gray-800">追加</p>
-                  <p className="text-xs text-gray-500 mt-0.5">新任务追加到现有任务末尾，不影响已有数据</p>
                 </div>
               </label>
               <label
@@ -154,7 +153,6 @@ export function ApplyModal({
                 </div>
                 <div>
                   <p className="text-sm font-medium text-gray-800">覆盖</p>
-                  <p className="text-xs text-gray-500 mt-0.5">先删除项目全部现有任务，再应用模板</p>
                 </div>
               </label>
             </div>
@@ -194,7 +192,6 @@ export function ApplyModal({
             {loading ? (
               <LoadingState
                 label="目标项目加载中"
-                description="正在读取可应用模板的项目列表"
                 className="min-h-28"
               />
             ) : projects.length === 0 ? (

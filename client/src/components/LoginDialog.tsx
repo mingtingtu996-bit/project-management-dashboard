@@ -21,7 +21,6 @@ export function LoginDialog({ isOpen, onClose }: LoginDialogProps) {
   const [loading, setLoading] = useState(false)
   const { login, register } = useAuth()
   const titleId = useId()
-  const descriptionId = useId()
   const dialogRef = useRef<HTMLDivElement | null>(null)
   const usernameInputRef = useRef<HTMLInputElement | null>(null)
 
@@ -138,7 +137,6 @@ export function LoginDialog({ isOpen, onClose }: LoginDialogProps) {
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        aria-describedby={descriptionId}
         ref={dialogRef}
         tabIndex={-1}
         data-testid="login-dialog"
@@ -151,9 +149,6 @@ export function LoginDialog({ isOpen, onClose }: LoginDialogProps) {
             <h2 id={titleId} className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">
               {mode === 'login' ? '登录账号' : '注册账号'}
             </h2>
-            <p id={descriptionId} className="mt-2 text-sm leading-6 text-slate-500">
-              {mode === 'login' ? '登录后即可按公司级和项目级角色获取对应权限。' : '首个注册用户将自动成为公司管理员。'}
-            </p>
           </div>
           <button onClick={onClose} className="rounded-full p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700" aria-label="关闭登录弹窗">
             ×
@@ -202,12 +197,6 @@ export function LoginDialog({ isOpen, onClose }: LoginDialogProps) {
             {mode === 'login' ? '登录' : '注册'}
           </Button>
         </form>
-
-        {mode === 'login' ? (
-          <p className="mt-4 rounded-2xl bg-slate-50 px-4 py-3 text-xs leading-6 text-slate-500">
-            忘记密码？请联系公司管理员为你重置密码并获取临时密码。
-          </p>
-        ) : null}
 
         <div className="mt-5 text-center text-sm text-slate-600">
           {mode === 'login' ? '还没有账号？' : '已经有账号？'}{' '}

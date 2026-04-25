@@ -63,7 +63,6 @@ describe('§7.3 protected business routes require authenticate', () => {
     'routes/projects.ts',
     'routes/tasks.ts',
     'routes/risks.ts',
-    'routes/milestones.ts',
     'routes/members.ts',
     'routes/delay-requests.ts',
     'routes/dashboard.ts',

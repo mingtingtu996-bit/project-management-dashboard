@@ -46,9 +46,6 @@ export function BaselineHeader({
                 </Badge>
               ) : null}
             </div>
-            <p className="text-sm leading-6 text-slate-600">
-              这里集中展示基线树编辑、锁状态、暂存状态和强制解锁入口，方便在确认冻结前统一完成校核。
-            </p>
           </div>
 
           <Button type="button" variant="outline" className="gap-2" onClick={onForceUnlock}>
@@ -74,9 +71,6 @@ export function BaselineHeader({
             <div className="flex items-center gap-2 text-xs">
               <AlertTriangle className="h-3.5 w-3.5" />
               提醒
-            </div>
-            <div className="mt-1 text-sm leading-6">
-              先完成基线树编辑和映射校核，再进入确认冻结，不要直接跳过版本差异复核。
             </div>
           </div>
         </div>

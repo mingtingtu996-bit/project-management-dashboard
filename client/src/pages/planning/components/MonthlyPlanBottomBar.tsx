@@ -29,9 +29,6 @@ export function MonthlyPlanBottomBar({
                 <Sparkles className="h-4 w-4 text-cyan-300" />
                 月度确认条
               </div>
-              <p className="text-xs leading-5 text-slate-300">
-                当前统一提供快速确认与标准确认两条路径，先完成复核，再决定走哪条确认链路。
-              </p>
             </div>
             <div className="rounded-full border border-slate-700 bg-slate-900 px-3 py-1 text-xs text-slate-200">
               草稿状态 {draftStatus}
@@ -44,9 +41,6 @@ export function MonthlyPlanBottomBar({
                 <ArrowRightCircle className="h-4 w-4" />
                 快速确认路径
               </div>
-              <p className="mt-2 text-xs leading-5 text-cyan-50/80">
-                {quickAvailable ? '当前条件满足，可直接进入快速确认弹窗。' : '当前条件不足，已保留标准确认路径。'}
-              </p>
               <Button
                 type="button"
                 size="sm"
@@ -65,9 +59,6 @@ export function MonthlyPlanBottomBar({
                 <BadgeInfo className="h-4 w-4 text-slate-300" />
                 标准路径
               </div>
-              <p className="mt-2 text-xs leading-5 text-slate-300">
-                标准确认会展示异常摘要、失败态与月末待处理前的复核步骤。
-              </p>
               <Button
                 type="button"
                 size="sm"

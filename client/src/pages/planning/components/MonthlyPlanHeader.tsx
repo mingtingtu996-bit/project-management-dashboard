@@ -42,9 +42,6 @@ export function MonthlyPlanHeader({
               <Badge variant="outline">月度计划工作台</Badge>
             </div>
             <h2 className="text-lg font-semibold text-slate-900">月度计划编制态</h2>
-            <p className="text-sm leading-6 text-slate-600">
-              当前集中展示月度计划草稿、条件、阻碍、延期摘要和确认入口，便于按统一流程推进当月完成情况。
-            </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
@@ -68,27 +65,18 @@ export function MonthlyPlanHeader({
             <div className="mt-1 text-sm font-semibold text-slate-900">
               {conditionCount > 0 ? `${conditionCount} 项待补齐` : '当前条件已满足'}
             </div>
-            <p className="mt-1 text-xs leading-5 text-slate-600">
-              未满足条件会阻断快速确认，需先回到任务链补齐或明确处理口径。
-            </p>
           </div>
           <div className="rounded-2xl border border-rose-100 bg-rose-50/70 p-3">
             <div className="text-xs font-medium text-rose-700">阻碍</div>
             <div className="mt-1 text-sm font-semibold text-slate-900">
               {obstacleCount > 0 ? `${obstacleCount} 项处理中` : '当前无活跃阻碍'}
             </div>
-            <p className="mt-1 text-xs leading-5 text-slate-600">
-              阻碍摘要会进入标准确认链路，并保留前往异常链路工作台的处理入口。
-            </p>
           </div>
           <div className="rounded-2xl border border-amber-100 bg-amber-50/70 p-3">
             <div className="text-xs font-medium text-amber-700">延期摘要</div>
             <div className="mt-1 text-sm font-semibold text-slate-900">
               {delayCount > 0 ? `${delayCount} 项出现延期信号` : '当前无延期信号'}
             </div>
-            <p className="mt-1 text-xs leading-5 text-slate-600">
-              延期摘要会和条件、阻碍一起进入确认前复核，并保留返回任务列表的入口。
-            </p>
           </div>
         </div>
       </CardContent>

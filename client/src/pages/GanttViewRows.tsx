@@ -249,7 +249,6 @@ export const GanttTaskRows = memo(function GanttTaskRows(props: GanttTaskRowsPro
           <EmptyState
             icon={Calendar}
             title="暂无任务"
-            description="当前计划还没有任务，先创建第一条任务再继续编排。"
             className="max-w-none rounded-none border-0 bg-transparent py-12 shadow-none"
             action={
               <Button onClick={() => props.onOpenEditDialog()}>
@@ -261,7 +260,6 @@ export const GanttTaskRows = memo(function GanttTaskRows(props: GanttTaskRowsPro
           <EmptyState
             icon={Search}
             title="没有匹配的任务"
-            description="当前筛选条件下没有找到任务，可以清空筛选后再试。"
             className="max-w-none rounded-none border-0 bg-transparent py-10 shadow-none"
             action={
               <Button variant="outline" onClick={props.onClearFilters}>

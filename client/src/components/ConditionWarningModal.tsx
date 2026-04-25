@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { AlertTriangle, Bell } from 'lucide-react'
 
 interface ConditionWarningModalProps {
@@ -50,26 +50,13 @@ export function ConditionWarningModal({
             </span>
             <span>提醒汇总</span>
           </DialogTitle>
-          <DialogDescription className="text-sm text-muted-foreground">
-            提醒入口已统一，这里只保留一个轻量提醒入口，不再单独拉取预警明细。
-          </DialogDescription>
         </DialogHeader>
 
         <div className="flex flex-col items-center justify-center gap-2 py-8">
           <AlertTriangle className="h-10 w-10 text-amber-400" />
-          <p className="text-sm font-medium text-slate-700">提醒已统一</p>
-          {taskTitle ? (
-            <p className="text-xs text-center text-muted-foreground">
-              任务“{taskTitle}”
-              {pendingConditionCount ? ` 仍有 ${pendingConditionCount} 项未满足开工条件，` : ' 仍有未满足开工条件，'}
-              本次首次进度填报已放行，请尽快前往“问题与风险”页继续处理。
-            </p>
-          ) : (
-            <p className="text-xs text-muted-foreground">
-              需要处理的事项请统一到“问题与风险”页查看。
-            </p>
-          )}
-          {projectId && <p className="text-xs text-muted-foreground">当前项目：{projectId}</p>}
+          <p className="text-sm font-medium text-slate-700">
+            {taskTitle || (pendingConditionCount ? `${pendingConditionCount} 项开工条件` : '提醒')}
+          </p>
         </div>
 
         <div className="flex items-center justify-end gap-2 pt-2">

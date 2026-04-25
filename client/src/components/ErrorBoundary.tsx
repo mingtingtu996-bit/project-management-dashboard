@@ -71,14 +71,6 @@ export class ErrorBoundary extends Component<Props, State> {
               <CardTitle className="text-xl">出现了一些问题</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              <p className="text-center text-muted-foreground">
-                应用程序遇到了一个意外错误。请尝试刷新页面或返回首页。
-              </p>
-              
-              <div className="rounded-md bg-muted p-3 text-sm text-slate-600">
-                当前页面已中断，我们已经记录了错误信息。请先刷新页面；如果问题持续出现，再联系管理员协助处理。
-              </div>
-              
               <div className="flex gap-2 justify-center pt-4">
                 <Button variant="outline" onClick={this.handleReset}>
                   <RefreshCw className="mr-2 h-4 w-4" />

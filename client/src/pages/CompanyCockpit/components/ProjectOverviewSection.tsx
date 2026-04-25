@@ -109,8 +109,7 @@ export function ProjectOverviewSection({
               <FolderKanban className="h-6 w-6 text-slate-500" />
             </div>
             <p className="mb-1 text-base font-semibold text-slate-900">暂无项目</p>
-            <p className="mb-5 text-sm text-slate-500">先创建一个项目，再从公司视角查看各项目推进状态。</p>
-            <Button onClick={onCreate} className="gap-2 rounded-2xl px-5">
+            <Button onClick={onCreate} className="mt-5 gap-2 rounded-2xl px-5">
               <Plus className="h-4 w-4" />
               创建项目
             </Button>

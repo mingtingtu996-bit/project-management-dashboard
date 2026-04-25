@@ -32,9 +32,6 @@ export function ExecutionScatterChart({
         <CardTitle className="text-base">{mainlineLabel} · 散点图</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm leading-6 text-slate-500">
-          散点图用于查看计划偏差与完成偏差的分布，帮助快速识别高风险任务点位。
-        </div>
         {points.length > 0 ? (
           <div className="relative h-72 overflow-hidden rounded-2xl border border-slate-100 bg-white">
             <div className="absolute left-1/2 top-0 h-full w-px -translate-x-1/2 bg-slate-300" />

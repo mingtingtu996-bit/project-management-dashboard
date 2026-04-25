@@ -15,6 +15,7 @@ out/
 .env.development.local
 .env.test.local
 .env.production.local
+deploy/env/server.production.env
 
 # IDE
 .idea/

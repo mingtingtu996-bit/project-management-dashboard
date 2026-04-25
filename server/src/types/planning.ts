@@ -51,25 +51,6 @@ export interface PlanningDraftLock {
   updated_at?: string | null
 }
 
-export interface MilestonePlanningReadModel {
-  id: string
-  project_id: string
-  name: string
-  title?: string | null
-  target_date: string | null
-  baseline_date: string | null
-  current_plan_date: string | null
-  actual_date: string | null
-  completed_at: string | null
-  status: string
-  completion_rate: number
-  timeline_source: {
-    baseline: 'baseline_date' | 'target_date' | 'none'
-    current_plan: 'current_plan_date' | 'baseline_date' | 'target_date' | 'none'
-    actual: 'actual_date' | 'completed_at' | 'none'
-  }
-}
-
 export interface PlanningTransitionContext {
   version?: number
   expected_version?: number

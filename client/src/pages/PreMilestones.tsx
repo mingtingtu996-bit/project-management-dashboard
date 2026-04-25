@@ -456,7 +456,6 @@ export default function PreMilestones() {
       <PageHeader
         eyebrow="证照与验收"
         title="前期证照"
-        subtitle="汇总四证完成度、当前阻塞和办理台账，统一从这里推进开工前证照准备。"
       />
 
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -537,7 +536,6 @@ export default function PreMilestones() {
         <EmptyState
           icon={ArrowRight}
           title="请选择项目"
-          description="先选择一个项目，我们就能查看四证总览、看板和办理台账。"
           action={null}
         />
       ) : (
@@ -576,7 +574,6 @@ export default function PreMilestones() {
                     : '当前卡点：待选择'}
                 </p>
               </div>
-              <div className="text-xs text-slate-500">总览摘要，四证完成数，阻塞证照，预计具备开工条件日期，逾期数，待补正压力，本周推进事项数</div>
             </div>
 
             <CertificateSharedRibbon

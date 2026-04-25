@@ -464,31 +464,21 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
 
   if (!isDesktop) {
     return (
-      <div
-        data-testid="gantt-timeline-mobile-fallback"
-        className="rounded-2xl border border-amber-200 bg-amber-50 px-5 py-6 text-sm text-amber-900"
-      >
-        横道图建议在桌面端查看。当前屏宽小于 1024px，已保留列表视图供移动端维护任务。
-      </div>
+      <div data-testid="gantt-timeline-mobile-fallback" className="rounded-2xl border border-amber-200 bg-amber-50 px-5 py-6" />
     )
   }
 
   if (rows.length > TIMELINE_LIMIT) {
     return (
-      <div
-        data-testid="gantt-timeline-too-many"
-        className="rounded-2xl border border-slate-200 bg-slate-50 px-5 py-6 text-sm text-slate-700"
-      >
-        当前筛选结果共 {rows.length} 条任务。为保证横道图性能，请先按楼栋、专业、责任单位或关键路径缩小到 500 条以内。
+      <div data-testid="gantt-timeline-too-many" className="rounded-2xl border border-slate-200 bg-slate-50 px-5 py-6 text-sm text-slate-700">
+        {rows.length} 条任务
       </div>
     )
   }
 
   if (rows.length === 0) {
     return (
-      <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-5 py-10 text-center text-sm text-slate-500">
-        当前筛选条件下没有可展示的任务。
-      </div>
+      <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-5 py-10" />
     )
   }
 
@@ -567,9 +557,7 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
       </div>
 
       {compareMode === 'baseline' && baselineOptions.length === 0 ? (
-        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-5 py-6 text-sm text-amber-900">
-          当前还没有已确认的项目基线版本。请先到“项目基线”确认版本后，再查看基线横道图对比。
-        </div>
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-5 py-6" />
       ) : (
         <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
           <div className="grid" style={{ gridTemplateColumns: `${leftPaneWidth}px minmax(0, 1fr)` }}>

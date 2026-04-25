@@ -48,9 +48,6 @@ export function PlanningDraftResumeDialog({
               : '当前检测到未收口的本地工作区状态。'}
           </AlertDialogDescription>
         </AlertDialogHeader>
-        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-600">
-          你可以继续沿用上次的草稿工作区，也可以放弃本地状态，从服务端当前版本重新开始。
-        </div>
         <AlertDialogFooter>
           <AlertDialogCancel onClick={onDiscard}>放弃本地状态</AlertDialogCancel>
           <AlertDialogAction onClick={onContinue}>继续编辑</AlertDialogAction>

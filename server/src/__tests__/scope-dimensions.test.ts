@@ -19,4 +19,15 @@ describe('scope dimensions contract', () => {
     expect(routeSource).toContain('router.delete(')
     expect(routeSource).toContain('region: normalizeLabels')
   })
+
+  it('seeds default dictionary rows without rewriting existing row ids', () => {
+    const routeSource = readServerFile('src', 'routes', 'scope-dimensions.ts')
+    const ensureDefaultSource = routeSource.slice(
+      routeSource.indexOf('async function ensureDefaultScopeRows()'),
+      routeSource.indexOf('async function loadScopeDictionary()'),
+    )
+
+    expect(ensureDefaultSource).toContain("onConflict: 'dimension_key,label', ignoreDuplicates: true")
+    expect(ensureDefaultSource).not.toContain('id: uuidv4()')
+  })
 })

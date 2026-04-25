@@ -501,9 +501,6 @@ export default function CompanyCockpit() {
           <Card data-testid="company-cockpit-access-denied" className="border border-amber-100 bg-amber-50/70 shadow-none">
             <CardContent className="space-y-3 p-8">
               <p className="text-lg font-semibold text-slate-900">公司驾驶舱仅公司管理员可见</p>
-              <p className="max-w-2xl text-sm leading-6 text-slate-600">
-                当前账号可继续在自己参与的项目中查看进度、风险和责任人信息；公司级汇总、跨项目指标和统一驾驶舱视图仅对公司管理员开放。
-              </p>
             </CardContent>
           </Card>
         </div>

@@ -63,9 +63,7 @@ export function BaselineRevisionPoolDialog({
               {sourceEntryLabel}
             </span>
           </div>
-          <DialogDescription>
-            在这里汇总待纳入本次修订的候选项、修订篮和暂缓说明，再带着上下文进入修订草稿。
-          </DialogDescription>
+          <DialogDescription className="sr-only">基线计划修订候选</DialogDescription>
         </DialogHeader>
 
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">

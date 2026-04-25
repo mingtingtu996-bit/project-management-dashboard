@@ -1,7 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { resolve, sep } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { buildMilestonePlanningReadModel } from '../routes/milestones.js'
 import {
   buildDraftLockNotificationRecipients,
   canForceUnlockDraftLock,
@@ -96,9 +95,9 @@ describe('planning domain contract', () => {
 
     expect(indexSource).toContain("import taskBaselinesRouter from './routes/task-baselines.js'")
     expect(indexSource).toContain("import monthlyPlansRouter from './routes/monthly-plans.js'")
+
     expect(indexSource).toContain("app.use('/api/task-baselines', taskBaselinesRouter)")
     expect(indexSource).toContain("app.use('/api/monthly-plans', monthlyPlansRouter)")
-    expect(indexSource).toContain("app.use('/api/milestones', milestonesRouter)")
 
     expect(schedulerSource).toContain('planningDraftLockTimeoutJob.start()')
     expect(schedulerSource).toContain('planningDraftLockTimeoutJob.stop()')
@@ -121,57 +120,6 @@ describe('planning domain contract', () => {
     expect(indexSource).toContain("app.use('/api/planning-governance', planningGovernanceRouter)")
     expect(lockServiceSource).toContain('recipients:')
     expect(lockServiceSource).toContain('releasedBy')
-  })
-
-  it('normalizes milestone three-time read model fields from either direct or fallback sources', () => {
-    const explicit = buildMilestonePlanningReadModel({
-      id: 'ms-1',
-      project_id: 'project-1',
-      title: '结构封顶',
-      target_date: '2026-04-08',
-      baseline_date: '2026-04-01',
-      current_plan_date: '2026-04-05',
-      actual_date: '2026-04-07',
-      completed_at: '2026-04-07T08:00:00.000Z',
-      status: 'completed',
-      completion_rate: 100,
-    })
-
-    expect(explicit).toMatchObject({
-      id: 'ms-1',
-      project_id: 'project-1',
-      name: '结构封顶',
-      baseline_date: '2026-04-01',
-      current_plan_date: '2026-04-05',
-      actual_date: '2026-04-07',
-    })
-    expect(explicit.timeline_source).toMatchObject({
-      baseline: 'baseline_date',
-      current_plan: 'current_plan_date',
-      actual: 'actual_date',
-    })
-
-    const fallback = buildMilestonePlanningReadModel({
-      id: 'ms-2',
-      project_id: 'project-1',
-      title: '竣工验收',
-      target_date: '2026-05-02',
-      completed_at: '2026-05-04T10:00:00.000Z',
-      status: 'completed',
-    })
-
-    expect(fallback).toMatchObject({
-      id: 'ms-2',
-      name: '竣工验收',
-      baseline_date: '2026-05-02',
-      current_plan_date: '2026-05-02',
-      actual_date: '2026-05-04',
-    })
-    expect(fallback.timeline_source).toMatchObject({
-      baseline: 'target_date',
-      current_plan: 'target_date',
-      actual: 'completed_at',
-    })
   })
 
   it('classifies planning draft locks with timeout, reminder and force-unlock rules', () => {

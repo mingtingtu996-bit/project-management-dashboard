@@ -31,6 +31,10 @@ type DnsLookupResult = {
 }
 
 type DnsLookupFn = (hostname: string, options: { family: 4 }) => Promise<DnsLookupResult>
+type RuntimeHostResolution = {
+  host: string
+  family?: 4
+}
 
 function isCanonicalMigrationFile(filename: string) {
   if (!MIGRATION_FILE_PATTERN.test(filename)) {
@@ -203,8 +207,16 @@ export async function resolveMigrationRuntimeConnectionConfig(
 
   if ('connectionString' in baseConfig) {
     const parsed = new URL(baseConfig.connectionString)
-    const resolved = await dnsLookup(parsed.hostname, { family: 4 })
-    parsed.hostname = resolved.address
+    const resolved = await resolveRuntimeHost(parsed.hostname, dnsLookup)
+    parsed.hostname = resolved.host
+
+    if (!resolved.family) {
+      const { family: _family, ...configWithoutFamily } = baseConfig
+      return {
+        ...configWithoutFamily,
+        connectionString: parsed.toString(),
+      }
+    }
 
     return {
       ...baseConfig,
@@ -212,10 +224,34 @@ export async function resolveMigrationRuntimeConnectionConfig(
     }
   }
 
-  const resolved = await dnsLookup(baseConfig.host, { family: 4 })
+  const resolved = await resolveRuntimeHost(baseConfig.host, dnsLookup)
+  if (!resolved.family) {
+    const { family: _family, ...configWithoutFamily } = baseConfig
+    return {
+      ...configWithoutFamily,
+      host: resolved.host,
+    }
+  }
+
   return {
     ...baseConfig,
-    host: resolved.address,
+    host: resolved.host,
+  }
+}
+
+async function resolveRuntimeHost(
+  hostname: string,
+  dnsLookup: DnsLookupFn,
+): Promise<RuntimeHostResolution> {
+  try {
+    const resolved = await dnsLookup(hostname, { family: 4 })
+    return { host: resolved.address, family: 4 }
+  } catch (error) {
+    console.warn('Migration IPv4 host lookup failed, falling back to runtime DNS resolution', {
+      host: hostname,
+      error,
+    })
+    return { host: hostname }
   }
 }
 

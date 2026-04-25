@@ -10,7 +10,6 @@ import {
 } from '../utils'
 import { PreviewNodeTree } from './PreviewNodeTree'
 import {
-  IconClock,
   IconEdit,
   IconUpload,
   IconX,
@@ -163,7 +162,6 @@ export function PreviewModal({
                   )}
                   {selectedNode.description && (
                     <div>
-                      <p className="text-xs text-gray-400 mb-1">节点说明</p>
                       <p className="text-xs text-gray-600 leading-relaxed">{selectedNode.description}</p>
                     </div>
                   )}
@@ -195,11 +193,6 @@ export function PreviewModal({
                 <svg className="w-10 h-10 text-gray-200 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
                 </svg>
-                <p className="text-xs text-gray-400 leading-relaxed">
-                  点击左侧节点
-                  <br />
-                  查看详细信息
-                </p>
               </div>
             )}
           </div>
@@ -222,16 +215,6 @@ export function PreviewModal({
                     </span>
                   </div>
                 ))}
-              </div>
-            </div>
-
-            <div className="bg-amber-50 border border-amber-100 rounded-xl p-3">
-              <div className="flex items-start gap-2">
-                <IconClock className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
-                <div>
-                  <p className="text-xs font-medium text-amber-700">工期参考说明</p>
-                  <p className="text-xs text-amber-600 mt-1">工期参考值来源于历史项目平均值，应用后可根据实际情况调整。</p>
-                </div>
               </div>
             </div>
 

@@ -23,14 +23,27 @@ describe('runtime schema reconciliation', () => {
     expect(migration).toContain('CREATE TABLE IF NOT EXISTS public.operation_logs')
   })
 
+  it('keeps operation_logs DDL in migrations instead of audit request handling', () => {
+    const migration = readServerFile('migrations', '107_move_operation_logs_schema_to_migration.sql')
+    const auditLoggerSource = readServerFile('src', 'middleware', 'auditLogger.ts')
+
+    expect(migration).toContain('CREATE TABLE IF NOT EXISTS public.operation_logs')
+    expect(migration).toContain('ALTER TABLE IF EXISTS public.operation_logs')
+    expect(migration).toContain('idx_operation_logs_project_id')
+    expect(auditLoggerSource).toContain('INSERT INTO public.operation_logs')
+    expect(auditLoggerSource).not.toContain('CREATE TABLE IF NOT EXISTS public.operation_logs')
+    expect(auditLoggerSource).not.toContain('ALTER TABLE IF EXISTS public.operation_logs')
+    expect(auditLoggerSource).not.toContain('CREATE INDEX IF NOT EXISTS idx_operation_logs')
+    expect(auditLoggerSource).not.toContain('ensureTableOnce')
+  })
+
   it('keeps audit logger and progress deviation runtime code aligned with the reconciled schema', () => {
     const auditLoggerSource = readServerFile('src', 'middleware', 'auditLogger.ts')
     const progressDeviationSource = readServerFile('src', 'services', 'progressDeviationService.ts')
     const taskSummarySource = readServerFile('src', 'routes', 'task-summaries.ts')
     const projectExecutionSummarySource = readServerFile('src', 'services', 'projectExecutionSummaryService.ts')
 
-    expect(auditLoggerSource).toContain('ADD COLUMN IF NOT EXISTS project_id')
-    expect(auditLoggerSource).toContain('idx_operation_logs_project_id')
+    expect(auditLoggerSource).toContain('INSERT INTO public.operation_logs')
     expect(progressDeviationSource).toContain("fetchRowsIn<TaskProgressSnapshot>(")
     expect(progressDeviationSource).toContain("'task_progress_snapshots'")
     expect(progressDeviationSource).not.toContain("fetchRows<TaskProgressSnapshot>('task_progress_snapshots', [['project_id', projectId]])")

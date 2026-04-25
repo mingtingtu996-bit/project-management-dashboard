@@ -58,6 +58,8 @@ interface MappingOrphanPointerNotificationDefinition {
   metadata: Record<string, unknown>
 }
 
+type ProjectRecipientsCache = Map<string, Promise<string[]>>
+
 function nowIso() {
   return new Date().toISOString()
 }
@@ -207,7 +209,7 @@ function detectStatusProgressMismatchSignals(tasks: Task[]): OperationalSignalDe
   return signals
 }
 
-async function getProjectRecipients(projectId: string) {
+async function loadProjectRecipients(projectId: string): Promise<string[]> {
   const [project, members] = await Promise.all([
     executeSQLOne<ProjectOwnerRow>('SELECT id, owner_id FROM projects WHERE id = ? LIMIT 1', [projectId]),
     executeSQL<ProjectMemberRow>('SELECT project_id, user_id, role, permission_level FROM project_members WHERE project_id = ?', [projectId]),
@@ -224,8 +226,27 @@ async function getProjectRecipients(projectId: string) {
   ])
 }
 
-async function buildNotificationRow(projectId: string, signal: OperationalSignalDefinition): Promise<Notification | null> {
-  const recipients = await getProjectRecipients(projectId)
+async function getProjectRecipients(projectId: string, cache?: ProjectRecipientsCache) {
+  if (!cache) {
+    return await loadProjectRecipients(projectId)
+  }
+
+  const cached = cache.get(projectId)
+  if (cached) {
+    return await cached
+  }
+
+  const pending = loadProjectRecipients(projectId)
+  cache.set(projectId, pending)
+  return await pending
+}
+
+async function buildNotificationRow(
+  projectId: string,
+  signal: OperationalSignalDefinition,
+  recipientsCache?: ProjectRecipientsCache,
+): Promise<Notification | null> {
+  const recipients = await getProjectRecipients(projectId, recipientsCache)
   if (recipients.length === 0) return null
 
   return {
@@ -257,8 +278,9 @@ async function buildNotificationRow(projectId: string, signal: OperationalSignal
 async function buildMappingOrphanNotificationRow(
   projectId: string,
   definition: MappingOrphanPointerNotificationDefinition,
+  recipientsCache?: ProjectRecipientsCache,
 ): Promise<Notification | null> {
-  const recipients = await getProjectRecipients(projectId)
+  const recipients = await getProjectRecipients(projectId, recipientsCache)
   if (recipients.length === 0) return null
 
   const timestamp = nowIso()
@@ -295,7 +317,9 @@ export class OperationalNotificationService {
   async syncMappingOrphanPointerNotifications(
     projectId: string,
     input: PlanningIntegrityMappingSummary | Pick<PlanningIntegrityReport, 'mapping_integrity'>,
+    recipientsCache?: ProjectRecipientsCache,
   ): Promise<Notification[]> {
+    const effectiveRecipientsCache = recipientsCache ?? new Map<string, Promise<string[]>>()
     const definition = buildMappingOrphanPointerNotificationDefinition(projectId, input)
     const existingRows = (await listNotifications({ projectId }))
       .filter((notification) =>
@@ -318,7 +342,7 @@ export class OperationalNotificationService {
       return []
     }
 
-    const row = await buildMappingOrphanNotificationRow(projectId, definition)
+    const row = await buildMappingOrphanNotificationRow(projectId, definition, effectiveRecipientsCache)
     if (!row) return []
 
     if (!existing) {
@@ -356,7 +380,8 @@ export class OperationalNotificationService {
     ]
   }
 
-  async syncProjectNotifications(projectId: string): Promise<Notification[]> {
+  async syncProjectNotifications(projectId: string, recipientsCache?: ProjectRecipientsCache): Promise<Notification[]> {
+    const effectiveRecipientsCache = recipientsCache ?? new Map<string, Promise<string[]>>()
     const signals = await this.collectProjectSignals(projectId)
     const existingRows = (await listNotifications({ projectId }))
       .filter((notification) => OPERATIONAL_SIGNAL_SOURCE_TYPES.has(String(notification.source_entity_type ?? '').trim()))
@@ -378,7 +403,7 @@ export class OperationalNotificationService {
     for (const signal of signals) {
       const key = buildNotificationKey(signal)
       activeKeys.add(key)
-      const notification = await buildNotificationRow(projectId, signal)
+      const notification = await buildNotificationRow(projectId, signal, effectiveRecipientsCache)
       if (!notification) continue
 
       const existing = existingByKey.get(key)
@@ -444,6 +469,7 @@ export class OperationalNotificationService {
     const projectIds = await listActiveProjectIds()
     const CONCURRENCY = 4
     const results: Notification[] = []
+    const recipientsCache: ProjectRecipientsCache = new Map()
 
     for (let i = 0; i < projectIds.length; i += CONCURRENCY) {
       const batch = projectIds.slice(i, i + CONCURRENCY)
@@ -452,8 +478,8 @@ export class OperationalNotificationService {
           try {
             const integrityReport = await this.planningIntegrityService.scanProjectIntegrity(projectId)
             const notifications = await Promise.all([
-              this.syncProjectNotifications(projectId),
-              this.syncMappingOrphanPointerNotifications(projectId, integrityReport),
+              this.syncProjectNotifications(projectId, recipientsCache),
+              this.syncMappingOrphanPointerNotifications(projectId, integrityReport, recipientsCache),
               this.milestoneIntegrityService.syncProjectMilestoneNotifications(
                 projectId,
                 integrityReport.milestone_integrity,
