@@ -30,7 +30,11 @@ const mocks = vi.hoisted(() => {
       getProject: vi.fn(async (id: string) => projectList.find((p: any) => p.id === id) ?? null),
       getTasks: vi.fn(async () => []),
       getRisks: vi.fn(async () => []),
-      executeSQL: vi.fn(async () => []),
+      executeSQL: vi.fn(async (query?: string) => {
+        const sql = String(query ?? '').toLowerCase()
+        if (sql.includes('from projects')) return projectList
+        return []
+      }),
       executeSQLOne: vi.fn(async () => null),
       createProject: vi.fn(),
       updateProject: vi.fn(),
@@ -121,7 +125,11 @@ describe('project creation -> shared summary chain (8.4.1)', () => {
     mocks.dbService.getProjects.mockImplementation(async () => mocks.projectList)
     mocks.dbService.getTasks.mockResolvedValue([])
     mocks.dbService.getRisks.mockResolvedValue([])
-    mocks.dbService.executeSQL.mockResolvedValue([])
+    mocks.dbService.executeSQL.mockImplementation(async (query?: string) => {
+      const sql = String(query ?? '').toLowerCase()
+      if (sql.includes('from projects')) return mocks.projectList
+      return []
+    })
     mocks.calculateProjectHealth.mockResolvedValue({
       score: 88,
       details: {

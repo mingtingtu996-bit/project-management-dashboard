@@ -28,6 +28,7 @@ export default function TeamMembers() {
       <PageHeader
         eyebrow="辅助能力"
         title="团队管理"
+        subtitle="独立页面作为辅助入口保留"
       />
       <ProjectTeamManagementPanel projectId={id} projectName={projectName} layout="page" />
     </div>

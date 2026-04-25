@@ -609,7 +609,7 @@ describe('RiskManagement', () => {
 
     const titleInput = document.body.querySelector('input[placeholder="例如：专项审批资料缺失"]') as HTMLInputElement | null
     const severitySelect = document.body.querySelector('select') as HTMLSelectElement | null
-    const descriptionInput = document.body.querySelector('textarea[placeholder="补充背景、影响和当前处理建议"]') as HTMLTextAreaElement | null
+    const descriptionInput = document.body.querySelector('textarea[placeholder="补充内容"]') as HTMLTextAreaElement | null
 
     if (!titleInput || !severitySelect || !descriptionInput) {
       throw new Error('Manual issue dialog fields not found')

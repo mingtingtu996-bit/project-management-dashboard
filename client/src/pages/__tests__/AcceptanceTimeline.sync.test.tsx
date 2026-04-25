@@ -407,7 +407,7 @@ describe('AcceptanceTimeline dependency sync', () => {
     const requirementTypeInput = document.querySelector('input[placeholder="external / drawing / task_condition"]') as HTMLInputElement | null
     const sourceTypeInput = document.querySelector('input[placeholder="task_condition"]') as HTMLInputElement | null
     const sourceIdInput = document.querySelector('input[placeholder="condition-1"]') as HTMLInputElement | null
-    const descriptionInput = document.querySelector('textarea[placeholder="补充验收条件、前置判断或共享来源说明"]') as HTMLTextAreaElement | null
+    const descriptionInput = document.querySelector('textarea[placeholder="补充内容"]') as HTMLTextAreaElement | null
     const sourceId = 'sync-created-requirement'
 
     expect(requirementTypeInput).toBeTruthy()

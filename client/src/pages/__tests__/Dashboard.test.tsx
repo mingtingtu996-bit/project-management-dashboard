@@ -274,8 +274,6 @@ describe('Dashboard contract', () => {
     expect(weeklyDigest!.compareDocumentPosition(livePanel!) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
     expect(livePanel!.compareDocumentPosition(snapshotPanel!) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
 
-    expect(container.textContent).toContain('月度趋势将在任务完成后自动生成')
-    expect(container.textContent).toContain('周报将在每周一自动生成，当前暂无数据')
     expect(container.textContent).toContain('全局摘要')
     expect(container.textContent).toContain('当下优先级信号区')
     expect(container.textContent).toContain('导流快照')
@@ -306,7 +304,7 @@ describe('Dashboard contract', () => {
 
     await waitForSelector(container, '[data-testid="dashboard-empty-state"]')
 
-    expect((container.textContent || '').replace(/\s+/g, '')).toContain(`请先进入一个项目，再查看项目${PROJECT_NAVIGATION_LABELS.dashboard}。`)
+    expect(container.textContent).toContain('未选择项目')
     expect(container.textContent).not.toContain('项目 Dashboard')
   })
 

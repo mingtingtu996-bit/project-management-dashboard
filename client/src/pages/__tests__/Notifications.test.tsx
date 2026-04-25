@@ -441,10 +441,10 @@ describe('Notifications', () => {
       await flush()
     })
 
-    await waitForCondition(() => container.textContent?.includes('登录后继续查看提醒中心') === true)
+    await waitForCondition(() => Boolean(container.querySelector('[data-testid="notifications-login-required"]')))
 
     expect(apiMock.get).not.toHaveBeenCalled()
-    expect(container.textContent).toContain('提醒中心需要登录后才会加载你的个人提醒')
+    expect(container.textContent).toContain('登录后继续')
 
     const loginButton = Array.from(container.querySelectorAll('button')).find((button) =>
       button.textContent?.includes('登录后继续'),

@@ -513,7 +513,7 @@ describe('Reports story coverage', () => {
   it('keeps the shell stable while switching all three deviation views', async () => {
     await renderReports(root, `/projects/${projectId}/reports?view=execution`)
 
-    await waitForText(container, ['进度偏差分析', '版本切换说明', '下钻明细区'])
+    await waitForText(container, ['进度偏差分析', '基线版本切换标记', '下钻明细区'])
     expect(container.querySelector('[data-testid="deviation-shell"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="reports-module-tabs"]')).toBeTruthy()
     expect(container.textContent).toContain('返回项目总览')
@@ -544,7 +544,7 @@ describe('Reports story coverage', () => {
       await flush()
     })
 
-    await waitForText(container, ['基线偏差', 'mapping_pending', '版本切换说明'])
+    await waitForText(container, ['基线偏差', 'mapping_pending', '基线版本切换标记'])
     expect(container.querySelector('[data-testid="deviation-shell"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="execution-scatter-chart"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="deviation-detail-table"]')).toBeTruthy()
@@ -559,7 +559,7 @@ describe('Reports story coverage', () => {
       await flush()
     })
 
-    await waitForText(container, ['月度完成情况', 'merged_into', '版本切换说明'])
+    await waitForText(container, ['月度完成情况', 'merged_into', '基线版本切换标记'])
     expect(container.querySelector('[data-testid="deviation-shell"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="execution-scatter-chart"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="deviation-detail-table"]')).toBeTruthy()
@@ -574,7 +574,7 @@ describe('Reports story coverage', () => {
       await flush()
     })
 
-    await waitForText(container, ['执行偏差', 'child_group', '版本切换说明'])
+    await waitForText(container, ['执行偏差', 'child_group', '基线版本切换标记'])
     expect(container.querySelector('[data-testid="deviation-shell"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="execution-scatter-chart"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="deviation-detail-table"]')).toBeTruthy()
@@ -601,14 +601,14 @@ describe('Reports story coverage', () => {
   it('shows the current view markers directly from the chosen route', async () => {
     await renderReports(root, `/projects/${projectId}/reports?view=baseline`)
 
-    await waitForText(container, ['基线偏差', 'mapping_pending', '版本切换说明'])
+    await waitForText(container, ['基线偏差', 'mapping_pending', '基线版本切换标记'])
 
     expect(container.querySelector('[data-testid="execution-scatter-chart"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="deviation-detail-table"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="baseline-switch-marker"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="deviation-version-note"]')).toBeTruthy()
     expect(container.textContent).toContain('mapping_pending')
-    expect(container.textContent).toContain('版本切换说明')
+    expect(container.textContent).toContain('基线版本切换标记')
   })
 
   it('exposes the change log analysis entry with real project-level records', async () => {
@@ -631,8 +631,8 @@ describe('Reports story coverage', () => {
 
     expect(container.querySelector('[data-testid="reports-current-metrics"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="analysis-entry-progress"]')).toBeTruthy()
-    expect(container.textContent).toContain('处置建议')
-    expect(container.textContent).toContain('当前优先关注')
+    expect(container.textContent).toContain('处置入口')
+    expect(container.textContent).toContain('重点风险与问题清单')
   })
   it('renders material arrival summary in the risk module', async () => {
     await renderReports(root, `/projects/${projectId}/reports?view=risk`)

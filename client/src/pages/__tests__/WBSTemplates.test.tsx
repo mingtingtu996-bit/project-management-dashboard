@@ -203,10 +203,10 @@ describe('WBSTemplates planning entry', () => {
       )
     })
 
-    await waitForText(container, ['计划编制', 'WBS 模板', '了解更多', '四层时间线'])
+    await waitForText(container, ['计划编制', 'WBS 模板', '计划编制入口', 'WBS 模板 -> 项目基线'])
 
     expect(container.textContent).toContain('在建项目一键启用')
-    expect(container.textContent).toContain('自动补建初始基线')
+    expect(container.textContent).toContain('初始化基线')
     expect(container.textContent).not.toContain('独立主模块')
 
     const ongoingButton = findButton(container, '在建项目一键启用')
@@ -238,7 +238,7 @@ describe('WBSTemplates planning entry', () => {
     expect(requestedUrls.some((url) => url.includes('/api/wbs-templates'))).toBe(false)
   })
 
-  it('requires an explicit template selection before generating a baseline from WBS templates', async () => {
+  it('prompts from the top-level generate action and submits when a template card is used', async () => {
     useStore.setState({
       currentProject: {
         id: projectId,
@@ -263,6 +263,19 @@ describe('WBSTemplates planning entry', () => {
               checklist: [
                 { key: 'pick', title: '选择模板', detail: '先选一套模板再生成项目基线' },
               ],
+            },
+          }),
+        } as never
+      }
+
+      if (url.includes('/api/planning/wbs-templates/bootstrap/from-template')) {
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            data: {
+              baseline: { id: 'baseline-from-template', project_id: projectId, version: 1 },
+              created_item_count: 8,
             },
           }),
         } as never
@@ -320,13 +333,13 @@ describe('WBSTemplates planning entry', () => {
       )
     })
 
-    await waitForText(container, ['计划编制', 'WBS 模板', '选择模板后生成'])
+    await waitForText(container, ['计划编制', 'WBS 模板', '生成基线', '标准模板'])
 
-    const templateButton = findButton(container, '选择模板后生成')
-    expect(templateButton).toBeTruthy()
+    const topLevelButton = findButton(container, '生成基线')
+    expect(topLevelButton).toBeTruthy()
 
     await act(async () => {
-      templateButton?.click()
+      topLevelButton?.click()
       await flush()
     })
 
@@ -337,13 +350,23 @@ describe('WBSTemplates planning entry', () => {
     )
 
     expect(
-      toastMock.mock.calls.some(([payload]) =>
-        String(payload?.description ?? '').includes('请先在下方选择一套模板'),
-      ),
-    ).toBe(true)
-    expect(
       fetchMock.mock.calls.some(([url]) => String(url).includes('/bootstrap/from-template')),
     ).toBe(false)
+
+    const cardButton = findButton(container, '用这个模板生成基线')
+    expect(cardButton).toBeTruthy()
+
+    await act(async () => {
+      cardButton?.click()
+      await flush()
+    })
+
+    await waitForCondition(() =>
+      fetchMock.mock.calls.some(([url]) => String(url).includes('/bootstrap/from-template')),
+    )
+
+    const submittedCall = fetchMock.mock.calls.find(([url]) => String(url).includes('/bootstrap/from-template'))
+    expect(String(submittedCall?.[1]?.body ?? '')).toContain('"template_id":"template-1"')
   })
 
   it('shows the quality panel for non-completed projects, but keeps completed-project generation disabled when no samples exist', async () => {
@@ -428,7 +451,7 @@ describe('WBSTemplates planning entry', () => {
     })
 
     await waitForCondition(() => Boolean(container.querySelector('[data-testid="wbs-template-quality-panel"]')))
-    expect(container.textContent).toContain('当前还没有已完成项目样本参与校准')
+    expect(container.textContent).toContain('已完成项目反馈摘要')
 
     const generateButton = container.querySelector('[data-testid="wbs-template-generate-from-completed"]') as HTMLButtonElement | null
     const applyButton = container.querySelector('[data-testid="wbs-template-apply-feedback"]') as HTMLButtonElement | null
@@ -594,7 +617,8 @@ describe('WBSTemplates planning entry', () => {
     expect(container.textContent).toContain('工业')
 
     await waitForCondition(() => (container.textContent || '').includes('缺少标准工序节点'))
-    expect(container.textContent).toContain('公共建筑（学校/医院）WBS模板 · 公共建筑')
+    expect(container.textContent).toContain('公共建筑（学校/医院）WBS模板')
+    expect(container.textContent).toContain('公共建筑')
     const missingMetric = container.querySelector('[data-testid="wbs-template-quality-missing-standard-steps"]')
     expect(missingMetric?.textContent).toContain('0')
 
@@ -612,7 +636,8 @@ describe('WBSTemplates planning entry', () => {
       ),
     )
 
-    expect(container.textContent).toContain('商业办公综合体（塔楼+裙房）WBS模板 · 商业')
+    expect(container.textContent).toContain('商业办公综合体（塔楼+裙房）WBS模板')
+    expect(container.textContent).toContain('商业')
     const selectedCommercialCard = container.querySelector('[data-testid="wbs-template-card-template-commercial"]')
     expect(selectedCommercialCard?.textContent).toContain('当前查看模板')
   })

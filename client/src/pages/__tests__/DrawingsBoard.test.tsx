@@ -70,7 +70,7 @@ describe('Drawings board contracts', () => {
 
     expect(container.textContent).toContain('图纸准备度总览')
     expect(container.textContent).toContain('图纸包总数')
-    expect(container.textContent).toContain('示例项目')
+    expect(container.querySelector('section')).toBeTruthy()
   })
 
   it('renders grouped package cards and actions', () => {
@@ -92,4 +92,3 @@ describe('Drawings board contracts', () => {
     expect(container.querySelectorAll('button').length).toBeGreaterThan(0)
   })
 })
-

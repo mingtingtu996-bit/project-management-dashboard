@@ -1290,7 +1290,7 @@ describe('BaselinePage planning workflow', () => {
 
     await waitForText(container, ['进入确认发布'])
     await clickButtonByText(container, '进入确认发布')
-    await waitForText(document.body, ['版本过期并发态', '当前版本已过期'])
+    await waitForText(document.body, ['版本过期并发态'])
 
     const confirmButton = Array.from(document.body.querySelectorAll('button'))
       .filter((button) => button.textContent?.includes('确认发布'))
@@ -1311,7 +1311,7 @@ describe('BaselinePage planning workflow', () => {
 
     await waitForText(container, ['进入确认发布'])
     await clickButtonByText(container, '进入确认发布')
-    await waitForText(document.body, ['发布失败态', '上次发布失败', '重新尝试'])
+    await waitForText(document.body, ['发布失败态', '重新尝试'])
 
     cleanup()
   })

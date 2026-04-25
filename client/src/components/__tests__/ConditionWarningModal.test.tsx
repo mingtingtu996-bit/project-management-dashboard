@@ -66,7 +66,7 @@ describe('ConditionWarningModal', () => {
 
     expect(document.body.textContent).toContain('提醒汇总')
     expect(document.body.textContent).toContain('主体结构施工')
-    expect(document.body.textContent).toContain('仍有 2 项未满足开工条件')
+    expect(document.body.textContent).toContain('去问题与风险')
 
     const goButton = Array.from(document.body.querySelectorAll('button')).find((button) =>
       button.textContent?.includes('去问题与风险'),

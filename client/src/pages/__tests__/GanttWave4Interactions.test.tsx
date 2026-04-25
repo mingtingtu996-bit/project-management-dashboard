@@ -163,7 +163,7 @@ describe('wave4 gantt interactions', () => {
     expect(screen.getByTestId('gantt-delay-request-approve')).toBeTruthy()
     expect(screen.getByTestId('gantt-delay-request-reject')).toBeTruthy()
     expect(screen.getByTestId('gantt-critical-delay-notice')).toBeTruthy()
-    expect(screen.getByText(/建议尽快催办审批人/)).toBeTruthy()
+    expect(screen.getByText(/当前任务位于关键路径/)).toBeTruthy()
 
     fireEvent.click(screen.getByTestId('gantt-delay-request-approve'))
     fireEvent.click(screen.getByTestId('gantt-delay-request-reject'))

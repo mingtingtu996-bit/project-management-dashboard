@@ -20,6 +20,10 @@ function readWorkspaceSource(relativePath: string) {
   throw new Error(`Unable to locate source file: ${relativePath}`)
 }
 
+function normalizeSource(source: string) {
+  return source.replace(/\r\n/g, '\n')
+}
+
 describe('Wave8 performance source contracts', () => {
   it('allows project routes to render once project metadata is ready', () => {
     const source = readWorkspaceSource('src/hooks/useProjectInit.ts')
@@ -41,7 +45,7 @@ describe('Wave8 performance source contracts', () => {
   })
 
   it('keeps token-backed routes renderable while auth verification finishes in the background', () => {
-    const source = readWorkspaceSource('src/App.tsx')
+    const source = normalizeSource(readWorkspaceSource('src/App.tsx'))
 
     expect(source.includes('const hasStoredToken = Boolean(getAuthToken())')).toBe(true)
     expect(source.includes("const initialGanttModulePromise = initialHash.includes('/gantt')")).toBe(true)
