@@ -501,9 +501,13 @@ router.get('/ledger', asyncHandler(async (req, res) => {
   }
 
   const certificateId = req.query.certificateId as string | undefined
-  const workItems = await loadProjectWorkItems(projectId)
-  const dependencies = await loadProjectDependencies(projectId)
-  const data = buildLicenseLedgerReadModel({ workItems, dependencies, certificateId: certificateId || null })
+  const [workItems, dependencies, issues, risks] = await Promise.all([
+    loadProjectWorkItems(projectId),
+    loadProjectDependencies(projectId),
+    getIssues(projectId).catch(() => []),
+    getRisks(projectId).catch(() => []),
+  ])
+  const data = buildLicenseLedgerReadModel({ workItems, dependencies, issues, risks, certificateId: certificateId || null })
 
   const response: ApiResponse<CertificateLedgerResponse> = {
     success: true,
@@ -556,13 +560,12 @@ router.get('/:certificateId/detail', asyncHandler(async (req, res) => {
     certificate,
     ...certificates.filter((item) => String(item.id ?? '') !== resolvedCertificateId),
   ]
-  const workItems = await loadProjectWorkItems(projectId)
-  const dependencies = await loadProjectDependencies(projectId)
-  const conditions =
+  const [workItems, dependencies, conditions, warnings, issues, risks] = await Promise.all([
+    loadProjectWorkItems(projectId),
+    loadProjectDependencies(projectId),
     matchedCertificate && getCertificateRecordId(certificate)
-      ? await loadCertificateConditions(getCertificateRecordId(certificate))
-      : []
-  const [warnings, issues, risks] = await Promise.all([
+      ? loadCertificateConditions(getCertificateRecordId(certificate))
+      : Promise.resolve([] as PreMilestoneCondition[]),
     warningService.scanPreMilestoneWarnings(projectId).catch(() => []),
     getIssues(projectId).catch(() => []),
     getRisks(projectId).catch(() => []),
@@ -605,6 +608,7 @@ router.get('/:certificateId/detail', asyncHandler(async (req, res) => {
     certificate,
     workItems,
     dependencies,
+    conditions,
     warnings,
     issues,
     risks,

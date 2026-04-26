@@ -1097,7 +1097,14 @@ export default function Materials() {
       <PageHeader
         eyebrow="专项管理"
         title={PROJECT_NAVIGATION_LABELS.materials}
+        subtitle="跟踪专项工程材料到场状态，关联分包责任主体。"
       >
+        {!isReadOnly && (
+          <Button onClick={() => void handleCreateSingle()} disabled={saving}>
+            <Plus className="mr-2 h-4 w-4" />
+            新增材料
+          </Button>
+        )}
         <Button variant="outline" onClick={() => void loadPage(undefined, true)} disabled={refreshing}>
           <RefreshCw className={`mr-2 h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
           刷新
@@ -1135,9 +1142,6 @@ export default function Materials() {
                   周窗口 {formatWeekLabel(latestDigest?.week_start)} · 最近生成 {formatDateTimeLabel(latestDigest?.generated_at)}
                 </div>
               </div>
-              <Button asChild variant="outline" size="sm">
-                <Link to={`/projects/${projectId}/reports?view=progress`}>查看材料分析</Link>
-              </Button>
             </div>
           </CardHeader>
           <CardContent className="space-y-4">

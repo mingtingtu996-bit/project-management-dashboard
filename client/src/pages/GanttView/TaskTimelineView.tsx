@@ -46,6 +46,7 @@ interface TaskTimelineViewProps {
   onToggleCollapse: (taskId: string) => void
   onSelectTask: (task: Task) => void
   isOnCriticalPath: (taskId: string) => boolean
+  getCriticalPathSourceType: (taskId: string) => 'auto' | 'manual_attention' | 'manual_insert' | null
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -80,6 +81,8 @@ type TimelineLayout = {
     actualFill: string
   }
 }
+
+type CriticalPathSourceType = 'auto' | 'manual_attention' | 'manual_insert' | null
 
 function parseDate(value?: string | null) {
   if (!value || typeof value !== 'string') return null
@@ -182,7 +185,7 @@ function buildScaleSegments(
   return segments
 }
 
-function getTaskTone(task: WBSNode, critical: boolean) {
+function getTaskTone(task: WBSNode, sourceType: CriticalPathSourceType) {
   const status = String(task.status ?? '').trim().toLowerCase()
   const overdue =
     status !== 'completed'
@@ -191,11 +194,38 @@ function getTaskTone(task: WBSNode, critical: boolean) {
     && parseDate(task.end_date) !== null
     && (parseDate(task.end_date)?.getTime() ?? 0) < Date.now()
 
+  if (sourceType === 'auto') {
+    return {
+      fill: '#fef2f2',
+      progressFill: '#ef4444',
+      stroke: '#fca5a5',
+      actualFill: '#dc2626',
+    }
+  }
+
+  if (sourceType === 'manual_attention') {
+    return {
+      fill: '#fffbeb',
+      progressFill: '#f59e0b',
+      stroke: '#facc15',
+      actualFill: '#d97706',
+    }
+  }
+
+  if (sourceType === 'manual_insert') {
+    return {
+      fill: '#fff7ed',
+      progressFill: '#f97316',
+      stroke: '#fdba74',
+      actualFill: '#c2410c',
+    }
+  }
+
   if (status === 'completed' || clampProgress(task.progress) >= 100) {
     return {
       fill: '#d1fae5',
       progressFill: '#10b981',
-      stroke: critical ? '#047857' : '#6ee7b7',
+      stroke: '#6ee7b7',
       actualFill: '#047857',
     }
   }
@@ -204,7 +234,7 @@ function getTaskTone(task: WBSNode, critical: boolean) {
     return {
       fill: '#fef3c7',
       progressFill: '#f59e0b',
-      stroke: critical ? '#d97706' : '#fbbf24',
+      stroke: '#fbbf24',
       actualFill: '#b45309',
     }
   }
@@ -213,7 +243,7 @@ function getTaskTone(task: WBSNode, critical: boolean) {
     return {
       fill: '#fee2e2',
       progressFill: '#ef4444',
-      stroke: critical ? '#dc2626' : '#fca5a5',
+      stroke: '#fca5a5',
       actualFill: '#dc2626',
     }
   }
@@ -221,7 +251,7 @@ function getTaskTone(task: WBSNode, critical: boolean) {
   return {
     fill: '#dbeafe',
     progressFill: '#2563eb',
-    stroke: critical ? '#f97316' : '#93c5fd',
+    stroke: '#93c5fd',
     actualFill: '#1d4ed8',
   }
 }
@@ -285,6 +315,7 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
     onToggleCollapse,
     onSelectTask,
     isOnCriticalPath,
+    getCriticalPathSourceType,
   },
   ref,
 ) {
@@ -340,6 +371,7 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
     visibleRows.map((task, visibleIndex) => {
       const index = visibleStartIndex + visibleIndex
       const top = index * ROW_HEIGHT
+      const sourceType = getCriticalPathSourceType(task.id)
       const currentStart = parseDate(task.start_date || task.planned_start_date || null)
       const currentEnd = parseDate(task.end_date || task.planned_end_date || task.start_date || null)
       const actualStart = parseDate(task.actual_start_date)
@@ -370,10 +402,10 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
           ? `${formatDateLabel(task.start_date || task.planned_start_date)} → ${formatDateLabel(task.end_date || task.planned_end_date)}`
           : `${formatDateLabel(task.actual_start_date)} → ${formatDateLabel(task.actual_end_date || task.actual_start_date)}`,
         missingBaseline,
-        mainTone: getTaskTone(task, isOnCriticalPath(task.id)),
+        mainTone: getTaskTone(task, sourceType),
       }
     })
-  ), [compareMode, isOnCriticalPath, visibleRows, visibleStartIndex, xForDate])
+  ), [compareMode, getCriticalPathSourceType, visibleRows, visibleStartIndex, xForDate])
 
   const layoutMap = useMemo(
     () => new Map(rowLayouts.map((layout) => [layout.task.id, layout])),
@@ -691,7 +723,6 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
 
                     {rowLayouts.map((layout) => {
                       const selected = selectedTaskId === layout.task.id
-                      const critical = isOnCriticalPath(layout.task.id)
                       const mainWidth = layout.mainStartX !== null && layout.mainEndX !== null
                         ? Math.max(10, layout.mainEndX - layout.mainStartX + pxPerDay - 6)
                         : 0
@@ -727,9 +758,9 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
                                 height={14}
                                 rx={7}
                                 fill={layout.missingBaseline ? '#f8fafc' : layout.mainTone.fill}
-                                stroke={critical ? '#f97316' : layout.mainTone.stroke}
+                                stroke={layout.mainTone.stroke}
                                 strokeDasharray={layout.missingBaseline ? '4 3' : undefined}
-                                strokeWidth={critical ? 2 : selected ? 1.8 : 1.2}
+                                strokeWidth={selected ? 1.8 : 1.2}
                               />
                               {progressWidth > 0 ? (
                                 <rect
@@ -749,8 +780,8 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
                             <polygon
                               points={`${milestoneX},${layout.top + 8} ${milestoneX + 8},${layout.top + 16} ${milestoneX},${layout.top + 24} ${milestoneX - 8},${layout.top + 16}`}
                               fill="#f59e0b"
-                              stroke={critical ? '#f97316' : '#d97706'}
-                              strokeWidth={critical ? 2 : 1.5}
+                              stroke={layout.mainTone.stroke}
+                              strokeWidth={1.5}
                             />
                           ) : null}
 

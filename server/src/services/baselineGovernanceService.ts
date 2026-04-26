@@ -3,6 +3,7 @@ import { executeSQL, supabase } from './dbService.js'
 import { listActiveProjectIds } from './activeProjectService.js'
 import { evaluateProjectBaselineValidity } from './planningRevisionPoolService.js'
 import { getProjectCriticalPathSnapshot } from './projectCriticalPathService.js'
+import { getCriticalPathTaskIds } from './criticalPathHelpers.js'
 import type { Milestone, MonthlyPlanItem, Task, TaskBaseline, TaskBaselineItem } from '../types/db.js'
 import type { ProjectBaselineValiditySnapshot } from './planningRevisionPoolService.js'
 
@@ -106,7 +107,7 @@ export async function annotateBaselineCriticalItems(
   return nextItems
 }
 
-function mapTasksToMonthlySeedItems(tasks: Task[]): MonthlyPlanSeedItem[] {
+function mapTasksToMonthlySeedItems(tasks: Task[], criticalTaskIds: Set<string>): MonthlyPlanSeedItem[] {
   return [...tasks]
     .sort((left, right) => {
       const orderComparison = bySortOrder(left, right)
@@ -127,7 +128,7 @@ function mapTasksToMonthlySeedItems(tasks: Task[]): MonthlyPlanSeedItem[] {
       current_progress: toProgress(task.progress),
       sort_order: Number(task.sort_order ?? index),
       is_milestone: Boolean(task.is_milestone),
-      is_critical: Boolean(task.is_critical),
+      is_critical: criticalTaskIds.has(task.id),
       commitment_status: task.status === 'completed' || task.progress === 100 ? 'completed' : 'planned',
       notes: task.description ?? null,
     }))
@@ -193,7 +194,10 @@ export async function resolveMonthlyPlanGenerationSource(projectId: string): Pro
     }
   }
 
-  const tasks = await getProjectTasks(projectId)
+  const [tasks, criticalTaskIds] = await Promise.all([
+    getProjectTasks(projectId),
+    getCriticalPathTaskIds(projectId),
+  ])
   const baselineStatus = String(latestBaseline?.status ?? '').trim() || null
   return {
     mode: 'schedule',
@@ -202,7 +206,7 @@ export async function resolveMonthlyPlanGenerationSource(projectId: string): Pro
     sourceVersionLabel: AUTO_REALIGN_BASELINE_STATUSES.has(String(latestBaseline?.status ?? '').trim())
       ? '当前任务列表（基线待重整，已自动切换）'
       : '当前任务列表',
-    items: mapTasksToMonthlySeedItems(tasks),
+    items: mapTasksToMonthlySeedItems(tasks, criticalTaskIds),
     baselineStatus,
     autoSwitched: AUTO_REALIGN_BASELINE_STATUSES.has(String(latestBaseline?.status ?? '').trim()),
   }

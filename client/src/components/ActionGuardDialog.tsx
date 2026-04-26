@@ -8,6 +8,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import { Button } from '@/components/ui/button'
 import { AlertTriangle, ShieldAlert } from 'lucide-react'
 
 interface ActionGuardDialogProps {
@@ -17,6 +18,8 @@ interface ActionGuardDialogProps {
   description: string
   hint?: string
   confirmLabel?: string
+  secondaryActionLabel?: string
+  onSecondaryAction?: () => void
   testId?: string
 }
 
@@ -41,6 +44,8 @@ export function ActionGuardDialog({
   description,
   hint,
   confirmLabel = '我知道了',
+  secondaryActionLabel,
+  onSecondaryAction,
   testId = 'action-guard-dialog',
 }: ActionGuardDialogProps) {
   return (
@@ -66,6 +71,18 @@ export function ActionGuardDialog({
         ) : null}
 
         <AlertDialogFooter>
+          {secondaryActionLabel && onSecondaryAction ? (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                onOpenChange(false)
+                onSecondaryAction()
+              }}
+            >
+              {secondaryActionLabel}
+            </Button>
+          ) : null}
           <AlertDialogAction
             className="bg-slate-900 text-white hover:bg-slate-800 focus:ring-slate-500"
             onClick={() => onOpenChange(false)}

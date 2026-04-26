@@ -194,6 +194,18 @@ describe('baseline governance service', () => {
       version: 7,
       status: 'pending_realign',
     })
+    mocks.getProjectCriticalPathSnapshot.mockResolvedValue({
+      displayTaskIds: ['task-live-1'],
+      allTaskIds: ['task-live-1'],
+      manualTaskIds: [],
+      insertedTaskIds: [],
+      pathTaskIds: ['task-live-1'],
+      startTaskIds: ['task-live-1'],
+      endTaskIds: ['task-live-1'],
+      segmentCount: 1,
+      totalFloatDays: 0,
+      summary: null,
+    })
     mocks.tables.tasks.push({
       id: 'task-live-1',
       project_id: 'project-1',

@@ -133,6 +133,18 @@ function buildMockResponse(urlString, method) {
     return json({ success: true, data: mockProject })
   }
 
+  if (pathname === `/api/members/${projectId}/me`) {
+    return json({
+      success: true,
+      data: {
+        permissionLevel: 'owner',
+        globalRole: 'company_admin',
+        canManageTeam: true,
+        canEdit: true,
+      },
+    })
+  }
+
   if (pathname === '/api/warnings') {
     return json({ success: true, data: [] })
   }
@@ -149,7 +161,7 @@ function buildMockResponse(urlString, method) {
     return json({ success: true, data: [] })
   }
 
-  if (pathname === '/api/risks/risk-pending' && method === 'PUT') {
+  if (pathname === '/api/risks/risk-pending/confirm-close' && method === 'POST') {
     return json({
       success: false,
       error: {

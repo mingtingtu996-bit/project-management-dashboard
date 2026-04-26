@@ -97,6 +97,20 @@ vi.mock('../middleware/logger.js', () => ({
   requestLogger: (_req: unknown, _res: unknown, next: () => void) => next(),
 }))
 
+vi.mock('../middleware/auth.js', () => ({
+  authenticate: vi.fn((req: any, _res: unknown, next: () => void) => {
+    req.user = { id: 'owner-1' }
+    next()
+  }),
+  optionalAuthenticate: vi.fn((req: any, _res: unknown, next: () => void) => {
+    req.user = { id: 'owner-1' }
+    next()
+  }),
+  requireProjectEditor: vi.fn(() => (_req: unknown, _res: unknown, next: () => void) => next()),
+  requireProjectMember: vi.fn(() => (_req: unknown, _res: unknown, next: () => void) => next()),
+  requireProjectOwner: vi.fn(() => (_req: unknown, _res: unknown, next: () => void) => next()),
+}))
+
 vi.mock('../services/supabaseService.js', () => ({
   SupabaseService: class {
     getProjects = vi.fn(async () => [])
@@ -149,7 +163,7 @@ describe('wbs template apply route', () => {
 
     const [rootInsert, childInsert] = mocks.insertedTasks
 
-    expect(rootInsert).toHaveLength(14)
+    expect(rootInsert).toHaveLength(16)
     expect(rootInsert[0]).toBe('task-root-1')
     expect(rootInsert[1]).toBe('project-1')
     expect(rootInsert[2]).toBeNull()
@@ -159,8 +173,12 @@ describe('wbs template apply route', () => {
     expect(rootInsert[7]).toBe(0)
     expect(rootInsert[10]).toBe('1')
     expect(rootInsert[11]).toBe(1)
+    expect(rootInsert[12]).toBe('template-1')
+    expect(rootInsert[13]).toBeNull()
+    expect(rootInsert[14]).toEqual(expect.any(String))
+    expect(rootInsert[15]).toEqual(expect.any(String))
 
-    expect(childInsert).toHaveLength(14)
+    expect(childInsert).toHaveLength(16)
     expect(childInsert[0]).toBe('task-child-1')
     expect(childInsert[1]).toBe('project-1')
     expect(childInsert[2]).toBe('task-root-1')
@@ -169,5 +187,9 @@ describe('wbs template apply route', () => {
     expect(childInsert[6]).toBe(0)
     expect(childInsert[10]).toBe('1.1')
     expect(childInsert[11]).toBe(2)
+    expect(childInsert[12]).toBe('template-1')
+    expect(childInsert[13]).toBeNull()
+    expect(childInsert[14]).toEqual(expect.any(String))
+    expect(childInsert[15]).toEqual(expect.any(String))
   })
 })

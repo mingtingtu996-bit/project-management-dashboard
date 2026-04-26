@@ -69,10 +69,10 @@ export function calculateHealthDetails(params: HealthScoreParams): HealthDetails
   const delayPenaltyScore = -Math.min(Math.abs(totalDelayDays), 30);
 
   // 5. 风险惩罚分 (critical/high=-10, medium=-5, low=-2)
-  // 已解决/已缓解的风险不计入惩罚
+  // 已关闭的风险不计入惩罚
   const riskPenaltyScore = risks.reduce((total, r) => {
     const status = r.status?.toLowerCase();
-    if (status === 'mitigated' || status === 'closed' || status === 'resolved' || status === '已解决') {
+    if (status === 'closed' || status === '已关闭') {
       return total;
     }
     switch (r.level) {

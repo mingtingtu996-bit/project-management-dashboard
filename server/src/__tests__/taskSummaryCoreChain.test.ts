@@ -59,6 +59,22 @@ const mocks = vi.hoisted(() => {
       ],
       error: null,
     },
+    task_delay_history: {
+      data: [],
+      error: null,
+    },
+    monthly_plans: {
+      data: [],
+      error: null,
+    },
+    monthly_plan_items: {
+      data: [],
+      error: null,
+    },
+    participant_units: {
+      data: [],
+      error: null,
+    },
   }
 
   const createQuery = (table: keyof typeof queryResults) => {
@@ -71,8 +87,9 @@ const mocks = vi.hoisted(() => {
       lte: () => query,
       not: () => query,
       limit: () => query,
+      single: () => query,
       then: (resolve: (value: any) => void, reject: (reason?: any) => void) =>
-        Promise.resolve(queryResults[table]).then(resolve, reject),
+        Promise.resolve(queryResults[table] ?? { data: [], error: null }).then(resolve, reject),
     }
     return query
   }
@@ -80,7 +97,7 @@ const mocks = vi.hoisted(() => {
   return {
     queryResults,
     supabase: {
-      from: (table: keyof typeof queryResults) => createQuery(table),
+      from: (table: string) => createQuery(table as keyof typeof queryResults),
     },
     getProjectTimelineEvents: vi.fn(),
     isTaskTimelineEventStoreReady: vi.fn(),

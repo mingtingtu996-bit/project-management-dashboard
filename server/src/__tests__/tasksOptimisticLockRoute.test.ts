@@ -155,4 +155,34 @@ describe('tasks optimistic lock route', () => {
       },
     })
   })
+
+  it('returns 202 for batch updates and includes a job id', async () => {
+    const taskIds = Array.from({ length: 101 }, (_, index) => `task-${index + 1}`)
+    mocks.supabaseService.getTask.mockImplementation(async (taskId: string) => buildTask({ id: taskId, project_id: 'project-1', version: 1 }))
+    mocks.updateTaskInMainChain.mockImplementation(async (taskId: string) => ({
+      task: buildTask({ id: taskId, project_id: 'project-1', version: 2, title: `Updated ${taskId}` }),
+      participantUnit: null,
+    }))
+
+    const response = await supertest(buildApp())
+      .post('/api/tasks/batch-update')
+      .send({
+        project_id: 'project-1',
+        task_ids: taskIds,
+        status: 'in_progress',
+      })
+
+    expect(response.status).toBe(202)
+    expect(response.body).toMatchObject({
+      success: true,
+      data: {
+        project_id: 'project-1',
+        accepted_count: 101,
+        updated_count: 0,
+        updated_task_ids: [],
+        processing: true,
+      },
+    })
+    expect(response.body.data.job_id).toEqual(expect.any(String))
+  })
 })

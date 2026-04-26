@@ -442,7 +442,9 @@ describe('shared infrastructure contract', () => {
     })
 
     expect(mocks.persistNotification).toHaveBeenCalledWith(expect.objectContaining({
-      type: 'delay_request_submitted',
+      type: 'critical_path_delay_request_submitted',
+      severity: 'critical',
+      is_broadcast: true,
       source_entity_type: 'delay_request',
       source_entity_id: firstCreated.id,
       recipients: expect.arrayContaining(['owner-1', 'admin-1']),

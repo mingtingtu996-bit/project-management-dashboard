@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import Milestones from '../Milestones'
 import { PROJECT_NAVIGATION_LABELS } from '@/config/navigation'
+import { apiGet } from '@/lib/apiClient'
 import { useStore } from '@/hooks/useStore'
 import { DashboardApiService } from '@/services/dashboardApi'
 
@@ -12,6 +13,12 @@ vi.mock('@/services/dashboardApi', () => ({
   DashboardApiService: {
     getProjectSummary: vi.fn(),
   },
+}))
+
+vi.mock('@/lib/apiClient', () => ({
+  apiGet: vi.fn(),
+  getApiErrorMessage: vi.fn((_error: unknown, fallback: string) => fallback),
+  isAbortError: vi.fn(() => false),
 }))
 
 vi.mock('react-router-dom', async () => {
@@ -24,6 +31,7 @@ vi.mock('react-router-dom', async () => {
 
 const mockedUseNavigate = vi.mocked(useNavigate)
 const mockedGetProjectSummary = vi.mocked(DashboardApiService.getProjectSummary)
+const mockedApiGet = vi.mocked(apiGet)
 
 function flush() {
   return new Promise((resolve) => setTimeout(resolve, 0))
@@ -76,6 +84,20 @@ describe('Milestones page story coverage', () => {
           upcomingSoon: 1,
           completionRate: 33,
         },
+        summaryStats: {
+          shiftedCount: 1,
+          baselineOnTimeCount: 1,
+          dueSoon30dCount: 2,
+          highRiskCount: 2,
+        },
+        healthSummary: {
+          status: 'needs_attention',
+          needsAttentionCount: 2,
+          mappingPendingCount: 1,
+          mergedCount: 0,
+          excessiveDeviationCount: 1,
+          incompleteDataCount: 1,
+        },
         items: [
           {
             id: 'm1',
@@ -88,6 +110,7 @@ describe('Milestones page story coverage', () => {
             progress: 100,
             status: 'completed',
             statusLabel: '已兑现',
+            non_base_labels: ['偏差过大'],
             updatedAt: '2026-04-01T00:00:00.000Z',
           },
           {
@@ -103,6 +126,7 @@ describe('Milestones page story coverage', () => {
             statusLabel: '临近节点',
             parent_id: 'm1',
             mapping_pending: true,
+            non_base_labels: ['待补映射'],
             updatedAt: '2026-04-02T00:00:00.000Z',
           },
           {
@@ -114,10 +138,27 @@ describe('Milestones page story coverage', () => {
             status: 'upcoming',
             statusLabel: '待完成',
             updatedAt: '2026-04-03T00:00:00.000Z',
+            non_base_labels: [],
           },
         ],
       },
     } as never)
+    mockedApiGet.mockImplementation(async (url: string) => {
+      if (url === `/api/projects/${projectId}/milestones/m1/linked-tasks`) {
+        return [
+          {
+            id: 'task-1',
+            title: '地下室模板安装',
+            status: 'in_progress',
+            progress: 50,
+            assignee_name: '张三',
+            planned_end_date: '2026-04-06',
+          },
+        ] as never
+      }
+
+      return [] as never
+    })
 
     useStore.setState({
       currentProject: {
@@ -142,6 +183,7 @@ describe('Milestones page story coverage', () => {
   afterEach(() => {
     mockedUseNavigate.mockReset()
     mockedGetProjectSummary.mockReset()
+    mockedApiGet.mockReset()
     navigateMock.mockReset()
     useStore.setState({ currentProject: null } as never)
     useStore.setState({
@@ -176,7 +218,7 @@ describe('Milestones page story coverage', () => {
     })
 
     await waitForText(container, ['关键节点偏差与兑现页', '节点偏差表', PROJECT_NAVIGATION_LABELS.dashboard, '任务管理'])
-    expect(container.querySelector('[data-testid="milestone-health-strip"]')).toBeTruthy()
+    expect(container.querySelector('[data-testid="milestone-health-summary"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="milestone-child-group"]')).toBeTruthy()
 
     const milestoneButton = findButton(container, '地下室施工')
@@ -189,6 +231,7 @@ describe('Milestones page story coverage', () => {
 
     await waitForText(container, ['偏差结果', '异常与对应关系', '关联执行'])
     expect(container.textContent).toContain('进入任务管理')
+    expect(container.textContent).toContain('地下室模板安装')
 
     const goToTasksButton = findButton(container, '进入任务管理')
     expect(goToTasksButton).toBeTruthy()

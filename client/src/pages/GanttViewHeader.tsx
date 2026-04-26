@@ -1,4 +1,4 @@
-import { ArrowLeft, Building2, CalendarCheck, CalendarDays, GitBranch, List, Plus } from 'lucide-react'
+import { ArrowLeft, CalendarCheck, CalendarDays, FileText, GitBranch, Layers3, List, Plus } from 'lucide-react'
 
 import { Breadcrumb } from '@/components/Breadcrumb'
 import { PageHeader } from '@/components/PageHeader'
@@ -9,6 +9,7 @@ interface PlanningGovernanceSummary {
   activeCount?: number | null
   dashboardCloseoutOverdue?: boolean | null
   dashboardForceUnlockAvailable?: boolean | null
+  governancePhase?: 'free_edit' | 'monthly_pending' | 'formal_execution' | 'pending_realign' | 'reordering' | 'closeout' | null
 }
 
 interface GanttViewHeaderProps {
@@ -16,10 +17,12 @@ interface GanttViewHeaderProps {
   projectName?: string | null
   planningGovernance?: PlanningGovernanceSummary | null
   viewMode: 'list' | 'timeline'
+  canEdit: boolean
   onBack: () => void
   onViewModeChange: (mode: 'list' | 'timeline') => void
   onOpenCriticalPath: () => void
-  onOpenParticipantUnits: () => void
+  onOpenTaskSummary: () => void
+  onOpenScopeDimensions: () => void
   onCreateTask: () => void
   onOpenCloseout: () => void
   onScrollToToday?: () => void
@@ -30,10 +33,12 @@ export function GanttViewHeader({
   projectName,
   planningGovernance,
   viewMode,
+  canEdit,
   onBack,
   onViewModeChange,
   onOpenCriticalPath,
-  onOpenParticipantUnits,
+  onOpenTaskSummary,
+  onOpenScopeDimensions,
   onCreateTask,
   onOpenCloseout,
   onScrollToToday,
@@ -41,6 +46,46 @@ export function GanttViewHeader({
   const hasCloseoutGovernanceSignal = Boolean(
     planningGovernance?.dashboardCloseoutOverdue || planningGovernance?.dashboardForceUnlockAvailable,
   )
+  const governancePhase = planningGovernance?.governancePhase ?? (hasCloseoutGovernanceSignal ? 'closeout' : null)
+
+  const governanceBanner = (() => {
+    switch (governancePhase) {
+      case 'monthly_pending':
+        return {
+          testId: 'gantt-governance-banner-monthly-pending',
+          badge: '月计划待确认',
+          className: 'border-sky-200 bg-sky-50 text-sky-900',
+          badgeClassName: 'bg-sky-100 text-sky-800',
+          description: '当前月计划尚未确认，建议先完成确认再进入正式执行。',
+        }
+      case 'pending_realign':
+        return {
+          testId: 'gantt-governance-banner-pending-realign',
+          badge: '基线待重定',
+          className: 'border-amber-200 bg-amber-50 text-amber-900',
+          badgeClassName: 'bg-amber-100 text-amber-800',
+          description: '当前存在待重定的计划或基线调整，请先处理重定再继续推进。',
+        }
+      case 'reordering':
+        return {
+          testId: 'gantt-governance-banner-reordering',
+          badge: '执行重排',
+          className: 'border-violet-200 bg-violet-50 text-violet-900',
+          badgeClassName: 'bg-violet-100 text-violet-800',
+          description: '主动重排进行中，请在重排结束后再进行后续确认与关账。',
+        }
+      case 'closeout':
+        return {
+          testId: 'gantt-governance-banner-closeout',
+          badge: '月末关账',
+          className: 'border-rose-200 bg-rose-50 text-rose-900',
+          badgeClassName: 'bg-rose-100 text-rose-800',
+          description: '当前项目处于关账治理窗口，需要尽快完成关账处理。',
+        }
+      default:
+        return null
+    }
+  })()
 
   return (
     <div data-testid="task-workspace-layer-l1" className="space-y-4">
@@ -87,9 +132,13 @@ export function GanttViewHeader({
           <GitBranch className="mr-2 h-4 w-4" />
           查看关键路径
         </Button>
-        <Button variant="outline" onClick={onOpenParticipantUnits} data-testid="gantt-open-participant-units">
-          <Building2 className="mr-2 h-4 w-4" />
-          参建单位台账
+        <Button variant="outline" onClick={onOpenTaskSummary} data-testid="gantt-open-task-summary">
+          <FileText className="mr-2 h-4 w-4" />
+          任务总结
+        </Button>
+        <Button variant="outline" onClick={onOpenScopeDimensions} data-testid="gantt-open-scope-dimensions">
+          <Layers3 className="mr-2 h-4 w-4" />
+          范围维度
         </Button>
         {onScrollToToday && (
           <Button variant="outline" onClick={onScrollToToday} data-testid="gantt-scroll-to-today">
@@ -97,45 +146,50 @@ export function GanttViewHeader({
             今天
           </Button>
         )}
-        <Button onClick={onCreateTask}>
+        <Button onClick={onCreateTask} disabled={!canEdit}>
           <Plus className="mr-2 h-4 w-4" />
           新建任务
         </Button>
       </PageHeader>
 
-      {hasCloseoutGovernanceSignal ? (
+      {governanceBanner ? (
         <div
-          data-testid="gantt-closeout-banner"
-          className="flex flex-col gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-900 md:flex-row md:items-center md:justify-between"
+          data-testid={governanceBanner.testId}
+          className={`flex flex-col gap-3 rounded-2xl border px-5 py-4 text-sm md:flex-row md:items-center md:justify-between ${governanceBanner.className}`}
         >
           <div className="space-y-2">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800">
-                关账治理提醒
+              <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ${governanceBanner.badgeClassName}`}>
+                {governanceBanner.badge}
               </span>
               {planningGovernance?.activeCount ? (
                 <span
-                  data-testid="gantt-closeout-marker"
-                  className="inline-flex items-center rounded-full bg-white px-2.5 py-1 text-xs font-medium text-amber-800"
+                  data-testid="gantt-governance-marker"
+                  className="inline-flex items-center rounded-full bg-white px-2.5 py-1 text-xs font-medium text-slate-700"
                 >
-                  月末待处理事项 {planningGovernance.activeCount}
+                  治理信号 {planningGovernance.activeCount}
                 </span>
               ) : null}
-              {planningGovernance?.dashboardForceUnlockAvailable ? (
+              {governancePhase === 'closeout' && planningGovernance?.dashboardForceUnlockAvailable ? (
                 <span className="inline-flex items-center rounded-full bg-white px-2.5 py-1 text-xs font-medium text-amber-800">
                   已到第 7 天
                 </span>
               ) : null}
             </div>
+            <div className="text-sm font-medium">
+              {governanceBanner.description}
+            </div>
           </div>
-          <Button
-            data-testid="gantt-closeout-entry"
-            variant="outline"
-            onClick={onOpenCloseout}
-            className="border-amber-300 bg-white text-amber-900 hover:bg-amber-100"
-          >
-            打开月末关账工作台
-          </Button>
+          {governancePhase === 'closeout' ? (
+            <Button
+              data-testid="gantt-closeout-entry"
+              variant="outline"
+              onClick={onOpenCloseout}
+              className="border-rose-300 bg-white text-rose-900 hover:bg-rose-100"
+            >
+              打开月末关账工作台
+            </Button>
+          ) : null}
         </div>
       ) : null}
     </div>

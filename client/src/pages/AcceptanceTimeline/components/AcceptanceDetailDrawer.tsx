@@ -57,12 +57,14 @@ interface AcceptanceDetailDrawerProps {
     },
   ) => Promise<void> | void
   onDateUpdate?: (planId: string, plannedDate: string) => void
+  onPlanUpdate?: (planId: string, updates: Partial<AcceptancePlan>) => Promise<void> | void
+  canEdit?: boolean
 }
 
 const ALLOWED_TRANSITIONS: Record<string, string[]> = {
-  draft: ['preparing', 'inspecting'],
-  preparing: ['ready_to_submit', 'inspecting'],
-  ready_to_submit: ['submitted', 'inspecting'],
+  draft: ['preparing'],
+  preparing: ['ready_to_submit'],
+  ready_to_submit: ['submitted'],
   submitted: ['inspecting'],
   inspecting: ['passed', 'rectifying'],
   rectifying: ['ready_to_submit', 'inspecting'],
@@ -125,9 +127,12 @@ export default function AcceptanceDetailDrawer({
   onRequirementCreate,
   onRecordCreate,
   onDateUpdate,
+  onPlanUpdate,
+  canEdit = true,
 }: AcceptanceDetailDrawerProps) {
   useDialogFocusRestore(open)
   const { toast } = useToast()
+  const canMutate = canEdit !== false
 
   const [dependencyTargetId, setDependencyTargetId] = useState('')
   const [requirementDraft, setRequirementDraft] = useState(createEmptyRequirementDraft)
@@ -136,13 +141,32 @@ export default function AcceptanceDetailDrawer({
   const [creatingRecord, setCreatingRecord] = useState(false)
   const [changingStatus, setChangingStatus] = useState(false)
   const [mutatingDependency, setMutatingDependency] = useState(false)
+  const [mutatingParallelGroup, setMutatingParallelGroup] = useState(false)
+  const [parallelGroupTargetId, setParallelGroupTargetId] = useState('')
+  const [parallelGroupDraft, setParallelGroupDraft] = useState('')
   const [escalatingIssue, setEscalatingIssue] = useState(false)
 
   const currentNodeId = node?.id || ''
+  const planRow = useMemo(
+    () => allPlans.find((item) => item.id === currentNodeId) || null,
+    [allPlans, currentNodeId],
+  )
+  const planLookup = useMemo(() => new Map(allPlans.map((item) => [item.id, item])), [allPlans])
   const dependencyOptions = useMemo(
     () => allPlans.filter((item) => item.id !== currentNodeId),
     [allPlans, currentNodeId],
   )
+  const parallelGroupOptions = useMemo(() => {
+    const groups = new Map<string, AcceptancePlan[]>()
+    allPlans.forEach((plan) => {
+      const groupId = String(plan.parallel_group_id ?? '').trim()
+      if (!groupId) return
+      groups.set(groupId, [...(groups.get(groupId) ?? []), plan])
+    })
+    return Array.from(groups.entries())
+      .map(([groupId, members]) => ({ groupId, members }))
+      .sort((left, right) => left.groupId.localeCompare(right.groupId, 'zh-CN'))
+  }, [allPlans])
 
   useEffect(() => {
     setDependencyTargetId((current) =>
@@ -155,7 +179,17 @@ export default function AcceptanceDetailDrawer({
   useEffect(() => {
     setRequirementDraft(createEmptyRequirementDraft())
     setRecordDraft(createEmptyRecordDraft())
+    setParallelGroupDraft('')
   }, [node?.id, open])
+
+  useEffect(() => {
+    const currentGroupId = String(planRow?.parallel_group_id ?? '').trim()
+    const existingTargetIsValid = parallelGroupOptions.some((group) => (
+      group.groupId === parallelGroupTargetId && group.groupId !== currentGroupId
+    ))
+    if (existingTargetIsValid) return
+    setParallelGroupTargetId(parallelGroupOptions.find((group) => group.groupId !== currentGroupId)?.groupId || '')
+  }, [parallelGroupOptions, parallelGroupTargetId, planRow?.parallel_group_id])
 
   if (!node) return null
 
@@ -187,8 +221,6 @@ export default function AcceptanceDetailDrawer({
     }
   }
 
-  const planRow = allPlans.find((item) => item.id === currentNodeId) || null
-  const planLookup = new Map(allPlans.map((item) => [item.id, item]))
   const prerequisites = detailContext?.requirements || []
   const dependencies = detailContext?.dependencies || []
   const records = detailContext?.records || []
@@ -200,6 +232,24 @@ export default function AcceptanceDetailDrawer({
   const successorPlanIds = planRow ? getAcceptanceSuccessorIds(planRow) : []
   const upstreamDependencies = dependencies.filter((item) => item.target_plan_id === currentNodeId)
   const downstreamDependencies = dependencies.filter((item) => item.source_plan_id === currentNodeId)
+  const currentParallelGroupId = String(planRow?.parallel_group_id ?? '').trim()
+  const currentParallelGroupMembers = currentParallelGroupId
+    ? parallelGroupOptions.find((group) => group.groupId === currentParallelGroupId)?.members.filter((item) => item.id !== currentNodeId) ?? []
+    : []
+
+  async function persistPlanUpdates(updates: Partial<AcceptancePlan>) {
+    if (!node) return
+    if (Object.keys(updates).length === 0) return
+
+    if (onPlanUpdate) {
+      await onPlanUpdate(node.id, updates)
+      return
+    }
+
+    if ('planned_date' in updates && onDateUpdate) {
+      await onDateUpdate(node.id, String(updates.planned_date ?? ''))
+    }
+  }
 
   const canCreateRequirement = Boolean(
     requirementDraft.requirement_type.trim()
@@ -255,6 +305,42 @@ export default function AcceptanceDetailDrawer({
       })
     } finally {
       setMutatingDependency(false)
+    }
+  }
+
+  async function handleJoinParallelGroup(groupId: string) {
+    const normalizedGroupId = groupId.trim()
+    if (!normalizedGroupId || normalizedGroupId === currentParallelGroupId) return
+    setMutatingParallelGroup(true)
+    try {
+      await persistPlanUpdates({ parallel_group_id: normalizedGroupId })
+      setParallelGroupDraft('')
+      toast({ title: '并行组已更新', description: `已加入 ${normalizedGroupId}` })
+    } catch (error) {
+      toast({
+        title: '并行组更新失败',
+        description: getActionErrorMessage(error, '并行组未能保存，请稍后重试。'),
+        variant: 'destructive',
+      })
+    } finally {
+      setMutatingParallelGroup(false)
+    }
+  }
+
+  async function handleExitParallelGroup() {
+    if (!currentParallelGroupId) return
+    setMutatingParallelGroup(true)
+    try {
+      await persistPlanUpdates({ parallel_group_id: null })
+      toast({ title: '已退出并行组', description: currentParallelGroupId })
+    } catch (error) {
+      toast({
+        title: '退出并行组失败',
+        description: getActionErrorMessage(error, '并行组未能更新，请稍后重试。'),
+        variant: 'destructive',
+      })
+    } finally {
+      setMutatingParallelGroup(false)
     }
   }
 
@@ -342,15 +428,16 @@ export default function AcceptanceDetailDrawer({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="mt-2 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <div className="mt-2 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
           <div className="space-y-1">
             <div className="text-xs text-slate-500">计划日期</div>
             <input
               type="date"
               defaultValue={node.planned_date || ''}
               onBlur={(e) => {
-                if (e.target.value && e.target.value !== (node.planned_date || '')) {
-                  onDateUpdate?.(node.id, e.target.value)
+                const nextValue = e.target.value || ''
+                if (nextValue !== (node.planned_date || '')) {
+                  void persistPlanUpdates({ planned_date: nextValue || null })
                 }
               }}
               className="w-full rounded-lg border border-slate-200 px-2 py-1 text-sm text-slate-900 focus:border-blue-400 focus:outline-none"
@@ -363,12 +450,29 @@ export default function AcceptanceDetailDrawer({
               type="date"
               defaultValue={node.actual_date || ''}
               onBlur={(e) => {
-                if (e.target.value !== (node.actual_date || '')) {
-                  onStatusChange(node.id, node.status)
+                const nextValue = e.target.value || ''
+                if (nextValue !== (node.actual_date || '')) {
+                  void persistPlanUpdates({ actual_date: nextValue || null })
                 }
               }}
               className="w-full rounded-lg border border-slate-200 px-2 py-1 text-sm text-slate-900 focus:border-blue-400 focus:outline-none"
               data-testid="acceptance-actual-date-input"
+            />
+          </div>
+          <div className="space-y-1">
+            <div className="text-xs text-slate-500">并行组</div>
+            <input
+              type="text"
+              defaultValue={planRow?.parallel_group_id || ''}
+              onBlur={(e) => {
+                const nextValue = e.target.value.trim()
+                if (nextValue !== (planRow?.parallel_group_id || '')) {
+                  void persistPlanUpdates({ parallel_group_id: nextValue || null })
+                }
+              }}
+              placeholder="填写并行组编号"
+              className="w-full rounded-lg border border-slate-200 px-2 py-1 text-sm text-slate-900 focus:border-blue-400 focus:outline-none"
+              data-testid="acceptance-parallel-group-input"
             />
           </div>
           <InfoTile label="前置未完成" value={String(planRow?.upstream_unfinished_count ?? predecessorPlanIds.length)} />
@@ -451,6 +555,7 @@ export default function AcceptanceDetailDrawer({
                   <input
                     value={requirementDraft.requirement_type}
                     onChange={(event) => setRequirementDraft((current) => ({ ...current, requirement_type: event.target.value }))}
+                    disabled={!canMutate}
                     className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
                     placeholder="external / drawing / task_condition"
                     data-testid="acceptance-requirement-type-input"
@@ -461,6 +566,7 @@ export default function AcceptanceDetailDrawer({
                   <input
                     value={requirementDraft.source_entity_type}
                     onChange={(event) => setRequirementDraft((current) => ({ ...current, source_entity_type: event.target.value }))}
+                    disabled={!canMutate}
                     className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
                     placeholder="task_condition"
                     data-testid="acceptance-requirement-source-type-input"
@@ -471,6 +577,7 @@ export default function AcceptanceDetailDrawer({
                   <input
                     value={requirementDraft.source_entity_id}
                     onChange={(event) => setRequirementDraft((current) => ({ ...current, source_entity_id: event.target.value }))}
+                    disabled={!canMutate}
                     className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
                     placeholder="condition-1"
                     data-testid="acceptance-requirement-source-id-input"
@@ -481,6 +588,7 @@ export default function AcceptanceDetailDrawer({
                   <select
                     value={requirementDraft.status}
                     onChange={(event) => setRequirementDraft((current) => ({ ...current, status: event.target.value }))}
+                    disabled={!canMutate}
                     className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
                   >
                     <option value="open">open</option>
@@ -495,6 +603,7 @@ export default function AcceptanceDetailDrawer({
                 <textarea
                   value={requirementDraft.description}
                   onChange={(event) => setRequirementDraft((current) => ({ ...current, description: event.target.value }))}
+                  disabled={!canMutate}
                   className="min-h-20 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
                   data-testid="acceptance-requirement-description-input"
                   placeholder="补充内容"
@@ -504,7 +613,7 @@ export default function AcceptanceDetailDrawer({
                 <Button
                   type="button"
                   className="gap-2"
-                  disabled={!canCreateRequirement || creatingRequirement}
+                  disabled={!canMutate || !canCreateRequirement || creatingRequirement}
                   onClick={() => void handleRequirementCreate()}
                   data-testid="acceptance-create-requirement"
                 >
@@ -608,46 +717,50 @@ export default function AcceptanceDetailDrawer({
               <div className="grid gap-3 md:grid-cols-2">
                 <label className="grid gap-1 text-xs text-slate-500">
                   记录类型
-                  <input
-                    value={recordDraft.record_type}
-                    onChange={(event) => setRecordDraft((current) => ({ ...current, record_type: event.target.value }))}
-                    className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
-                    placeholder="submission / rectifying / review"
-                  />
+                <input
+                  value={recordDraft.record_type}
+                  onChange={(event) => setRecordDraft((current) => ({ ...current, record_type: event.target.value }))}
+                  disabled={!canMutate}
+                  className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                  placeholder="submission / rectifying / review"
+                />
                 </label>
                 <label className="grid gap-1 text-xs text-slate-500">
                   处理人
-                  <input
-                    value={recordDraft.operator}
-                    onChange={(event) => setRecordDraft((current) => ({ ...current, operator: event.target.value }))}
-                    className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
-                    placeholder="operator"
-                  />
+                <input
+                  value={recordDraft.operator}
+                  onChange={(event) => setRecordDraft((current) => ({ ...current, operator: event.target.value }))}
+                  disabled={!canMutate}
+                  className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                  placeholder="operator"
+                />
                 </label>
                 <label className="grid gap-1 text-xs text-slate-500 md:col-span-2">
                   内容
-                  <textarea
-                    value={recordDraft.content}
-                    onChange={(event) => setRecordDraft((current) => ({ ...current, content: event.target.value }))}
-                    className="min-h-24 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
-                    placeholder="记录申报、预约、整改、复验、通过或备案等过程事实"
-                  />
+                <textarea
+                  value={recordDraft.content}
+                  onChange={(event) => setRecordDraft((current) => ({ ...current, content: event.target.value }))}
+                  disabled={!canMutate}
+                  className="min-h-24 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                  placeholder="记录申报、预约、整改、复验、通过或备案等过程事实"
+                />
                 </label>
                 <label className="grid gap-1 text-xs text-slate-500">
                   日期
-                  <input
-                    type="date"
-                    value={recordDraft.record_date}
-                    onChange={(event) => setRecordDraft((current) => ({ ...current, record_date: event.target.value }))}
-                    className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
-                  />
+                <input
+                  type="date"
+                  value={recordDraft.record_date}
+                  onChange={(event) => setRecordDraft((current) => ({ ...current, record_date: event.target.value }))}
+                  disabled={!canMutate}
+                  className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                />
                 </label>
               </div>
               <div className="flex justify-end">
                 <Button
                   type="button"
                   className="gap-2"
-                  disabled={!canCreateRecord || creatingRecord}
+                  disabled={!canMutate || !canCreateRecord || creatingRecord}
                   onClick={() => void handleRecordCreate()}
                 >
                   <Plus className="h-4 w-4" />
@@ -760,6 +873,7 @@ export default function AcceptanceDetailDrawer({
             <select
               value={dependencyTargetId}
               onChange={(event) => setDependencyTargetId(event.target.value)}
+              disabled={!canMutate}
               className="min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
               data-testid="acceptance-dependency-target"
             >
@@ -776,7 +890,7 @@ export default function AcceptanceDetailDrawer({
             <Button
               type="button"
               className="shrink-0 gap-2"
-              disabled={!dependencyTargetId || mutatingDependency}
+              disabled={!canMutate || !dependencyTargetId || mutatingDependency}
               onClick={() => void handleDependencyAdd()}
               data-testid="acceptance-add-dependency"
             >
@@ -804,7 +918,7 @@ export default function AcceptanceDetailDrawer({
                   variant="outline"
                   size="sm"
                   className="shrink-0"
-                  disabled={mutatingDependency}
+                  disabled={!canMutate || mutatingDependency}
                   onClick={() => void handleDependencyRemove(item.source_plan_id)}
                   data-testid={`acceptance-remove-dependency-${item.id}`}
                 >
@@ -813,23 +927,110 @@ export default function AcceptanceDetailDrawer({
               </div>
             )) : <LinkedEmptyState text="暂无前置依赖，可在此维护。" />}
           </div>
+
+          <div className="mt-4 rounded-2xl border border-indigo-100 bg-indigo-50/40 p-3" data-testid="acceptance-parallel-group-panel">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <div className="text-sm font-semibold text-slate-900">并行组</div>
+                <div className="mt-0.5 text-xs text-slate-500">
+                  {currentParallelGroupId ? `当前组：${currentParallelGroupId}` : '当前节点未加入并行组'}
+                </div>
+              </div>
+              {currentParallelGroupId ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={!canMutate || mutatingParallelGroup}
+                  onClick={() => void handleExitParallelGroup()}
+                  data-testid="acceptance-exit-parallel-group"
+                >
+                  退出并行组
+                </Button>
+              ) : null}
+            </div>
+
+            <div className="mt-3 grid gap-2">
+              {currentParallelGroupMembers.length > 0 ? currentParallelGroupMembers.map((member) => (
+                <div key={member.id} className="flex items-center justify-between rounded-xl border border-indigo-100 bg-white px-3 py-2 text-sm">
+                  <span className="truncate font-medium text-slate-800">{member.name}</span>
+                  <Badge variant="outline" className="shrink-0">{member.status}</Badge>
+                </div>
+              )) : (
+                <LinkedEmptyState text={currentParallelGroupId ? '当前组暂无其他节点。' : '加入或创建并行组后，将在这里展示组内其他节点。'} />
+              )}
+            </div>
+
+            <div className="mt-3 grid gap-3 lg:grid-cols-[1fr_auto]">
+              <select
+                value={parallelGroupTargetId}
+                onChange={(event) => setParallelGroupTargetId(event.target.value)}
+                disabled={!canMutate || parallelGroupOptions.length === 0}
+                className="min-w-0 rounded-md border border-indigo-100 bg-white px-3 py-2 text-sm text-slate-900"
+                data-testid="acceptance-parallel-group-select"
+              >
+                {parallelGroupOptions.length === 0 ? (
+                  <option value="">暂无已有并行组</option>
+                ) : (
+                  parallelGroupOptions.map((group) => (
+                    <option key={group.groupId} value={group.groupId} disabled={group.groupId === currentParallelGroupId}>
+                      {group.groupId}（{group.members.length}项）
+                    </option>
+                  ))
+                )}
+              </select>
+              <Button
+                type="button"
+                variant="outline"
+                className="shrink-0"
+                disabled={!canMutate || !parallelGroupTargetId || mutatingParallelGroup}
+                onClick={() => void handleJoinParallelGroup(parallelGroupTargetId)}
+                data-testid="acceptance-join-parallel-group"
+              >
+                {mutatingParallelGroup ? '保存中...' : '加入并行组'}
+              </Button>
+            </div>
+
+            <div className="mt-3 grid gap-3 lg:grid-cols-[1fr_auto]">
+              <input
+                value={parallelGroupDraft}
+                onChange={(event) => setParallelGroupDraft(event.target.value)}
+                disabled={!canMutate}
+                className="min-w-0 rounded-md border border-indigo-100 bg-white px-3 py-2 text-sm text-slate-900"
+                placeholder="新并行组编号，可留空自动生成"
+                data-testid="acceptance-new-parallel-group-input"
+              />
+              <Button
+                type="button"
+                className="shrink-0"
+                disabled={!canMutate || mutatingParallelGroup}
+                onClick={() => {
+                  const fallbackGroupId = `PG-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${currentNodeId.slice(0, 4) || 'new'}`
+                  void handleJoinParallelGroup(parallelGroupDraft || fallbackGroupId)
+                }}
+                data-testid="acceptance-create-parallel-group"
+              >
+                {mutatingParallelGroup ? '保存中...' : '创建并加入'}
+              </Button>
+            </div>
+          </div>
         </div>
 
         <div className="mt-4 flex flex-wrap gap-3 border-t border-slate-100 pt-4">
           {['inspecting', 'rectifying'].includes(node.status) && (
-            <Button className="gap-2 bg-green-600 hover:bg-green-500" disabled={changingStatus} onClick={() => void handleStatusChange('passed')}>
+            <Button className="gap-2 bg-green-600 hover:bg-green-500" disabled={!canMutate || changingStatus} onClick={() => void handleStatusChange('passed')}>
               <CheckCircle2 className="h-4 w-4" />
               {changingStatus ? '提交中...' : '标记通过'}
             </Button>
           )}
-          {['draft', 'preparing', 'ready_to_submit', 'submitted'].includes(node.status) && (
-            <Button variant="outline" className="gap-2" disabled={changingStatus} onClick={() => void handleStatusChange('inspecting')}>
+          {node.status === 'submitted' && (
+            <Button variant="outline" className="gap-2" disabled={!canMutate || changingStatus} onClick={() => void handleStatusChange('inspecting')}>
               <ArrowRight className="h-4 w-4" />
               {changingStatus ? '提交中...' : '开始验收'}
             </Button>
           )}
           {node.status === 'draft' && (
-            <Button variant="outline" className="gap-2" disabled={changingStatus} onClick={() => void handleStatusChange('preparing')}>
+            <Button variant="outline" className="gap-2" disabled={!canMutate || changingStatus} onClick={() => void handleStatusChange('preparing')}>
               <ArrowRight className="h-4 w-4" />
               {changingStatus ? '提交中...' : '开始准备'}
             </Button>
@@ -839,7 +1040,7 @@ export default function AcceptanceDetailDrawer({
               <Button
                 variant="outline"
                 className="gap-2"
-                disabled={!canSubmitDeclaration}
+                disabled={!canMutate || !canSubmitDeclaration}
                 title={submitBlockedReason ?? undefined}
                 onClick={() => void handleStatusChange('submitted')}
               >
@@ -852,13 +1053,13 @@ export default function AcceptanceDetailDrawer({
             </div>
           )}
           {node.status === 'rectifying' && (
-            <Button variant="outline" className="gap-2" disabled={changingStatus} onClick={() => void handleStatusChange('ready_to_submit')}>
+            <Button variant="outline" className="gap-2" disabled={!canMutate || changingStatus} onClick={() => void handleStatusChange('ready_to_submit')}>
               <ArrowRight className="h-4 w-4" />
               {changingStatus ? '提交中...' : '回到待申报'}
             </Button>
           )}
           {node.status === 'passed' && (
-            <Button variant="outline" className="gap-2" disabled={changingStatus} onClick={() => void handleStatusChange('archived')}>
+            <Button variant="outline" className="gap-2" disabled={!canMutate || changingStatus} onClick={() => void handleStatusChange('archived')}>
               <CheckCircle2 className="h-4 w-4" />
               {changingStatus ? '提交中...' : '标记已归档'}
             </Button>
@@ -866,7 +1067,7 @@ export default function AcceptanceDetailDrawer({
           <Button
             variant="outline"
             className="gap-2 text-amber-700 border-amber-200 hover:bg-amber-50"
-            disabled={escalatingIssue}
+            disabled={!canMutate || escalatingIssue}
             onClick={async () => {
               setEscalatingIssue(true)
               try {
@@ -981,11 +1182,11 @@ function LinkedBundleSection(
   },
 ) {
   const { title, subtitle, children, ...rest } = props
-  void subtitle
   return (
     <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm" {...rest}>
       <div className="mb-3 space-y-1">
         <h4 className="text-sm font-semibold text-slate-900">{title}</h4>
+        {subtitle ? <p className="text-xs text-slate-500">{subtitle}</p> : null}
       </div>
       <div className="space-y-3">{children}</div>
     </section>

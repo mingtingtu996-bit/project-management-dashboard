@@ -1,11 +1,11 @@
-import { ArrowRightCircle, Layers3, X } from 'lucide-react'
-
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { ArrowRightCircle, Layers3, X } from 'lucide-react'
 
 interface CloseoutBatchBarProps {
   selectedCount: number
   drawerOpen: boolean
+  readOnly?: boolean
   onOpenBatchLayer: () => void
   onClearSelection: () => void
 }
@@ -13,6 +13,7 @@ interface CloseoutBatchBarProps {
 export function CloseoutBatchBar({
   selectedCount,
   drawerOpen,
+  readOnly = false,
   onOpenBatchLayer,
   onClearSelection,
 }: CloseoutBatchBarProps) {
@@ -42,7 +43,8 @@ export function CloseoutBatchBar({
           <button
             type="button"
             onClick={onClearSelection}
-            className="rounded-full p-1 text-slate-300 transition hover:bg-white/10 hover:text-white"
+            disabled={readOnly}
+            className="rounded-full p-1 text-slate-300 transition hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
             aria-label="清空选择"
           >
             <X className="h-4 w-4" />
@@ -57,6 +59,7 @@ export function CloseoutBatchBar({
             onClick={onOpenBatchLayer}
             className="gap-2 rounded-full border-slate-600 bg-transparent text-slate-100 hover:bg-white/10"
             data-testid="closeout-batch-close-entry"
+            disabled={readOnly}
           >
             <Layers3 className="h-4 w-4" />
             批量关闭
@@ -68,6 +71,7 @@ export function CloseoutBatchBar({
             variant="ghost"
             onClick={onClearSelection}
             className="gap-2 rounded-full text-slate-200 hover:bg-white/10 hover:text-white"
+            disabled={readOnly}
           >
             <ArrowRightCircle className="h-4 w-4" />
             逐条处理

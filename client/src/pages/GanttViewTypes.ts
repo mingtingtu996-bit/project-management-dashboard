@@ -44,6 +44,8 @@ export interface Task {
   // 实际开始/结束日期
   actual_start_date?: string | null
   actual_end_date?: string | null
+  lagLevel?: 'none' | 'mild' | 'moderate' | 'severe'
+  lagStatus?: '正常' | '轻度滞后' | '中度滞后' | '严重滞后'
   // #12: 专项工程分类
   specialty_type?: string | null
   version?: number

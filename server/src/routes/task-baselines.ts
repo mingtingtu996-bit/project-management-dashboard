@@ -1,10 +1,11 @@
-import { v4 as uuidv4 } from 'uuid'
 import { Router } from 'express'
+import { v4 as uuidv4 } from 'uuid'
 import { asyncHandler } from '../middleware/errorHandler.js'
-import { authenticate } from '../middleware/auth.js'
+import { authenticate, requireProjectEditor, requireProjectMember } from '../middleware/auth.js'
 import { logger } from '../middleware/logger.js'
 import { validateIdParam } from '../middleware/validation.js'
 import { supabase } from '../services/dbService.js'
+import { PlanningBootstrapService, buildBaselineSeedFromProject } from '../services/planningBootstrap.js'
 import { planningStateMachine, PlanningStateTransitionError } from '../services/planningStateMachine.js'
 import {
   PlanningDraftLockService,
@@ -28,7 +29,7 @@ import type {
   PlanningTransitionContext,
   RevisionSubmitResponse,
 } from '../types/planning.js'
-import type { PlanningDraftLockRecord, TaskBaseline, TaskBaselineItem } from '../types/db.js'
+import type { Milestone, PlanningDraftLockRecord, Task, TaskBaseline, TaskBaselineItem } from '../types/db.js'
 
 const router = Router()
 const draftLockService = new PlanningDraftLockService()
@@ -102,6 +103,8 @@ function mapBaselineItem(
     is_baseline_critical: Boolean(row.is_baseline_critical),
     mapping_status: row.mapping_status ?? 'mapped',
     notes: row.notes ?? null,
+    template_id: row.template_id ?? null,
+    template_node_id: row.template_node_id ?? null,
     created_at: row.created_at ?? new Date().toISOString(),
     updated_at: row.updated_at ?? new Date().toISOString(),
   }
@@ -135,6 +138,93 @@ async function getBaselineItems(baselineId: string): Promise<TaskBaselineItem[]>
 
   if (error) throw error
   return (data ?? []) as TaskBaselineItem[]
+}
+
+function getBaselineCompareKey(item: Pick<TaskBaselineItem, 'source_task_id' | 'source_milestone_id' | 'title'>) {
+  return item.source_task_id?.trim() || item.source_milestone_id?.trim() || item.title.trim()
+}
+
+function summarizeBaselineDiff(currentItems: TaskBaselineItem[], previousItems: TaskBaselineItem[]) {
+  const previousByKey = new Map(previousItems.map((item) => [getBaselineCompareKey(item), item]))
+  const matchedKeys = new Set<string>()
+
+  let modifiedItemCount = 0
+  let milestoneChangeCount = 0
+  let criticalPathChangeCount = 0
+  let mappingAffectedCount = 0
+
+  for (const current of currentItems) {
+    const key = getBaselineCompareKey(current)
+    const previous = previousByKey.get(key)
+
+    if (!previous) {
+      modifiedItemCount += 1
+      if (current.is_critical) {
+        criticalPathChangeCount += 1
+      }
+      if (current.mapping_status && current.mapping_status !== 'mapped') {
+        mappingAffectedCount += 1
+      }
+      continue
+    }
+
+    matchedKeys.add(key)
+
+    const isModified =
+      previous.title !== current.title ||
+      previous.planned_start_date !== current.planned_start_date ||
+      previous.planned_end_date !== current.planned_end_date ||
+      previous.target_progress !== current.target_progress ||
+      previous.mapping_status !== current.mapping_status ||
+      previous.is_critical !== current.is_critical
+
+    const isMilestoneChange =
+      Boolean(current.is_milestone || previous.is_milestone) &&
+      previous.planned_end_date !== current.planned_end_date
+
+    const affectsCriticalPath =
+      Boolean(current.is_critical || previous.is_critical) ||
+      isMilestoneChange ||
+      previous.mapping_status !== current.mapping_status
+
+    const mappingAffected =
+      previous.mapping_status !== current.mapping_status ||
+      current.mapping_status === 'missing' ||
+      previous.mapping_status === 'missing'
+
+    if (isModified) modifiedItemCount += 1
+    if (isMilestoneChange) milestoneChangeCount += 1
+    if (affectsCriticalPath) criticalPathChangeCount += 1
+    if (mappingAffected) mappingAffectedCount += 1
+  }
+
+  for (const previous of previousItems) {
+    const key = getBaselineCompareKey(previous)
+    if (matchedKeys.has(key)) continue
+    modifiedItemCount += 1
+    if (previous.is_critical) {
+      criticalPathChangeCount += 1
+    }
+    if (previous.mapping_status && previous.mapping_status !== 'mapped') {
+      mappingAffectedCount += 1
+    }
+  }
+
+  return {
+    modifiedItemCount,
+    milestoneChangeCount,
+    criticalPathChangeCount,
+    mappingAffectedCount,
+  }
+}
+
+async function getComparisonBaseline(projectId: string, currentBaselineId: string) {
+  const baselines = await listProjectBaselines(projectId)
+  return (
+    baselines
+      .filter((baseline) => baseline.id !== currentBaselineId && baseline.status === 'confirmed')
+      .sort((left, right) => right.version - left.version)[0] ?? null
+  )
 }
 
 async function evaluateRuntimeBaselineValidity(projectId: string, items: TaskBaselineItem[]) {
@@ -365,7 +455,10 @@ async function createBaselineVersion(params: {
     try {
       const createdBaseline = data as TaskBaseline
       const items = await persistBaselineItems(createdBaseline.id, params.projectId, params.items)
-      return normalizeBaselineRow(createdBaseline, items)
+      const comparisonBaseline = await getComparisonBaseline(params.projectId, createdBaseline.id)
+      const comparisonItems = comparisonBaseline ? await getBaselineItems(comparisonBaseline.id) : []
+      const summary = summarizeBaselineDiff(items, comparisonItems)
+      return normalizeBaselineRow({ ...createdBaseline, ...summary }, items)
     } catch (itemError) {
       await cleanupBaselineDraft((data as TaskBaseline).id)
       throw itemError
@@ -382,8 +475,80 @@ function mapPlanningTransitionError(error: unknown) {
   return null
 }
 
+router.post(
+  '/bootstrap/from-schedule',
+  requireProjectEditor((req) => req.body?.project_id ?? req.body?.projectId),
+  asyncHandler(async (req, res) => {
+    const projectId = String(req.body?.project_id ?? req.body?.projectId ?? '').trim()
+    if (!projectId) {
+      return res.status(400).json(badRequest('project_id 不能为空'))
+    }
+
+    const bootstrapService = new PlanningBootstrapService()
+    const [projectResult, tasksResult, milestonesResult] = await Promise.all([
+      supabase
+        .from('projects')
+        .select('id, name, status, project_type, building_type, planned_start_date, start_date, actual_start_date, current_phase, default_wbs_generated')
+        .eq('id', projectId)
+        .limit(1),
+      supabase
+        .from('tasks')
+        .select('id, parent_id, title, description, reference_duration, ai_duration, is_milestone, template_id, template_node_id')
+        .eq('project_id', projectId),
+      supabase
+        .from('milestones')
+        .select('id, title, description')
+        .eq('project_id', projectId),
+    ])
+
+    if (projectResult.error) throw projectResult.error
+    if (tasksResult.error) throw tasksResult.error
+    if (milestonesResult.error) throw milestonesResult.error
+
+    const project = (projectResult.data?.[0] as Record<string, any> | undefined) ?? null
+    if (!project) {
+      return res.status(404).json(badRequest('项目不存在', 'NOT_FOUND'))
+    }
+
+    const tasks = (tasksResult.data ?? []) as Array<Partial<Task> & Record<string, any>>
+    const milestones = (milestonesResult.data ?? []) as Array<Partial<Milestone> & Record<string, any>>
+    const nodes = bootstrapService.buildProjectNodes({
+      project: project as any,
+      tasks,
+      milestones,
+    })
+    const seed = buildBaselineSeedFromProject({
+      project: project as any,
+      nodes,
+    })
+
+    const baseline = await createBaselineVersion({
+      projectId,
+      title: seed.title,
+      description: seed.description,
+      sourceType: 'current_schedule',
+      sourceVersionLabel: seed.source_version_label,
+      items: seed.items,
+    })
+
+    const response: ApiResponse = {
+      success: true,
+      data: {
+        path: 'ongoing_project_to_baseline',
+        baseline,
+        created_item_count: baseline.items.length,
+        project_id: projectId,
+        needs_mapping_review: true,
+      },
+      timestamp: new Date().toISOString(),
+    }
+    res.status(201).json(response)
+  })
+)
+
 router.get(
   '/',
+  requireProjectMember((req) => req.query.project_id as string | undefined),
   asyncHandler(async (req, res) => {
     const projectId = req.query.project_id as string | undefined
     const { data, error } = await supabase
@@ -407,6 +572,7 @@ router.get(
 router.get(
   '/:id',
   validateIdParam,
+  requireProjectMember((req) => req.query.project_id as string | undefined),
   asyncHandler(async (req, res) => {
     const { id } = req.params
     const baseline = await getBaselineRecord(id)
@@ -415,9 +581,12 @@ router.get(
     }
 
     const items = await getBaselineItems(id)
+    const comparisonBaseline = await getComparisonBaseline(baseline.project_id, baseline.id)
+    const comparisonItems = comparisonBaseline ? await getBaselineItems(comparisonBaseline.id) : []
+    const summary = summarizeBaselineDiff(items, comparisonItems)
     const response: ApiResponse<TaskBaseline & { items: TaskBaselineItem[] }> = {
       success: true,
-      data: normalizeBaselineRow(baseline, items),
+      data: normalizeBaselineRow({ ...baseline, ...summary }, items),
       timestamp: new Date().toISOString(),
     }
     res.json(response)
@@ -426,6 +595,7 @@ router.get(
 
 router.post(
   '/',
+  requireProjectEditor((req) => req.body?.project_id),
   asyncHandler(async (req, res) => {
     const projectId = String(req.body?.project_id ?? '').trim()
     const title = String(req.body?.title ?? '').trim() || '项目基线'
@@ -457,6 +627,10 @@ router.post(
 router.post(
   '/:id/confirm',
   validateIdParam,
+  requireProjectEditor(async (req) => {
+    const baseline = await getBaselineRecord(req.params.id)
+    return baseline?.project_id
+  }),
   asyncHandler(async (req, res) => {
     const { id } = req.params
     const version = Number(req.body?.version)
@@ -470,6 +644,20 @@ router.post(
     }
     if (baseline.version !== version) {
       return res.status(409).json(badRequest('版本号已发生变化，请刷新后重试', 'VERSION_CONFLICT'))
+    }
+
+    try {
+      await draftLockService.acquireDraftLock({
+        projectId: baseline.project_id,
+        draftType: 'baseline',
+        resourceId: id,
+        actorUserId: req.user?.id ?? 'system',
+      })
+    } catch (error: unknown) {
+      if (error instanceof PlanningDraftLockServiceError) {
+        return res.status(error.statusCode).json(badRequest(error.message, error.code))
+      }
+      throw error
     }
 
     try {
@@ -544,6 +732,21 @@ router.post(
         return res.status(409).json(badRequest(planningError.message, planningError.code))
       }
       throw error
+    } finally {
+      try {
+        await draftLockService.releaseDraftLock({
+          projectId: baseline.project_id,
+          draftType: 'baseline',
+          resourceId: id,
+          actorUserId: req.user?.id ?? 'system',
+          actorRole: await draftLockService.getProjectRole(baseline.project_id, req.user?.id ?? 'system'),
+          reason: 'manual_release',
+        })
+      } catch (error) {
+        if (!(error instanceof PlanningDraftLockServiceError) || error.code !== 'NOT_FOUND') {
+          logger.warn('[task-baselines] failed to release draft lock after confirm', { baselineId: id, error })
+        }
+      }
     }
   })
 )
@@ -551,6 +754,10 @@ router.post(
 router.post(
   '/:id/queue-realignment',
   validateIdParam,
+  requireProjectEditor(async (req) => {
+    const baseline = await getBaselineRecord(req.params.id)
+    return baseline?.project_id
+  }),
   asyncHandler(async (req, res) => {
     const { id } = req.params
     const version = Number(req.body?.version)
@@ -614,6 +821,10 @@ router.post(
 router.post(
   '/:id/resolve-realignment',
   validateIdParam,
+  requireProjectEditor(async (req) => {
+    const baseline = await getBaselineRecord(req.params.id)
+    return baseline?.project_id
+  }),
   asyncHandler(async (req, res) => {
     const { id } = req.params
     const version = Number(req.body?.version)
@@ -677,6 +888,10 @@ router.post(
 router.get(
   '/:id/revision-pool',
   validateIdParam,
+  requireProjectEditor(async (req) => {
+    const baseline = await getBaselineRecord(req.params.id)
+    return baseline?.project_id
+  }),
   asyncHandler(async (req, res) => {
     const baseline = await getBaselineRecord(req.params.id)
     if (!baseline) {
@@ -696,6 +911,10 @@ router.get(
 router.post(
   '/:id/revision-pool',
   validateIdParam,
+  requireProjectEditor(async (req) => {
+    const baseline = await getBaselineRecord(req.params.id)
+    return baseline?.project_id
+  }),
   asyncHandler(async (req, res) => {
     const baseline = await getBaselineRecord(req.params.id)
     if (!baseline) {
@@ -730,6 +949,10 @@ router.post(
 router.post(
   '/:id/revisions',
   validateIdParam,
+  requireProjectEditor(async (req) => {
+    const baseline = await getBaselineRecord(req.params.id)
+    return baseline?.project_id
+  }),
   asyncHandler(async (req, res) => {
     const baseline = await getBaselineRecord(req.params.id)
     if (!baseline) {
@@ -741,6 +964,11 @@ router.post(
         baseline,
         actorUserId: req.user?.id ?? null,
         reason: String(req.body?.reason ?? '').trim() || 'manual_revision',
+        sourceCandidateIds: Array.isArray(req.body?.source_candidate_ids)
+          ? req.body.source_candidate_ids.map((item: unknown) => String(item ?? '').trim()).filter(Boolean)
+          : Array.isArray(req.body?.sourceCandidateIds)
+            ? req.body.sourceCandidateIds.map((item: unknown) => String(item ?? '').trim()).filter(Boolean)
+            : undefined,
       })
 
       const response: ApiResponse<RevisionSubmitResponse> = {
@@ -761,6 +989,10 @@ router.post(
 router.get(
   '/:id/lock',
   validateIdParam,
+  requireProjectEditor(async (req) => {
+    const baseline = await getBaselineRecord(req.params.id)
+    return baseline?.project_id
+  }),
   asyncHandler(async (req, res) => {
     const { id } = req.params
     const baseline = await getBaselineRecord(id)
@@ -785,6 +1017,10 @@ router.get(
 router.post(
   '/:id/lock',
   validateIdParam,
+  requireProjectEditor(async (req) => {
+    const baseline = await getBaselineRecord(req.params.id)
+    return baseline?.project_id
+  }),
   asyncHandler(async (req, res) => {
     const { id } = req.params
     const baseline = await getBaselineRecord(id)
@@ -817,6 +1053,10 @@ router.post(
 router.post(
   '/:id/force-unlock',
   validateIdParam,
+  requireProjectEditor(async (req) => {
+    const baseline = await getBaselineRecord(req.params.id)
+    return baseline?.project_id
+  }),
   asyncHandler(async (req, res) => {
     const { id } = req.params
     const baseline = await getBaselineRecord(id)

@@ -40,6 +40,16 @@ vi.mock('@/services/acceptanceApi', () => ({
       requirements: [],
       records: [],
     })),
+    getProjectSummary: vi.fn(async () => ({
+      totalCount: 1,
+      passedCount: 0,
+      inProgressCount: 0,
+      notStartedCount: 1,
+      blockedCount: 0,
+      dueSoon30dCount: 1,
+      keyMilestoneCount: 1,
+      completionRate: 0,
+    })),
     getCustomTypes: vi.fn(async () => []),
     getPlanRequirements: vi.fn(async () => []),
     getPlanDependencies: vi.fn(async () => []),
@@ -139,6 +149,16 @@ vi.mock('@/services/acceptanceApi', () => ({
     deleteCustomType: vi.fn(async () => undefined),
     createPlan: vi.fn(async (plan: Record<string, unknown>) => ({ id: 'plan-1', ...plan })),
   },
+}))
+
+vi.mock('@/hooks/usePermissions', () => ({
+  usePermissions: () => ({
+    canEdit: true,
+    canManageTeam: true,
+    loading: false,
+    permissionLevel: 'editor',
+    globalRole: 'admin',
+  }),
 }))
 
 function flush() {

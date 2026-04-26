@@ -1,5 +1,5 @@
-import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { LoadingState } from '@/components/ui/loading-state'
@@ -12,7 +12,11 @@ import {
 } from '@/components/ui/select'
 import { formatDate } from '@/lib/utils'
 import { Flag, GitBranch, X } from 'lucide-react'
+import { memo, useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 
+import type { CriticalPathSnapshot } from '@/lib/criticalPath'
+import type { TaskConditionSummary } from '@/lib/taskBusinessStatus'
 import { type Task, MILESTONE_LEVEL_CONFIG, SPECIALTY_TYPES } from './GanttViewTypes'
 
 interface DelayRequestRecord {
@@ -46,6 +50,7 @@ interface DelayRequestFormErrors {
 }
 
 export interface TaskDetailPanelProps {
+  projectId: string
   selectedTask: Task
   onClose: () => void
   getBusinessStatus: (task: Task) => {
@@ -58,6 +63,7 @@ export interface TaskDetailPanelProps {
   onOpenObstacle: (task: Task) => void
   criticalPathSummaryText?: string | null
   criticalPathError?: string | null
+  criticalPathSnapshot?: CriticalPathSnapshot | null
   selectedCriticalPathTask?: {
     isAutoCritical?: boolean
     isManualAttention?: boolean
@@ -66,6 +72,8 @@ export interface TaskDetailPanelProps {
     durationDays?: number
   } | null
   onOpenCriticalPathDialog: () => void
+  selectedTaskConditionSummary?: TaskConditionSummary | null
+  selectedTaskObstacleCount?: number
   delayRequests: DelayRequestRecord[]
   delayRequestsLoading: boolean
   pendingDelayRequest?: DelayRequestRecord | null
@@ -80,6 +88,7 @@ export interface TaskDetailPanelProps {
   delayRequestReviewingId?: string | null
   delayImpactDays?: number
   delayImpactSummary?: string
+  onSaveProgress: (taskId: string, value: number) => void | Promise<void>
   onDelayRequestFormChange: (field: keyof DelayRequestFormState, value: string) => void
   onSubmitDelayRequest: () => void
   onWithdrawDelayRequest: () => void
@@ -117,6 +126,7 @@ function formatDateRange(start?: string | null, end?: string | null) {
 }
 
 export function TaskDetailPanel({
+  projectId,
   selectedTask,
   onClose,
   getBusinessStatus,
@@ -125,8 +135,11 @@ export function TaskDetailPanel({
   onOpenObstacle,
   criticalPathSummaryText,
   criticalPathError,
+  criticalPathSnapshot,
   selectedCriticalPathTask,
   onOpenCriticalPathDialog,
+  selectedTaskConditionSummary = null,
+  selectedTaskObstacleCount = 0,
   delayRequests,
   delayRequestsLoading,
   pendingDelayRequest,
@@ -141,6 +154,7 @@ export function TaskDetailPanel({
   delayRequestReviewingId,
   delayImpactDays,
   delayImpactSummary,
+  onSaveProgress,
   onDelayRequestFormChange,
   onSubmitDelayRequest,
   onWithdrawDelayRequest,
@@ -152,12 +166,25 @@ export function TaskDetailPanel({
   const biz = getBusinessStatus(selectedTask)
   const scheduledDuration = getScheduledDurationDays(selectedTask)
   const specialty = SPECIALTY_TYPES.find((item) => item.value === selectedTask.specialty_type)
+  const [progressDraft, setProgressDraft] = useState<number>(Number(selectedTask.progress ?? 0))
+  const [progressSaving, setProgressSaving] = useState(false)
   const latestDelayRequest = delayRequests[0]
   const pendingDelayRequestAgeDays = pendingDelayRequest?.requested_at
     ? Math.max(0, Math.floor((Date.now() - new Date(pendingDelayRequest.requested_at).getTime()) / 86400000))
     : 0
   const showApprovalReminder = Boolean(pendingDelayRequest && pendingDelayRequestAgeDays >= 3)
   const showCriticalDelayNotice = Boolean(selectedCriticalPathTask && typeof delayImpactDays === 'number' && delayImpactDays > 0)
+  const selectedTaskProgress = Number(selectedTask.progress ?? 0)
+  const pendingConditionCount = Math.max(
+    0,
+    Number(selectedTaskConditionSummary?.total ?? 0) - Number(selectedTaskConditionSummary?.satisfied ?? 0),
+  )
+  const selectedTaskObstacleCountValue = Number(selectedTaskObstacleCount ?? 0)
+  const delayPanelId = 'gantt-delay-request-panel'
+
+  useEffect(() => {
+    setProgressDraft(Number(selectedTask.progress ?? 0))
+  }, [selectedTask.id, selectedTask.progress])
 
   return (
     <div className="w-full xl:w-80 xl:flex-shrink-0 xl:sticky xl:top-4" data-testid="gantt-task-detail-panel">
@@ -207,12 +234,109 @@ export function TaskDetailPanel({
                 className={`h-full rounded-full transition-all ${
                   selectedTask.status === 'completed'
                     ? 'bg-emerald-500'
-                    : selectedTask.status === 'blocked'
-                      ? 'bg-amber-500'
-                      : 'bg-blue-500'
+                    : selectedTask.lagLevel === 'severe'
+                      ? 'bg-orange-500'
+                      : selectedTask.lagLevel === 'moderate'
+                        ? 'bg-amber-400'
+                        : selectedTask.lagLevel === 'mild'
+                          ? 'bg-yellow-400'
+                          : selectedTask.status === 'in_progress'
+                              ? 'bg-blue-500'
+                              : 'bg-gray-300'
                 }`}
                 style={{ width: `${selectedTask.progress || 0}%` }}
               />
+            </div>
+          </div>
+
+          <div className="space-y-3 rounded-2xl border border-blue-100 bg-blue-50/70 p-3" data-testid="gantt-progress-entry-panel">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <p className="text-xs font-medium text-blue-700">录进展</p>
+                <p className="text-[11px] leading-4 text-blue-600">
+                  进度、条件、障碍和延期申请都在详情抽屉里处理。
+                </p>
+              </div>
+              <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${progressDraft === selectedTaskProgress ? 'bg-white text-blue-700' : 'bg-blue-100 text-blue-700'}`}>
+                {progressDraft}%
+              </span>
+            </div>
+
+            <div className="space-y-2">
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={1}
+                value={progressDraft}
+                onChange={(event) => setProgressDraft(Math.max(0, Math.min(100, Number(event.target.value) || 0)))}
+                className="h-1.5 w-full accent-blue-500"
+                aria-label="录进展滑块"
+              />
+              <div className="flex items-center gap-2">
+                <Input
+                  type="number"
+                  min="0"
+                  max="100"
+                  value={progressDraft}
+                  onChange={(event) => setProgressDraft(Math.max(0, Math.min(100, Number(event.target.value) || 0)))}
+                  className="h-9 bg-white"
+                  aria-label="录进展数值"
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  className="h-9 shrink-0"
+                  disabled={progressDraft === selectedTaskProgress || progressSaving}
+                  loading={progressSaving}
+                  data-testid="gantt-progress-save"
+                  onClick={async () => {
+                    try {
+                      setProgressSaving(true)
+                      await onSaveProgress(selectedTask.id, progressDraft)
+                    } finally {
+                      setProgressSaving(false)
+                    }
+                  }}
+                >
+                  保存进展
+                </Button>
+              </div>
+            </div>
+
+            <div className="grid gap-2 sm:grid-cols-3">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 justify-between border-blue-200 bg-white px-3 text-xs text-blue-700"
+                onClick={() => onOpenCondition(selectedTask)}
+              >
+                <span>条件</span>
+                <span>{pendingConditionCount > 0 ? `${pendingConditionCount}项待处理` : '已满足'}</span>
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 justify-between border-amber-200 bg-white px-3 text-xs text-amber-700"
+                onClick={() => onOpenObstacle(selectedTask)}
+              >
+                <span>障碍</span>
+                <span>{selectedTaskObstacleCountValue > 0 ? `${selectedTaskObstacleCountValue}条` : '暂无'}</span>
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 justify-between border-slate-200 bg-white px-3 text-xs text-slate-700"
+                onClick={() => {
+                  document.getElementById(delayPanelId)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                }}
+              >
+                <span>延期申请</span>
+                <span>{pendingDelayRequest ? '待审批' : '查看'}</span>
+              </Button>
             </div>
           </div>
 
@@ -303,6 +427,16 @@ export function TaskDetailPanel({
             </div>
           )}
 
+          {(selectedTask.is_milestone || selectedTask.milestone_id) && projectId && (
+            <Button asChild type="button" variant="outline" size="sm" className="h-8 w-full gap-1.5 border-slate-200 text-slate-700">
+              <Link
+                to={`/projects/${projectId}/milestones?highlight=${encodeURIComponent(selectedTask.milestone_id || selectedTask.id)}`}
+              >
+                查看里程碑详情
+              </Link>
+            </Button>
+          )}
+
           <div
             className="space-y-2 rounded-2xl border border-slate-200 bg-slate-50/80 p-3"
             data-testid="gantt-critical-path-panel"
@@ -357,6 +491,37 @@ export function TaskDetailPanel({
               <div className="h-1" />
             )}
 
+            {criticalPathSnapshot?.primaryChain?.taskIds?.length ? (
+              <div className="space-y-2 rounded-2xl border border-slate-200 bg-white p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs font-medium text-slate-700">主链顺序</p>
+                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600">
+                    {criticalPathSnapshot.primaryChain.displayLabel}
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {criticalPathSnapshot.primaryChain.taskIds.map((taskId, index) => {
+                    const snapshotTask = criticalPathSnapshot.tasks.find((item) => item.taskId === taskId)
+                    const active = taskId === selectedTask.id
+                    return (
+                      <span
+                        key={taskId}
+                        className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-[11px] ${
+                          active
+                            ? 'border-blue-300 bg-blue-50 text-blue-700'
+                            : 'border-slate-200 bg-slate-50 text-slate-600'
+                        }`}
+                        title={snapshotTask?.title || taskId}
+                      >
+                        <span className="font-semibold">{index + 1}</span>
+                        <span className="max-w-[180px] truncate">{snapshotTask?.title || taskId}</span>
+                      </span>
+                    )
+                  })}
+                </div>
+              </div>
+            ) : null}
+
             {criticalPathError && <p className="text-xs text-amber-700">{criticalPathError}</p>}
 
             <Button
@@ -374,6 +539,7 @@ export function TaskDetailPanel({
 
           <div
             className="space-y-2 rounded-2xl border border-orange-100 bg-orange-50/60 p-3"
+            id={delayPanelId}
             data-testid="gantt-delay-request-panel"
           >
             <div className="flex items-center justify-between gap-2">

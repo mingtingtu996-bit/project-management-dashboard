@@ -54,6 +54,40 @@ function readGanttDialogsSource() {
   throw new Error(`Unable to locate GanttViewDialogs.tsx in: ${candidates.join(', ')}`)
 }
 
+function readGanttFiltersSource() {
+  const candidates = [
+    join(process.cwd(), 'src/pages/GanttViewFilters.tsx'),
+    join(process.cwd(), 'client/src/pages/GanttViewFilters.tsx'),
+  ]
+
+  for (const candidate of candidates) {
+    try {
+      return readFileSync(candidate, 'utf8')
+    } catch {
+      // Try the next workspace root.
+    }
+  }
+
+  throw new Error(`Unable to locate GanttViewFilters.tsx in: ${candidates.join(', ')}`)
+}
+
+function readGanttPanelsSource() {
+  const candidates = [
+    join(process.cwd(), 'src/pages/GanttViewPanels.tsx'),
+    join(process.cwd(), 'client/src/pages/GanttViewPanels.tsx'),
+  ]
+
+  for (const candidate of candidates) {
+    try {
+      return readFileSync(candidate, 'utf8')
+    } catch {
+      // Try the next workspace root.
+    }
+  }
+
+  throw new Error(`Unable to locate GanttViewPanels.tsx in: ${candidates.join(', ')}`)
+}
+
 function readGanttComponentsSource() {
   const candidates = [
     join(process.cwd(), 'src/pages/GanttViewComponents.tsx'),
@@ -189,6 +223,51 @@ describe('GanttView source contracts', () => {
     expect(source.includes('onSelectTask(task)')).toBe(true)
   })
 
+  it('keeps gantt filters and stats aligned to the three-tier lag model', () => {
+    const source = readGanttFiltersSource()
+
+    expect(source.includes('laggedTaskCount')).toBe(true)
+    expect(source.includes('受阻任务')).toBe(false)
+    expect(source.includes('lagging_mild')).toBe(true)
+    expect(source.includes('lagging_moderate')).toBe(true)
+    expect(source.includes('lagging_severe')).toBe(true)
+    expect(source.includes('SelectItem value="blocked"')).toBe(false)
+    expect(source.includes('option value="blocked"')).toBe(false)
+  })
+
+  it('keeps the task detail drawer as the gantt progress entry point', () => {
+    const source = readGanttPanelsSource()
+
+    expect(source.includes('gantt-progress-entry-panel')).toBe(true)
+    expect(source.includes('gantt-progress-save')).toBe(true)
+    expect(source.includes('selectedTaskConditionSummary')).toBe(true)
+    expect(source.includes('selectedTaskObstacleCount')).toBe(true)
+    expect(source.includes('gantt-delay-request-panel')).toBe(true)
+    expect(source.includes('delayPanelId')).toBe(true)
+    expect(source.includes('onSaveProgress')).toBe(true)
+  })
+
+  it('keeps gantt task forms free of the legacy blocked status choice', () => {
+    const source = readGanttDialogsSource()
+
+    expect(source.includes('SelectItem value="blocked"')).toBe(false)
+    expect(source.includes('SelectItem value="todo"')).toBe(true)
+    expect(source.includes('SelectItem value="completed"')).toBe(true)
+  })
+
+  it('keeps row status badges and progress coloring tied to lag levels', () => {
+    const source = readGanttRowSectionsSource()
+
+    expect(source.includes('getTaskLagLevel')).toBe(true)
+    expect(source.includes('gantt-task-status-')).toBe(true)
+    expect(source.includes('StatusBadge')).toBe(false)
+    expect(source.includes('row-block-task')).toBe(false)
+    expect(source.includes('row-unblock-task')).toBe(false)
+    expect(source.includes('lagLevel === \'severe\'')).toBe(true)
+    expect(source.includes('lagLevel === \'moderate\'')).toBe(true)
+    expect(source.includes('lagLevel === \'mild\'')).toBe(true)
+  })
+
   it('keeps list and timeline view state on the shared gantt page', () => {
     const source = readGanttViewSource()
     const headerSource = readGanttViewHeaderSource()
@@ -243,7 +322,7 @@ describe('GanttView source contracts', () => {
     const source = readGanttViewSource()
 
     expect(source.includes('const statusPayload: Record<string, unknown> = {')).toBe(true)
-    expect(source.includes("if (val === 'completed') {")).toBe(true)
+    expect(source.includes("if (normalizedStatus === 'completed') {")).toBe(true)
     expect(source.includes('statusPayload.progress = 100')).toBe(true)
     expect(source.includes("...(typeof updatedTask?.progress === 'number'")).toBe(true)
   })

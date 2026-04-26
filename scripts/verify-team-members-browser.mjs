@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { chromium } from 'playwright'
+import { primeBrowserAuth } from './browser-auth-fixture.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const scriptsDir = dirname(__filename)
@@ -147,7 +148,7 @@ async function gotoWithRetry(page, url, {
   throw lastError ?? new Error(`${label ?? 'Navigation'} failed without an error payload`)
 }
 
-async function openTeamMembersPage(page, targetUrl) {
+async function openTeamManagementDrawer(page, targetUrl) {
   const previewRootUrl = `${baseUrl}/`
   await gotoWithRetry(page, previewRootUrl, {
     label: 'Preview warm-up',
@@ -155,11 +156,13 @@ async function openTeamMembersPage(page, targetUrl) {
     timeoutMs: 15000,
   })
   await gotoWithRetry(page, targetUrl, {
-    label: 'Team members page navigation',
+    label: 'Project dashboard navigation',
     attempts: 3,
     timeoutMs: 25000,
   })
-  await page.getByTestId('team-members-page').waitFor({ state: 'visible', timeout: 20000 })
+  await page.getByTestId('dashboard-page').waitFor({ state: 'visible', timeout: 20000 })
+  await page.getByLabel('打开用户菜单').click()
+  await page.getByRole('menuitem', { name: '团队管理' }).click()
   await page.getByTestId('team-management-panel').waitFor({ state: 'visible', timeout: 20000 })
 }
 
@@ -261,6 +264,7 @@ async function main() {
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1600 } })
     page.setDefaultTimeout(30000)
+    await primeBrowserAuth(page)
 
     page.on('console', (message) => {
       if (message.type() === 'error') {
@@ -297,8 +301,8 @@ async function main() {
       }
     })
 
-    const targetUrl = `${baseUrl}/#/projects/${projectId}/team`
-    await openTeamMembersPage(page, targetUrl)
+    const targetUrl = `${baseUrl}/#/projects/${projectId}/dashboard`
+    await openTeamManagementDrawer(page, targetUrl)
 
     const initialUrl = page.url()
     await page.screenshot({ path: join(outputDir, 'team-members-page.png'), fullPage: true })

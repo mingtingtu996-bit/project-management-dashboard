@@ -4,7 +4,7 @@ export type DeviationView = 'baseline' | 'monthly' | 'execution'
 
 const tabs: Array<{ value: DeviationView; label: string; helper: string }> = [
   { value: 'baseline', label: '基线偏差', helper: '基线对比' },
-  { value: 'monthly', label: '月度完成情况', helper: '月度关账' },
+  { value: 'monthly', label: '月度兑现偏差', helper: '月度计划兑现' },
   { value: 'execution', label: '执行偏差', helper: '计划执行' },
 ]
 

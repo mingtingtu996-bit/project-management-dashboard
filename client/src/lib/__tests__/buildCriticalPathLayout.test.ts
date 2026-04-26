@@ -84,7 +84,7 @@ describe('buildCriticalPathLayout', () => {
     expect(layout.lanes.map((lane) => ({ type: lane.type, taskIds: lane.taskIds }))).toEqual([
       { type: 'primary', taskIds: ['task-a', 'task-b', 'task-c'] },
       { type: 'alternate', taskIds: ['task-d', 'task-e'] },
-      { type: 'alternate', taskIds: ['task-c', 'task-g'] },
+      { type: 'manual_insert', taskIds: ['task-c', 'task-g'] },
       { type: 'attention', taskIds: ['task-f'] },
       { type: 'other', taskIds: ['task-h'] },
     ])

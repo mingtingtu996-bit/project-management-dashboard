@@ -8,6 +8,10 @@ export interface AcceptanceType {
   description?: string
   defaultDependsOn?: string[]
   sortOrder: number
+  phaseCode?: string
+  scopeLevel?: string
+  plannedFinishDate?: string
+  category?: string
 }
 
 export const DEFAULT_ACCEPTANCE_TYPES: AcceptanceType[] = [
@@ -432,6 +436,20 @@ export interface AcceptanceStats {
   inProgress: number
   pending: number
   failed: number
+  blockedCount: number
+  dueSoon30dCount: number
+  keyMilestoneCount: number
+  completionRate: number
+}
+
+export interface AcceptanceProjectSummary {
+  totalCount: number
+  passedCount: number
+  inProgressCount: number
+  notStartedCount: number
+  blockedCount: number
+  dueSoon30dCount: number
+  keyMilestoneCount: number
   completionRate: number
 }
 
@@ -482,6 +500,21 @@ export function summarizeAcceptancePlans(plans: AcceptancePlan[]): AcceptanceSta
   const inProgress = normalizedStatuses.filter((status) => ['preparing', 'ready_to_submit', 'submitted', 'inspecting'].includes(status)).length
   const pending = normalizedStatuses.filter((status) => status === 'draft').length
   const failed = normalizedStatuses.filter((status) => status === 'rectifying').length
+  const blockedCount = plans.filter((plan) => isAcceptanceBlocked(plan, plans)).length
+  const dueSoon30dCount = plans.filter((plan) => {
+    const status = normalizeAcceptanceStatus(plan.status)
+    if (['passed', 'archived'].includes(status)) return false
+    if (typeof plan.days_to_due === 'number') {
+      return plan.days_to_due >= 0 && plan.days_to_due <= 30
+    }
+    if (!plan.planned_date) return false
+    const planned = new Date(plan.planned_date)
+    if (Number.isNaN(planned.getTime())) return false
+    const now = new Date()
+    const diffDays = Math.ceil((planned.getTime() - now.getTime()) / (24 * 60 * 60 * 1000))
+    return diffDays >= 0 && diffDays <= 30
+  }).length
+  const keyMilestoneCount = plans.filter((plan) => Boolean(plan.is_hard_prerequisite) || Boolean(plan.is_system)).length
 
   return {
     total,
@@ -489,6 +522,9 @@ export function summarizeAcceptancePlans(plans: AcceptancePlan[]): AcceptanceSta
     inProgress,
     pending,
     failed,
+    blockedCount,
+    dueSoon30dCount,
+    keyMilestoneCount,
     completionRate: total > 0 ? Math.round((passed / total) * 100) : 0,
   }
 }

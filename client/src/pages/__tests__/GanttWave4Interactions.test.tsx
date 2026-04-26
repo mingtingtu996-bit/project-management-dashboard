@@ -108,14 +108,17 @@ describe('wave4 gantt interactions', () => {
 
     render(
       <TaskDetailPanel
+        projectId={selectedTask.project_id}
         selectedTask={selectedTask}
         onClose={vi.fn()}
         getBusinessStatus={() => ({ label: '进行中', cls: 'bg-blue-50 text-blue-700' })}
         onEdit={vi.fn()}
         onOpenCondition={vi.fn()}
         onOpenObstacle={vi.fn()}
+        onSaveProgress={vi.fn()}
         criticalPathSummaryText="主关键路径"
         criticalPathError={null}
+        criticalPathSnapshot={null}
         selectedCriticalPathTask={{ isAutoCritical: true, floatDays: 0, durationDays: 5 }}
         onOpenCriticalPathDialog={vi.fn()}
         delayRequests={[

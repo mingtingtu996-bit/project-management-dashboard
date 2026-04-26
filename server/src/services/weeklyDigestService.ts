@@ -1,5 +1,6 @@
 import { supabase } from './dbService.js'
 import { isProjectActiveStatus } from '../utils/projectStatus.js'
+import { getCriticalPathTaskIds } from './criticalPathHelpers.js'
 import type { WeeklyDigest } from '../types/db.js'
 
 function getWeekStart(date: Date): string {
@@ -45,15 +46,18 @@ export class WeeklyDigestService {
     const weekStartIso = weekStartDate.toISOString()
     const weekEndIso = new Date(weekEndDate.getTime() + 86400000).toISOString()
 
+    // Load critical task IDs
+    const criticalTaskIdsSet = await getCriticalPathTaskIds(projectId)
+
     // 1. 当前整体加权进度
     const { data: allTasks } = await supabase
       .from('tasks')
-      .select('progress, planned_start_date, planned_end_date, status, is_critical, assignee, title, planned_end_date, id')
+      .select('progress, planned_start_date, planned_end_date, status, assignee, title, id')
       .eq('project_id', projectId)
     const tasks = (allTasks || []) as Array<{
       id: string; title: string; progress?: number | null; status?: string | null
       planned_start_date?: string | null; planned_end_date?: string | null
-      is_critical?: boolean | null; assignee?: string | null
+      assignee?: string | null
     }>
     const overallProgress = getWeightedProgress(tasks)
 
@@ -89,7 +93,7 @@ export class WeeklyDigestService {
     const completedMilestonesCount = (snapshotRows || []).filter((r: { event_type: string }) => r.event_type === 'milestone_completed').length
 
     // 5. 关键路径状态
-    const criticalTasks = tasks.filter(t => t.is_critical && t.status !== 'completed' && t.status !== '已完成')
+    const criticalTasks = tasks.filter(t => criticalTaskIdsSet.has(t.id) && t.status !== 'completed' && t.status !== '已完成')
     const criticalTasksCount = criticalTasks.length
     const criticalTaskIds = criticalTasks.map((task) => task.id)
     let criticalBlockedCount = 0
@@ -113,14 +117,13 @@ export class WeeklyDigestService {
       .from('tasks')
       .select('id, title, planned_end_date, status')
       .eq('project_id', projectId)
-      .eq('is_critical', true)
       .eq('is_milestone', true)
       .neq('status', 'completed')
       .neq('status', '已完成')
       .not('planned_end_date', 'is', null)
       .order('planned_end_date', { ascending: true })
-      .limit(1)
-    const nearestMs = (milestoneRows?.[0] as { title: string; planned_end_date: string } | undefined)
+    const criticalMilestones = (milestoneRows || []).filter((m: { id: string }) => criticalTaskIdsSet.has(m.id))
+    const nearestMs = (criticalMilestones[0] as { title: string; planned_end_date: string } | undefined)
     const criticalNearestMilestone = nearestMs?.title ?? null
     const criticalNearestDelayDays = nearestMs ? daysBetween(nearestMs.planned_end_date, today) : null
 

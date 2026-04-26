@@ -2,9 +2,11 @@ import { useState } from 'react'
 import type { ApiResponse } from '../types'
 import { API_BASE, withCredentials } from '../utils'
 import { Button } from '@/components/ui/button'
+import { useParams } from 'react-router-dom'
 import { IconX, IconChevronRight, IconUpload } from './WbsIcons'
 
 export function CreateModal({ onClose, onSuccess }: { onClose: () => void; onSuccess?: () => void }) {
+  const { id: projectId = '' } = useParams<{ id: string }>()
   const [createType, setCreateType] = useState<'manual' | 'excel' | 'fromProject'>('manual')
   const [step, setStep] = useState<1 | 2>(1)
   const [creating, setCreating] = useState(false)
@@ -98,6 +100,7 @@ export function CreateModal({ onClose, onSuccess }: { onClose: () => void; onSuc
         formData.append('file', excelFile)
         formData.append('name', templateName.trim())
         formData.append('template_type', templateType)
+        formData.append('project_id', projectId)
         const res = await fetch(`${API_BASE}/api/wbs-templates/import-excel`, {
           method: 'POST',
           body: formData,
@@ -117,6 +120,7 @@ export function CreateModal({ onClose, onSuccess }: { onClose: () => void; onSuc
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            project_id: projectId,
             name: templateName.trim(),
             template_type: templateType,
             description: '',

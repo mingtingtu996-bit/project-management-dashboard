@@ -4,6 +4,7 @@ import { normalizeProjectPermissionLevel } from '../auth/access.js'
 import { logger } from '../middleware/logger.js'
 import type { DelayRequest, Task } from '../types/db.js'
 import { writeStatusTransitionLog } from './changeLogs.js'
+import { clearCriticalPathCache, getCriticalPathTaskIds } from './criticalPathHelpers.js'
 import { supabase } from './dbService.js'
 import { getProjectCriticalPathSnapshot, recalculateProjectCriticalPath } from './projectCriticalPathService.js'
 import { persistNotification } from './warningChainService.js'
@@ -147,14 +148,19 @@ function normalizeDelayRequest(row: DelayRequestRow): DelayRequest {
   }
 }
 
-function normalizeDelayTask(task: Partial<DelayTaskLike> | null | undefined): DelayTaskLike | null {
+async function normalizeDelayTask(
+  task: Partial<DelayTaskLike> | null | undefined,
+  projectId: string,
+): Promise<DelayTaskLike | null> {
   if (!task?.id) return null
+
+  const criticalTaskIds = await getCriticalPathTaskIds(projectId)
 
   return {
     id: String(task.id),
     project_id: String(task.project_id ?? ''),
     title: String(task.title ?? ''),
-    is_critical: Boolean(task.is_critical),
+    is_critical: criticalTaskIds.has(task.id),
     updated_at: String(task.updated_at ?? ''),
     planned_end_date: task.planned_end_date ? String(task.planned_end_date) : undefined,
     end_date: task.end_date ? String(task.end_date) : undefined,
@@ -219,7 +225,9 @@ async function loadDelayRows(filters: Record<string, unknown>): Promise<DelayReq
 async function loadTask(taskId: string): Promise<DelayTaskLike | null> {
   const { data, error } = await supabase.from('tasks').select('*').eq('id', taskId).single()
   if (error) throw error
-  return normalizeDelayTask(data)
+  const projectId = String(data?.project_id ?? '')
+  if (!projectId) return null
+  return await normalizeDelayTask(data, projectId)
 }
 
 async function loadProjectTasks(projectId: string): Promise<DelayTaskLike[]> {
@@ -228,7 +236,10 @@ async function loadProjectTasks(projectId: string): Promise<DelayTaskLike[]> {
     .select('id, project_id, title, start_date, planned_start_date, end_date, planned_end_date')
     .eq('project_id', projectId)
   if (error) throw error
-  return (data ?? []).map((row) => normalizeDelayTask(row)).filter((row): row is DelayTaskLike => Boolean(row))
+  const tasks = await Promise.all(
+    (data ?? []).map(async (row) => await normalizeDelayTask(row, projectId))
+  )
+  return tasks.filter((row): row is DelayTaskLike => Boolean(row))
 }
 
 async function loadProject(projectId: string) {
@@ -321,8 +332,13 @@ function uniqueRecipients(values: Array<string | null | undefined>) {
   return [...new Set(values.map((value) => String(value ?? '').trim()).filter(Boolean))]
 }
 
-function isCriticalDelayTask(task: DelayTaskLike | null | undefined, delayRequest?: DelayRequest | null) {
-  return Boolean(task?.is_critical || delayRequest?.chain_id)
+async function isCriticalDelayTask(task: DelayTaskLike | null | undefined, delayRequest?: DelayRequest | null) {
+  const projectId = String(delayRequest?.project_id ?? task?.project_id ?? '').trim()
+  const taskId = String(delayRequest?.task_id ?? task?.id ?? '').trim()
+  if (!projectId || !taskId) return false
+
+  const criticalTaskIds = await getCriticalPathTaskIds(projectId)
+  return criticalTaskIds.has(taskId)
 }
 
 async function resolveDelayApproverRecipients(projectId: string) {
@@ -356,7 +372,7 @@ async function notifyDelaySubmitted(delayRequest: DelayRequest, task: DelayTaskL
   try {
     const recipients = await resolveDelayApproverRecipients(projectId)
     if (recipients.length === 0) return
-    const isCritical = isCriticalDelayTask(task, delayRequest)
+    const isCritical = await isCriticalDelayTask(task, delayRequest)
 
     await persistNotification({
       project_id: projectId,
@@ -434,7 +450,7 @@ async function notifyDelayApprovedAssessment(delayRequest: DelayRequest, task: D
   if (!projectId) return
 
   try {
-    const isCritical = isCriticalDelayTask(task, delayRequest)
+    const isCritical = await isCriticalDelayTask(task, delayRequest)
     const recipients = await resolveDelayFollowupRecipients(projectId, delayRequest.requested_by ?? null)
     if (recipients.length === 0) return
 
@@ -890,7 +906,7 @@ export async function approveDelayRequest(id: string, reviewerId?: string | null
   const rpcPayload = await invokeDelayDecisionRpc('approve_delay_request_atomic', id, reviewerId)
   if (rpcPayload?.delay_request) {
     const approved = normalizeDelayRequest(rpcPayload.delay_request)
-    const approvedTask = normalizeDelayTask(rpcPayload.task) ?? await loadTask(existing.task_id)
+    const approvedTask = (await normalizeDelayTask(rpcPayload.task, existing.project_id)) ?? (await loadTask(existing.task_id))
     const projectId = rpcPayload.project_id ?? approved.project_id ?? null
     const timestamp = String(
       approved.reviewed_at
@@ -908,6 +924,7 @@ export async function approveDelayRequest(id: string, reviewerId?: string | null
         },
         async () => {
           await recalculateProjectCriticalPath(projectId)
+          clearCriticalPathCache(projectId)
         },
       )
     }

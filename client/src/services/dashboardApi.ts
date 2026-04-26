@@ -36,6 +36,7 @@ export interface ProjectSummary {
   milestoneProgress: number
   riskCount: number
   activeRiskCount: number
+  activeIssueCount: number
   pendingConditionCount: number
   pendingConditionTaskCount: number
   activeObstacleCount: number
@@ -77,6 +78,7 @@ export interface ProjectSummary {
     dashboardCloseoutOverdue: boolean
     dashboardForceUnlockAvailable: boolean
     hasActiveGovernanceSignal: boolean
+    governancePhase?: 'free_edit' | 'monthly_pending' | 'formal_execution' | 'pending_realign' | 'reordering' | 'closeout'
   }
 }
 

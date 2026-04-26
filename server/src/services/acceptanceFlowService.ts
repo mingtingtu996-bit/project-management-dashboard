@@ -9,6 +9,7 @@ import type {
   AcceptanceRequirementStatus,
 } from '../types/db.js'
 import {
+  IN_PROGRESS_ACCEPTANCE_STATUSES,
   PASSED_ACCEPTANCE_STATUSES,
   normalizeAcceptanceStatus,
 } from '../utils/acceptanceStatus.js'
@@ -513,6 +514,47 @@ export interface AcceptanceFlowSnapshot {
   dependencies: AcceptanceDependency[]
   requirements: AcceptanceRequirement[]
   records: AcceptanceRecord[]
+}
+
+export interface AcceptanceProjectSummary {
+  totalCount: number
+  passedCount: number
+  inProgressCount: number
+  notStartedCount: number
+  blockedCount: number
+  dueSoon30dCount: number
+  keyMilestoneCount: number
+  completionRate: number
+}
+
+export function buildAcceptanceProjectSummary(plans: AcceptancePlan[]): AcceptanceProjectSummary {
+  const totalCount = plans.length
+  const normalizedStatuses = plans.map((plan) => normalizeAcceptanceStatus(plan.status))
+  const passedCount = normalizedStatuses.filter((status) => PASSED_ACCEPTANCE_STATUSES.includes(status)).length
+  const inProgressCount = normalizedStatuses.filter((status) => IN_PROGRESS_ACCEPTANCE_STATUSES.includes(status)).length
+  const notStartedCount = normalizedStatuses.filter((status) => status === 'draft').length
+  const blockedCount = plans.filter((plan) => Boolean((plan as unknown as Record<string, unknown>).is_blocked)).length
+  const dueSoon30dCount = plans.filter((plan) => {
+    const status = normalizeAcceptanceStatus(plan.status)
+    if (PASSED_ACCEPTANCE_STATUSES.includes(status)) return false
+    const daysToDue = Number((plan as unknown as Record<string, unknown>).days_to_due)
+    return Number.isFinite(daysToDue) && daysToDue >= 0 && daysToDue <= 30
+  }).length
+  const keyMilestoneCount = plans.filter((plan) => {
+    const row = plan as unknown as Record<string, unknown>
+    return Boolean(plan.task_id || row.milestone_id || row.is_hard_prerequisite || row.is_system)
+  }).length
+
+  return {
+    totalCount,
+    passedCount,
+    inProgressCount,
+    notStartedCount,
+    blockedCount,
+    dueSoon30dCount,
+    keyMilestoneCount,
+    completionRate: totalCount > 0 ? Math.round((passedCount / totalCount) * 100) : 0,
+  }
 }
 
 export async function getAcceptanceFlowSnapshot(projectId: string): Promise<AcceptanceFlowSnapshot> {

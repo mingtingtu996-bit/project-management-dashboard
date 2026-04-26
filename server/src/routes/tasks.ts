@@ -1,6 +1,8 @@
 ﻿// Tasks API 路由
 
+import { randomUUID } from 'crypto'
 import { Router } from 'express'
+import { z } from 'zod'
 import { SupabaseService } from '../services/supabaseService.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import {
@@ -22,6 +24,11 @@ import {
   updateTaskInMainChain,
 } from '../services/taskWriteChainService.js'
 import {
+  attachTaskLagStatus,
+  attachTasksLagStatus,
+  type TaskLagFields,
+} from '../services/taskLagStatusService.js'
+import {
   REQUEST_TIMEOUT_BUDGETS,
   runWithRequestBudget,
 } from '../services/requestBudgetService.js'
@@ -32,6 +39,8 @@ const supabase = new SupabaseService()
 type TaskWithParticipantUnit = Task & {
   participant_unit_name?: string | null
 }
+
+type TaskWithLagStatus = TaskWithParticipantUnit & TaskLagFields
 
 type ParticipantUnitRecord = {
   id: string
@@ -52,6 +61,8 @@ type TaskDeleteProtectionSummary = {
   delay_request_count: number
   acceptance_plan_count: number
   has_execution_trail: boolean
+  has_baseline_link?: boolean
+  baseline_item_id?: string | null
 }
 
 function normalizeTimelineDate(value?: string | null) {
@@ -161,6 +172,25 @@ function normalizeUnitLabel(value: unknown) {
   return typeof value === 'string' ? value.trim() : ''
 }
 
+function shiftDateString(value: string | null | undefined, days: number) {
+  if (!value || !Number.isFinite(days) || days === 0) return value ?? null
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value ?? null
+  date.setDate(date.getDate() + days)
+  return date.toISOString().slice(0, 10)
+}
+
+const batchTaskUpdateSchema = z.object({
+  project_id: z.string().trim().min(1),
+  task_ids: z.array(z.string().trim().min(1)).min(1),
+  status: z.string().trim().optional().nullable(),
+  assignee_name: z.string().trim().optional().nullable(),
+  assignee_user_id: z.string().trim().optional().nullable(),
+  participant_unit_id: z.string().trim().optional().nullable(),
+  responsible_unit: z.string().trim().optional().nullable(),
+  dateShiftDays: z.number().int().optional().nullable(),
+}).passthrough()
+
 function isMissingRelationError(error: unknown, relation: string) {
   const message = String((error as Error | undefined)?.message || '')
   const lowerMessage = message.toLowerCase()
@@ -176,16 +206,20 @@ function isMissingRelationError(error: unknown, relation: string) {
 }
 
 function buildTaskDeleteProtectionResponse(task: Task, summary: TaskDeleteProtectionSummary): ApiResponse {
+  const hasBaselineLink = Boolean(summary.has_baseline_link)
   return {
     success: false,
     error: {
       code: 'TASK_DELETE_PROTECTED',
-      message: '该任务已形成执行或流程记录，请改为关闭此记录。',
+      message: hasBaselineLink
+        ? '该里程碑关联基线条目，请先在基线中处理（关闭/取消）后再删除。'
+        : '该任务已形成执行或流程记录，请改为关闭此记录。',
       details: {
         entity_type: 'task',
         entity_id: task.id,
         status: task.status,
         progress: Number(task.progress ?? 0),
+        baseline_item_id: summary.baseline_item_id ?? null,
         ...summary,
         close_action: {
           method: 'POST',
@@ -272,6 +306,11 @@ async function decorateTasksWithParticipantUnits(tasks: Task[]) {
   return Array.from(taskMap.values())
 }
 
+async function decorateTaskResponse(task: Task): Promise<TaskWithLagStatus> {
+  const taskWithParticipantUnit = await decorateTaskWithParticipantUnit(task)
+  return attachTaskLagStatus(taskWithParticipantUnit)
+}
+
 async function loadTaskDeleteProtectionSummary(task: Task): Promise<TaskDeleteProtectionSummary | null> {
   const [childTasks, conditions, obstacles, delayRequests, acceptancePlans] = await Promise.all([
     executeSQL<{ id: string }>('SELECT id FROM tasks WHERE parent_id = ?', [task.id]),
@@ -280,6 +319,8 @@ async function loadTaskDeleteProtectionSummary(task: Task): Promise<TaskDeletePr
     executeSQL<{ id: string }>('SELECT id FROM delay_requests WHERE task_id = ?', [task.id]),
     executeSQL<{ id: string }>('SELECT id FROM acceptance_plans WHERE task_id = ?', [task.id]),
   ])
+
+  const hasBaselineLink = Boolean(task.baseline_item_id)
 
   const summary: TaskDeleteProtectionSummary = {
     child_task_count: childTasks.length,
@@ -290,6 +331,8 @@ async function loadTaskDeleteProtectionSummary(task: Task): Promise<TaskDeletePr
     has_execution_trail:
       Number(task.progress ?? 0) > 0 ||
       !['pending', 'todo'].includes(String(task.status ?? '').trim().toLowerCase()),
+    has_baseline_link: hasBaselineLink,
+    baseline_item_id: task.baseline_item_id ?? null,
   }
 
   const hasBlockingRecords =
@@ -298,7 +341,8 @@ async function loadTaskDeleteProtectionSummary(task: Task): Promise<TaskDeletePr
     summary.obstacle_count > 0 ||
     summary.delay_request_count > 0 ||
     summary.acceptance_plan_count > 0 ||
-    summary.has_execution_trail
+    summary.has_execution_trail ||
+    hasBaselineLink
 
   return hasBlockingRecords ? summary : null
 }
@@ -320,12 +364,14 @@ router.get('/', requireProjectMember(req => (req.query.projectId ?? req.query.pr
   const tasks = await supabase.getTasks(projectId)
   const sortedTasks = [...tasks].sort(compareTimelineOrder)
   const decoratedTasks = await decorateTasksWithParticipantUnits(sortedTasks)
-  const responseTasks = await attachTimelineProjectionFields(decoratedTasks, {
-    includeTimelineProjection,
-    baselineVersionId: baselineVersionId || null,
-  })
+  const responseTasks = attachTasksLagStatus(
+    await attachTimelineProjectionFields(decoratedTasks, {
+      includeTimelineProjection,
+      baselineVersionId: baselineVersionId || null,
+    }),
+  )
   
-  const response: ApiResponse<TaskWithParticipantUnit[]> = {
+  const response: ApiResponse<TaskWithLagStatus[]> = {
     success: true,
     data: responseTasks,
     timestamp: new Date().toISOString(),
@@ -425,11 +471,11 @@ router.get('/:id', validateIdParam, requireProjectMember(async (req) => {
     return res.status(404).json(response)
   }
   
-  const responseTask = task ? await decorateTaskWithParticipantUnit(task) : null
+  const responseTask = task ? await decorateTaskResponse(task) : null
 
-  const response: ApiResponse<TaskWithParticipantUnit> = {
+  const response: ApiResponse<TaskWithLagStatus> = {
     success: true,
-    data: responseTask as TaskWithParticipantUnit,
+    data: responseTask as TaskWithLagStatus,
     timestamp: new Date().toISOString(),
   }
   res.json(response)
@@ -451,14 +497,14 @@ router.post('/', requireProjectEditor(req => req.body.project_id), validate(task
       ...taskBody,
       created_by: req.user?.id,
     }, req.user?.id ?? null)
-    const responseTask = await decorateTaskWithParticipantUnit({
+    const responseTask = await decorateTaskResponse({
       ...task,
       participant_unit_id: participantUnit?.id ?? task.participant_unit_id ?? null,
       participant_unit_name: participantUnit?.unit_name ?? task.participant_unit_name ?? null,
       responsible_unit: participantUnit?.unit_name ?? task.responsible_unit ?? task.assignee_unit ?? null,
     })
   
-    const response: ApiResponse<TaskWithParticipantUnit> = {
+    const response: ApiResponse<TaskWithLagStatus> = {
       success: true,
       data: responseTask,
       timestamp: new Date().toISOString(),
@@ -480,7 +526,7 @@ router.put('/:id', validateIdParam, requireProjectEditor(async (req) => {
   return task?.project_id
 }), validate(taskUpdateSchema), asyncHandler(async (req, res) => {
   const { id } = req.params
-  const { version, ...updates } = req.body
+  const { version, force, ...updates } = req.body
   const appliedUpdates = { ...updates, updated_by: req.user?.id }
 
   logger.info('Updating task', { id, version })
@@ -517,6 +563,35 @@ router.put('/:id', validateIdParam, requireProjectEditor(async (req) => {
       }
       return res.status(400).json(response)
     }
+
+    if (
+      oldTask?.baseline_item_id
+      && oldTask.is_milestone
+      && updates.is_milestone === false
+      && !force
+    ) {
+      const response: ApiResponse = {
+        success: false,
+        error: {
+          code: 'TASK_UPDATE_REQUIRES_CONFIRMATION',
+          message: '该里程碑关联基线条目，取消里程碑身份会脱离基线跟踪，请确认后重试。',
+          details: {
+            entity_type: 'task',
+            entity_id: id,
+            baseline_item_id: oldTask.baseline_item_id,
+            requires_confirmation: true,
+            confirm_action: {
+              method: 'PUT',
+              endpoint: `/api/tasks/${id}`,
+              label: '继续取消里程碑身份',
+            },
+          },
+        },
+        timestamp: new Date().toISOString(),
+      }
+      return res.status(422).json(response)
+    }
+
     const result = await updateTaskInMainChain(id, appliedUpdates, version)
     const task = result?.task ?? null
     const participantUnit = result?.participantUnit ?? null
@@ -530,14 +605,14 @@ router.put('/:id', validateIdParam, requireProjectEditor(async (req) => {
       return res.status(404).json(response)
     }
 
-    const responseTask = await decorateTaskWithParticipantUnit({
+    const responseTask = await decorateTaskResponse({
       ...task,
       participant_unit_id: participantUnit?.id ?? task.participant_unit_id ?? null,
       participant_unit_name: participantUnit?.unit_name ?? task.participant_unit_name ?? null,
       responsible_unit: participantUnit?.unit_name ?? task.responsible_unit ?? task.assignee_unit ?? null,
     })
 
-    const response: ApiResponse<TaskWithParticipantUnit> = {
+    const response: ApiResponse<TaskWithLagStatus> = {
       success: true,
       data: responseTask,
       timestamp: new Date().toISOString(),
@@ -572,6 +647,121 @@ router.put('/:id', validateIdParam, requireProjectEditor(async (req) => {
     }
     throw error
   }
+}))
+
+router.post('/batch-update', validate(batchTaskUpdateSchema), requireProjectEditor(async (req) => {
+  return req.body.project_id
+}), asyncHandler(async (req, res) => {
+  const {
+    project_id: projectId,
+    task_ids: taskIds,
+    status,
+    assignee_name: assigneeName,
+    assignee_user_id: assigneeUserId,
+    participant_unit_id: participantUnitId,
+    responsible_unit: responsibleUnit,
+    dateShiftDays,
+  } = req.body as z.infer<typeof batchTaskUpdateSchema>
+
+  logger.info('Batch updating tasks', {
+    projectId,
+    taskCount: taskIds.length,
+    hasStatus: Boolean(status),
+    hasAssignee: Boolean(assigneeUserId || assigneeName),
+    hasParticipantUnit: Boolean(participantUnitId || responsibleUnit),
+    dateShiftDays: Number(dateShiftDays ?? 0) || 0,
+  })
+
+  const uniqueTaskIds = [...new Set(taskIds)]
+  const shiftDays = Number(dateShiftDays ?? 0) || 0
+  const actorId = req.user?.id ?? null
+  const applyBatchUpdate = async () => {
+    const updatedTaskIds: string[] = []
+    const updateOneTask = async (taskId: string) => {
+      const currentTask = await supabase.getTask(taskId)
+      if (!currentTask || String(currentTask.project_id ?? '') !== projectId) {
+        return null
+      }
+
+      const nextUpdates: Partial<Task> = {
+        updated_by: actorId,
+      }
+
+      if (typeof status === 'string' && status.trim()) {
+        nextUpdates.status = status.trim() as Task['status']
+      }
+
+      if (assigneeName !== undefined) {
+        nextUpdates.assignee_name = assigneeName ?? null
+        nextUpdates.assignee = assigneeName ?? null
+      }
+      if (assigneeUserId !== undefined) {
+        nextUpdates.assignee_user_id = assigneeUserId ?? null
+      }
+
+      if (participantUnitId !== undefined) {
+        nextUpdates.participant_unit_id = participantUnitId ?? null
+      }
+      if (responsibleUnit !== undefined) {
+        nextUpdates.responsible_unit = responsibleUnit ?? null
+        nextUpdates.assignee_unit = responsibleUnit ?? null
+      }
+
+      if (shiftDays !== 0) {
+        nextUpdates.start_date = shiftDateString(currentTask.start_date ?? currentTask.planned_start_date ?? null, shiftDays)
+        nextUpdates.end_date = shiftDateString(currentTask.end_date ?? currentTask.planned_end_date ?? null, shiftDays)
+        nextUpdates.planned_start_date = shiftDateString(currentTask.planned_start_date ?? currentTask.start_date ?? null, shiftDays)
+        nextUpdates.planned_end_date = shiftDateString(currentTask.planned_end_date ?? currentTask.end_date ?? null, shiftDays)
+      }
+
+      const result = await updateTaskInMainChain(taskId, nextUpdates, currentTask.version ?? 1)
+      return result?.task?.id ?? null
+    }
+
+    const concurrency = 10
+    for (let index = 0; index < uniqueTaskIds.length; index += concurrency) {
+      const chunk = uniqueTaskIds.slice(index, index + concurrency)
+      const chunkResults = await Promise.all(chunk.map(updateOneTask))
+      updatedTaskIds.push(...chunkResults.filter((taskId): taskId is string => Boolean(taskId)))
+    }
+
+    return updatedTaskIds
+  }
+
+  const jobId = randomUUID()
+  setTimeout(() => {
+    void applyBatchUpdate()
+      .then((updatedTaskIds) => {
+        logger.info('Batch update job completed', {
+          jobId,
+          projectId,
+          acceptedCount: uniqueTaskIds.length,
+          updatedCount: updatedTaskIds.length,
+        })
+      })
+      .catch((error) => {
+        logger.error('Batch update job failed', {
+          jobId,
+          projectId,
+          acceptedCount: uniqueTaskIds.length,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      })
+  }, 0)
+
+  const response: ApiResponse = {
+    success: true,
+    data: {
+      project_id: projectId,
+      job_id: jobId,
+      accepted_count: uniqueTaskIds.length,
+      updated_task_ids: [],
+      updated_count: 0,
+      processing: true,
+    },
+    timestamp: new Date().toISOString(),
+  }
+  res.status(202).json(response)
 }))
 
 // 删除任务
@@ -664,9 +854,9 @@ router.post('/:id/close', validateIdParam, requireProjectEditor(async (req) => {
     return res.status(404).json(response)
   }
 
-  const responseTask = await decorateTaskWithParticipantUnit(closedTask)
+  const responseTask = await decorateTaskResponse(closedTask)
 
-  const response: ApiResponse<TaskWithParticipantUnit> = {
+  const response: ApiResponse<TaskWithLagStatus> = {
     success: true,
     data: responseTask,
     timestamp: new Date().toISOString(),
@@ -735,13 +925,13 @@ router.post('/:id/reopen', validateIdParam, requireProjectEditor(async (req) => 
     })
   }
 
-  const responseTask = await decorateTaskWithParticipantUnit(reopenedTask)
+  const responseTask = await decorateTaskResponse(reopenedTask)
 
   res.json({
     success: true,
     data: responseTask,
     timestamp: new Date().toISOString(),
-  } satisfies ApiResponse<TaskWithParticipantUnit>)
+  } satisfies ApiResponse<TaskWithLagStatus>)
 }))
 
 export default router

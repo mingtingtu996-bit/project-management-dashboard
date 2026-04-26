@@ -10,11 +10,14 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { LoadingState } from '@/components/ui/loading-state'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useApi } from '@/hooks/useApi'
 import { useAuth } from '@/hooks/useAuth'
 import { useAuthDialog } from '@/hooks/useAuthDialog'
+import { useReminderSettings } from '@/hooks/useReminderSettings'
 import {
   useConnectionMode,
   useCurrentProject,
@@ -59,7 +62,6 @@ type ReminderTab =
   | 'business-warning'
   | 'system-exception'
   | 'flow-reminder'
-  | 'planning-mapping'
 type NotificationTargetKey = 'dashboard' | 'reports' | 'tasks' | 'task-summary' | 'planning' | 'risks' | 'license' | 'special' | 'project-home'
 
 interface NotificationApiItem {
@@ -161,7 +163,6 @@ const TAB_OPTIONS: Array<{ value: ReminderTab; label: string }> = [
   { value: 'business-warning', label: '业务预警' },
   { value: 'system-exception', label: '系统异常' },
   { value: 'flow-reminder', label: '流程催办' },
-  { value: 'planning-mapping', label: '映射孤立' },
 ]
 
 function isPlanningMappingNotification(notification: Pick<
@@ -346,7 +347,7 @@ function getNotificationReadBadge(notification: NormalizedNotification) {
 
 function getReminderTab(notification: NormalizedNotification): Exclude<ReminderTab, 'all' | 'unread'> {
   if (isPlanningMappingNotification(notification)) {
-    return 'planning-mapping'
+    return 'system-exception'
   }
 
   if (
@@ -434,6 +435,7 @@ export default function Notifications() {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [scope, setScope] = useState<ReminderScope>('company')
   const [tab, setTab] = useState<ReminderTab>('all')
+  const [systemExceptionFilter, setSystemExceptionFilter] = useState<'all' | 'mapping'>('all')
   const [assigneeFilter, setAssigneeFilter] = useState<string>('all')
   const [assigneeDropdownOpen, setAssigneeDropdownOpen] = useState(false)
   const [settingsPanelOpen, setSettingsPanelOpen] = useState(false)
@@ -444,6 +446,13 @@ export default function Notifications() {
   const assigneeDropdownRef = useRef<HTMLDivElement>(null)
   const settingsPanelRef = useRef<HTMLDivElement>(null)
   const realtimeRefreshTimeoutRef = useRef<number | null>(null)
+  const reminderProjectId = scope === 'current-project' ? currentProject?.id ?? projectIdFromQuery : undefined
+  const {
+    reminderSettings,
+    setReminderSettings,
+    saveReminderSettings,
+    saving: savingSettings,
+  } = useReminderSettings(reminderProjectId, { enabled: !authLoading && isAuthenticated })
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -706,8 +715,8 @@ export default function Notifications() {
   const processedCount = decoratedNotifications.filter((item) => item.isRead || item.isMuted).length
   const businessWarningCount = decoratedNotifications.filter((item) => getReminderTab(item) === 'business-warning').length
   const systemExceptionCount = decoratedNotifications.filter((item) => getReminderTab(item) === 'system-exception').length
+  const systemExceptionMappingCount = decoratedNotifications.filter((item) => getReminderTab(item) === 'system-exception' && isPlanningMappingNotification(item)).length
   const flowReminderCount = decoratedNotifications.filter((item) => getReminderTab(item) === 'flow-reminder').length
-  const planningMappingCount = decoratedNotifications.filter((item) => getReminderTab(item) === 'planning-mapping').length
   const linkedProjectCount = decoratedNotifications.filter((item) => Boolean(item.projectId)).length
   const allCount = decoratedNotifications.length
 
@@ -723,10 +732,14 @@ export default function Notifications() {
         tab === 'all' ||
         (tab === 'unread' && !item.isRead && !item.isMuted) ||
         getReminderTab(item) === tab
+      const systemExceptionMatch =
+        tab !== 'system-exception' ||
+        systemExceptionFilter === 'all' ||
+        isPlanningMappingNotification(item)
 
-      return assigneeMatch && tabMatch
+      return assigneeMatch && tabMatch && systemExceptionMatch
     })
-  }, [assigneeFilter, decoratedNotifications, tab])
+  }, [assigneeFilter, decoratedNotifications, systemExceptionFilter, tab])
 
   const groupedNotifications = useMemo(() => {
     const groups = new Map<string, NotificationGroup>()
@@ -1018,6 +1031,84 @@ export default function Notifications() {
                   </div>
                 </div>
 
+                <div className="border-t border-slate-100 pt-4">
+                  <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+                    \u63d0\u9192\u89c4\u5219
+                  </div>
+                  <div className="mt-3 space-y-3">
+                    <div>
+                      <Label htmlFor="condition-days" className="text-xs text-slate-600">\u6761\u4ef6\u5230\u671f\u63d0\u524d\u5929\u6570</Label>
+                      <Input
+                        id="condition-days"
+                        type="text"
+                        placeholder="\u4f8b\u5982: 3,1"
+                        value={reminderSettings.condition_reminder_days.join(',')}
+                        onChange={(e) => setReminderSettings({
+                          ...reminderSettings,
+                          condition_reminder_days: e.target.value.split(',').map(v => Number(v.trim())).filter(n => !Number.isNaN(n))
+                        })}
+                        className="mt-1 h-9 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="obstacle-days" className="text-xs text-slate-600">\u963b\u788d\u6301\u7eed\u63d0\u9192\u5929\u6570</Label>
+                      <Input
+                        id="obstacle-days"
+                        type="text"
+                        placeholder="\u4f8b\u5982: 3,7"
+                        value={reminderSettings.obstacle_reminder_days.join(',')}
+                        onChange={(e) => setReminderSettings({
+                          ...reminderSettings,
+                          obstacle_reminder_days: e.target.value.split(',').map(v => Number(v.trim())).filter(n => !Number.isNaN(n))
+                        })}
+                        className="mt-1 h-9 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="acceptance-days" className="text-xs text-slate-600">\u9a8c\u6536\u5230\u671f\u63d0\u524d\u5929\u6570</Label>
+                      <Input
+                        id="acceptance-days"
+                        type="text"
+                        placeholder="\u4f8b\u5982: 7,3,1"
+                        value={reminderSettings.acceptance_reminder_days.join(',')}
+                        onChange={(e) => setReminderSettings({
+                          ...reminderSettings,
+                          acceptance_reminder_days: e.target.value.split(',').map(v => Number(v.trim())).filter(n => !Number.isNaN(n))
+                        })}
+                        className="mt-1 h-9 text-sm"
+                      />
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor="enable-popup" className="text-xs text-slate-600">\u542f\u7528\u5f39\u7a97\u63d0\u9192</Label>
+                      <input
+                        id="enable-popup"
+                        type="checkbox"
+                        checked={reminderSettings.enable_popup}
+                        onChange={(e) => setReminderSettings({ ...reminderSettings, enable_popup: e.target.checked })}
+                        className="h-4 w-4 rounded border-slate-300"
+                      />
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor="enable-notification" className="text-xs text-slate-600">\u542f\u7528\u901a\u77e5</Label>
+                      <input
+                        id="enable-notification"
+                        type="checkbox"
+                        checked={reminderSettings.enable_notification}
+                        onChange={(e) => setReminderSettings({ ...reminderSettings, enable_notification: e.target.checked })}
+                        className="h-4 w-4 rounded border-slate-300"
+                      />
+                    </div>
+                    <Button
+                      onClick={() => void saveReminderSettings()}
+                      disabled={savingSettings}
+                      className="w-full"
+                      size="sm"
+                    >
+                      {savingSettings ? '\u4fdd\u5b58\u4e2d...' : '\u4fdd\u5b58\u8bbe\u7f6e'}
+                    </Button>
+                  </div>
+                </div>
+
               </div>
             </div>
           )}
@@ -1080,7 +1171,6 @@ export default function Notifications() {
             <div className="text-3xl font-semibold tracking-tight text-blue-600">{flowReminderCount}</div>
             <p className="text-xs text-slate-500">
               {linkedProjectCount > 0 ? `${linkedProjectCount} 条 · 已处理 ${processedCount}` : ''}
-              {planningMappingCount > 0 ? ` | S2 mapping isolated ${planningMappingCount}` : ''}
             </p>
           </CardContent>
         </Card>
@@ -1089,7 +1179,16 @@ export default function Notifications() {
       <Card className="overflow-hidden">
         <CardContent className="space-y-5 p-0">
           <div className="flex flex-col gap-4 border-b border-slate-100 px-6 py-5 lg:flex-row lg:items-center lg:justify-between">
-            <Tabs value={tab} onValueChange={(value) => setTab(value as ReminderTab)} className="w-full">
+            <Tabs
+              value={tab}
+              onValueChange={(value) => {
+                setTab(value as ReminderTab)
+                if (value !== 'system-exception') {
+                  setSystemExceptionFilter('all')
+                }
+              }}
+              className="w-full"
+            >
               <TabsList className="flex h-auto flex-wrap justify-start gap-2 bg-transparent p-0">
                 {TAB_OPTIONS.map((option) => (
                   <TabsTrigger
@@ -1108,6 +1207,28 @@ export default function Notifications() {
               <span>{'\u5f53\u524d\u7b5b\u9009\u7ed3\u679c'}</span>
             </div>
           </div>
+
+          {tab === 'system-exception' ? (
+            <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 px-6 pb-4 pt-0">
+              <Button
+                type="button"
+                size="sm"
+                variant={systemExceptionFilter === 'all' ? 'default' : 'outline'}
+                onClick={() => setSystemExceptionFilter('all')}
+              >
+                全部异常
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant={systemExceptionFilter === 'mapping' ? 'default' : 'outline'}
+                onClick={() => setSystemExceptionFilter('mapping')}
+              >
+                映射孤立 {systemExceptionMappingCount > 0 ? `(${systemExceptionMappingCount})` : ''}
+              </Button>
+              <span className="text-xs text-slate-500">系统异常中的规划映射孤立提醒可直接收窄查看</span>
+            </div>
+          ) : null}
 
           {groupedNotifications.length === 0 ? (
             <div className="px-6 py-8">
@@ -1160,7 +1281,7 @@ export default function Notifications() {
                           <div className="flex flex-wrap items-center gap-2">
                             <h3 className="text-sm font-semibold text-slate-900">{group.label}</h3>
                             <Badge variant={tone.badge}>{group.target.label}</Badge>
-                            {group.items.some((item) => getReminderTab(item) === 'planning-mapping') ? (
+                            {group.items.some((item) => isPlanningMappingNotification(item)) ? (
                               <Badge variant="outline">S2 mapping</Badge>
                             ) : null}
                             <Badge variant="secondary">{`${group.items.length} 条同类提醒`}</Badge>

@@ -105,6 +105,7 @@ function collectDateSpan(values: Array<string | null>) {
 }
 
 function normalizeCandidate(row: any): RevisionPoolCandidate {
+  const priority = row.priority ?? row.severity ?? 'medium'
   return {
     id: String(row.id ?? ''),
     project_id: String(row.project_id ?? ''),
@@ -115,11 +116,38 @@ function normalizeCandidate(row: any): RevisionPoolCandidate {
     title: String(row.title ?? ''),
     reason: String(row.reason ?? ''),
     severity: row.severity ?? 'medium',
+    priority,
+    observation_window_start: row.observation_window_start ?? null,
+    observation_window_end: row.observation_window_end ?? null,
+    affects_critical_milestone: row.affects_critical_milestone ?? null,
+    consecutive_cross_month_count: row.consecutive_cross_month_count ?? null,
+    deferred_reason: row.deferred_reason ?? null,
+    review_due_at: row.review_due_at ?? null,
+    reviewed_by: row.reviewed_by ?? null,
     status: row.status ?? 'open',
     submitted_at: row.submitted_at ?? null,
     reviewed_at: row.reviewed_at ?? null,
     created_at: row.created_at ?? null,
     updated_at: row.updated_at ?? null,
+  }
+}
+
+function buildRevisionPoolSummary(items: RevisionPoolCandidate[]) {
+  const sortedByUpdatedAt = [...items].sort((left, right) => {
+    const leftStamp = new Date(left.updated_at ?? left.created_at ?? 0).getTime()
+    const rightStamp = new Date(right.updated_at ?? right.created_at ?? 0).getTime()
+    return rightStamp - leftStamp
+  })
+
+  return {
+    high_priority_count: items.filter((item) => String(item.priority ?? item.severity ?? '').toLowerCase() === 'high' || String(item.priority ?? item.severity ?? '').toLowerCase() === 'critical').length,
+    consecutive_cross_month_count: items.filter((item) => Number(item.consecutive_cross_month_count ?? 0) > 0).length,
+    critical_milestone_count: items.filter((item) => Boolean(item.affects_critical_milestone)).length,
+    last_reviewed_at:
+      sortedByUpdatedAt[0]?.reviewed_at
+      ?? sortedByUpdatedAt[0]?.updated_at
+      ?? sortedByUpdatedAt[0]?.created_at
+      ?? null,
   }
 }
 
@@ -267,6 +295,7 @@ export async function listRevisionPoolCandidates(baselineId: string): Promise<Ob
   return {
     items,
     total: items.length,
+    summary: buildRevisionPoolSummary(items),
   }
 }
 
@@ -284,6 +313,7 @@ export async function submitObservationPoolItems(params: {
     const reason = String(item.reason ?? '').trim()
     const severity = String(item.severity ?? 'medium').trim().toLowerCase()
     const sourceType = String(item.source_type ?? 'manual').trim().toLowerCase()
+    const priority = String(item.priority ?? severity).trim().toLowerCase()
     if (!title || !reason) {
       throw new PlanningRevisionPoolServiceError('VALIDATION_ERROR', `第 ${index + 1} 条观测池条目缺少标题或原因`, 400)
     }
@@ -312,7 +342,15 @@ export async function submitObservationPoolItems(params: {
       title,
       reason,
       severity,
-      status: 'open',
+      priority,
+      observation_window_start: item.observation_window_start ?? null,
+      observation_window_end: item.observation_window_end ?? null,
+      affects_critical_milestone: Boolean(item.affects_critical_milestone ?? false),
+      consecutive_cross_month_count: Number(item.consecutive_cross_month_count ?? 0),
+      deferred_reason: item.deferred_reason ?? null,
+      review_due_at: item.review_due_at ?? null,
+      reviewed_by: item.reviewed_by ?? null,
+      status: item.deferred_reason ? 'deferred' : 'open',
       submitted_at: null,
       reviewed_at: null,
       created_at: timestamp,
@@ -337,12 +375,19 @@ export async function startRevisionFromBaseline(params: {
   baseline: TaskBaseline
   actorUserId?: string | null
   reason: string
+  sourceCandidateIds?: string[]
 }): Promise<RevisionSubmitResponse> {
   const sourceBaseline = params.baseline
   const existingPool = await listRevisionPoolCandidates(sourceBaseline.id)
-  const openCandidates = existingPool.items.filter((item) => item.status === 'open')
+  const selectedCandidateIds = Array.from(
+    new Set((params.sourceCandidateIds ?? []).map((candidateId) => String(candidateId ?? '').trim()).filter(Boolean)),
+  )
+  const chosenCandidates =
+    selectedCandidateIds.length > 0
+      ? existingPool.items.filter((item) => selectedCandidateIds.includes(item.id))
+      : existingPool.items.filter((item) => item.status === 'open')
 
-  if (openCandidates.length === 0) {
+  if (chosenCandidates.length === 0) {
     throw new PlanningRevisionPoolServiceError('OBSERVATION_POOL_EMPTY', '观测池为空，无法发起修订', 409)
   }
 
@@ -397,7 +442,7 @@ export async function startRevisionFromBaseline(params: {
     if (itemInsertError) throw itemInsertError
   }
 
-  const candidateIds = openCandidates.map((candidate) => candidate.id)
+  const candidateIds = chosenCandidates.map((candidate) => candidate.id)
   if (candidateIds.length > 0) {
     const { error: candidateUpdateError } = await supabase
       .from('revision_pool_candidates')

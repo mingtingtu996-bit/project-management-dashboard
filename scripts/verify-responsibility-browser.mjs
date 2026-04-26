@@ -389,6 +389,18 @@ function buildMockResponse(route, requestBody) {
     return json({ success: true, data: mockProject })
   }
 
+  if (pathname === `/api/members/${projectId}/me`) {
+    return json({
+      success: true,
+      data: {
+        permissionLevel: 'owner',
+        globalRole: 'company_admin',
+        canManageTeam: true,
+        canEdit: true,
+      },
+    })
+  }
+
   if (pathname === '/api/tasks') {
     return json({ success: true, data: mockTasks })
   }

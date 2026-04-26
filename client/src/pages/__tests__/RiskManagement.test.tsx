@@ -2,7 +2,7 @@
 
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import RiskManagement from '../RiskManagement'
@@ -33,6 +33,7 @@ vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom')
   return {
     ...actual,
+    useLocation: vi.fn(),
     useNavigate: vi.fn(),
     useParams: vi.fn(),
   }
@@ -41,6 +42,7 @@ vi.mock('react-router-dom', async () => {
 const mockedApiGet = vi.mocked(apiGet)
 const mockedApiPost = vi.mocked(apiPost)
 const mockedApiPut = vi.mocked(apiPut)
+const mockedUseLocation = vi.mocked(useLocation)
 const mockedUseNavigate = vi.mocked(useNavigate)
 const mockedUseParams = vi.mocked(useParams)
 const fetchMock = vi.fn()
@@ -96,9 +98,10 @@ function clickExactButtonText(container: HTMLElement, text: string) {
 }
 
 function clickTestId(container: HTMLElement, testId: string) {
-  const element = container.querySelector(`[data-testid="${testId}"]`)
+  const resolvedTestId = testId === 'risk-stream-problems' ? 'risk-stream-issues' : testId
+  const element = container.querySelector(`[data-testid="${resolvedTestId}"]`)
   if (!element) {
-    throw new Error(`Element not found: ${testId}`)
+    throw new Error(`Element not found: ${resolvedTestId}`)
   }
   act(() => {
     element.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }))
@@ -167,6 +170,13 @@ describe('RiskManagement', () => {
     document.body.appendChild(container)
     container.innerHTML = ''
     root = createRoot(container)
+    mockedUseLocation.mockReturnValue({
+      pathname: `/projects/${projectId}/risks`,
+      search: '',
+      hash: '',
+      state: null,
+      key: 'risk-test',
+    })
 
     useStore.setState({
       currentProject: { id: projectId, name: '城市中心广场项目（二期）' } as never,

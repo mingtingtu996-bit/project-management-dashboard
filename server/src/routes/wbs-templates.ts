@@ -3,7 +3,7 @@
 import { Router } from 'express'
 import { executeSQL, executeSQLOne, supabase } from '../services/dbService.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
-import { authenticate } from '../middleware/auth.js'
+import { authenticate, requireProjectEditor } from '../middleware/auth.js'
 import { logger } from '../middleware/logger.js'
 import type { ApiResponse } from '../types/index.js'
 import type { WBSTemplate } from '../types/db.js'
@@ -63,6 +63,8 @@ const BOOTSTRAP_TASK_FIELDS = [
   'reference_duration',
   'ai_duration',
   'is_milestone',
+  'template_id',
+  'template_node_id',
 ].join(', ')
 const BOOTSTRAP_MILESTONE_FIELDS = [
   'id',
@@ -139,11 +141,11 @@ function countNodes(nodes: any[]): number {
   return count
 }
 
-function parsePlanningNodes(raw: any): PlanningBootstrapNode[] {
+function parsePlanningNodes(raw: any, templateId?: string | null): PlanningBootstrapNode[] {
   const source = raw?.wbs_nodes ?? raw?.template_data ?? raw?.nodes ?? raw ?? []
   if (typeof source === 'string') {
     try {
-      return parsePlanningNodes(JSON.parse(source))
+      return parsePlanningNodes(JSON.parse(source), templateId)
     } catch {
       return []
     }
@@ -157,7 +159,9 @@ function parsePlanningNodes(raw: any): PlanningBootstrapNode[] {
     reference_days: node.reference_days ?? node.duration ?? null,
     is_milestone: Boolean(node.is_milestone),
     source_id: node.source_id ?? node.id ?? null,
-    children: parsePlanningNodes(node.children ?? []),
+    template_id: templateId ?? node.template_id ?? null,
+    template_node_id: node.template_node_id ?? node.id ?? null,
+    children: parsePlanningNodes(node.children ?? [], templateId),
   }))
 }
 
@@ -426,7 +430,9 @@ router.get('/bootstrap/context', asyncHandler(async (req, res) => {
   res.json(response)
 }))
 
-router.post('/bootstrap/from-template', asyncHandler(async (req, res) => {
+router.post('/bootstrap/from-template',
+  requireProjectEditor((req) => req.body?.project_id ?? req.body?.projectId),
+  asyncHandler(async (req, res) => {
   const projectId = String(req.body?.project_id ?? req.body?.projectId ?? '').trim()
   const templateId = String(req.body?.template_id ?? req.body?.templateId ?? '').trim()
 
@@ -463,7 +469,7 @@ router.post('/bootstrap/from-template', asyncHandler(async (req, res) => {
     return res.status(404).json(response)
   }
 
-  const nodes = parsePlanningNodes(template)
+  const nodes = parsePlanningNodes(template, String(template.id ?? null) || null)
   const baseline = await insertBaselineDraft({
     projectId,
     title: `${String(project.name ?? '项目')} 项目基线`,
@@ -493,7 +499,9 @@ router.post('/bootstrap/from-template', asyncHandler(async (req, res) => {
   res.status(201).json(response)
 }))
 
-router.post('/bootstrap/from-completed-project', asyncHandler(async (req, res) => {
+router.post('/bootstrap/from-completed-project',
+  requireProjectEditor((req) => req.body?.project_id ?? req.body?.projectId),
+  asyncHandler(async (req, res) => {
   const projectId = String(req.body?.project_id ?? req.body?.projectId ?? '').trim()
   if (!projectId) {
     const response: ApiResponse = {
@@ -536,7 +544,9 @@ router.post('/bootstrap/from-completed-project', asyncHandler(async (req, res) =
   res.status(201).json(response)
 }))
 
-router.post('/bootstrap/from-ongoing-project', asyncHandler(async (req, res) => {
+router.post('/bootstrap/from-ongoing-project',
+  requireProjectEditor((req) => req.body?.project_id ?? req.body?.projectId),
+  asyncHandler(async (req, res) => {
   const projectId = String(req.body?.project_id ?? req.body?.projectId ?? '').trim()
   if (!projectId) {
     const response: ApiResponse = {
@@ -644,7 +654,10 @@ router.get('/:id', asyncHandler(async (req, res) => {
 }))
 
 // 创建WBS模板
-router.post('/', asyncHandler(async (req, res) => {
+router.post(
+  '/',
+  requireProjectEditor((req) => req.body?.project_id ?? req.body?.projectId),
+  asyncHandler(async (req, res) => {
   logger.info('Creating WBS template', req.body)
 
   // 验证数据
@@ -692,7 +705,10 @@ router.post('/', asyncHandler(async (req, res) => {
 }))
 
 // 更新WBS模板
-router.put('/:id', asyncHandler(async (req, res) => {
+router.put(
+  '/:id',
+  requireProjectEditor((req) => req.body?.project_id ?? req.body?.projectId),
+  asyncHandler(async (req, res) => {
   const { id } = req.params
   logger.info('Updating WBS template', { id })
 
@@ -757,7 +773,10 @@ router.put('/:id', asyncHandler(async (req, res) => {
 }))
 
 // 删除WBS模板
-router.delete('/:id', asyncHandler(async (req, res) => {
+router.delete(
+  '/:id',
+  requireProjectEditor((req) => req.body?.project_id ?? req.body?.projectId),
+  asyncHandler(async (req, res) => {
   const { id } = req.params
   logger.info('Deleting WBS template', { id })
 
@@ -771,7 +790,9 @@ router.delete('/:id', asyncHandler(async (req, res) => {
 }))
 
 // 应用WBS模板到项目（批量创建任务）
-router.post('/:id/apply', asyncHandler(async (req, res) => {
+router.post('/:id/apply',
+  requireProjectEditor((req) => req.body?.projectId),
+  asyncHandler(async (req, res) => {
   const { id } = req.params
   const { projectId, overwrite } = req.body
 
@@ -879,10 +900,11 @@ router.post('/:id/apply', asyncHandler(async (req, res) => {
       const newId = uuidv4()
       const generatedWbsCode = parentWbsCode ? `${parentWbsCode}.${idx + 1}` : `${idx + 1}`
       const wbsCode = String(node.wbs_code || generatedWbsCode)
+      const templateNodeId = node.template_node_id ?? node.id ?? node.source_id ?? null
       await executeSQL(
         `INSERT INTO tasks (id, project_id, parent_id, title, description, status, progress,
-           sort_order, is_milestone, reference_duration, wbs_code, wbs_level, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           sort_order, is_milestone, reference_duration, wbs_code, wbs_level, template_id, template_node_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           newId,
           projectId,
@@ -896,6 +918,8 @@ router.post('/:id/apply', asyncHandler(async (req, res) => {
           node.reference_days || node.duration || null,
           wbsCode,
           level,
+          id,
+          templateNodeId ? String(templateNodeId) : null,
           nowTs,
           nowTs,
         ]
@@ -939,7 +963,10 @@ router.post('/:id/apply', asyncHandler(async (req, res) => {
 }))
 
 // 设置默认模板
-router.post('/:id/set-default', asyncHandler(async (req, res) => {
+router.post(
+  '/:id/set-default',
+  requireProjectEditor((req) => req.body?.project_id ?? req.body?.projectId),
+  asyncHandler(async (req, res) => {
   const { id } = req.params
   const templateType = req.body.template_type
 
@@ -976,7 +1003,10 @@ router.post('/:id/set-default', asyncHandler(async (req, res) => {
 }))
 
 // B6/U1: 克隆 WBS 模板
-router.post('/:id/clone', asyncHandler(async (req, res) => {
+router.post(
+  '/:id/clone',
+  requireProjectEditor((req) => req.body?.project_id ?? req.body?.projectId),
+  asyncHandler(async (req, res) => {
   const { id } = req.params
   logger.info('Cloning WBS template', { id })
 
@@ -1083,7 +1113,11 @@ router.patch('/:id/status', asyncHandler(async (req, res) => {
 }))
 
 // F1: 从 Excel/CSV 导入 WBS 模板
-router.post('/import-excel', upload.single('file'), asyncHandler(async (req: any, res) => {
+router.post(
+  '/import-excel',
+  upload.single('file'),
+  requireProjectEditor((req) => req.body?.project_id ?? req.body?.projectId),
+  asyncHandler(async (req: any, res) => {
   if (!req.file) {
     const response: ApiResponse = {
       success: false,
@@ -1255,7 +1289,10 @@ router.post('/import-excel', upload.single('file'), asyncHandler(async (req: any
 }))
 
 // ── F9: JSON 导入 ────────────────────────────────────────────────────────────
-router.post('/import-json', asyncHandler(async (req, res) => {
+router.post(
+  '/import-json',
+  requireProjectEditor((req) => req.body?.project_id ?? req.body?.projectId),
+  asyncHandler(async (req, res) => {
   const { templates } = req.body as { templates?: Array<{
     name: string
     template_type?: string

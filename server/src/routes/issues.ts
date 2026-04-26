@@ -80,6 +80,49 @@ function buildUpgradeChainProtectedResponse(issue: Issue): ApiResponse {
   }
 }
 
+function normalizeIssueStatus(value?: string | null) {
+  return normalizeIssueKey(value).toLowerCase()
+}
+
+function getIssueSourceLabel(sourceType?: string | null) {
+  switch (normalizeIssueKey(sourceType)) {
+    case 'manual':
+      return '手动创建'
+    case 'risk_converted':
+      return '风险转问题'
+    case 'risk_auto_escalated':
+      return '风险自动升级'
+    case 'obstacle_escalated':
+      return '阻碍上卷'
+    case 'condition_expired':
+      return '条件过期'
+    case 'source_deleted':
+      return '来源已删除'
+    default:
+      return sourceType?.trim() || '未分类'
+  }
+}
+
+function toIsoDate(value?: string | null) {
+  if (!value) return null
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return null
+  return date.toISOString().split('T')[0]
+}
+
+function createDateRange(startDateStr: string, endDateStr: string) {
+  const dates: string[] = []
+  const current = new Date(`${startDateStr}T00:00:00.000Z`)
+  const end = new Date(`${endDateStr}T00:00:00.000Z`)
+
+  while (current <= end) {
+    dates.push(current.toISOString().split('T')[0])
+    current.setUTCDate(current.getUTCDate() + 1)
+  }
+
+  return dates
+}
+
 router.use(authenticate)
 
 router.get('/', asyncHandler(async (req, res) => {
@@ -101,6 +144,131 @@ router.get('/', asyncHandler(async (req, res) => {
     data: issues,
     timestamp: new Date().toISOString(),
   }
+  res.json(response)
+}))
+
+router.get('/summary', asyncHandler(async (req, res) => {
+  const projectId = req.query.projectId as string | undefined
+  logger.info('Fetching issue summary', { projectId })
+
+  let issues = await getIssues(projectId)
+
+  if (!projectId && req.user?.id) {
+    const visibleProjectIds = await getVisibleProjectIds(req.user.id, req.user.globalRole)
+    if (visibleProjectIds) {
+      const visibleProjectIdSet = new Set(visibleProjectIds)
+      issues = issues.filter((issue) => visibleProjectIdSet.has(String(issue.project_id ?? '')))
+    }
+  }
+
+  const endDate = new Date()
+  const startDate = new Date()
+  startDate.setDate(startDate.getDate() - 29)
+  const startDateStr = startDate.toISOString().split('T')[0]
+  const endDateStr = endDate.toISOString().split('T')[0]
+  const dateKeys = createDateRange(startDateStr, endDateStr)
+
+  const trendMap = new Map<string, {
+    date: string
+    newIssues: number
+    resolvedIssues: number
+    activeIssues: number
+  }>()
+
+  for (const date of dateKeys) {
+    trendMap.set(date, {
+      date,
+      newIssues: 0,
+      resolvedIssues: 0,
+      activeIssues: 0,
+    })
+  }
+
+  const activeIssueStatuses = new Set(['open', 'investigating', 'resolved'])
+  let activeIssues = 0
+
+  for (const issue of issues) {
+    const createdDate = toIsoDate(issue.created_at)
+    if (createdDate && trendMap.has(createdDate)) {
+      const point = trendMap.get(createdDate)
+      if (point) point.newIssues += 1
+    }
+
+    const updatedDate = toIsoDate(issue.updated_at)
+    if (updatedDate && trendMap.has(updatedDate) && normalizeIssueStatus(issue.status) === 'closed') {
+      const point = trendMap.get(updatedDate)
+      if (point) point.resolvedIssues += 1
+    }
+
+    if (activeIssueStatuses.has(normalizeIssueStatus(issue.status))) {
+      activeIssues += 1
+    }
+  }
+
+  const runningTrend: Array<{ date: string; newIssues: number; resolvedIssues: number; activeIssues: number }> = []
+  let runningActive = 0
+  for (const date of dateKeys) {
+    const point = trendMap.get(date)
+    if (!point) continue
+    runningActive += point.newIssues - point.resolvedIssues
+    point.activeIssues = Math.max(0, runningActive)
+    runningTrend.push(point)
+  }
+
+  const statusCounts = issues.reduce((counts, issue) => {
+    const key = normalizeIssueStatus(issue.status) || 'open'
+    counts[key] = (counts[key] || 0) + 1
+    return counts
+  }, {} as Record<string, number>)
+
+  const severityCounts = issues.reduce((counts, issue) => {
+    const key = String(issue.severity || 'medium')
+    counts[key] = (counts[key] || 0) + 1
+    return counts
+  }, {} as Record<string, number>)
+
+  const sourceCounts = Array.from(
+    issues.reduce((map, issue) => {
+      const key = String(issue.source_type || 'manual')
+      map.set(key, (map.get(key) || 0) + 1)
+      return map
+    }, new Map<string, number>()),
+  )
+    .map(([key, count]) => ({
+      key,
+      label: getIssueSourceLabel(key),
+      count,
+    }))
+    .sort((left, right) => right.count - left.count)
+
+  const recentIssues = [...issues]
+    .sort((left, right) => String(right.created_at || '').localeCompare(String(left.created_at || '')))
+    .slice(0, 8)
+
+  const response: ApiResponse<{
+    project_id?: string
+    total_issues: number
+    active_issues: number
+    status_counts: Record<string, number>
+    severity_counts: Record<string, number>
+    source_counts: Array<{ key: string; label: string; count: number }>
+    trend: Array<{ date: string; newIssues: number; resolvedIssues: number; activeIssues: number }>
+    recent_issues: Issue[]
+  }> = {
+    success: true,
+    data: {
+      project_id: projectId,
+      total_issues: issues.length,
+      active_issues: activeIssues,
+      status_counts: statusCounts,
+      severity_counts: severityCounts,
+      source_counts: sourceCounts,
+      trend: runningTrend,
+      recent_issues: recentIssues,
+    },
+    timestamp: new Date().toISOString(),
+  }
+
   res.json(response)
 }))
 

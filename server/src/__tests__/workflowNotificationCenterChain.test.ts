@@ -473,6 +473,8 @@ describe('workflow notification center chain', () => {
           type: 'drawing_version_updated',
           notification_type: 'flow-reminder',
           source_entity_type: 'drawing_version',
+          message: expect.any(String),
+          body: expect.any(String),
         }),
       ]),
     )

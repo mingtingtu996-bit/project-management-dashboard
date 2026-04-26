@@ -1,5 +1,6 @@
 import { persistNotification } from './warningChainService.js'
 import { getMembers, supabase } from './dbService.js'
+import { getCriticalPathTaskIds } from './criticalPathHelpers.js'
 import { logger } from '../middleware/logger.js'
 import type {
   ProjectMember,
@@ -71,6 +72,36 @@ export interface ResponsibilityInsightsResponse {
   person_rows: ResponsibilitySubjectInsightRow[]
   unit_rows: ResponsibilitySubjectInsightRow[]
   watchlist: ResponsibilityWatchlist[]
+}
+
+export interface ResponsibilityTrendPoint {
+  date: string
+  completion_rate: number
+  delay_rate: number
+  completed_count: number
+  delayed_count: number
+  active_count: number
+}
+
+export interface ResponsibilityTrendSeries {
+  key: string
+  label: string
+  dimension: ResponsibilityDimension
+  subject_user_id?: string | null
+  subject_unit_id?: string | null
+  total_tasks: number
+  latest_completion_rate: number
+  latest_delay_rate: number
+  points: ResponsibilityTrendPoint[]
+}
+
+export interface ResponsibilityTrendsResponse {
+  project_id: string
+  generated_at: string
+  group_by: ResponsibilityDimension
+  days: number
+  dates: string[]
+  series: ResponsibilityTrendSeries[]
 }
 
 export function resolveResponsibilityWatchStatus(input: {
@@ -198,6 +229,58 @@ function addDays(input: Date, days: number) {
   return next
 }
 
+function toDateKey(input: Date) {
+  const year = input.getFullYear()
+  const month = String(input.getMonth() + 1).padStart(2, '0')
+  const day = String(input.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function isTaskCompletedByDate(task: ResponsibilityTaskDetail, dateKey: string) {
+  if (!task.completed) return false
+  const actualDate = dateOnly(task.actual_end_date)
+  if (!actualDate) return false
+  return actualDate <= dateKey
+}
+
+function buildResponsibilityTrendPoints(tasks: ResponsibilityTaskDetail[], days: number) {
+  const safeDays = Math.min(Math.max(Math.trunc(days), 7), 90)
+  const endDate = new Date()
+  endDate.setHours(0, 0, 0, 0)
+  const startDate = addDays(endDate, -(safeDays - 1))
+
+  const points: ResponsibilityTrendPoint[] = []
+  for (let index = 0; index < safeDays; index += 1) {
+    const day = addDays(startDate, index)
+    const dateKey = toDateKey(day)
+    let completedCount = 0
+    let delayedCount = 0
+
+    for (const task of tasks) {
+      const plannedDate = dateOnly(task.planned_end_date)
+      const completedByDate = isTaskCompletedByDate(task, dateKey)
+      if (completedByDate) {
+        completedCount += 1
+      }
+      if (plannedDate && plannedDate <= dateKey && !completedByDate) {
+        delayedCount += 1
+      }
+    }
+
+    const totalTasks = tasks.length
+    points.push({
+      date: dateKey,
+      completion_rate: totalTasks > 0 ? Math.round((completedCount / totalTasks) * 100) : 0,
+      delay_rate: totalTasks > 0 ? Math.round((delayedCount / totalTasks) * 100) : 0,
+      completed_count: completedCount,
+      delayed_count: delayedCount,
+      active_count: Math.max(totalTasks - completedCount, 0),
+    })
+  }
+
+  return points
+}
+
 function inDateRange(value: string | null | undefined, start: Date, end: Date) {
   if (!value) return false
   const parsed = parseDate(value)
@@ -212,21 +295,21 @@ function statusLabel(task: ResponsibilityTaskRow, delayed: boolean) {
   return delayed ? '进行中（逾期）' : normalizeText(task.status, '进行中')
 }
 
-function buildTaskDetail(task: ResponsibilityTaskRow) {
+function buildTaskDetail(task: ResponsibilityTaskRow, criticalTaskIds: Set<string>) {
   const delayed = isTaskDelayed(task)
   return {
     id: String(task.id),
     title: normalizeText(task.title, '未命名任务'),
     assignee: normalizeText(task.assignee_name ?? task.assignee, '未分配责任人'),
     assignee_user_id: task.assignee_user_id ?? task.assignee_id ?? null,
-    unit: normalizeText(task.participant_unit_name ?? task.responsible_unit ?? task.assignee_unit, '未分配责任单位'),
+    unit: normalizeText(task.participant_unit_name ?? task.responsible_unit ?? task.assignee_unit, '未���配责任单位'),
     participant_unit_id: task.participant_unit_id ?? null,
     completed: isCompletedTask(task),
     status_label: statusLabel(task, delayed),
     planned_end_date: getPlannedEndDate(task),
     actual_end_date: getActualEndDate(task),
     is_delayed: delayed,
-    is_critical: Boolean(task.is_critical),
+    is_critical: criticalTaskIds.has(task.id),
     is_milestone: Boolean(task.is_milestone),
   } satisfies ResponsibilityTaskDetail
 }
@@ -474,7 +557,8 @@ function finalizeRows(
   })
 }
 
-function buildRowsForDimension(
+async function buildRowsForDimension(
+  projectId: string,
   dimension: ResponsibilityDimension,
   tasks: ResponsibilityTaskRow[],
   memberMap: Map<string, ProjectMember>,
@@ -485,10 +569,11 @@ function buildRowsForDimension(
   const accumulators = new Map<string, SubjectAccumulator>()
   const riskByTaskId = buildRiskTaskMap(risks)
   const obstacleByTaskId = buildObstacleTaskMap(obstacles)
+  const criticalTaskIds = await getCriticalPathTaskIds(projectId)
 
   for (const task of tasks) {
     const subject = buildSubjectKey(dimension, task, memberMap, unitNameMap)
-    const detail = buildTaskDetail(task)
+    const detail = buildTaskDetail(task, criticalTaskIds)
     const unitInfo = getTaskUnitInfo(task, unitNameMap)
     const existing = accumulators.get(subject.key) ?? {
       key: subject.key,
@@ -748,8 +833,10 @@ export class ResponsibilityInsightService {
       getOwnerRecipients(projectId),
     ])
 
-    const personRowsBase = buildRowsForDimension('person', tasks, memberMap, unitNameMap, risks, obstacles)
-    const unitRowsBase = buildRowsForDimension('unit', tasks, memberMap, unitNameMap, risks, obstacles)
+    const [personRowsBase, unitRowsBase] = await Promise.all([
+      buildRowsForDimension(projectId, 'person', tasks, memberMap, unitNameMap, risks, obstacles),
+      buildRowsForDimension(projectId, 'unit', tasks, memberMap, unitNameMap, risks, obstacles),
+    ])
 
     const [personRows, unitRows] = await Promise.all([
       hydrateDimensionRows(projectId, personRowsBase, watchlist, alertStates, ownerRecipients),
@@ -764,6 +851,40 @@ export class ResponsibilityInsightService {
       person_rows: personRows,
       unit_rows: unitRows,
       watchlist: latestWatchlist,
+    }
+  }
+
+  async getProjectTrends(
+    projectId: string,
+    days = 30,
+    groupBy: ResponsibilityDimension = 'person',
+  ): Promise<ResponsibilityTrendsResponse> {
+    const insights = await this.getProjectInsights(projectId)
+    const sourceRows = groupBy === 'unit' ? insights.unit_rows : insights.person_rows
+    const safeDays = Math.min(Math.max(Math.trunc(days), 7), 90)
+    const series = sourceRows.slice(0, 6).map<ResponsibilityTrendSeries>((row) => {
+      const points = buildResponsibilityTrendPoints(row.tasks, safeDays)
+      const lastPoint = points[points.length - 1] ?? null
+      return {
+        key: row.key,
+        label: row.label,
+        dimension: row.dimension,
+        subject_user_id: row.subject_user_id ?? null,
+        subject_unit_id: row.subject_unit_id ?? null,
+        total_tasks: row.total_tasks,
+        latest_completion_rate: lastPoint?.completion_rate ?? 0,
+        latest_delay_rate: lastPoint?.delay_rate ?? 0,
+        points,
+      }
+    })
+
+    return {
+      project_id: projectId,
+      generated_at: new Date().toISOString(),
+      group_by: groupBy,
+      days: safeDays,
+      dates: series[0]?.points.map((point) => point.date) ?? [],
+      series,
     }
   }
 

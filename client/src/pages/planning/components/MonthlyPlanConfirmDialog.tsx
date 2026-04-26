@@ -1,5 +1,5 @@
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import {
   Dialog,
@@ -14,13 +14,19 @@ export type MonthlyPlanConfirmMode = 'quick' | 'standard'
 export type MonthlyPlanConfirmState = 'ready' | 'failed'
 
 export interface MonthlyPlanConfirmSummary {
-  monthLabel: string
-  versionLabel: string
-  sourceLabel: string
-  conditionCount: number
-  obstacleCount: number
-  delayCount: number
-  selectedCount: number
+  totalItemCount: number
+  newlyAddedCount: number
+  autoRolledInCount: number
+  pendingRemovalCount: number
+  milestoneCount: number
+  dateAdjustmentCount: number
+  progressAdjustmentCount: number
+  blockingIssueCount: number
+  conditionIssueCount: number
+  obstacleIssueCount: number
+  delayIssueCount: number
+  mappingIssueCount: number
+  requiredFieldIssueCount: number
 }
 
 export interface MonthlyPlanConfirmDialogProps {
@@ -29,6 +35,7 @@ export interface MonthlyPlanConfirmDialogProps {
   mode: MonthlyPlanConfirmMode
   state?: MonthlyPlanConfirmState
   summary: MonthlyPlanConfirmSummary
+  canConfirm?: boolean
   onConfirm?: () => void
   onRetry?: () => void
 }
@@ -39,6 +46,7 @@ export function MonthlyPlanConfirmDialog({
   mode,
   state = 'ready',
   summary,
+  canConfirm = state !== 'failed',
   onConfirm,
   onRetry,
 }: MonthlyPlanConfirmDialogProps) {
@@ -60,50 +68,60 @@ export function MonthlyPlanConfirmDialog({
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant="secondary">{modeLabel}</Badge>
             <Badge variant={state === 'failed' ? 'destructive' : 'outline'}>{stateLabel}</Badge>
-            <Badge variant="outline">已选 {summary.selectedCount} 项</Badge>
           </div>
 
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             <Card className="border-slate-200 shadow-sm">
               <CardContent className="space-y-1 p-4">
-                <div className="text-xs text-slate-500">当前月份</div>
-                <div className="text-2xl font-semibold text-slate-900">{summary.monthLabel}</div>
+                <div className="text-xs text-slate-500">条目总数</div>
+                <div className="text-2xl font-semibold text-slate-900">{summary.totalItemCount}</div>
               </CardContent>
             </Card>
             <Card className="border-slate-200 shadow-sm">
               <CardContent className="space-y-1 p-4">
-                <div className="text-xs text-slate-500">当前版本</div>
-                <div className="text-2xl font-semibold text-slate-900">{summary.versionLabel}</div>
+                <div className="text-xs text-slate-500">本月新增数</div>
+                <div className="text-2xl font-semibold text-slate-900">{summary.newlyAddedCount}</div>
               </CardContent>
             </Card>
             <Card className="border-slate-200 shadow-sm">
               <CardContent className="space-y-1 p-4">
-                <div className="text-xs text-slate-500">生成来源</div>
-                <div className="text-xl font-semibold text-slate-900">{summary.sourceLabel}</div>
+                <div className="text-xs text-slate-500">自动滚入数</div>
+                <div className="text-2xl font-semibold text-slate-900">{summary.autoRolledInCount}</div>
               </CardContent>
             </Card>
             <Card className="border-slate-200 shadow-sm">
               <CardContent className="space-y-1 p-4">
-                <div className="text-xs text-slate-500">确认范围</div>
-                <div className="text-2xl font-semibold text-slate-900">{summary.selectedCount}</div>
+                <div className="text-xs text-slate-500">待移出数</div>
+                <div className="text-2xl font-semibold text-slate-900">{summary.pendingRemovalCount}</div>
               </CardContent>
             </Card>
             <Card className="border-slate-200 shadow-sm">
               <CardContent className="space-y-1 p-4">
-                <div className="text-xs text-slate-500">当前条件</div>
-                <div className="text-2xl font-semibold text-slate-900">{summary.conditionCount}</div>
+                <div className="text-xs text-slate-500">关键里程碑数</div>
+                <div className="text-2xl font-semibold text-slate-900">{summary.milestoneCount}</div>
               </CardContent>
             </Card>
             <Card className="border-slate-200 shadow-sm">
               <CardContent className="space-y-1 p-4">
-                <div className="text-xs text-slate-500">阻碍</div>
-                <div className="text-2xl font-semibold text-slate-900">{summary.obstacleCount}</div>
+                <div className="text-xs text-slate-500">目标时间调整数</div>
+                <div className="text-2xl font-semibold text-slate-900">{summary.dateAdjustmentCount}</div>
               </CardContent>
             </Card>
             <Card className="border-slate-200 shadow-sm">
               <CardContent className="space-y-1 p-4">
-                <div className="text-xs text-slate-500">延期摘要</div>
-                <div className="text-2xl font-semibold text-slate-900">{summary.delayCount}</div>
+                <div className="text-xs text-slate-500">目标进度调整数</div>
+                <div className="text-2xl font-semibold text-slate-900">{summary.progressAdjustmentCount}</div>
+              </CardContent>
+            </Card>
+            <Card className={`shadow-sm ${summary.blockingIssueCount > 0 ? 'border-amber-200 bg-amber-50' : 'border-slate-200 bg-white'}`}>
+              <CardContent className="space-y-1 p-4">
+                <div className="text-xs text-slate-500">确认阻断项</div>
+                <div className="text-2xl font-semibold text-slate-900">{summary.blockingIssueCount}</div>
+                {summary.blockingIssueCount > 0 ? (
+                  <div className="text-xs leading-5 text-amber-700">
+                    条件 {summary.conditionIssueCount} · 障碍 {summary.obstacleIssueCount} · 延期 {summary.delayIssueCount} · 映射 {summary.mappingIssueCount} · 必填 {summary.requiredFieldIssueCount}
+                  </div>
+                ) : null}
               </CardContent>
             </Card>
           </div>
@@ -117,7 +135,7 @@ export function MonthlyPlanConfirmDialog({
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               关闭
             </Button>
-            <Button type="button" onClick={onConfirm} disabled={state === 'failed'}>
+            <Button type="button" onClick={onConfirm} disabled={!canConfirm}>
               {mode === 'quick' ? '快速确认' : '确认月度计划'}
             </Button>
           </div>

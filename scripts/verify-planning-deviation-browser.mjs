@@ -597,7 +597,7 @@ async function main() {
     await page.goto(targetUrl, { waitUntil: 'domcontentloaded' })
     await page.getByTestId('planning-governance-workspace').waitFor({ state: 'visible', timeout: 20000 })
     await page.getByTestId('planning-quick-link-closeout').click()
-    await page.waitForFunction(() => window.location.hash.includes('/planning/closeout'))
+    await page.waitForFunction(() => window.location.hash.includes('/tasks/closeout'))
     await page.getByTestId('closeout-filter-bar').waitFor({ state: 'visible', timeout: 20000 })
     const closeoutUrl = page.url()
     await page.screenshot({ path: join(outputDir, 'planning-deviation-to-closeout.png'), fullPage: true })

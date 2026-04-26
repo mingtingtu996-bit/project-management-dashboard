@@ -160,30 +160,81 @@ function uniqueStrings(values: Array<string | null | undefined>) {
   return [...new Set(values.filter((value): value is string => Boolean(value && value.trim())))]
 }
 
-function resolveMilestoneNotificationSeverity(state: MilestoneIntegrityState): 'warning' | 'critical' {
-  return state === 'blocked' ? 'critical' : 'warning'
+type MilestoneScenarioType =
+  | 'milestone_mapping_pending'      // M1
+  | 'milestone_pending_takeover'     // M2
+  | 'milestone_execution_closed'     // M5
+  | 'milestone_baseline_removed'     // M6
+  | 'milestone_data_incomplete'      // M7
+  | 'milestone_deviation_excessive'  // M8
+  | 'milestone_no_baseline'          // M9
+
+const MILESTONE_SCENARIO_LABELS: Record<MilestoneScenarioType, string> = {
+  milestone_mapping_pending: 'M1 基线映射待补',
+  milestone_pending_takeover: 'M2 待承接',
+  milestone_execution_closed: 'M5 执行层已关闭',
+  milestone_baseline_removed: 'M6 基线已移除',
+  milestone_data_incomplete: 'M7 数据不完整',
+  milestone_deviation_excessive: 'M8 偏差过大',
+  milestone_no_baseline: 'M9 未关联基线',
 }
 
-function buildMilestoneNotificationType(state: MilestoneIntegrityState) {
-  switch (state) {
-    case 'blocked':
-      return 'milestone_blocked'
-    case 'missing_data':
-      return 'milestone_missing_data'
-    case 'needs_attention':
-      return 'milestone_needs_attention'
-    default:
-      return 'milestone_integrity'
-  }
+const MILESTONE_SCENARIO_ACTIONS: Record<MilestoneScenarioType, string> = {
+  milestone_mapping_pending: '请补齐基线映射并回到基线页确认。',
+  milestone_pending_takeover: '请确认承接关系并补齐执行层节点。',
+  milestone_execution_closed: '请改为关闭/取消或重新激活执行层节点。',
+  milestone_baseline_removed: '请重新确认基线版本并修复映射。',
+  milestone_data_incomplete: '请补全三时间字段后再继续跟踪。',
+  milestone_deviation_excessive: '请纳入修订观察池并评估偏差原因。',
+  milestone_no_baseline: '请补充基线来源或标记为临时新增。',
+}
+
+const MILESTONE_NOTIFICATION_TYPES: MilestoneScenarioType[] = [
+  'milestone_mapping_pending',
+  'milestone_pending_takeover',
+  'milestone_execution_closed',
+  'milestone_baseline_removed',
+  'milestone_data_incomplete',
+  'milestone_deviation_excessive',
+  'milestone_no_baseline',
+]
+
+const MILESTONE_NOTIFICATION_TYPE_BY_KEY: Record<typeof MILESTONE_KEYS[number], MilestoneScenarioType | null> = {
+  M1: 'milestone_mapping_pending',
+  M2: 'milestone_pending_takeover',
+  M3: null,
+  M4: null,
+  M5: 'milestone_execution_closed',
+  M6: 'milestone_baseline_removed',
+  M7: 'milestone_data_incomplete',
+  M8: 'milestone_deviation_excessive',
+  M9: 'milestone_no_baseline',
+}
+
+function resolveMilestoneScenarioType(item: MilestoneIntegrityRow): MilestoneScenarioType | null {
+  return MILESTONE_NOTIFICATION_TYPE_BY_KEY[item.milestone_key] ?? null
+}
+
+function getMilestoneScenarioLabel(type: MilestoneScenarioType): string {
+  return MILESTONE_SCENARIO_LABELS[type]
+}
+
+function deriveSuggestedAction(type: MilestoneScenarioType): string {
+  return MILESTONE_SCENARIO_ACTIONS[type]
+}
+
+function buildMilestoneNotificationType(item: MilestoneIntegrityRow): MilestoneScenarioType | null {
+  return resolveMilestoneScenarioType(item)
 }
 
 function buildMilestoneNotificationTitle(item: MilestoneIntegrityRow) {
   return `${item.milestone_key} 里程碑完整性异常`
 }
 
-function buildMilestoneNotificationContent(item: MilestoneIntegrityRow) {
+function buildMilestoneNotificationContent(item: MilestoneIntegrityRow, scenarioType: MilestoneScenarioType) {
   const issueSummary = item.issues.join('；')
-  return `里程碑“${item.title}”存在${item.state}场景：${issueSummary}。`
+  const suggestedAction = deriveSuggestedAction(scenarioType)
+  return `里程碑「${item.title}」触发 ${getMilestoneScenarioLabel(scenarioType)}，当前状态：${item.state}；问题：${issueSummary}；建议动作：${suggestedAction}`
 }
 
 function readMilestoneStateFromNotification(notification?: Notification | null): MilestoneIntegrityState | null {
@@ -208,6 +259,13 @@ function readMilestoneStateFromNotification(notification?: Notification | null):
   if (type === 'milestone_needs_attention') return 'needs_attention'
   if (type === 'milestone_missing_data') return 'missing_data'
   if (type === 'milestone_blocked') return 'blocked'
+  if (type === 'milestone_data_incomplete') return 'missing_data'
+  if (type === 'milestone_execution_closed') return 'blocked'
+  if (type === 'milestone_mapping_pending') return 'needs_attention'
+  if (type === 'milestone_pending_takeover') return 'needs_attention'
+  if (type === 'milestone_baseline_removed') return 'needs_attention'
+  if (type === 'milestone_deviation_excessive') return 'needs_attention'
+  if (type === 'milestone_no_baseline') return 'needs_attention'
 
   return null
 }
@@ -255,17 +313,25 @@ async function buildMilestoneNotificationRow(projectId: string, item: MilestoneI
   const recipients = await getProjectRecipients(projectId)
   if (recipients.length === 0) return null
 
-  const severity = resolveMilestoneNotificationSeverity(item.state)
+  const scenarioType = buildMilestoneNotificationType(item)
+  if (!scenarioType) return null
+
+  const severity = scenarioType === 'milestone_execution_closed' || scenarioType === 'milestone_baseline_removed'
+    ? 'critical'
+    : 'warning'
   const timestamp = nowIso()
+  const suggestedAction = deriveSuggestedAction(scenarioType)
+  const jumpUrl = `/projects/${projectId}/milestones?highlight=${item.milestone_id}`
+
   return {
     id: uuidv4(),
     project_id: projectId,
-    type: buildMilestoneNotificationType(item.state),
+    type: scenarioType,
     notification_type: 'planning-governance-milestone',
     severity,
     level: severity,
     title: buildMilestoneNotificationTitle(item),
-    content: buildMilestoneNotificationContent(item),
+    content: buildMilestoneNotificationContent(item, scenarioType),
     is_read: false,
     is_broadcast: severity === 'critical',
     source_entity_type: 'milestone_integrity',
@@ -279,10 +345,14 @@ async function buildMilestoneNotificationRow(projectId: string, item: MilestoneI
       milestone_key: item.milestone_key,
       milestone_title: item.title,
       milestone_state: item.state,
+      scenario_type: scenarioType,
+      scenario_label: getMilestoneScenarioLabel(scenarioType),
       issues: item.issues,
       planned_date: item.planned_date,
       current_planned_date: item.current_planned_date,
       actual_date: item.actual_date,
+      suggested_action: suggestedAction,
+      jump_url: jumpUrl,
     },
     created_at: timestamp,
     updated_at: timestamp,
@@ -291,7 +361,10 @@ async function buildMilestoneNotificationRow(projectId: string, item: MilestoneI
 
 export class MilestoneIntegrityService {
   async scanProjectMilestones(projectId: string): Promise<MilestoneIntegrityReport> {
-    const milestones = await executeSQL<MilestoneIntegritySourceRow>('SELECT * FROM milestones WHERE project_id = ?', [projectId])
+    const milestones = await executeSQL<MilestoneIntegritySourceRow>(
+      'SELECT id, project_id, title, planned_end_date as target_date, baseline_end as baseline_date, planned_end_date as current_plan_date, actual_end_date as actual_date, status, version FROM tasks WHERE project_id = ? AND is_milestone = true',
+      [projectId]
+    )
     return evaluateMilestoneIntegrityRows(projectId, milestones)
   }
 
@@ -315,7 +388,12 @@ export class MilestoneIntegrityService {
     const existingRows = (await listNotifications({ projectId }))
       .filter((notification) =>
         String(notification.source_entity_type ?? '').trim() === 'milestone_integrity'
-        && ['milestone_blocked', 'milestone_missing_data', 'milestone_needs_attention'].includes(String(notification.type ?? '').trim()),
+        && [
+          'milestone_blocked',
+          'milestone_data_incomplete',
+          'milestone_needs_attention',
+          ...MILESTONE_NOTIFICATION_TYPES,
+        ].includes(String(notification.type ?? '').trim()),
       )
     const existingByMilestoneId = new Map(
       existingRows.map((row) => [String(row.source_entity_id ?? ''), row]),

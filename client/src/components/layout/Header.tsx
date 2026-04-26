@@ -57,7 +57,7 @@ export default function Header() {
     if (contextLabel) {
       titleParts.push(contextLabel)
     }
-    titleParts.push('项目管理 Dashboard')
+    titleParts.push('仪表盘')
     document.title = titleParts.join(' · ')
   }, [contextLabel, currentProject?.name, isProjectPage, title])
 

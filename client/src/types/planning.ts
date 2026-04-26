@@ -55,6 +55,10 @@ export interface BaselineVersion extends PlanningVersionBase {
   effective_to?: string | null
   revision_pool_count?: number
   observation_pool_count?: number
+  modified_item_count?: number
+  milestone_change_count?: number
+  critical_path_change_count?: number
+  mapping_affected_count?: number
 }
 
 export interface BaselineItem {
@@ -64,6 +68,8 @@ export interface BaselineItem {
   parent_item_id?: string | null
   source_task_id?: string | null
   source_milestone_id?: string | null
+  template_id?: string | null
+  template_node_id?: string | null
   title: string
   planned_start_date?: string | null
   planned_end_date?: string | null
@@ -84,6 +90,7 @@ export interface MonthlyPlanVersion extends PlanningVersionBase {
   auto_switched?: boolean | null
   closeout_at?: string | null
   carryover_item_count?: number
+  pending_closeout_count?: number | null
   data_confidence_score?: number | null
   data_confidence_flag?: 'high' | 'medium' | 'low' | null
   data_confidence_note?: string | null
@@ -132,8 +139,16 @@ export interface RevisionPoolCandidate {
   source_id?: string | null
   title: string
   reason: string
+  priority?: 'low' | 'medium' | 'high' | 'critical' | string | null
   severity: 'low' | 'medium' | 'high' | 'critical'
-  status: 'open' | 'submitted' | 'accepted' | 'rejected'
+  status: 'open' | 'submitted' | 'accepted' | 'rejected' | 'deferred'
+  observation_window_start?: string | null
+  observation_window_end?: string | null
+  affects_critical_milestone?: boolean | null
+  consecutive_cross_month_count?: number | null
+  deferred_reason?: string | null
+  review_due_at?: string | null
+  reviewed_by?: string | null
   submitted_at?: string | null
   reviewed_at?: string | null
   created_at?: string | null
@@ -215,6 +230,12 @@ export interface ObservationPoolReadRequest {
 export interface ObservationPoolReadResponse {
   items: RevisionPoolCandidate[]
   total: number
+  summary?: {
+    high_priority_count: number
+    consecutive_cross_month_count: number
+    critical_milestone_count: number
+    last_reviewed_at?: string | null
+  }
 }
 
 export interface ObservationPoolSubmitRequest {
@@ -226,6 +247,14 @@ export interface ObservationPoolSubmitRequest {
     source_type: RevisionPoolCandidate['source_type']
     source_id?: string | null
     severity?: RevisionPoolCandidate['severity']
+    priority?: RevisionPoolCandidate['priority']
+    observation_window_start?: string | null
+    observation_window_end?: string | null
+    affects_critical_milestone?: boolean | null
+    consecutive_cross_month_count?: number | null
+    deferred_reason?: string | null
+    review_due_at?: string | null
+    reviewed_by?: string | null
   }>
 }
 

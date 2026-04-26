@@ -8,6 +8,7 @@ import {
   FolderKanban,
   GanttChart,
   LayoutDashboard,
+  Users,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 
@@ -125,6 +126,7 @@ export const PROJECT_NAVIGATION: NavigationItem[] = [
     children: [
       { key: 'gantt', label: PROJECT_NAVIGATION_LABELS.taskList, href: '/projects/:id/gantt', permission: 'view:task' },
       { key: 'task-summary', label: PROJECT_NAVIGATION_LABELS.taskSummary, href: '/projects/:id/task-summary', permission: 'view:task' },
+      { key: 'responsibility', label: PROJECT_NAVIGATION_LABELS.responsibility, href: '/projects/:id/responsibility', permission: 'view:task' },
     ],
   },
   { key: 'risks', label: PROJECT_NAVIGATION_LABELS.risks, href: '/projects/:id/risks', icon: AlertTriangle, permission: 'view:risk' },
@@ -142,6 +144,7 @@ export const PROJECT_NAVIGATION: NavigationItem[] = [
       { key: 'acceptance', label: PROJECT_NAVIGATION_LABELS.acceptance, href: '/projects/:id/acceptance', permission: 'view:project' },
     ],
   },
+  { key: 'notifications', label: PROJECT_NAVIGATION_LABELS.notifications, href: '/notifications', icon: Bell, permission: 'view:project' },
 ]
 
 const PLANNING_TARGETS: Record<string, Pick<NotificationTarget, 'key' | 'label' | 'href'>> = {
@@ -163,7 +166,7 @@ const PLANNING_TARGETS: Record<string, Pick<NotificationTarget, 'key' | 'label' 
   closeout: {
     key: 'planning',
     label: PROJECT_NAVIGATION_LABELS.closeout,
-    href: '/projects/:id/planning/closeout',
+    href: '/projects/:id/tasks/closeout',
   },
 }
 
@@ -196,6 +199,13 @@ export function getShellNavigationMeta(pathname: string): ShellNavigationMeta {
     return {
       title: `${PROJECT_NAVIGATION_LABELS.tasks} / ${PROJECT_NAVIGATION_LABELS.taskSummary}`,
       contextLabel: '\u4efb\u52a1\u7ed3\u679c\u603b\u7ed3',
+    }
+  }
+
+  if (pathname.includes('/tasks/closeout')) {
+    return {
+      title: `${PROJECT_NAVIGATION_LABELS.tasks} / ${PROJECT_NAVIGATION_LABELS.closeout}`,
+      contextLabel: '\\u4efb\\u52a1\\u5217\\u8868 / \\u6708\\u672b\\u5173\\u8d26',
     }
   }
 
@@ -268,10 +278,6 @@ export function getShellNavigationMeta(pathname: string): ShellNavigationMeta {
     return { title: '\u76d1\u63a7\u4e2d\u5fc3', contextLabel: '\u9690\u85cf\u5de5\u5177 / \u76d1\u63a7\u5165\u53e3' }
   }
 
-  if (pathname.includes('/team')) {
-    return { title: '\u56e2\u961f\u6210\u5458', contextLabel: '\u8f85\u52a9\u80fd\u529b / \u56e2\u961f\u6210\u5458' }
-  }
-
   if (pathname.startsWith('/projects/')) {
     return { title: PROJECT_NAVIGATION_LABELS.projectHome, contextLabel: PROJECT_NAVIGATION_LABELS.projectHome }
   }
@@ -331,7 +337,7 @@ export function resolveNotificationTarget(notification: NotificationLike, curren
       return buildTarget(
         'planning',
         `${PROJECT_NAVIGATION_LABELS.planning} / ${PROJECT_NAVIGATION_LABELS.closeout}`,
-        '/projects/:id/planning/closeout',
+        '/projects/:id/tasks/closeout',
         projectId,
       )
     }

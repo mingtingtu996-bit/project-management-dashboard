@@ -170,9 +170,12 @@ async function createTask(token, projectId, input) {
       end_date: input.endDate,
       planned_start_date: input.startDate,
       planned_end_date: input.endDate,
+      participant_unit_id: input.participantUnitId ?? null,
+      responsible_unit: input.responsibleUnit ?? input.assigneeUnit ?? null,
       assignee_name: input.assigneeName ?? null,
       assignee_unit: input.assigneeUnit ?? null,
       specialty_type: input.specialtyType ?? null,
+      phase_id: input.phaseId ?? projectId,
       is_milestone: input.isMilestone ?? false,
       milestone_level: input.milestoneLevel ?? null,
     },
@@ -485,6 +488,7 @@ async function main() {
 
   const project = await createProject(owner.token, suffix)
   log('project created', project.id)
+  const generalUnit = await createParticipantUnit(owner.token, project.id, '总包单位', '总包')
   const materialUnit = await createParticipantUnit(owner.token, project.id, '机电分包')
   const retiredUnit = await createParticipantUnit(owner.token, project.id, `联调电梯分包-${suffix}`)
 
@@ -494,7 +498,8 @@ async function main() {
     endDate: plusDays('2026-05-05', 0),
     progress: 35,
     assigneeName: '张工',
-    assigneeUnit: '总包单位',
+    assigneeUnit: generalUnit.unit_name,
+    participantUnitId: generalUnit.id,
     specialtyType: 'structure',
   })
   const taskMep = await createTask(owner.token, project.id, {
@@ -503,7 +508,8 @@ async function main() {
     endDate: plusDays('2026-05-10', 0),
     progress: 20,
     assigneeName: '李工',
-    assigneeUnit: '机电分包',
+    assigneeUnit: materialUnit.unit_name,
+    participantUnitId: materialUnit.id,
     specialtyType: 'mep',
   })
   const milestone = await createTask(owner.token, project.id, {
@@ -511,6 +517,10 @@ async function main() {
     startDate: plusDays('2026-05-15', 0),
     endDate: plusDays('2026-05-15', 0),
     progress: 0,
+    assigneeName: '赵工',
+    assigneeUnit: generalUnit.unit_name,
+    participantUnitId: generalUnit.id,
+    specialtyType: 'structure',
     isMilestone: true,
     milestoneLevel: 1,
   })
@@ -521,6 +531,7 @@ async function main() {
     progress: 15,
     assigneeName: '王工',
     assigneeUnit: materialUnit.unit_name,
+    participantUnitId: materialUnit.id,
     specialtyType: 'curtain',
   })
 
@@ -678,8 +689,8 @@ async function main() {
       await page.getByTestId('task-workspace-layer-l2').waitFor({ state: 'visible', timeout: 20000 })
       const foundationRow = page.locator(`#gantt-task-row-${taskFoundation.id}`)
       await foundationRow.waitFor({ state: 'visible', timeout: 20000 })
-      const delayedChip = page.getByText(/延期\\d+天/).first()
-      const overdueCard = page.getByText('逾期任务').first()
+      const delayedChip = page.getByText(/延期\d+天/).first()
+      const overdueCard = page.getByText(/延期任务|逾期任务/).first()
       const delayedChipVisible = await delayedChip.isVisible().catch(() => false)
       if (!delayedChipVisible) {
         await overdueCard.waitFor({ state: 'visible', timeout: 20000 })

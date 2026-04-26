@@ -1,6 +1,7 @@
 // Projects API 路由
 
 import { Router } from 'express'
+import { z } from 'zod'
 import { SupabaseService } from '../services/supabaseService.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import { validate, validateIdParam, projectSchema, projectUpdateSchema } from '../middleware/validation.js'
@@ -9,10 +10,26 @@ import { logger } from '../middleware/logger.js'
 import type { ApiResponse } from '../types/index.js'
 import type { Project } from '../types/db.js'
 import { getVisibleProjectIds } from '../auth/access.js'
+import { executeSQL } from '../services/dbService.js'
+import { dataQualityService } from '../services/dataQualityService.js'
 
 const router = Router()
 const supabase = new SupabaseService()
 const PROJECT_LIST_CACHE_TTL_MS = Number(process.env.PROJECT_LIST_CACHE_TTL_MS ?? 15_000)
+
+const projectLinkedTasksParamsSchema = z.object({
+  id: z.string().trim().min(1),
+  taskId: z.string().trim().min(1),
+})
+
+type LinkedTaskItem = {
+  id: string
+  title: string
+  status: string | null
+  progress: number | null
+  assignee_name: string | null
+  planned_end_date: string | null
+}
 
 let projectListCache: { expiresAt: number; projects: Project[] } | null = null
 
@@ -129,6 +146,19 @@ router.get('/:id/export', validateIdParam, requireProjectMember(req => req.param
   res.json(response)
 }))
 
+// 获取项目数据质量摘要。保留 /api/data-quality/project-summary 的同时，补齐 v1.1 清单中的项目级 alias。
+router.get('/:id/data-quality-summary', validateIdParam, requireProjectMember(req => req.params.id), asyncHandler(async (req, res) => {
+  const { id } = req.params
+  const month = String(req.query.month ?? '').trim() || undefined
+  const summary = await dataQualityService.buildProjectSummary(id, month)
+  const response: ApiResponse<typeof summary> = {
+    success: true,
+    data: summary,
+    timestamp: new Date().toISOString(),
+  }
+  res.json(response)
+}))
+
 // 获取单个项目
 router.get('/:id', validateIdParam, requireProjectMember(req => req.params.id), asyncHandler(async (req, res) => {
   const { id } = req.params
@@ -152,6 +182,47 @@ router.get('/:id', validateIdParam, requireProjectMember(req => req.params.id), 
   }
   res.json(response)
 }))
+
+router.get(
+  '/:id/milestones/:taskId/linked-tasks',
+  validate(projectLinkedTasksParamsSchema, 'params'),
+  requireProjectMember((req) => req.params.id),
+  asyncHandler(async (req, res) => {
+    const { id: projectId, taskId } = req.params
+    logger.info('Fetching milestone linked tasks', { projectId, taskId })
+
+    const task = await supabase.getTask(taskId)
+    if (!task || task.project_id !== projectId) {
+      const response: ApiResponse = {
+        success: false,
+        error: { code: 'TASK_NOT_FOUND', message: '任务不存在' },
+        timestamp: new Date().toISOString(),
+      }
+      return res.status(404).json(response)
+    }
+
+    const linkedTasks = await executeSQL<LinkedTaskItem>(
+      `SELECT id,
+              title,
+              status,
+              progress,
+              COALESCE(NULLIF(assignee_name, ''), assignee) AS assignee_name,
+              COALESCE(planned_end_date, end_date) AS planned_end_date
+         FROM tasks
+        WHERE project_id = ?
+          AND (parent_id = ? OR milestone_id = ?)
+        ORDER BY COALESCE(planned_end_date, end_date) ASC, updated_at DESC, title ASC`,
+      [projectId, taskId, taskId],
+    )
+
+    const response: ApiResponse<LinkedTaskItem[]> = {
+      success: true,
+      data: linkedTasks ?? [],
+      timestamp: new Date().toISOString(),
+    }
+    res.json(response)
+  }),
+)
 
 // 创建项目
 router.post('/', validate(projectSchema), asyncHandler(async (req, res) => {

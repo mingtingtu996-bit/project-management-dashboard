@@ -136,7 +136,7 @@ describe('WBSTemplates planning entry', () => {
         } as never
       }
 
-      if (url.includes('/api/planning/wbs-templates/bootstrap/from-ongoing-project')) {
+      if (url.includes('/api/task-baselines/bootstrap/from-schedule')) {
         return {
           ok: true,
           json: async () => ({
@@ -203,7 +203,7 @@ describe('WBSTemplates planning entry', () => {
       )
     })
 
-    await waitForText(container, ['计划编制', 'WBS 模板', '计划编制入口', 'WBS 模板 -> 项目基线'])
+    await waitForText(container, ['计划编制', 'WBS 模板', '结构资产与行业经验工期管理', 'WBS 模板 -> 项目基线'])
 
     expect(container.textContent).toContain('在建项目一键启用')
     expect(container.textContent).toContain('初始化基线')

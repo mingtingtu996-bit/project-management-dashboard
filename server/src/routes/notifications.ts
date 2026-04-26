@@ -159,6 +159,14 @@ function isUnreadCountCandidate(notification: Notification) {
   return String(notification.status ?? '').toLowerCase() === 'unread' || !isReadFlag(notification.is_read)
 }
 
+function serializeNotification(notification: Notification) {
+  return {
+    ...notification,
+    message: notification.content,
+    body: notification.content,
+  }
+}
+
 function buildValidationError(message: string, details?: unknown): ApiResponse {
   return {
     success: false,
@@ -310,9 +318,9 @@ router.get('/', validate(notificationsQuerySchema, 'query'), asyncHandler(async 
     offset,
   })
 
-  const response: ApiResponse<Notification[]> = {
+  const response: ApiResponse<Array<Notification & { message: string; body: string }>> = {
     success: true,
-    data: notifications,
+    data: notifications.map(serializeNotification),
     timestamp: new Date().toISOString(),
   }
 

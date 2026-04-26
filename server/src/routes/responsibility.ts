@@ -1,14 +1,16 @@
-import { Router } from 'express'
-import type { Request } from 'express'
+import { Router, type Request } from 'express'
+import { z } from 'zod'
 
 import { authenticate, requireProjectEditor, requireProjectMember } from '../middleware/auth.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import { logger } from '../middleware/logger.js'
+import { validate } from '../middleware/validation.js'
 import type { ApiResponse } from '../types/index.js'
 import {
   responsibilityInsightService,
   type ResponsibilityDimension,
   type ResponsibilityInsightsResponse,
+  type ResponsibilityTrendsResponse,
 } from '../services/responsibilityInsightService.js'
 
 const router = Router({ mergeParams: true })
@@ -22,6 +24,11 @@ function getProjectId(req: Request) {
 function normalizeDimension(value: unknown): ResponsibilityDimension {
   return String(value ?? '').trim().toLowerCase() === 'unit' ? 'unit' : 'person'
 }
+
+const responsibilityTrendsQuerySchema = z.object({
+  days: z.coerce.number().int().min(7).max(90).optional(),
+  groupBy: z.enum(['person', 'unit']).optional(),
+}).passthrough()
 
 router.get(
   '/',
@@ -38,6 +45,36 @@ router.get(
     }
     res.json(response)
   }),
+)
+
+const responsibilityTrendsHandler = asyncHandler(async (req, res) => {
+  const projectId = String(req.params.projectId)
+  const days = Number(req.query.days ?? 30)
+  const groupBy = normalizeDimension(req.query.groupBy)
+
+  logger.info('Fetching responsibility trends', { projectId, days, groupBy })
+
+  const data = await responsibilityInsightService.getProjectTrends(projectId, days, groupBy)
+  const response: ApiResponse<ResponsibilityTrendsResponse> = {
+    success: true,
+    data,
+    timestamp: new Date().toISOString(),
+  }
+  res.json(response)
+})
+
+router.get(
+  '/trends',
+  requireProjectMember(getProjectId),
+  validate(responsibilityTrendsQuerySchema, 'query'),
+  responsibilityTrendsHandler,
+)
+
+router.get(
+  '/responsibility-trends',
+  requireProjectMember(getProjectId),
+  validate(responsibilityTrendsQuerySchema, 'query'),
+  responsibilityTrendsHandler,
 )
 
 router.post(

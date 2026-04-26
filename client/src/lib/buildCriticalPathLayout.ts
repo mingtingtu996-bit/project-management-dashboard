@@ -9,7 +9,7 @@ export const CRITICAL_PATH_LANE_GAP = 34
 export const CRITICAL_PATH_CANVAS_PADDING_X = 36
 export const CRITICAL_PATH_CANVAS_PADDING_Y = 28
 
-export type CriticalPathLayoutLaneType = 'primary' | 'alternate' | 'attention' | 'other'
+export type CriticalPathLayoutLaneType = 'primary' | 'alternate' | 'attention' | 'manual_insert' | 'other'
 
 export interface CriticalPathLayoutLane {
   id: string
@@ -122,7 +122,7 @@ function buildLanes(snapshot: CriticalPathSnapshot): CriticalPathLayoutLane[] {
     lanes.push({
       id: chain.id || `alternate-${index + 1}`,
       label: chain.displayLabel || `备选链 ${index + 1}`,
-      type: 'alternate',
+      type: chain.source === 'manual_insert' ? 'manual_insert' : 'alternate',
       taskIds,
     })
   })

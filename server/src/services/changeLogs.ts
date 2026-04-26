@@ -19,6 +19,7 @@ export type ChangeLogEntityType =
   | 'planning_governance'
   | 'task_condition'
   | 'task_obstacle'
+  | 'draft_lock'
 
 export type ChangeSource =
   | 'system_auto'

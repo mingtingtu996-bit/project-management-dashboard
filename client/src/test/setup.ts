@@ -1,6 +1,16 @@
 import '@testing-library/jest-dom'
-import * as React from 'react'
+import { cleanup } from '@testing-library/react'
+import { createRequire } from 'node:module'
+import type * as ReactTypes from 'react'
 import { afterEach, vi } from 'vitest'
+
+const require = createRequire(import.meta.url)
+const React = require('react') as typeof ReactTypes
+
+vi.mock('react', () => ({
+  ...React,
+  default: React,
+}))
 
 vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom')
@@ -60,7 +70,7 @@ if (!HTMLCanvasElement.prototype.getContext) {
 }
 
 afterEach(() => {
-  document.body.innerHTML = ''
+  cleanup()
 })
 
 Object.defineProperty(window, 'matchMedia', {

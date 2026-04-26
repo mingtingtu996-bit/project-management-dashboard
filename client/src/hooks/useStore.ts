@@ -28,6 +28,19 @@ export interface ScopeDimensionSection {
 
 export type ScopeDraft = Record<ScopeDimensionKey, string[]>
 
+function resolveInitialConnectionMode(): 'websocket' | 'polling' {
+  if (
+    typeof window !== 'undefined'
+    && import.meta.env.PROD
+    && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+    && window.location.port === '4173'
+  ) {
+    return 'polling'
+  }
+
+  return 'websocket'
+}
+
 export interface ParticipantUnitRecord {
   id: string
   project_id?: string | null
@@ -414,7 +427,7 @@ export const useStore = create<AppState>((set) => ({
   setSidebarOpen: (open) => set({ sidebarOpen: open }),
 
   // 连接模式
-  connectionMode: 'websocket',
+  connectionMode: resolveInitialConnectionMode(),
   setConnectionMode: (mode) => set({ connectionMode: mode }),
   realtimeConnectionState: 'idle',
   setRealtimeConnectionState: (realtimeConnectionState) => set({ realtimeConnectionState }),

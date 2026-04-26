@@ -6,6 +6,7 @@ import { insertNotification, listNotifications, updateNotificationById } from '.
 import type { CriticalPathOverride, CriticalPathOverrideInput, Notification } from '../types/db.js'
 
 const DAY_MS = 24 * 60 * 60 * 1000
+const criticalPathSnapshotCache = new Map<string, CriticalPathSnapshot>()
 
 export type CriticalSource = 'auto' | 'manual_attention' | 'manual_insert' | 'hybrid'
 
@@ -44,9 +45,14 @@ export interface CriticalPathSnapshot {
   primaryChain: CriticalChainSnapshot | null
   alternateChains: CriticalChainSnapshot[]
   displayTaskIds: string[]
+  watchedTaskIds: string[]  // CP14: manual_attention 任务独立存储，不混入 displayTaskIds
   edges: CriticalPathEdge[]
   tasks: CriticalTaskSnapshot[]
   projectDurationDays: number
+  calculatedAt?: string
+  calculationStatus?: 'fresh' | 'cached_after_failure' | 'empty_after_failure'
+  calculationFailureMessage?: string | null
+  calculationFailedAt?: string | null
   hasCycleDetected?: boolean
   cycleTaskIds?: string[]
 }
@@ -60,6 +66,36 @@ export interface ProjectCriticalPathResult {
   criticalTaskIds: string[]
   projectDuration: number
   snapshot: CriticalPathSnapshot
+}
+
+function cloneCriticalPathSnapshot(snapshot: CriticalPathSnapshot): CriticalPathSnapshot {
+  return {
+    ...snapshot,
+    primaryChain: snapshot.primaryChain
+      ? {
+        ...snapshot.primaryChain,
+        taskIds: [...snapshot.primaryChain.taskIds],
+      }
+      : null,
+    alternateChains: snapshot.alternateChains.map((chain) => ({
+      ...chain,
+      taskIds: [...chain.taskIds],
+    })),
+    displayTaskIds: [...snapshot.displayTaskIds],
+    watchedTaskIds: [...snapshot.watchedTaskIds],
+    edges: snapshot.edges.map((edge) => ({ ...edge })),
+    tasks: snapshot.tasks.map((task) => ({ ...task })),
+    cycleTaskIds: snapshot.cycleTaskIds ? [...snapshot.cycleTaskIds] : undefined,
+  }
+}
+
+function rememberCriticalPathSnapshot(projectId: string, snapshot: CriticalPathSnapshot) {
+  criticalPathSnapshotCache.set(projectId, cloneCriticalPathSnapshot(snapshot))
+}
+
+function getCachedCriticalPathSnapshot(projectId: string): CriticalPathSnapshot | null {
+  const cached = criticalPathSnapshotCache.get(projectId)
+  return cached ? cloneCriticalPathSnapshot(cached) : null
 }
 
 interface CriticalPathTaskRow {
@@ -830,31 +866,57 @@ export function buildProjectCriticalPathSnapshot(
   let analysis: CPMResult
   let hasCycleDetected = false
   let cycleTaskIds: string[] = []
+  let calculatedSuccessfully = false
   try {
     analysis = calculateCPM(taskNodes)
+    calculatedSuccessfully = true
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error)
+    const failedAt = new Date().toISOString()
     hasCycleDetected = errorMessage.startsWith('CRITICAL_PATH_CYCLE_DETECTED:')
     if (hasCycleDetected) {
       const cycleTaskId = errorMessage.replace('CRITICAL_PATH_CYCLE_DETECTED:', '').trim()
       if (cycleTaskId) cycleTaskIds = [cycleTaskId]
     }
-    logger.warn('[projectCriticalPathService] CPM calculation failed, using deterministic fallback ordering', {
+    logger.warn('[projectCriticalPathService] CPM calculation failed, returning cached or empty snapshot', {
       projectId,
       hasCycleDetected,
       cycleTaskIds,
       error: errorMessage,
     })
-    analysis = {
-      criticalPath: [],
-      projectDuration: 0,
-      earliestStart: new Map(),
-      earliestFinish: new Map(),
-      latestStart: new Map(),
-      latestFinish: new Map(),
-      float: new Map(),
-      orderedTaskIds: [],
-      taskMap: new Map(),
+    const cachedSnapshot = getCachedCriticalPathSnapshot(projectId)
+    if (cachedSnapshot) {
+      logger.warn('[projectCriticalPathService] using cached critical path snapshot after CPM failure', {
+        projectId,
+        hasCycleDetected,
+        cycleTaskIds,
+      })
+      return {
+        ...cachedSnapshot,
+        calculationStatus: 'cached_after_failure',
+        calculationFailureMessage: errorMessage,
+        calculationFailedAt: failedAt,
+        hasCycleDetected: cachedSnapshot.hasCycleDetected || hasCycleDetected,
+        cycleTaskIds: cycleTaskIds.length > 0 ? cycleTaskIds : cachedSnapshot.cycleTaskIds,
+      }
+    }
+    return {
+      projectId,
+      autoTaskIds: [],
+      manualAttentionTaskIds: [],
+      manualInsertedTaskIds: [],
+      primaryChain: null,
+      alternateChains: [],
+      displayTaskIds: [],
+      watchedTaskIds: [],
+      edges: [],
+      tasks: [],
+      projectDurationDays: 0,
+      calculationStatus: 'empty_after_failure',
+      calculationFailureMessage: errorMessage,
+      calculationFailedAt: failedAt,
+      hasCycleDetected,
+      cycleTaskIds: cycleTaskIds.length > 0 ? cycleTaskIds : undefined,
     }
   }
   const taskMap = new Map(rows.map((row) => [row.id, row]))
@@ -872,9 +934,9 @@ export function buildProjectCriticalPathSnapshot(
   )
   const manualInsertOverrides = overrides.filter((override) => override.mode === 'manual_insert')
   const manualInsertedTaskIds = unique(manualInsertOverrides.map((override) => override.task_id))
+  // CP14: displayTaskIds 仅包含客观关键路径（CPM 自动计算 + manual_insert），不混入 manual_attention
   const displayTaskIds = unique([
     ...orderDisplayTaskIds(autoTaskIds, new Set(rows.map((row) => row.id)), manualInsertOverrides),
-    ...manualAttentionTaskIds,
   ])
   const manualInsertChains = buildManualInsertChains(projectId, manualInsertOverrides, taskMap)
   const edges = buildSnapshotEdges(primaryChain?.taskIds ?? autoTaskIds, rows, manualInsertOverrides)
@@ -899,7 +961,7 @@ export function buildProjectCriticalPathSnapshot(
     })
     .filter((task): task is CriticalTaskSnapshot => task !== null)
 
-  return {
+  const snapshot: CriticalPathSnapshot = {
     projectId,
     autoTaskIds,
     manualAttentionTaskIds,
@@ -907,17 +969,23 @@ export function buildProjectCriticalPathSnapshot(
     primaryChain,
     alternateChains: [...autoAlternateChains, ...manualInsertChains],
     displayTaskIds,
+    watchedTaskIds: manualAttentionTaskIds,  // CP14: manual_attention 任务独立字段
     edges,
     tasks,
     projectDurationDays: Math.max(
       analysis.projectDuration,
       primaryChain?.totalDurationDays ?? 0,
       ...autoAlternateChains.map((chain) => chain.totalDurationDays),
-      ...manualInsertChains.map((chain) => chain.totalDurationDays),
     ),
+    calculatedAt: new Date().toISOString(),
     hasCycleDetected,
     cycleTaskIds: cycleTaskIds.length > 0 ? cycleTaskIds : undefined,
   }
+
+  if (calculatedSuccessfully) {
+    rememberCriticalPathSnapshot(projectId, snapshot)
+  }
+  return snapshot
 }
 
 async function saveCriticalPathOverride(projectId: string, input: CriticalPathOverrideInput): Promise<CriticalPathOverrideRow> {
@@ -975,6 +1043,54 @@ export async function createCriticalPathOverride(projectId: string, input: Criti
   return await saveCriticalPathOverride(projectId, input)
 }
 
+export async function updateCriticalPathOverride(
+  projectId: string,
+  overrideId: string,
+  input: CriticalPathOverrideInput,
+): Promise<CriticalPathOverrideRow> {
+  const existingRows = await loadCriticalPathOverrideRows(projectId)
+  const existing = existingRows.find((override) => override.id === overrideId)
+  if (!existing) {
+    throw makeError('CRITICAL_PATH_OVERRIDE_NOT_FOUND', 404, '关键路径覆盖不存在')
+  }
+
+  const projectTasks = await loadCriticalPathTaskRows(projectId)
+  validateOverrideInput(projectTasks, input)
+
+  const updatedAt = new Date().toISOString()
+  const nextRow: CriticalPathOverrideRow = {
+    ...existing,
+    task_id: input.task_id,
+    mode: input.mode,
+    anchor_type: input.anchor_type ?? null,
+    left_task_id: input.left_task_id ?? null,
+    right_task_id: input.right_task_id ?? null,
+    reason: input.reason ?? null,
+    created_by: input.created_by ?? existing.created_by ?? null,
+    updated_at: updatedAt,
+  }
+
+  await executeSQL(
+    `UPDATE task_critical_overrides
+     SET task_id = ?, mode = ?, anchor_type = ?, left_task_id = ?, right_task_id = ?, reason = ?, created_by = ?, updated_at = ?
+     WHERE id = ? AND project_id = ?`,
+    [
+      nextRow.task_id,
+      nextRow.mode,
+      nextRow.anchor_type,
+      nextRow.left_task_id,
+      nextRow.right_task_id,
+      nextRow.reason,
+      nextRow.created_by,
+      nextRow.updated_at,
+      nextRow.id,
+      nextRow.project_id,
+    ],
+  )
+
+  return nextRow
+}
+
 export async function deleteCriticalPathOverride(projectId: string, overrideId: string): Promise<void> {
   await executeSQL(
     'DELETE FROM task_critical_overrides WHERE id = ? AND project_id = ?',
@@ -993,7 +1109,7 @@ export async function recalculateProjectCriticalPath(projectId: string): Promise
     analysis = calculateCPM(taskNodes)
   } catch (error) {
     failureMessage = error instanceof Error ? error.message : String(error)
-    logger.warn('[projectCriticalPathService] recalculation fallback ordering engaged', {
+    logger.warn('[projectCriticalPathService] recalculation CPM failed, snapshot metadata will indicate stale or empty data', {
       projectId,
       error: failureMessage,
     })
@@ -1019,20 +1135,34 @@ export async function recalculateProjectCriticalPath(projectId: string): Promise
   }
   const snapshot = buildProjectCriticalPathSnapshot(projectId, rows, overrides)
 
+  // CP15: 同步 tasks.is_critical 缓存字段
+  try {
+    const displayTaskIdSet = new Set(snapshot.displayTaskIds)
+    await executeSQL(
+      `UPDATE tasks SET is_critical = (id = ANY($1::text[])) WHERE project_id = $2`,
+      [Array.from(displayTaskIdSet), projectId]
+    )
+  } catch (syncError) {
+    logger.warn('[projectCriticalPathService] failed to sync tasks.is_critical cache field', {
+      projectId,
+      error: syncError instanceof Error ? syncError.message : String(syncError),
+    })
+  }
+
   logger.info('[projectCriticalPathService] recalculated project critical path snapshot', {
     projectId,
     taskCount: tasks.length,
     eligibleTaskCount: taskNodes.length,
     criticalTaskCount: snapshot.autoTaskIds.length,
-    projectDuration: analysis.projectDuration,
+    projectDuration: snapshot.projectDurationDays,
   })
 
   return {
     projectId,
     taskCount: tasks.length,
     eligibleTaskCount: taskNodes.length,
-    criticalTaskIds: analysis.criticalPath,
-    projectDuration: analysis.projectDuration,
+    criticalTaskIds: snapshot.autoTaskIds,
+    projectDuration: snapshot.projectDurationDays,
     snapshot,
   }
 }

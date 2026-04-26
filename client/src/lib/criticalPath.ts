@@ -1,4 +1,4 @@
-import { apiDelete, apiGet, apiPost } from '@/lib/apiClient'
+import { apiDelete, apiGet, apiPatch, apiPost } from '@/lib/apiClient'
 
 import { formatCriticalPathCount } from './userFacingTerms'
 
@@ -56,6 +56,10 @@ export interface CriticalPathSnapshot {
   edges: CriticalPathEdge[]
   tasks: CriticalTaskSnapshot[]
   projectDurationDays: number
+  calculatedAt?: string
+  calculationStatus?: 'fresh' | 'cached_after_failure' | 'empty_after_failure'
+  calculationFailureMessage?: string | null
+  calculationFailedAt?: string | null
   hasCycleDetected?: boolean
   cycleTaskIds?: string[]
 }
@@ -193,4 +197,20 @@ export async function deleteCriticalPathOverride(
   options?: RequestInit,
 ): Promise<void> {
   await apiDelete(`/api/projects/${projectId}/critical-path/overrides/${overrideId}`, options)
+}
+
+export async function updateCriticalPathOverride(
+  projectId: string,
+  overrideId: string,
+  input: CriticalPathOverrideInput,
+  options?: RequestInit,
+): Promise<CriticalPathOverrideRecord> {
+  return await apiPatch<CriticalPathOverrideRecord>(`/api/projects/${projectId}/critical-path/overrides/${overrideId}`, {
+    task_id: input.taskId,
+    mode: input.mode,
+    anchor_type: input.anchorType ?? null,
+    left_task_id: input.leftTaskId ?? null,
+    right_task_id: input.rightTaskId ?? null,
+    reason: input.reason ?? null,
+  }, options)
 }

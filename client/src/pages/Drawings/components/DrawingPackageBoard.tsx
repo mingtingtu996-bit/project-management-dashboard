@@ -39,7 +39,6 @@ export function DrawingPackageBoard({
   emptyDescription?: string
 }) {
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
-  void subtitle
   void emptyDescription
 
   function toggleGroup(disciplineType: string) {
@@ -56,6 +55,7 @@ export function DrawingPackageBoard({
       <div className="flex items-end justify-between gap-4">
         <div>
           <h2 className="text-lg font-semibold text-slate-900">{title}</h2>
+          {subtitle && <p className="text-sm text-slate-500">{subtitle}</p>}
         </div>
         <div className="hidden items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500 md:flex">
           <Layers3 className="h-3.5 w-3.5" />

@@ -54,10 +54,15 @@ export const CERTIFICATE_STAGE_DESCRIPTIONS: Record<(typeof CERTIFICATE_STAGE_SE
 
 export const CERTIFICATE_STATUS_LABELS: Record<string, string> = {
   pending: '待启动',
+  in_progress: '进行中',
+  submitted: '已申报',
   preparing_documents: '资料准备中',
   internal_review: '报审中',
   external_submission: '报批中',
   supplement_required: '待补正',
+  completed: '已完成',
+  blocked: '已阻塞',
+  cancelled: '已取消',
   approved: '已批复',
   issued: '已领证',
   expired: '已失效',
@@ -66,10 +71,15 @@ export const CERTIFICATE_STATUS_LABELS: Record<string, string> = {
 
 export const CERTIFICATE_STATUS_THEME_KEYS: Record<string, string> = {
   pending: 'pending',
+  in_progress: 'investigating',
+  submitted: 'warning',
   preparing_documents: 'pending',
   internal_review: 'investigating',
   external_submission: 'warning',
   supplement_required: 'warning',
+  completed: 'completed',
+  blocked: 'delayed',
+  cancelled: 'closed',
   approved: 'completed',
   issued: 'completed',
   expired: 'delayed',

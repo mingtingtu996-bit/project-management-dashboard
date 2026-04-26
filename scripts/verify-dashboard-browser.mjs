@@ -610,7 +610,6 @@ async function main() {
     await page.goto(targetUrl, { waitUntil: 'domcontentloaded' })
     await page.getByTestId('dashboard-page').waitFor({ state: 'visible', timeout: 20000 })
     await page.getByTestId('dashboard-hero-cards').waitFor({ state: 'visible', timeout: 20000 })
-    await page.getByTestId('dashboard-critical-path-summary').waitFor({ state: 'visible', timeout: 20000 })
     await page.getByTestId('dashboard-live-panel').waitFor({ state: 'visible', timeout: 20000 })
 
     const initialUrl = page.url()
@@ -643,7 +642,7 @@ async function main() {
     await page.goto(targetUrl, { waitUntil: 'domcontentloaded' })
     await page.getByTestId('dashboard-page').waitFor({ state: 'visible', timeout: 20000 })
     await page.getByTestId('dashboard-open-closeout').click()
-    await page.waitForFunction(() => window.location.hash.includes('/planning/closeout'))
+    await page.waitForFunction(() => window.location.hash.includes('/tasks/closeout'))
     await page.getByTestId('closeout-filter-bar').waitFor({ state: 'visible', timeout: 20000 })
     const closeoutUrl = page.url()
     await page.screenshot({ path: join(outputDir, 'dashboard-page-closeout-link.png'), fullPage: true })

@@ -20,16 +20,18 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { LoadingState } from '@/components/ui/loading-state'
 import { usePlanningStore, type PlanningValidationIssue } from '@/hooks/usePlanningStore'
+import { usePermissions } from '@/hooks/usePermissions'
 import { useStore } from '@/hooks/useStore'
 import { useToast } from '@/hooks/use-toast'
 import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard'
 import { apiGet, apiPost, getApiErrorMessage } from '@/lib/apiClient'
 import type { BaselineVersion, MonthlyPlanVersion, PlanningDraftLockRecord } from '@/types/planning'
 import type { Task, TaskCondition, TaskObstacle } from '@/pages/GanttViewTypes'
-import { AlertTriangle, CalendarDays, Clock, FileDiff, Layers3, Lock, RefreshCw, WandSparkles } from 'lucide-react'
+import { AlertTriangle, CalendarDays, Clock, FileDiff, Layers3, Lock, MoreHorizontal, RefreshCw, WandSparkles } from 'lucide-react'
 
 import { BaselineTreeEditor } from './components/BaselineTreeEditor'
 import { MonthlyPlanBottomBar } from './components/MonthlyPlanBottomBar'
@@ -42,6 +44,7 @@ import { MonthlyPlanExceptionSummary } from './components/MonthlyPlanExceptionSu
 import { MonthlyPlanHeader } from './components/MonthlyPlanHeader'
 import { MonthlyPlanSkeletonDiffDialog } from './components/MonthlyPlanSkeletonDiffDialog'
 import { PlanningDraftResumeDialog } from './components/PlanningDraftResumeDialog'
+import type { MonthlyPlanConfirmSummary } from './components/MonthlyPlanConfirmDialog'
 import {
   buildPlanningDraftResumeKey,
   clearPlanningDraftResumeSnapshot,
@@ -52,6 +55,7 @@ import {
 import {
   type BaselineDetail,
   type DraftLockResponse,
+  type MonthlyPlanChangeSummary,
   type MonthlyPlanDetail,
   buildMonthWindow,
   buildMonthlyPlanRows,
@@ -75,10 +79,16 @@ type MonthlyAction =
   | 'unlock'
   | 'queue_realign'
   | 'resolve_realign'
+  | 'batch_scope'
+  | 'batch_shift'
+  | 'batch_progress'
+  | 'batch_notes'
   | null
 type MonthlySourceMode = 'baseline' | 'schedule'
 type MonthlyEditableField = 'title' | 'start' | 'end' | 'progress'
 type MonthlyEditorSnapshot = { items: MonthlyPlanDetail['items']; selectedIds: string[] }
+
+const MONTHLY_EDITABLE_FIELDS: MonthlyEditableField[] = ['title', 'start', 'end', 'progress']
 
 const SOURCE_OPTIONS: Array<{
   key: MonthlySourceMode
@@ -87,12 +97,12 @@ const SOURCE_OPTIONS: Array<{
 }> = [
   {
     key: 'baseline',
-    title: '基于项目基线生成',
+    title: '以项目基线生成',
     description: '沿用正式基线的层级和关键节点生成本月草稿。',
   },
   {
     key: 'schedule',
-    title: '基于当前任务列表生成',
+    title: '以当前排期生成',
     description: '按当前任务列表生成本月草稿，适合先按现状编排。',
   },
 ]
@@ -240,6 +250,7 @@ function buildValidationIssues(params: {
   tasks: Task[]
   month: string
   plan: MonthlyPlanDetail | null
+  blockingSummary?: MonthlyPlanConfirmSummary | null
 }): PlanningValidationIssue[] {
   const today = new Date().toISOString().slice(0, 10)
   const scopedTaskIds = new Set(
@@ -260,6 +271,8 @@ function buildValidationIssues(params: {
     if (!isScopedTask(task.id)) return false
     return plannedEnd.slice(0, 10) < today
   })
+  const blockingSummary = params.blockingSummary ?? null
+  const blockingIssueCount = blockingSummary?.blockingIssueCount ?? 0
 
   const issues: Array<PlanningValidationIssue | null> = [
     pendingConditions.length
@@ -284,6 +297,20 @@ function buildValidationIssues(params: {
           level: 'warning' as const,
           title: `${delayedTasks.length} 项执行任务已晚于计划日期`,
           detail: '这些延期信号会直接影响当月完成情况。',
+        }
+      : null,
+    blockingIssueCount > 0
+      ? {
+          id: 'monthly-blocking',
+          level: 'error' as const,
+          title: `${blockingIssueCount} 项确认阻断项未清`,
+          detail:
+            `还剩 ${blockingIssueCount} 项需要先处理：` +
+            `条件 ${blockingSummary?.conditionIssueCount ?? 0}、` +
+            `障碍 ${blockingSummary?.obstacleIssueCount ?? 0}、` +
+            `延期 ${blockingSummary?.delayIssueCount ?? 0}、` +
+            `映射 ${blockingSummary?.mappingIssueCount ?? 0}、` +
+            `必填 ${blockingSummary?.requiredFieldIssueCount ?? 0}。`,
         }
       : null,
     params.plan
@@ -324,12 +351,113 @@ function buildMonthlyStatusNotice(status: MonthlyPlanVersion['status'], month: s
   }
 }
 
+function buildMonthlyConfirmSummary(plan: MonthlyPlanDetail | null, tasks: Task[], conditions: TaskCondition[] = [], obstacles: TaskObstacle[] = []) {
+  const itemList = plan?.items ?? []
+  const taskMap = new Map(tasks.map((task) => [task.id, task]))
+  const scopedTaskIds = new Set(
+    itemList
+      .map((item) => item.source_task_id)
+      .filter((taskId): taskId is string => Boolean(taskId)),
+  )
+  const isScopedTask = (taskId?: string | null) => scopedTaskIds.size === 0 || !taskId || scopedTaskIds.has(taskId)
+  const pendingConditions = conditions.filter((item) => !item.is_satisfied && isScopedTask(item.task_id))
+  const activeObstacles = obstacles.filter((item) => !item.is_resolved && item.status !== '已解决' && isScopedTask(item.task_id))
+  const delayedTasks = itemList.filter((item) => {
+    const task = item.source_task_id ? taskMap.get(item.source_task_id) : null
+    const plannedEnd = item.planned_end_date ?? task?.planned_end_date ?? task?.end_date ?? null
+    if (!plannedEnd) return false
+    if (item.commitment_status === 'cancelled') return false
+    return plannedEnd.slice(0, 10) < new Date().toISOString().slice(0, 10)
+  })
+
+  return {
+    totalItemCount: itemList.length,
+    newlyAddedCount: itemList.filter((item) => !item.baseline_item_id && !item.carryover_from_item_id).length,
+    autoRolledInCount: itemList.filter((item) => item.commitment_status === 'carried_over').length,
+    pendingRemovalCount: itemList.filter((item) => item.commitment_status === 'cancelled').length,
+    milestoneCount: itemList.filter((item) => Boolean(item.is_milestone)).length,
+    dateAdjustmentCount: itemList.filter((item) => {
+      const task = item.source_task_id ? taskMap.get(item.source_task_id) : null
+      if (!task) return Boolean(item.planned_start_date || item.planned_end_date)
+      const taskStart = task.planned_start_date ?? task.start_date ?? null
+      const taskEnd = task.planned_end_date ?? task.end_date ?? null
+      return taskStart !== item.planned_start_date || taskEnd !== item.planned_end_date
+    }).length,
+    progressAdjustmentCount: itemList.filter((item) => {
+      const task = item.source_task_id ? taskMap.get(item.source_task_id) : null
+      if (!task) return item.target_progress != null
+      return (task.progress ?? null) !== (item.target_progress ?? null)
+    }).length,
+    blockingIssueCount: pendingConditions.length + activeObstacles.length + delayedTasks.length,
+    conditionIssueCount: pendingConditions.length,
+    obstacleIssueCount: activeObstacles.length,
+    delayIssueCount: delayedTasks.length,
+    mappingIssueCount: 0,
+    requiredFieldIssueCount: 0,
+  }
+}
+
+function buildMonthlyChangeSummary(plan: MonthlyPlanDetail | null, tasks: Task[]): MonthlyPlanChangeSummary {
+  const itemList = plan?.items ?? []
+  const taskMap = new Map(tasks.map((task) => [task.id, task]))
+
+  let addedCount = 0
+  let removedCount = 0
+  let dateShiftCount = 0
+  let progressAdjustmentCount = 0
+  let milestoneAdjustCount = 0
+
+  itemList.forEach((item) => {
+    const task = item.source_task_id ? taskMap.get(item.source_task_id) ?? null : null
+    const taskStart = task?.planned_start_date ?? task?.start_date ?? null
+    const taskEnd = task?.planned_end_date ?? task?.end_date ?? null
+    const itemStart = item.planned_start_date ?? null
+    const itemEnd = item.planned_end_date ?? null
+    const taskProgress = typeof task?.progress === 'number' ? task.progress : null
+    const itemProgress = typeof item.target_progress === 'number' ? item.target_progress : null
+
+    if (!item.baseline_item_id && !item.carryover_from_item_id) {
+      addedCount += 1
+    }
+    if (item.commitment_status === 'cancelled') {
+      removedCount += 1
+    }
+    if (task && (taskStart !== itemStart || taskEnd !== itemEnd)) {
+      dateShiftCount += 1
+    }
+    if (task && itemProgress !== taskProgress) {
+      progressAdjustmentCount += 1
+    } else if (!task && itemProgress !== null) {
+      progressAdjustmentCount += 1
+    }
+    if (item.is_milestone && (taskStart !== itemStart || taskEnd !== itemEnd || itemProgress !== taskProgress)) {
+      milestoneAdjustCount += 1
+    }
+  })
+
+  const totalChangeCount =
+    addedCount + removedCount + dateShiftCount + progressAdjustmentCount + milestoneAdjustCount
+  const threshold = 5
+
+  return {
+    addedCount,
+    removedCount,
+    dateShiftCount,
+    progressAdjustmentCount,
+    milestoneAdjustCount,
+    totalChangeCount,
+    threshold,
+    isLargeScale: totalChangeCount >= threshold,
+  }
+}
+
 export default function MonthlyPlanPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const location = useLocation()
   const { toast } = useToast()
   const currentProject = useStore((state) => state.currentProject)
+  const { canEdit, globalRole, isOwner, permissionLevel } = usePermissions({ projectId: currentProject?.id ?? id })
   const selectedItemIds = usePlanningStore((state) => state.selectedItemIds)
   const setSelectedItemIds = usePlanningStore((state) => state.setSelectedItemIds)
   const clearSelection = usePlanningStore((state) => state.clearSelection)
@@ -352,6 +480,8 @@ export default function MonthlyPlanPage() {
   const [conditions, setConditions] = useState<TaskCondition[]>([])
   const [obstacles, setObstacles] = useState<TaskObstacle[]>([])
   const [activePlan, setActivePlan] = useState<MonthlyPlanDetail | null>(null)
+  const [monthlyConfirmSummary, setMonthlyConfirmSummary] = useState<MonthlyPlanConfirmSummary | null>(null)
+  const [monthlyChangeSummary, setMonthlyChangeSummary] = useState<MonthlyPlanChangeSummary | null>(null)
   const [draftLock, setDraftLock] = useState<PlanningDraftLockRecord | null>(null)
   const [lockSecondsLeft, setLockSecondsLeft] = useState<number | null>(null)
   const [pageLoading, setPageLoading] = useState(true)
@@ -385,7 +515,7 @@ export default function MonthlyPlanPage() {
       ) ?? null,
     [baselineVersions],
   )
-  const readOnly = !activePlan || activePlan.status !== 'draft' || draftStatus === 'locked'
+  const readOnly = !canEdit || !activePlan || activePlan.status !== 'draft' || draftStatus === 'locked'
   const lockRemainingLabel = formatCountdown(lockSecondsLeft)
   const noBaselineIntercept = !pageLoading && !activePlan && !latestConfirmedBaseline
   const conditionTaskIds = useMemo(
@@ -414,7 +544,12 @@ export default function MonthlyPlanPage() {
         .map((task) => task.id),
     )
   }, [tasks])
-  const currentSourceLabel = activePlan?.baseline_version_id ? '项目基线' : '当前任务列表'
+  const currentSourceLabel = activePlan?.source_version_label ?? (sourceMode === 'baseline' ? '项目基线' : '当前排期')
+  useEffect(() => {
+    if (!pageLoading && sourceMode !== 'schedule' && (!latestConfirmedBaseline || activePlan?.status === 'pending_realign')) {
+      setSourceMode('schedule')
+    }
+  }, [activePlan?.status, latestConfirmedBaseline, pageLoading, sourceMode])
   const confirmReminder = useMemo(
     () => buildMonthlyConfirmReminder(activePlan?.month ?? selectedMonth, activePlan?.status),
     [activePlan?.month, activePlan?.status, selectedMonth],
@@ -439,9 +574,13 @@ export default function MonthlyPlanPage() {
     () => countChangedMonthlyEntries(initialSnapshotRef.current, currentEditorSnapshot),
     [currentEditorSnapshot],
   )
-  const quickAvailable = Boolean(activePlan) && !readOnly && !validationIssues.some((issue) => issue.level === 'error')
-  const canQueueRealignment = activePlan?.status === 'confirmed' || activePlan?.status === 'revising'
-  const canResolveRealignment = activePlan?.status === 'pending_realign'
+  const hasBlockingIssues = validationIssues.some((issue) => issue.level === 'error')
+  const quickAvailable = Boolean(activePlan) && !readOnly && !hasBlockingIssues
+  const canOpenStandardConfirm = Boolean(activePlan) && !readOnly
+  const canStandardConfirm = canOpenStandardConfirm
+  const canManagePlanning = canEdit || isOwner || globalRole === 'company_admin'
+  const canQueueRealignment = canManagePlanning && (activePlan?.status === 'confirmed' || activePlan?.status === 'revising')
+  const canResolveRealignment = canManagePlanning && activePlan?.status === 'pending_realign'
   const conditionIssues = useMemo(
     () => validationIssues.filter((issue) => issue.id.includes('condition')),
     [validationIssues],
@@ -455,28 +594,12 @@ export default function MonthlyPlanPage() {
     [validationIssues],
   )
   const confirmSummary = useMemo(
-    () => ({
-      monthLabel: formatMonthLabel(selectedMonth),
-      versionLabel: activePlan ? `v${activePlan.version}` : '待生成',
-      sourceLabel: currentSourceLabel,
-      conditionCount: conditionIssues.length,
-      obstacleCount: obstacleIssues.length,
-      delayCount: delayIssues.length,
-      selectedCount: normalizedSelectedItemIds.length,
-    }),
-    [activePlan, conditionIssues.length, currentSourceLabel, delayIssues.length, normalizedSelectedItemIds.length, obstacleIssues.length, selectedMonth],
+    () => monthlyConfirmSummary ?? buildMonthlyConfirmSummary(activePlan, tasks, conditions, obstacles),
+    [activePlan, conditions, monthlyConfirmSummary, obstacles, tasks],
   )
-  const confirmSummaryItems = useMemo(
-    () => [
-      { key: 'month', label: '当前月份', value: confirmSummary.monthLabel },
-      { key: 'version', label: '当前版本', value: confirmSummary.versionLabel },
-      { key: 'source', label: '生成来源', value: confirmSummary.sourceLabel },
-      { key: 'selected', label: '确认范围', value: String(confirmSummary.selectedCount) },
-      { key: 'conditions', label: '当前条件', value: String(confirmSummary.conditionCount) },
-      { key: 'obstacles', label: '阻碍', value: String(confirmSummary.obstacleCount) },
-      { key: 'delays', label: '延期摘要', value: String(confirmSummary.delayCount) },
-    ],
-    [confirmSummary],
+  const changeSummary = useMemo(
+    () => monthlyChangeSummary ?? buildMonthlyChangeSummary(activePlan, tasks),
+    [activePlan, monthlyChangeSummary, tasks],
   )
   const unsavedChangesGuard = useUnsavedChangesGuard(
     Boolean(isDirty),
@@ -560,6 +683,8 @@ export default function MonthlyPlanPage() {
         setPageLoading(false)
         setPlanVersions([])
         setActivePlan(null)
+        setMonthlyConfirmSummary(null)
+        setMonthlyChangeSummary(null)
         setDraftLock(null)
         setLockSecondsLeft(null)
         setDraftStatus('idle')
@@ -592,6 +717,7 @@ export default function MonthlyPlanPage() {
         const versionsForMonth = sortedVersions.filter((item) => item.month === resolvedMonth)
         const selectedVersion =
           (options?.preferredId ? versionsForMonth.find((item) => item.id === options.preferredId) : null) ??
+          versionsForMonth.find((item) => item.status !== 'draft') ??
           versionsForMonth.find((item) => item.status === 'draft') ??
           versionsForMonth[0] ??
           null
@@ -600,9 +726,14 @@ export default function MonthlyPlanPage() {
         let lock: PlanningDraftLockRecord | null = null
         let notice: string | null = null
         let nextDraftStatus = 'idle' as typeof draftStatus
+        let nextConfirmSummary: MonthlyPlanConfirmSummary | null = null
+        let nextChangeSummary: MonthlyPlanChangeSummary | null = null
 
         if (selectedVersion) {
-          detail = await apiGet<MonthlyPlanDetail>(`/api/monthly-plans/${selectedVersion.id}`, { signal })
+          detail = await apiGet<MonthlyPlanDetail>(
+            `/api/monthly-plans/${selectedVersion.id}?project_id=${encodeURIComponent(projectId)}`,
+            { signal },
+          )
           if (selectedVersion.status === 'draft') {
             try {
               const lockResponse = await apiPost<DraftLockResponse>(`/api/monthly-plans/${selectedVersion.id}/lock`, undefined, { signal })
@@ -620,6 +751,9 @@ export default function MonthlyPlanPage() {
           } else {
             notice = buildMonthlyStatusNotice(selectedVersion.status, detail.month)
           }
+
+          nextConfirmSummary = buildMonthlyConfirmSummary(detail, allTasks, allConditions, allObstacles)
+          nextChangeSummary = buildMonthlyChangeSummary(detail, allTasks)
         }
 
         setSelectedMonth(resolvedMonth)
@@ -629,6 +763,8 @@ export default function MonthlyPlanPage() {
         setConditions(allConditions)
         setObstacles(allObstacles)
         setActivePlan(detail)
+        setMonthlyConfirmSummary(nextConfirmSummary)
+        setMonthlyChangeSummary(nextChangeSummary)
         setDraftLock(lock)
         setLockSecondsLeft(
           lock?.lock_expires_at
@@ -637,18 +773,21 @@ export default function MonthlyPlanPage() {
         )
         setDraftStatus(nextDraftStatus)
         setValidationIssues(
-          buildValidationIssues({
-            conditions: allConditions,
-            obstacles: allObstacles,
-            tasks: allTasks,
-            month: resolvedMonth,
-            plan: detail,
+        buildValidationIssues({
+          conditions: allConditions,
+          obstacles: allObstacles,
+          tasks: allTasks,
+          month: resolvedMonth,
+          plan: detail,
+            blockingSummary: nextConfirmSummary,
           }),
         )
         setStatusNotice(notice)
       } catch (error) {
         if (signal?.aborted) return
         setActivePlan(null)
+        setMonthlyConfirmSummary(null)
+        setMonthlyChangeSummary(null)
         setDraftLock(null)
         setLockSecondsLeft(null)
         setDraftStatus('idle')
@@ -857,10 +996,24 @@ export default function MonthlyPlanPage() {
     })
   }, [activePlan, monthlyDraftResumeKey, projectId, readOnly, resumeInitialized])
 
-  const handleMonthSwitch = async (month: string) => {
-    clearSelection()
-    await loadMonthlyContext({ preferredMonth: month })
-  }
+  const handleMonthSwitch = useCallback(
+    async (month: string) => {
+      const switchMonth = async () => {
+        clearSelection()
+        await loadMonthlyContext({ preferredMonth: month })
+      }
+
+      if (isDirty) {
+        unsavedChangesGuard.guardNavigation(() => {
+          void switchMonth()
+        })
+        return
+      }
+
+      await switchMonth()
+    },
+    [clearSelection, isDirty, loadMonthlyContext, unsavedChangesGuard],
+  )
 
   const handleContinueDraftWorkspace = useCallback(() => {
     setResumeDialogOpen(false)
@@ -917,6 +1070,33 @@ export default function MonthlyPlanPage() {
 
   const handleInputKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLInputElement>, itemId: string, field: MonthlyEditableField) => {
+      const draftKey = `${itemId}:${field}`
+      const focusOrder = editorItems.flatMap((item) =>
+        MONTHLY_EDITABLE_FIELDS.map((currentField) => ({ itemId: item.id, field: currentField })),
+      )
+      const currentIndex = focusOrder.findIndex((entry) => entry.itemId === itemId && entry.field === field)
+      const focusTarget = (index: number) => {
+        const target = focusOrder[index]
+        if (!target) return
+        requestAnimationFrame(() => {
+          const nextCell = document.querySelector<HTMLInputElement>(
+            `[data-monthly-editor-cell="${target.itemId}:${target.field}"]`,
+          )
+          nextCell?.focus()
+          nextCell?.select?.()
+        })
+      }
+
+      if (event.key === 'Tab') {
+        const targetIndex = event.shiftKey ? currentIndex - 1 : currentIndex + 1
+        commitFieldEdit(itemId, field)
+        if (targetIndex >= 0 && targetIndex < focusOrder.length) {
+          event.preventDefault()
+          focusTarget(targetIndex)
+        }
+        return
+      }
+
       if (event.key === 'Enter') {
         event.preventDefault()
         commitFieldEdit(itemId, field)
@@ -928,13 +1108,13 @@ export default function MonthlyPlanPage() {
         event.preventDefault()
         setInputDrafts((current) => {
           const next = { ...current }
-          delete next[`${itemId}:${field}`]
+          delete next[draftKey]
           return next
         })
         event.currentTarget.blur()
       }
     },
-    [commitFieldEdit],
+    [commitFieldEdit, editorItems],
   )
 
   const handleToggleRow = useCallback(
@@ -990,7 +1170,7 @@ export default function MonthlyPlanPage() {
             conditionTaskIds,
             obstacleTaskIds,
             delayedTaskIds,
-            draftSourceMode: activePlan.baseline_version_id ? 'baseline' : 'schedule',
+            draftSourceMode: sourceMode,
           })
         : [],
     [
@@ -1000,6 +1180,7 @@ export default function MonthlyPlanPage() {
       normalizedSelectedItemIds,
       obstacleTaskIds,
       readOnly,
+      sourceMode,
       tasks,
     ],
   )
@@ -1093,7 +1274,9 @@ export default function MonthlyPlanPage() {
         if (!latestConfirmedBaseline) {
           throw new Error('当前项目还没有可用的确认基线，请先建立项目基线。')
         }
-        const baselineDetail = await apiGet<BaselineDetail>(`/api/task-baselines/${latestConfirmedBaseline.id}`)
+        const baselineDetail = await apiGet<BaselineDetail>(
+          `/api/task-baselines/${latestConfirmedBaseline.id}?project_id=${encodeURIComponent(projectId)}`,
+        )
         items = mapBaselineItemsToMonthlyItems(baselineDetail)
         baselineVersionId = latestConfirmedBaseline.id
         sourceVersionId = latestConfirmedBaseline.id
@@ -1133,6 +1316,7 @@ export default function MonthlyPlanPage() {
           tasks,
           month: created.month,
           plan: created,
+          blockingSummary: buildMonthlyConfirmSummary(created, tasks, conditions, obstacles),
         }),
       )
       setStatusNotice(null)
@@ -1207,8 +1391,145 @@ export default function MonthlyPlanPage() {
     }
   }
 
+  const handleBatchScope = async (action: 'move_in' | 'move_out') => {
+    if (!activePlan || readOnly || normalizedSelectedItemIds.length === 0) return
+
+    setActionLoading('batch_scope')
+    try {
+      await apiPost(`/api/monthly-plans/${activePlan.id}/items/batch-scope`, {
+        action,
+        item_ids: normalizedSelectedItemIds,
+      })
+      setSelectedItemIds([])
+      toast({
+        title: action === 'move_in' ? '已批量移入' : '已批量移出',
+        description: `已处理 ${normalizedSelectedItemIds.length} 个选中条目。`,
+      })
+      await loadMonthlyContext({ preferredMonth: activePlan.month, preferredId: activePlan.id, preserveNotice: true })
+    } catch (error) {
+      toast({
+        title: '批量范围调整失败',
+        description: getApiErrorMessage(error, '请稍后重试。'),
+        variant: 'destructive',
+      })
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
+  const handleBatchShiftDates = async () => {
+    if (!activePlan || readOnly || normalizedSelectedItemIds.length === 0) return
+
+    const raw = window.prompt('请输入顺延天数，支持负数回拨：', '1')
+    if (raw === null) return
+    const shiftDays = Number(raw)
+    if (!Number.isFinite(shiftDays) || shiftDays === 0) {
+      toast({
+        title: '请输入有效天数',
+        description: '顺延天数必须是非 0 数字。',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    setActionLoading('batch_shift')
+    try {
+      await apiPost(`/api/monthly-plans/${activePlan.id}/items/batch-shift-dates`, {
+        shift_days: shiftDays,
+        item_ids: normalizedSelectedItemIds,
+      })
+      toast({
+        title: '已批量顺延日期',
+        description: `已处理 ${normalizedSelectedItemIds.length} 个选中条目。`,
+      })
+      await loadMonthlyContext({ preferredMonth: activePlan.month, preferredId: activePlan.id, preserveNotice: true })
+    } catch (error) {
+      toast({
+        title: '批量顺延失败',
+        description: getApiErrorMessage(error, '请稍后重试。'),
+        variant: 'destructive',
+      })
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
+  const handleBatchTargetProgress = async () => {
+    if (!activePlan || readOnly || normalizedSelectedItemIds.length === 0) return
+
+    const raw = window.prompt('请输入目标进度（0-100）:', '100')
+    if (raw === null) return
+    const targetProgress = Number(raw)
+    if (!Number.isFinite(targetProgress) || targetProgress < 0 || targetProgress > 100) {
+      toast({
+        title: '请输入有效进度',
+        description: '目标进度必须在 0-100 之间。',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    setActionLoading('batch_progress')
+    try {
+      await apiPost(`/api/monthly-plans/${activePlan.id}/items/batch-target-progress`, {
+        target_progress: targetProgress,
+        item_ids: normalizedSelectedItemIds,
+      })
+      toast({
+        title: '已批量更新目标进度',
+        description: `已处理 ${normalizedSelectedItemIds.length} 个选中条目。`,
+      })
+      await loadMonthlyContext({ preferredMonth: activePlan.month, preferredId: activePlan.id, preserveNotice: true })
+    } catch (error) {
+      toast({
+        title: '批量进度更新失败',
+        description: getApiErrorMessage(error, '请稍后重试。'),
+        variant: 'destructive',
+      })
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
+  const handleBatchNotes = async () => {
+    if (!activePlan || readOnly || normalizedSelectedItemIds.length === 0) return
+
+    const notes = window.prompt('请输入要批量写入的备注：', '')
+    if (notes === null) return
+    const trimmedNotes = notes.trim()
+    if (!trimmedNotes) {
+      toast({
+        title: '备注不能为空',
+        description: '请输入要批量写入的备注内容。',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    setActionLoading('batch_notes')
+    try {
+      await apiPost(`/api/monthly-plans/${activePlan.id}/items/batch-notes`, {
+        notes: trimmedNotes,
+        item_ids: normalizedSelectedItemIds,
+      })
+      toast({
+        title: '已批量写入备注',
+        description: `已处理 ${normalizedSelectedItemIds.length} 个选中条目。`,
+      })
+      await loadMonthlyContext({ preferredMonth: activePlan.month, preferredId: activePlan.id, preserveNotice: true })
+    } catch (error) {
+      toast({
+        title: '批量备注失败',
+        description: getApiErrorMessage(error, '请稍后重试。'),
+        variant: 'destructive',
+      })
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
   const handleConfirmPlan = async () => {
-    if (!activePlan) return
+    if (!activePlan || readOnly) return
 
     setActionLoading('confirm')
     try {
@@ -1239,7 +1560,7 @@ export default function MonthlyPlanPage() {
   }
 
   const handleForceUnlock = async () => {
-    if (!activePlan) return
+    if (!activePlan || !canManagePlanning) return
 
     setActionLoading('unlock')
     try {
@@ -1340,7 +1661,7 @@ export default function MonthlyPlanPage() {
         quickAvailable={quickAvailable}
       />
 
-      {activePlan?.source_version_label && (
+      {activePlan?.source_version_label && !priorityBanner && !confirmReminder && (
         <div className="flex items-center gap-2 rounded-xl border border-blue-100 bg-blue-50 px-4 py-2 text-sm text-blue-700" data-testid="monthly-plan-source-version-banner">
           <span>来源版本：{activePlan.source_version_label}</span>
           {activePlan.auto_switched && (
@@ -1349,7 +1670,7 @@ export default function MonthlyPlanPage() {
         </div>
       )}
 
-      {priorityBanner ? (
+      {!confirmReminder && priorityBanner ? (
         <Card
           data-testid="monthly-plan-priority-banner"
           className={
@@ -1426,7 +1747,11 @@ export default function MonthlyPlanPage() {
               <div className="grid gap-3 md:grid-cols-5">
                 {monthWindow.map((month) => {
                   const versions = planVersions.filter((item) => item.month === month)
-                  const version = versions.find((item) => item.status === 'draft') ?? versions[0] ?? null
+                  const version =
+                    versions.find((item) => item.status !== 'draft') ??
+                    versions.find((item) => item.status === 'draft') ??
+                    versions[0] ??
+                    null
                   const active = month === selectedMonth
                   const monthState = month.localeCompare(getCurrentMonth())
                   const isFutureMonth = monthState > 0
@@ -1459,6 +1784,11 @@ export default function MonthlyPlanPage() {
                       </div>
                       <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
                         <span>{version ? `v${version.version}` : '等待草稿'}</span>
+                        {version ? (
+                          <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700">
+                            待关账 {version.pending_closeout_count ?? 0}
+                          </Badge>
+                        ) : null}
                         {monthState === 0 ? <Badge variant="outline">当前</Badge> : null}
                         {isFutureMonth ? <Badge variant="outline">未来</Badge> : null}
                       </div>
@@ -1498,13 +1828,71 @@ export default function MonthlyPlanPage() {
                 {confirmReminder?.badge ?? '正常窗口'}
               </div>
             </div>
+            {activePlan?.status !== 'draft' ? (
+              <div className="flex items-end justify-end rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                <Button type="button" variant="outline" size="sm" onClick={() => setSkeletonDiffOpen(true)}>
+                  查看与主骨架差异
+                </Button>
+              </div>
+            ) : null}
           </div>
+
+          {activePlan?.status === 'draft' && changeSummary.totalChangeCount > 0 ? (
+            <Card
+              data-testid="monthly-plan-change-summary-strip"
+              className={
+                changeSummary.isLargeScale
+                  ? 'border-cyan-200 bg-cyan-50 shadow-sm'
+                  : 'border-slate-200 bg-white shadow-sm'
+              }
+            >
+              <CardContent className="space-y-4 p-4 sm:p-5">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="space-y-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant={changeSummary.isLargeScale ? 'secondary' : 'outline'}>大范围调整摘要</Badge>
+                      <Badge variant="outline">阈值 {changeSummary.threshold}</Badge>
+                    </div>
+                    <div className="text-sm font-medium text-slate-900">
+                      当前月计划存在 {changeSummary.totalChangeCount} 项可见变化
+                    </div>
+                  </div>
+                  <Button type="button" variant="outline" size="sm" onClick={() => setSkeletonDiffOpen(true)}>
+                    查看与主骨架差异
+                  </Button>
+                </div>
+
+                <div className="grid gap-3 md:grid-cols-5">
+                  <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                    <div className="text-xs text-slate-500">新增承接数</div>
+                    <div className="mt-1 text-lg font-semibold text-slate-900">{changeSummary.addedCount}</div>
+                  </div>
+                  <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                    <div className="text-xs text-slate-500">移出数</div>
+                    <div className="mt-1 text-lg font-semibold text-slate-900">{changeSummary.removedCount}</div>
+                  </div>
+                  <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                    <div className="text-xs text-slate-500">时间调整数</div>
+                    <div className="mt-1 text-lg font-semibold text-slate-900">{changeSummary.dateShiftCount}</div>
+                  </div>
+                  <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                    <div className="text-xs text-slate-500">关键里程碑调整数</div>
+                    <div className="mt-1 text-lg font-semibold text-slate-900">{changeSummary.milestoneAdjustCount}</div>
+                  </div>
+                  <div className="rounded-2xl border border-cyan-200 bg-cyan-50 px-4 py-3">
+                    <div className="text-xs text-cyan-700">目标进度调整数</div>
+                    <div className="mt-1 text-lg font-semibold text-cyan-900">{changeSummary.progressAdjustmentCount}</div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ) : null}
         </>
       )}
     </>
   )
 
-  const sectionHeader = noBaselineIntercept ? null : (
+  const sectionHeader = noBaselineIntercept || activePlan?.status !== 'draft' ? null : (
     <Card variant="detail" data-testid="monthly-plan-source-block">
       <CardContent className="space-y-4 p-4 sm:p-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
@@ -1519,7 +1907,7 @@ export default function MonthlyPlanPage() {
             <div className="text-lg font-semibold text-slate-900">草稿来源与版本动作</div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Button type="button" variant="outline" size="sm" className="gap-2" onClick={() => void handleForceUnlock()} disabled={!activePlan} loading={actionLoading === 'unlock'}>
+            <Button type="button" variant="outline" size="sm" className="gap-2" onClick={() => void handleForceUnlock()} disabled={readOnly || !activePlan || !canManagePlanning} loading={actionLoading === 'unlock'}>
               {actionLoading !== 'unlock' ? <RefreshCw className="h-4 w-4" /> : null}
               重新获取编辑锁
             </Button>
@@ -1556,15 +1944,15 @@ export default function MonthlyPlanPage() {
                 className="gap-2"
                 data-testid="monthly-plan-regenerate-draft"
                 onClick={() => setRegenConfirmOpen(true)}
-                disabled={actionLoading === 'generate'}
+                disabled={readOnly || actionLoading === 'generate'}
               >
                 <RefreshCw className="h-4 w-4" />
                 重新生成草稿
               </Button>
             ) : null}
-            <Button type="button" size="sm" className="gap-2" onClick={() => void (activePlan ? handleSaveDraft() : handleGenerateDraft())} loading={actionLoading === 'generate' || actionLoading === 'save'}>
+            <Button type="button" size="sm" className="gap-2" onClick={() => void (activePlan ? handleSaveDraft() : handleGenerateDraft())} loading={actionLoading === 'generate' || actionLoading === 'save'} disabled={readOnly}>
               {actionLoading !== 'generate' && actionLoading !== 'save' ? <WandSparkles className="h-4 w-4" /> : null}
-              {activePlan ? '保存草稿快照' : '生成本月草稿'}
+              {activePlan ? '保存草稿' : '生成本月草稿'}
             </Button>
           </div>
         </div>
@@ -1578,9 +1966,9 @@ export default function MonthlyPlanPage() {
                 key={option.key}
                 type="button"
                 onClick={() => setSourceMode(option.key)}
-                disabled={disabled}
+                disabled={disabled || readOnly}
                 className={`rounded-2xl border px-4 py-4 text-left transition ${
-                  active ? 'border-cyan-300 bg-cyan-50 shadow-sm' : 'border-slate-200 bg-white hover:border-slate-300'
+                  active ? 'ring-2 ring-blue-500 bg-white shadow-sm' : 'border-slate-200 bg-white hover:border-slate-300'
                 } ${disabled ? 'cursor-not-allowed opacity-60' : ''}`}
               >
                 <div className="flex items-center justify-between gap-3">
@@ -1611,9 +1999,6 @@ export default function MonthlyPlanPage() {
         <div className="flex flex-wrap justify-center gap-2">
           <Button type="button" onClick={() => navigateWithGuard(`/projects/${projectId}/planning/baseline`)}>
             去建立项目基线
-          </Button>
-          <Button type="button" variant="outline" onClick={() => setSourceMode('schedule')}>
-            改为按当前任务列表预编制
           </Button>
         </div>
       </CardContent>
@@ -1652,9 +2037,6 @@ export default function MonthlyPlanPage() {
                   结束重排
                 </Button>
               ) : null}
-              <Button type="button" variant="outline" onClick={() => setSkeletonDiffOpen(true)}>
-                查看与主骨架差异
-              </Button>
             </div>
           </CardContent>
         </Card>
@@ -1665,7 +2047,7 @@ export default function MonthlyPlanPage() {
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="space-y-1">
                 <div className="flex flex-wrap items-center gap-2">
-                  <Badge variant="secondary">L4 批量条</Badge>
+                  <Badge variant="secondary">L3 批量条</Badge>
                   <Badge variant="outline">{isDirty ? '草稿已调整' : '草稿未调整'}</Badge>
                 </div>
                 <div className="text-sm font-medium text-slate-900">编制范围与确认条</div>
@@ -1697,6 +2079,58 @@ export default function MonthlyPlanPage() {
                 <div className="mt-1 text-sm font-semibold text-slate-900">{quickAvailable ? '可快速确认' : '建议走标准确认'}</div>
               </div>
             </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => void handleBatchScope('move_in')}
+                disabled={readOnly || normalizedSelectedItemIds.length === 0}
+                loading={actionLoading === 'batch_scope'}
+              >
+                批量移入
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => void handleBatchScope('move_out')}
+                disabled={readOnly || normalizedSelectedItemIds.length === 0}
+                loading={actionLoading === 'batch_scope'}
+              >
+                批量移出
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => void handleBatchShiftDates()}
+                disabled={readOnly || normalizedSelectedItemIds.length === 0}
+                loading={actionLoading === 'batch_shift'}
+              >
+                批量顺延
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => void handleBatchTargetProgress()}
+                disabled={readOnly || normalizedSelectedItemIds.length === 0}
+                loading={actionLoading === 'batch_progress'}
+              >
+                批量目标进度
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => void handleBatchNotes()}
+                disabled={readOnly || normalizedSelectedItemIds.length === 0}
+                loading={actionLoading === 'batch_notes'}
+              >
+                批量备注
+              </Button>
+            </div>
           </CardContent>
         </Card>
       ) : null}
@@ -1704,7 +2138,7 @@ export default function MonthlyPlanPage() {
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3">
           <div>
             <div className="flex flex-wrap items-center gap-2">
-              <Badge variant="secondary">L5 编制树</Badge>
+              <Badge variant="secondary">L4 编制树</Badge>
               <Badge variant="outline">{rows.length} 项</Badge>
             </div>
           </div>
@@ -1738,9 +2172,9 @@ export default function MonthlyPlanPage() {
       <CardContent className="space-y-3 p-6">
         <div className="text-lg font-semibold text-slate-900">{formatMonthLabel(selectedMonth)} 尚未生成月度草稿</div>
         <div className="flex flex-wrap gap-2">
-          <Button type="button" onClick={() => void handleGenerateDraft()} loading={actionLoading === 'generate'}>
-            生成本月草稿
-          </Button>
+              <Button type="button" onClick={() => void handleGenerateDraft()} loading={actionLoading === 'generate'} disabled={readOnly}>
+                生成本月草稿
+              </Button>
           <Button type="button" variant="outline" onClick={() => navigateWithGuard(`/projects/${projectId}/planning/baseline`)}>
             去看项目基线
           </Button>
@@ -1749,7 +2183,7 @@ export default function MonthlyPlanPage() {
     </Card>
   )
 
-  const aside = noBaselineIntercept
+  const aside = noBaselineIntercept || activePlan?.status !== 'draft'
     ? undefined
     : (
         <div data-testid="monthly-plan-review-block" className="space-y-4">
@@ -1765,14 +2199,22 @@ export default function MonthlyPlanPage() {
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <div className="flex flex-wrap items-center gap-2">
-                  <Badge variant="secondary">L6 校验与确认区</Badge>
-                  <Badge variant="outline">7 项确认摘要</Badge>
-                </div>
+                    <Badge variant="secondary">L5 校验与确认区</Badge>
+                    <Badge variant="outline">7 项确认摘要</Badge>
+                  </div>
                 </div>
                 <Badge variant={quickAvailable ? 'secondary' : 'outline'}>{quickAvailable ? '快确认可用' : '建议标准确认'}</Badge>
               </div>
               <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                {confirmSummaryItems.map((item) => (
+                {[
+                  { key: 'total', label: '条目总数', value: confirmSummary.totalItemCount },
+                  { key: 'new', label: '本月新增数', value: confirmSummary.newlyAddedCount },
+                  { key: 'carry', label: '自动滚入数', value: confirmSummary.autoRolledInCount },
+                  { key: 'remove', label: '待移出数', value: confirmSummary.pendingRemovalCount },
+                  { key: 'milestone', label: '关键里程碑数', value: confirmSummary.milestoneCount },
+                  { key: 'date', label: '目标时间调整数', value: confirmSummary.dateAdjustmentCount },
+                  { key: 'progress', label: '目标进度调整数', value: confirmSummary.progressAdjustmentCount },
+                ].map((item) => (
                   <div
                     key={item.key}
                     data-testid="monthly-plan-confirm-summary-item"
@@ -1878,43 +2320,68 @@ export default function MonthlyPlanPage() {
   return (
     <PlanningPageShell
       projectName={currentProject.name ?? '未命名项目'}
-      title="月度计划"
+      title="计划编制 / 月度计划"
       description=""
       tabs={tabs}
       actions={
         <>
-          {canQueueRealignment ? (
-            <Button
-              type="button"
-              size="sm"
-              className="gap-2"
-              data-testid="monthly-plan-queue-realignment-header"
-              onClick={() => void handleQueueRealignment()}
-            >
-              声明开始重排
-            </Button>
+          {activePlan?.status === 'draft' ? (
+            <>
+              <Button
+                type="button"
+                size="sm"
+                className="gap-2"
+                data-testid="monthly-plan-save-draft-header"
+                onClick={() => void handleSaveDraft()}
+                loading={actionLoading === 'save'}
+                disabled={readOnly}
+              >
+                保存草稿
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                className="gap-2"
+                data-testid="monthly-plan-confirm-draft-header"
+                onClick={() => {
+                  setConfirmMode(quickAvailable ? 'quick' : 'standard')
+                  setConfirmState('ready')
+                  setConfirmOpen(true)
+                }}
+                disabled={readOnly || !canStandardConfirm}
+              >
+                确认当月月度计划
+              </Button>
+            </>
           ) : null}
-          {canResolveRealignment ? (
-            <Button
-              type="button"
-              size="sm"
-              className="gap-2"
-              data-testid="monthly-plan-resolve-realignment-header"
-              onClick={() => void handleResolveRealignment()}
-            >
-              结束重排
-            </Button>
-          ) : null}
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="gap-2 border-slate-600 bg-transparent text-white hover:bg-white/10"
-            onClick={() => navigateWithGuard(`/projects/${projectId}/planning/closeout`)}
-          >
-            <RefreshCw className="h-4 w-4" />
-            打开月末关账
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="gap-2 border-slate-600 bg-transparent text-white hover:bg-white/10"
+              >
+                <MoreHorizontal className="h-4 w-4" />
+                管理动作
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-52">
+              {canQueueRealignment ? (
+                <DropdownMenuItem onClick={() => void handleQueueRealignment()}>
+                  声明开始重排
+                </DropdownMenuItem>
+              ) : null}
+              {canResolveRealignment ? (
+                <DropdownMenuItem onClick={() => void handleResolveRealignment()}>
+                  结束重排
+                </DropdownMenuItem>
+              ) : null}
+              <DropdownMenuItem onClick={() => navigateWithGuard(`/projects/${projectId}/tasks/closeout`)}>
+                打开月末关账
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Badge variant={readOnly ? 'outline' : 'secondary'}>{readOnly ? '查看态' : '草稿编辑态'}</Badge>
         </>
       }
@@ -1927,6 +2394,10 @@ export default function MonthlyPlanPage() {
         <MonthlyPlanBottomBar
           draftStatus={draftStatus}
           quickAvailable={quickAvailable}
+          canSaveDraft={!readOnly}
+          canStandardConfirm={canOpenStandardConfirm}
+          onSaveDraft={() => void handleSaveDraft()}
+          readOnly={readOnly}
           onQuickConfirmEntry={() => {
             setConfirmMode('quick')
             setConfirmState('ready')
@@ -1946,6 +2417,7 @@ export default function MonthlyPlanPage() {
         mode={confirmMode}
         state={confirmState}
         summary={confirmSummary}
+        canConfirm={canStandardConfirm}
         onConfirm={() => void handleConfirmPlan()}
         onRetry={() => void handleConfirmPlan()}
       />
@@ -1960,8 +2432,33 @@ export default function MonthlyPlanPage() {
                 : ' 当前还没有本地调整，适合直接重建。'}
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">
-            当前来源：{sourceMode === 'baseline' ? '项目基线' : '当前任务列表'}。重生成后会重新拉起新的月计划草稿版本。
+          <div className="space-y-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">
+            <div className="font-medium">请选择重新生成来源</div>
+            <div className="grid gap-2 md:grid-cols-3">
+              {[
+                { key: 'current', label: '按当前方式', value: sourceMode },
+                { key: 'baseline', label: '改用项目基线', value: 'baseline' as MonthlySourceMode },
+                { key: 'schedule', label: '改用当前排期', value: 'schedule' as MonthlySourceMode },
+              ].map((option) => {
+                const active = option.value === sourceMode && (option.key !== 'current' || sourceMode === option.value)
+                return (
+                  <button
+                    key={option.key}
+                    type="button"
+                    className={`rounded-xl border px-3 py-2 text-left transition ${
+                      active ? 'border-amber-400 bg-white' : 'border-amber-200 bg-transparent'
+                    }`}
+                    onClick={() => setSourceMode(option.value)}
+                  >
+                    <div className="text-sm font-medium">{option.label}</div>
+                    <div className="text-xs opacity-80">
+                      {option.value === 'baseline' ? '基于项目基线重新编制' : '基于当前排期重新编制'}
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+            <div>当前来源：{sourceMode === 'baseline' ? '项目基线' : '当前排期'}。重生成后会重新拉起新的月计划草稿版本。</div>
           </div>
           <AlertDialogFooter>
             <AlertDialogCancel>先不重生成</AlertDialogCancel>
@@ -1981,6 +2478,7 @@ export default function MonthlyPlanPage() {
         onOpenChange={setSkeletonDiffOpen}
         items={activePlan?.items ?? []}
         tasks={tasks}
+        summary={changeSummary}
       />
       <PlanningDraftResumeDialog
         open={resumeDialogOpen}

@@ -45,6 +45,7 @@ export function useGanttCriticalPath({ projectId, summaryDelayMs = 800 }: UseGan
     if (!projectId) {
       abortSummaryRequest()
       setCriticalPathSummary(null)
+      setCriticalPathOverrides([])
       setCriticalPathError(null)
       return null
     }
@@ -55,13 +56,17 @@ export function useGanttCriticalPath({ projectId, summaryDelayMs = 800 }: UseGan
 
     setCriticalPathSummaryLoading(true)
     try {
-      const snapshot = options?.refresh
-        ? await refreshCriticalPathSnapshot(projectId, { signal: controller.signal })
-        : await fetchCriticalPathSnapshot(projectId, { signal: controller.signal })
+      const [snapshot, overrides] = await Promise.all([
+        options?.refresh
+          ? refreshCriticalPathSnapshot(projectId, { signal: controller.signal })
+          : fetchCriticalPathSnapshot(projectId, { signal: controller.signal }),
+        listCriticalPathOverrides(projectId, { signal: controller.signal }),
+      ])
       if (controller.signal.aborted) return null
 
       const nextSummary = buildCriticalPathSummaryModel(snapshot)
       setCriticalPathSummary(nextSummary)
+      setCriticalPathOverrides(overrides)
       setCriticalPathError(null)
       return nextSummary
     } catch (error) {
@@ -181,12 +186,25 @@ export function useGanttCriticalPath({ projectId, summaryDelayMs = 800 }: UseGan
     }
   }, [loadCriticalPathDialogData, projectId])
 
-  const handleDeleteCriticalPathOverride = useCallback(async (overrideId: string) => {
+  const handleDeleteCriticalPathOverride = useCallback(async (taskOrOverrideId: string, mode?: 'manual_attention' | 'manual_insert') => {
     if (!projectId) return
 
     setCriticalPathActionLoading(true)
     try {
-      await deleteCriticalPathOverride(projectId, overrideId)
+      const overrides = criticalPathOverrides.length > 0
+        ? criticalPathOverrides
+        : await listCriticalPathOverrides(projectId)
+      const matchedOverride =
+        overrides.find((override) => override.id === taskOrOverrideId)
+        ?? (mode
+          ? overrides.find((override) => override.task_id === taskOrOverrideId && override.mode === mode)
+          : overrides.find((override) => override.task_id === taskOrOverrideId) ?? null)
+
+      if (!matchedOverride) {
+        throw new Error('未找到对应的关键路径覆盖')
+      }
+
+      await deleteCriticalPathOverride(projectId, matchedOverride.id)
       await loadCriticalPathDialogData({ refresh: true })
       toast({ title: '已删除关键路径覆盖' })
     } catch (error) {
@@ -200,7 +218,7 @@ export function useGanttCriticalPath({ projectId, summaryDelayMs = 800 }: UseGan
     } finally {
       setCriticalPathActionLoading(false)
     }
-  }, [loadCriticalPathDialogData, projectId])
+  }, [criticalPathOverrides, loadCriticalPathDialogData, projectId])
 
   return {
     criticalPathSummary,

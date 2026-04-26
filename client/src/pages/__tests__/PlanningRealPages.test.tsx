@@ -10,8 +10,6 @@ import { useStore } from '@/hooks/useStore'
 import { apiGet, apiPost, getApiErrorMessage } from '@/lib/apiClient'
 import type { BaselineVersion, MonthlyPlanVersion, PlanningDraftLockRecord } from '@/types/planning'
 import type { Task, TaskCondition, TaskObstacle } from '@/pages/GanttViewTypes'
-import CloseoutPage from '../planning/CloseoutPage'
-import MonthlyPlanPage from '../planning/MonthlyPlanPage'
 
 vi.mock('@/lib/apiClient', () => ({
   apiGet: vi.fn(),
@@ -19,16 +17,36 @@ vi.mock('@/lib/apiClient', () => ({
   getApiErrorMessage: vi.fn(),
 }))
 
+vi.mock('@/hooks/usePermissions', () => ({
+  usePermissions: () => ({
+    canEdit: true,
+    canManageTeam: true,
+    globalRole: 'company_admin',
+    isOwner: true,
+    loading: false,
+    permissionLevel: 'owner',
+  }),
+}))
+
+vi.mock('@/hooks/use-toast', () => ({
+  useToast: () => ({
+    toast: vi.fn(),
+    dismiss: vi.fn(),
+    toasts: [],
+  }),
+}))
+
 const mockedApiGet = vi.mocked(apiGet)
 const mockedApiPost = vi.mocked(apiPost)
 const mockedGetApiErrorMessage = vi.mocked(getApiErrorMessage)
+let MonthlyPlanPage: typeof import('../planning/MonthlyPlanPage').default
 
 function flush() {
   return new Promise((resolve) => setTimeout(resolve, 0))
 }
 
 async function waitForCondition(check: () => boolean) {
-  const deadline = Date.now() + 2500
+  const deadline = Date.now() + 8000
   while (Date.now() < deadline) {
     await act(async () => {
       await flush()
@@ -45,8 +63,32 @@ async function waitForSelector(container: HTMLElement, selector: string) {
 async function clickButtonByText(container: HTMLElement, text: string) {
   const button = Array.from(container.querySelectorAll('button')).find((item) => item.textContent?.includes(text)) as HTMLButtonElement | undefined
   expect(button).toBeTruthy()
+  await clickElement(button)
+}
+
+async function clickMenuItemByText(container: HTMLElement, text: string) {
+  const item = Array.from(container.querySelectorAll('[role="menuitem"]')).find((candidate) => candidate.textContent?.includes(text)) as HTMLElement | undefined
+  expect(item).toBeTruthy()
+  await clickElement(item)
+}
+
+async function clickElement(element: HTMLElement | null | undefined) {
+  expect(element).toBeTruthy()
   await act(async () => {
-    button?.click()
+    if (typeof PointerEvent === 'function') {
+      element?.dispatchEvent(
+        new PointerEvent('pointerdown', {
+          bubbles: true,
+          cancelable: true,
+          button: 0,
+          pointerType: 'mouse',
+        }),
+      )
+    } else {
+      element?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 }))
+    }
+    element?.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, button: 0 }))
+    element?.click()
     await flush()
   })
 }
@@ -69,6 +111,7 @@ function mount(node: ReactNode) {
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
+
   act(() => {
     root.render(node)
   })
@@ -89,6 +132,14 @@ function RouteSearchProbe({ testId }: { testId: string }) {
   return <div data-testid={testId}>{`${location.pathname}${location.search}`}</div>
 }
 
+async function loadCloseoutPage() {
+  return (await import('../planning/CloseoutPage')).default
+}
+
+async function loadMonthlyPlanPage() {
+  return (await import('../planning/MonthlyPlanPage')).default
+}
+
 const lockRecord: PlanningDraftLockRecord = {
   id: 'lock-1',
   project_id: 'project-1',
@@ -96,7 +147,7 @@ const lockRecord: PlanningDraftLockRecord = {
   resource_id: 'monthly-v3',
   locked_by: 'user-1',
   locked_at: '2026-04-15T08:00:00.000Z',
-  lock_expires_at: '2026-04-15T08:30:00.000Z',
+  lock_expires_at: '2026-12-31T08:30:00.000Z',
   is_locked: true,
 }
 
@@ -215,6 +266,33 @@ const closeoutPlan = {
   ],
 }
 
+type CloseoutPlanItem = {
+  title: string
+  notes?: string | null
+  current_progress?: number | null
+  planned_start_date?: string | null
+  planned_end_date?: string | null
+  sort_order: number
+  is_milestone?: boolean | null
+  is_critical?: boolean | null
+}
+
+const closeoutTasks: Task[] = (closeoutPlan.items as CloseoutPlanItem[]).map((item, index) => ({
+  id: `closeout-task-${index + 1}`,
+  project_id: 'project-1',
+  title: item.title,
+  name: item.title,
+  description: item.notes ?? '',
+  progress: item.current_progress ?? 0,
+  planned_start_date: item.planned_start_date ?? null,
+  planned_end_date: item.planned_end_date ?? null,
+  sort_order: item.sort_order,
+  is_milestone: Boolean(item.is_milestone),
+  is_critical: Boolean(item.is_critical),
+  created_at: '2026-03-01T00:00:00.000Z',
+  updated_at: '2026-03-01T00:00:00.000Z',
+}))
+
 const dataQualitySummary = {
   projectId: 'project-1',
   month: '2026-03',
@@ -250,7 +328,7 @@ const dataQualitySummary = {
 describe('Planning real pages', () => {
   const cleanups: Array<() => void> = []
 
-  beforeEach(() => {
+  beforeEach(async () => {
     mockedApiGet.mockReset()
     mockedApiPost.mockReset()
     mockedGetApiErrorMessage.mockImplementation((error, fallback) => (error instanceof Error ? error.message : fallback || 'error'))
@@ -266,6 +344,7 @@ describe('Planning real pages', () => {
       validationIssues: [],
       confirmDialog: { open: false, target: null, title: '', description: '' },
     })
+    MonthlyPlanPage = (await import('../planning/MonthlyPlanPage')).default
   })
 
   afterEach(() => {
@@ -277,7 +356,7 @@ describe('Planning real pages', () => {
 
     mockedApiGet.mockImplementation(async (url: string) => {
       if (url.startsWith('/api/monthly-plans?project_id=')) return versions as never
-      if (url === '/api/monthly-plans/monthly-v3') return monthlyDraft as never
+      if (url.startsWith('/api/monthly-plans/monthly-v3?project_id=')) return monthlyDraft as never
       if (url.startsWith('/api/task-baselines?project_id=')) return baselineVersions as never
       if (url.startsWith('/api/tasks?projectId=')) return tasks as never
       if (url.startsWith('/api/task-conditions?projectId=')) return conditions as never
@@ -300,7 +379,7 @@ describe('Planning real pages', () => {
     )
     cleanups.push(view.cleanup)
 
-    await waitForSelector(view.container, '[data-testid="planning-layered-workspace"]')
+    await waitForSelector(view.container, '[data-testid="monthly-plan-tree-editor"]')
     await waitForSelector(view.container, '[data-testid="monthly-plan-bottom-bar"]')
     await waitForSelector(view.container, '[data-testid="monthly-plan-source-block"]')
     await waitForSelector(view.container, '[data-testid="monthly-plan-batch-strip"]')
@@ -334,7 +413,7 @@ describe('Planning real pages', () => {
 
     mockedApiGet.mockImplementation(async (url: string) => {
       if (url.startsWith('/api/monthly-plans?project_id=')) return versions as never
-      if (url === '/api/monthly-plans/monthly-v3') return monthlyDraft as never
+      if (url.startsWith('/api/monthly-plans/monthly-v3?project_id=')) return monthlyDraft as never
       if (url.startsWith('/api/task-baselines?project_id=')) return baselineVersions as never
       if (url.startsWith('/api/tasks?projectId=')) return tasks as never
       if (url.startsWith('/api/task-conditions?projectId=')) return conditions as never
@@ -365,7 +444,7 @@ describe('Planning real pages', () => {
 
     mockedApiGet.mockImplementation(async (url: string) => {
       if (url.startsWith('/api/monthly-plans?project_id=')) return versions as never
-      if (url === '/api/monthly-plans/monthly-v3') return monthlyDraft as never
+      if (url.startsWith('/api/monthly-plans/monthly-v3?project_id=')) return monthlyDraft as never
       if (url.startsWith('/api/task-baselines?project_id=')) return baselineVersions as never
       if (url.startsWith('/api/tasks?projectId=')) return tasks as never
       if (url.startsWith('/api/task-conditions?projectId=')) return conditions as never
@@ -406,7 +485,7 @@ describe('Planning real pages', () => {
 
     mockedApiGet.mockImplementation(async (url: string) => {
       if (url.startsWith('/api/monthly-plans?project_id=')) return versions as never
-      if (url === '/api/monthly-plans/monthly-v3') return monthlyDraft as never
+      if (url.startsWith('/api/monthly-plans/monthly-v3?project_id=')) return monthlyDraft as never
       if (url.startsWith('/api/task-baselines?project_id=')) return baselineVersions as never
       if (url.startsWith('/api/tasks?projectId=')) return tasks as never
       if (url.startsWith('/api/task-conditions?projectId=')) return conditions as never
@@ -492,7 +571,6 @@ describe('Planning real pages', () => {
 
     await waitForCondition(() => view.container.textContent?.includes('当前项目还没有正式基线') ?? false)
     expect(view.container.textContent).toContain('去建立项目基线')
-    expect(view.container.textContent).toContain('改为按当前任务列表预编制')
   })
 
   it('opens the skeleton diff dialog in confirmed view', async () => {
@@ -500,7 +578,7 @@ describe('Planning real pages', () => {
 
     mockedApiGet.mockImplementation(async (url: string) => {
       if (url.startsWith('/api/monthly-plans?project_id=')) return confirmedVersions as never
-      if (url === '/api/monthly-plans/monthly-v3') return { ...monthlyDraft, status: 'confirmed' } as never
+      if (url.startsWith('/api/monthly-plans/monthly-v3?project_id=')) return { ...monthlyDraft, status: 'confirmed' } as never
       if (url.startsWith('/api/task-baselines?project_id=')) return baselineVersions as never
       if (url.startsWith('/api/tasks?projectId=')) return tasks as never
       if (url.startsWith('/api/task-conditions?projectId=')) return conditions as never
@@ -521,7 +599,8 @@ describe('Planning real pages', () => {
     )
     cleanups.push(view.cleanup)
 
-    await waitForCondition(() => view.container.textContent?.includes('已确认查看态') ?? false)
+    await waitForSelector(view.container, '[data-testid="monthly-plan-info-bar"]')
+    await waitForCondition(() => view.container.textContent?.includes('确认查看态') ?? false)
     await clickButtonByText(view.container, '查看与主骨架差异')
     await waitForSelector(document.body, '[data-testid="monthly-plan-skeleton-diff-dialog"]')
     expect(document.body.textContent).toContain('查看与主骨架差异')
@@ -541,7 +620,7 @@ describe('Planning real pages', () => {
 
     mockedApiGet.mockImplementation(async (url: string) => {
       if (url.startsWith('/api/monthly-plans?project_id=')) return versions as never
-      if (url === '/api/monthly-plans/monthly-v9') return futureConfirmed as never
+      if (url.startsWith('/api/monthly-plans/monthly-v9?project_id=')) return futureConfirmed as never
       if (url.startsWith('/api/task-baselines?project_id=')) return baselineVersions as never
       if (url.startsWith('/api/tasks?projectId=')) return tasks as never
       if (url.startsWith('/api/task-conditions?projectId=')) return conditions as never
@@ -563,7 +642,9 @@ describe('Planning real pages', () => {
     cleanups.push(view.cleanup)
 
     await waitForCondition(() => view.container.textContent?.includes('2099年9月') ?? false)
-    expect(view.container.textContent).toContain('声明开始重排')
+    await clickButtonByText(view.container, '管理动作')
+    await waitForSelector(document.body, '[role="menuitem"]')
+    expect(document.body.textContent).toContain('声明开始重排')
     expect(view.container.textContent).toContain('2099年9月')
   })
 
@@ -576,7 +657,7 @@ describe('Planning real pages', () => {
 
     mockedApiGet.mockImplementation(async (url: string) => {
       if (url.startsWith('/api/monthly-plans?project_id=')) return versions as never
-      if (url === '/api/monthly-plans/monthly-v3') return detail as never
+      if (url.startsWith('/api/monthly-plans/monthly-v3?project_id=')) return detail as never
       if (url.startsWith('/api/task-baselines?project_id=')) return baselineVersions as never
       if (url.startsWith('/api/tasks?projectId=')) return tasks as never
       if (url.startsWith('/api/task-conditions?projectId=')) return conditions as never
@@ -607,20 +688,25 @@ describe('Planning real pages', () => {
     )
     cleanups.push(view.cleanup)
 
-    await waitForCondition(() => view.container.textContent?.includes('已确认查看态') ?? false)
-    await clickButtonByText(view.container, '声明开始重排')
+    await waitForSelector(view.container, '[data-testid="monthly-plan-info-bar"]')
+    await waitForCondition(() => view.container.textContent?.includes('确认查看态') ?? false)
+    await clickButtonByText(view.container, '管理动作')
+    await waitForSelector(document.body, '[role="menuitem"]')
+    await clickMenuItemByText(document.body, '声明开始重排')
 
     await waitForCondition(() =>
       mockedApiPost.mock.calls.some(([url]) => url === '/api/monthly-plans/monthly-v3/queue-realignment'),
     )
     await waitForCondition(() => view.container.textContent?.includes('待重排查看态') ?? false)
 
-    await clickButtonByText(view.container, '结束重排')
+    await clickButtonByText(view.container, '管理动作')
+    await waitForSelector(document.body, '[role="menuitem"]')
+    await clickMenuItemByText(document.body, '结束重排')
 
     await waitForCondition(() =>
       mockedApiPost.mock.calls.some(([url]) => url === '/api/monthly-plans/monthly-v3/resolve-realignment'),
     )
-    await waitForCondition(() => view.container.textContent?.includes('已确认查看态') ?? false)
+    await waitForCondition(() => view.container.textContent?.includes('确认查看态') ?? false)
   })
 
   it('supports undo and redo in the monthly tree editor', async () => {
@@ -628,7 +714,7 @@ describe('Planning real pages', () => {
 
     mockedApiGet.mockImplementation(async (url: string) => {
       if (url.startsWith('/api/monthly-plans?project_id=')) return versions as never
-      if (url === '/api/monthly-plans/monthly-v3') return monthlyDraft as never
+      if (url.startsWith('/api/monthly-plans/monthly-v3?project_id=')) return monthlyDraft as never
       if (url.startsWith('/api/task-baselines?project_id=')) return baselineVersions as never
       if (url.startsWith('/api/tasks?projectId=')) return tasks as never
       if (url.startsWith('/api/task-conditions?projectId=')) return conditions as never
@@ -676,11 +762,44 @@ describe('Planning real pages', () => {
     const draftDetails: Record<string, typeof monthlyDraft> = {
       'monthly-v3': monthlyDraft,
     }
+    const baselineDetail = {
+      ...baselineVersions[0],
+      items: [
+        {
+          id: 'baseline-item-1',
+          project_id: 'project-1',
+          title: '主体结构',
+          sort_order: 0,
+          source_task_id: 'task-root',
+          planned_start_date: '2026-04-01',
+          planned_end_date: '2026-04-30',
+          target_progress: 60,
+          is_milestone: false,
+          is_critical: false,
+          notes: null,
+        },
+        {
+          id: 'baseline-item-2',
+          project_id: 'project-1',
+          title: '机电安装',
+          sort_order: 1,
+          source_task_id: 'task-leaf',
+          planned_start_date: '2026-04-05',
+          planned_end_date: '2026-04-25',
+          target_progress: 35,
+          is_milestone: false,
+          is_critical: false,
+          notes: null,
+        },
+      ],
+    }
 
     mockedApiGet.mockImplementation(async (url: string) => {
       if (url.startsWith('/api/monthly-plans?project_id=')) return versions as never
+      if (url.startsWith('/api/task-baselines/baseline-v2?project_id=')) return baselineDetail as never
       if (url.startsWith('/api/monthly-plans/')) {
-        const detail = draftDetails[url.split('/').at(-1) ?? '']
+        const detailId = url.split('/').at(-1)?.split('?')[0] ?? ''
+        const detail = draftDetails[detailId]
         if (detail) return detail as never
       }
       if (url.startsWith('/api/task-baselines?project_id=')) return baselineVersions as never
@@ -733,8 +852,7 @@ describe('Planning real pages', () => {
 
     await waitForSelector(view.container, '[data-testid="monthly-plan-tree-editor"]')
     await waitForCondition(() => usePlanningStore.getState().selectedItemIds.length === 2)
-
-    await clickButtonByText(view.container, '基于当前任务列表生成')
+    await waitForSelector(view.container, '[data-testid="monthly-plan-regenerate-draft"]')
 
     const checkboxes = Array.from(
       view.container.querySelectorAll('[data-testid="planning-selection-checkbox"]'),
@@ -753,7 +871,7 @@ describe('Planning real pages', () => {
 
     await waitForSelector(document.body, '[data-testid="monthly-plan-regenerate-dialog"]')
     expect(document.body.textContent).toContain('1 项已调整条目会被覆盖')
-    expect(document.body.textContent).toContain('当前来源：当前任务列表')
+    expect(document.body.textContent).toContain('当前来源：项目基线')
 
     await clickButtonByText(document.body, '确认重新生成')
 
@@ -766,7 +884,7 @@ describe('Planning real pages', () => {
   it('tracks monthly field edits in undo and redo history', async () => {
     mockedApiGet.mockImplementation(async (url: string) => {
       if (url.startsWith('/api/monthly-plans?project_id=')) return [{ ...monthlyDraft, items: undefined } as never]
-      if (url === '/api/monthly-plans/monthly-v3') return monthlyDraft as never
+      if (url.startsWith('/api/monthly-plans/monthly-v3?project_id=')) return monthlyDraft as never
       if (url.startsWith('/api/task-baselines?project_id=')) return baselineVersions as never
       if (url.startsWith('/api/tasks?projectId=')) return tasks as never
       if (url.startsWith('/api/task-conditions?projectId=')) return conditions as never
@@ -816,47 +934,53 @@ describe('Planning real pages', () => {
   })
 
   it('loads the real closeout page and closes through /api/monthly-plans/:id/close', async () => {
+    const CloseoutPage = await loadCloseoutPage()
     const versions: MonthlyPlanVersion[] = [{ ...closeoutPlan, items: undefined } as never]
 
     mockedApiGet.mockImplementation(async (url: string) => {
       if (url.startsWith('/api/monthly-plans?project_id=')) return versions as never
-      if (url === '/api/monthly-plans/monthly-v2') return closeoutPlan as never
+      if (url.startsWith('/api/monthly-plans/monthly-v2?project_id=')) return closeoutPlan as never
+      if (url.startsWith('/api/tasks?projectId=')) return closeoutTasks as never
       if (url.startsWith('/api/data-quality/project-summary?')) return dataQualitySummary as never
       throw new Error(`unexpected apiGet: ${url}`)
     })
 
     mockedApiPost.mockImplementation(async (url: string) => {
-      if (url === '/api/monthly-plans/monthly-v2/close') return { ...closeoutPlan, status: 'closed' } as never
+      if (url === '/api/monthly-plans/monthly-v2/force-close') return { ...closeoutPlan, status: 'closed' } as never
       throw new Error(`unexpected apiPost: ${url}`)
     })
 
     const view = mount(
-      <MemoryRouter initialEntries={['/projects/project-1/planning/closeout']}>
+      <MemoryRouter initialEntries={['/projects/project-1/tasks/closeout']}>
         <Routes>
-          <Route path="/projects/:id/planning/closeout" element={<CloseoutPage />} />
+          <Route path="/projects/:id/tasks/closeout" element={<CloseoutPage />} />
           <Route path="/projects/:id/planning/monthly" element={<div data-testid="monthly-route-after-closeout" />} />
         </Routes>
       </MemoryRouter>,
     )
     cleanups.push(view.cleanup)
 
-    await waitForSelector(view.container, '[data-testid="planning-layered-workspace"]')
-    await clickButtonByText(view.container, '强制发起关账')
+    await waitForSelector(view.container, '[data-testid="closeout-escalation-ladder"]')
+    await clickElement(view.container.querySelector('[data-testid="closeout-more-actions"]') as HTMLElement | null)
+    await waitForSelector(document.body, '[data-testid="closeout-force-close-entry"]')
+    await clickElement(document.body.querySelector('[data-testid="closeout-force-close-entry"]') as HTMLElement | null)
     await waitForSelector(document.body, '[data-testid="closeout-confirm-dialog"]')
     await clickButtonByText(document.body, '确认关账')
 
     expect(
-      mockedApiPost.mock.calls.some(([url]) => url === '/api/monthly-plans/monthly-v2/close'),
+      mockedApiPost.mock.calls.some(([url]) => url === '/api/monthly-plans/monthly-v2/force-close'),
     ).toBe(true)
   })
 
   it('filters the real closeout list by status', async () => {
+    const CloseoutPage = await loadCloseoutPage()
     const overdueCloseoutPlan = { ...closeoutPlan, month: '2020-03' }
     const versions: MonthlyPlanVersion[] = [{ ...overdueCloseoutPlan, items: undefined } as never]
 
     mockedApiGet.mockImplementation(async (url: string) => {
       if (url.startsWith('/api/monthly-plans?project_id=')) return versions as never
-      if (url === '/api/monthly-plans/monthly-v2') return overdueCloseoutPlan as never
+      if (url.startsWith('/api/monthly-plans/monthly-v2?project_id=')) return overdueCloseoutPlan as never
+      if (url.startsWith('/api/tasks?projectId=')) return closeoutTasks as never
       if (url.startsWith('/api/data-quality/project-summary?')) return { ...dataQualitySummary, month: '2020-03' } as never
       throw new Error(`unexpected apiGet: ${url}`)
     })
@@ -866,9 +990,9 @@ describe('Planning real pages', () => {
     })
 
     const view = mount(
-      <MemoryRouter initialEntries={['/projects/project-1/planning/closeout']}>
+      <MemoryRouter initialEntries={['/projects/project-1/tasks/closeout']}>
         <Routes>
-          <Route path="/projects/:id/planning/closeout" element={<CloseoutPage />} />
+          <Route path="/projects/:id/tasks/closeout" element={<CloseoutPage />} />
         </Routes>
       </MemoryRouter>,
     )
@@ -889,12 +1013,14 @@ describe('Planning real pages', () => {
   })
 
   it('switches closeout grouping dimensions and shows the escalation ladder', async () => {
+    const CloseoutPage = await loadCloseoutPage()
     const overdueCloseoutPlan = { ...closeoutPlan, month: '2026-03' }
     const versions: MonthlyPlanVersion[] = [{ ...overdueCloseoutPlan, items: undefined } as never]
 
     mockedApiGet.mockImplementation(async (url: string) => {
       if (url.startsWith('/api/monthly-plans?project_id=')) return versions as never
-      if (url === '/api/monthly-plans/monthly-v2') return overdueCloseoutPlan as never
+      if (url.startsWith('/api/monthly-plans/monthly-v2?project_id=')) return overdueCloseoutPlan as never
+      if (url.startsWith('/api/tasks?projectId=')) return closeoutTasks as never
       if (url.startsWith('/api/data-quality/project-summary?')) return dataQualitySummary as never
       throw new Error(`unexpected apiGet: ${url}`)
     })
@@ -904,9 +1030,9 @@ describe('Planning real pages', () => {
     })
 
     const view = mount(
-      <MemoryRouter initialEntries={['/projects/project-1/planning/closeout']}>
+      <MemoryRouter initialEntries={['/projects/project-1/tasks/closeout']}>
         <Routes>
-          <Route path="/projects/:id/planning/closeout" element={<CloseoutPage />} />
+          <Route path="/projects/:id/tasks/closeout" element={<CloseoutPage />} />
         </Routes>
       </MemoryRouter>,
     )

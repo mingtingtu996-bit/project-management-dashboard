@@ -11,13 +11,21 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { LoadingState } from '@/components/ui/loading-state'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { usePlanningStore } from '@/hooks/usePlanningStore'
+import { usePermissions } from '@/hooks/usePermissions'
 import { useStore } from '@/hooks/useStore'
 import { useToast } from '@/hooks/use-toast'
 import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard'
 import { apiGet, apiPost, getApiErrorMessage } from '@/lib/apiClient'
-import type { BaselineItem, BaselineVersion, PlanningDraftLockRecord } from '@/types/planning'
-import { AlertTriangle, FileDiff, FileSpreadsheet, FolderGit2, History, LockKeyhole } from 'lucide-react'
+import type {
+  BaselineItem,
+  BaselineVersion,
+  ObservationPoolReadResponse,
+  PlanningDraftLockRecord,
+  RevisionPoolCandidate,
+} from '@/types/planning'
+import { AlertTriangle, FileDiff, FileSpreadsheet, FolderGit2, History, LockKeyhole, FilePlus2, Calendar } from 'lucide-react'
 import * as XLSX from 'xlsx'
 
 import { BaselineBottomBar } from './components/BaselineBottomBar'
@@ -53,36 +61,174 @@ type BaselineImportPreviewRow = {
   is_milestone: boolean
   sort_order: number
 }
+type BaselineImportSourceRow = Record<string, unknown>
+type BaselineImportFieldKey = 'title' | 'start' | 'end' | 'progress' | 'notes' | 'milestone'
+type BaselineImportColumnMapping = Record<BaselineImportFieldKey, string>
 type BaselineImportPreview = {
   fileName: string
   sheetName: string
   importedAt: string
+  sourceRows: BaselineImportSourceRow[]
+  columns: string[]
+  mapping: BaselineImportColumnMapping
   rows: BaselineImportPreviewRow[]
   warnings: string[]
 }
 
+const BASELINE_EDITABLE_FIELDS: EditableField[] = ['title', 'start', 'end', 'progress']
+
 const TABS = [
   { key: 'baseline', label: '项目基线' },
   { key: 'monthly', label: '月度计划' },
-  { key: 'revision-pool', label: '计划修订候选' },
-  { key: 'change-log', label: '变更记录' },
-  { key: 'deviation', label: '报表分析' },
 ] as const
 
-const BASELINE_IMPORT_TITLE_KEYS = ['任务名称', '标题', '名称', 'task_name', 'title', '任务', 'WBS名称'] as const
-const BASELINE_IMPORT_START_KEYS = ['计划开始', '开始日期', 'planned_start_date', 'start_date', '开始'] as const
-const BASELINE_IMPORT_END_KEYS = ['计划结束', '结束日期', 'planned_end_date', 'end_date', '结束'] as const
-const BASELINE_IMPORT_PROGRESS_KEYS = ['目标进度', 'target_progress', '进度', 'progress', '目标进度(%)', '进度(%)'] as const
-const BASELINE_IMPORT_NOTE_KEYS = ['备注', '说明', 'notes', 'description'] as const
-const BASELINE_IMPORT_MILESTONE_KEYS = ['是否里程碑', '里程碑', 'is_milestone', 'milestone'] as const
+const BASELINE_IMPORT_FIELD_CONFIG: Array<{
+  key: BaselineImportFieldKey
+  label: string
+  required: boolean
+  hints: readonly string[]
+}> = [
+  {
+    key: 'title',
+    label: '任务名称',
+    required: true,
+    hints: ['任务名称', '标题', '名称', 'task_name', 'title', '任务', 'WBS名称'],
+  },
+  {
+    key: 'start',
+    label: '计划开始',
+    required: true,
+    hints: ['计划开始', '开始日期', 'planned_start_date', 'start_date', '开始'],
+  },
+  {
+    key: 'end',
+    label: '计划结束',
+    required: true,
+    hints: ['计划结束', '结束日期', 'planned_end_date', 'end_date', '结束'],
+  },
+  {
+    key: 'progress',
+    label: '目标进度',
+    required: true,
+    hints: ['目标进度', 'target_progress', '进度', 'progress', '目标进度(%)', '进度(%)'],
+  },
+  {
+    key: 'notes',
+    label: '备注',
+    required: false,
+    hints: ['备注', '说明', 'notes', 'description'],
+  },
+  {
+    key: 'milestone',
+    label: '是否里程碑',
+    required: false,
+    hints: ['是否里程碑', '里程碑', 'is_milestone', 'milestone'],
+  },
+] as const
 
-function pickImportCell(row: Record<string, unknown>, keys: readonly string[]) {
-  for (const key of keys) {
-    if (row[key] !== undefined && row[key] !== null && String(row[key]).trim().length > 0) {
-      return row[key]
-    }
+function normalizeImportColumnName(value: string) {
+  return value.trim().toLowerCase()
+}
+
+function getImportCell(row: BaselineImportSourceRow, columnName: string) {
+  if (!columnName) return null
+  const cell = row[columnName]
+  if (cell === undefined || cell === null) return null
+  const normalized = String(cell).trim()
+  return normalized.length > 0 ? cell : null
+}
+
+function resolveImportColumn(columns: string[], hints: readonly string[]) {
+  const normalizedColumns = columns.map((column) => ({ column, normalized: normalizeImportColumnName(column) }))
+  for (const hint of hints) {
+    const normalizedHint = normalizeImportColumnName(hint)
+    const matched = normalizedColumns.find((column) => column.normalized === normalizedHint)
+    if (matched) return matched.column
   }
-  return null
+  return ''
+}
+
+function resolveImportMapping(columns: string[]): BaselineImportColumnMapping {
+  return BASELINE_IMPORT_FIELD_CONFIG.reduce((mapping, field) => {
+    mapping[field.key] = resolveImportColumn(columns, field.hints)
+    return mapping
+  }, {} as BaselineImportColumnMapping)
+}
+
+function calculateImportMappingProgress(mapping: BaselineImportColumnMapping) {
+  const mappedCount = BASELINE_IMPORT_FIELD_CONFIG.filter((field) => Boolean(mapping[field.key])).length
+  return Math.round((mappedCount / BASELINE_IMPORT_FIELD_CONFIG.length) * 100)
+}
+
+function buildBaselineImportPreview(params: {
+  fileName: string
+  sheetName: string
+  importedAt: string
+  sourceRows: BaselineImportSourceRow[]
+  columns: string[]
+  mapping: BaselineImportColumnMapping
+}): BaselineImportPreview {
+  const warnings: string[] = []
+  const missingRequiredMappings = BASELINE_IMPORT_FIELD_CONFIG.filter(
+    (field) => field.required && !params.mapping[field.key],
+  )
+
+  if (missingRequiredMappings.length > 0) {
+    warnings.push(`尚有必填列未映射：${missingRequiredMappings.map((field) => field.label).join(' / ')}。`)
+  }
+
+  const previewRows = params.sourceRows
+    .map((row, index) => {
+      const titleCell = getImportCell(row, params.mapping.title)
+      const startCell = getImportCell(row, params.mapping.start)
+      const endCell = getImportCell(row, params.mapping.end)
+      const progressCell = getImportCell(row, params.mapping.progress)
+      const notesCell = getImportCell(row, params.mapping.notes)
+      const milestoneCell = getImportCell(row, params.mapping.milestone)
+
+      const hasContent = [titleCell, startCell, endCell, progressCell, notesCell, milestoneCell].some((value) =>
+        value != null && String(value).trim().length > 0,
+      )
+      if (!hasContent) return null
+
+      const title = titleCell ? String(titleCell).trim() : `导入条目 ${index + 1}`
+      if (!titleCell) {
+        warnings.push(`第 ${index + 1} 行未找到标题字段，已自动命名为“${title}”。`)
+      }
+
+      const planned_start_date = normalizeImportDate(startCell)
+      const planned_end_date = normalizeImportDate(endCell)
+      const target_progress = normalizeImportProgress(progressCell)
+      const notes = notesCell ? String(notesCell).trim() : null
+      const is_milestone = normalizeImportMilestone(milestoneCell)
+
+      return {
+        id: `import-${index + 1}`,
+        title,
+        planned_start_date,
+        planned_end_date,
+        target_progress,
+        notes,
+        is_milestone,
+        sort_order: index,
+      } satisfies BaselineImportPreviewRow
+    })
+    .filter((row): row is BaselineImportPreviewRow => Boolean(row))
+
+  if (previewRows.length === 0) {
+    throw new Error('导入文件中没有可用的基线条目。')
+  }
+
+  return {
+    fileName: params.fileName,
+    sheetName: params.sheetName,
+    importedAt: params.importedAt,
+    sourceRows: params.sourceRows,
+    columns: params.columns,
+    mapping: params.mapping,
+    rows: previewRows,
+    warnings,
+  }
 }
 
 function normalizeImportDate(value: unknown) {
@@ -107,6 +253,7 @@ function normalizeImportProgress(value: unknown) {
 }
 
 function normalizeImportMilestone(value: unknown) {
+  if (typeof value === 'boolean') return value
   const normalized = String(value ?? '').trim().toLowerCase()
   return ['1', 'true', 'yes', 'y', '是', '里程碑'].includes(normalized)
 }
@@ -115,54 +262,21 @@ async function parseBaselineImportFile(file: File): Promise<BaselineImportPrevie
   const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' })
   const sheetName = workbook.SheetNames[0]
   const sheet = workbook.Sheets[sheetName]
-  const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: null })
-  const warnings: string[] = []
+  const rows = XLSX.utils.sheet_to_json<BaselineImportSourceRow>(sheet, { defval: null })
+  const sourceRows = rows.filter((row) =>
+    Object.values(row).some((value) => String(value ?? '').trim().length > 0),
+  )
+  const columns = Array.from(new Set(sourceRows.flatMap((row) => Object.keys(row))))
+  const mapping = resolveImportMapping(columns)
 
-  const previewRows = rows
-    .map((row, index) => {
-      const importedTitle = pickImportCell(row, BASELINE_IMPORT_TITLE_KEYS)
-      const title = importedTitle ? String(importedTitle).trim() : `导入条目 ${index + 1}`
-      if (!importedTitle) {
-        warnings.push(`第 ${index + 1} 行未找到标题字段，已自动命名为“${title}”。`)
-      }
-
-      const planned_start_date = normalizeImportDate(pickImportCell(row, BASELINE_IMPORT_START_KEYS))
-      const planned_end_date = normalizeImportDate(pickImportCell(row, BASELINE_IMPORT_END_KEYS))
-      const target_progress = normalizeImportProgress(pickImportCell(row, BASELINE_IMPORT_PROGRESS_KEYS))
-      const notes = (() => {
-        const cell = pickImportCell(row, BASELINE_IMPORT_NOTE_KEYS)
-        return cell ? String(cell).trim() : null
-      })()
-      const is_milestone = normalizeImportMilestone(pickImportCell(row, BASELINE_IMPORT_MILESTONE_KEYS))
-
-      if (!title && !planned_start_date && !planned_end_date && target_progress == null && !notes) {
-        return null
-      }
-
-      return {
-        id: `import-${index + 1}`,
-        title,
-        planned_start_date,
-        planned_end_date,
-        target_progress,
-        notes,
-        is_milestone,
-        sort_order: index,
-      } satisfies BaselineImportPreviewRow
-    })
-    .filter((row): row is BaselineImportPreviewRow => Boolean(row))
-
-  if (!previewRows.length) {
-    throw new Error('导入文件中没有可用的基线条目。')
-  }
-
-  return {
+  return buildBaselineImportPreview({
     fileName: file.name,
     sheetName,
     importedAt: new Date().toISOString(),
-    rows: previewRows,
-    warnings,
-  }
+    sourceRows,
+    columns,
+    mapping,
+  })
 }
 
 function sameIdSequence(left: string[], right: string[]) {
@@ -207,6 +321,31 @@ function shiftDateValue(value: string | null | undefined, days: number) {
 
 function formatStatusLabel(status: BaselineVersion['status']) {
   return getBaselineStatusLabel(status)
+}
+
+function mapRevisionPoolCandidate(candidate: RevisionPoolCandidate): BaselineRevisionCandidate {
+  const sourceTypeLabel =
+    candidate.source_type === 'observation'
+      ? '观测'
+      : candidate.source_type === 'deviation'
+        ? '偏差'
+        : '手动'
+  const sourceLabel =
+    candidate.source_type === 'observation'
+      ? '来自观测池'
+      : candidate.source_type === 'deviation'
+        ? '来自偏差分析'
+        : '人工补录'
+  const windowLabel = [candidate.observation_window_start, candidate.observation_window_end]
+    .filter(Boolean)
+    .join(' → ')
+
+  return {
+    ...candidate,
+    summary: candidate.reason,
+    source: windowLabel ? `${sourceLabel} · ${windowLabel}` : sourceLabel,
+    tag: sourceTypeLabel,
+  }
 }
 
 function buildBaselineStatusNotice(status: BaselineVersion['status'], compareLabel: string) {
@@ -358,6 +497,8 @@ function buildSavePayload(
         parent_item_id: item.parent_item_id ?? null,
         source_task_id: item.source_task_id ?? null,
         source_milestone_id: item.source_milestone_id ?? null,
+        template_id: item.template_id ?? null,
+        template_node_id: item.template_node_id ?? null,
         title: item.title,
         planned_start_date: item.planned_start_date ?? null,
         planned_end_date: item.planned_end_date ?? null,
@@ -377,6 +518,7 @@ export default function BaselinePage() {
   const navigate = useNavigate()
   const { toast } = useToast()
   const currentProject = useStore((state) => state.currentProject)
+  const { canEdit, globalRole, permissionLevel } = usePermissions({ projectId: currentProject?.id ?? id })
   const changeLogs = useStore((state) => state.changeLogs)
   const changeLogsStatus = useStore((state) => state.sharedSliceStatus.changeLogs)
   const selectedItemIds = usePlanningStore((state) => state.selectedItemIds)
@@ -397,7 +539,7 @@ export default function BaselinePage() {
   const [editorItems, setEditorItems] = useState<BaselineItem[]>([])
   const [inputDrafts, setInputDrafts] = useState<Record<string, string>>({})
   const [draftLock, setDraftLock] = useState<PlanningDraftLockRecord | null>(null)
-  const [readOnly, setReadOnly] = useState(false)
+  const [internalReadOnly, setInternalReadOnly] = useState(false)
   const [statusNotice, setStatusNotice] = useState<string | null>(null)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [confirmFailure, setConfirmFailure] = useState<ConfirmFailureContext | null>(null)
@@ -415,8 +557,13 @@ export default function BaselinePage() {
   const [importPreview, setImportPreview] = useState<BaselineImportPreview | null>(null)
   const [importError, setImportError] = useState<string | null>(null)
   const [importParsing, setImportParsing] = useState(false)
+  const [importProgress, setImportProgress] = useState(0)
+  const [importMappingConfirmed, setImportMappingConfirmed] = useState(false)
   const [batchShiftDays, setBatchShiftDays] = useState('1')
   const [batchProgressValue, setBatchProgressValue] = useState('')
+  const [revisionDeferredReviewDueAt, setRevisionDeferredReviewDueAt] = useState('')
+  const [revisionPoolData, setRevisionPoolData] = useState<ObservationPoolReadResponse | null>(null)
+  const [revisionPoolError, setRevisionPoolError] = useState<string | null>(null)
   const [, forceHistoryRender] = useState(0)
 
   const historyRef = useRef<EditorSnapshot[]>([])
@@ -437,6 +584,7 @@ export default function BaselinePage() {
 
   const compareLabel = formatVersionLabel(compareBaseline?.version)
   const currentLabel = formatVersionLabel(activeBaseline?.version)
+  const readOnly = internalReadOnly || !canEdit
   const lockRemainingLabel = getLockLabel(draftLock, readOnly)
   const validityLabel = activeBaseline?.status === 'pending_realign' ? '待重定' : '有效'
   const validityHint =
@@ -447,8 +595,11 @@ export default function BaselinePage() {
   const confirmDisabledReason = validationIssues.some((issue) => issue.level === 'error')
     ? '当前存在阻断项，修正后才能确认发布。'
     : null
-  const canQueueRealignment = activeBaseline?.status === 'confirmed' || activeBaseline?.status === 'revising'
-  const canResolveRealignment = activeBaseline?.status === 'pending_realign'
+  const canManageBaselineActions = permissionLevel === 'owner' || globalRole === 'company_admin'
+  const canQueueRealignment =
+    canManageBaselineActions && (activeBaseline?.status === 'confirmed' || activeBaseline?.status === 'revising')
+  const canResolveRealignment = canManageBaselineActions && activeBaseline?.status === 'pending_realign'
+  const canForceUnlock = canManageBaselineActions && activeBaseline?.status === 'draft'
   const baselineChangeLogs = useMemo(
     () =>
       changeLogs
@@ -512,8 +663,13 @@ export default function BaselinePage() {
       const nextVersions = await apiGet<BaselineVersion[]>(`/api/task-baselines?project_id=${projectId}`, { signal })
       const sorted = [...nextVersions].sort((left, right) => right.version - left.version)
       setVersions(sorted)
+      const resumeTargetId = preferredId
+        ? null
+        : readPlanningDraftResumeSnapshot(baselineDraftResumeKey)?.resourceId ?? null
 
       const targetVersion = sorted.find((item) => item.id === preferredId)
+        ?? sorted.find((item) => item.id === resumeTargetId && item.status === 'draft')
+        ?? sorted.find((item) => item.status === 'confirmed')
         ?? sorted.find((item) => item.status === 'draft')
         ?? sorted[0]
 
@@ -521,8 +677,9 @@ export default function BaselinePage() {
         setActiveBaseline(null)
         setCompareBaseline(null)
         setEditorItems([])
-        setReadOnly(true)
+        setInternalReadOnly(true)
         setDraftLock(null)
+        setDraftStatus('locked')
         clearSelection()
         setStatusNotice('当前项目还没有基线版本。')
         return
@@ -539,8 +696,12 @@ export default function BaselinePage() {
         ?? sorted.find((item) => item.id !== targetVersion.id)
         ?? null
       const [nextActive, nextCompare] = await Promise.all([
-        apiGet<BaselineDetail>(`/api/task-baselines/${targetVersion.id}`, { signal }),
-        compareVersion ? apiGet<BaselineDetail>(`/api/task-baselines/${compareVersion.id}`, { signal }) : Promise.resolve(null),
+        apiGet<BaselineDetail>(`/api/task-baselines/${targetVersion.id}?project_id=${encodeURIComponent(projectId)}`, { signal }),
+        compareVersion
+          ? apiGet<BaselineDetail>(`/api/task-baselines/${compareVersion.id}?project_id=${encodeURIComponent(projectId)}`, {
+              signal,
+            })
+          : Promise.resolve(null),
       ])
 
       setActiveBaseline(nextActive)
@@ -563,19 +724,19 @@ export default function BaselinePage() {
         try {
           const response = await apiPost<{ lock: PlanningDraftLockRecord }>(`/api/task-baselines/${nextActive.id}/lock`, undefined, { signal })
           setDraftLock(response.lock)
-          setReadOnly(false)
+          setInternalReadOnly(false)
           setDraftStatus('editing')
           setStatusNotice(buildBaselineStatusNotice(nextActive.status, formatVersionLabel(nextCompare?.version)))
         } catch (lockError) {
           if (signal?.aborted) return
           setDraftLock(null)
-          setReadOnly(true)
+          setInternalReadOnly(true)
           setDraftStatus('locked')
           setStatusNotice(getApiErrorMessage(lockError, '当前草稿暂时无法获取编辑锁，已切换为只读查看。'))
         }
       } else {
         setDraftLock(null)
-        setReadOnly(true)
+        setInternalReadOnly(true)
         setDraftStatus('locked')
         setResumeSnapshot(null)
         setResumeDialogOpen(false)
@@ -616,7 +777,11 @@ export default function BaselinePage() {
 
     if (!activeBaseline) return
 
-    if (activeBaseline.status !== 'draft' || readOnly) {
+    if (activeBaseline.status !== 'draft') {
+      return
+    }
+
+    if (readOnly) {
       clearPlanningDraftResumeSnapshot(baselineDraftResumeKey)
       return
     }
@@ -628,6 +793,38 @@ export default function BaselinePage() {
       workspaceLabel: '项目基线',
     })
   }, [activeBaseline, baselineDraftResumeKey, loading, projectId, readOnly, resumeInitialized])
+
+  useEffect(() => {
+    if (!activeBaseline?.id) {
+      setRevisionPoolData(null)
+      setRevisionPoolError(null)
+      return
+    }
+
+    const controller = new AbortController()
+    let cancelled = false
+
+    setRevisionPoolData(null)
+    setRevisionPoolError(null)
+
+    void apiGet<ObservationPoolReadResponse>(`/api/task-baselines/${activeBaseline.id}/revision-pool`, {
+      signal: controller.signal,
+    })
+      .then((data) => {
+        if (cancelled || controller.signal.aborted) return
+        setRevisionPoolData(data)
+      })
+      .catch((error) => {
+        if (cancelled || controller.signal.aborted) return
+        setRevisionPoolData(null)
+        setRevisionPoolError(getApiErrorMessage(error, '修订观察池加载失败，当前展示本地候选。'))
+      })
+
+    return () => {
+      cancelled = true
+      controller.abort()
+    }
+  }, [activeBaseline?.id])
 
   const handleDraftChange = useCallback((itemId: string, field: EditableField, value: string) => {
     setInputDrafts((current) => ({ ...current, [`${itemId}:${field}`]: value }))
@@ -665,12 +862,53 @@ export default function BaselinePage() {
   }, [commitSnapshot, editorItems, inputDrafts, normalizedSelectedItemIds])
 
   const handleInputKeyDown = useCallback((event: KeyboardEvent<HTMLInputElement>, itemId: string, field: EditableField) => {
+    const draftKey = `${itemId}:${field}`
+    const visibleRowIds = rowsRef.current
+      .map((row) => row.id)
+      .filter((rowId) => allRowIds.includes(rowId))
+    const focusOrder = visibleRowIds.flatMap((rowId) =>
+      BASELINE_EDITABLE_FIELDS.map((currentField) => ({ rowId, field: currentField })),
+    )
+    const currentIndex = focusOrder.findIndex((entry) => entry.rowId === itemId && entry.field === field)
+    const focusTarget = (index: number) => {
+      const target = focusOrder[index]
+      if (!target) return
+      requestAnimationFrame(() => {
+        const nextCell = document.querySelector<HTMLInputElement>(
+          `[data-baseline-editor-cell="${target.rowId}:${target.field}"]`,
+        )
+        nextCell?.focus()
+        nextCell?.select?.()
+      })
+    }
+
+    if (event.key === 'Tab') {
+      const targetIndex = event.shiftKey ? currentIndex - 1 : currentIndex + 1
+      commitFieldEdit(itemId, field)
+      if (targetIndex >= 0 && targetIndex < focusOrder.length) {
+        event.preventDefault()
+        focusTarget(targetIndex)
+      }
+      return
+    }
+
     if (event.key === 'Enter') {
       event.preventDefault()
       commitFieldEdit(itemId, field)
       event.currentTarget.blur()
+      return
     }
-  }, [commitFieldEdit])
+
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      setInputDrafts((current) => {
+        const next = { ...current }
+        delete next[draftKey]
+        return next
+      })
+      event.currentTarget.blur()
+    }
+  }, [allRowIds, commitFieldEdit])
 
   const handleToggleRow = useCallback((rowId: string) => {
     if (readOnly) return
@@ -744,17 +982,17 @@ export default function BaselinePage() {
   }, [commitSnapshot, editorItems, normalizedSelectedItemIds, readOnly])
 
   const handleForceUnlock = useCallback(async () => {
-    if (!activeBaseline || activeBaseline.status !== 'draft') return
+    if (!activeBaseline || !canForceUnlock) return
     setActionLoading('unlock')
     try {
       await apiPost(`/api/task-baselines/${activeBaseline.id}/force-unlock`, { reason: 'manual_release' })
       const response = await apiPost<{ lock: PlanningDraftLockRecord }>(`/api/task-baselines/${activeBaseline.id}/lock`)
       setDraftLock(response.lock)
-      setReadOnly(false)
+      setInternalReadOnly(false)
       setDraftStatus('editing')
       setStatusNotice('已重新获取编辑锁，可以继续整理当前草稿。')
     } catch (unlockError) {
-      setReadOnly(true)
+      setInternalReadOnly(true)
       setDraftLock(null)
       setDraftStatus('locked')
       toast({
@@ -765,7 +1003,7 @@ export default function BaselinePage() {
     } finally {
       setActionLoading(null)
     }
-  }, [activeBaseline, setDraftStatus, toast])
+  }, [activeBaseline, canForceUnlock, setDraftStatus, toast])
 
   const handleSaveDraft = useCallback(async () => {
     if (!projectId || !activeBaseline) return
@@ -788,8 +1026,71 @@ export default function BaselinePage() {
     }
   }, [activeBaseline, editorItems, loadBaselineContext, normalizedSelectedItemIds, projectId, toast])
 
+  const handleCreateBlankBaseline = useCallback(async () => {
+    if (!projectId) return
+    setActionLoading('save')
+    try {
+      const created = await apiPost<BaselineDetail>('/api/task-baselines', {
+        project_id: projectId,
+        title: `${currentProject?.name ?? '项目'}空白基线`,
+        description: '空白基线草稿',
+        source_type: 'manual',
+        source_version_label: '空白基线',
+        items: [],
+      })
+      await loadBaselineContext({ preferredId: created.id })
+      setStatusNotice('已创建空白基线草稿。')
+    } catch (saveError) {
+      toast({
+        title: '创建空白基线失败',
+        description: getApiErrorMessage(saveError, '请稍后重试。'),
+        variant: 'destructive',
+      })
+    } finally {
+      setActionLoading(null)
+    }
+  }, [currentProject?.name, loadBaselineContext, projectId, toast])
+
+  const handleBootstrapFromSchedule = useCallback(async () => {
+    if (!projectId) return
+    setActionLoading('save')
+    try {
+      const result = await apiPost<{ baseline?: BaselineDetail; needs_mapping_review?: boolean; created_item_count?: number }>(
+        '/api/task-baselines/bootstrap/from-schedule',
+        { project_id: projectId },
+      )
+      const createdBaselineId = result.baseline?.id ?? null
+      if (createdBaselineId) {
+        await loadBaselineContext({ preferredId: createdBaselineId })
+      } else {
+        await loadBaselineContext()
+      }
+      setStatusNotice(
+        result.needs_mapping_review
+          ? `已从当前排期生成初始化基线，${result.created_item_count ?? 0} 项进入待确认。`
+          : `已从当前排期生成初始化基线。`,
+      )
+    } catch (saveError) {
+      toast({
+        title: '从当前排期生成失败',
+        description: getApiErrorMessage(saveError, '请稍后重试。'),
+        variant: 'destructive',
+      })
+    } finally {
+      setActionLoading(null)
+    }
+  }, [loadBaselineContext, projectId, toast])
+
   const handleConfirm = useCallback(async () => {
     if (!activeBaseline) return
+    if (activeBaseline.status !== 'draft' && activeBaseline.status !== 'revising') {
+      toast({
+        title: '当前版本不可确认',
+        description: '仅草稿态或修订态基线可以确认发布。',
+        variant: 'destructive',
+      })
+      return
+    }
     setActionLoading('confirm')
     try {
       await apiPost(`/api/task-baselines/${activeBaseline.id}/confirm`, { version: activeBaseline.version })
@@ -908,12 +1209,16 @@ export default function BaselinePage() {
 
     setImportParsing(true)
     setImportError(null)
+    setImportProgress(0)
+    setImportMappingConfirmed(false)
     try {
       const preview = await parseBaselineImportFile(file)
       setImportPreview(preview)
+      setImportProgress(calculateImportMappingProgress(preview.mapping))
       setStatusNotice(`已解析 ${preview.fileName}，可先预览再生成导入基线草稿。`)
     } catch (error) {
       setImportPreview(null)
+      setImportProgress(0)
       setImportError(getApiErrorMessage(error, '导入文件解析失败，请检查表头和日期格式。'))
     } finally {
       setImportParsing(false)
@@ -921,10 +1226,28 @@ export default function BaselinePage() {
     }
   }, [])
 
+  const handleImportColumnMappingChange = useCallback((field: BaselineImportFieldKey, columnName: string) => {
+    if (!importPreview) return
+
+    setImportMappingConfirmed(false)
+    const nextMapping = { ...importPreview.mapping, [field]: columnName }
+    const nextPreview = buildBaselineImportPreview({
+      fileName: importPreview.fileName,
+      sheetName: importPreview.sheetName,
+      importedAt: importPreview.importedAt,
+      sourceRows: importPreview.sourceRows,
+      columns: importPreview.columns,
+      mapping: nextMapping,
+    })
+    setImportPreview(nextPreview)
+    setImportProgress(calculateImportMappingProgress(nextMapping))
+  }, [importPreview])
+
   const handleCreateImportedBaseline = useCallback(async () => {
-    if (!projectId || !importPreview) return
+    if (!projectId || !importPreview || !importMappingConfirmed) return
     setActionLoading('save')
     try {
+      setImportProgress(25)
       const created = await apiPost<BaselineDetail>('/api/task-baselines', {
         project_id: projectId,
         title: `${currentProject?.name ?? '项目'}导入基线`,
@@ -946,9 +1269,13 @@ export default function BaselinePage() {
           notes: row.notes,
         })),
       })
+      setImportProgress(75)
       await loadBaselineContext({ preferredId: created.id })
+      setImportProgress(100)
       setImportPreview(null)
       setImportError(null)
+      setImportMappingConfirmed(false)
+      setImportProgress(0)
       setStatusNotice(`已从 ${importPreview.fileName} 生成导入基线草稿。`)
     } catch (error) {
       toast({
@@ -956,10 +1283,11 @@ export default function BaselinePage() {
         description: getApiErrorMessage(error, '请稍后重试。'),
         variant: 'destructive',
       })
+      setImportProgress(0)
     } finally {
       setActionLoading(null)
     }
-  }, [currentProject?.name, importPreview, loadBaselineContext, projectId, toast])
+  }, [currentProject?.name, importMappingConfirmed, importPreview, loadBaselineContext, projectId, toast])
 
   const rows = useMemo(() => {
     const depthMap = buildDepthMap(editorItems)
@@ -987,6 +1315,31 @@ export default function BaselinePage() {
           progressLabel: item.target_progress == null ? '—' : `${item.target_progress}%`,
           mappingStatus: item.mapping_status === 'pending' ? '映射待确认' : null,
           statusLabel: item.is_milestone ? '里程碑' : undefined,
+          onAddSibling: readOnly
+            ? undefined
+            : () => {
+                const targetIndex = editorItems.findIndex((entry) => entry.id === item.id)
+                if (targetIndex < 0) return
+                const target = editorItems[targetIndex]
+                const nextItem: BaselineItem = {
+                  ...target,
+                  id: `baseline-sibling-${Date.now()}-${targetIndex}`,
+                  title: `${target.title}（新同级）`,
+                  sort_order: target.sort_order + 1,
+                  parent_item_id: target.parent_item_id ?? null,
+                  source_task_id: target.source_task_id ?? null,
+                  source_milestone_id: target.source_milestone_id ?? null,
+                  template_id: target.template_id ?? null,
+                  template_node_id: target.template_node_id ?? null,
+                  mapping_status: target.mapping_status === 'missing' ? 'pending' : (target.mapping_status ?? 'pending'),
+                  notes: target.notes ?? null,
+                }
+                const nextItems = [...editorItems]
+                nextItems.splice(targetIndex + 1, 0, nextItem)
+                const normalizedNextItems = nextItems.map((entry, index) => ({ ...entry, sort_order: index }))
+                commitSnapshot(normalizedNextItems, [...normalizedSelectedItemIds, nextItem.id])
+                setStatusNotice(`已在“${target.title}”后新增一个同级条目。`)
+              },
           titleCell: (
             <div className="space-y-1">
               <div className="truncate text-xs text-slate-500">{inputDrafts[titleKey] ?? item.title}</div>
@@ -1043,12 +1396,14 @@ export default function BaselinePage() {
       })
   }, [
     commitFieldEdit,
+    commitSnapshot,
     editorItems,
     handleDraftChange,
     handleInputKeyDown,
     inputDrafts,
     normalizedSelectedItemIds,
     readOnly,
+    setStatusNotice,
   ])
 
   rowsRef.current = rows
@@ -1067,7 +1422,18 @@ export default function BaselinePage() {
     () => buildDiffItems(compareBaseline?.items ?? [], editorItems),
     [compareBaseline?.items, editorItems],
   )
-  const revisionCandidates = useMemo<BaselineRevisionCandidate[]>(() => {
+  const noDiff = diffItems.length === 0
+  const modifiedItemCount = activeBaseline?.modified_item_count ?? diffItems.length
+  const milestoneChangeCount =
+    activeBaseline?.milestone_change_count ?? diffItems.filter((item) => item.kind === '里程碑变动').length
+  const criticalPathChangeCount =
+    activeBaseline?.critical_path_change_count ?? diffItems.filter((item) => item.kind === '修改' || item.kind === '里程碑变动').length
+  const mappingAffectedCount =
+    activeBaseline?.mapping_affected_count ?? editorItems.filter((item) => item.mapping_status === 'pending').length
+  const localRevisionCandidates = useMemo<BaselineRevisionCandidate[]>(() => {
+    const currentTimestamp = new Date().toISOString()
+    const sourceWindowStart = compareBaseline?.effective_from ?? compareBaseline?.updated_at ?? null
+    const sourceWindowEnd = activeBaseline?.updated_at ?? null
     if (diffItems.length > 0) {
       return diffItems.slice(0, 6).map((item) => ({
         id: `baseline-revision-${item.id}`,
@@ -1075,6 +1441,23 @@ export default function BaselinePage() {
         summary: item.note ?? `${item.before} → ${item.after}`,
         source: `来自${item.kind}差异`,
         tag: item.kind,
+        priority: item.kind === '里程碑变动' || item.kind === '移除' ? 'high' : item.kind === '修改' ? 'medium' : 'low',
+        severity: item.kind === '移除' ? 'critical' : item.kind === '里程碑变动' ? 'high' : item.kind === '修改' ? 'medium' : 'low',
+        source_type: 'observation',
+        source_id: item.id,
+        reason: item.note ?? `${item.before} → ${item.after}`,
+        status: 'open',
+        observation_window_start: sourceWindowStart,
+        observation_window_end: sourceWindowEnd,
+        affects_critical_milestone: item.kind === '里程碑变动' || item.kind === '移除',
+        consecutive_cross_month_count: item.kind === '移除' ? 2 : 1,
+        deferred_reason: null,
+        review_due_at: null,
+        reviewed_by: null,
+        submitted_at: null,
+        reviewed_at: null,
+        created_at: currentTimestamp,
+        updated_at: currentTimestamp,
       }))
     }
 
@@ -1084,14 +1467,45 @@ export default function BaselinePage() {
       summary: describeBaselineItem(item),
       source: '来自当前基线结构',
       tag: item.is_milestone ? '里程碑' : item.is_critical ? '关键路径' : '基线条目',
+      priority: item.is_critical ? 'high' : item.is_milestone ? 'medium' : 'low',
+      severity: item.is_critical ? 'high' : item.is_milestone ? 'medium' : 'low',
+      source_type: 'manual',
+      source_id: item.id,
+      reason: describeBaselineItem(item),
+      status: 'open',
+      observation_window_start: sourceWindowStart,
+      observation_window_end: sourceWindowEnd,
+      affects_critical_milestone: Boolean(item.is_milestone),
+      consecutive_cross_month_count: item.is_milestone ? 1 : 0,
+      deferred_reason: null,
+      review_due_at: null,
+      reviewed_by: null,
+      submitted_at: null,
+      reviewed_at: null,
+      created_at: currentTimestamp,
+      updated_at: currentTimestamp,
     }))
-  }, [diffItems, editorItems])
+  }, [
+    activeBaseline?.effective_from,
+    activeBaseline?.updated_at,
+    compareBaseline?.effective_from,
+    compareBaseline?.updated_at,
+    diffItems,
+    editorItems,
+  ])
+  const revisionCandidates = useMemo<BaselineRevisionCandidate[]>(() => {
+    if (revisionPoolData) {
+      return (Array.isArray(revisionPoolData.items) ? revisionPoolData.items : []).map(mapRevisionPoolCandidate)
+    }
+    return localRevisionCandidates
+  }, [localRevisionCandidates, revisionPoolData])
   useEffect(() => {
     if (!revisionCandidates.length) {
       setRevisionActiveCandidateId(null)
       setRevisionBasketIds([])
       setRevisionDeferredCandidateIds([])
       setRevisionDeferredReason('')
+      setRevisionDeferredReviewDueAt('')
       setRevisionDeferredReasonVisible(false)
       return
     }
@@ -1118,9 +1532,15 @@ export default function BaselinePage() {
   )
   const revisionPriorityLabel = useMemo(() => {
     if (!revisionCandidates.length) return '暂无候选'
-    if (diffItems.some((item) => item.kind === '里程碑变动' || item.kind === '移除')) return '高优先级'
+    if (
+      revisionCandidates.some((item) =>
+        ['critical', 'high'].includes(String(item.priority ?? item.severity ?? '').toLowerCase()),
+      )
+    ) {
+      return '高优先级'
+    }
     return '待整理'
-  }, [diffItems, revisionCandidates.length])
+  }, [revisionCandidates])
   const mappingSummary = useMemo(() => {
     const total = editorItems.length
     const attention = editorItems.filter((item) => item.mapping_status === 'pending').length
@@ -1153,13 +1573,64 @@ export default function BaselinePage() {
       current.includes(revisionActiveCandidate.id) ? current : [...current, revisionActiveCandidate.id],
     )
     setRevisionDeferredReasonVisible(true)
+    setRevisionDeferredReviewDueAt((current) => current || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10))
     setStatusNotice(`已把“${revisionActiveCandidate.title}”标记为暂不处理。`)
   }, [revisionActiveCandidate])
 
-  const handleRevisionEnterDraft = useCallback(() => {
-    setRevisionPoolOpen(false)
-    setStatusNotice('已带着修订候选回到基线草稿，可继续在当前树表中处理。')
-  }, [])
+  const handleRevisionEnterDraft = useCallback(async () => {
+    if (!activeBaseline) {
+      setRevisionPoolOpen(false)
+      return
+    }
+
+    setActionLoading('save')
+    try {
+      const selectedCandidateIds = Array.from(new Set([...revisionBasketIds, ...revisionDeferredCandidateIds]))
+      const result = await apiPost<{ revision_id?: string }>(`/api/task-baselines/${activeBaseline.id}/revisions`, {
+        baseline_version_id: activeBaseline.id,
+        reason: revisionDeferredReason.trim() || '从修订候选进入修订草稿',
+        source_candidate_ids: selectedCandidateIds,
+      })
+      await loadBaselineContext({ preferredId: result.revision_id ?? activeBaseline.id })
+      setStatusNotice('已发起基线修订，可继续在基线页完成整理。')
+    } catch (error) {
+      toast({
+        title: '进入修订草稿失败',
+        description: getApiErrorMessage(error, '请稍后重试。'),
+        variant: 'destructive',
+      })
+    } finally {
+      setActionLoading(null)
+      setRevisionPoolOpen(false)
+    }
+  }, [activeBaseline, loadBaselineContext, revisionBasketIds, revisionDeferredCandidateIds, revisionDeferredReason, toast])
+
+  const handleAddSiblingItem = useCallback((itemId: string) => {
+    if (readOnly) return
+    const targetIndex = editorItems.findIndex((item) => item.id === itemId)
+    if (targetIndex < 0) return
+
+    const target = editorItems[targetIndex]
+    const nextItem: BaselineItem = {
+      ...target,
+      id: `baseline-sibling-${Date.now()}-${targetIndex}`,
+      title: `${target.title}（新同级）`,
+      sort_order: target.sort_order + 1,
+      parent_item_id: target.parent_item_id ?? null,
+      source_task_id: target.source_task_id ?? null,
+      source_milestone_id: target.source_milestone_id ?? null,
+      template_id: target.template_id ?? null,
+      template_node_id: target.template_node_id ?? null,
+      mapping_status: target.mapping_status === 'missing' ? 'pending' : (target.mapping_status ?? 'pending'),
+      notes: target.notes ?? null,
+    }
+
+    const nextItems = [...editorItems]
+    nextItems.splice(targetIndex + 1, 0, nextItem)
+    const normalizedNextItems = nextItems.map((item, index) => ({ ...item, sort_order: index }))
+    commitSnapshot(normalizedNextItems, [...normalizedSelectedItemIds, nextItem.id])
+    setStatusNotice(`已在“${target.title}”后新增一个同级条目。`)
+  }, [commitSnapshot, editorItems, normalizedSelectedItemIds, readOnly])
 
   const unsavedChangesGuard = useUnsavedChangesGuard(
     Boolean(isDirty),
@@ -1186,7 +1657,9 @@ export default function BaselinePage() {
     if (nextCompareId === activeBaseline.id) return
 
     try {
-      const detail = await apiGet<BaselineDetail>(`/api/task-baselines/${nextCompareId}`)
+      const detail = await apiGet<BaselineDetail>(
+        `/api/task-baselines/${nextCompareId}?project_id=${encodeURIComponent(projectId)}`,
+      )
       compareVersionPreferenceRef.current = nextCompareId
       setCompareVersionId(nextCompareId)
       setCompareBaseline(detail)
@@ -1202,19 +1675,7 @@ export default function BaselinePage() {
     active: tab.key === 'baseline',
     onClick: () => {
       if (!projectId || tab.key === 'baseline') return
-      if (tab.key === 'monthly') {
-        navigateWithGuard(`/projects/${projectId}/planning/monthly`)
-        return
-      }
-      if (tab.key === 'revision-pool') {
-        navigateWithGuard(`/projects/${projectId}/planning/revision-pool`)
-        return
-      }
-      if (tab.key === 'change-log') {
-        navigateWithGuard(`/projects/${projectId}/reports?view=change_log`)
-        return
-      }
-      navigateWithGuard(`/projects/${projectId}/reports`)
+      navigateWithGuard(`/projects/${projectId}/planning/${tab.key}`)
     },
   }))
 
@@ -1234,11 +1695,13 @@ export default function BaselinePage() {
   }
 
   if (!activeBaseline) {
+    const creationDisabled = !canEdit || actionLoading === 'save'
+
     return (
       <PlanningPageShell
         projectName={currentProject?.name ?? '项目'}
-        title="基线编辑"
-        description=""
+        title="计划编制 / 项目基线"
+        description="从空白基线、当前排期或导入文件建立项目基线，并在树表里继续校核。"
         tabs={tabs}
       >
         {statusNotice ? (
@@ -1247,7 +1710,7 @@ export default function BaselinePage() {
           </Alert>
         ) : null}
 
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(280px,1fr)]">
+        <div className="space-y-4">
           <Card data-testid="baseline-entry-selector" className="border-slate-200 shadow-sm">
             <CardHeader>
               <CardTitle className="text-base">首版基线创建入口</CardTitle>
@@ -1256,60 +1719,68 @@ export default function BaselinePage() {
               <button
                 type="button"
                 data-testid="baseline-entry-blank"
-                onClick={() => setStatusNotice('已选择“新建空白基线”')}
-                className="rounded-2xl border border-slate-200 bg-white px-4 py-4 text-left transition hover:border-slate-300"
+                onClick={() => void handleCreateBlankBaseline()}
+                disabled={creationDisabled}
+                className="group flex min-h-[172px] flex-col justify-between rounded-3xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60"
               >
-                <div className="text-sm font-medium text-slate-900">新建空白基线</div>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-100 text-slate-700 transition group-hover:bg-slate-900 group-hover:text-white">
+                    <FilePlus2 className="h-5 w-5" />
+                  </div>
+                  <Badge variant="outline">空白基线</Badge>
+                </div>
+                <div className="space-y-2">
+                  <div className="text-base font-semibold text-slate-900">新建空白基线</div>
+                  <p className="text-sm leading-6 text-slate-500">
+                    从零开始搭建项目基线骨架，适合先手工整理再校核。
+                  </p>
+                </div>
               </button>
               <button
                 type="button"
                 data-testid="baseline-entry-schedule"
-                onClick={() => setStatusNotice('已选择“从当前排期生成”')}
-                className="rounded-2xl border border-cyan-200 bg-cyan-50 px-4 py-4 text-left transition hover:border-cyan-300"
+                onClick={() => void handleBootstrapFromSchedule()}
+                disabled={creationDisabled}
+                className="group flex min-h-[172px] flex-col justify-between rounded-3xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60"
               >
-                <div className="text-sm font-medium text-slate-900">从当前排期生成</div>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-cyan-100 text-cyan-700 transition group-hover:bg-cyan-600 group-hover:text-white">
+                    <Calendar className="h-5 w-5" />
+                  </div>
+                  <Badge variant="outline">当前排期</Badge>
+                </div>
+                <div className="space-y-2">
+                  <div className="text-base font-semibold text-slate-900">从当前排期生成</div>
+                  <p className="text-sm leading-6 text-slate-500">
+                    直接把当前排期整理成初始化基线，保留待确认映射再继续校核。
+                  </p>
+                </div>
               </button>
               <button
                 type="button"
                 data-testid="baseline-entry-import"
                 onClick={() => importInputRef.current?.click()}
-                className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-4 text-left transition hover:border-amber-300"
+                disabled={creationDisabled}
+                className="group flex min-h-[172px] flex-col justify-between rounded-3xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60"
               >
-                <div className="flex items-center justify-between gap-3 text-sm font-medium text-slate-900">
-                  <span>导入计划文件</span>
-                  <FileSpreadsheet className="h-4 w-4 text-amber-700" />
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-amber-100 text-amber-700 transition group-hover:bg-amber-600 group-hover:text-white">
+                    <FileSpreadsheet className="h-5 w-5" />
+                  </div>
+                  <Badge variant="outline">文件导入</Badge>
+                </div>
+                <div className="space-y-2">
+                  <div className="text-base font-semibold text-slate-900">导入计划文件</div>
+                  <p className="text-sm leading-6 text-slate-500">
+                    按表头映射导入计划文件，先预览 10 行再生成导入基线草稿。
+                  </p>
                 </div>
               </button>
             </CardContent>
           </Card>
-
-          <Card className="border-slate-200 shadow-sm">
-            <CardHeader>
-              <CardTitle className="text-base">下一步</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3 text-sm leading-6 text-slate-600">
-              <div className="grid gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="justify-between"
-                  onClick={() => navigateWithGuard(`/projects/${projectId}/planning/monthly`)}
-                >
-                  <span>先看月度计划壳子</span>
-                  <Badge variant="outline">Monthly</Badge>
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="justify-between"
-                  onClick={() => navigateWithGuard(`/projects/${projectId}/planning/revision-pool`)}
-                >
-                  <span>查看修订候选</span>
-                  <Badge variant="outline">Planning</Badge>
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-600">
+            只保留空白基线、当前排期和导入三种入口；进入基线后再在页内继续编辑、校核和确认。
+          </div>
         </div>
 
         <input
@@ -1360,9 +1831,62 @@ export default function BaselinePage() {
                   <div className="text-xs text-slate-500">预警提示</div>
                   <div className="mt-1 font-medium text-slate-900">{importPreview.warnings.length}</div>
                 </div>
+                <div className="rounded-2xl border border-white/80 bg-white px-4 py-3">
+                  <div className="text-xs text-slate-500">映射完成度</div>
+                  <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100">
+                    <div className="h-full rounded-full bg-amber-500 transition-all" style={{ width: `${importProgress}%` }} />
+                  </div>
+                  <div className="mt-2 text-sm font-medium text-slate-900">{importProgress}%</div>
+                </div>
               </div>
+              <div className="rounded-2xl border border-white/80 bg-white px-4 py-4 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <div className="text-sm font-medium text-slate-900">列映射</div>
+                    <div className="text-xs text-slate-500">把 Excel 表头对应到基线字段，再确认导入。</div>
+                  </div>
+                  <Badge variant="outline">
+                    {BASELINE_IMPORT_FIELD_CONFIG.filter((field) => Boolean(importPreview.mapping[field.key])).length}/
+                    {BASELINE_IMPORT_FIELD_CONFIG.length} 已匹配
+                  </Badge>
+                </div>
+                <div className="grid gap-3 md:grid-cols-2">
+                  {BASELINE_IMPORT_FIELD_CONFIG.map((field) => (
+                    <label key={field.key} className="block space-y-1">
+                      <span className="text-xs font-medium text-slate-500">
+                        {field.label}
+                        {field.required ? '（必填）' : '（可选）'}
+                      </span>
+                      <select
+                        data-testid={`baseline-import-mapping-${field.key}`}
+                        className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-slate-400"
+                        value={importPreview.mapping[field.key]}
+                        onChange={(event) => handleImportColumnMappingChange(field.key, event.target.value)}
+                      >
+                        <option value="">未映射</option>
+                        {importPreview.columns.map((column) => (
+                          <option key={column} value={column}>
+                            {column}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <label className="flex items-start gap-3 rounded-2xl border border-white/80 bg-white px-4 py-3">
+                <input
+                  type="checkbox"
+                  checked={importMappingConfirmed}
+                  onChange={(event) => setImportMappingConfirmed(event.target.checked)}
+                  className="mt-1 h-4 w-4 rounded border-slate-300 text-cyan-600"
+                />
+                <span className="text-sm leading-6 text-slate-700">
+                  已确认列映射与字段对应关系，再生成导入基线草稿
+                </span>
+              </label>
               <div className="space-y-2">
-                {importPreview.rows.slice(0, 4).map((row) => (
+                {importPreview.rows.slice(0, 10).map((row) => (
                   <div key={row.id} className="rounded-2xl border border-white/80 bg-white px-4 py-3">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="font-medium text-slate-900">{row.title}</span>
@@ -1375,8 +1899,8 @@ export default function BaselinePage() {
                     </div>
                   </div>
                 ))}
-                {importPreview.rows.length > 4 ? (
-                  <div className="text-xs text-slate-500">其余 {importPreview.rows.length - 4} 项会在生成草稿后进入基线树继续校核。</div>
+                {importPreview.rows.length > 10 ? (
+                  <div className="text-xs text-slate-500">其余 {importPreview.rows.length - 10} 项会在生成草稿后进入基线树继续校核。</div>
                 ) : null}
                 {importPreview.warnings.length > 0 ? (
                   <div className="rounded-2xl border border-amber-200 bg-white px-4 py-3 text-xs leading-5 text-amber-800">
@@ -1385,10 +1909,15 @@ export default function BaselinePage() {
                 ) : null}
               </div>
               <div className="flex flex-wrap gap-2">
-                <Button type="button" onClick={() => void handleCreateImportedBaseline()} loading={actionLoading === 'save'}>
+                <Button
+                  type="button"
+                  onClick={() => void handleCreateImportedBaseline()}
+                  loading={actionLoading === 'save'}
+                  disabled={!canEdit || !importMappingConfirmed}
+                >
                   生成导入基线草稿
                 </Button>
-                <Button type="button" variant="outline" onClick={() => importInputRef.current?.click()}>
+                <Button type="button" variant="outline" onClick={() => importInputRef.current?.click()} disabled={!canEdit}>
                   重新选择文件
                 </Button>
               </div>
@@ -1402,8 +1931,8 @@ export default function BaselinePage() {
   return (
     <PlanningPageShell
       projectName={currentProject?.name ?? '项目'}
-      title="基线编辑"
-      description=""
+      title="计划编制 / 项目基线"
+      description="继续对比、修订和确认当前项目基线。"
       tabs={tabs}
       actions={
         <div className="flex flex-wrap items-center gap-2">
@@ -1415,6 +1944,7 @@ export default function BaselinePage() {
               data-testid="baseline-queue-realignment"
               onClick={() => void handleQueueRealignment()}
               loading={actionLoading === 'queue_realign'}
+              disabled={actionLoading === 'queue_realign'}
             >
               声明开始重排
             </Button>
@@ -1426,11 +1956,12 @@ export default function BaselinePage() {
               data-testid="baseline-resolve-realignment"
               onClick={() => void handleResolveRealignment()}
               loading={actionLoading === 'resolve_realign'}
+              disabled={actionLoading === 'resolve_realign'}
             >
               结束重排
             </Button>
           ) : null}
-          {activeBaseline.status === 'draft' ? (
+          {canForceUnlock ? (
             <Button
               type="button"
               variant="outline"
@@ -1453,21 +1984,16 @@ export default function BaselinePage() {
 
       <PlanningWorkspaceLayers
         summary={
-          <div data-testid="baseline-info-bar" className="grid gap-3 xl:grid-cols-5">
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm text-slate-500">版本对照</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-1 text-sm text-slate-700">
-                <div className="text-lg font-semibold text-slate-900">{compareLabel} → {currentLabel}</div>
-                <div>{currentLabel} · {formatStatusLabel(activeBaseline.status)} · {editorItems.length} 项</div>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm text-slate-500">当前状态</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-1 text-sm text-slate-700">
+          <div
+            data-testid="baseline-info-bar"
+            className="rounded-3xl border border-slate-200 bg-white px-5 py-4 shadow-sm"
+          >
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1fr)]">
+              <div className="space-y-2">
+                <div className="text-sm font-medium text-slate-500">版本对照</div>
+                <div className="text-lg font-semibold text-slate-900">
+                  {compareLabel} → {currentLabel}
+                </div>
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge variant={readOnly ? 'outline' : 'secondary'}>{readOnly ? '只读查看态' : '可编辑态'}</Badge>
                   <Badge variant="outline">{formatStatusLabel(activeBaseline.status)}</Badge>
@@ -1484,7 +2010,7 @@ export default function BaselinePage() {
                     {validityLabel}
                   </Badge>
                 </div>
-                <div>{buildBaselineStatusNotice(activeBaseline.status, compareLabel)}</div>
+                <div className="text-sm text-slate-600">{buildBaselineStatusNotice(activeBaseline.status, compareLabel)}</div>
                 <div className="text-xs text-slate-500">阈值结果：{validityHint}</div>
                 {activeBaseline.status === 'pending_realign' ? (
                   <div
@@ -1499,51 +2025,39 @@ export default function BaselinePage() {
                     该版本已归档，适合作为修订前后的历史参照，不再参与当前编制动作。
                   </div>
                 ) : null}
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm text-slate-500">映射完整性</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-2 text-sm text-slate-700">
-                <div className="text-lg font-semibold text-amber-700">
-                  {mappingSummary.aligned} / {mappingSummary.total}
+              </div>
+              <div className="space-y-2">
+                <div className="text-sm font-medium text-slate-500">校核与映射</div>
+                <div className="flex flex-wrap gap-2">
+                  <Badge variant="outline">
+                    映射 {mappingSummary.aligned} / {mappingSummary.total}
+                  </Badge>
+                  <Badge variant="outline">已修改 {modifiedItemCount}</Badge>
+                  <Badge variant="outline">里程碑 {milestoneChangeCount}</Badge>
+                  <Badge variant="outline">关键路径 {criticalPathChangeCount}</Badge>
+                  <Badge variant="outline">受影响映射 {mappingAffectedCount}</Badge>
                 </div>
                 <Button
                   type="button"
                   size="sm"
                   variant={filterMode === 'mapping_attention' ? 'default' : 'outline'}
                   onClick={() =>
-                    setFilterMode((current) =>
-                      current === 'mapping_attention' ? 'all' : 'mapping_attention',
-                    )
+                    setFilterMode((current) => (current === 'mapping_attention' ? 'all' : 'mapping_attention'))
                   }
                   data-testid="baseline-filter-mapping-attention"
                 >
-                  {mappingSummary.attention > 0
-                    ? `${mappingSummary.attention} 项待补齐`
-                    : '当前映射已全部对齐'}
+                  {mappingSummary.attention > 0 ? `${mappingSummary.attention} 项待补齐` : '当前映射已全部对齐'}
                 </Button>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm text-slate-500">最近暂存</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-1 text-sm text-slate-700">
-                <div className="text-lg font-semibold text-slate-900">
-                  {activeBaseline.updated_at ?? '暂无'}
+              </div>
+              <div className="space-y-3">
+                <div className="text-sm font-medium text-slate-500">修订与留痕</div>
+                <div className="text-lg font-semibold text-slate-900">{activeBaseline.updated_at ?? '暂无'}</div>
+                <div className="flex flex-wrap gap-2">
+                  <Badge variant="outline">版本 {versions.length}</Badge>
+                  <Badge variant="secondary">{revisionCandidates.length} 项候选</Badge>
+                  <Badge variant="outline">当前视图 {filteredRows.length} 项</Badge>
+                  <Badge variant="outline">已选 {normalizedSelectedItemIds.length} 项</Badge>
                 </div>
-                <div>当前视图 {filteredRows.length} 项</div>
-                <div>已选 {normalizedSelectedItemIds.length} 项</div>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm text-slate-500">修订与留痕</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-2 text-sm text-slate-700">
-                <div>共 {versions.length} 个版本</div>
                 <div className="grid gap-2">
                   <Button
                     type="button"
@@ -1565,10 +2079,11 @@ export default function BaselinePage() {
                   <Button
                     type="button"
                     size="sm"
-                    variant="outline"
-                    className="justify-between"
-                    onClick={() => navigateWithGuard(`/projects/${projectId}/reports?view=change_log`)}
-                  >
+                  variant="outline"
+                  className="justify-between"
+                  onClick={() => navigateWithGuard(`/projects/${projectId}/reports?view=change_log`)}
+                  data-testid="baseline-open-change-log"
+                >
                     <span className="flex items-center gap-2">
                       <History className="h-4 w-4" />
                       变更记录分析
@@ -1576,8 +2091,8 @@ export default function BaselinePage() {
                     <Badge variant="outline">Reports</Badge>
                   </Button>
                 </div>
-              </CardContent>
-            </Card>
+              </div>
+            </div>
           </div>
         }
         sectionHeader={
@@ -1677,21 +2192,28 @@ export default function BaselinePage() {
                 <CardTitle className="text-base">历史版本对比</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
-                <div className="flex flex-wrap gap-2">
-                  {versions.map((version) => (
-                    <Button
-                      key={version.id}
-                      type="button"
-                      size="sm"
-                      variant={activeBaseline.id === version.id ? 'default' : 'outline'}
-                      data-testid={`baseline-version-chip-${version.id}`}
-                      onClick={() => void loadBaselineContext({ preferredId: version.id })}
-                      disabled={actionLoading !== null && activeBaseline.id === version.id}
-                    >
-                      v{version.version} · {formatStatusLabel(version.status)}
-                    </Button>
-                  ))}
-                </div>
+                <Tabs
+                  value={activeBaseline.id}
+                  onValueChange={(value) => {
+                    if (value && value !== activeBaseline.id) {
+                      void loadBaselineContext({ preferredId: value })
+                    }
+                  }}
+                >
+                  <TabsList className="flex h-auto w-full flex-wrap justify-start gap-2 bg-transparent p-0">
+                    {versions.map((version) => (
+                      <TabsTrigger
+                        key={version.id}
+                        value={version.id}
+                        data-testid={`baseline-version-chip-${version.id}`}
+                        className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-600 data-[state=active]:border-slate-900 data-[state=active]:bg-slate-900 data-[state=active]:text-white"
+                        disabled={actionLoading !== null && activeBaseline.id === version.id}
+                      >
+                        v{version.version} · {formatStatusLabel(version.status)}
+                      </TabsTrigger>
+                    ))}
+                  </TabsList>
+                </Tabs>
                 <label className="block space-y-2">
                   <span className="text-xs font-medium uppercase tracking-[0.16em] text-slate-500">对比版本</span>
                   <select
@@ -1770,38 +2292,6 @@ export default function BaselinePage() {
                 </div>
               </CardContent>
             </Card>
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">版本侧栏</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <div className="text-sm text-slate-600">{compareLabel} → {currentLabel}</div>
-                <Button type="button" className="w-full" onClick={handleOpenConfirmDialog}>
-                  <FileDiff className="mr-2 h-4 w-4" />
-                  进入确认发布
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="w-full"
-                  onClick={() => navigateWithGuard(`/projects/${projectId}/planning/revision-pool`)}
-                  data-testid="baseline-open-revision-pool"
-                >
-                  <FolderGit2 className="mr-2 h-4 w-4" />
-                  打开计划修订候选
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="w-full"
-                  onClick={() => navigateWithGuard(`/projects/${projectId}/reports?view=change_log`)}
-                  data-testid="baseline-open-change-log"
-                >
-                  <History className="mr-2 h-4 w-4" />
-                  查看变更日志
-                </Button>
-              </CardContent>
-            </Card>
           </div>
         }
       />
@@ -1823,6 +2313,8 @@ export default function BaselinePage() {
         onBatchDelete={handleBatchDelete}
         onBatchShift={handleBatchShift}
         onBatchSetProgress={handleBatchSetProgress}
+        onOpenConfirm={handleOpenConfirmDialog}
+        confirmDisabled={readOnly || noDiff || Boolean(confirmDisabledReason)}
         onUndo={handleUndo}
         onRedo={handleRedo}
         onSaveDraft={handleSaveDraft}
@@ -1835,12 +2327,16 @@ export default function BaselinePage() {
           fromVersionLabel: compareLabel,
           toVersionLabel: currentLabel,
           items: diffItems,
+          modifiedItemCount: activeBaseline.modified_item_count ?? diffItems.length,
+          milestoneChangeCount: activeBaseline.milestone_change_count ?? diffItems.filter((item) => item.kind === '里程碑变动').length,
+          criticalPathChangeCount: activeBaseline.critical_path_change_count ?? diffItems.filter((item) => item.kind === '修改' || item.kind === '里程碑变动').length,
+          mappingAffectedCount: activeBaseline.mapping_affected_count ?? editorItems.filter((item) => item.mapping_status === 'pending').length,
         }}
         state={confirmState}
         failureCode={confirmFailure?.code ?? null}
         failureMessage={confirmFailure?.message ?? null}
-        canConfirm={!confirmDisabledReason}
-        confirmDisabledReason={confirmDisabledReason}
+        canConfirm={!confirmDisabledReason && !noDiff}
+        confirmDisabledReason={noDiff ? '当前版本与对比版本没有差异。' : confirmDisabledReason}
         confirming={actionLoading === 'confirm'}
         onConfirm={handleConfirm}
         onRetry={handleConfirm}
@@ -1852,16 +2348,21 @@ export default function BaselinePage() {
         open={revisionPoolOpen}
         sourceEntryLabel="基线信息带入口"
         candidates={revisionCandidates}
+        summary={revisionPoolData?.summary ?? null}
         basketItems={revisionBasketItems}
         activeCandidateId={revisionActiveCandidate?.id ?? null}
         deferredCandidateIds={revisionDeferredCandidateIds}
         deferredReason={revisionDeferredReason}
         deferredReasonVisible={revisionDeferredReasonVisible}
+        deferredReviewDueAt={revisionDeferredReviewDueAt}
+        canEnterDraft={revisionBasketItems.length > 0 || Boolean(revisionDeferredReason.trim())}
+        errorMessage={revisionPoolError}
         onOpenChange={setRevisionPoolOpen}
         onSelectCandidate={setRevisionActiveCandidateId}
         onAddToBasket={handleRevisionAddToBasket}
         onMarkDeferred={handleRevisionMarkDeferred}
         onDeferredReasonChange={setRevisionDeferredReason}
+        onDeferredReviewDueAtChange={setRevisionDeferredReviewDueAt}
         onEnterDraft={handleRevisionEnterDraft}
         onRemoveFromBasket={(candidateId) => {
           setRevisionBasketIds((current) => current.filter((id) => id !== candidateId))

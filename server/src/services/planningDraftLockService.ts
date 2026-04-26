@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { normalizeProjectPermissionLevel } from '../auth/access.js'
 import { logger } from '../middleware/logger.js'
 import { supabase } from './dbService.js'
+import { writeLog } from './changeLogs.js'
 import {
   PLANNING_DRAFT_LOCK_REMINDER_MINUTES,
   PLANNING_DRAFT_LOCK_TIMEOUT_MINUTES,
@@ -112,6 +113,7 @@ async function writeNotification(params: {
     id: uuidv4(),
     project_id: params.projectId,
     type: params.type,
+    notification_type: params.type,
     severity: params.severity,
     title: params.title,
     content: params.content,
@@ -385,6 +387,21 @@ export class PlanningDraftLockService {
         },
       })
     }
+
+    if (reason === 'force_unlock') {
+      await writeLog({
+        project_id: lock.project_id,
+        entity_type: 'draft_lock',
+        entity_id: lock.resource_id,
+        field_name: 'force_unlock',
+        old_value: lock.locked_by,
+        new_value: 'unlocked',
+        change_reason: note ?? 'force_unlock',
+        changed_by: actorUserId,
+        change_source: 'manual_adjusted',
+      })
+    }
+
     return normalized
   }
 }

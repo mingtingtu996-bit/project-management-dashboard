@@ -44,7 +44,7 @@ export const isPendingCondition = (condition: any): boolean => {
 
 export const isActiveRisk = (risk: any): boolean => {
   const status = normalizeStatus(risk?.status)
-  return !['resolved', '已解决', 'mitigated', 'closed'].includes(status)
+  return !['closed', '已关闭'].includes(status)
 }
 
 export const isCompletedMilestone = (milestone: any): boolean => {

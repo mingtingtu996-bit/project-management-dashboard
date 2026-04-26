@@ -133,6 +133,35 @@ describe('acceptanceApi canonical contract', () => {
     })
   })
 
+  it('loads the backend acceptance summary contract without client-side aggregation', async () => {
+    mocks.authFetch.mockResolvedValueOnce({
+      totalCount: 7,
+      passedCount: 2,
+      inProgressCount: 3,
+      notStartedCount: 1,
+      blockedCount: 1,
+      dueSoon30dCount: 2,
+      keyMilestoneCount: 4,
+      completionRate: 29,
+    })
+
+    const summary = await acceptanceApi.getProjectSummary('project-1')
+
+    expect(mocks.authFetch).toHaveBeenCalledWith(
+      '/api/projects/project-1/acceptance-summary',
+      {
+        headers: { 'Content-Type': 'application/json' },
+        cache: 'no-store',
+      },
+    )
+    expect(summary).toMatchObject({
+      totalCount: 7,
+      blockedCount: 1,
+      dueSoon30dCount: 2,
+      keyMilestoneCount: 4,
+    })
+  })
+
   it('bypasses cache for requirement reads so the detail drawer sees the latest truth', async () => {
     mocks.authFetch.mockResolvedValueOnce([
       {
@@ -157,5 +186,115 @@ describe('acceptanceApi canonical contract', () => {
         cache: 'no-store',
       },
     )
+  })
+
+  it('connects custom type management to acceptance catalog endpoints', async () => {
+    mocks.authFetch
+      .mockResolvedValueOnce([
+        {
+          id: 'catalog-1',
+          project_id: 'project-1',
+          catalog_code: '专项验收',
+          catalog_name: '专项验收',
+          phase_code: 'special_acceptance',
+          scope_level: 'specialty',
+          category: '专项',
+          planned_finish_date: '2026-05-30',
+          description: '扩展类型',
+          is_system: false,
+        },
+      ])
+      .mockResolvedValueOnce({
+        id: 'catalog-2',
+        project_id: 'project-1',
+        catalog_code: '竣备',
+        catalog_name: '竣工备案补充',
+        phase_code: 'filing_archive',
+        scope_level: 'project',
+        category: '备案',
+        planned_finish_date: '2026-06-15',
+        description: '补充类型',
+        is_system: false,
+      })
+      .mockResolvedValueOnce(undefined)
+
+    const list = await acceptanceApi.getCustomTypes('project-1')
+    const created = await acceptanceApi.createCustomType(
+        {
+          name: '竣工备案补充',
+          shortName: '竣备',
+          color: '#123456',
+          icon: '验',
+          phaseCode: 'filing_archive',
+          scopeLevel: 'project',
+          plannedFinishDate: '2026-06-15',
+          category: '备案',
+          defaultDependsOn: ['four_party'],
+          sortOrder: 7,
+        },
+      'project-1',
+    )
+    await acceptanceApi.deleteCustomType('catalog-2')
+
+    expect(mocks.authFetch).toHaveBeenNthCalledWith(
+      1,
+      '/api/acceptance-catalog?projectId=project-1',
+      {
+        headers: { 'Content-Type': 'application/json' },
+        cache: 'no-store',
+      },
+    )
+    expect(mocks.authFetch).toHaveBeenNthCalledWith(
+      2,
+      '/api/acceptance-catalog',
+      expect.objectContaining({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    expect(JSON.parse(String(mocks.authFetch.mock.calls[1][1]?.body))).toMatchObject({
+      project_id: 'project-1',
+      catalog_code: '竣备',
+      catalog_name: '竣工备案补充',
+      phase_code: 'filing_archive',
+      scope_level: 'project',
+      category: '备案',
+      planned_finish_date: '2026-06-15',
+      description: null,
+      is_system: false,
+    })
+    expect(mocks.authFetch).toHaveBeenNthCalledWith(
+      3,
+      '/api/acceptance-catalog/catalog-2',
+      {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+      },
+    )
+
+    expect(list[0]).toMatchObject({
+      id: 'catalog-1',
+      name: '专项验收',
+      shortName: '专项验收',
+      isSystem: false,
+      description: '扩展类型',
+      phaseCode: 'special_acceptance',
+      scopeLevel: 'specialty',
+      plannedFinishDate: '2026-05-30',
+      category: '专项',
+    })
+    expect(created).toMatchObject({
+      id: 'catalog-2',
+      name: '竣工备案补充',
+      shortName: '竣备',
+      color: '#123456',
+      icon: '验',
+      phaseCode: 'filing_archive',
+      scopeLevel: 'project',
+      plannedFinishDate: '2026-06-15',
+      category: '备案',
+      defaultDependsOn: ['four_party'],
+      sortOrder: 7,
+    })
   })
 })

@@ -6,6 +6,8 @@ export type TaskContextMenuState = {
   x: number
   y: number
   task: Task
+  hasManualAttentionOverride?: boolean
+  hasManualInsertOverride?: boolean
 }
 
 export function TaskContextMenu({
@@ -35,8 +37,11 @@ export function TaskContextMenu({
   onMarkCriticalPathAttention?: (taskId: string) => void
   onInsertBeforeChain?: (taskId: string) => void
   onInsertAfterChain?: (taskId: string) => void
-  onRemoveCriticalPathOverride?: (taskId: string) => void
+  onRemoveCriticalPathOverride?: (taskId: string, mode?: 'manual_attention' | 'manual_insert') => void
 }) {
+  const hasManualAttentionOverride = Boolean(contextMenu.hasManualAttentionOverride)
+  const hasManualInsertOverride = Boolean(contextMenu.hasManualInsertOverride)
+
   return (
     <>
       <div
@@ -171,7 +176,7 @@ export function TaskContextMenu({
             插到主链后面
           </button>
         )}
-        {onRemoveCriticalPathOverride && (
+        {onRemoveCriticalPathOverride && !hasManualAttentionOverride && !hasManualInsertOverride && (
           <button
             className="w-full text-left px-3 py-1.5 hover:bg-slate-50 text-slate-600 flex items-center gap-2"
             data-testid="gantt-task-context-menu-remove-critical"
@@ -182,6 +187,32 @@ export function TaskContextMenu({
           >
             <GitBranch className="h-3.5 w-3.5" />
             取消手动标记
+          </button>
+        )}
+        {onRemoveCriticalPathOverride && hasManualAttentionOverride && (
+          <button
+            className="w-full text-left px-3 py-1.5 hover:bg-slate-50 text-slate-600 flex items-center gap-2"
+            data-testid="gantt-task-context-menu-remove-critical-attention"
+            onClick={() => {
+              onRemoveCriticalPathOverride(contextMenu.task.id, 'manual_attention')
+              onClose()
+            }}
+          >
+            <GitBranch className="h-3.5 w-3.5" />
+            取消关注
+          </button>
+        )}
+        {onRemoveCriticalPathOverride && hasManualInsertOverride && (
+          <button
+            className="w-full text-left px-3 py-1.5 hover:bg-slate-50 text-slate-600 flex items-center gap-2"
+            data-testid="gantt-task-context-menu-remove-critical-insert"
+            onClick={() => {
+              onRemoveCriticalPathOverride(contextMenu.task.id, 'manual_insert')
+              onClose()
+            }}
+          >
+            <GitBranch className="h-3.5 w-3.5" />
+            取消插链
           </button>
         )}
         <button

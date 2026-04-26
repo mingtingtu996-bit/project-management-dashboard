@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { WbsTemplate, ApiResponse } from '../types'
 import { API_BASE, withCredentials } from '../utils'
 import { Button } from '@/components/ui/button'
+import { useParams } from 'react-router-dom'
 import { IconX } from './WbsIcons'
 
 export function EditModal({
@@ -13,6 +14,7 @@ export function EditModal({
   onClose: () => void
   onSuccess?: () => void
 }) {
+  const { id: projectId = '' } = useParams<{ id: string }>()
   const [name, setName] = useState(template.name)
   const [templateType, setTemplateType] = useState(template.template_type || '住宅')
   const [description, setDescription] = useState(template.description || '')
@@ -31,6 +33,7 @@ export function EditModal({
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          project_id: projectId,
           name: name.trim(),
           template_type: templateType,
           description: description.trim(),

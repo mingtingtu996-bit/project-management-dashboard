@@ -56,7 +56,7 @@ interface AuthContextType {
   updateProfile: (data: { display_name?: string; email?: string }) => Promise<ProfileActionResult>
 }
 
-const AuthContext = createContext<AuthContextType | undefined>(undefined)
+export const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [authState, setAuthState] = useState<AuthState>({

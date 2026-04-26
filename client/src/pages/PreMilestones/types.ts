@@ -43,6 +43,9 @@ export interface PreMilestoneCondition {
   condition_name: string
   description?: string
   status: '待满足' | '已满足' | '未满足' | '已确认' | string
+  is_satisfied?: boolean
+  responsible_person?: string
+  due_date?: string
   target_date?: string
   completed_date?: string
   completed_by?: string
@@ -171,6 +174,17 @@ export interface CertificateBoardItem {
   issuing_authority?: string | null
 }
 
+export interface CertificateBoardCriticalItem {
+  itemType: 'certificate' | 'work_item'
+  itemId: string
+  title: string
+  status: string
+  plannedFinishDate?: string | null
+  dueDate?: string | null
+  blockReason?: string | null
+  isOverdue: boolean
+}
+
 export interface CertificateSharedRibbonItem {
   work_item_id: string
   item_name: string
@@ -206,6 +220,8 @@ export interface CertificateWorkItem {
   notes?: string | null
   latest_record_at?: string | null
   certificate_ids?: string[]
+  linked_issue_id?: string | null
+  linked_risk_id?: string | null
   created_at: string
   updated_at: string
 }
@@ -310,6 +326,7 @@ export interface CertificateBoardSummary {
   overdueCount: number
   supplementCount: number
   weeklyActionCount: number
+  criticalItems: CertificateBoardCriticalItem[]
 }
 
 export interface CertificateBoardResponse {
@@ -333,6 +350,7 @@ export interface CertificateDetailResponse {
   dependencies: CertificateDependency[]
   records: CertificateStatusRecord[]
   dependencyMatrix: CertificateDependencyMatrixRow[]
+  conditions: PreMilestoneCondition[]
   linkedWarnings: CertificateLinkedWarning[]
   linkedIssues: CertificateLinkedIssue[]
   linkedRisks: CertificateLinkedRisk[]

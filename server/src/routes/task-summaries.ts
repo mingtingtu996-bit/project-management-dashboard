@@ -106,6 +106,83 @@ async function fetchTaskSummaryRows(
   return result.data ?? []
 }
 
+async function loadMonthlyFulfillmentTrend(projectId: string, months = 6) {
+  const safeMonths = Math.min(Math.max(Math.trunc(months), 1), 24)
+
+  const { data: plansData, error: plansError } = await supabase
+    .from('monthly_plans')
+    .select('id, month, status')
+    .eq('project_id', projectId)
+    .in('status', ['confirmed', 'closed'])
+    .order('month', { ascending: false })
+    .limit(safeMonths)
+
+  if (plansError) throw plansError
+
+  const plans = (plansData ?? []) as Array<{ id: string; month: string; status: string }>
+  if (plans.length === 0) {
+    return [] as Array<{ month: string; committedCount: number; fulfilledCount: number; rate: number }>
+  }
+
+  const planIds = plans.map((plan) => plan.id)
+  const { data: itemsData, error: itemsError } = await supabase
+    .from('monthly_plan_items')
+    .select('monthly_plan_version_id, source_task_id, commitment_status')
+    .in('monthly_plan_version_id', planIds)
+
+  if (itemsError) throw itemsError
+
+  const items = (itemsData ?? []) as Array<{
+    monthly_plan_version_id: string
+    source_task_id: string | null
+    commitment_status: string | null
+  }>
+
+  const taskIds = [...new Set(items.map((item) => item.source_task_id).filter(Boolean))] as string[]
+  const { data: tasksData, error: tasksError } = taskIds.length > 0
+    ? await supabase.from('tasks').select('id, status, progress').in('id', taskIds)
+    : { data: [], error: null }
+
+  if (tasksError) throw tasksError
+
+  const taskStatusMap = new Map(
+    (tasksData ?? []).map((task: { id: string; status: string; progress: number | null }) => [
+      task.id,
+      { status: task.status, progress: task.progress },
+    ]),
+  )
+
+  return plans
+    .map((plan) => {
+      const planItems = items.filter(
+        (item) =>
+          item.monthly_plan_version_id === plan.id &&
+          item.commitment_status !== 'cancelled' &&
+          item.commitment_status !== null,
+      )
+      const committedCount = planItems.length
+
+      const fulfilledCount = planItems.filter((item) => {
+        if (!item.source_task_id) return false
+        const taskStatus = taskStatusMap.get(item.source_task_id)
+        if (!taskStatus) return false
+        const status = String(taskStatus.status ?? '').trim().toLowerCase()
+        const progress = Number(taskStatus.progress ?? 0)
+        return status === 'completed' || status === 'done' || status === '已完成' || progress >= 100
+      }).length
+
+      const rate = committedCount > 0 ? Math.round((fulfilledCount / committedCount) * 100) : 0
+
+      return {
+        month: plan.month,
+        committedCount,
+        fulfilledCount,
+        rate,
+      }
+    })
+    .reverse()
+}
+
 // 获取任务总结
 router.get('/tasks/:taskId/summary', validate(taskIdParamSchema, 'params'), asyncHandler(async (req, res) => {
   const { taskId } = req.params
@@ -258,11 +335,13 @@ router.get('/projects/:id/task-summary', validateIdParam, asyncHandler(async (re
   )
 
   const timelineReadyPromise = isTaskTimelineEventStoreReady(projectId)
+  const monthlyFulfillmentPromise = loadMonthlyFulfillmentTrend(projectId)
 
-  const [milestones, tasks, timelineReady] = await Promise.all([
+  const [milestones, tasks, timelineReady, monthlyFulfillment] = await Promise.all([
     milestonesPromise,
     tasksPromise,
     timelineReadyPromise,
+    monthlyFulfillmentPromise,
   ])
 
   const taskIds = (tasks || []).map((t: any) => t.id)
@@ -410,7 +489,7 @@ router.get('/projects/:id/task-summary', validateIdParam, asyncHandler(async (re
 
   const response: ApiResponse = {
     success: true,
-    data: { stats, groups, timeline_events: timelineEvents, timeline_ready: timelineReady },
+    data: { stats, groups, monthlyFulfillment, timeline_events: timelineEvents, timeline_ready: timelineReady },
     timestamp: new Date().toISOString(),
   }
   res.json(response)

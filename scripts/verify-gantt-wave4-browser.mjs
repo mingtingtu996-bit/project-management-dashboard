@@ -14,7 +14,7 @@ const distIndexFile = join(repoRoot, 'client', 'dist', 'index.html')
 
 const baseUrl = process.env.BASE_URL || 'http://127.0.0.1:4173'
 const projectId = process.env.PROJECT_ID || '4cd542b4-1b59-4d66-a501-27dffc1b3a08'
-const advancedStorageKey = 'workbuddy_gantt_task_dialog_advanced'
+const legacyAdvancedStorageKey = 'workbuddy_gantt_task_dialog_advanced'
 
 function assert(condition, message) {
   if (!condition) {
@@ -644,22 +644,24 @@ async function main() {
     await page.getByTestId('gantt-task-context-menu').waitFor({ state: 'visible' })
     await page.getByTestId('gantt-task-context-menu-add-child').click()
     await page.getByText('上级任务：设计协调').waitFor({ state: 'visible' })
-    const advancedToggle = page.getByRole('button', { name: /更多字段/ })
+    const advancedToggle = page.getByRole('button', { name: /高级选项/ })
     await advancedToggle.waitFor({ state: 'visible' })
-    assert((await advancedToggle.getAttribute('aria-expanded')) === 'true', 'advanced section should default open')
+    assert((await advancedToggle.getAttribute('aria-expanded')) === 'false', 'advanced section should default collapsed')
+    await advancedToggle.click()
+    assert((await advancedToggle.getAttribute('aria-expanded')) === 'true', 'advanced section should expand')
     await advancedToggle.click()
     assert((await advancedToggle.getAttribute('aria-expanded')) === 'false', 'advanced section should collapse')
-    const persistedValue = await page.evaluate((key) => window.localStorage.getItem(key), advancedStorageKey)
-    assert(persistedValue === 'false', `advanced state expected false, got ${persistedValue}`)
+    const persistedValue = await page.evaluate((key) => window.localStorage.getItem(key), legacyAdvancedStorageKey)
+    assert(persistedValue === null, `advanced state should not use legacy localStorage, got ${persistedValue}`)
     await page.keyboard.press('Escape')
     await page.getByRole('dialog').waitFor({ state: 'detached' })
 
     await page.getByTestId('gantt-task-select-task-lagging-severe').click({ button: 'right' })
     await page.getByTestId('gantt-task-context-menu-add-child').click()
     await advancedToggle.waitFor({ state: 'visible' })
-    assert((await advancedToggle.getAttribute('aria-expanded')) === 'false', 'advanced state should restore from localStorage')
+    assert((await advancedToggle.getAttribute('aria-expanded')) === 'false', 'advanced section should stay collapsed on the next task dialog')
     await page.keyboard.press('Escape')
-    summary.checks.push('task dialog advanced toggle persists to localStorage')
+    summary.checks.push('task dialog advanced options default collapsed without legacy localStorage')
 
     await page.getByTestId('gantt-task-select-task-lagging-severe').click({ button: 'right' })
     await page.getByTestId('gantt-task-context-menu-obstacles').click()
@@ -693,21 +695,18 @@ async function main() {
     summary.screenshots.push('wave4-gantt-batch-delete-confirm.png')
     await page.getByRole('button', { name: '取消' }).click()
     await page.getByText('批量删除任务').waitFor({ state: 'detached' })
+    await page.getByTestId('batch-action-bar-clear').click()
+    await page.getByText('已选 2 项').waitFor({ state: 'hidden' })
     summary.checks.push('batch delete opens the shared confirm dialog')
 
     const conditionWarningRow = page.locator('#gantt-task-row-task-condition-warning')
     await conditionWarningRow.waitFor({ state: 'visible' })
     await conditionWarningRow.scrollIntoViewIfNeeded()
-    await page.getByTestId('gantt-task-progress-display-task-condition-warning').click()
-    await page.getByTestId('gantt-task-progress-editor-task-condition-warning').waitFor({ state: 'visible' })
-    const conditionWarningInput = page.getByTestId('gantt-task-progress-input-task-condition-warning')
-    await conditionWarningInput.waitFor({ state: 'visible' })
-    await conditionWarningInput.focus()
-    for (let step = 0; step < 4; step += 1) {
-      await conditionWarningInput.press('ArrowRight')
-    }
-    await page.getByText('20%').waitFor({ state: 'visible' })
-    await conditionWarningInput.press('Enter')
+    await page.getByTestId('gantt-task-select-task-condition-warning').click()
+    const progressPanel = page.getByTestId('gantt-progress-entry-panel')
+    await progressPanel.waitFor({ state: 'visible' })
+    await progressPanel.getByLabel('录进展数值').fill('20')
+    await progressPanel.getByTestId('gantt-progress-save').click()
     const conditionWarningModal = page.getByTestId('condition-warning-modal')
     await conditionWarningModal.waitFor({ state: 'visible' })
     await conditionWarningModal.getByText('首报进度任务').waitFor({ state: 'visible' })

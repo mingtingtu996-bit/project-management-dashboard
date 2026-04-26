@@ -23,6 +23,8 @@ interface BaselineBottomBarProps {
   onBatchDelete?: () => void
   onBatchShift?: (value?: string) => void
   onBatchSetProgress?: (value?: string) => void
+  onOpenConfirm?: () => void
+  confirmDisabled?: boolean
   onUndo: () => void
   onRedo: () => void
   onSaveDraft: () => void
@@ -45,6 +47,8 @@ export function BaselineBottomBar({
   onBatchDelete,
   onBatchShift,
   onBatchSetProgress,
+  onOpenConfirm,
+  confirmDisabled = false,
   onUndo,
   onRedo,
   onSaveDraft,
@@ -112,6 +116,17 @@ export function BaselineBottomBar({
                 <Save className="h-4 w-4" />
                 {saving ? '保存中...' : '保存草稿'}
               </Button>
+              {onOpenConfirm ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  className="gap-2 rounded-full bg-emerald-500 text-white hover:bg-emerald-400"
+                  onClick={onOpenConfirm}
+                  disabled={readOnly || confirmDisabled}
+                >
+                  确认项目基线
+                </Button>
+              ) : null}
             </div>
           </div>
 

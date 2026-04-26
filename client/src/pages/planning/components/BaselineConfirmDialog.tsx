@@ -22,6 +22,10 @@ export interface BaselineConfirmSummary {
   fromVersionLabel: string
   toVersionLabel: string
   items: BaselineDiffItem[]
+  modifiedItemCount?: number
+  milestoneChangeCount?: number
+  criticalPathChangeCount?: number
+  mappingAffectedCount?: number
 }
 
 export interface BaselineConfirmDialogProps {
@@ -127,6 +131,11 @@ export function BaselineConfirmDialog({
   }, [open])
 
   const counts = useMemo(() => buildCounts(summary.items), [summary.items])
+  const modifiedItemCount = summary.modifiedItemCount ?? counts.修改 + counts.新增 + counts.移除
+  const milestoneChangeCount = summary.milestoneChangeCount ?? counts.里程碑变动
+  const criticalPathChangeCount = summary.criticalPathChangeCount ?? 0
+  const mappingAffectedCount = summary.mappingAffectedCount ?? 0
+  const noDiff = counts.total === 0
   const isRealignmentFailure = state === 'failed' && failureCode === 'REQUIRES_REALIGNMENT'
   const realignmentSummary = useMemo(
     () => (isRealignmentFailure ? parseRealignmentFailureSummary(failureMessage) : null),
@@ -159,6 +168,7 @@ export function BaselineConfirmDialog({
   const StatusIcon = statusMeta.icon
 
   const openDiff = () => setShowDiff(true)
+  const canConfirmNow = !noDiff && confirming === false && state !== 'stale' && !Boolean(resolvedConfirmDisabledReason) && !isRealignmentFailure
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -279,7 +289,7 @@ export function BaselineConfirmDialog({
             </Alert>
           ) : null}
 
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
             <Card className="border-slate-200 shadow-sm">
               <CardContent className="space-y-1 p-4">
                 <div className="text-xs text-slate-500">当前版本</div>
@@ -300,7 +310,32 @@ export function BaselineConfirmDialog({
                 </CardContent>
               </Card>
             ))}
+            <Card className="border-slate-200 shadow-sm">
+              <CardContent className="space-y-1 p-4">
+                <div className="text-xs text-slate-500">影响条目</div>
+                <div className="text-2xl font-semibold text-slate-900">{modifiedItemCount}</div>
+              </CardContent>
+            </Card>
+            <Card className="border-slate-200 shadow-sm">
+              <CardContent className="space-y-1 p-4">
+                <div className="text-xs text-slate-500">关键路径</div>
+                <div className="text-2xl font-semibold text-slate-900">{criticalPathChangeCount}</div>
+              </CardContent>
+            </Card>
+            <Card className="border-slate-200 shadow-sm">
+              <CardContent className="space-y-1 p-4">
+                <div className="text-xs text-slate-500">映射影响</div>
+                <div className="text-2xl font-semibold text-slate-900">{mappingAffectedCount}</div>
+              </CardContent>
+            </Card>
           </div>
+
+          {noDiff ? (
+            <Alert className="border-slate-200 bg-slate-50 text-slate-700">
+              <FileDiff className="h-4 w-4" />
+              <AlertDescription>当前版本与对比版本没有差异，可直接关闭弹窗或回到草稿继续整理。</AlertDescription>
+            </Alert>
+          ) : null}
 
           <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -341,7 +376,7 @@ export function BaselineConfirmDialog({
             <Button
               type="button"
               onClick={onConfirm}
-              disabled={confirming || state === 'stale' || Boolean(resolvedConfirmDisabledReason) || isRealignmentFailure}
+              disabled={!canConfirmNow}
             >
               {confirming ? '发布中...' : state === 'failed' && !isRealignmentFailure ? '继续重试发布' : '确认发布'}
             </Button>

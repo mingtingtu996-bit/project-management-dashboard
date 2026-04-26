@@ -26,6 +26,7 @@ import {
   MonthlyPlanConfirmDialog,
   type MonthlyPlanConfirmMode,
   type MonthlyPlanConfirmState,
+  type MonthlyPlanConfirmSummary,
 } from './components/MonthlyPlanConfirmDialog'
 import { MonthlyPlanBottomBar } from './components/MonthlyPlanBottomBar'
 import { MonthlyPlanDraftPanel } from './components/MonthlyPlanDraftPanel'
@@ -49,47 +50,64 @@ import type { BaselineRevisionCandidate } from './components/BaselineRevisionCan
 const TABS: Array<{ key: PlanningWorkspaceTab; label: string }> = [
   { key: 'baseline', label: '项目基线' },
   { key: 'monthly', label: '月度计划' },
-  { key: 'revision-pool', label: '计划修订候选' },
-  { key: 'deviation', label: '偏差分析' },
 ]
 
 const routeTabMap: Record<string, PlanningWorkspaceTab> = {
   baseline: 'baseline',
   monthly: 'monthly',
-  'revision-pool': 'revision-pool',
-  deviation: 'deviation',
+  'revision-pool': 'baseline',
+}
+
+function getWorkspaceMarker(pathname: string): string {
+  const planningMarker = pathname.split('/planning/')[1]?.split('/')[0]
+  if (planningMarker) return planningMarker
+  const taskMarker = pathname.split('/tasks/')[1]?.split('/')[0]
+  if (taskMarker) return taskMarker
+  return 'baseline'
 }
 
 function getTabFromPath(pathname: string): PlanningWorkspaceTab {
-  const marker = pathname.split('/planning/')[1]?.split('/')[0] ?? 'baseline'
+  const marker = getWorkspaceMarker(pathname)
   return routeTabMap[marker] ?? 'baseline'
 }
 
 type PlanningSurface = PlanningWorkspaceTab | 'closeout'
 
 function getPlanningSurface(pathname: string): PlanningSurface {
-  const marker = pathname.split('/planning/')[1]?.split('/')[0] ?? 'baseline'
+  const marker = getWorkspaceMarker(pathname)
   return marker === 'closeout' ? 'closeout' : routeTabMap[marker] ?? 'baseline'
 }
 
 const REVISION_CANDIDATES: BaselineRevisionCandidate[] = [
   {
     id: 'revision-candidate-1',
+    source_type: 'manual',
+    status: 'open',
+    severity: 'medium',
     title: '主体结构施工窗口调整',
+    reason: '建议将主体验收前的窗口前移，便于吸收近期变更。',
     summary: '建议将主体验收前的窗口前移，便于吸收近期变更。',
     source: '来自计划修订候选',
     tag: '窗口调整',
   },
   {
     id: 'revision-candidate-2',
+    source_type: 'manual',
+    status: 'open',
+    severity: 'medium',
     title: '里程碑依赖重排',
+    reason: '建议把关键里程碑依赖前置到同一修订篮中统一查看。',
     summary: '建议把关键里程碑依赖前置到同一修订篮中统一查看。',
     source: '来自基线对比',
     tag: '依赖重排',
   },
   {
     id: 'revision-candidate-3',
+    source_type: 'manual',
+    status: 'open',
+    severity: 'low',
     title: '风险缓冲备注补录',
+    reason: '补录暂缓处理原因。',
     summary: '补录暂缓处理原因。',
     source: '来自月度复盘',
     tag: '留痕补录',
@@ -343,6 +361,7 @@ function PlanningWorkspaceInner() {
   const [revisionDeferredCandidateIds, setRevisionDeferredCandidateIds] = useState<string[]>([])
   const [revisionDeferredReason, setRevisionDeferredReason] = useState('')
   const [revisionDeferredReasonVisible, setRevisionDeferredReasonVisible] = useState(false)
+  const [revisionDeferredReviewDueAt, setRevisionDeferredReviewDueAt] = useState('')
   const [governanceStatus, setGovernanceStatus] = useState<PlanningGovernanceStatus>('loading')
   const [governanceSnapshot, setGovernanceSnapshot] = useState<PlanningGovernanceSnapshot | null>(null)
   const [governanceErrorMessage, setGovernanceErrorMessage] = useState<string | null>(null)
@@ -351,6 +370,7 @@ function PlanningWorkspaceInner() {
 
   const activeTabFromPath = getTabFromPath(location.pathname)
   const planningSurface = getPlanningSurface(location.pathname)
+  const isRevisionPoolSurface = getWorkspaceMarker(location.pathname) === 'revision-pool'
 
   useEffect(() => {
     setActiveWorkspace(planningSurface === 'closeout' ? 'monthly' : activeTabFromPath)
@@ -437,15 +457,29 @@ function PlanningWorkspaceInner() {
     ?? []
   const monthlyQuickConfirmAvailable =
     selectedCount > 0 && draftStatus !== 'locked' && !validationIssues.some((issue) => issue.level === 'error')
+  const monthlyConditionIssueCount = validationIssues.filter((issue) => issue.id.includes('condition')).length
+  const monthlyObstacleIssueCount = validationIssues.filter((issue) => issue.id.includes('obstacle')).length
+  const monthlyDelayIssueCount = validationIssues.filter((issue) => issue.id.includes('delay')).length
+  const monthlyMappingIssueCount = validationIssues.filter((issue) => issue.id.includes('mapping')).length
+  const monthlyRequiredFieldIssueCount = validationIssues.filter((issue) => {
+    const text = `${issue.id} ${issue.title} ${issue.detail ?? ''}`.toLocaleLowerCase('zh-CN')
+    return text.includes('required') || text.includes('必填')
+  }).length
   const monthlyConfirmSummary = {
-    monthLabel: '当前月份',
-    versionLabel: 'vCurrent',
-    sourceLabel: '当前任务列表',
-    conditionCount: validationIssues.filter((issue) => issue.level === 'info').length,
-    obstacleCount: validationIssues.filter((issue) => issue.level === 'error').length,
-    delayCount: validationIssues.filter((issue) => issue.level === 'warning').length,
-    selectedCount,
-  }
+    totalItemCount: selectedCount,
+    newlyAddedCount: validationIssues.filter((issue) => issue.level === 'info').length,
+    autoRolledInCount: 0,
+    pendingRemovalCount: validationIssues.filter((issue) => issue.level === 'error').length,
+    milestoneCount: 0,
+    dateAdjustmentCount: validationIssues.filter((issue) => issue.level === 'warning').length,
+    progressAdjustmentCount: 0,
+    blockingIssueCount: validationIssues.filter((issue) => issue.level === 'error').length,
+    conditionIssueCount: monthlyConditionIssueCount,
+    obstacleIssueCount: monthlyObstacleIssueCount,
+    delayIssueCount: monthlyDelayIssueCount,
+    mappingIssueCount: monthlyMappingIssueCount,
+    requiredFieldIssueCount: monthlyRequiredFieldIssueCount,
+  } satisfies MonthlyPlanConfirmSummary
   const governanceHealthReport = governanceSnapshot?.health ?? null
   const governanceIntegrityReport = governanceSnapshot?.integrity ?? null
   const governanceAnomalyReport = governanceSnapshot?.anomaly ?? null
@@ -496,7 +530,16 @@ function PlanningWorkspaceInner() {
       governanceAlerts.length > 0
         ? governanceAlerts.slice(0, 4).map((alert, index) => ({
             id: `revision-${alert.kind}-${alert.source_id}-${index}`,
+            source_type: alert.kind === 'health' ? 'observation' : 'deviation',
+            status: 'open' as const,
+            severity:
+              alert.severity === 'critical'
+                ? 'critical'
+                : alert.severity === 'warning'
+                  ? 'medium'
+                  : 'low',
             title: alert.title,
+            reason: alert.detail,
             summary: alert.detail,
             source:
               alert.kind === 'health'
@@ -632,8 +675,8 @@ function PlanningWorkspaceInner() {
     {
       key: '3',
       ctrlKey: true,
-      description: '切换到计划修订候选',
-      action: () => navigate(`/projects/${params.id}/planning/revision-pool`),
+      description: '切换到项目基线',
+      action: () => navigate(`/projects/${params.id}/planning/baseline`),
     },
     {
       key: 'z',
@@ -708,6 +751,7 @@ function PlanningWorkspaceInner() {
 
     setRevisionDeferredReasonVisible(true)
     setRevisionDeferredReason((current) => current || '等待上游确认')
+    setRevisionDeferredReviewDueAt((current) => current || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10))
     setRevisionDeferredCandidateIds((current) =>
       current.includes(revisionActiveCandidate.id) ? current : [...current, revisionActiveCandidate.id]
     )
@@ -739,11 +783,11 @@ function PlanningWorkspaceInner() {
   ).length
   const closeoutRemainingCount = closeoutItems.length - closeoutProcessedCount
   const closeoutSummary = {
-    selectedCount: closeoutSelectedItems.length,
-    processedCount: closeoutProcessedCount,
+    rolledInCount: closeoutItems.filter((item) => item.groupId === 'closeout-normal').length,
+    closedCount: closeoutProcessedCount,
+    manualOverrideCount: closeoutItems.filter((item) => item.groupId === 'closeout-manual').length,
+    forcedCount: closeoutItems.filter((item) => item.groupId === 'closeout-risk').length,
     remainingCount: closeoutRemainingCount,
-    reasonLabel: closeoutReasonLeaf,
-    itemLabel: closeoutActiveItem?.title ?? '当前事项',
   } satisfies CloseoutConfirmSummary
   const closeoutCloseDay = Number(new URLSearchParams(location.search).get('closeout_day') ?? '7')
   const closeoutForceUnlocked = Number.isNaN(closeoutCloseDay) ? true : closeoutCloseDay >= 7
@@ -1008,6 +1052,9 @@ function PlanningWorkspaceInner() {
       <MonthlyPlanBottomBar
         draftStatus={draftStatus}
         quickAvailable={monthlyQuickConfirmAvailable}
+        canSaveDraft={false}
+        canStandardConfirm={draftStatus !== 'locked'}
+        onSaveDraft={() => void 0}
         onQuickConfirmEntry={handleQuickMonthlyConfirmEntry}
         onStandardConfirmEntry={handleStandardMonthlyConfirmEntry}
       />
@@ -1093,11 +1140,14 @@ function PlanningWorkspaceInner() {
         deferredCandidateIds={revisionDeferredCandidateIds}
         deferredReason={revisionDeferredReason}
         deferredReasonVisible={revisionDeferredReasonVisible}
+        deferredReviewDueAt={revisionDeferredReviewDueAt}
+        canEnterDraft={revisionBasketItems.length > 0 || Boolean(revisionDeferredReason.trim())}
         onOpenChange={setRevisionPoolOpen}
         onSelectCandidate={setRevisionActiveCandidateId}
         onAddToBasket={handleRevisionAddToBasket}
         onMarkDeferred={handleRevisionMarkDeferred}
         onDeferredReasonChange={setRevisionDeferredReason}
+        onDeferredReviewDueAtChange={setRevisionDeferredReviewDueAt}
         onEnterDraft={handleRevisionEnterDraft}
         onRemoveFromBasket={(candidateId) => {
           setRevisionBasketIds((current) => current.filter((id) => id !== candidateId))
@@ -1212,7 +1262,7 @@ function PlanningWorkspaceInner() {
               variant="outline"
               className="justify-between"
               data-testid="planning-quick-link-closeout"
-              onClick={() => navigate(`/projects/${params.id}/planning/closeout`)}
+              onClick={() => navigate(`/projects/${params.id}/tasks/closeout`)}
             >
               <span className="flex items-center gap-2">
                 <CheckCircle2 className="h-4 w-4" />
@@ -1352,8 +1402,6 @@ function PlanningWorkspaceInner() {
       actions={
         planningSurface === 'closeout'
           ? closeoutShellActions
-          : activeWorkspace === 'revision-pool'
-            ? revisionPoolShellActions
           : activeWorkspace === 'monthly'
             ? monthlyShellActions
             : baselineShellActions
@@ -1363,7 +1411,7 @@ function PlanningWorkspaceInner() {
         {governanceWorkspaceContent}
         {planningSurface === 'closeout'
           ? closeoutWorkspaceContent
-          : activeWorkspace === 'revision-pool'
+          : isRevisionPoolSurface
             ? revisionPoolWorkspaceContent
           : activeWorkspace === 'monthly'
             ? monthlyWorkspaceContent

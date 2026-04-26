@@ -4,6 +4,8 @@ import {
   buildProjectTaskProgressSnapshot,
   calculateProjectHealthScore,
   getTaskBusinessStatus,
+  getTaskLagLevel,
+  getTaskLagStatus,
   TASK_STATUS_THEME,
 } from '../taskBusinessStatus'
 
@@ -73,6 +75,35 @@ describe('taskBusinessStatus', () => {
         { conditionSummary: { total: 1, satisfied: 1 }, activeObstacleCount: 0 },
       ),
     ).toEqual(TASK_STATUS_THEME.ready)
+  })
+
+  it('derives lag labels and snapshot counts from explicit lag fields', () => {
+    expect(
+      getTaskLagLevel({ id: 'lag-mild', status: 'todo', progress: 0, lagLevel: 'mild' }),
+    ).toBe('mild')
+    expect(
+      getTaskLagStatus({ id: 'lag-mild', status: 'todo', progress: 0, lagLevel: 'mild' }),
+    ).toBe('轻度滞后')
+
+    expect(
+      getTaskLagLevel({ id: 'lag-severe', status: 'todo', progress: 0, lagStatus: '严重滞后' }),
+    ).toBe('severe')
+    expect(
+      getTaskLagStatus({ id: 'lag-severe', status: 'todo', progress: 0, lagStatus: '严重滞后' }),
+    ).toBe('严重滞后')
+
+    const snapshot = buildProjectTaskProgressSnapshot(
+      [
+        { id: 'root', status: 'todo', progress: 0 },
+        { id: 'lag-a', parent_id: 'root', status: 'todo', progress: 0, lagLevel: 'mild' },
+        { id: 'lag-b', parent_id: 'root', status: 'todo', progress: 0, lagStatus: '中度滞后' },
+        { id: 'ready', parent_id: 'root', status: 'todo', progress: 0 },
+      ],
+      [],
+      [],
+    )
+
+    expect(snapshot.laggedTaskCount).toBe(2)
   })
 
   it('matches the fallback health score formula used by the unified project summary', () => {

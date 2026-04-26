@@ -28,6 +28,8 @@ interface DashboardMilestoneCardProps {
 export default function DashboardMilestoneCard({
   completed,
   total,
+  upcoming,
+  overdue,
   recentMilestones,
   onViewAll
 }: DashboardMilestoneCardProps) {
@@ -73,6 +75,8 @@ export default function DashboardMilestoneCard({
           <CardTitle className="text-sm font-medium text-gray-700">里程碑追踪</CardTitle>
           <div className="flex items-center gap-2">
             <span className="text-sm text-blue-600 font-medium">{completed}/{total}</span>
+            <span className="text-xs rounded-full bg-amber-50 px-2 py-0.5 text-amber-700">偏移 {upcoming}</span>
+            <span className="text-xs rounded-full bg-red-50 px-2 py-0.5 text-red-700">逾期 {overdue}</span>
             <button 
               onClick={() => setExpanded(!expanded)}
               className="p-1 hover:bg-gray-100 rounded-full transition-colors"

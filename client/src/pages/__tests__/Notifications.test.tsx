@@ -161,7 +161,6 @@ describe('Notifications', () => {
     expect(container.textContent).toContain('业务预警')
     expect(container.textContent).toContain('流程催办')
     expect(container.textContent).toContain('系统异常')
-    expect(container.textContent).toContain('映射孤立')
     expect(container.textContent).toContain('应出现在提醒中心')
     expect(container.textContent).not.toContain('导出数据')
     expect(container.textContent).not.toContain('导入数据')
@@ -329,7 +328,7 @@ describe('Notifications', () => {
     expect(navigateMock.mock.calls.some((call) => call[0] === `/projects/${projectId}/acceptance`)).toBe(true)
   })
 
-  it('keeps S2 mapping orphan notifications in an isolated tab and routes them to planning baseline', async () => {
+  it('keeps S2 mapping orphan notifications under system exceptions and routes them to planning baseline', async () => {
     apiMock.get.mockResolvedValue([
       {
         id: 'mapping-1',
@@ -352,19 +351,10 @@ describe('Notifications', () => {
 
     await waitForCondition(() => container.textContent?.includes('规划映射存在孤立指针'))
 
-    const mappingTab = Array.from(container.querySelectorAll('button')).find((button) =>
-      button.textContent?.includes('映射孤立'),
-    ) as HTMLButtonElement | undefined
-
-    expect(mappingTab).toBeTruthy()
-
-    await act(async () => {
-      mappingTab?.click()
-      await flush()
-    })
-
     expect(container.textContent).toContain('规划映射存在孤立指针')
     expect(container.textContent).toContain('S2 mapping')
+    expect(container.textContent).toContain('系统异常')
+    expect(container.textContent).not.toContain('映射孤立指针2 条')
 
     const goButton = Array.from(container.querySelectorAll('button')).find((button) =>
       button.textContent?.includes('前往处理'),

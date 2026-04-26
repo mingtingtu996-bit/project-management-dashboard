@@ -104,15 +104,12 @@ describe('repository hygiene', () => {
       'utf8',
     )
 
-    expect(source).toContain('deterministic fallback ordering')
+    expect(source).toContain("fallback: 'deterministic_ordering'")
     expect(source).not.toContain('compatibility fallback ordering')
   })
 
   it('keeps current-facing client copy neutral and historical mappings explicit', () => {
-    const teamMembers = readFileSync(
-      resolve(workspaceRoot, 'client', 'src', 'pages', 'TeamMembers.tsx'),
-      'utf8',
-    )
+    const appRoutes = readFileSync(resolve(workspaceRoot, 'client', 'src', 'App.tsx'), 'utf8')
     const tokensDoc = readFileSync(
       resolve(workspaceRoot, 'client', 'DESIGN_TOKENS.md'),
       'utf8',
@@ -122,8 +119,8 @@ describe('repository hygiene', () => {
       'utf8',
     )
 
-    expect(teamMembers).toContain('独立页面作为辅助入口保留')
-    expect(teamMembers).not.toContain('保留为兼容入口')
+    expect(existsSync(resolve(workspaceRoot, 'client', 'src', 'pages', 'TeamMembers.tsx'))).toBe(false)
+    expect(appRoutes).not.toContain('path="team"')
     expect(tokensDoc).toContain('12px（历史映射）')
     expect(tokensDoc).not.toContain('12px（兼容旧代码）')
     expect(tailwindConfig).not.toContain('兼容历史 rounded-2xl')

@@ -18,12 +18,13 @@ import {
 } from '@/hooks/useStore'
 import { useConfirmDialog } from '@/hooks/useConfirmDialog'
 import { useDebounce } from '@/hooks/useDebounce'
+import { usePermissions } from '@/hooks/usePermissions'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/hooks/use-toast'
 import { LoadingState } from '@/components/ui/loading-state'
 import { zhCN } from '@/i18n/zh-CN'
-import { Calendar, Save, Trash2, ChevronRight, ChevronDown, LayoutTemplate, CheckCircle2, XCircle, Search, SlidersHorizontal, AlertTriangle } from 'lucide-react'
+import { Calendar, Save, ChevronRight, ChevronDown, Search, SlidersHorizontal, AlertTriangle } from 'lucide-react'
 import { apiDelete, apiGet, apiPost, apiPut, getApiErrorMessage, getAuthHeaders, isAbortError } from '@/lib/apiClient'
 import { DashboardApiService, type ProjectSummary } from '@/services/dashboardApi'
 import { DataQualityApiService, type DataQualityLiveCheckSummary, type DataQualityProjectSummary } from '@/services/dataQualityApi'
@@ -35,9 +36,9 @@ import { formatCriticalPathCount } from '@/lib/userFacingTerms'
 import {
   buildProjectTaskProgressSnapshot,
   getTaskBusinessStatus,
+  getTaskLagLevel,
   isCompletedTask,
 } from '@/lib/taskBusinessStatus'
-import { BatchActionBar } from '@/components/BatchActionBar'
 import { ConditionWarningModal } from '@/components/ConditionWarningModal'
 import { DeleteProtectionDialog } from '@/components/DeleteProtectionDialog'
 import { GanttViewSkeleton } from '@/components/ui/page-skeleton'
@@ -46,6 +47,8 @@ import { GanttViewHeader } from './GanttViewHeader'
 import { useGanttCriticalPath } from './useGanttCriticalPath'
 import { GanttBatchBar, GanttFilterBar, GanttStatsCards } from './GanttViewFilters'
 import { GanttTaskRows } from './GanttViewRows'
+import { ScopeDimensionsDialog } from './GanttView/ScopeDimensionsDialog'
+import { CriticalPathInsertDialog } from './GanttView/CriticalPathInsertDialog'
 import {
   ParticipantUnitsDialog,
   type ParticipantUnitDraft,
@@ -206,6 +209,35 @@ function normalizeTimelineScale(value: string | null): GanttTimelineScale | null
 
 function normalizeTimelineCompareMode(value: string | null): GanttTimelineCompareMode | null {
   return value === 'plan' || value === 'baseline' ? value : null
+}
+
+function normalizeGanttFilterStatus(value: string | null): string {
+  const normalized = String(value ?? '').trim()
+  if (normalized === 'blocked' || normalized === '受阻') return 'lagging_moderate'
+  if (
+    normalized === 'all'
+    || normalized === 'todo'
+    || normalized === 'in_progress'
+    || normalized === 'completed'
+    || normalized === 'lagging_mild'
+    || normalized === 'lagging_moderate'
+    || normalized === 'lagging_severe'
+  ) {
+    return normalized
+  }
+  return 'all'
+}
+
+function normalizeTaskEditableStatus(value: string | null | undefined): string {
+  const normalized = String(value ?? '').trim()
+  if (
+    normalized === 'blocked'
+    || normalized === '受阻'
+    || normalized === 'lagging_mild'
+    || normalized === 'lagging_moderate'
+    || normalized === 'lagging_severe'
+  ) return 'in_progress'
+  return normalized || 'todo'
 }
 
 type DelayRequestErrorCode = 'PENDING_CONFLICT' | 'DUPLICATE_REASON'
@@ -420,6 +452,7 @@ export default function GanttView() {
   const timelineViewRef = useRef<TaskTimelineViewHandle | null>(null)
   const currentProject = useCurrentProject()
   const currentUser = useStore((state) => state.currentUser)
+  const { canEdit } = usePermissions()
   const lastRealtimeEvent = useStore((state) => state.lastRealtimeEvent)
   const delayRequests = useStore((state) => state.delayRequests) as DelayRequestRecord[]
   const setDelayRequests = useStore((state) => state.setDelayRequests)
@@ -487,6 +520,10 @@ export default function GanttView() {
     handleCreateCriticalPathOverride,
     handleDeleteCriticalPathOverride,
   } = useGanttCriticalPath({ projectId: loading ? null : id })
+  const [criticalPathInsertRequest, setCriticalPathInsertRequest] = useState<{
+    anchorTaskId: string
+    direction: 'before' | 'after'
+  } | null>(null)
   const tasks = useMemo(
     () => (id ? allTasks.filter((task) => task.project_id === id) : []),
     [allTasks, id],
@@ -494,6 +531,10 @@ export default function GanttView() {
   const projectTaskIds = useMemo(
     () => new Set(tasks.map((task) => task.id).filter((taskId): taskId is string => Boolean(taskId))),
     [tasks],
+  )
+  const criticalPathInsertAnchorTask = useMemo(
+    () => (criticalPathInsertRequest ? tasks.find((task) => task.id === criticalPathInsertRequest.anchorTaskId) ?? null : null),
+    [criticalPathInsertRequest, tasks],
   )
   const projectConditions = useMemo<TaskCondition[]>(
     () =>
@@ -590,6 +631,7 @@ export default function GanttView() {
     return new Set(safeJsonParse<string[]>(saved, [], `gantt collapsed ${id ?? 'unknown'}`))
   })
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [batchUpdating, setBatchUpdating] = useState(false)
   const { confirmDialog, setConfirmDialog, openConfirm } = useConfirmDialog()
   // 濞ｈ濮炵€涙劒鎹㈤崝鈩冩妫板嫯顔曢惃鍕煑閼哄倻鍋?ID
   const [newTaskParentId, setNewTaskParentId] = useState<string | null>(null)
@@ -650,7 +692,7 @@ export default function GanttView() {
   const [searchText, setSearchText] = useState('')
   const debouncedSearchText = useDebounce(searchText, 300)
   const [filterStatus, setFilterStatus] = useState<string>(() => {
-    return safeStorageGet(localStorage, `gantt_filter_status_${id}`) || 'all'
+    return normalizeGanttFilterStatus(safeStorageGet(localStorage, `gantt_filter_status_${id}`))
   })
   const [filterPriority, setFilterPriority] = useState<string>(() => {
     return safeStorageGet(localStorage, `gantt_filter_priority_${id}`) || 'all'
@@ -674,8 +716,6 @@ export default function GanttView() {
   )
   const delayRequestsLoading = delayRequestsStatus.loading
 
-  const [inlineProgressTaskId, setInlineProgressTaskId] = useState<string | null>(null)
-  const [inlineProgressValue, setInlineProgressValue] = useState<number>(0)
   const [inlineTitleTaskId, setInlineTitleTaskId] = useState<string | null>(null)
   const [inlineTitleValue, setInlineTitleValue] = useState<string>('')
   const [hoveredTaskId, setHoveredTaskId] = useState<string | null>(null)
@@ -721,6 +761,7 @@ export default function GanttView() {
   const [participantUnitSaving, setParticipantUnitSaving] = useState(false)
   const [participantUnitDraft, setParticipantUnitDraft] = useState<ParticipantUnitDraft>(() => createEmptyParticipantUnitDraft(id))
   const [projectMembers, setProjectMembers] = useState<GanttProjectMember[]>([])
+  const [scopeDimensionsOpen, setScopeDimensionsOpen] = useState(false)
   const [taskFormErrors, setTaskFormErrors] = useState<{ name?: string; start_date?: string; end_date?: string }>({})
   const canAdminForceSatisfyCondition = useMemo(() => {
     if (!currentUser?.id) return false
@@ -790,10 +831,34 @@ export default function GanttView() {
     () => new Map((criticalPathSnapshot?.tasks ?? []).map((task) => [task.taskId, task])),
     [criticalPathSnapshot],
   )
+  const getCriticalPathSourceType = useCallback((taskId: string) => {
+    const criticalTask = criticalPathTaskMap.get(taskId)
+    if (!criticalTask) return null
+    if (criticalTask.isManualInserted) return 'manual_insert' as const
+    if (criticalTask.isManualAttention) return 'manual_attention' as const
+    if (criticalTask.isAutoCritical) return 'auto' as const
+    return null
+  }, [criticalPathTaskMap])
   const criticalPathDisplayTaskIds = useMemo(
     () => new Set(criticalPathSnapshot?.displayTaskIds ?? []),
     [criticalPathSnapshot],
   )
+  const criticalPathOverrideFlags = useMemo(() => {
+    const nextFlags = new Map<string, { hasManualAttentionOverride: boolean; hasManualInsertOverride: boolean }>()
+    criticalPathOverrides.forEach((override) => {
+      const current = nextFlags.get(override.task_id) ?? {
+        hasManualAttentionOverride: false,
+        hasManualInsertOverride: false,
+      }
+      if (override.mode === 'manual_attention') {
+        current.hasManualAttentionOverride = true
+      } else if (override.mode === 'manual_insert') {
+        current.hasManualInsertOverride = true
+      }
+      nextFlags.set(override.task_id, current)
+    })
+    return nextFlags
+  }, [criticalPathOverrides])
 
   const filteredFlatList = useMemo(() => {
     if (!debouncedSearchText && filterStatus === 'all' && filterPriority === 'all' && !filterCritical && filterSpecialty === 'all' && filterBuilding === 'all') {
@@ -808,8 +873,13 @@ export default function GanttView() {
         const assignee = (task.assignee || task.assignee_name || '').toLowerCase()
         if (!name.includes(lowerSearch) && !assignee.includes(lowerSearch)) return false
       }
-      // 閻樿埖鈧胶鐡柅?
-      if (filterStatus !== 'all' && task.status !== filterStatus) return false
+      if (filterStatus !== 'all') {
+        const lagLevel = getTaskLagLevel(task)
+        if (filterStatus === 'lagging_mild' && lagLevel !== 'mild') return false
+        if (filterStatus === 'lagging_moderate' && lagLevel !== 'moderate') return false
+        if (filterStatus === 'lagging_severe' && lagLevel !== 'severe') return false
+        if (!filterStatus.startsWith('lagging_') && task.status !== filterStatus) return false
+      }
       // 娴兼ê鍘涚痪褏鐡柅?
       if (filterPriority !== 'all' && task.priority !== filterPriority) return false
       if (filterCritical && !criticalPathDisplayTaskIds.has(task.id)) return false
@@ -1135,30 +1205,17 @@ export default function GanttView() {
 
   // 页面顶部统计卡
   const projectStats = useMemo(() => {
-    const criticalTaskCount = criticalPathSummary?.primaryTaskCount ?? 0
-    // #10: AI 参考工期任务
-    const aiDurationTasks = tasks.filter(t => t.ai_duration && t.ai_duration > 0)
-    const totalAiDuration = aiDurationTasks.reduce((sum, t) => sum + (t.ai_duration || 0), 0)
-    const avgAiDuration = aiDurationTasks.length > 0 ? Math.round(totalAiDuration / aiDurationTasks.length) : 0
-    
     return {
       totalTasks: taskProgressSnapshot.totalTasks,
-      progressBaseTaskCount: taskProgressSnapshot.progressBaseTaskCount,
       completedTasks: taskProgressSnapshot.completedTaskCount,
       inProgressTasks: taskProgressSnapshot.inProgressTaskCount,
       overdueTask: taskProgressSnapshot.delayedTaskCount,
-      avgProgress: taskProgressSnapshot.overallProgress,
-      criticalTaskCount,
-      blockedTasks: taskProgressSnapshot.activeObstacleTaskCount,
+      laggedTaskCount: taskProgressSnapshot.laggedTaskCount,
       pendingStartTasks: taskProgressSnapshot.pendingConditionTaskCount,
       readyToStartTasks: taskProgressSnapshot.readyToStartTaskCount,
-      projectDuration: criticalPathSummary?.projectDurationDays ?? 0,
       criticalPathSummary: criticalPathSummaryText,
-      aiDurationTaskCount: aiDurationTasks.length,
-      totalAiDuration,
-      avgAiDuration,
     }
-  }, [criticalPathSummary, criticalPathSummaryText, tasks, taskProgressSnapshot])
+  }, [criticalPathSummaryText, taskProgressSnapshot])
 
   /**
    */
@@ -1713,7 +1770,7 @@ export default function GanttView() {
   ])
 
   const handleSaveTask = async () => {
-    if (taskSaving) return
+    if (taskSaving || !canEdit) return
 
     const nextErrors: { name?: string; start_date?: string; end_date?: string } = {}
     if (!formData.name.trim()) {
@@ -2027,21 +2084,24 @@ export default function GanttView() {
   }, [deleteGuardTarget, deleteTask, projectObstacles, setProjectObstacles])
 
   const handleDeleteTask = useCallback((taskId: string) => {
+    if (!canEdit) return
     openTaskDeleteGuard(taskId)
-  }, [openTaskDeleteGuard])
+  }, [canEdit, openTaskDeleteGuard])
 
   const handleViewTaskSummary = (taskId: string) => {
     navigate(`/projects/${id}/task-summary?taskId=${taskId}`)
   }
 
   const handleStatusChange = async (taskId: string, val: string) => {
+    if (!canEdit) return
     const task = tasks.find(t => t.id === taskId)
+    const normalizedStatus = normalizeTaskEditableStatus(val)
     const statusPayload: Record<string, unknown> = {
-      status: val,
+      status: normalizedStatus,
       updated_at: new Date().toISOString(),
       version: task?.version ?? 1,
     }
-    if (val === 'completed') {
+    if (normalizedStatus === 'completed') {
       statusPayload.progress = 100
     }
     const res = await fetch(
@@ -2058,16 +2118,28 @@ export default function GanttView() {
     if (json.success) {
       const updatedTask = json.data as Partial<Task> | undefined
       updateTask(taskId, {
-        status: (updatedTask?.status ?? val) as 'todo' | 'in_progress' | 'completed',
+        status: normalizeTaskEditableStatus(updatedTask?.status ?? normalizedStatus) as 'todo' | 'in_progress' | 'completed',
         ...(typeof updatedTask?.progress === 'number'
           ? { progress: updatedTask.progress }
-          : val === 'completed'
+          : normalizedStatus === 'completed'
             ? { progress: 100 }
             : {}),
         ...(updatedTask?.actual_start_date ? { actual_start_date: updatedTask.actual_start_date } : {}),
         ...(updatedTask?.actual_end_date ? { actual_end_date: updatedTask.actual_end_date } : {}),
         ...(typeof updatedTask?.version === 'number' ? { version: updatedTask.version } : {}),
       })
+      if (selectedTask?.id === taskId && updatedTask) {
+        setSelectedTask((previous) => (previous?.id === taskId ? {
+          ...previous,
+          ...updatedTask,
+          status: normalizeTaskEditableStatus(updatedTask.status ?? normalizedStatus) as 'todo' | 'in_progress' | 'completed',
+          ...(typeof updatedTask.progress === 'number'
+            ? { progress: updatedTask.progress }
+            : normalizedStatus === 'completed'
+              ? { progress: 100 }
+              : {}),
+        } : previous))
+      }
       const submitAutoDelayRequest = async (reason: string, delayedDate: string) => {
         if (!task?.end_date || !id) return
         const now = new Date()
@@ -2096,16 +2168,17 @@ export default function GanttView() {
         } catch {
         }
       }
-      if (task && val === 'in_progress' && task.end_date) {
+      if (task && normalizedStatus === 'in_progress' && task.end_date) {
         void submitAutoDelayRequest('手动标记开工时已逾期', new Date().toISOString().slice(0, 10))
       }
-      if (task && val === 'completed' && task.end_date) {
+      if (task && normalizedStatus === 'completed' && task.end_date) {
         void submitAutoDelayRequest('逾期完成', new Date().toISOString().slice(0, 10))
       }
     }
   }
 
   const handlePriorityChange = async (taskId: string, val: string) => {
+    if (!canEdit) return
     const task = tasks.find(t => t.id === taskId)
     const res = await fetch(
       `${API_BASE}/api/tasks/${taskId}`,
@@ -2124,13 +2197,14 @@ export default function GanttView() {
   }
 
   const openEditDialog = (task?: Task, parentId?: string) => {
+    if (!canEdit) return
     if (task) {
       setEditingTask(task)
       setTaskFormErrors({})
       setFormData({
         name: task.title || task.name || '',
         description: task.description || '',
-        status: task.status || 'todo',
+        status: normalizeTaskEditableStatus(task.status),
         priority: task.priority || 'medium',
         start_date: task.planned_start_date || task.start_date || '',
         end_date: task.planned_end_date || task.end_date || '',
@@ -2241,6 +2315,16 @@ export default function GanttView() {
     setParticipantUnitsOpen(true)
   }, [id])
 
+  const handleOpenTaskSummary = useCallback(() => {
+    if (!id) return
+    navigate(`/projects/${id}/task-summary`)
+  }, [id, navigate])
+
+  const handleOpenScopeDimensions = useCallback(() => {
+    if (!id) return
+    setScopeDimensionsOpen(true)
+  }, [id])
+
   const handleParticipantUnitCreateNew = useCallback(() => {
     setParticipantUnitDraft(createEmptyParticipantUnitDraft(id))
   }, [id])
@@ -2250,7 +2334,7 @@ export default function GanttView() {
   }, [id])
 
   const handleParticipantUnitSubmit = useCallback(async () => {
-    if (!id) return
+    if (!id || !canEdit) return
 
     const payload = {
       project_id: id,
@@ -2298,6 +2382,7 @@ export default function GanttView() {
   }, [id, loadTasks, participantUnitDraft, participantUnits, setParticipantUnits])
 
   const handleParticipantUnitDelete = useCallback(async (unit: ParticipantUnitRecord) => {
+    if (!canEdit) return
     setParticipantUnitSaving(true)
     try {
       await apiDelete(`/api/participant-units/${unit.id}`)
@@ -2442,7 +2527,7 @@ export default function GanttView() {
   }
 
   const handleAddCondition = async () => {
-    if (!newConditionName.trim() || !conditionTask) return
+    if (!newConditionName.trim() || !conditionTask || !canEdit) return
     try {
       const body: Record<string, unknown> = {
         task_id: conditionTask.id,
@@ -2492,6 +2577,7 @@ export default function GanttView() {
   }
 
   const handleToggleCondition = async (cond: TaskCondition) => {
+    if (!canEdit) return
     try {
       const res = await fetch(`/api/task-conditions/${cond.id}`, {
         method: 'PUT',
@@ -2585,6 +2671,7 @@ export default function GanttView() {
   ])
 
   const handleDeleteCondition = async (condId: string) => {
+    if (!canEdit) return
     try {
       const res = await fetch(
         `/api/task-conditions/${condId}`,
@@ -2688,7 +2775,7 @@ export default function GanttView() {
   }
 
   const handleSubmitDelayRequest = async () => {
-    if (!selectedTask || !id) return
+    if (!selectedTask || !id || !canEdit) return
 
     const originalPlannedEndDate = selectedTask.planned_end_date || selectedTask.end_date || ''
     const delayedDate = delayRequestForm.delayedDate
@@ -2848,7 +2935,7 @@ export default function GanttView() {
   }
 
   const handleAddObstacle = async () => {
-    if (!newObstacleTitle.trim() || !obstacleTask) return
+    if (!newObstacleTitle.trim() || !obstacleTask || !canEdit) return
     try {
       const res = await fetch(`${API_BASE}/api/task-obstacles`, {
         method: 'POST',
@@ -2880,6 +2967,7 @@ export default function GanttView() {
   }
 
   const handleResolveObstacle = async (obs: TaskObstacle) => {
+    if (!canEdit) return
     try {
         const res = await fetch(`/api/task-obstacles/${obs.id}`, {
           method: 'PUT',
@@ -2955,6 +3043,7 @@ export default function GanttView() {
   }, [deleteGuardTarget, projectObstacles, taskObstacles, setProjectObstacles])
 
   const handleDeleteObstacle = useCallback((obsId: string) => {
+    if (!canEdit) return
     const obstacle = taskObstacles.find((item) => item.id === obsId) ?? projectObstacles.find((item) => item.id === obsId)
     setDeleteGuardTarget({
       kind: 'obstacle',
@@ -2962,10 +3051,10 @@ export default function GanttView() {
       title: obstacle?.title || '未命名阻碍',
       blocked: false,
     })
-  }, [projectObstacles, taskObstacles])
+  }, [canEdit, projectObstacles, taskObstacles])
 
   const handleSaveObstacleEdit = async (obsId: string) => {
-    if (!editingObstacleTitle.trim()) return
+    if (!editingObstacleTitle.trim() || !canEdit) return
     try {
       const res = await fetch(`/api/task-obstacles/${obsId}`, {
           method: 'PUT',
@@ -3074,24 +3163,25 @@ export default function GanttView() {
     toast({ title: isCrossLevel ? '已移动到新层级' : '排序已更新' })
   }, [flatList, tasks, setTasks])
   const handleInlineProgressSave = useCallback(async (taskId: string, newProgress: number) => {
+    if (!canEdit) return
     const task = tasks.find(t => t.id === taskId)
     if (!task) return
     if (blockedProgressTaskIds.has(taskId)) {
       toast({ title: '仍有未满足条件，先处理条件后再继续填报进度。', variant: 'destructive' })
-      setInlineProgressTaskId(null)
       return
     }
     const prevProgress = task.progress ?? 0
     const taskConditionSummary = taskProgressSnapshot.taskConditionMap[taskId]
     const pendingConditionCount = Math.max(0, Number(taskConditionSummary?.total ?? 0) - Number(taskConditionSummary?.satisfied ?? 0))
     const shouldWarnConditionAdvance = prevProgress === 0 && newProgress > 0 && pendingConditionCount > 0
+    const currentStatus = normalizeTaskEditableStatus(task.status)
     const autoStatus = (newProgress >= 100
       ? 'completed'
-      : newProgress > 0 && task.status === 'todo'
+      : newProgress > 0 && currentStatus === 'todo'
       ? 'in_progress'
-      : newProgress === 0 && task.status === 'completed'
+      : newProgress === 0 && currentStatus === 'completed'
       ? 'todo'
-      : task.status) as 'todo' | 'in_progress' | 'completed'
+      : currentStatus) as 'todo' | 'in_progress' | 'completed'
     const now = new Date().toISOString()
     const firstProgressAt = (prevProgress === 0 && newProgress > 0 && !task.first_progress_at)
       ? now
@@ -3141,6 +3231,16 @@ export default function GanttView() {
           actual_end_date: updatedTask.actual_end_date,
           version: updatedTask.version,
         }))
+        if (selectedTask?.id === taskId) {
+          setSelectedTask((previous) => (previous?.id === taskId ? {
+            ...previous,
+            ...updatedTask,
+            progress: newProgress,
+            status: autoStatus,
+            first_progress_at: firstProgressAt,
+            updated_at: now,
+          } : previous))
+        }
       }
 
       // 首次进度推进后刷新条件真值，保持页面提示与后端一致
@@ -3159,8 +3259,6 @@ export default function GanttView() {
       if (shouldWarnConditionAdvance) {
         openConditionWarning(task, pendingConditionCount)
       }
-
-      setInlineProgressTaskId(null)
 
     } catch (err: any) {
       const msg = err?.message || '閺堫亞鐓￠柨娆掝嚖'
@@ -3194,7 +3292,16 @@ export default function GanttView() {
                 updated_at: now,
                 version: latestVersion + 1,
               })
-              setInlineProgressTaskId(null)
+              if (selectedTask?.id === taskId) {
+                setSelectedTask((previous) => (previous?.id === taskId ? {
+                  ...previous,
+                  progress: newProgress,
+                  status: autoStatus,
+                  first_progress_at: firstProgressAt,
+                  updated_at: now,
+                  version: latestVersion + 1,
+                } : previous))
+              }
               toast({ title: '进度已更新' })
               return
             }
@@ -3205,10 +3312,11 @@ export default function GanttView() {
         toast({ title: '更新进度失败', description: msg, variant: 'destructive' })
       }
     }
-  }, [blockedProgressTaskIds, currentProject?.id, openConditionWarning, taskProgressSnapshot.taskConditionMap, tasks, toast, updateTask])
+  }, [blockedProgressTaskIds, currentProject?.id, openConditionWarning, selectedTask?.id, taskProgressSnapshot.taskConditionMap, tasks, toast, updateTask])
 
 
   const handleInlineTitleSave = useCallback(async (taskId: string) => {
+    if (!canEdit) return
     const trimmed = inlineTitleValue.trim()
     if (!trimmed) { setInlineTitleTaskId(null); return }
     const task = tasks.find(t => t.id === taskId)
@@ -3333,7 +3441,7 @@ export default function GanttView() {
   }
 
   const handleBatchComplete = async () => {
-    if (selectedIds.size === 0) return
+    if (selectedIds.size === 0 || !canEdit) return
     const selectedTaskEntries = [...selectedIds]
       .map((taskId) => ({ id: taskId, task: tasks.find((item) => item.id === taskId) }))
       .filter((entry): entry is { id: string; task: Task } => Boolean(entry.task))
@@ -3368,7 +3476,7 @@ export default function GanttView() {
   }
 
   const handleBatchDelete = async () => {
-    if (selectedIds.size === 0) return
+    if (selectedIds.size === 0 || !canEdit) return
     openConfirm('批量删除任务', '确定要删除选中的 ' + selectedIds.size + ' 个任务吗？此操作不可撤销。', async () => {
       try {
         let deletedCount = 0
@@ -3409,6 +3517,64 @@ export default function GanttView() {
     })
   }
 
+  const handleApplyBatchUpdate = useCallback(async (payload: {
+    status?: string | null
+    assignee_name?: string | null
+    assignee_user_id?: string | null
+    participant_unit_id?: string | null
+    responsible_unit?: string | null
+    dateShiftDays?: number | null
+  }) => {
+    if (!id || selectedIds.size === 0 || !canEdit || batchUpdating) return
+
+    setBatchUpdating(true)
+    try {
+      const response = await fetch(
+        `${API_BASE}/api/tasks/batch-update`,
+        withRequestContext({
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            project_id: id,
+            task_ids: Array.from(selectedIds),
+            ...payload,
+          }),
+        }),
+      )
+      const json = await response.json()
+      if (!response.ok || !json.success) {
+        throw new Error(extractApiErrorMessage(json, '批量更新失败'))
+      }
+
+      const updatedTaskCount = Array.isArray(json.data?.updated_task_ids)
+        ? json.data.updated_task_ids.length
+        : selectedIds.size
+      if (json.data?.job_id) {
+        toast({
+          title: '批量更新已受理',
+          description: `已受理 ${json.data.accepted_count ?? updatedTaskCount} 个任务，作业编号 ${json.data.job_id}`,
+        })
+      } else {
+        toast({
+          title: '批量更新已提交',
+          description: `已处理 ${updatedTaskCount} 个任务`,
+        })
+      }
+      setSelectedIds(new Set())
+      await refreshGanttProjectData({ includeSummary: true })
+    } catch (error) {
+      toast({
+        title: '批量更新失败',
+        description: getApiErrorMessage(error, '请稍后重试。'),
+        variant: 'destructive',
+      })
+    } finally {
+      setBatchUpdating(false)
+    }
+  }, [batchUpdating, canEdit, id, refreshGanttProjectData, selectedIds])
+
 
   const isOnCriticalPath = (taskId: string): boolean => {
     return criticalPathDisplayTaskIds.has(taskId)
@@ -3445,12 +3611,14 @@ export default function GanttView() {
         projectName={currentProject?.name}
         planningGovernance={planningGovernance}
         viewMode={viewMode}
+        canEdit={canEdit}
         onBack={() => navigate(`/projects/${id}/dashboard`)}
         onViewModeChange={setViewMode}
         onOpenCriticalPath={() => handleOpenCriticalPathDialog(selectedTask?.id)}
-        onOpenParticipantUnits={openParticipantUnitsDialog}
+        onOpenTaskSummary={handleOpenTaskSummary}
+        onOpenScopeDimensions={handleOpenScopeDimensions}
         onCreateTask={() => openEditDialog()}
-        onOpenCloseout={() => navigate(`/projects/${id}/planning/closeout`)}
+        onOpenCloseout={() => navigate(`/projects/${id}/tasks/closeout`)}
         onScrollToToday={() => {
           if (viewMode === 'timeline') {
             timelineViewRef.current?.scrollToToday()
@@ -3475,8 +3643,12 @@ export default function GanttView() {
           allSelected={allSelected}
           someSelected={someSelected}
           selectedCount={selectedIds.size}
+          projectMembers={projectMembers}
+          participantUnits={participantUnits}
+          batchUpdating={batchUpdating}
           onToggleSelectAll={toggleSelectAll}
-          onBatchComplete={handleBatchComplete}
+          onClearSelection={() => setSelectedIds(new Set())}
+          onApplyBatchUpdate={handleApplyBatchUpdate}
           onBatchDelete={handleBatchDelete}
         />
       ) : null}
@@ -3542,15 +3714,6 @@ export default function GanttView() {
               <SlidersHorizontal className="h-3 w-3" />
               筛选{activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}
             </button>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="text-xs text-blue-600 h-7"
-              onClick={() => navigate(`/projects/${id}/planning/wbs-templates`)}
-            >
-              <LayoutTemplate className="mr-1 h-3.5 w-3.5" />
-              从模板生成
-            </Button>
           </div>
         </CardHeader>
 
@@ -3622,6 +3785,7 @@ export default function GanttView() {
               onToggleCollapse={toggleCollapse}
               onSelectTask={(task) => setSelectedTask((previous) => (previous?.id === task.id ? null : task))}
               isOnCriticalPath={isOnCriticalPath}
+              getCriticalPathSourceType={getCriticalPathSourceType}
             />
           </div>
         ) : (
@@ -3637,8 +3801,6 @@ export default function GanttView() {
                 inlineConditionsMap={inlineConditionsMap}
                 taskProgressSnapshot={taskProgressSnapshot}
                 rolledProgressMap={rolledProgressMap}
-                inlineProgressTaskId={inlineProgressTaskId}
-                inlineProgressValue={inlineProgressValue}
                 inlineTitleTaskId={inlineTitleTaskId}
                 inlineTitleValue={inlineTitleValue}
                 onClearFilters={clearAllFilters}
@@ -3665,27 +3827,15 @@ export default function GanttView() {
                 onInlineTitleValueChange={setInlineTitleValue}
                 onInlineTitleSave={handleInlineTitleSave}
                 onCancelInlineTitleEdit={() => setInlineTitleTaskId(null)}
-                onStartInlineProgressEdit={(task) => {
-                  if (blockedProgressTaskIds.has(task.id)) {
-                    toast({ title: '仍有未满足条件，先处理条件后再继续填报进度。', variant: 'destructive' })
-                    return
-                  }
-                  setInlineProgressTaskId(task.id)
-                  setInlineProgressValue(task.progress || 0)
-                }}
-                onInlineProgressValueChange={setInlineProgressValue}
-                onInlineProgressSave={handleInlineProgressSave}
-                onCancelInlineProgressEdit={() => setInlineProgressTaskId(null)}
                 onViewTaskSummary={handleViewTaskSummary}
                 onDeleteTaskFromContextMenu={(task) => handleDeleteTask(task.id)}
                 onMarkCriticalPathAttention={(taskId) => void handleCreateCriticalPathOverride({ taskId, mode: 'manual_attention' })}
-                onInsertBeforeChain={(taskId) => void handleCreateCriticalPathOverride({ taskId, mode: 'manual_insert' })}
-                onInsertAfterChain={(taskId) => void handleCreateCriticalPathOverride({ taskId, mode: 'manual_insert' })}
+                onInsertBeforeChain={(taskId) => setCriticalPathInsertRequest({ anchorTaskId: taskId, direction: 'before' })}
+                onInsertAfterChain={(taskId) => setCriticalPathInsertRequest({ anchorTaskId: taskId, direction: 'after' })}
                 onRemoveCriticalPathOverride={handleDeleteCriticalPathOverride}
                 getBusinessStatus={getBusinessStatus}
                 getCriticalPathTask={(taskId) => criticalPathTaskMap.get(taskId) ?? null}
-                isOnCriticalPath={isOnCriticalPath}
-                getTaskFloat={getTaskFloat}
+                criticalPathOverrideFlags={criticalPathOverrideFlags}
               />
             </SortableContext>
           </DndContext>
@@ -3707,6 +3857,7 @@ export default function GanttView() {
               }
             >
               <LazyTaskDetailPanel
+                projectId={id || ''}
                 selectedTask={selectedTask}
                 onClose={() => setSelectedTask(null)}
                 getBusinessStatus={getBusinessStatus}
@@ -3715,8 +3866,11 @@ export default function GanttView() {
                 onOpenObstacle={openObstacleDialog}
                 criticalPathSummaryText={criticalPathSummaryText}
                 criticalPathError={criticalPathError}
+                criticalPathSnapshot={criticalPathSnapshot}
                 selectedCriticalPathTask={selectedCriticalPathTask}
                 onOpenCriticalPathDialog={() => handleOpenCriticalPathDialog(selectedTask.id)}
+                selectedTaskConditionSummary={taskProgressSnapshot.taskConditionMap[selectedTask.id] ?? null}
+                selectedTaskObstacleCount={taskProgressSnapshot.obstacleCountMap[selectedTask.id] ?? 0}
                 delayRequests={selectedTaskDelayRequests}
                 delayRequestsLoading={delayRequestsLoading}
                 pendingDelayRequest={pendingDelayRequest}
@@ -3731,6 +3885,7 @@ export default function GanttView() {
                 delayRequestReviewingId={delayRequestReviewingId}
                 delayImpactDays={delayImpactDays}
                 delayImpactSummary={delayImpactSummary}
+                onSaveProgress={handleInlineProgressSave}
                 onDelayRequestFormChange={(field, value) => {
                   setDelayFormErrors((previous) => ({
                     ...previous,
@@ -3752,7 +3907,7 @@ export default function GanttView() {
             </Suspense>
           </aside>
         )}
-      </div>{}
+      </div>
 
       {criticalPathDialogOpen && (
         <Suspense fallback={null}>
@@ -3773,6 +3928,33 @@ export default function GanttView() {
             onRefresh={handleRefreshCriticalPath}
             onCreateOverride={handleCreateCriticalPathOverride}
             onDeleteOverride={handleDeleteCriticalPathOverride}
+            onNodeNavigate={(taskId) => {
+              setCriticalPathDialogOpen(false)
+              setCriticalPathFocusTaskId(null)
+              if (!id) return
+              navigate(`/projects/${id}/gantt?highlight=${encodeURIComponent(taskId)}`)
+            }}
+          />
+        </Suspense>
+      )}
+
+      {criticalPathInsertRequest && (
+        <Suspense fallback={null}>
+          <CriticalPathInsertDialog
+            open
+            onOpenChange={(open) => {
+              if (!open) {
+                setCriticalPathInsertRequest(null)
+              }
+            }}
+            anchorTask={criticalPathInsertAnchorTask as Task | null}
+            direction={criticalPathInsertRequest.direction}
+            tasks={tasks as Task[]}
+            snapshot={criticalPathSummary?.snapshot ?? null}
+            actionLoading={criticalPathActionLoading}
+            onCreateOverride={async (input) => {
+              await handleCreateCriticalPathOverride(input)
+            }}
           />
         </Suspense>
       )}
@@ -3901,6 +4083,11 @@ export default function GanttView() {
         onDelete={(unit) => void handleParticipantUnitDelete(unit)}
         onCreateNew={handleParticipantUnitCreateNew}
       />
+      <ScopeDimensionsDialog
+        projectId={id || ''}
+        open={scopeDimensionsOpen}
+        onOpenChange={setScopeDimensionsOpen}
+      />
       <DeleteProtectionDialog
         open={Boolean(deleteGuardTarget)}
         onOpenChange={(open) => {
@@ -3964,27 +4151,6 @@ export default function GanttView() {
         projectId={id}
         taskTitle={conditionWarningTarget?.taskTitle}
         pendingConditionCount={conditionWarningTarget?.pendingConditionCount}
-      />
-      <BatchActionBar
-        selectedCount={selectedIds.size}
-        onClear={() => setSelectedIds(new Set())}
-        actions={[
-          {
-            label: '批量完成',
-            icon: CheckCircle2,
-            onClick: handleBatchComplete,
-            disabled: selectedIds.size === 0,
-            testId: 'gantt-batch-complete',
-          },
-          {
-            label: '批量删除',
-            icon: Trash2,
-            variant: 'destructive',
-            onClick: handleBatchDelete,
-            disabled: selectedIds.size === 0,
-            testId: 'gantt-batch-delete',
-          },
-        ]}
       />
     </div>
   )

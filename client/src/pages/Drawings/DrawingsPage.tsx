@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Plus, RefreshCw, Search } from 'lucide-react'
+import { ArrowLeft, FileBadge2, Plus, RefreshCw, Search } from 'lucide-react'
 
 import { Breadcrumb } from '@/components/Breadcrumb'
 import { PageHeader } from '@/components/PageHeader'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import {
@@ -18,12 +19,14 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Textarea } from '@/components/ui/textarea'
+import { usePermissions } from '@/hooks/usePermissions'
 import { useStore } from '@/hooks/useStore'
 import { useToast } from '@/hooks/use-toast'
-import { apiGet, apiPost, getApiErrorMessage, isAbortError } from '@/lib/apiClient'
+import { apiDelete, apiGet, apiPost, apiPut, getApiErrorMessage, isAbortError } from '@/lib/apiClient'
 import { safeJsonParse, safeStorageGet, safeStorageSet } from '@/lib/browserStorage'
+import { cn } from '@/lib/utils'
 
-import { DRAWING_DISCIPLINE_OPTIONS, DRAWING_PURPOSE_OPTIONS, DRAWING_TEMPLATES } from './constants'
+import { DRAWING_DISCIPLINE_OPTIONS, DRAWING_PURPOSE_OPTIONS, DRAWING_REVIEW_MODE_LABELS, DRAWING_TEMPLATES } from './constants'
 import { DrawingDetailDrawer } from './components/DrawingDetailDrawer'
 import { DrawingLedger } from './components/DrawingLedger'
 import { DrawingPackageBoard, type DrawingPackageGroup } from './components/DrawingPackageBoard'
@@ -81,6 +84,60 @@ interface CreateDrawingVersionFormState {
   versionNo: string
   changeReason: string
   isCurrentVersion: boolean
+}
+
+type DrawingReviewRuleRow = {
+  id: string
+  project_id: string | null
+  package_code: string | null
+  discipline_type: string | null
+  document_purpose: string | null
+  default_review_mode: ReviewMode
+  review_basis: string | null
+  reviewer_id?: string | null
+  is_active: boolean | number | null
+  created_at: string
+  updated_at: string
+}
+
+type DrawingReviewRuleFormState = {
+  packageCode: string
+  disciplineType: string
+  documentPurpose: string
+  defaultReviewMode: ReviewMode
+  reviewBasis: string
+  reviewerId: string
+  isActive: boolean
+}
+
+type DrawingReviewRulesResponse = {
+  success?: boolean
+  data?: {
+    rules?: DrawingReviewRuleRow[]
+  }
+}
+
+const emptyReviewRuleForm = (): DrawingReviewRuleFormState => ({
+  packageCode: '',
+  disciplineType: '',
+  documentPurpose: '',
+  defaultReviewMode: 'mandatory',
+  reviewBasis: '',
+  reviewerId: '',
+  isActive: true,
+})
+
+function toReviewRuleForm(rule?: DrawingReviewRuleRow | null): DrawingReviewRuleFormState {
+  if (!rule) return emptyReviewRuleForm()
+  return {
+    packageCode: rule.package_code || '',
+    disciplineType: rule.discipline_type || '',
+    documentPurpose: rule.document_purpose || '',
+    defaultReviewMode: rule.default_review_mode || 'mandatory',
+    reviewBasis: rule.review_basis || '',
+    reviewerId: rule.reviewer_id || '',
+    isActive: Boolean(rule.is_active),
+  }
 }
 
 const reviewModeOptions: Array<{ value: ReviewMode; label: string }> = [
@@ -173,6 +230,7 @@ export default function Drawings() {
   const { id } = useParams<{ id: string }>()
   const { currentProject, projects } = useStore()
   const { toast } = useToast()
+  const { canEdit } = usePermissions({ projectId: id ?? currentProject?.id })
 
   const projectName = currentProject?.name || projects.find((project) => project.id === id)?.name || '当前项目'
   const [board, setBoard] = useState<DrawingsBoardResponse | null>(null)
@@ -201,6 +259,13 @@ export default function Drawings() {
   const [createForm, setCreateForm] = useState<CreatePackageFormState>(emptyCreateForm)
   const [createFormErrors, setCreateFormErrors] = useState<CreatePackageFormErrors>({})
   const [focusView, setFocusView] = useState<DrawingFocusViewMode>(savedFilters.focusView ?? 'overview')
+  const [reviewRulesDialogOpen, setReviewRulesDialogOpen] = useState(false)
+  const [reviewRulesLoading, setReviewRulesLoading] = useState(false)
+  const [reviewRulesSaving, setReviewRulesSaving] = useState(false)
+  const [reviewRules, setReviewRules] = useState<DrawingReviewRuleRow[]>([])
+  const [selectedReviewRuleId, setSelectedReviewRuleId] = useState<string | null>(null)
+  const [reviewRuleForm, setReviewRuleForm] = useState<DrawingReviewRuleFormState>(emptyReviewRuleForm)
+  const [reviewRuleFormError, setReviewRuleFormError] = useState('')
   const boardAbortRef = useRef<AbortController | null>(null)
   const ledgerAbortRef = useRef<AbortController | null>(null)
   const detailAbortRef = useRef<AbortController | null>(null)
@@ -342,6 +407,117 @@ export default function Drawings() {
     [id],
   )
 
+  const loadReviewRules = useCallback(async () => {
+    if (!id) return
+
+    setReviewRulesLoading(true)
+    try {
+      const result = await apiGet<DrawingReviewRulesResponse>(
+        `${API_BASE}/api/drawing-review-rules?projectId=${encodeURIComponent(id)}`,
+        { cache: 'no-store' },
+      )
+      setReviewRules(result.data?.rules ?? [])
+    } catch (error) {
+      if (!isAbortError(error)) {
+        console.error('Failed to load drawing review rules', error)
+        toast({
+          title: '审图规则加载失败',
+          description: getApiErrorMessage(error, '请稍后重试。'),
+          variant: 'destructive',
+        })
+      }
+    } finally {
+      setReviewRulesLoading(false)
+    }
+  }, [id, toast])
+
+  const beginCreateReviewRule = useCallback(() => {
+    setSelectedReviewRuleId(null)
+    setReviewRuleForm(emptyReviewRuleForm())
+    setReviewRuleFormError('')
+  }, [])
+
+  const beginEditReviewRule = useCallback((rule: DrawingReviewRuleRow) => {
+    setSelectedReviewRuleId(rule.id)
+    setReviewRuleForm(toReviewRuleForm(rule))
+    setReviewRuleFormError('')
+  }, [])
+
+  const handleSaveReviewRule = useCallback(async () => {
+    if (!id) return
+
+    const payload = {
+      project_id: id,
+      package_code: reviewRuleForm.packageCode.trim() || null,
+      discipline_type: reviewRuleForm.disciplineType.trim() || null,
+      document_purpose: reviewRuleForm.documentPurpose.trim() || null,
+      default_review_mode: reviewRuleForm.defaultReviewMode,
+      review_basis: reviewRuleForm.reviewBasis.trim() || null,
+      reviewer_id: reviewRuleForm.reviewerId.trim() || null,
+      is_active: reviewRuleForm.isActive,
+    }
+
+    if (reviewRuleForm.defaultReviewMode === 'mandatory' && !payload.reviewer_id) {
+      const message = '必须送审规则需要关联审图人。'
+      setReviewRuleFormError(message)
+      toast({ title: '请先补全审图规则', description: message, variant: 'destructive' })
+      return
+    }
+
+    setReviewRulesSaving(true)
+    try {
+      if (selectedReviewRuleId) {
+        await apiPut(`${API_BASE}/api/drawing-review-rules/${selectedReviewRuleId}`, payload)
+      } else {
+        await apiPost(`${API_BASE}/api/drawing-review-rules`, payload)
+      }
+
+      setSelectedReviewRuleId(null)
+      setReviewRuleForm(emptyReviewRuleForm())
+      setReviewRuleFormError('')
+      await Promise.all([loadReviewRules(), refreshAll()])
+      toast({
+        title: selectedReviewRuleId ? '审图规则已更新' : '审图规则已创建',
+        description: '规则列表已同步刷新。',
+      })
+    } catch (error) {
+      const message = getApiErrorMessage(error, '请稍后重试。')
+      setReviewRuleFormError(message)
+      toast({
+        title: selectedReviewRuleId ? '审图规则更新失败' : '审图规则创建失败',
+        description: message,
+        variant: 'destructive',
+      })
+    } finally {
+      setReviewRulesSaving(false)
+    }
+  }, [id, loadReviewRules, reviewRuleForm, selectedReviewRuleId, toast])
+
+  const handleDeleteReviewRule = useCallback(async (ruleId: string) => {
+    if (!id) return
+    if (!window.confirm('确定删除这条审图规则吗？')) return
+
+    setReviewRulesSaving(true)
+    try {
+      await apiDelete(`${API_BASE}/api/drawing-review-rules/${ruleId}?projectId=${encodeURIComponent(id)}`, {
+        headers: { 'Content-Type': 'application/json' },
+      })
+      if (selectedReviewRuleId === ruleId) {
+        beginCreateReviewRule()
+      }
+      await Promise.all([loadReviewRules(), refreshAll()])
+      toast({ title: '审图规则已删除', description: '规则列表已同步刷新。' })
+    } catch (error) {
+      toast({
+        title: '审图规则删除失败',
+        description: getApiErrorMessage(error, '请稍后重试。'),
+        variant: 'destructive',
+      })
+    } finally {
+      setReviewRulesSaving(false)
+    }
+  }, [beginCreateReviewRule, id, loadReviewRules, selectedReviewRuleId, toast])
+
   const refreshAll = useCallback(async () => {
     await Promise.all([loadBoard(), loadLedger()])
   }, [loadBoard, loadLedger])
@@ -370,6 +546,25 @@ export default function Drawings() {
       versionAbortRef.current?.abort()
     }
   }, [])
+
+  useEffect(() => {
+    if (!reviewRulesDialogOpen) {
+      setSelectedReviewRuleId(null)
+      setReviewRuleForm(emptyReviewRuleForm())
+      setReviewRuleFormError('')
+      return
+    }
+
+    void loadReviewRules()
+  }, [loadReviewRules, reviewRulesDialogOpen])
+
+  useEffect(() => {
+    if (!reviewRulesDialogOpen || !selectedReviewRuleId) return
+    const selectedRule = reviewRules.find((rule) => rule.id === selectedReviewRuleId)
+    if (selectedRule) {
+      setReviewRuleForm(toReviewRuleForm(selectedRule))
+    }
+  }, [reviewRules, reviewRulesDialogOpen, selectedReviewRuleId])
 
   const filteredPackages = useMemo(() => {
     const packages = board?.packages ?? []
@@ -864,14 +1059,14 @@ export default function Drawings() {
         <Breadcrumb
           items={[
             { label: '项目', href: `/projects/${id}` },
-            { label: '证照与验收', href: `/projects/${id}/pre-milestones` },
+            { label: '专项管理', href: `/projects/${id}/pre-milestones` },
             { label: '施工图纸' },
           ]}
         />
       </div>
 
       <PageHeader
-        eyebrow="证照与验收"
+        eyebrow="专项管理"
         title="施工图纸"
       >
         <Button variant="ghost" size="sm" onClick={() => {
@@ -885,11 +1080,23 @@ export default function Drawings() {
           navigate(`/projects/${id}/pre-milestones`)
         }}>
           <ArrowLeft className="mr-2 h-4 w-4" />
-          返回证照与验收
+          返回前期证照
         </Button>
-        <Button variant="outline" size="sm" onClick={() => setCreateDialogOpen(true)}>
+        <Button variant="outline" size="sm" onClick={() => setCreateDialogOpen(true)} disabled={!canEdit}>
           <Plus className="mr-2 h-4 w-4" />
           新建图纸包
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            setReviewRulesDialogOpen(true)
+            beginCreateReviewRule()
+          }}
+          disabled={!canEdit}
+        >
+          <FileBadge2 className="mr-2 h-4 w-4" />
+          审图规则管理
         </Button>
         <Button variant="outline" size="sm" onClick={() => void refreshAll()}>
           <RefreshCw className="mr-2 h-4 w-4" />
@@ -997,7 +1204,7 @@ export default function Drawings() {
                 }
               }}
               onOpenVersions={(row) => void openVersionWindowFromRow(row)}
-              onSetCurrentVersion={(row) => void handleSetCurrentVersion(row.drawingId)}
+              onSetCurrentVersion={canEdit ? (row) => void handleSetCurrentVersion(row.drawingId) : undefined}
             />
           </div>
         )}
@@ -1018,14 +1225,18 @@ export default function Drawings() {
             void openVersionWindow(selectedPackage)
           }
         }}
-        onSetCurrentVersion={(versionId) => void handleSetCurrentVersion(versionId)}
-        onAddDrawing={() => {
+        onSetCurrentVersion={(versionId) => {
+          if (!canEdit) return
+          void handleSetCurrentVersion(versionId)
+        }}
+        onAddDrawing={canEdit ? () => {
           if (selectedPackage) {
             void openVersionWindow(selectedPackage)
           }
-        }}
-        onCreateIssue={(signal) => void createManualIssue(signal)}
-        onCreateRisk={(signal) => void createManualRisk(signal)}
+        } : undefined}
+        onCreateIssue={canEdit ? (signal) => void createManualIssue(signal) : undefined}
+        onCreateRisk={canEdit ? (signal) => void createManualRisk(signal) : undefined}
+        canEdit={canEdit}
       />
 
       <DrawingVersionDialog
@@ -1034,9 +1245,270 @@ export default function Drawings() {
         versions={versionRows}
         projectId={id}
         onOpenChange={setVersionDialogOpen}
-        onSetCurrentVersion={(versionId) => void handleSetCurrentVersion(versionId)}
-        onCreateVersion={(draft) => handleCreateVersion(draft)}
+        onSetCurrentVersion={canEdit ? (versionId) => void handleSetCurrentVersion(versionId) : () => {}}
+        onCreateVersion={canEdit ? (draft) => handleCreateVersion(draft) : undefined}
+        canEdit={canEdit}
       />
+
+      <Dialog
+        open={reviewRulesDialogOpen}
+        onOpenChange={(open) => {
+          setReviewRulesDialogOpen(open)
+          if (!open) {
+            beginCreateReviewRule()
+          }
+        }}
+      >
+        <DialogContent className="max-w-6xl border-slate-200">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-slate-900">
+              <FileBadge2 className="h-5 w-5" />
+              审图规则管理
+            </DialogTitle>
+            <DialogDescription className="text-slate-500">
+              按专业、用途和图纸包编号维护项目审图规则，支持新增、编辑和删除。
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-4 lg:grid-cols-[0.92fr_1.08fr]">
+            <Card className="border-slate-200 shadow-sm">
+              <CardContent className="space-y-3 p-4">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <div className="text-sm font-semibold text-slate-900">规则列表</div>
+                    <div className="text-xs text-slate-500">当前项目下的可用规则</div>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      beginCreateReviewRule()
+                      if (!reviewRulesDialogOpen) {
+                        setReviewRulesDialogOpen(true)
+                      }
+                    }}
+                    disabled={!canEdit}
+                  >
+                    新增规则
+                  </Button>
+                </div>
+
+                <div className="max-h-[56vh] space-y-3 overflow-y-auto pr-1">
+                  {reviewRulesLoading ? (
+                    <>
+                      {[1, 2, 3].map((item) => (
+                        <div key={item} className="space-y-2 rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                          <Skeleton className="h-4 w-28 rounded-full" />
+                          <Skeleton className="h-3 w-48 rounded-full" />
+                          <Skeleton className="h-3 w-36 rounded-full" />
+                        </div>
+                      ))}
+                    </>
+                  ) : reviewRules.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+                      暂无审图规则，可先新增一条。
+                    </div>
+                  ) : (
+                    reviewRules.map((rule) => {
+                      const isSelected = selectedReviewRuleId === rule.id
+                      return (
+                        <div
+                          key={rule.id}
+                          className={cn(
+                            'rounded-2xl border p-3 transition-colors',
+                            isSelected ? 'border-blue-300 bg-blue-50/50' : 'border-slate-200 bg-white',
+                          )}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="truncate text-sm font-semibold text-slate-900">
+                                {rule.discipline_type || '全部专业'}
+                              </div>
+                              <div className="mt-1 text-xs text-slate-500">
+                                {rule.package_code || '不限包号'} · {rule.document_purpose || '不限用途'}
+                              </div>
+                            </div>
+                            <Badge variant={rule.is_active ? 'secondary' : 'outline'} className="shrink-0 rounded-full px-2 py-0.5">
+                              {rule.is_active ? '启用' : '停用'}
+                            </Badge>
+                          </div>
+
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            <Badge variant="outline" className="rounded-full px-2 py-0.5">
+                              {DRAWING_REVIEW_MODE_LABELS[rule.default_review_mode]}
+                            </Badge>
+                            <Badge variant="outline" className="rounded-full px-2 py-0.5">
+                              {rule.reviewer_id?.trim() ? `审图人 ${rule.reviewer_id.trim().slice(0, 12)}` : '未关联审图人'}
+                            </Badge>
+                            <Badge variant="outline" className="rounded-full px-2 py-0.5">
+                              {rule.review_basis?.trim() ? rule.review_basis.trim().slice(0, 18) : '无依据'}
+                            </Badge>
+                          </div>
+
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => beginEditReviewRule(rule)}
+                              disabled={reviewRulesSaving}
+                            >
+                              编辑
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => void handleDeleteReviewRule(rule.id)}
+                              disabled={reviewRulesSaving}
+                            >
+                              删除
+                            </Button>
+                          </div>
+                        </div>
+                      )
+                    })
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="border-slate-200 shadow-sm">
+              <CardContent className="space-y-4 p-4">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <div className="text-sm font-semibold text-slate-900">
+                      {selectedReviewRuleId ? '编辑审图规则' : '新增审图规则'}
+                    </div>
+                    <div className="text-xs text-slate-500">
+                      {selectedReviewRuleId ? '修改后会立即覆盖当前规则。' : '先填一条规则，再按需调整。'}
+                    </div>
+                  </div>
+                  {selectedReviewRuleId ? (
+                    <Button variant="ghost" size="sm" onClick={beginCreateReviewRule}>
+                      取消编辑
+                    </Button>
+                  ) : null}
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="review-rule-package-code">图纸包编号</Label>
+                    <Input
+                      id="review-rule-package-code"
+                      value={reviewRuleForm.packageCode}
+                      onChange={(event) => {
+                        setReviewRuleFormError('')
+                        setReviewRuleForm((current) => ({ ...current, packageCode: event.target.value }))
+                      }}
+                      placeholder="可留空，支持全包规则"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="review-rule-discipline">专业</Label>
+                    <Input
+                      id="review-rule-discipline"
+                      value={reviewRuleForm.disciplineType}
+                      onChange={(event) => {
+                        setReviewRuleFormError('')
+                        setReviewRuleForm((current) => ({ ...current, disciplineType: event.target.value }))
+                      }}
+                      placeholder="例如：建筑、结构、消防"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="review-rule-purpose">用途 / 属性</Label>
+                    <Input
+                      id="review-rule-purpose"
+                      value={reviewRuleForm.documentPurpose}
+                      onChange={(event) => {
+                        setReviewRuleFormError('')
+                        setReviewRuleForm((current) => ({ ...current, documentPurpose: event.target.value }))
+                      }}
+                      placeholder="例如：施工执行、送审报批"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="review-rule-mode">默认审图方式</Label>
+                    <select
+                      id="review-rule-mode"
+                      value={reviewRuleForm.defaultReviewMode}
+                      onChange={(event) => {
+                        setReviewRuleFormError('')
+                        setReviewRuleForm((current) => ({ ...current, defaultReviewMode: event.target.value as ReviewMode }))
+                      }}
+                      className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-blue-300"
+                    >
+                      {reviewModeOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="space-y-2 md:col-span-2">
+                    <Label htmlFor="review-rule-basis">判定依据</Label>
+                    <Textarea
+                      id="review-rule-basis"
+                      value={reviewRuleForm.reviewBasis}
+                      onChange={(event) => {
+                        setReviewRuleFormError('')
+                        setReviewRuleForm((current) => ({ ...current, reviewBasis: event.target.value }))
+                      }}
+                      rows={4}
+                      placeholder="可填写规范、图纸清单或专项要求。"
+                    />
+                  </div>
+
+                  <div className="space-y-2 md:col-span-2">
+                    <Label htmlFor="review-rule-reviewer">审图人</Label>
+                    <Input
+                      id="review-rule-reviewer"
+                      value={reviewRuleForm.reviewerId}
+                      onChange={(event) => {
+                        setReviewRuleFormError('')
+                        setReviewRuleForm((current) => ({ ...current, reviewerId: event.target.value }))
+                      }}
+                      placeholder="填写审图人用户 ID；必审规则必填"
+                    />
+                  </div>
+
+                  <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 md:col-span-2">
+                    <input
+                      type="checkbox"
+                      checked={reviewRuleForm.isActive}
+                      onChange={(event) => {
+                        setReviewRuleFormError('')
+                        setReviewRuleForm((current) => ({ ...current, isActive: event.target.checked }))
+                      }}
+                    />
+                    启用此规则
+                  </label>
+                </div>
+
+                {reviewRuleFormError ? (
+                  <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                    {reviewRuleFormError}
+                  </div>
+                ) : null}
+
+                <div className="flex justify-end gap-2">
+                  <Button variant="outline" onClick={beginCreateReviewRule} disabled={reviewRulesSaving}>
+                    重置
+                  </Button>
+                  <Button onClick={() => void handleSaveReviewRule()} loading={reviewRulesSaving} disabled={!canEdit}>
+                    保存规则
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={createDialogOpen}
@@ -1187,7 +1659,7 @@ export default function Drawings() {
             >
               取消
             </Button>
-            <Button onClick={() => void handleCreatePackage()} loading={creatingPackage}>
+            <Button onClick={() => void handleCreatePackage()} loading={creatingPackage} disabled={!canEdit}>
               创建图纸包
             </Button>
           </DialogFooter>

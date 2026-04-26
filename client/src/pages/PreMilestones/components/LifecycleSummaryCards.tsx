@@ -11,7 +11,7 @@ import type { CertificateBoardSummary } from '../types'
 interface LifecycleSummaryCardsProps {
   summary: Pick<
     CertificateBoardSummary,
-    'completedCount' | 'blockingCertificateType' | 'expectedReadyDate' | 'overdueCount' | 'supplementCount' | 'weeklyActionCount'
+    'completedCount' | 'totalCount' | 'blockingCertificateType' | 'expectedReadyDate' | 'overdueCount' | 'supplementCount' | 'weeklyActionCount'
   >
   onClickBlockingCertificate?: () => void
   onClickExpectedReadyDate?: () => void

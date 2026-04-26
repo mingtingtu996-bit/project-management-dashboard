@@ -326,6 +326,7 @@ export const DRAWING_REVIEW_RULE_COLUMNS = [
   'document_purpose',
   'default_review_mode',
   'review_basis',
+  'reviewer_id',
   'is_active',
   'created_at',
   'updated_at',

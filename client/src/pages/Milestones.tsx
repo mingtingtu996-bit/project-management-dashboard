@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useEffect, useMemo, useState } from 'react'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
 
 import { Breadcrumb } from '@/components/Breadcrumb'
 import { EmptyState } from '@/components/EmptyState'
@@ -15,6 +15,7 @@ import { DashboardApiService } from '@/services/dashboardApi'
 import { toast } from '@/hooks/use-toast'
 import { formatDate } from '@/lib/utils'
 import { MilestonesSkeleton } from '@/components/ui/page-skeleton'
+import { apiGet, getApiErrorMessage, isAbortError } from '@/lib/apiClient'
 import {
   AlertCircle,
   ArrowLeft,
@@ -48,6 +49,7 @@ interface MilestoneItem {
   mapping_pending?: boolean
   merged_into?: string | null
   merged_into_name?: string | null
+  non_base_labels?: string[]
 }
 
 interface MilestoneStats {
@@ -59,8 +61,26 @@ interface MilestoneStats {
   completionRate: number
 }
 
+interface MilestoneSummaryStats {
+  shiftedCount: number
+  baselineOnTimeCount: number
+  dueSoon30dCount: number
+  highRiskCount: number
+}
+
+interface MilestoneHealthSummary {
+  status: 'normal' | 'needs_attention' | 'abnormal'
+  needsAttentionCount: number
+  mappingPendingCount: number
+  mergedCount: number
+  excessiveDeviationCount: number
+  incompleteDataCount: number
+}
+
 interface ProjectMilestoneOverview {
   stats: MilestoneStats
+  summaryStats?: MilestoneSummaryStats
+  healthSummary?: MilestoneHealthSummary
   items: MilestoneItem[]
 }
 
@@ -71,6 +91,15 @@ interface ProjectSummary {
 }
 
 type MilestoneFilter = 'all' | MilestoneStatus
+
+interface LinkedTaskItem {
+  id: string
+  title: string
+  status?: string | null
+  progress?: number | null
+  assignee_name?: string | null
+  planned_end_date?: string | null
+}
 
 function isCompleted(milestone: MilestoneItem): boolean {
   return milestone.status === 'completed'
@@ -131,6 +160,41 @@ function escapeCsvCell(value: string | number | boolean | null | undefined) {
   return `"${normalized.replace(/"/g, '""')}"`
 }
 
+function getMilestoneHealthTone(status: MilestoneHealthSummary['status']) {
+  if (status === 'abnormal') {
+    return {
+      container: 'border-red-200 bg-red-50 text-red-800',
+      badge: 'border-red-200 bg-red-100 text-red-700',
+      title: '存在异常',
+      accent: 'text-red-700',
+    }
+  }
+
+  if (status === 'needs_attention') {
+    return {
+      container: 'border-amber-200 bg-amber-50 text-amber-800',
+      badge: 'border-amber-200 bg-amber-100 text-amber-700',
+      title: '需要关注',
+      accent: 'text-amber-700',
+    }
+  }
+
+  return {
+    container: 'border-emerald-200 bg-emerald-50 text-emerald-800',
+    badge: 'border-emerald-200 bg-emerald-100 text-emerald-700',
+    title: '状态正常',
+    accent: 'text-emerald-700',
+  }
+}
+
+function getLinkedTaskBadgeVariant(status?: string | null) {
+  const normalized = String(status ?? '').trim().toLowerCase()
+  if (normalized === 'completed' || normalized === 'done' || normalized === '已完成') return 'default' as const
+  if (normalized === 'overdue' || normalized === 'delayed' || normalized === 'blocked') return 'destructive' as const
+  if (normalized === 'in_progress' || normalized === 'active' || normalized === '进行中') return 'secondary' as const
+  return 'outline' as const
+}
+
 function StatCard({
   title,
   value,
@@ -185,6 +249,59 @@ function MilestoneDetailCard({
   )
 }
 
+function LinkedTasksCard({
+  tasks,
+  loading,
+}: {
+  tasks: LinkedTaskItem[]
+  loading: boolean
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+      <div className="text-sm font-medium text-slate-900">关联执行</div>
+      <div className="mt-3 space-y-3">
+        {loading ? (
+          <div className="rounded-2xl border border-dashed border-slate-200 bg-white px-4 py-5 text-sm text-slate-400">
+            关联执行加载中...
+          </div>
+        ) : tasks.length > 0 ? (
+          tasks.map((task) => (
+            <div key={task.id} className="rounded-2xl border border-white bg-white px-4 py-3 shadow-sm">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-medium text-slate-900">{task.title}</div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    {task.assignee_name || '未分配'}
+                    {task.planned_end_date ? ` · 计划完成 ${formatMilestoneDate(task.planned_end_date)}` : ' · 未设置计划完成日'}
+                  </div>
+                </div>
+                <Badge variant={getLinkedTaskBadgeVariant(task.status)} className="shrink-0">
+                  {task.status || '状态待补充'}
+                </Badge>
+              </div>
+              <div className="mt-3">
+                <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+                  <div
+                    className="h-full rounded-full bg-blue-500"
+                    style={{ width: `${Math.max(0, Math.min(100, Number(task.progress ?? 0)))}%` }}
+                  />
+                </div>
+                <div className="mt-1 text-[11px] text-slate-500">
+                  进度 {Math.max(0, Math.min(100, Number(task.progress ?? 0)))}%
+                </div>
+              </div>
+            </div>
+          ))
+        ) : (
+          <div className="rounded-2xl border border-dashed border-slate-200 bg-white px-4 py-5 text-sm text-slate-400">
+            暂无关联执行任务
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function MilestoneNodeCard({
   milestone,
   onSelect,
@@ -225,6 +342,8 @@ function MilestoneNodeCard({
     <button
       type="button"
       onClick={() => onSelect(milestone)}
+      id={`milestone-${milestone.id}`}
+      data-testid={`milestone-card-${milestone.id}`}
       className={`w-full rounded-xl border p-4 text-left transition-colors ${completed ? 'opacity-80' : ''} ${
         milestone.status === 'overdue'
           ? 'border-red-200 bg-red-50'
@@ -249,6 +368,18 @@ function MilestoneNodeCard({
               </span>
             )}
           </div>
+          {(milestone.non_base_labels?.length ?? 0) > 0 && (
+            <div className="flex flex-wrap gap-2 pt-1">
+              {milestone.non_base_labels?.map((label) => (
+                <span
+                  key={`${milestone.id}-${label}`}
+                  className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-medium text-slate-600"
+                >
+                  {label}
+                </span>
+              ))}
+            </div>
+          )}
           <div data-testid="milestones-three-time" className="grid gap-2 pt-2 text-[11px] text-slate-500 sm:grid-cols-3">
             <div className="rounded-lg bg-slate-50 px-2 py-1.5">
               <div className="text-[10px] uppercase tracking-wide text-slate-400">基线</div>
@@ -292,6 +423,7 @@ function MilestoneNodeCard({
 
 export default function Milestones() {
   const { id } = useParams<{ id: string }>()
+  const location = useLocation()
   const navigate = useNavigate()
   const { data: summary, loading, error, refetch } = useAsyncData(
     async () => {
@@ -311,6 +443,69 @@ export default function Milestones() {
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState<MilestoneFilter>('all')
   const [selectedMilestone, setSelectedMilestone] = useState<MilestoneItem | null>(null)
+  const [linkedTasks, setLinkedTasks] = useState<LinkedTaskItem[]>([])
+  const [linkedTasksLoading, setLinkedTasksLoading] = useState(false)
+  const highlightMilestoneId = useMemo(() => new URLSearchParams(location.search).get('highlight')?.trim() ?? '', [location.search])
+
+  useEffect(() => {
+    setSelectedMilestone(null)
+    setLinkedTasks([])
+    setLinkedTasksLoading(false)
+  }, [id])
+
+  useEffect(() => {
+    if (!highlightMilestoneId || !milestoneOverview?.items?.length) {
+      return
+    }
+
+    const highlighted = milestoneOverview.items.find((item) => item.id === highlightMilestoneId)
+    if (!highlighted) {
+      return
+    }
+
+    setSelectedMilestone((current) => (current?.id === highlighted.id ? current : highlighted))
+    window.setTimeout(() => {
+      document.getElementById(`milestone-${highlighted.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }, 0)
+  }, [highlightMilestoneId, milestoneOverview?.items])
+
+  useEffect(() => {
+    if (!id || !selectedMilestone) {
+      setLinkedTasks([])
+      setLinkedTasksLoading(false)
+      return
+    }
+
+    const controller = new AbortController()
+    setLinkedTasksLoading(true)
+
+    apiGet<LinkedTaskItem[]>(
+      `/api/projects/${id}/milestones/${selectedMilestone.id}/linked-tasks`,
+      { signal: controller.signal },
+    )
+      .then((payload) => {
+        if (!controller.signal.aborted) {
+          setLinkedTasks(Array.isArray(payload) ? payload : [])
+        }
+      })
+      .catch((error) => {
+        if (!isAbortError(error)) {
+          setLinkedTasks([])
+          toast({
+            title: '关联执行加载失败',
+            description: getApiErrorMessage(error, '无法加载关联执行'),
+            variant: 'destructive',
+          })
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setLinkedTasksLoading(false)
+        }
+      })
+
+    return () => controller.abort()
+  }, [id, selectedMilestone, toast])
 
   const goToTaskList = (milestoneId?: string) => {
     if (!id) return
@@ -332,35 +527,34 @@ export default function Milestones() {
       })
   }, [filter, milestoneOverview?.items, search])
 
-  const dueIn7DaysCount = useMemo(() => {
-    const items = milestoneOverview?.items || []
-    return items.filter((m) => !isCompleted(m) && daysUntil(m.targetDate) >= 0 && daysUntil(m.targetDate) <= 7).length
-  }, [milestoneOverview?.items])
+  const milestoneSummaryStats = milestoneOverview?.summaryStats ?? {
+    shiftedCount: 0,
+    baselineOnTimeCount: 0,
+    dueSoon30dCount: 0,
+    highRiskCount: 0,
+  }
 
-  const milestoneHealth = useMemo(() => {
-    const items = milestoneOverview?.items || []
-    return {
-      plannedCount: items.filter((item) => item.planned_date).length,
-      currentCount: items.filter((item) => item.current_planned_date).length,
-      actualCount: items.filter((item) => item.actual_date).length,
-      mappingPendingCount: items.filter((item) => item.mapping_pending).length,
-      mergedCount: items.filter((item) => Boolean(item.merged_into)).length,
-    }
-  }, [milestoneOverview?.items])
+  const milestoneHealthSummary = milestoneOverview?.healthSummary ?? {
+    status: 'normal' as const,
+    needsAttentionCount: 0,
+    mappingPendingCount: 0,
+    mergedCount: 0,
+    excessiveDeviationCount: 0,
+    incompleteDataCount: 0,
+  }
 
   const filteredMilestoneGroups = useMemo(() => buildMilestoneGroups(filteredMilestones), [filteredMilestones])
   const summaryCards = useMemo(
     () =>
       milestoneOverview
         ? [
-            { title: '待完成', value: milestoneOverview.stats.pending, hint: '来自共享摘要口径', tone: 'amber' as const },
-            { title: '已完成', value: milestoneOverview.stats.completed, hint: `共 ${milestoneOverview.stats.total} 个节点`, tone: 'green' as const },
-            { title: '7天内到期', value: dueIn7DaysCount, hint: '临近节点提醒', tone: 'orange' as const },
-            { title: '已逾期', value: milestoneOverview.stats.overdue, hint: '优先处理', tone: 'red' as const },
-            { title: '完成率', value: `${milestoneOverview.stats.completionRate}%`, hint: '节点偏差表达已收口', tone: 'slate' as const },
+            { title: '当前已偏移数', value: milestoneSummaryStats.shiftedCount, hint: '基线与当前计划不一致', tone: 'orange' as const },
+            { title: '按基线准时完成数', value: milestoneSummaryStats.baselineOnTimeCount, hint: '按基线完成或未偏移', tone: 'green' as const },
+            { title: '近 30 天到期数', value: milestoneSummaryStats.dueSoon30dCount, hint: '按当前计划未来 30 天内到期', tone: 'blue' as const },
+            { title: '高风险里程碑数', value: milestoneSummaryStats.highRiskCount, hint: '偏差、缺失与异常场景', tone: 'red' as const },
           ]
         : [],
-    [milestoneOverview, dueIn7DaysCount],
+    [milestoneOverview, milestoneSummaryStats],
   )
 
   const exportMilestones = () => {
@@ -472,6 +666,32 @@ export default function Milestones() {
   }
 
   const totalItems = milestoneOverview.items.length
+  const hasAnyMilestones = totalItems > 0
+  const healthTone = getMilestoneHealthTone(milestoneHealthSummary.status)
+  const healthSummaryText =
+    milestoneHealthSummary.status === 'normal'
+      ? '里程碑状态正常'
+      : milestoneHealthSummary.status === 'needs_attention'
+        ? `${milestoneHealthSummary.needsAttentionCount} 个里程碑需要关注`
+        : `${milestoneHealthSummary.needsAttentionCount} 个里程碑存在异常`
+  const countByLabel = (label: string) =>
+    milestoneOverview.items.filter((item) => (item.non_base_labels ?? []).includes(label)).length
+  const healthBreakdown = {
+    mappingPending: milestoneHealthSummary.mappingPendingCount,
+    pendingTakeover: countByLabel('待人工承接'),
+    executionClosed: countByLabel('执行层已关闭'),
+    baselineRemoved: countByLabel('基线已移除') + countByLabel('基线版本已移除'),
+    incompleteData: milestoneHealthSummary.incompleteDataCount,
+    deviationExcessive: milestoneHealthSummary.excessiveDeviationCount,
+    noBaseline: countByLabel('未关联基线'),
+  }
+  const healthSummaryDetail = [
+    `待补映射 ${healthBreakdown.mappingPending}`,
+    `待承接 ${healthBreakdown.pendingTakeover}`,
+    `执行层已关闭 ${healthBreakdown.executionClosed}`,
+    `数据不完整 ${healthBreakdown.incompleteData}`,
+    `偏差过大 ${healthBreakdown.deviationExcessive}`,
+  ].join(' / ')
 
   return (
     <div className="page-enter space-y-6 p-6">
@@ -519,167 +739,190 @@ export default function Milestones() {
           ))}
         </div>
 
-        <Card data-testid="milestone-health-strip" className="border-slate-200 shadow-sm">
-          <CardContent className="flex flex-wrap items-center gap-3 p-4 text-sm">
-            <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-700">三时间表达</span>
-            <span className="rounded-full bg-blue-50 px-3 py-1 text-blue-700">计划 {milestoneHealth.plannedCount}</span>
-            <span className="rounded-full bg-indigo-50 px-3 py-1 text-indigo-700">当前 {milestoneHealth.currentCount}</span>
-            <span className="rounded-full bg-emerald-50 px-3 py-1 text-emerald-700">实际 {milestoneHealth.actualCount}</span>
-            <span className="rounded-full bg-amber-50 px-3 py-1 text-amber-700">映射待确认 {milestoneHealth.mappingPendingCount}</span>
-            <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-600">已合并 {milestoneHealth.mergedCount}</span>
-          </CardContent>
-        </Card>
-
-        <Card className="border-slate-200 shadow-sm">
-          <CardContent className="flex flex-col gap-4 p-4 lg:flex-row lg:items-center lg:justify-between">
-            <p className="text-sm font-medium text-slate-900">节点偏差表</p>
-            <Input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="搜索节点名称、描述、状态"
-              className="w-full lg:w-[320px]"
-            />
-          </CardContent>
-        </Card>
-
-        <Tabs value={filter} onValueChange={(value) => setFilter(value as MilestoneFilter)}>
-          <TabsList className="grid w-full grid-cols-5 bg-slate-100 p-1">
-            <TabsTrigger value="all">全部 {totalItems}</TabsTrigger>
-            <TabsTrigger value="pending">待完成 {milestoneOverview.stats.pending}</TabsTrigger>
-            <TabsTrigger value="soon">7天内 {milestoneOverview.stats.upcomingSoon}</TabsTrigger>
-            <TabsTrigger value="overdue">已逾期 {milestoneOverview.stats.overdue}</TabsTrigger>
-            <TabsTrigger value="completed">已完成 {milestoneOverview.stats.completed}</TabsTrigger>
-          </TabsList>
-
-          <TabsContent value={filter} className="mt-6 space-y-6">
-            <div className={`grid gap-6 ${selectedMilestone ? 'xl:grid-cols-[minmax(0,1.5fr)_minmax(320px,0.85fr)]' : ''}`}>
-              <Card className="border-slate-200 shadow-sm">
-                <CardHeader className="border-b border-slate-100 pb-4">
-                  <CardTitle className="flex items-center gap-2 text-base">
-                    <Flag className="h-4 w-4" />
-                    节点偏差表
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3 pt-4">
-                  {filteredMilestoneGroups.length === 0 ? (
-                    <EmptyState
-                      icon={Flag}
-                      title="暂无匹配的节点"
-                      action={<Button variant="outline" size="sm" onClick={() => { setSearch(''); setFilter('all') }}>重置筛选</Button>}
-                      className="max-w-none py-8"
-                    />
-                  ) : (
-                    filteredMilestoneGroups.map((group) => (
-                      <div key={group.root.id} className="space-y-3">
-                        <MilestoneNodeCard milestone={group.root} onSelect={setSelectedMilestone} />
-                        {group.children.length > 0 && (
-                          <div data-testid="milestone-child-group" className="ml-4 space-y-2 rounded-2xl border border-dashed border-slate-200 bg-slate-50/70 p-3">
-                            <div className="text-xs font-medium text-slate-500">子里程碑组 · {group.children.length} 项</div>
-                            <div className="space-y-2">
-                              {group.children.map((child) => (
-                                <MilestoneNodeCard key={child.id} milestone={child} onSelect={setSelectedMilestone} />
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    ))
-                  )}
-                </CardContent>
-              </Card>
-
-              {selectedMilestone && (
-                <Card className="border-slate-200 shadow-sm">
-                  <CardHeader className="pb-4">
-                    <div className="flex items-start justify-between gap-2">
-                      <CardTitle className="text-base">{selectedMilestone.name}</CardTitle>
-                      <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => setSelectedMilestone(null)}>
-                        收起
-                      </Button>
-                    </div>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    {(() => {
-                      const { baselineDate, currentPlanDate, actualDate } = getMilestoneTimeline(selectedMilestone)
-                      const anomalyLabel = selectedMilestone.mapping_pending
-                        ? '对应关系待确认'
-                        : selectedMilestone.merged_into
-                          ? `已合并到 ${selectedMilestone.merged_into_name || selectedMilestone.merged_into}`
-                          : '当前未发现异常标记'
-                      const currentVariance = getVarianceDays(baselineDate, currentPlanDate)
-                      const actualVariance = getVarianceDays(baselineDate, actualDate)
-
-                      return (
-                        <div className="grid gap-3 sm:grid-cols-2">
-                          <MilestoneDetailCard
-                            title="三时间对比"
-                            rows={[
-                              { label: '基线目标', value: formatMilestoneDate(baselineDate) },
-                              { label: '当前计划', value: formatMilestoneDate(currentPlanDate) },
-                              { label: '实际达成', value: formatMilestoneDate(actualDate) },
-                            ]}
-                          />
-                          <MilestoneDetailCard
-                            title="偏差结果"
-                            rows={[
-                              { label: '当前状态', value: selectedMilestone.statusLabel },
-                              { label: '当前进度', value: `${selectedMilestone.progress}%` },
-                              {
-                                label: '当前计划偏差',
-                                value:
-                                  currentVariance === null
-                                    ? '待补齐日期'
-                                    : currentVariance === 0
-                                      ? '与基线一致'
-                                      : currentVariance > 0
-                                        ? `较基线延后 ${currentVariance} 天`
-                                        : `较基线提前 ${Math.abs(currentVariance)} 天`,
-                              },
-                              {
-                                label: '实际达成偏差',
-                                value:
-                                  actualVariance === null
-                                    ? '待补齐日期'
-                                    : actualVariance === 0
-                                      ? '与基线一致'
-                                      : actualVariance > 0
-                                        ? `较基线延后 ${actualVariance} 天`
-                                        : `较基线提前 ${Math.abs(actualVariance)} 天`,
-                              },
-                            ]}
-                          />
-                          <MilestoneDetailCard
-                            title="异常与对应关系"
-                            rows={[
-                              { label: '对应关系', value: anomalyLabel },
-                              { label: '节点备注', value: selectedMilestone.description || '暂无备注' },
-                              {
-                                label: '最近更新',
-                                value: selectedMilestone.updatedAt ? formatMilestoneDate(selectedMilestone.updatedAt) : '待补充',
-                              },
-                            ]}
-                          />
-                          <MilestoneDetailCard
-                            title="关联执行"
-                            rows={[
-                              { label: 'WBS', value: selectedMilestone.wbs_code || '未编码' },
-                              { label: '节点编号', value: selectedMilestone.id },
-                              { label: '执行入口', value: '跳转任务管理并高亮当前节点' },
-                            ]}
-                          />
-                        </div>
-                      )
-                    })()}
-                    <Button variant="outline" size="sm" className="w-full" onClick={() => goToTaskList(selectedMilestone.id)}>
-                      <ExternalLink className="mr-2 h-3 w-3" />
-                      进入任务管理
-                    </Button>
-                  </CardContent>
-                </Card>
-              )}
+        <Card data-testid="milestone-health-summary" className={`border shadow-sm ${healthTone.container}`}>
+          <CardContent className="flex flex-col gap-4 p-5 lg:flex-row lg:items-center lg:justify-between">
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className={`rounded-full border px-3 py-1 text-xs font-medium ${healthTone.badge}`}>里程碑健康状态</span>
+                <span className={`text-base font-semibold ${healthTone.accent}`}>{healthSummaryText}</span>
+              </div>
+              <div className="text-sm leading-6 text-slate-600">{healthSummaryDetail}</div>
+              <div className="flex flex-wrap gap-2 text-xs text-slate-600">
+                <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1">当前已偏移 {milestoneSummaryStats.shiftedCount}</span>
+                <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1">按基线准时完成 {milestoneSummaryStats.baselineOnTimeCount}</span>
+                <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1">近 30 天到期 {milestoneSummaryStats.dueSoon30dCount}</span>
+                <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1">高风险 {milestoneSummaryStats.highRiskCount}</span>
+              </div>
             </div>
-          </TabsContent>
-        </Tabs>
+            <Button variant="outline" size="sm" onClick={() => navigate(`/projects/${id}/reports?view=progress`)}>
+              查看详情
+            </Button>
+          </CardContent>
+        </Card>
+
+        {!hasAnyMilestones ? (
+          <Card className="border-dashed border-slate-200 shadow-sm">
+            <CardContent className="flex flex-col items-center gap-4 py-14 text-center">
+              <Flag className="h-12 w-12 text-slate-300" />
+              <div className="space-y-2">
+                <div className="text-lg font-semibold text-slate-900">暂无里程碑数据</div>
+                <p className="max-w-xl text-sm leading-6 text-slate-500">
+                  在任务列表中将关键节点标记为里程碑后，这里会自动展示。
+                </p>
+              </div>
+              <Button variant="outline" onClick={() => goToTaskList()}>
+                <ExternalLink className="mr-2 h-4 w-4" />
+                前往任务列表
+              </Button>
+            </CardContent>
+          </Card>
+        ) : (
+          <>
+            <Card className="border-slate-200 shadow-sm">
+              <CardContent className="flex flex-col gap-4 p-4 lg:flex-row lg:items-center lg:justify-between">
+                <p className="text-sm font-medium text-slate-900">节点偏差表</p>
+                <Input
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder="搜索节点名称、描述、状态"
+                  className="w-full lg:w-[320px]"
+                />
+              </CardContent>
+            </Card>
+
+            <Tabs value={filter} onValueChange={(value) => setFilter(value as MilestoneFilter)}>
+              <TabsList className="grid w-full grid-cols-5 bg-slate-100 p-1">
+                <TabsTrigger value="all">全部 {totalItems}</TabsTrigger>
+                <TabsTrigger value="pending">待完成 {milestoneOverview.stats.pending}</TabsTrigger>
+                <TabsTrigger value="soon">7天内 {milestoneOverview.stats.upcomingSoon}</TabsTrigger>
+                <TabsTrigger value="overdue">已逾期 {milestoneOverview.stats.overdue}</TabsTrigger>
+                <TabsTrigger value="completed">已完成 {milestoneOverview.stats.completed}</TabsTrigger>
+              </TabsList>
+
+              <TabsContent value={filter} className="mt-6 space-y-6">
+                <div className={`grid gap-6 ${selectedMilestone ? 'xl:grid-cols-[minmax(0,1.5fr)_minmax(320px,0.85fr)]' : ''}`}>
+                  <Card className="border-slate-200 shadow-sm">
+                    <CardHeader className="border-b border-slate-100 pb-4">
+                      <CardTitle className="flex items-center gap-2 text-base">
+                        <Flag className="h-4 w-4" />
+                        节点偏差表
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-3 pt-4">
+                      {filteredMilestoneGroups.length === 0 ? (
+                        <EmptyState
+                          icon={Flag}
+                          title="暂无匹配的节点"
+                          action={<Button variant="outline" size="sm" onClick={() => { setSearch(''); setFilter('all') }}>重置筛选</Button>}
+                          className="max-w-none py-8"
+                        />
+                      ) : (
+                        filteredMilestoneGroups.map((group) => (
+                          <div key={group.root.id} className="space-y-3">
+                            <MilestoneNodeCard milestone={group.root} onSelect={setSelectedMilestone} />
+                            {group.children.length > 0 && (
+                              <div data-testid="milestone-child-group" className="ml-4 space-y-2 rounded-2xl border border-dashed border-slate-200 bg-slate-50/70 p-3">
+                                <div className="text-xs font-medium text-slate-500">子里程碑组 · {group.children.length} 项</div>
+                                <div className="space-y-2">
+                                  {group.children.map((child) => (
+                                    <MilestoneNodeCard key={child.id} milestone={child} onSelect={setSelectedMilestone} />
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        ))
+                      )}
+                    </CardContent>
+                  </Card>
+
+                  {selectedMilestone && (
+                    <Card className="border-slate-200 shadow-sm">
+                      <CardHeader className="pb-4">
+                        <div className="flex items-start justify-between gap-2">
+                          <CardTitle className="text-base">{selectedMilestone.name}</CardTitle>
+                          <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => setSelectedMilestone(null)}>
+                            收起
+                          </Button>
+                        </div>
+                      </CardHeader>
+                      <CardContent className="space-y-4">
+                        {(() => {
+                          const { baselineDate, currentPlanDate, actualDate } = getMilestoneTimeline(selectedMilestone)
+                          const anomalyLabel = selectedMilestone.mapping_pending
+                            ? '对应关系待确认'
+                            : selectedMilestone.merged_into
+                              ? `已合并到 ${selectedMilestone.merged_into_name || selectedMilestone.merged_into}`
+                              : '当前未发现异常标记'
+                          const currentVariance = getVarianceDays(baselineDate, currentPlanDate)
+                          const actualVariance = getVarianceDays(baselineDate, actualDate)
+
+                          return (
+                            <div className="grid gap-3 sm:grid-cols-2">
+                              <MilestoneDetailCard
+                                title="三时间对比"
+                                rows={[
+                                  { label: '基线目标', value: formatMilestoneDate(baselineDate) },
+                                  { label: '当前计划', value: formatMilestoneDate(currentPlanDate) },
+                                  { label: '实际达成', value: formatMilestoneDate(actualDate) },
+                                ]}
+                              />
+                              <MilestoneDetailCard
+                                title="偏差结果"
+                                rows={[
+                                  { label: '当前状态', value: selectedMilestone.statusLabel },
+                                  { label: '当前进度', value: `${selectedMilestone.progress}%` },
+                                  {
+                                    label: '当前计划偏差',
+                                    value:
+                                      currentVariance === null
+                                        ? '待补齐日期'
+                                        : currentVariance === 0
+                                          ? '与基线一致'
+                                          : currentVariance > 0
+                                            ? `较基线延后 ${currentVariance} 天`
+                                            : `较基线提前 ${Math.abs(currentVariance)} 天`,
+                                  },
+                                  {
+                                    label: '实际达成偏差',
+                                    value:
+                                      actualVariance === null
+                                        ? '待补齐日期'
+                                        : actualVariance === 0
+                                          ? '与基线一致'
+                                          : actualVariance > 0
+                                            ? `较基线延后 ${actualVariance} 天`
+                                            : `较基线提前 ${Math.abs(actualVariance)} 天`,
+                                  },
+                                ]}
+                              />
+                              <MilestoneDetailCard
+                                title="异常与对应关系"
+                                rows={[
+                                  { label: '对应关系', value: anomalyLabel },
+                                  { label: '节点备注', value: selectedMilestone.description || '暂无备注' },
+                                  {
+                                    label: '最近更新',
+                                    value: selectedMilestone.updatedAt ? formatMilestoneDate(selectedMilestone.updatedAt) : '待补充',
+                                  },
+                                ]}
+                              />
+                              <LinkedTasksCard tasks={linkedTasks} loading={linkedTasksLoading} />
+                            </div>
+                          )
+                        })()}
+                        <Button variant="outline" size="sm" className="w-full" onClick={() => goToTaskList(selectedMilestone.id)}>
+                          <ExternalLink className="mr-2 h-3 w-3" />
+                          进入任务管理
+                        </Button>
+                      </CardContent>
+                    </Card>
+                  )}
+                </div>
+              </TabsContent>
+            </Tabs>
+          </>
+        )}
       </div>
     </div>
   )

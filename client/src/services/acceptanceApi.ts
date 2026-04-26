@@ -11,6 +11,7 @@ import type {
   AcceptanceRequirementStatus,
   AcceptancePlanDependencyRecord,
   AcceptancePlanRelationBundle,
+  AcceptanceProjectSummary,
   AcceptanceRecordEntry,
   AcceptanceRequirementRecord,
   AcceptanceStatus,
@@ -90,6 +91,23 @@ type AcceptanceFlowSnapshotRow = {
   dependencies: UnknownRecord[]
   requirements: UnknownRecord[]
   records: UnknownRecord[]
+}
+
+type AcceptanceProjectSummaryRow = Partial<AcceptanceProjectSummary>
+
+type AcceptanceCatalogRow = {
+  id: string
+  project_id: string
+  catalog_code?: string | null
+  catalog_name?: string | null
+  phase_code?: string | null
+  scope_level?: string | null
+  category?: string | null
+  planned_finish_date?: string | null
+  description?: string | null
+  is_system?: boolean | null
+  created_at?: string
+  updated_at?: string
 }
 
 type AcceptanceRequirementMutation = {
@@ -214,6 +232,56 @@ function buildDerivedOverlayBadges(input: {
   if (input.isCustom) badges.push('自定义')
 
   return badges
+}
+
+const CUSTOM_TYPE_COLOR_PALETTE = [
+  '#2563eb',
+  '#ea580c',
+  '#16a34a',
+  '#dc2626',
+  '#0891b2',
+  '#7c3aed',
+  '#ca8a04',
+  '#4f46e5',
+] as const
+
+function pickCustomTypeColor(seed: string) {
+  const normalized = seed.trim()
+  if (!normalized) return CUSTOM_TYPE_COLOR_PALETTE[0]
+
+  let hash = 0
+  for (let index = 0; index < normalized.length; index += 1) {
+    hash = (hash * 31 + normalized.charCodeAt(index)) >>> 0
+  }
+  return CUSTOM_TYPE_COLOR_PALETTE[hash % CUSTOM_TYPE_COLOR_PALETTE.length]
+}
+
+function mapCatalogToType(row: AcceptanceCatalogRow): AcceptanceType {
+  const raw = row as UnknownRecord
+  const name = String(row.catalog_name ?? row.catalog_code ?? '自定义类型').trim() || '自定义类型'
+  const shortName = String(row.catalog_code ?? '').trim() || name.slice(0, 4)
+  const color = typeof raw.color === 'string' && raw.color.trim()
+    ? raw.color
+    : pickCustomTypeColor(String(row.id ?? row.catalog_code ?? name))
+  const icon = typeof raw.icon === 'string' && raw.icon.trim()
+    ? raw.icon
+    : shortName.slice(0, 2) || '验'
+
+  return {
+    id: String(row.id),
+    name,
+    shortName,
+    color,
+    icon,
+    isSystem: Boolean(row.is_system),
+    description: row.description ?? undefined,
+    defaultDependsOn: parseStringArray(raw.default_depends_on ?? raw.defaultDependsOn),
+    sortOrder: parseNumber(raw.sort_order, 99),
+    phaseCode: row.phase_code ?? undefined,
+    scopeLevel: row.scope_level ?? row.category ?? undefined,
+    plannedFinishDate: row.planned_finish_date ?? undefined,
+    category: row.category ?? row.scope_level ?? undefined,
+  }
 }
 
 function mapDbToPlan(row: AcceptancePlanRow): AcceptancePlan {
@@ -492,6 +560,24 @@ export const acceptanceApi = {
     }
   },
 
+  async getProjectSummary(projectId: string): Promise<AcceptanceProjectSummary> {
+    const data = await authFetch<AcceptanceProjectSummaryRow>(
+      `${API_BASE}/projects/${encodeURIComponent(projectId)}/acceptance-summary`,
+      FRESH_ACCEPTANCE_READ_OPTIONS,
+    )
+
+    return {
+      totalCount: parseNumber(data?.totalCount, 0),
+      passedCount: parseNumber(data?.passedCount, 0),
+      inProgressCount: parseNumber(data?.inProgressCount, 0),
+      notStartedCount: parseNumber(data?.notStartedCount, 0),
+      blockedCount: parseNumber(data?.blockedCount, 0),
+      dueSoon30dCount: parseNumber(data?.dueSoon30dCount, 0),
+      keyMilestoneCount: parseNumber(data?.keyMilestoneCount, 0),
+      completionRate: parseNumber(data?.completionRate, 0),
+    }
+  },
+
   async getPlan(planId: string): Promise<AcceptancePlan> {
     const data = await authFetch<AcceptancePlanRow>(
       `${API_BASE}/acceptance-plans/${encodeURIComponent(planId)}`,
@@ -547,25 +633,51 @@ export const acceptanceApi = {
     })
   },
 
-  async getCustomTypes(_projectId: string): Promise<AcceptanceType[]> {
-    return []
+  async getCustomTypes(projectId: string): Promise<AcceptanceType[]> {
+    const data = await authFetch<AcceptanceCatalogRow[]>(
+      `${API_BASE}/acceptance-catalog?projectId=${encodeURIComponent(projectId)}`,
+      FRESH_ACCEPTANCE_READ_OPTIONS,
+    )
+    return (data || []).map(mapCatalogToType)
   },
 
-  async createCustomType(type: Partial<AcceptanceType>, _projectId: string): Promise<AcceptanceType> {
+  async createCustomType(type: Partial<AcceptanceType>, projectId: string): Promise<AcceptanceType> {
+    const data = await authFetch<AcceptanceCatalogRow>(`${API_BASE}/acceptance-catalog`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_id: projectId,
+        catalog_code: (type.shortName || type.name || '自定义').slice(0, 12),
+        catalog_name: type.name || '自定义类型',
+        phase_code: type.phaseCode ?? null,
+        scope_level: type.scopeLevel ?? type.category ?? null,
+        category: type.category ?? type.scopeLevel ?? null,
+        planned_finish_date: type.plannedFinishDate ?? null,
+        description: type.description ?? null,
+        is_system: false,
+      }),
+    })
+
+    const mapped = mapCatalogToType(data)
     return {
-      id: `custom_${Date.now()}`,
-      name: type.name || '自定义类型',
-      shortName: (type.shortName || type.name || '自定义').slice(0, 4),
-      color: type.color || '#6b7280',
-      icon: type.icon,
-      isSystem: false,
-      description: type.description,
-      defaultDependsOn: type.defaultDependsOn,
-      sortOrder: type.sortOrder ?? 99,
+      ...mapped,
+      color: type.color || mapped.color,
+      icon: type.icon || mapped.icon,
+      defaultDependsOn: type.defaultDependsOn ?? mapped.defaultDependsOn,
+      sortOrder: type.sortOrder ?? mapped.sortOrder,
+      phaseCode: type.phaseCode ?? mapped.phaseCode,
+      scopeLevel: type.scopeLevel ?? type.category ?? mapped.scopeLevel,
+      plannedFinishDate: type.plannedFinishDate ?? mapped.plannedFinishDate,
+      category: type.category ?? type.scopeLevel ?? mapped.category,
     }
   },
 
-  async deleteCustomType(_typeId: string): Promise<void> {},
+  async deleteCustomType(typeId: string): Promise<void> {
+    await authFetch(`${API_BASE}/acceptance-catalog/${encodeURIComponent(typeId)}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+    })
+  },
   async addDependency(projectId: string, planId: string, dependsOnId: string): Promise<void> {
     await authFetch(`${API_BASE}/acceptance-dependencies`, {
       method: 'POST',

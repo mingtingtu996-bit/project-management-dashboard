@@ -98,11 +98,26 @@ const state = vi.hoisted(() => {
     }),
   }
 
-  return { tables, upserts, supabase }
+  const executeSQL = vi.fn(async (sql: string) => {
+    if (sql.includes('FROM tasks')) {
+      return tables.tasks.map((row) => ({ ...row }))
+    }
+    if (sql.includes('FROM task_critical_overrides')) {
+      return []
+    }
+    return []
+  })
+
+  return { tables, upserts, supabase, executeSQL }
 })
 
 vi.mock('../services/dbService.js', () => ({
   supabase: state.supabase,
+  executeSQL: state.executeSQL,
+}))
+
+vi.mock('../services/criticalPathHelpers.js', () => ({
+  getCriticalPathTaskIds: vi.fn(async () => new Set(['task-1', 'task-2'])),
 }))
 
 import { weeklyDigestService } from '../services/weeklyDigestService.js'

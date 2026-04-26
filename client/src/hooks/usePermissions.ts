@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useContext, useEffect, useMemo, useState } from 'react'
 
-import { useAuth } from '@/hooks/useAuth'
+import { AuthContext } from '@/context/AuthContext'
 import { useCurrentProject } from '@/hooks/useStore'
 import { getApiErrorMessage, getAuthHeaders } from '@/lib/apiClient'
 import { PROJECT_ACCESS_OVERRIDE_EVENT } from '@/lib/projectAccessEvents'
@@ -93,7 +93,9 @@ async function fetchProjectAccessSummary(
 
 export function usePermissions(options: UsePermissionsOptions = {}) {
   const currentProject = useCurrentProject()
-  const { isAuthenticated, user } = useAuth()
+  const authContext = useContext(AuthContext)
+  const isAuthenticated = authContext?.authState.isAuthenticated ?? false
+  const user = authContext?.authState.user ?? null
   const [accessSummary, setAccessSummary] = useState<ProjectAccessSummary>({
     permissionLevel: 'viewer',
     globalRole: normalizeGlobalRole(user?.globalRole),
@@ -108,6 +110,19 @@ export function usePermissions(options: UsePermissionsOptions = {}) {
     let cancelled = false
 
     const ownerFallback = currentProject?.owner_id && user?.id && currentProject.owner_id === user.id
+
+    if (!authContext) {
+      setAccessSummary({
+        permissionLevel: 'editor',
+        globalRole: normalizeGlobalRole(user?.globalRole),
+        canManageTeam: false,
+        canEdit: true,
+      })
+      setLoading(false)
+      return () => {
+        cancelled = true
+      }
+    }
 
     if (!projectId || !isAuthenticated || !user?.id) {
       setAccessSummary({
@@ -163,7 +178,7 @@ export function usePermissions(options: UsePermissionsOptions = {}) {
     return () => {
       cancelled = true
     }
-  }, [currentProject?.owner_id, isAuthenticated, projectId, user?.globalRole, user?.id])
+  }, [authContext, currentProject?.owner_id, isAuthenticated, projectId, user?.globalRole, user?.id])
 
   useEffect(() => {
     if (typeof window === 'undefined' || !projectId) return undefined

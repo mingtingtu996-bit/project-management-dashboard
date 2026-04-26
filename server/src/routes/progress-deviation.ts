@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import { asyncHandler } from '../middleware/errorHandler.js'
-import { authenticate } from '../middleware/auth.js'
+import { authenticate, requireProjectMember } from '../middleware/auth.js'
 import {
   PlanningDraftLockServiceError,
   readBaselineVersionLock,
@@ -32,6 +32,7 @@ function parseBoolean(value: unknown): boolean {
 
 router.get(
   '/lock',
+  requireProjectMember((req) => req.query.project_id as string | undefined),
   asyncHandler(async (req, res) => {
     const projectId = String(req.query.project_id ?? '').trim()
     const baselineVersionId = String(req.query.baseline_version_id ?? '').trim()
@@ -59,6 +60,7 @@ router.get(
 
 router.get(
   '/',
+  requireProjectMember((req) => req.query.project_id as string | undefined),
   asyncHandler(async (req, res) => {
     const projectId = String(req.query.project_id ?? '').trim()
     const baselineVersionId = String(req.query.baseline_version_id ?? '').trim()

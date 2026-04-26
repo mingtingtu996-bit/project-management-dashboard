@@ -15,6 +15,7 @@ import {
   XCircle,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { AssigneeCombobox } from '@/components/AssigneeCombobox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
@@ -26,11 +27,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from '@/components/ui/popover'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
   Select,
   SelectContent,
@@ -42,9 +39,8 @@ import { ConflictDialog } from '@/components/ConflictDialog'
 import { LoadingState } from '@/components/ui/loading-state'
 import type { ConfirmDialogState } from '@/hooks/useConfirmDialog'
 import { zhCN } from '@/i18n/zh-CN'
-import { safeStorageGet, safeStorageSet } from '@/lib/browserStorage'
 import { getStatusTheme } from '@/lib/statusTheme'
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { ChevronDown, ChevronUp } from 'lucide-react'
 import type { DataQualityLiveCheckSummary } from '@/services/dataQualityApi'
 import type { ParticipantUnitRecord } from './GanttView/ParticipantUnitsDialog'
@@ -129,8 +125,6 @@ function getTaskStatusThemeKey(status?: string | null) {
       return 'open'
   }
 }
-
-const TASK_DIALOG_ADVANCED_STORAGE_KEY = 'workbuddy_gantt_task_dialog_advanced'
 
 export interface GanttViewDialogsProps {
   dialogOpen: boolean
@@ -233,17 +227,13 @@ export interface GanttViewDialogsProps {
 }
 
 export function GanttViewDialogs(props: GanttViewDialogsProps) {
-  const [advancedOpen, setAdvancedOpen] = useState(() => safeStorageGet(localStorage, TASK_DIALOG_ADVANCED_STORAGE_KEY) !== 'false')
+  const [advancedOpen, setAdvancedOpen] = useState(false)
   const selectedParticipantUnit = props.participantUnits.find((unit) => unit.id === props.formData.participant_unit_id) ?? null
   const parentTaskName = props.newTaskParentId
     ? props.tasks.find((task) => task.id === props.newTaskParentId)?.title
       || props.tasks.find((task) => task.id === props.newTaskParentId)?.name
       || ''
     : ''
-
-  useEffect(() => {
-    safeStorageSet(localStorage, TASK_DIALOG_ADVANCED_STORAGE_KEY, String(advancedOpen))
-  }, [advancedOpen])
 
   return (
     <>
@@ -300,7 +290,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
                 />
                 {props.taskFormErrors.end_date && <p className="text-xs text-red-600">{props.taskFormErrors.end_date}</p>}
               </div>
-              <div className="space-y-2">
+              <div className={advancedOpen ? "space-y-2" : "hidden"}>
                 <Label>实际开始日期</Label>
                 <Input
                   type="date"
@@ -311,7 +301,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
               </div>
             </div>
 
-            {props.editingTask && (
+            {advancedOpen && props.editingTask && (
               <div className="space-y-2 rounded-xl border border-blue-100 bg-blue-50/60 p-3">
                 <div className="flex items-center justify-between gap-2">
                   <p className="text-xs font-medium text-blue-700">AI 工期建议</p>
@@ -354,7 +344,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
               </div>
             )}
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className={advancedOpen ? 'grid grid-cols-2 gap-4' : 'hidden'}>
               <div className="space-y-2">
                 <Label>状态</Label>
                 <Select
@@ -368,7 +358,6 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
                     <SelectItem value="todo">待开始</SelectItem>
                     <SelectItem value="in_progress">进行中</SelectItem>
                     <SelectItem value="completed">已完成</SelectItem>
-                    <SelectItem value="blocked">受阻</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -391,7 +380,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
               </div>
             </div>
 
-            <div className="space-y-2">
+            <div className={advancedOpen ? 'space-y-2' : 'hidden'}>
               <Label>{zhCN.gantt.progress}</Label>
               <Input
                 type="number"
@@ -409,11 +398,11 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
 
             <div
               data-testid="gantt-live-data-quality-check"
-              className={`rounded-2xl border px-4 py-3 ${
+              className={advancedOpen ? `rounded-2xl border px-4 py-3 ${
                 props.liveCheckSummary?.count
                   ? 'border-amber-200 bg-amber-50'
                   : 'border-slate-200 bg-slate-50'
-              }`}
+              }` : 'hidden'}
             >
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
@@ -453,42 +442,16 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>{zhCN.gantt.assignee}</Label>
-                <Select
-                  value={props.formData.assignee_user_id || '__manual__'}
-                  onValueChange={(value) => {
-                    if (value === '__manual__') {
-                      props.setFormData({ ...props.formData, assignee_user_id: null })
-                      return
-                    }
-                    const selectedMember = props.projectMembers.find((member) => member.userId === value)
-                    props.setFormData({
-                      ...props.formData,
-                      assignee_user_id: value,
-                      assignee_name: selectedMember?.displayName ?? props.formData.assignee_name,
-                    })
-                  }}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="优先从项目成员中选择" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__manual__">手工输入</SelectItem>
-                    {props.projectMembers.map((member) => (
-                      <SelectItem key={member.userId} value={member.userId}>
-                        {member.displayName}
-                        {member.permissionLevel ? ` · ${member.permissionLevel}` : ''}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Input
-                  value={props.formData.assignee_name}
-                  onChange={(event) => props.setFormData({
-                    ...props.formData,
-                    assignee_name: event.target.value,
-                    assignee_user_id: null,
-                  })}
+                <AssigneeCombobox
+                  members={props.projectMembers}
+                  valueName={props.formData.assignee_name}
+                  valueUserId={props.formData.assignee_user_id}
                   placeholder={zhCN.gantt.assigneePlaceholder}
+                  onChange={(value) => props.setFormData({
+                    ...props.formData,
+                    assignee_name: value.assignee_name,
+                    assignee_user_id: value.assignee_user_id,
+                  })}
                 />
                 {props.formData.assignee_name.trim() ? (
                   props.formData.assignee_user_id ? (
@@ -500,7 +463,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
                   <p className="text-xs text-muted-foreground">优先关联项目成员；若需录入外部责任人，可直接手工填写。</p>
                 )}
               </div>
-              <div className="space-y-2">
+              <div className={advancedOpen ? 'space-y-2' : 'hidden'}>
                 <div className="flex items-center justify-between gap-2">
                   <Label>责任单位</Label>
                   <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={props.onOpenParticipantUnits}>
@@ -562,7 +525,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
                 aria-expanded={advancedOpen}
               >
                 <div>
-                  <p className="text-sm font-medium text-slate-900">更多字段</p>
+                  <p className="text-sm font-medium text-slate-900">高级选项</p>
                 </div>
                 {advancedOpen ? <ChevronUp className="h-4 w-4 text-slate-500" /> : <ChevronDown className="h-4 w-4 text-slate-500" />}
               </button>

@@ -80,6 +80,33 @@ describe('TaskSummary page contract', () => {
               completed_milestone_count: 2,
               avg_delay_days: 1.2,
             },
+            groups: [
+              {
+                id: 'group-1',
+                name: '里程碑 A',
+                status: 'completed',
+                completed_at: '2026-04-08',
+                planned_end_date: '2026-04-08',
+                tasks: [
+                  {
+                    id: 'task-1',
+                    title: '关联任务 1',
+                    assignee: '张三',
+                    planned_end_date: '2026-04-08',
+                    status_label: 'on_time',
+                    delay_total_days: 0,
+                  },
+                ],
+              },
+            ],
+            monthlyFulfillment: [
+              {
+                month: '2026-03',
+                committedCount: 4,
+                fulfilledCount: 3,
+                rate: 75,
+              },
+            ],
           },
         })
       }
@@ -108,7 +135,7 @@ describe('TaskSummary page contract', () => {
     vi.unstubAllGlobals()
   })
 
-  it('renders results summary and compare analysis in-page', async () => {
+  it('renders results summary, summary list, and monthly fulfillment in-page', async () => {
     act(() => {
       root?.render(
         <MemoryRouter initialEntries={[`/projects/${projectId}/task-summary`]}>
@@ -122,7 +149,8 @@ describe('TaskSummary page contract', () => {
     await waitForSelector(container, '[data-testid="task-summary-page"]')
     await waitForSelector(container, '[data-testid="task-summary-header-actions"]')
     await waitForSelector(container, '[data-testid="task-summary-results-section"]')
-    await waitForSelector(container, '[data-testid="task-summary-compare-section"]')
+    await waitForSelector(container, '[data-testid="task-summary-summary-list-section"]')
+    await waitForSelector(container, '[data-testid="task-summary-monthly-fulfillment-section"]')
     await waitForSelector(container, '[data-testid="task-summary-export"]')
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -131,12 +159,8 @@ describe('TaskSummary page contract', () => {
         signal: expect.any(AbortSignal),
       }),
     )
-    expect(
-      fetchMock.mock.calls.some(([url]) =>
-        String(url).includes(`/api/task-summaries/projects/${projectId}/daily-progress?date=`),
-      ),
-    ).toBe(true)
     expect(container.textContent).toContain('结果摘要')
-    expect(container.textContent).toContain('任务执行与对比分析')
+    expect(container.textContent).toContain('总结列表')
+    expect(container.textContent).toContain('月度兑现')
   })
 })

@@ -1,6 +1,6 @@
-import { RefreshCw } from 'lucide-react'
-
+import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Card, CardContent } from '@/components/ui/card'
 import {
   Dialog,
   DialogContent,
@@ -9,17 +9,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { Button } from '@/components/ui/button'
-
+import { RefreshCw } from 'lucide-react'
 export type CloseoutConfirmMode = 'batch' | 'single' | 'force'
 export type CloseoutConfirmState = 'ready' | 'failed'
 
 export interface CloseoutConfirmSummary {
-  selectedCount: number
-  processedCount: number
-  remainingCount: number
-  reasonLabel: string
-  itemLabel: string
+  rolledInCount: number
+  closedCount: number
+  manualOverrideCount: number
+  forcedCount: number
+  remainingCount?: number
 }
 
 interface CloseoutConfirmDialogProps {
@@ -43,7 +42,7 @@ export function CloseoutConfirmDialog({
 }: CloseoutConfirmDialogProps) {
   const modeLabel =
     mode === 'force' ? '强制发起关账确认' : mode === 'batch' ? '批量关账确认' : '逐条关账确认'
-  const canConfirm = state !== 'failed' && (mode === 'force' || summary.remainingCount === 0)
+  const canConfirm = state !== 'failed'
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -55,33 +54,42 @@ export function CloseoutConfirmDialog({
               {state === 'failed' ? '生成失败' : '确认待续'}
             </Badge>
           </div>
-          <DialogDescription>
-            关账完成前会先记录当前快照与关闭原因，普通关账必须在未处理事项归零后才能继续。
-          </DialogDescription>
+        <DialogDescription>
+          关账完成前会先记录当前快照与关闭原因，普通关账必须在未处理事项归零后才能继续。
+        </DialogDescription>
         </DialogHeader>
 
-        <div className="grid gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700 sm:grid-cols-2">
-          <div>
-            <div className="text-xs uppercase tracking-[0.18em] text-slate-500">当前处理</div>
-            <div className="mt-1 font-medium text-slate-900">{summary.itemLabel}</div>
-          </div>
-          <div>
-            <div className="text-xs uppercase tracking-[0.18em] text-slate-500">关闭原因</div>
-            <div className="mt-1 font-medium text-slate-900">{summary.reasonLabel}</div>
-          </div>
-          <div>
-            <div className="text-xs uppercase tracking-[0.18em] text-slate-500">批量范围</div>
-            <div className="mt-1 font-medium text-slate-900">{summary.selectedCount} 项选中</div>
-          </div>
-          <div>
-            <div className="text-xs uppercase tracking-[0.18em] text-slate-500">已处理</div>
-            <div className="mt-1 font-medium text-slate-900">{summary.processedCount} 项已处理</div>
-          </div>
-          <div>
-            <div className="text-xs uppercase tracking-[0.18em] text-slate-500">未处理</div>
-            <div className="mt-1 font-medium text-slate-900">{summary.remainingCount} 项未处理</div>
-          </div>
+        <div className="grid gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700 sm:grid-cols-2 xl:grid-cols-4">
+          <Card className="border-slate-200 bg-white shadow-sm">
+            <CardContent className="space-y-1 p-4">
+              <div className="text-xs uppercase tracking-[0.18em] text-slate-500">滚入数</div>
+              <div className="text-2xl font-semibold text-slate-900">{summary.rolledInCount}</div>
+            </CardContent>
+          </Card>
+          <Card className="border-slate-200 bg-white shadow-sm">
+            <CardContent className="space-y-1 p-4">
+              <div className="text-xs uppercase tracking-[0.18em] text-slate-500">关闭数</div>
+              <div className="text-2xl font-semibold text-slate-900">{summary.closedCount}</div>
+            </CardContent>
+          </Card>
+          <Card className="border-slate-200 bg-white shadow-sm">
+            <CardContent className="space-y-1 p-4">
+              <div className="text-xs uppercase tracking-[0.18em] text-slate-500">人工改判数</div>
+              <div className="text-2xl font-semibold text-slate-900">{summary.manualOverrideCount}</div>
+            </CardContent>
+          </Card>
+          <Card className="border-slate-200 bg-white shadow-sm">
+            <CardContent className="space-y-1 p-4">
+              <div className="text-xs uppercase tracking-[0.18em] text-slate-500">强制处理数</div>
+              <div className="text-2xl font-semibold text-slate-900">{summary.forcedCount}</div>
+            </CardContent>
+          </Card>
         </div>
+        {typeof summary.remainingCount === 'number' ? (
+          <div className="text-xs text-slate-500">
+            当前剩余 <span className="font-medium text-slate-900">{summary.remainingCount} 项未处理</span>
+          </div>
+        ) : null}
 
         <DialogFooter className="gap-2 sm:justify-between">
           {state === 'failed' ? (

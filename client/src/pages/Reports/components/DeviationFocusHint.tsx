@@ -1,11 +1,11 @@
-import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
 
 import type { DeviationView } from './DeviationTabs'
 
 const viewLabels: Record<DeviationView, string> = {
   baseline: '基线偏差',
-  monthly: '月度完成情况',
+  monthly: '月度兑现偏差',
   execution: '执行偏差',
 }
 

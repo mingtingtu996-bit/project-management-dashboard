@@ -1,5 +1,6 @@
 import type {
   CertificateBoardItem,
+  CertificateBoardCriticalItem,
   CertificateBoardResponse,
   CertificateBoardSummary,
   CertificateDependency,
@@ -14,6 +15,7 @@ import type {
   CertificateWorkItem,
   Issue,
   PreMilestone,
+  PreMilestoneCondition,
   Risk,
   Warning,
   KnownCertificateType,
@@ -94,6 +96,31 @@ export function normalizeCertificateStatus(value: string | null | undefined): Ce
   if (['voided', '已作废', '注销', '已吊销'].includes(text)) return 'voided'
 
   return 'pending'
+}
+
+export type CertificateWorkItemStatus =
+  | 'pending'
+  | 'in_progress'
+  | 'submitted'
+  | 'supplement_required'
+  | 'completed'
+  | 'blocked'
+  | 'cancelled'
+
+export function normalizeCertificateWorkItemStatus(value: string | null | undefined): CertificateWorkItemStatus {
+  const text = normalizeText(value).toLowerCase()
+
+  if (['in_progress', '进行中', '处理中', '资料准备中'].includes(text)) return 'in_progress'
+  if (['submitted', '已提交', '已报送', '报送中'].includes(text)) return 'submitted'
+  if (['supplement_required', '补正', '待补正'].includes(text)) return 'supplement_required'
+  if (['completed', '已完成', '已办结', 'approved', 'issued'].includes(text)) return 'completed'
+  if (['blocked', '已阻塞', '阻塞'].includes(text)) return 'blocked'
+  if (['cancelled', '已取消', '取消', 'voided'].includes(text)) return 'cancelled'
+  return 'pending'
+}
+
+function isCertificateWorkItemCompleteStatus(value: string | null | undefined) {
+  return ['completed', 'cancelled'].includes(normalizeCertificateWorkItemStatus(value))
 }
 
 export function normalizeCertificateStage(value: string | null | undefined): CertificateStage {
@@ -357,7 +384,7 @@ function countOverdueItems(certificates: CertificateBoardItem[], workItems: Cert
   const overdueWorkItems = workItems.filter((item) => {
     const planned = normalizeDate(item.planned_finish_date)
     if (!planned) return false
-    return planned < today && !COMPLETE_STATUSES.includes(normalizeCertificateStatus(item.status))
+    return planned < today && !isCertificateWorkItemCompleteStatus(item.status)
   })
 
   return overdueCertificates.length + overdueWorkItems.length
@@ -372,8 +399,131 @@ function countWeeklyActions(workItems: CertificateWorkItem[], now = new Date()) 
   return workItems.filter((item) => {
     const due = normalizeDate(item.next_action_due_date ?? item.planned_finish_date)
     if (!due) return false
-    return due >= start.toISOString().slice(0, 10) && due <= end.toISOString().slice(0, 10)
+    return due >= start.toISOString().slice(0, 10) && due <= end.toISOString().slice(0, 10) && !isCertificateWorkItemCompleteStatus(item.status)
   }).length
+}
+
+function collectCriticalItems(
+  certificates: CertificateBoardItem[],
+  workItems: CertificateWorkItem[],
+  now = new Date(),
+): CertificateBoardCriticalItem[] {
+  const today = now.toISOString().slice(0, 10)
+
+  const collect = (
+    itemType: CertificateBoardCriticalItem['itemType'],
+    itemId: string,
+    title: string,
+    status: string,
+    plannedFinishDate?: string | null,
+    dueDate?: string | null,
+    blockReason?: string | null,
+  ): CertificateBoardCriticalItem | null => {
+    const planned = normalizeDate(plannedFinishDate)
+    const due = normalizeDate(dueDate ?? plannedFinishDate)
+    const normalizedStatus = itemType === 'certificate'
+      ? normalizeCertificateStatus(status)
+      : normalizeCertificateWorkItemStatus(status)
+    const isComplete = itemType === 'certificate'
+      ? COMPLETE_STATUSES.includes(normalizedStatus as CertificateStatus)
+      : isCertificateWorkItemCompleteStatus(status)
+    const isOverdue = Boolean(due && due < today && !isComplete)
+    const isCritical = isOverdue || Boolean(blockReason) || Boolean(due) || Boolean(planned)
+    if (!isCritical || isComplete) {
+      return null
+    }
+
+    return {
+      itemType,
+      itemId,
+      title,
+      status: normalizedStatus,
+      plannedFinishDate: planned,
+      dueDate: due,
+      blockReason: blockReason ?? null,
+      isOverdue,
+    }
+  }
+
+  const certificateItems = certificates
+    .map((certificate) => collect(
+      'certificate',
+      certificate.id,
+      certificate.certificate_name,
+      certificate.status,
+      certificate.planned_finish_date,
+      certificate.next_action_due_date,
+      certificate.block_reason,
+    ))
+    .filter((item): item is CertificateBoardCriticalItem => Boolean(item))
+
+  const workItemItems = workItems
+    .map((item) => collect(
+      'work_item',
+      item.id,
+      item.item_name,
+      item.status,
+      item.planned_finish_date,
+      item.next_action_due_date,
+      item.block_reason,
+    ))
+    .filter((item): item is CertificateBoardCriticalItem => Boolean(item))
+
+  return [...certificateItems, ...workItemItems].sort((left, right) => {
+    if (left.isOverdue !== right.isOverdue) return left.isOverdue ? -1 : 1
+    const leftDue = left.dueDate || left.plannedFinishDate || '9999-12-31'
+    const rightDue = right.dueDate || right.plannedFinishDate || '9999-12-31'
+    if (leftDue !== rightDue) return leftDue.localeCompare(rightDue)
+    if (left.itemType !== right.itemType) return left.itemType === 'certificate' ? -1 : 1
+    return left.title.localeCompare(right.title)
+  })
+}
+
+function buildWorkItemAnchorSet(workItem: CertificateWorkItem) {
+  return new Set(
+    [workItem.id, workItem.item_code, workItem.item_name]
+      .map((value) => normalizeText(value, ''))
+      .filter((value): value is string => Boolean(value)),
+  )
+}
+
+function matchesWorkItemAnchors(
+  candidate: {
+    task_id?: string | null
+    source_id?: string | null
+    source_entity_id?: string | null
+    chain_id?: string | null
+    linked_issue_id?: string | null
+  },
+  anchors: Set<string>,
+) {
+  return [
+    candidate.task_id,
+    candidate.source_id,
+    candidate.source_entity_id,
+    candidate.chain_id,
+    candidate.linked_issue_id,
+  ]
+    .map((value) => normalizeText(value, ''))
+    .some((value) => value && anchors.has(value))
+}
+
+function annotateWorkItemLinks(
+  workItem: CertificateWorkItem,
+  issues: Issue[],
+  risks: Risk[],
+): CertificateWorkItem {
+  const anchors = buildWorkItemAnchorSet(workItem)
+  const linkedIssue = issues.find((issue) => matchesWorkItemAnchors(issue, anchors))
+  const linkedRisk = risks.find((risk) =>
+    matchesWorkItemAnchors(risk, anchors) || Boolean(risk.linked_issue_id && risk.linked_issue_id === linkedIssue?.id),
+  )
+
+  return {
+    ...workItem,
+    linked_issue_id: linkedIssue?.id ?? null,
+    linked_risk_id: linkedRisk?.id ?? null,
+  }
 }
 
 export function buildLicenseBoardReadModel(params: {
@@ -441,9 +591,10 @@ export function buildLicenseBoardReadModel(params: {
     expectedReadyDate: getExpectedReadyDate(enrichedCertificates, workItems),
     overdueCount: countOverdueItems(enrichedCertificates, workItems, now),
     supplementCount:
-      workItems.filter((item) => normalizeCertificateStatus(item.status) === 'supplement_required').length +
+      workItems.filter((item) => normalizeCertificateWorkItemStatus(item.status) === 'supplement_required').length +
       enrichedCertificates.filter((certificate) => normalizeCertificateStatus(certificate.status) === 'supplement_required').length,
     weeklyActionCount: countWeeklyActions(workItems, now),
+    criticalItems: collectCriticalItems(enrichedCertificates, workItems, now),
   }
 
   return {
@@ -457,9 +608,13 @@ export function buildLicenseLedgerReadModel(params: {
   workItems?: CertificateWorkItem[]
   dependencies?: CertificateDependency[]
   certificateId?: string | null
+  issues?: Issue[]
+  risks?: Risk[]
 }): CertificateLedgerResponse {
   const workItems = params.workItems ?? []
   const dependencies = params.dependencies ?? []
+  const issues = params.issues ?? []
+  const risks = params.risks ?? []
   const filteredItems = params.certificateId
     ? workItems.filter((item) =>
         dependencies.some(
@@ -471,13 +626,18 @@ export function buildLicenseLedgerReadModel(params: {
         )
       )
     : workItems
+  const annotatedItems = filteredItems.map((item) => annotateWorkItemLinks(item, issues, risks))
+  const today = new Date().toISOString().slice(0, 10)
 
   return {
-    items: filteredItems,
+    items: annotatedItems,
     totals: {
-      overdueCount: filteredItems.filter((item) => BLOCKING_STATUSES.includes(normalizeCertificateStatus(item.status))).length,
-      blockedCount: filteredItems.filter((item) => Boolean(item.is_blocked)).length,
-      supplementCount: filteredItems.filter((item) => normalizeCertificateStatus(item.status) === 'supplement_required').length,
+      overdueCount: annotatedItems.filter((item) => {
+        const due = normalizeDate(item.next_action_due_date ?? item.planned_finish_date)
+        return Boolean(due && due < today && !isCertificateWorkItemCompleteStatus(item.status))
+      }).length,
+      blockedCount: annotatedItems.filter((item) => Boolean(item.is_blocked) || normalizeCertificateWorkItemStatus(item.status) === 'blocked').length,
+      supplementCount: annotatedItems.filter((item) => normalizeCertificateWorkItemStatus(item.status) === 'supplement_required').length,
     },
   }
 }
@@ -487,6 +647,7 @@ export function buildLicenseDetailReadModel(params: {
   certificate?: Partial<PreMilestone> & Record<string, any> | null
   workItems?: CertificateWorkItem[]
   dependencies?: CertificateDependency[]
+  conditions?: PreMilestoneCondition[]
   warnings?: Warning[]
   issues?: Issue[]
   risks?: Risk[]
@@ -516,6 +677,7 @@ export function buildLicenseDetailReadModel(params: {
   const certificate = certificates[0]
   const workItems = params.workItems ?? []
   const dependencies = params.dependencies ?? []
+  const conditions = params.conditions ?? []
   const warnings = params.warnings ?? []
   const issues = params.issues ?? []
   const risks = params.risks ?? []
@@ -569,6 +731,7 @@ export function buildLicenseDetailReadModel(params: {
     certificate,
     workItems,
     dependencies,
+    conditions,
     records,
     dependencyMatrix: matrix,
     linkedWarnings,

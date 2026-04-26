@@ -359,7 +359,7 @@ describe('License management presentation layer', () => {
     vi.unstubAllGlobals()
   })
 
-  it('keeps PreMilestones inside the license management parent module without legacy drawings runtime', async () => {
+  it('keeps PreMilestones inside the special management parent module without legacy drawings runtime', async () => {
     act(() => {
       root?.render(
         <MemoryRouter initialEntries={[`/projects/${projectId}/pre-milestones`]}>
@@ -370,7 +370,7 @@ describe('License management presentation layer', () => {
       )
     })
 
-    await waitForText(container, ['证照与验收', '前期证照'])
+    await waitForText(container, ['专项管理', '前期证照'])
     await waitForText(container, ['开工准入总览', '四证推进看板', '办理台账', '详情抽屉'])
 
     expect(container.querySelectorAll('[role="tab"]')).toHaveLength(0)

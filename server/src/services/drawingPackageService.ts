@@ -1,4 +1,4 @@
-import type { DrawingPackage, DrawingPackageItem, DrawingVersion } from '../types/db.js'
+import type { CertificateDependency, CertificateWorkItem, DrawingPackage, DrawingPackageItem, DrawingVersion } from '../types/db.js'
 
 export type ReviewMode = 'mandatory' | 'optional' | 'none' | 'manual_confirm'
 export const DRAWING_REVIEW_MODE_VALUES = ['mandatory', 'optional', 'none', 'manual_confirm'] as const
@@ -243,6 +243,7 @@ export interface DrawingReviewRuleSource {
   document_purpose?: string | null
   default_review_mode?: ReviewMode | string | null
   review_basis?: string | null
+  reviewer_id?: string | null
   is_active?: boolean | number | null
   created_at?: string | null
   updated_at?: string | null
@@ -1025,12 +1026,27 @@ function derivePackageStatus(input: {
   return 'pending'
 }
 
+function countLinkedCertificateCount(packageKey: string, workItems: CertificateWorkItem[], dependencies: CertificateDependency[]) {
+  const autoCode = 'drawing-package:' + packageKey
+  const linkedWorkItem = workItems.find((item) => normalizeString(item.item_code) === autoCode)
+  if (!linkedWorkItem) return 0
+  const linkedCertificateIds = new Set<string>()
+  for (const dependency of dependencies) {
+    if (dependency.successor_type !== 'work_item' || dependency.successor_id !== linkedWorkItem.id || dependency.predecessor_type !== 'certificate') continue
+    const predecessorId = normalizeString(dependency.predecessor_id)
+    if (predecessorId) linkedCertificateIds.add(predecessorId)
+  }
+  return linkedCertificateIds.size
+}
+
 export function buildDrawingBoardView(source: {
   packages?: DrawingPackageSource[]
   items?: DrawingPackageItemSource[]
   drawings?: DrawingRecordSource[]
   versions?: DrawingVersionRecordSource[]
   reviewRules?: DrawingReviewRuleSource[]
+  certificateWorkItems?: CertificateWorkItem[]
+  certificateDependencies?: CertificateDependency[]
   tasks?: DrawingTaskSource[]
   taskConditions?: DrawingTaskConditionSource[]
   acceptancePlans?: DrawingAcceptancePlanSource[]
@@ -1156,7 +1172,7 @@ export function buildDrawingBoardView(source: {
       ...packageCardBase,
       linkedTaskCount: linkedTasks.length,
       linkedAcceptanceCount: linkedAcceptance.length,
-      linkedCertificateCount: 0,
+      linkedCertificateCount: countLinkedCertificateCount(packageKey, source.certificateWorkItems ?? [], source.certificateDependencies ?? []),
     } satisfies DrawingPackageCard
   })
 

@@ -68,6 +68,8 @@ export interface Task {
   ai_duration?: number | null    // AI 推荐工期（天）
   first_progress_at?: string | null  // 首次填报时间
   delay_reason?: string | null   // 延期原因
+  lagLevel?: 'none' | 'mild' | 'moderate' | 'severe'
+  lagStatus?: '正常' | '轻度滞后' | '中度滞后' | '严重滞后'
   assignee_user_id?: string | null
   assignee_name?: string
   responsible_unit?: string      // 过渡兼容字段，优先级低于 participant_unit_id
@@ -78,6 +80,8 @@ export interface Task {
   monthly_plan_item_id?: string | null
   participant_unit_id?: string | null
   participant_unit_name?: string | null
+  template_id?: string | null
+  template_node_id?: string | null
   created_at: string
   updated_at: string
   updated_by?: string
@@ -635,6 +639,8 @@ export interface CertificateWorkItem {
   notes?: string | null
   latest_record_at?: string | null
   certificate_ids?: string[]
+  linked_issue_id?: string | null
+  linked_risk_id?: string | null
   created_at: string
   updated_at: string
 }
@@ -669,6 +675,17 @@ export interface CertificateBoardItem {
   shared_work_item_ids: string[]
 }
 
+export interface CertificateBoardCriticalItem {
+  itemType: 'certificate' | 'work_item'
+  itemId: string
+  title: string
+  status: string
+  plannedFinishDate?: string | null
+  dueDate?: string | null
+  blockReason?: string | null
+  isOverdue: boolean
+}
+
 export interface CertificateSharedRibbonItem {
   work_item_id: string
   item_name: string
@@ -693,6 +710,7 @@ export interface CertificateBoardSummary {
   overdueCount: number
   supplementCount: number
   weeklyActionCount: number
+  criticalItems: CertificateBoardCriticalItem[]
 }
 
 export interface CertificateBoardResponse {
@@ -744,6 +762,7 @@ export interface CertificateDetailResponse {
   dependencies: CertificateDependency[]
   records: CertificateStatusRecord[]
   dependencyMatrix: CertificateDependencyMatrixRow[]
+  conditions: PreMilestoneCondition[]
   linkedWarnings: Array<Record<string, any>>
   linkedIssues: Array<Record<string, any>>
   linkedRisks: Array<Record<string, any>>
@@ -925,6 +944,10 @@ export interface TaskBaseline {
   effective_to?: string | null
   confirmed_at?: string | null
   confirmed_by?: string | null
+  modified_item_count?: number
+  milestone_change_count?: number
+  critical_path_change_count?: number
+  mapping_affected_count?: number
   created_at: string
   updated_at: string
 }
@@ -946,6 +969,8 @@ export interface TaskBaselineItem {
   is_baseline_critical?: boolean
   mapping_status?: 'mapped' | 'pending' | 'missing' | 'merged'
   notes?: string | null
+  template_id?: string | null
+  template_node_id?: string | null
   created_at: string
   updated_at: string
 }
@@ -963,6 +988,7 @@ export interface MonthlyPlan {
   source_version_label?: string | null
   closeout_at?: string | null
   carryover_item_count?: number | null
+  pending_closeout_count?: number | null
   data_confidence_score?: number | null
   data_confidence_flag?: 'high' | 'medium' | 'low' | null
   data_confidence_note?: string | null

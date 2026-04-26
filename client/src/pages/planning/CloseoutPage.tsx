@@ -9,15 +9,18 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { LoadingState } from '@/components/ui/loading-state'
 import { usePlanningStore } from '@/hooks/usePlanningStore'
+import { usePermissions } from '@/hooks/usePermissions'
 import { useStore } from '@/hooks/useStore'
 import { useToast } from '@/hooks/use-toast'
 import { apiGet, apiPost, getApiErrorMessage } from '@/lib/apiClient'
 import { safeJsonParse, safeStorageGet, safeStorageRemove, safeStorageSet } from '@/lib/browserStorage'
 import { DataQualityApiService, type DataQualityProjectSummary } from '@/services/dataQualityApi'
+import type { Task } from '@/pages/GanttViewTypes'
 import type { MonthlyPlanVersion } from '@/types/planning'
-import { AlertTriangle, Clock, RefreshCw, Search } from 'lucide-react'
+import { AlertTriangle, Clock, MoreHorizontal, RefreshCw, Search } from 'lucide-react'
 
 import { CloseoutBatchBar } from './components/CloseoutBatchBar'
 import {
@@ -34,14 +37,27 @@ import {
   getMonthlyCommitmentLabel,
   formatMonthLabel,
   getMonthlyPlanStatusLabel,
+  formatDate,
   shiftMonth,
   sortMonthlyPlanVersions,
 } from './planningShared'
 
-type CloseoutAction = 'close' | 'refresh' | null
+type CloseoutAction = 'close' | 'refresh' | 'auto_adopt' | null
 type CloseoutPersistedState = { processedIds: string[] }
 type CloseoutFilter = 'all' | 'pending' | 'processed' | 'overdue'
 type CloseoutGroupingMode = 'suggestion' | 'processing' | 'commitment'
+type CloseoutOverviewSummary = {
+  totalCount: number
+  processedCount: number
+  remainingCount: number
+  autoAdoptableCount: number
+}
+type CloseoutConfirmSummaryResponse = {
+  rolledInCount: number
+  closedCount: number
+  manualOverrideCount: number
+  forcedCount: number
+}
 
 function getProcessedStorageKey(planId: string) {
   return `planning-closeout:${planId}`
@@ -76,26 +92,37 @@ function getOverdueDays(month: string) {
   return Math.max(0, Math.floor(diff / (1000 * 60 * 60 * 24)))
 }
 
-function buildCloseoutItems(plan: MonthlyPlanDetail | null): CloseoutItem[] {
+function buildCloseoutItems(plan: MonthlyPlanDetail | null, tasks: Task[]): CloseoutItem[] {
   if (!plan) return []
+  const taskById = new Map(tasks.map((task) => [task.id, task]))
   const overdueDays = getOverdueDays(plan.month)
 
   return [...plan.items]
     .sort((left, right) => left.sort_order - right.sort_order)
     .map((item) => {
+      const task = item.source_task_id ? taskById.get(item.source_task_id) ?? null : null
       const done = item.commitment_status === 'completed' || (item.current_progress ?? 0) >= (item.target_progress ?? 100)
-      const needsCarry = item.commitment_status === 'carried_over' || !done
-      const suggestion = done ? '建议关闭处理' : needsCarry ? '建议滚入下月' : '需要人工判断'
-      const groupId = done ? 'closeout-close' : needsCarry ? 'closeout-carry' : 'closeout-manual'
+      const carried = item.commitment_status === 'carried_over'
+      const cancelled = item.commitment_status === 'cancelled'
+      const suggestion = done ? '建议关闭处理' : carried ? '建议滚入下月' : '需要人工判断'
+      const groupId = done ? 'closeout-close' : carried ? 'closeout-carry' : 'closeout-manual'
       const sourceHierarchyLabel = item.carryover_from_item_id
         ? '上月承接 / 月计划条目'
         : item.baseline_item_id
           ? '项目基线 / 月计划条目'
-          : item.source_task_id
+          : task
             ? '当前排期 / 月计划条目'
             : '月计划自建 / 条目'
       const sourceEntityLabel = item.is_milestone ? '关键节点' : '执行项'
-      const closeReasonLabel = done ? '采纳系统建议 / 已完成' : needsCarry ? '滚入下月 / 承诺延续' : '人工判断 / 待补录'
+      const closeReasonLabel = done
+        ? '当月已消化关闭'
+        : carried
+          ? '条目延后至后续阶段'
+          : cancelled
+            ? '条目取消或不再需要'
+            : item.carryover_from_item_id
+              ? '条目合并到其他条目'
+              : '因范围变更移出'
       const status =
         !done && overdueDays >= 5 ? 'overdue' : !done && overdueDays >= 3 ? 'stale' : 'normal'
       const escalationLabel =
@@ -121,6 +148,16 @@ function buildCloseoutItems(plan: MonthlyPlanDetail | null): CloseoutItem[] {
         sourceHierarchyLabel,
         sourceEntityLabel,
         closeReasonLabel,
+        taskTitle: task?.title ?? task?.name ?? undefined,
+        planStartLabel: formatDate(item.planned_start_date) ?? undefined,
+        planEndLabel: formatDate(item.planned_end_date) ?? undefined,
+        planProgressLabel:
+          typeof item.current_progress === 'number' || typeof item.target_progress === 'number'
+            ? `当前 ${item.current_progress ?? 0}% / 目标 ${item.target_progress ?? 0}%`
+            : undefined,
+        taskStartLabel: formatDate(task?.planned_start_date ?? task?.start_date) ?? undefined,
+        taskEndLabel: formatDate(task?.planned_end_date ?? task?.end_date) ?? undefined,
+        taskProgressLabel: task ? `${Math.round(Number(task.progress ?? 0))}%` : undefined,
       } satisfies CloseoutItem
     })
 }
@@ -176,9 +213,9 @@ function buildCloseoutGroups(items: CloseoutItem[], mode: CloseoutGroupingMode):
             },
           ] as const)
         : ([
+            { id: 'closeout-manual', title: '需要人工判断', description: '', badge: '人工判断' },
             { id: 'closeout-close', title: '建议关闭处理', description: '', badge: '关闭优先' },
             { id: 'closeout-carry', title: '建议滚入下月', description: '', badge: '滚入下月' },
-            { id: 'closeout-manual', title: '需要人工判断', description: '', badge: '人工判断' },
           ] as const)
 
   return groups
@@ -209,6 +246,8 @@ export default function CloseoutPage() {
   const navigate = useNavigate()
   const { toast } = useToast()
   const currentProject = useStore((state) => state.currentProject)
+  const { canEdit, globalRole, isOwner, permissionLevel } = usePermissions({ projectId: currentProject?.id ?? id })
+  const canManagePlanning = canEdit || isOwner || globalRole === 'company_admin'
   const selectedItemIds = usePlanningStore((state) => state.selectedItemIds)
   const setSelectedItemIds = usePlanningStore((state) => state.setSelectedItemIds)
   const clearSelection = usePlanningStore((state) => state.clearSelection)
@@ -217,6 +256,7 @@ export default function CloseoutPage() {
   const projectId = id ?? ''
   const [planVersions, setPlanVersions] = useState<MonthlyPlanVersion[]>([])
   const [activePlan, setActivePlan] = useState<MonthlyPlanDetail | null>(null)
+  const [tasks, setTasks] = useState<Task[]>([])
   const [processedIds, setProcessedIds] = useState<string[]>([])
   const [activeItemId, setActiveItemId] = useState<string | null>(null)
   const [batchLayerOpen, setBatchLayerOpen] = useState(false)
@@ -228,13 +268,15 @@ export default function CloseoutPage() {
   const [pageLoading, setPageLoading] = useState(true)
   const [pageError, setPageError] = useState<string | null>(null)
   const [dataQualitySummary, setDataQualitySummary] = useState<DataQualityProjectSummary | null>(null)
+  const [closeoutOverviewSummary, setCloseoutOverviewSummary] = useState<CloseoutOverviewSummary | null>(null)
+  const [closeoutConfirmSummary, setCloseoutConfirmSummary] = useState<CloseoutConfirmSummaryResponse | null>(null)
   const [statusNotice, setStatusNotice] = useState<string | null>(null)
   const [actionLoading, setActionLoading] = useState<CloseoutAction>(null)
-  const [activeFilter, setActiveFilter] = useState<CloseoutFilter>('all')
+  const [activeFilter, setActiveFilter] = useState<CloseoutFilter>('pending')
   const [searchQuery, setSearchQuery] = useState('')
   const [groupingMode, setGroupingMode] = useState<CloseoutGroupingMode>('suggestion')
 
-  const items = useMemo(() => buildCloseoutItems(activePlan), [activePlan])
+  const items = useMemo(() => buildCloseoutItems(activePlan, tasks), [activePlan, tasks])
   const filteredItems = useMemo(() => {
     const keyword = searchQuery.trim().toLocaleLowerCase('zh-CN')
 
@@ -270,10 +312,18 @@ export default function CloseoutPage() {
     [activeItemId, filteredItemsWithState],
   )
   const selectedItems = useMemo(() => items.filter((item) => selectedItemIds.includes(item.id)), [items, selectedItemIds])
-  const processedCount = processedIds.length
-  const remainingCount = Math.max(items.length - processedCount, 0)
+  const totalCount = closeoutOverviewSummary?.totalCount ?? 0
+  const processedCount = (closeoutOverviewSummary?.processedCount ?? 0) + processedIds.length
+  const remainingCount = Math.max(totalCount - processedCount, 0)
+  const processedAutoAdoptableCount = useMemo(
+    () => items.filter((item) => item.groupId === 'closeout-close' && processedIds.includes(item.id)).length,
+    [items, processedIds],
+  )
+  const autoAdoptableBaseCount = closeoutOverviewSummary?.autoAdoptableCount ?? 0
+  const autoAdoptableCount = Math.max(autoAdoptableBaseCount - processedAutoAdoptableCount, 0)
   const overdueDays = activePlan ? getOverdueDays(activePlan.month) : 0
   const forceCloseUnlocked = overdueDays >= 7
+  const readOnly = !canEdit
   const tabs = useMemo(
     () => buildPlanningTabs({ navigate, projectId, activeKey: 'monthly' }),
     [navigate, projectId],
@@ -281,18 +331,13 @@ export default function CloseoutPage() {
 
   const closeoutSummary: CloseoutConfirmSummary = useMemo(
     () => ({
-      selectedCount: selectedItemIds.length,
-      processedCount,
+      rolledInCount: closeoutConfirmSummary?.rolledInCount ?? 0,
+      closedCount: closeoutConfirmSummary?.closedCount ?? 0,
+      manualOverrideCount: closeoutConfirmSummary?.manualOverrideCount ?? 0,
+      forcedCount: closeoutConfirmSummary?.forcedCount ?? 0,
       remainingCount,
-      reasonLabel: reasonLeaf,
-      itemLabel:
-        confirmMode === 'batch'
-          ? `${selectedItemIds.length} 项批量处理`
-          : confirmMode === 'force'
-            ? '强制发起关账'
-            : activeItem?.title ?? '当前事项',
     }),
-    [activeItem?.title, confirmMode, processedCount, reasonLeaf, remainingCount, selectedItemIds.length],
+    [closeoutConfirmSummary, remainingCount],
   )
 
   const loadCloseoutContext = useCallback(async (signal?: AbortSignal) => {
@@ -300,7 +345,10 @@ export default function CloseoutPage() {
       setPageLoading(false)
       setPlanVersions([])
       setActivePlan(null)
+      setTasks([])
       setDataQualitySummary(null)
+      setCloseoutOverviewSummary(null)
+      setCloseoutConfirmSummary(null)
       setProcessedIds([])
       return
     }
@@ -317,19 +365,49 @@ export default function CloseoutPage() {
         versions.find((item) => item.status === 'confirmed') ??
         null
 
-      const detail = currentPlan ? await apiGet<MonthlyPlanDetail>(`/api/monthly-plans/${currentPlan.id}`, { signal }) : null
-      const qualitySummary = await DataQualityApiService.getProjectSummary(projectId, currentPlan?.month, { signal })
+      const [detail, taskList] = await Promise.all([
+        currentPlan
+          ? apiGet<MonthlyPlanDetail>(
+              `/api/monthly-plans/${currentPlan.id}?project_id=${encodeURIComponent(projectId)}`,
+              { signal },
+            )
+          : Promise.resolve(null),
+        apiGet<Task[]>(`/api/tasks?projectId=${encodeURIComponent(projectId)}`, { signal }),
+      ])
+      const [qualitySummary, overviewSummary, confirmSummary] = await Promise.all([
+        DataQualityApiService.getProjectSummary(projectId, detail?.month ?? currentPlan?.month, {
+          signal,
+        }),
+        detail
+          ? apiGet<CloseoutOverviewSummary>(
+              `/api/monthly-plans/${detail.id}/closeout-summary?project_id=${encodeURIComponent(projectId)}`,
+              { signal },
+            ).catch(() => null)
+          : Promise.resolve(null),
+        detail
+          ? apiGet<CloseoutConfirmSummaryResponse>(
+              `/api/monthly-plans/${detail.id}/closeout-confirm-summary?project_id=${encodeURIComponent(projectId)}`,
+              { signal },
+            ).catch(() => null)
+          : Promise.resolve(null),
+      ])
       const persistedState = detail ? readProcessedState(detail.id) : { processedIds: [] }
 
       setPlanVersions(versions)
       setActivePlan(detail)
+      setTasks(taskList)
       setDataQualitySummary(qualitySummary)
+      setCloseoutOverviewSummary(overviewSummary)
+      setCloseoutConfirmSummary(confirmSummary)
       setProcessedIds(persistedState.processedIds)
       setActiveItemId(detail?.items[0]?.id ?? null)
     } catch (error) {
       if (signal?.aborted) return
       setActivePlan(null)
+      setTasks([])
       setDataQualitySummary(null)
+      setCloseoutOverviewSummary(null)
+      setCloseoutConfirmSummary(null)
       setProcessedIds([])
       setPageError(getApiErrorMessage(error, '月末关账页面加载失败，请稍后重试。'))
     } finally {
@@ -346,9 +424,16 @@ export default function CloseoutPage() {
   }, [clearSelection, loadCloseoutContext, setActiveWorkspace])
 
   useEffect(() => {
-    setActiveFilter('all')
+    setActiveFilter('pending')
     setSearchQuery('')
     setGroupingMode('suggestion')
+    setReasonBranch('system')
+    setReasonLeaf('确认已完成')
+    setBatchLayerOpen(false)
+    setConfirmOpen(false)
+    setConfirmMode('single')
+    setConfirmState('ready')
+    clearSelection()
   }, [activePlan?.id])
 
   useEffect(() => {
@@ -371,21 +456,62 @@ export default function CloseoutPage() {
     setProcessedIds((current) => Array.from(new Set([...current, ...idsToMark])))
   }
 
+  const handleAutoAdopt = () => {
+    if (!activePlan || readOnly || autoAdoptableCount === 0) return
+
+    setActionLoading('auto_adopt')
+    void apiPost<{ processedIds: string[]; autoAdoptableCount: number; totalCount: number; processedCount: number; remainingCount: number }>(
+      `/api/monthly-plans/${activePlan.id}/closeout-auto-adopt`,
+      {
+        processed_ids: processedIds,
+      },
+    )
+      .then((response) => {
+        const adoptedIds = response.processedIds ?? []
+        if (adoptedIds.length > 0) {
+          markProcessed(adoptedIds)
+        }
+        toast({
+          title: '已一键采纳系统建议',
+          description: `已采纳 ${adoptedIds.length} 条建议关闭事项。`,
+        })
+      })
+      .catch((error) => {
+        toast({
+          title: '一键采纳失败',
+          description: getApiErrorMessage(error, '请稍后重试。'),
+          variant: 'destructive',
+        })
+      })
+      .finally(() => {
+        setActionLoading(null)
+      })
+  }
+
   const handleCloseoutConfirm = async () => {
     if (!activePlan) return
+    if (confirmMode === 'force' && (!forceCloseUnlocked || !canManagePlanning)) return
+    if (confirmMode !== 'force' && readOnly) return
 
     setActionLoading('close')
     try {
-      await apiPost<MonthlyPlanDetail>(`/api/monthly-plans/${activePlan.id}/close`, {
+      const endpoint = confirmMode === 'force' ? 'force-close' : 'close'
+      await apiPost<MonthlyPlanDetail>(`/api/monthly-plans/${activePlan.id}/${endpoint}`, {
         version: activePlan.version,
         month: activePlan.month,
       })
       clearProcessedState(activePlan.id)
+      clearSelection()
+      setBatchLayerOpen(false)
       setConfirmOpen(false)
       setConfirmState('ready')
+      setConfirmMode('single')
       toast({
-        title: '本月已完成关账',
-        description: `${formatMonthLabel(activePlan.month)} 已写入真实关账结果。`,
+        title: confirmMode === 'force' ? '本月已完成强制关账' : '本月已完成关账',
+        description:
+          confirmMode === 'force'
+            ? `${formatMonthLabel(activePlan.month)} 已写入强制关账结果。`
+            : `${formatMonthLabel(activePlan.month)} 已写入真实关账结果。`,
       })
       navigate(`/projects/${projectId}/planning/monthly?closeout_complete=1&month=${encodeURIComponent(shiftMonth(activePlan.month, 1))}`)
     } catch (error) {
@@ -423,7 +549,20 @@ export default function CloseoutPage() {
             </div>
             <h2 className="text-lg font-semibold text-slate-900">月末待处理事项</h2>
           </div>
-          {forceCloseUnlocked ? <Badge variant="secondary">已到第 7 日，可强制发起关账</Badge> : null}
+          <div className="flex flex-wrap items-center gap-2">
+            {forceCloseUnlocked ? <Badge variant="secondary">已到第 7 日，可强制发起关账</Badge> : null}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="gap-2"
+              loading={actionLoading === 'auto_adopt'}
+              onClick={handleAutoAdopt}
+              disabled={readOnly || autoAdoptableCount === 0 || actionLoading === 'auto_adopt'}
+            >
+              一键采纳系统建议
+            </Button>
+          </div>
         </div>
 
         <div
@@ -461,14 +600,14 @@ export default function CloseoutPage() {
           })}
         </div>
 
-        <div className="grid gap-3 md:grid-cols-4">
+        <div className="grid gap-3 md:grid-cols-5">
           <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
             <div className="text-xs text-slate-500">关账月份</div>
             <div className="mt-1 text-lg font-semibold text-slate-900">{activePlan ? formatMonthLabel(activePlan.month) : '暂无'}</div>
           </div>
           <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
             <div className="text-xs text-slate-500">总待处理数</div>
-            <div className="mt-1 text-lg font-semibold text-slate-900">{items.length}</div>
+            <div className="mt-1 text-lg font-semibold text-slate-900">{totalCount}</div>
           </div>
           <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
             <div className="text-xs text-slate-500">已处理</div>
@@ -477,6 +616,10 @@ export default function CloseoutPage() {
           <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
             <div className="text-xs text-amber-700">剩余未处理</div>
             <div className="mt-1 text-lg font-semibold text-amber-900">{remainingCount}</div>
+          </div>
+          <div className="rounded-2xl border border-cyan-200 bg-cyan-50 px-4 py-3">
+            <div className="text-xs text-cyan-700">建议可一键采纳数</div>
+            <div className="mt-1 text-lg font-semibold text-cyan-900">{autoAdoptableCount}</div>
           </div>
         </div>
         {dataQualitySummary ? (
@@ -540,7 +683,7 @@ export default function CloseoutPage() {
           <div className="flex flex-wrap items-start gap-2">
             {([
               { key: 'all', label: '全部' },
-              { key: 'pending', label: '待处理' },
+              { key: 'pending', label: '仅看未处理' },
               { key: 'processed', label: '已处理' },
               { key: 'overdue', label: '超期' },
             ] as Array<{ key: CloseoutFilter; label: string }>).map((filter) => (
@@ -576,9 +719,9 @@ export default function CloseoutPage() {
         </div>
         <div className="flex flex-wrap gap-2">
           {([
+            { key: 'processing', label: '按变更类型' },
+            { key: 'commitment', label: '按范围维度' },
             { key: 'suggestion', label: '按系统建议' },
-            { key: 'processing', label: '按处理状态' },
-            { key: 'commitment', label: '按承诺类型' },
           ] as Array<{ key: CloseoutGroupingMode; label: string }>).map((option) => (
             <Button
               key={option.key}
@@ -670,6 +813,7 @@ export default function CloseoutPage() {
         forceCloseUnlocked={forceCloseUnlocked}
         reasonBranch={reasonBranch}
         reasonLeaf={reasonLeaf}
+        readOnly={readOnly}
         onClose={() => setBatchLayerOpen(false)}
         onToggleBatchLayer={setBatchLayerOpen}
         onSelectReasonBranch={setReasonBranch}
@@ -701,8 +845,8 @@ export default function CloseoutPage() {
   return (
     <PlanningPageShell
       projectName={currentProject.name ?? '未命名项目'}
-      title="月末关账"
-      description=""
+      title="任务列表 / 月末关账"
+      description="收口当月待处理事项，并把结果带回月度计划。"
       tabs={tabs}
       actions={
         <>
@@ -711,17 +855,50 @@ export default function CloseoutPage() {
             variant="outline"
             size="sm"
             className="gap-2 border-slate-600 bg-transparent text-white hover:bg-white/10"
-            onClick={() => void loadCloseoutContext()}
+            data-testid="closeout-refresh-entry"
+            onClick={() => {
+              setActionLoading('refresh')
+              void (async () => {
+                try {
+                  await loadCloseoutContext()
+                } finally {
+                  setActionLoading(null)
+                }
+              })()
+            }}
             loading={actionLoading === 'refresh'}
           >
             {actionLoading !== 'refresh' ? <RefreshCw className="h-4 w-4" /> : null}
-            刷新清单
+            重新生成清单
           </Button>
-          {forceCloseUnlocked ? (
-            <Button type="button" size="sm" className="gap-2" onClick={() => { setConfirmMode('force'); setConfirmOpen(true) }}>
-              <AlertTriangle className="h-4 w-4" />
-              强制发起关账
-            </Button>
+          {canManagePlanning ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="gap-2 border-slate-600 bg-transparent text-white hover:bg-white/10"
+                  data-testid="closeout-more-actions"
+                >
+                  <MoreHorizontal className="h-4 w-4" />
+                  ...
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48">
+                <DropdownMenuItem
+                  data-testid="closeout-force-close-entry"
+                  disabled={!forceCloseUnlocked}
+                  onSelect={() => {
+                    setConfirmMode('force')
+                    setConfirmState('ready')
+                    setConfirmOpen(true)
+                  }}
+                >
+                  强制发起关账
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           ) : null}
         </>
       }
@@ -733,6 +910,7 @@ export default function CloseoutPage() {
       <CloseoutBatchBar
         selectedCount={selectedItemIds.length}
         drawerOpen={Boolean(activeItem)}
+        readOnly={readOnly}
         onOpenBatchLayer={() => setBatchLayerOpen(true)}
         onClearSelection={() => setSelectedItemIds([])}
       />

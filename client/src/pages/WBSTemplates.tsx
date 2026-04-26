@@ -256,37 +256,37 @@ function buildFallbackGuide(params: {
     project_name: params.projectName,
     status_label: params.statusLabel,
     mode: params.mode,
-    title: '计划编制启用与 WBS 模板',
-    subtitle: '',
+    title: '结构资产与行业经验工期管理',
+    subtitle: '把模板资产、历史项目经验和工期校准统一收口，再一键生成基线或沉淀模板。',
     quickActions: [
       {
         path: 'template_to_baseline',
         label: 'WBS 模板 -> 项目基线',
-        description: '',
+        description: '把成熟结构直接生成基线草稿。',
       },
       {
         path: 'completed_project_to_template',
         label: '已完成项目 -> WBS 模板',
-        description: '',
+        description: '从完工项目反哺模板资产。',
       },
       {
         path: 'ongoing_project_to_baseline',
         label: '在建项目 -> 初始化基线',
-        description: '',
+        description: '从当前排期直接生成可校核基线。',
       },
     ],
     checklist: [
-      { key: 'scan', title: '先看现状', detail: '识别当前执行到哪一步。' },
-      { key: 'bootstrap', title: '自动补基线', detail: '自动补建初始基线，不用手工一条条录。' },
+      { key: 'scan', title: '先看现状', detail: '识别当前项目属于模板、在建还是已完成。' },
+      { key: 'bootstrap', title: '自动补基线', detail: '从排期或模板自动生成初始结构。' },
       { key: 'review', title: '确认映射', detail: '把待确认项补齐后再正式启用。' },
     ],
     learnMore: {
-      title: '四层时间线怎么理解',
+      title: '结构资产与工期怎么理解',
       sections: [
-        { heading: '项目基线', body: '先定下来的主计划骨架，后续确认和对比都围绕它。' },
-        { heading: '月度计划', body: '把本月真正要推进的事情说清楚。' },
-        { heading: '当前项目计划时间', body: '系统整理后的最新计划时间。' },
-        { heading: '项目实际执行时间', body: '现场真实发生的时间，用来复盘和看偏差。' },
+        { heading: '结构资产', body: '把成熟 WBS 结构沉淀为可复用模板。' },
+        { heading: '工期经验', body: '把历史项目的参考工期反哺到模板和基线。' },
+        { heading: '项目基线', body: '一键生成后，后续确认和对比都围绕它。' },
+        { heading: '当前排期', body: '从在建项目直接生成初始化基线，减少手工录入。' },
       ],
     },
   }
@@ -534,7 +534,7 @@ export default function WBSTemplates() {
     if (!projectId) return
 
     try {
-      let endpoint = `${API_BASE}/bootstrap/from-ongoing-project`
+      let endpoint = '/api/task-baselines/bootstrap/from-schedule'
       let body: Record<string, unknown> = { project_id: projectId }
 
       if (path === 'template_to_baseline') {
@@ -572,11 +572,11 @@ export default function WBSTemplates() {
 
       if (path === 'ongoing_project_to_baseline') {
         toast({
-          title: '已自动补建初始基线',
-          description: result.data?.needs_mapping_review
-            ? '还有映射待确认项，已带你去项目基线继续处理。'
-            : '已带你去项目基线继续处理。',
-        })
+        title: '已自动补建初始基线',
+        description: result.data?.needs_mapping_review
+          ? '还有映射待确认项，已带你去项目基线继续处理。'
+          : '已带你去项目基线继续处理。',
+      })
         navigate(`/projects/${projectId}/planning/baseline`)
         return
       }
@@ -709,8 +709,8 @@ export default function WBSTemplates() {
 
       <PageHeader
         eyebrow="计划编制"
-        title="WBS 模板"
-        subtitle=""
+        title="结构资产与行业经验工期管理"
+        subtitle="把模板资产、历史经验和工期校准统一收口，再一键生成项目基线。"
       />
 
       <div className="mt-6 grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
@@ -727,7 +727,10 @@ export default function WBSTemplates() {
               </Badge>
             </div>
 
-            <h2 className="text-xl font-semibold text-slate-900">计划编制入口</h2>
+            <div className="space-y-1">
+              <h2 className="text-xl font-semibold text-slate-900">{guide.title}</h2>
+              {guide.subtitle ? <p className="text-sm leading-6 text-slate-500">{guide.subtitle}</p> : null}
+            </div>
 
             <div className="grid gap-3 md:grid-cols-3">
               {guide.quickActions.map((action) => (

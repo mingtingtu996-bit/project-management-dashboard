@@ -72,6 +72,9 @@ describe('acceptance timeline contract', () => {
       inProgress: 1,
       pending: 1,
       failed: 3,
+      blockedCount: 0,
+      dueSoon30dCount: 0,
+      keyMilestoneCount: 0,
       completionRate: 17,
     });
   });

@@ -88,17 +88,14 @@ function findButton(container: HTMLElement, label: string) {
 }
 
 async function renderReports(root: Root | null, initialEntry: string) {
-  await act(async () => {
-    root?.render(
-      <MemoryRouter initialEntries={[initialEntry]}>
-        <Routes>
-          <Route path="/projects/:id/reports" element={<Reports />} />
-        </Routes>
-      </MemoryRouter>,
-    )
-    await flush()
-    await flush()
-  })
+  root?.render(
+    <MemoryRouter initialEntries={[initialEntry]}>
+      <Routes>
+        <Route path="/projects/:id/reports" element={<Reports />} />
+      </Routes>
+    </MemoryRouter>,
+  )
+  await flush()
 }
 
 function dataQualitySummaryResponse(projectId: string) {
@@ -430,6 +427,40 @@ describe('Reports story coverage', () => {
         ]
       }
 
+      if (url.startsWith('/api/issues/summary')) {
+        return {
+          project_id: projectId,
+          total_issues: 2,
+          active_issues: 1,
+          status_counts: {
+            open: 1,
+            closed: 1,
+          },
+          severity_counts: {
+            high: 1,
+            medium: 1,
+          },
+          source_counts: [
+            { key: 'manual', label: '人工录入', count: 1 },
+            { key: 'system', label: '系统生成', count: 1 },
+          ],
+          trend: [
+            { date: '2026-04-01', newIssues: 1, resolvedIssues: 0, activeIssues: 1 },
+            { date: '2026-04-02', newIssues: 0, resolvedIssues: 1, activeIssues: 1 },
+          ],
+          recent_issues: [
+            {
+              id: 'issue-1',
+              title: '问题A',
+              description: '说明A',
+              status: 'open',
+              source_type: 'manual',
+              created_at: '2026-04-01T08:00:00.000Z',
+            },
+          ],
+        }
+      }
+
       throw new Error(`Unexpected apiGet url: ${url}`)
     })
 
@@ -546,22 +577,22 @@ describe('Reports story coverage', () => {
 
     await waitForText(container, ['基线偏差', 'mapping_pending', '基线版本切换标记'])
     expect(container.querySelector('[data-testid="deviation-shell"]')).toBeTruthy()
-    expect(container.querySelector('[data-testid="execution-scatter-chart"]')).toBeTruthy()
+    expect(container.querySelector('[data-testid="baseline-dumbbell-chart"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="deviation-detail-table"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="baseline-switch-marker"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="deviation-version-note"]')).toBeTruthy()
     expect(container.textContent).toContain('mapping_pending')
 
-    const monthlyTab = findButton(container, '月度完成情况')
+    const monthlyTab = findButton(container, '月度兑现偏差')
     expect(monthlyTab).toBeTruthy()
     await act(async () => {
       monthlyTab?.click()
       await flush()
     })
 
-    await waitForText(container, ['月度完成情况', 'merged_into', '基线版本切换标记'])
+    await waitForText(container, ['月度兑现偏差', 'merged_into', '基线版本切换标记'])
     expect(container.querySelector('[data-testid="deviation-shell"]')).toBeTruthy()
-    expect(container.querySelector('[data-testid="execution-scatter-chart"]')).toBeTruthy()
+    expect(container.querySelector('[data-testid="monthly-stacked-bar-chart"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="deviation-detail-table"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="baseline-switch-marker"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="deviation-version-note"]')).toBeTruthy()
@@ -583,8 +614,8 @@ describe('Reports story coverage', () => {
     expect(container.textContent).toContain('child_group')
   })
 
-  it('maps legacy license, acceptance and wbs routes into progress analysis', async () => {
-    await renderReports(root, `/projects/${projectId}/reports?view=wbs`)
+  it('keeps WBS content folded into the canonical progress analysis route', async () => {
+    await renderReports(root, `/projects/${projectId}/reports?view=progress`)
 
     await waitForText(container, ['项目进度总览分析', '工期偏差与执行判断', '关键路径摘要'])
 
@@ -603,7 +634,7 @@ describe('Reports story coverage', () => {
 
     await waitForText(container, ['基线偏差', 'mapping_pending', '基线版本切换标记'])
 
-    expect(container.querySelector('[data-testid="execution-scatter-chart"]')).toBeTruthy()
+    expect(container.querySelector('[data-testid="baseline-dumbbell-chart"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="deviation-detail-table"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="baseline-switch-marker"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="deviation-version-note"]')).toBeTruthy()

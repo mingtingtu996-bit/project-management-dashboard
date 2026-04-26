@@ -17,6 +17,13 @@ export interface CloseoutItem {
   sourceHierarchyLabel?: string
   sourceEntityLabel?: string
   closeReasonLabel?: string
+  taskTitle?: string
+  planStartLabel?: string | null
+  planEndLabel?: string | null
+  planProgressLabel?: string | null
+  taskStartLabel?: string | null
+  taskEndLabel?: string | null
+  taskProgressLabel?: string | null
 }
 
 export interface CloseoutGroup {
@@ -124,6 +131,13 @@ export function CloseoutGroupedList({
                             {item.sourceEntityLabel ? <span>来源类型：{item.sourceEntityLabel}</span> : null}
                             {item.closeReasonLabel ? <span>关闭口径：{item.closeReasonLabel}</span> : null}
                           </div>
+                          {item.taskTitle || item.planProgressLabel || item.taskProgressLabel ? (
+                            <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+                              {item.taskTitle ? <span>当前排期：{item.taskTitle}</span> : null}
+                              {item.planProgressLabel ? <span>月计划进度：{item.planProgressLabel}</span> : null}
+                              {item.taskProgressLabel ? <span>当前进度：{item.taskProgressLabel}</span> : null}
+                            </div>
+                          ) : null}
                         </button>
                       </div>
 

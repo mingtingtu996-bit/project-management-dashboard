@@ -2,9 +2,10 @@ import { Router } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import { z } from 'zod'
 import { asyncHandler } from '../middleware/errorHandler.js'
-import { authenticate } from '../middleware/auth.js'
+import { authenticate, requireProjectEditor } from '../middleware/auth.js'
 import { logger } from '../middleware/logger.js'
 import { validate } from '../middleware/validation.js'
+import { executeSQLOne } from '../services/dbService.js'
 import type { ApiResponse } from '../types/index.js'
 import type { AcceptanceRecord } from '../types/db.js'
 import {
@@ -108,7 +109,10 @@ router.get('/', validate(recordListQuerySchema, 'query'), asyncHandler(async (re
   res.json(response)
 }))
 
-router.post('/', validate(recordCreateBodySchema), asyncHandler(async (req, res) => {
+router.post('/',
+  requireProjectEditor((req) => req.body.project_id ?? req.body.projectId),
+  validate(recordCreateBodySchema),
+  asyncHandler(async (req, res) => {
   const payload = normalizeRecordPayload(req.body ?? {})
   if (!payload.plan_id || !payload.record_type || !payload.content) {
     const response: ApiResponse = {
@@ -157,10 +161,30 @@ async function handleUpdateRecord(req: any, res: any) {
   res.json(response)
 }
 
-router.put('/:id', validate(recordIdParamSchema, 'params'), validate(recordUpdateBodySchema), asyncHandler(handleUpdateRecord))
-router.patch('/:id', validate(recordIdParamSchema, 'params'), validate(recordUpdateBodySchema), asyncHandler(handleUpdateRecord))
+router.put('/:id',
+  requireProjectEditor(async (req) => {
+    const record = await executeSQLOne<{ project_id?: string }>('SELECT project_id FROM acceptance_records WHERE id = ? LIMIT 1', [req.params.id])
+    return record?.project_id
+  }),
+  validate(recordIdParamSchema, 'params'),
+  validate(recordUpdateBodySchema),
+  asyncHandler(handleUpdateRecord))
+router.patch('/:id',
+  requireProjectEditor(async (req) => {
+    const record = await executeSQLOne<{ project_id?: string }>('SELECT project_id FROM acceptance_records WHERE id = ? LIMIT 1', [req.params.id])
+    return record?.project_id
+  }),
+  validate(recordIdParamSchema, 'params'),
+  validate(recordUpdateBodySchema),
+  asyncHandler(handleUpdateRecord))
 
-router.delete('/:id', validate(recordIdParamSchema, 'params'), asyncHandler(async (req, res) => {
+router.delete('/:id',
+  requireProjectEditor(async (req) => {
+    const record = await executeSQLOne<{ project_id?: string }>('SELECT project_id FROM acceptance_records WHERE id = ? LIMIT 1', [req.params.id])
+    return record?.project_id
+  }),
+  validate(recordIdParamSchema, 'params'),
+  asyncHandler(async (req, res) => {
   const { id } = req.params
   logger.info('Deleting acceptance record', { id })
 

@@ -175,6 +175,18 @@ function buildMockResponse(urlString) {
     return json({ success: true, data: mockProject })
   }
 
+  if (pathname === `/api/members/${projectId}/me`) {
+    return json({
+      success: true,
+      data: {
+        permissionLevel: 'owner',
+        globalRole: 'company_admin',
+        canManageTeam: true,
+        canEdit: true,
+      },
+    })
+  }
+
   if (
     pathname === '/api/tasks'
     || pathname === '/api/risks'
@@ -269,14 +281,14 @@ async function main() {
       }
     })
 
-    const targetUrl = `${baseUrl}/#/projects/${projectId}/planning/closeout`
+    const targetUrl = `${baseUrl}/#/projects/${projectId}/tasks/closeout`
     await page.goto(targetUrl, { waitUntil: 'domcontentloaded' })
     await page.getByTestId('closeout-escalation-ladder').waitFor({ state: 'visible', timeout: 20000 })
     await page.getByTestId('closeout-filter-bar').waitFor({ state: 'visible', timeout: 20000 })
     await page.getByTestId('closeout-grouped-list').waitFor({ state: 'visible', timeout: 20000 })
 
     const initialUrl = page.url()
-    assert(initialUrl.includes('/planning/closeout'), `Unexpected Closeout URL: ${initialUrl}`)
+    assert(initialUrl.includes('/tasks/closeout'), `Unexpected Closeout URL: ${initialUrl}`)
     await page.screenshot({ path: join(outputDir, 'planning-closeout-page.png'), fullPage: true })
 
     await page.getByTestId('closeout-item-open-closeout-item-2').click()
@@ -284,7 +296,8 @@ async function main() {
     await page.screenshot({ path: join(outputDir, 'planning-closeout-detail.png'), fullPage: true })
     await page.keyboard.press('Escape')
 
-    await page.getByRole('button', { name: '强制发起关账' }).click()
+    await page.getByTestId('closeout-more-actions').click()
+    await page.getByTestId('closeout-force-close-entry').click()
     await page.getByTestId('closeout-confirm-dialog').waitFor({ state: 'visible', timeout: 10000 })
     await page.screenshot({ path: join(outputDir, 'planning-closeout-confirm-dialog.png'), fullPage: true })
 

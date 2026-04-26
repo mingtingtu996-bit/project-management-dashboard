@@ -8,6 +8,7 @@ import { writeLog } from './changeLogs.js'
 import { PlanningHealthService } from './planningHealthService.js'
 import { PlanningIntegrityService } from './planningIntegrityService.js'
 import { enqueueProjectHealthUpdate } from './projectHealthService.js'
+import { getCriticalPathTaskIds } from './criticalPathHelpers.js'
 import { SystemAnomalyService } from './systemAnomalyService.js'
 import type { Notification } from '../types/db.js'
 import type { MonthlyPlan, Task, TaskProgressSnapshot } from '../types/db.js'
@@ -654,15 +655,16 @@ function parseManualReorderPayload(value: unknown): ManualReorderSessionPayload 
 }
 
 async function collectManualReorderStartSnapshot(projectId: string): Promise<ManualReorderStartSnapshot> {
-  const [tasks, baselines, monthlyPlans] = await Promise.all([
+  const [tasks, baselines, monthlyPlans, criticalTaskIds] = await Promise.all([
     executeSQL<Task>('SELECT * FROM tasks WHERE project_id = ?', [projectId]),
     executeSQL<{ id: string; status?: string | null }>('SELECT id, status FROM task_baselines WHERE project_id = ?', [projectId]),
     executeSQL<{ id: string; status?: string | null }>('SELECT id, status FROM monthly_plans WHERE project_id = ?', [projectId]),
+    getCriticalPathTaskIds(projectId),
   ])
 
   return {
     total_tasks: tasks.length,
-    critical_task_count: tasks.filter((task) => Boolean(task.is_critical)).length,
+    critical_task_count: tasks.filter((task) => criticalTaskIds.has(task.id)).length,
     milestone_task_count: tasks.filter((task) => Boolean(task.is_milestone)).length,
     confirmed_baseline_count: baselines.filter((row) => String(row.status ?? '').trim() === 'confirmed').length,
     active_monthly_plan_count: monthlyPlans.filter((row) => ['draft', 'confirmed', 'pending_realign', 'revising'].includes(String(row.status ?? '').trim())).length,

@@ -9,7 +9,12 @@ import * as XLSX from 'xlsx'
 import { usePlanningStore, type PlanningValidationIssue } from '@/hooks/usePlanningStore'
 import { useStore } from '@/hooks/useStore'
 import { ApiClientError, apiGet, apiPost, getApiErrorMessage } from '@/lib/apiClient'
-import type { BaselineItem, BaselineVersion, PlanningDraftLockRecord } from '@/types/planning'
+import type {
+  BaselineItem,
+  BaselineVersion,
+  ObservationPoolReadResponse,
+  PlanningDraftLockRecord,
+} from '@/types/planning'
 import { buildPlanningDraftResumeKey } from '../planning/draftPersistence'
 
 import BaselinePage from '../planning/BaselinePage'
@@ -43,6 +48,14 @@ vi.mock('@/lib/apiClient', () => ({
   getApiErrorMessage: vi.fn(),
 }))
 
+vi.mock('@/hooks/usePermissions', () => ({
+  usePermissions: () => ({
+    canEdit: true,
+    globalRole: 'company_admin',
+    permissionLevel: 'owner',
+  }),
+}))
+
 const mockedApiGet = vi.mocked(apiGet)
 const mockedApiPost = vi.mocked(apiPost)
 const mockedGetApiErrorMessage = vi.mocked(getApiErrorMessage)
@@ -68,10 +81,16 @@ async function waitForCondition(check: () => boolean) {
 }
 
 async function waitForText(container: HTMLElement, expected: string[]) {
-  await waitForCondition(() => {
-    const text = container.textContent || ''
-    return expected.every((item) => text.includes(item))
-  })
+  try {
+    await waitForCondition(() => {
+      const text = container.textContent || ''
+      return expected.every((item) => text.includes(item))
+    })
+  } catch (error) {
+    const text = (container.textContent || '').replace(/\s+/g, ' ').trim()
+    const reason = error instanceof Error ? ` Cause: ${error.message}` : ''
+    throw new Error(`Timed out waiting for text. Expected: ${expected.join(' | ')}. Actual: ${text.slice(0, 1200)}${reason}`)
+  }
 }
 
 function mount(node: ReactNode) {
@@ -106,10 +125,37 @@ async function clickButtonByText(container: HTMLElement, text: string) {
 
   expect(button).toBeTruthy()
 
+  await clickElement(button as HTMLButtonElement)
+}
+
+async function clickElement(element: HTMLElement) {
   await act(async () => {
-    button?.click()
+    element.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }))
+    element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+    element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }))
+    element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     await flush()
   })
+}
+
+async function selectBaselineVersion(container: HTMLElement, baselineId: string) {
+  const selector = `[data-testid="baseline-version-chip-${baselineId}"]`
+  await waitForCondition(() => Boolean(container.querySelector(selector)))
+
+  await clickElement(container.querySelector(selector) as HTMLButtonElement)
+}
+
+async function openDraftBaseline(container: HTMLElement) {
+  await selectBaselineVersion(container, 'baseline-v7')
+  await waitForText(container, ['可编辑态', '当前草稿基于 v6 继续整理'])
+  if ((container.textContent || '').includes('全选当前视图')) {
+    const draftIds = currentDetails['baseline-v7'].items.map((item) => item.id)
+    await act(async () => {
+      usePlanningStore.getState().setSelectedItemIds(draftIds)
+      await flush()
+    })
+    await waitForCondition(() => usePlanningStore.getState().selectedItemIds.length === draftIds.length)
+  }
 }
 
 async function setInputValue(input: HTMLInputElement, value: string) {
@@ -146,6 +192,15 @@ async function setSelectValue(select: HTMLSelectElement, value: string) {
   })
 }
 
+async function setCheckboxChecked(input: HTMLInputElement, checked: boolean) {
+  await act(async () => {
+    if (input.checked !== checked) {
+      input.click()
+    }
+    await flush()
+  })
+}
+
 async function blurInput(input: HTMLInputElement) {
   await act(async () => {
     input.dispatchEvent(new FocusEvent('blur', { bubbles: true }))
@@ -163,6 +218,19 @@ async function pressKey(input: HTMLInputElement, key: string) {
 
 function deepClone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
+}
+
+function getBaselineIdFromUrl(url: string) {
+  return (url.split('?')[0]?.split('/').at(-1) ?? '').trim()
+}
+
+function isRevisionPoolUrl(url: string) {
+  return /\/api\/task-baselines\/[^/]+\/revision-pool(?:\?|$)/.test(url)
+}
+
+const emptyRevisionPool: ObservationPoolReadResponse = {
+  items: [],
+  total: 0,
 }
 
 const validationIssues: PlanningValidationIssue[] = [
@@ -391,7 +459,11 @@ describe('BaselinePage planning workflow', () => {
         return deepClone(currentVersions)
       }
 
-      const baselineId = url.split('/').at(-1) ?? ''
+      if (isRevisionPoolUrl(url)) {
+        return deepClone(emptyRevisionPool)
+      }
+
+      const baselineId = getBaselineIdFromUrl(url)
       const detail = currentDetails[baselineId]
       if (detail) return deepClone(detail)
 
@@ -517,7 +589,7 @@ describe('BaselinePage planning workflow', () => {
     window.localStorage.clear()
   })
 
-  it('loads the latest draft, acquires the edit lock, and renders the real version summary', async () => {
+  it('loads the current confirmed baseline by default and renders the real version summary', async () => {
     const { container, cleanup } = mount(
       <MemoryRouter initialEntries={['/projects/project-1/planning/baseline']}>
         <Routes>
@@ -527,22 +599,18 @@ describe('BaselinePage planning workflow', () => {
     )
 
     await waitForText(container, [
-      '基线编辑',
-      '可编辑态',
-      '当前草稿基于 v6 继续整理',
-      'v6 → v7',
-      'v7 · 草稿 · 5 项',
+      '计划编制 / 项目基线',
+      '只读查看态',
+      '当前展示的是已确认版本',
+      'v7 → v6',
+      'v6 · 已确认',
     ])
 
-    expect(mockedApiPost).toHaveBeenCalledWith(
-      '/api/task-baselines/baseline-v7/lock',
-      undefined,
-      expect.objectContaining({ signal: expect.any(AbortSignal) }),
-    )
+    expect(mockedApiPost.mock.calls.some(([url]) => url === '/api/task-baselines/baseline-v7/lock')).toBe(false)
     cleanup()
   })
 
-  it('switches to another baseline version from the history selector', async () => {
+  it('switches to the draft baseline from the history selector and acquires the edit lock', async () => {
     const { container, cleanup } = mount(
       <MemoryRouter initialEntries={['/projects/project-1/planning/baseline']}>
         <Routes>
@@ -551,14 +619,10 @@ describe('BaselinePage planning workflow', () => {
       </MemoryRouter>,
     )
 
-    await waitForCondition(() => Boolean(container.querySelector('[data-testid="baseline-version-chip-baseline-v6"]')))
+    await openDraftBaseline(container)
 
-    await act(async () => {
-      ;(container.querySelector('[data-testid="baseline-version-chip-baseline-v6"]') as HTMLButtonElement | null)?.click()
-      await flush()
-    })
-
-    await waitForText(container, ['v6 · 已确认', '只读查看态'])
+    await waitForText(container, ['v7 · 草稿', '可编辑态'])
+    expect(mockedApiPost.mock.calls.some(([url]) => url === '/api/task-baselines/baseline-v7/lock')).toBe(true)
     cleanup()
   })
 
@@ -621,6 +685,7 @@ describe('BaselinePage planning workflow', () => {
       </MemoryRouter>,
     )
 
+    await selectBaselineVersion(container, 'baseline-v7')
     await waitForText(container, [
       '只读查看态',
       '当前草稿暂时无法获取编辑锁，已切换为只读查看。',
@@ -631,9 +696,46 @@ describe('BaselinePage planning workflow', () => {
   })
 
   it('shows the no-baseline entry selector when the project has no baseline yet', async () => {
+    let scheduleCreated = false
+    const scheduleDetail: BaselineDetail = {
+      ...currentDetails['baseline-v7'],
+      id: 'baseline-schedule-v1',
+      version: 1,
+      source_type: 'current_schedule',
+      source_version_id: null,
+      source_version_label: '当前排期',
+      items: currentDetails['baseline-v7'].items.map((item) => ({
+        ...item,
+        baseline_version_id: 'baseline-schedule-v1',
+      })),
+    }
+    const scheduleLock: PlanningDraftLockRecord = {
+      ...currentLocks['baseline-v7'],
+      id: 'lock-baseline-schedule-v1',
+      resource_id: 'baseline-schedule-v1',
+    }
+
     mockedApiGet.mockImplementation(async (url: string) => {
-      if (url.startsWith('/api/task-baselines?project_id=')) return [] as never
+      if (url.startsWith('/api/task-baselines?project_id=')) {
+        return scheduleCreated ? [{ ...scheduleDetail, items: undefined } as never] : [] as never
+      }
+      if (isRevisionPoolUrl(url)) return deepClone(emptyRevisionPool) as never
+      if (getBaselineIdFromUrl(url) === 'baseline-schedule-v1') return deepClone(scheduleDetail) as never
       throw new Error(`Unexpected GET ${url}`)
+    })
+    mockedApiPost.mockImplementation(async (url: string) => {
+      if (url === '/api/task-baselines/bootstrap/from-schedule') {
+        scheduleCreated = true
+        return {
+          baseline: deepClone(scheduleDetail),
+          needs_mapping_review: true,
+          created_item_count: scheduleDetail.items.length,
+        } as never
+      }
+      if (url === '/api/task-baselines/baseline-schedule-v1/lock') {
+        return { lock: deepClone(scheduleLock) } as never
+      }
+      throw new Error(`Unexpected POST ${url}`)
     })
 
     const { container, cleanup } = mount(
@@ -652,7 +754,7 @@ describe('BaselinePage planning workflow', () => {
     ])
 
     await clickButtonByText(container, '从当前排期生成')
-    await waitForText(container, ['已选择“从当前排期生成”'])
+    await waitForText(container, ['已从当前排期生成初始化基线', 'v1 · 草稿'])
 
     cleanup()
   })
@@ -706,7 +808,8 @@ describe('BaselinePage planning workflow', () => {
       if (url.startsWith('/api/task-baselines?project_id=')) {
         return importedCreated ? [{ ...importedDetail, items: undefined } as never] : [] as never
       }
-      if (url === '/api/task-baselines/baseline-import-v1') return importedDetail as never
+      if (isRevisionPoolUrl(url)) return deepClone(emptyRevisionPool) as never
+      if (getBaselineIdFromUrl(url) === 'baseline-import-v1') return importedDetail as never
       throw new Error(`Unexpected GET ${url}`)
     })
 
@@ -753,6 +856,12 @@ describe('BaselinePage planning workflow', () => {
     await setFileInput(fileInput as HTMLInputElement, file)
     await waitForText(container, ['导入预览', 'baseline-import.xlsx', '导入结构 L1'])
 
+    const mappingConfirm = Array.from(container.querySelectorAll('input[type="checkbox"]')).at(-1) as
+      | HTMLInputElement
+      | undefined
+    expect(mappingConfirm).toBeTruthy()
+    await setCheckboxChecked(mappingConfirm as HTMLInputElement, true)
+
     await clickButtonByText(container, '生成导入基线草稿')
     await waitForCondition(() => mockedApiPost.mock.calls.some(([url]) => url === '/api/task-baselines'))
 
@@ -791,6 +900,7 @@ describe('BaselinePage planning workflow', () => {
       </MemoryRouter>,
     )
 
+    await selectBaselineVersion(container, 'baseline-v7')
     await waitForCondition(() => Boolean(document.body.querySelector('[data-testid="planning-draft-resume-dialog"]')))
     const resumeDialog = document.body.querySelector('[data-testid="planning-draft-resume-dialog"]') as HTMLElement | null
     expect(resumeDialog?.textContent).toContain('v7')
@@ -810,6 +920,8 @@ describe('BaselinePage planning workflow', () => {
   })
 
   it('opens the confirm dialog with real diff data', async () => {
+    usePlanningStore.setState({ validationIssues: [] } as never)
+
     const { container, cleanup } = mount(
       <MemoryRouter initialEntries={['/projects/project-1/planning/baseline']}>
         <Routes>
@@ -818,8 +930,9 @@ describe('BaselinePage planning workflow', () => {
       </MemoryRouter>,
     )
 
-    await waitForText(container, ['进入确认发布'])
-    await clickButtonByText(container, '进入确认发布')
+    await openDraftBaseline(container)
+    await waitForText(container, ['确认项目基线'])
+    await clickButtonByText(container, '确认项目基线')
 
     await waitForText(document.body, [
       '基线确认弹窗',
@@ -828,7 +941,6 @@ describe('BaselinePage planning workflow', () => {
       '新增',
       '修改',
       '里程碑变动',
-      '当前存在阻断项，修正后才能确认发布。',
     ])
 
     await clickButtonByText(document.body, '查看完整差异')
@@ -837,37 +949,31 @@ describe('BaselinePage planning workflow', () => {
     cleanup()
   })
 
-  it('opens revision pool and change log deep links from the baseline sidebar', async () => {
+  it('opens the revision pool dialog and change log deep link from the baseline sidebar', async () => {
     const mountBaseline = () =>
       mount(
         <MemoryRouter initialEntries={['/projects/project-1/planning/baseline']}>
           <Routes>
             <Route path="/projects/:id/planning/baseline" element={<BaselinePage />} />
-            <Route path="/projects/:id/planning/revision-pool" element={<RouteSearchProbe testId="baseline-route-probe" />} />
             <Route path="/projects/:id/reports" element={<RouteSearchProbe testId="baseline-route-probe" />} />
           </Routes>
         </MemoryRouter>,
       )
 
     let view = mountBaseline()
-    await waitForCondition(() => Boolean(view.container.querySelector('[data-testid="baseline-open-revision-pool"]')))
+    await waitForCondition(() => Boolean(view.container.querySelector('[data-testid="baseline-info-open-revision-pool"]')))
 
     await act(async () => {
-      ;(view.container.querySelector('[data-testid="baseline-open-revision-pool"]') as HTMLButtonElement | null)?.click()
+      ;(view.container.querySelector('[data-testid="baseline-info-open-revision-pool"]') as HTMLButtonElement | null)?.click()
       await flush()
     })
 
-    await waitForCondition(() => Boolean(view.container.querySelector('[data-testid="baseline-route-probe"]')))
-    expect(view.container.querySelector('[data-testid="baseline-route-probe"]')?.textContent).toContain('/projects/project-1/planning/revision-pool')
+    await waitForCondition(() => Boolean(document.body.querySelector('[data-testid="baseline-revision-pool-dialog"]')))
     view.cleanup()
 
     view = mountBaseline()
-    await waitForCondition(() => Boolean(view.container.querySelector('[data-testid="baseline-open-change-log"]')))
-
-    await act(async () => {
-      ;(view.container.querySelector('[data-testid="baseline-open-change-log"]') as HTMLButtonElement | null)?.click()
-      await flush()
-    })
+    await waitForText(view.container, ['变更记录分析'])
+    await clickButtonByText(view.container, '变更记录分析')
 
     await waitForCondition(() => Boolean(view.container.querySelector('[data-testid="baseline-route-probe"]')))
     expect(view.container.querySelector('[data-testid="baseline-route-probe"]')?.textContent).toContain('/projects/project-1/reports?view=change_log')
@@ -884,6 +990,7 @@ describe('BaselinePage planning workflow', () => {
       </MemoryRouter>,
     )
 
+    await openDraftBaseline(view.container)
     const titleSelector = '[data-baseline-editor-cell="baseline-v7-l3:title"]'
     await waitForCondition(() => Boolean(view.container.querySelector(titleSelector)))
 
@@ -891,10 +998,7 @@ describe('BaselinePage planning workflow', () => {
     await pressKey(view.container.querySelector(titleSelector) as HTMLInputElement, 'Enter')
     expect((view.container.querySelector(titleSelector) as HTMLInputElement | null)?.value).toBe('结构施工 L3 守卫验证')
 
-    await act(async () => {
-      ;(view.container.querySelector('[data-testid="baseline-open-change-log"]') as HTMLButtonElement | null)?.click()
-      await flush()
-    })
+    await clickButtonByText(view.container, '变更记录分析')
 
     await waitForCondition(() => Boolean(document.body.querySelector('[data-testid="baseline-unsaved-changes-dialog"]')))
     expect(document.body.textContent).toContain('基线草稿还有未保存调整')
@@ -903,10 +1007,7 @@ describe('BaselinePage planning workflow', () => {
     await waitForCondition(() => !document.body.querySelector('[data-testid="baseline-unsaved-changes-dialog"]'))
     expect(view.container.querySelector('[data-testid="baseline-guard-route"]')).toBeNull()
 
-    await act(async () => {
-      ;(view.container.querySelector('[data-testid="baseline-open-change-log"]') as HTMLButtonElement | null)?.click()
-      await flush()
-    })
+    await clickButtonByText(view.container, '变更记录分析')
 
     await waitForCondition(() => Boolean(document.body.querySelector('[data-testid="baseline-unsaved-changes-dialog"]')))
     await clickButtonByText(document.body, '确认离开')
@@ -950,6 +1051,7 @@ describe('BaselinePage planning workflow', () => {
       </MemoryRouter>,
     )
 
+    await openDraftBaseline(container)
     await waitForCondition(() => Boolean(container.querySelector('[data-testid="baseline-info-bar"]')))
 
     await act(async () => {
@@ -981,6 +1083,7 @@ describe('BaselinePage planning workflow', () => {
       </MemoryRouter>,
     )
 
+    await openDraftBaseline(container)
     await waitForText(container, ['保存草稿', 'v6 → v7'])
     await clickButtonByText(container, '保存草稿')
 
@@ -1008,6 +1111,7 @@ describe('BaselinePage planning workflow', () => {
       </MemoryRouter>,
     )
 
+    await openDraftBaseline(container)
     await waitForCondition(() =>
       Boolean(container.querySelector('[data-baseline-editor-cell="baseline-v7-l3:title"]')),
     )
@@ -1064,6 +1168,7 @@ describe('BaselinePage planning workflow', () => {
       </MemoryRouter>,
     )
 
+    await openDraftBaseline(container)
     const titleSelector = '[data-baseline-editor-cell="baseline-v7-l3:title"]'
     await waitForCondition(() => Boolean(container.querySelector(titleSelector)))
 
@@ -1093,6 +1198,7 @@ describe('BaselinePage planning workflow', () => {
       </MemoryRouter>,
     )
 
+    await openDraftBaseline(container)
     await waitForCondition(() => Boolean(container.querySelector('[data-testid="baseline-batch-bar"]')))
 
     await clickButtonByText(container, '取消全选')
@@ -1140,8 +1246,9 @@ describe('BaselinePage planning workflow', () => {
       </MemoryRouter>,
     )
 
-    await waitForText(container, ['进入确认发布'])
-    await clickButtonByText(container, '进入确认发布')
+    await openDraftBaseline(container)
+    await waitForText(container, ['确认项目基线'])
+    await clickButtonByText(container, '确认项目基线')
     await clickButtonByText(document.body, '确认发布')
 
     await waitForCondition(() => mockedApiPost.mock.calls.some(([url]) => url === '/api/task-baselines/baseline-v7/confirm'))
@@ -1186,6 +1293,10 @@ describe('BaselinePage planning workflow', () => {
         })
       }
 
+      if (url === '/api/task-baselines/baseline-v7/lock') {
+        return { lock: deepClone(currentLocks['baseline-v7']) }
+      }
+
       throw new Error(`Unexpected POST ${url}`)
     })
 
@@ -1197,8 +1308,9 @@ describe('BaselinePage planning workflow', () => {
       </MemoryRouter>,
     )
 
-    await waitForText(container, ['进入确认发布'])
-    await clickButtonByText(container, '进入确认发布')
+    await openDraftBaseline(container)
+    await waitForText(container, ['确认项目基线'])
+    await clickButtonByText(container, '确认项目基线')
     await clickButtonByText(document.body, '确认发布')
 
     await waitForText(document.body, [
@@ -1280,6 +1392,8 @@ describe('BaselinePage planning workflow', () => {
   })
 
   it('shows the version-expired concurrent state', async () => {
+    usePlanningStore.setState({ validationIssues: [] } as never)
+
     const { container, cleanup } = mount(
       <MemoryRouter initialEntries={['/projects/project-1/planning/baseline?confirm_state=stale']}>
         <Routes>
@@ -1288,8 +1402,9 @@ describe('BaselinePage planning workflow', () => {
       </MemoryRouter>,
     )
 
-    await waitForText(container, ['进入确认发布'])
-    await clickButtonByText(container, '进入确认发布')
+    await openDraftBaseline(container)
+    await waitForText(container, ['确认项目基线'])
+    await clickButtonByText(container, '确认项目基线')
     await waitForText(document.body, ['版本过期并发态'])
 
     const confirmButton = Array.from(document.body.querySelectorAll('button'))
@@ -1301,6 +1416,8 @@ describe('BaselinePage planning workflow', () => {
   })
 
   it('shows the publish-failed state with retry entry', async () => {
+    usePlanningStore.setState({ validationIssues: [] } as never)
+
     const { container, cleanup } = mount(
       <MemoryRouter initialEntries={['/projects/project-1/planning/baseline?confirm_state=failed']}>
         <Routes>
@@ -1309,8 +1426,9 @@ describe('BaselinePage planning workflow', () => {
       </MemoryRouter>,
     )
 
-    await waitForText(container, ['进入确认发布'])
-    await clickButtonByText(container, '进入确认发布')
+    await openDraftBaseline(container)
+    await waitForText(container, ['确认项目基线'])
+    await clickButtonByText(container, '确认项目基线')
     await waitForText(document.body, ['发布失败态', '重新尝试'])
 
     cleanup()

@@ -1,4 +1,5 @@
 import { executeSQL, listTaskProgressSnapshotsByTaskIds } from './dbService.js'
+import { getCriticalPathTaskIds } from './criticalPathHelpers.js'
 import { listActiveProjectIds } from './activeProjectService.js'
 import { evaluateMilestoneIntegrityRows } from './milestoneIntegrityService.js'
 import { detectPassiveReorderWindows, type PassiveReorderLogRow } from './systemAnomalyService.js'
@@ -96,7 +97,8 @@ export class PlanningIntegrityService {
     ])
 
     const taskIds = tasks.map((task) => task.id)
-    const keyTaskIds = tasks.filter((task) => task.is_critical).map((task) => task.id)
+    const criticalTaskIds = await getCriticalPathTaskIds(projectId)
+    const keyTaskIds = tasks.filter((task) => criticalTaskIds.has(task.id)).map((task) => task.id)
     const snapshots = await listTaskProgressSnapshotsByTaskIds(taskIds)
 
     return evaluatePlanningIntegritySnapshot({

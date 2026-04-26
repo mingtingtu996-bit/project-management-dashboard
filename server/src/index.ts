@@ -64,13 +64,13 @@ import preMilestoneDependenciesRouter from './routes/pre-milestone-dependencies.
 import certificateWorkItemsRouter from './routes/certificate-work-items.js'
 import certificateDependenciesRouter from './routes/certificate-dependencies.js'
 import acceptancePlansRouter from './routes/acceptance-plans.js'
+import acceptanceSummaryRouter from './routes/acceptance-summary.js'
 import acceptanceCatalogRouter from './routes/acceptance-catalog.js'
 import acceptanceDependenciesRouter from './routes/acceptance-dependencies.js'
 import acceptanceRequirementsRouter from './routes/acceptance-requirements.js'
 import acceptanceRecordsRouter from './routes/acceptance-records.js'
 import wbsRouter from './routes/wbs.js'
 import wbsTemplatesRouter from './routes/wbs-templates.js'
-import standardProcessesRouter from './routes/standard-processes.js'
 import aiDurationRouter from './routes/ai-duration.js'
 import aiScheduleRouter from './routes/aiSchedule.js'
 import warningsRouter from './routes/warnings.js'
@@ -82,6 +82,7 @@ import jobsRouter from './routes/jobs.js'
 import healthScoreRouter from './routes/health-score.js'
 import planningGovernanceRouter from './routes/planning-governance.js'
 import constructionDrawingsRouter from './routes/construction-drawings.js'
+import drawingReviewRulesRouter from './routes/drawing-review-rules.js'
 import criticalPathsRouter from './routes/critical-paths.js'
 import issuesRouter from './routes/issues.js'
 import clientErrorsRouter from './routes/client-errors.js'
@@ -261,6 +262,7 @@ app.use('/api/pre-milestone-conditions', preMilestoneConditionsRouter)
 app.use('/api/pre-milestone-dependencies', preMilestoneDependenciesRouter)
 app.use('/api/projects/:projectId/certificate-work-items', certificateWorkItemsRouter)
 app.use('/api/projects/:projectId/certificate-dependencies', certificateDependenciesRouter)
+app.use('/api/projects/:projectId/acceptance-summary', acceptanceSummaryRouter)
 
 app.use('/api/acceptance-plans', acceptancePlansRouter)
 app.use('/api/acceptance-catalog', acceptanceCatalogRouter)
@@ -273,7 +275,6 @@ app.use('/api/wbs', wbsRouter)
 app.use('/api/planning/wbs-templates', wbsTemplatesRouter)
 app.use('/api/wbs-templates', wbsTemplatesRouter)
 app.use('/api/wbs-template-governance', wbsTemplateGovernanceRouter)
-app.use('/api/standard-processes', standardProcessesRouter)
 
 app.use('/api/ai-duration', aiDurationRouter)
 app.use('/api/ai-schedule', aiScheduleRouter)
@@ -292,6 +293,7 @@ app.use('/api/health-score', healthScoreRouter)
 app.use('/api/planning-governance', planningGovernanceRouter)
 
 app.use('/api/construction-drawings', constructionDrawingsRouter)
+app.use('/api/drawing-review-rules', drawingReviewRulesRouter)
 app.use('/api/projects', criticalPathsRouter)
 
 // 问题域（10.1 建立基础模型）

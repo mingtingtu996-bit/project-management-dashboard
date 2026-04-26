@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Edit3, Eye, Plus, AlertTriangle, Search } from 'lucide-react'
 import { StatusBadge } from '@/components/ui/status-badge'
 import type { CertificateBoardItem, CertificateSharedRibbonItem, CertificateWorkItem } from '../types'
@@ -24,6 +25,7 @@ interface CertificateLedgerProps {
   onOpenDetail: (certificateId: string, workItemId?: string) => void
   onAddItem: (prefill?: ReturnType<typeof createEmptyWorkItemForm>) => void
   onEditItem: (item: CertificateWorkItem) => void
+  canEdit?: boolean
   onEscalateIssue?: (workItemId: string) => void
   onEscalateRisk?: (workItemId: string) => void
 }
@@ -58,9 +60,11 @@ export function CertificateLedger({
   onOpenDetail,
   onAddItem,
   onEditItem,
+  canEdit = true,
   onEscalateIssue,
   onEscalateRisk,
 }: CertificateLedgerProps) {
+  const navigate = useNavigate()
   const [searchQuery, setSearchQuery] = useState('')
   const [stageFilter, setStageFilter] = useState<string>('all')
   const [internalTypeFilter, setInternalTypeFilter] = useState<string>('all')
@@ -88,8 +92,8 @@ export function CertificateLedger({
       const certIdsForType = certificates.filter((c) => c.certificate_type === typeFilter).map((c) => c.id)
       result = result.filter((item) => (item.certificate_ids ?? []).some((id) => certIdsForType.includes(id)))
     }
-    if (quickFilter === 'blocked') result = result.filter((item) => item.is_blocked)
-    else if (quickFilter === 'overdue') result = result.filter((item) => item.planned_finish_date && new Date(item.planned_finish_date) < new Date() && item.status !== 'issued')
+    if (quickFilter === 'blocked') result = result.filter((item) => item.is_blocked || item.status === 'blocked')
+    else if (quickFilter === 'overdue') result = result.filter((item) => item.planned_finish_date && new Date(item.planned_finish_date) < new Date() && !['completed', 'cancelled'].includes(String(item.status)))
     else if (quickFilter === 'supplement') result = result.filter((item) => item.status === 'supplement_required')
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase()
@@ -106,16 +110,20 @@ export function CertificateLedger({
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between mb-4">
         <div>
           <h3 className="text-sm font-semibold text-slate-900">办理台账</h3>
-          <p className="mt-1 text-xs text-slate-500">台账是主编辑入口，支持新增、编辑与进入详情抽屉。</p>
+          <p className="mt-1 text-xs text-slate-500">
+            {canEdit ? '台账是主编辑入口，支持新增、编辑与进入详情抽屉。' : '当前为只读模式，仅支持查看详情。'}
+          </p>
         </div>
-        <button
-          type="button"
-          onClick={() => onAddItem(createEmptyWorkItemForm())}
-          className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-slate-800"
-        >
-          <Plus className="h-4 w-4" />
-          新增办理事项
-        </button>
+        {canEdit ? (
+          <button
+            type="button"
+            onClick={() => onAddItem(createEmptyWorkItemForm())}
+            className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-slate-800"
+          >
+            <Plus className="h-4 w-4" />
+            新增办理事项
+          </button>
+        ) : null}
       </div>
 
       <div className="mb-3 flex flex-wrap gap-2">
@@ -202,6 +210,8 @@ export function CertificateLedger({
                 const isActive = selectedWorkItemId === item.id
                 const certificateNames = resolveCertificateNames(item, certificates, sharedItems)
                 const shared = (item.certificate_ids ?? []).length > 1 || sharedItems.some((entry) => entry.work_item_id === item.id)
+                const linkedIssueId = item.linked_issue_id?.trim() || null
+                const linkedRiskId = item.linked_risk_id?.trim() || null
 
                 return (
                   <tr
@@ -247,9 +257,19 @@ export function CertificateLedger({
                       </span>
                     </td>
                     <td className="px-3 py-4">
-                      <StatusBadge status={getCertificateStatusThemeKey(item.status)} fallbackLabel={mapCertificateStatusLabel(item.status)} className="text-[11px]">
-                        {mapCertificateStatusLabel(item.status)}
-                      </StatusBadge>
+                      <div className="space-y-2">
+                        <StatusBadge status={getCertificateStatusThemeKey(item.status)} fallbackLabel={mapCertificateStatusLabel(item.status)} className="text-[11px]">
+                          {mapCertificateStatusLabel(item.status)}
+                        </StatusBadge>
+                        <div className="flex flex-wrap gap-1.5 text-[11px]">
+                          {linkedIssueId ? (
+                            <span className="rounded-full bg-amber-50 px-2 py-0.5 font-medium text-amber-700">已关联问题</span>
+                          ) : null}
+                          {linkedRiskId ? (
+                            <span className="rounded-full bg-red-50 px-2 py-0.5 font-medium text-red-700">已关联风险</span>
+                          ) : null}
+                        </div>
+                      </div>
                     </td>
                     <td className="px-3 py-4 text-sm text-slate-600">{item.planned_finish_date || '待补充'}</td>
                     <td className="px-3 py-4 text-sm text-slate-600">{item.actual_finish_date || '—'}</td>
@@ -271,15 +291,26 @@ export function CertificateLedger({
                             查看详情
                           </button>
                         )}
-                        <button
-                          type="button"
-                          onClick={() => onEditItem(item)}
-                          className="inline-flex items-center gap-1 rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100"
-                        >
-                          <Edit3 className="h-3.5 w-3.5" />
-                          编辑
-                        </button>
-                        {onEscalateIssue && (
+                        {canEdit ? (
+                          <button
+                            type="button"
+                            onClick={() => onEditItem(item)}
+                            className="inline-flex items-center gap-1 rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100"
+                          >
+                            <Edit3 className="h-3.5 w-3.5" />
+                            编辑
+                          </button>
+                        ) : null}
+                        {linkedIssueId ? (
+                          <button
+                            type="button"
+                            onClick={() => navigate(`/projects/${item.project_id}/risks?stream=issues&issueId=${encodeURIComponent(linkedIssueId)}`)}
+                            className="inline-flex items-center gap-1 rounded-lg border border-amber-200 bg-white px-2.5 py-1 text-xs font-medium text-amber-700 hover:bg-amber-50"
+                          >
+                            <Eye className="h-3.5 w-3.5" />
+                            查看关联问题
+                          </button>
+                        ) : canEdit && onEscalateIssue ? (
                           <button
                             type="button"
                             onClick={() => onEscalateIssue(item.id)}
@@ -288,8 +319,17 @@ export function CertificateLedger({
                             <AlertTriangle className="h-3.5 w-3.5" />
                             升级为问题
                           </button>
-                        )}
-                        {onEscalateRisk && (
+                        ) : null}
+                        {linkedRiskId ? (
+                          <button
+                            type="button"
+                            onClick={() => navigate(`/projects/${item.project_id}/risks?stream=risks&riskId=${encodeURIComponent(linkedRiskId)}`)}
+                            className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-white px-2.5 py-1 text-xs font-medium text-red-700 hover:bg-red-50"
+                          >
+                            <Eye className="h-3.5 w-3.5" />
+                            查看关联风险
+                          </button>
+                        ) : canEdit && onEscalateRisk ? (
                           <button
                             type="button"
                             onClick={() => onEscalateRisk(item.id)}
@@ -298,7 +338,7 @@ export function CertificateLedger({
                             <AlertTriangle className="h-3.5 w-3.5" />
                             升级为风险
                           </button>
-                        )}
+                        ) : null}
                       </div>
                     </td>
                   </tr>

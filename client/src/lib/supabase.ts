@@ -24,6 +24,7 @@ export interface Project {
   name?: string
   description?: string
   status?: string
+  location?: string
   start_date?: string
   end_date?: string
   owner_id?: string
@@ -48,6 +49,7 @@ export interface Project {
   total_investment?: number
   health_score?: number
   health_status?: string
+  current_phase?: string
 }
 
 export interface Task {
@@ -83,6 +85,9 @@ export interface Task {
   baseline_start?: string | null
   baseline_end?: string | null
   baseline_is_critical?: boolean | null
+  baseline_item_id?: string | null
+  monthly_plan_item_id?: string | null
+  task_source?: 'ad_hoc' | 'baseline' | 'monthly_plan' | 'execution' | string | null
   parent_id?: string | null
   milestone_id?: string | null
   sort_order?: number
@@ -95,6 +100,8 @@ export interface Task {
   specialty_type?: string | null   // 专项工程分类（#12 筛选）
   reference_duration?: number | null  // 参考/计划工期（天）（#7 工期对比）
   delay_reason?: string | null     // 延期原因
+  lagLevel?: 'none' | 'mild' | 'moderate' | 'severe'
+  lagStatus?: '正常' | '轻度滞后' | '中度滞后' | '严重滞后'
 }
 
 export interface Risk {

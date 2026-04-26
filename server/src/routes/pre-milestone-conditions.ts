@@ -1,11 +1,12 @@
 ﻿// 前期证照条件关联 API 路由
 
-import { Router } from 'express'
+import { type Request, type Response, Router } from 'express'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import { authenticate } from '../middleware/auth.js'
 import { logger } from '../middleware/logger.js'
 import { validate } from '../middleware/validation.js'
 import { executeSQL, executeSQLOne } from '../services/dbService.js'
+import { getProjectPermissionLevel } from '../auth/access.js'
 import { v4 as uuidv4 } from 'uuid'
 import { z } from 'zod'
 import type { ApiResponse } from '../types/index.js'
@@ -33,14 +34,25 @@ const preMilestoneConditionCreateBodySchema = z.object({
   condition_type: z.string().trim().optional(),
   condition_name: z.string().trim().optional(),
   description: z.string().optional().nullable(),
+  target_date: z.string().trim().optional().nullable(),
+  due_date: z.string().trim().optional().nullable(),
+  responsible_person: z.string().trim().optional().nullable(),
+  notes: z.string().optional().nullable(),
+  status: z.string().trim().optional().nullable(),
+  is_satisfied: z.boolean().optional(),
 }).passthrough()
 
 const preMilestoneConditionUpdateBodySchema = z.object({
   condition_type: z.string().trim().optional().nullable(),
   condition_name: z.string().trim().optional().nullable(),
   description: z.string().optional().nullable(),
+  target_date: z.string().trim().optional().nullable(),
+  due_date: z.string().trim().optional().nullable(),
+  responsible_person: z.string().trim().optional().nullable(),
+  notes: z.string().optional().nullable(),
   status: z.string().trim().optional().nullable(),
   completed_date: z.string().trim().optional().nullable(),
+  is_satisfied: z.boolean().optional(),
 }).passthrough()
 
 const preMilestoneConditionBatchBodySchema = z.object({
@@ -49,8 +61,56 @@ const preMilestoneConditionBatchBodySchema = z.object({
     condition_type: z.string().trim().optional(),
     condition_name: z.string().trim().optional(),
     description: z.string().optional().nullable(),
+    target_date: z.string().trim().optional().nullable(),
+    due_date: z.string().trim().optional().nullable(),
+    responsible_person: z.string().trim().optional().nullable(),
+    notes: z.string().optional().nullable(),
   }).passthrough()).optional(),
 }).passthrough()
+
+async function resolvePreMilestoneProjectId(preMilestoneId?: string | null) {
+  if (!preMilestoneId) return null
+  const row = await executeSQLOne<{ project_id?: string | null }>(
+    'SELECT project_id FROM pre_milestones WHERE id = ? LIMIT 1',
+    [preMilestoneId],
+  )
+  return row?.project_id ?? null
+}
+
+async function requireProjectEditorAccess(req: Request, res: Response, projectId: string | null) {
+  if (!req.user) {
+    const response: ApiResponse = {
+      success: false,
+      error: { code: 'UNAUTHORIZED', message: '请先登录' },
+      timestamp: new Date().toISOString(),
+    }
+    res.status(401).json(response)
+    return false
+  }
+
+  if (!projectId) {
+    const response: ApiResponse = {
+      success: false,
+      error: { code: 'PROJECT_NOT_FOUND', message: '项目不存在' },
+      timestamp: new Date().toISOString(),
+    }
+    res.status(404).json(response)
+    return false
+  }
+
+  const permissionLevel = await getProjectPermissionLevel(req.user.id, projectId)
+  if (permissionLevel !== 'owner' && permissionLevel !== 'editor') {
+    const response: ApiResponse = {
+      success: false,
+      error: { code: 'FORBIDDEN', message: '您没有编辑此项目的权限' },
+      timestamp: new Date().toISOString(),
+    }
+    res.status(403).json(response)
+    return false
+  }
+
+  return true
+}
 
 // 获取证照的所有条件
 router.get('/', validate(preMilestoneConditionListQuerySchema, 'query'), asyncHandler(async (req, res) => {
@@ -111,7 +171,18 @@ router.get('/:id', validate(preMilestoneConditionIdParamSchema, 'params'), async
 router.post('/', validate(preMilestoneConditionCreateBodySchema), asyncHandler(async (req, res) => {
   logger.info('Creating pre-milestone condition', req.body)
 
-  const { pre_milestone_id, condition_type, condition_name, description } = req.body
+  const {
+    pre_milestone_id,
+    condition_type,
+    condition_name,
+    description,
+    target_date,
+    due_date,
+    responsible_person,
+    notes,
+    status,
+    is_satisfied,
+  } = req.body
 
   if (!pre_milestone_id || !condition_type || !condition_name) {
     const response: ApiResponse = {
@@ -125,14 +196,37 @@ router.post('/', validate(preMilestoneConditionCreateBodySchema), asyncHandler(a
     return res.status(400).json(response)
   }
 
+  const projectId = await resolvePreMilestoneProjectId(pre_milestone_id)
+  if (!(await requireProjectEditorAccess(req, res, projectId))) {
+    return
+  }
+
   const id = uuidv4()
   const now = new Date().toISOString()
+  const resolvedDueDate = target_date ?? due_date ?? null
+  const resolvedStatus = status ?? (is_satisfied ? '已满足' : '待处理')
+  const resolvedSatisfied = typeof is_satisfied === 'boolean'
+    ? is_satisfied
+    : resolvedStatus === '已满足' || resolvedStatus === '已确认'
 
   await executeSQL(
     `INSERT INTO pre_milestone_conditions
-     (id, pre_milestone_id, condition_type, condition_name, description, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    [id, pre_milestone_id, condition_type, condition_name, description || null, now]
+     (id, pre_milestone_id, condition_type, condition_name, description, status, is_satisfied, responsible_person, due_date, notes, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      id,
+      pre_milestone_id,
+      condition_type,
+      condition_name,
+      description || null,
+      resolvedStatus,
+      resolvedSatisfied ? 1 : 0,
+      responsible_person || null,
+      resolvedDueDate,
+      notes || null,
+      now,
+      now,
+    ]
   )
 
   const data = await executeSQLOne(
@@ -155,7 +249,7 @@ router.put('/:id', validate(preMilestoneConditionIdParamSchema, 'params'), valid
 
   // 获取当前状态
   const current = await executeSQLOne(
-    'SELECT status FROM pre_milestone_conditions WHERE id = ? LIMIT 1',
+    'SELECT project_id, pre_milestone_id, status FROM pre_milestone_conditions WHERE id = ? LIMIT 1',
     [id]
   )
 
@@ -166,6 +260,11 @@ router.put('/:id', validate(preMilestoneConditionIdParamSchema, 'params'), valid
       timestamp: new Date().toISOString(),
     }
     return res.status(404).json(response)
+  }
+
+  const projectId = current.project_id ?? await resolvePreMilestoneProjectId(current.pre_milestone_id)
+  if (!(await requireProjectEditorAccess(req, res, projectId))) {
+    return
   }
 
   // 验证状态转换
@@ -196,7 +295,12 @@ router.put('/:id', validate(preMilestoneConditionIdParamSchema, 'params'), valid
   }
 
   // 构建动态 UPDATE（始终更新 updated_at）
-  const updateData = { ...req.body, updated_at: new Date().toISOString() }
+  const updateData = {
+    ...req.body,
+    due_date: req.body.target_date ?? req.body.due_date,
+    updated_at: new Date().toISOString(),
+  }
+  delete updateData.target_date
   const setClauses: string[] = []
   const setValues: any[] = []
 
@@ -228,6 +332,25 @@ router.delete('/:id', validate(preMilestoneConditionIdParamSchema, 'params'), as
   const { id } = req.params
   logger.info('Deleting pre-milestone condition', { id })
 
+  const current = await executeSQLOne<{ project_id?: string | null; pre_milestone_id?: string | null }>(
+    'SELECT project_id, pre_milestone_id FROM pre_milestone_conditions WHERE id = ? LIMIT 1',
+    [id],
+  )
+
+  if (!current) {
+    const response: ApiResponse = {
+      success: false,
+      error: { code: 'CONDITION_NOT_FOUND', message: '证照条件不存在' },
+      timestamp: new Date().toISOString(),
+    }
+    return res.status(404).json(response)
+  }
+
+  const projectId = current.project_id ?? await resolvePreMilestoneProjectId(current.pre_milestone_id)
+  if (!(await requireProjectEditorAccess(req, res, projectId))) {
+    return
+  }
+
   await executeSQL('DELETE FROM pre_milestone_conditions WHERE id = ?', [id])
 
   const response: ApiResponse = {
@@ -254,6 +377,11 @@ router.post('/batch', validate(preMilestoneConditionBatchBodySchema), asyncHandl
   }
 
   logger.info('Batch creating pre-milestone conditions', { pre_milestone_id, count: conditions.length })
+
+  const projectId = await resolvePreMilestoneProjectId(pre_milestone_id)
+  if (!(await requireProjectEditorAccess(req, res, projectId))) {
+    return
+  }
 
   if (conditions.length > 100) {
     const error = buildSyncBatchLimitError(conditions.length, { operation: 'pre_milestone_conditions.batch' })
@@ -282,15 +410,19 @@ router.post('/batch', validate(preMilestoneConditionBatchBodySchema), asyncHandl
         const id = uuidv4()
         await executeSQL(
           `INSERT INTO pre_milestone_conditions
-           (id, pre_milestone_id, condition_type, condition_name, description, created_at)
-           VALUES (?, ?, ?, ?, ?, ?)`,
+           (id, pre_milestone_id, condition_type, condition_name, description, due_date, responsible_person, notes, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             id,
             pre_milestone_id,
             condition.condition_type,
             condition.condition_name,
             condition.description || null,
-            now
+            condition.target_date ?? condition.due_date ?? null,
+            condition.responsible_person ?? null,
+            condition.notes ?? null,
+            now,
+            now,
           ]
         )
         insertedIds.push(id)

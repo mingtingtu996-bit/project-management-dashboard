@@ -125,7 +125,7 @@ const baselineLockResponse = {
     project_id: projectId,
     draft_type: 'baseline',
     resource_id: 'baseline-v7',
-    locked_by: 'user-1',
+    locked_by: 'browser-verify-user',
     locked_at: '2026-04-15T08:30:00.000Z',
     lock_expires_at: '2099-04-15T09:00:00.000Z',
     is_locked: true,
@@ -239,7 +239,7 @@ const monthlyLockResponse = {
     project_id: projectId,
     draft_type: 'monthly_plan',
     resource_id: 'monthly-v9',
-    locked_by: 'user-1',
+    locked_by: 'browser-verify-user',
     locked_at: '2099-09-15T08:00:00.000Z',
     lock_expires_at: '2099-09-15T08:30:00.000Z',
     is_locked: true,
@@ -461,6 +461,18 @@ function buildMockResponse(urlString) {
 
   if (pathname === `/api/projects/${projectId}`) {
     return json({ success: true, data: mockProject })
+  }
+
+  if (pathname === `/api/members/${projectId}/me`) {
+    return json({
+      success: true,
+      data: {
+        permissionLevel: 'owner',
+        globalRole: 'company_admin',
+        canManageTeam: true,
+        canEdit: true,
+      },
+    })
   }
 
   if (pathname === '/api/task-baselines') {

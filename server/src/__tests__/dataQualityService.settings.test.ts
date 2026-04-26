@@ -5,6 +5,26 @@ const state = vi.hoisted(() => ({
   upsertRows: [] as any[],
   executeSQL: vi.fn(),
   listTaskProgressSnapshotsByTaskIds: vi.fn(async () => []),
+  getProjectCriticalPathSnapshot: vi.fn(async () => ({
+    projectId: 'project-1',
+    autoTaskIds: ['task-critical'],
+    manualAttentionTaskIds: [],
+    manualInsertedTaskIds: [],
+    primaryChain: {
+      id: 'primary',
+      source: 'auto',
+      taskIds: ['task-critical'],
+      totalDurationDays: 0,
+      displayLabel: '关键路径',
+    },
+    alternateChains: [],
+    displayTaskIds: ['task-critical'],
+    watchedTaskIds: [],
+    edges: [],
+    tasks: [],
+    projectDurationDays: 0,
+    calculatedAt: '2026-04-18T12:00:00.000Z',
+  })),
 }))
 
 vi.mock('../services/dbService.js', () => ({
@@ -34,6 +54,10 @@ vi.mock('../services/notificationStore.js', () => ({
   updateNotificationById: vi.fn(),
 }))
 
+vi.mock('../services/projectCriticalPathService.js', () => ({
+  getProjectCriticalPathSnapshot: state.getProjectCriticalPathSnapshot,
+}))
+
 vi.mock('../middleware/logger.js', () => ({
   logger: {
     info: vi.fn(),
@@ -48,6 +72,26 @@ describe('DataQualityService project settings', () => {
     vi.clearAllMocks()
     state.selectRows = []
     state.upsertRows = []
+    state.getProjectCriticalPathSnapshot.mockResolvedValue({
+      projectId: 'project-1',
+      autoTaskIds: ['task-critical'],
+      manualAttentionTaskIds: [],
+      manualInsertedTaskIds: [],
+      primaryChain: {
+        id: 'primary',
+        source: 'auto',
+        taskIds: ['task-critical'],
+        totalDurationDays: 0,
+        displayLabel: '关键路径',
+      },
+      alternateChains: [],
+      displayTaskIds: ['task-critical'],
+      watchedTaskIds: [],
+      edges: [],
+      tasks: [],
+      projectDurationDays: 0,
+      calculatedAt: '2026-04-18T12:00:00.000Z',
+    })
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-04-18T12:00:00.000Z'))
   })

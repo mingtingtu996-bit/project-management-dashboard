@@ -1,7 +1,7 @@
 import { Router } from 'express'
 
 import { asyncHandler } from '../middleware/errorHandler.js'
-import { authenticate, requireProjectEditor } from '../middleware/auth.js'
+import { authenticate, requireProjectEditor, requireProjectMember } from '../middleware/auth.js'
 import { planningGovernanceService } from '../services/planningGovernanceService.js'
 import type { ApiResponse } from '../types/index.js'
 import type { PlanningGovernanceSnapshot, PlanningGovernanceState } from '../types/planning.js'
@@ -10,7 +10,9 @@ const router = Router()
 
 router.use(authenticate)
 
-router.get('/', asyncHandler(async (req, res) => {
+router.get('/',
+  requireProjectMember((req) => req.query.projectId as string | undefined),
+  asyncHandler(async (req, res) => {
   const projectId = req.query.projectId as string | undefined
 
   if (!projectId) {

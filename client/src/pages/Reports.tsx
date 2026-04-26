@@ -5,6 +5,9 @@ import {
   BarChart3,
   CheckSquare,
   ClipboardList,
+  Clock3,
+  Download,
+  FileSpreadsheet,
   Flag,
   LockKeyhole,
   RefreshCw,
@@ -18,6 +21,8 @@ import { EmptyState } from '@/components/EmptyState'
 import { PageHeader } from '@/components/PageHeader'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { LoadingState } from '@/components/ui/loading-state'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { toast } from '@/hooks/use-toast'
@@ -38,7 +43,9 @@ import { DeviationDetailTable } from './Reports/components/DeviationDetailTable'
 import { DeviationShell } from './Reports/components/DeviationShell'
 import { DeviationTabs, type DeviationView } from './Reports/components/DeviationTabs'
 import { ExecutionScatterChart } from './Reports/components/ExecutionScatterChart'
-import { SCurveChart } from './Reports/components/SCurveChart'
+import { BaselineDumbbellChart } from './Reports/components/BaselineDumbbellChart'
+import { MonthlyStackedBarChart } from './Reports/components/MonthlyStackedBarChart'
+import * as XLSX from 'xlsx'
 
 type MetricItem = {
   title: string
@@ -71,6 +78,8 @@ type ProgressDeviationRow = {
   id: string
   title: string
   mainline: ProgressDeviationMainlineKey
+  source_task_id?: string | null
+  planned_date?: string | null
   planned_progress?: number | null
   actual_progress?: number | null
   actual_date?: string | null
@@ -97,6 +106,35 @@ type ProgressDeviationMainline = {
 
 type ProgressDeviationTrendEvent = BaselineSwitchEvent
 
+type ProgressDeviationMonthlyBucket = {
+  month: string
+  on_track: number
+  delayed: number
+  carried_over: number
+  revised: number
+  unresolved: number
+}
+
+type ProgressDeviationResponsibilityContribution = {
+  owner: string
+  count: number
+  percentage: number
+  task_ids: string[]
+}
+
+type ProgressDeviationCauseSummary = {
+  reason: string
+  count: number
+  percentage: number
+}
+
+type ProgressDeviationChartData = {
+  baselineDeviation?: ProgressDeviationRow[]
+  monthlyFulfillment?: ProgressDeviationMonthlyBucket[]
+  executionDeviation?: ProgressDeviationRow[]
+  monthly_buckets: ProgressDeviationMonthlyBucket[]
+}
+
 type ProgressDeviationAnalysisResponse = {
   project_id: string
   baseline_version_id: string
@@ -114,6 +152,9 @@ type ProgressDeviationAnalysisResponse = {
   rows: ProgressDeviationRow[]
   mainlines: ProgressDeviationMainline[]
   trend_events: ProgressDeviationTrendEvent[]
+  chart_data?: ProgressDeviationChartData | null
+  responsibility_contribution?: ProgressDeviationResponsibilityContribution[]
+  top_deviation_causes?: ProgressDeviationCauseSummary[]
 }
 
 type ReportMilestoneCard = {
@@ -160,6 +201,54 @@ type ChangeLogRecord = {
   changed_by?: string | null
   change_source?: string | null
   changed_at?: string | null
+}
+
+type IssueSummaryTrendPoint = {
+  date: string
+  newIssues: number
+  resolvedIssues: number
+  activeIssues: number
+}
+
+type IssueSummaryRecord = {
+  id: string
+  title: string
+  description?: string | null
+  status?: string | null
+  source_type?: string | null
+  created_at?: string | null
+}
+
+type IssueSummaryResponse = {
+  project_id?: string
+  total_issues: number
+  active_issues: number
+  status_counts: Record<string, number>
+  severity_counts: Record<string, number>
+  source_counts: Array<{ key: string; label: string; count: number }>
+  trend: IssueSummaryTrendPoint[]
+  recent_issues: IssueSummaryRecord[]
+}
+
+function normalizeIssueSummaryResponse(value: unknown, projectId?: string): IssueSummaryResponse {
+  const record = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Partial<IssueSummaryResponse>
+    : {}
+
+  return {
+    project_id: typeof record.project_id === 'string' ? record.project_id : projectId,
+    total_issues: typeof record.total_issues === 'number' ? record.total_issues : 0,
+    active_issues: typeof record.active_issues === 'number' ? record.active_issues : 0,
+    status_counts: record.status_counts && typeof record.status_counts === 'object' && !Array.isArray(record.status_counts)
+      ? record.status_counts
+      : {},
+    severity_counts: record.severity_counts && typeof record.severity_counts === 'object' && !Array.isArray(record.severity_counts)
+      ? record.severity_counts
+      : {},
+    source_counts: Array.isArray(record.source_counts) ? record.source_counts : [],
+    trend: Array.isArray(record.trend) ? record.trend : [],
+    recent_issues: Array.isArray(record.recent_issues) ? record.recent_issues : [],
+  }
 }
 
 function MetricCard({ title, value, hint, icon }: MetricItem) {
@@ -323,6 +412,85 @@ function summarizeRiskSource(risk: Risk) {
   return risk.risk_source || risk.risk_category || '未分类'
 }
 
+function getIssueSourceLabel(sourceType?: string | null) {
+  switch (String(sourceType || '').trim()) {
+    case 'manual':
+      return '人工录入'
+    case 'warning_converted':
+      return '预警转问题'
+    case 'risk_converted':
+      return '风险转问题'
+    case 'obstacle_escalated':
+      return '阻碍上卷'
+    case 'condition_expired':
+      return '条件过期'
+    default:
+      return String(sourceType || '未分类')
+  }
+}
+
+function getIssueStatusLabel(status?: string | null) {
+  switch (String(status || '').trim()) {
+    case 'open':
+      return '待处理'
+    case 'investigating':
+      return '调查中'
+    case 'resolved':
+      return '已解决（待确认）'
+    case 'closed':
+      return '已关闭'
+    default:
+      return String(status || '待处理')
+  }
+}
+
+function getIssueSeverityLabel(severity?: string | null) {
+  switch (String(severity || '').trim()) {
+    case 'critical':
+      return '严重'
+    case 'high':
+      return '高'
+    case 'medium':
+      return '中'
+    case 'low':
+      return '低'
+    default:
+      return String(severity || '中')
+  }
+}
+
+function getDeviationFocusLabel(value: 'all' | 'tasks' | 'risks' | 'conditions' | 'obstacles') {
+  switch (value) {
+    case 'tasks':
+      return '任务'
+    case 'risks':
+      return '风险'
+    case 'conditions':
+      return '条件'
+    case 'obstacles':
+      return '阻碍'
+    default:
+      return '全部'
+  }
+}
+
+function getDeviationStatusLabel(status?: string | null) {
+  switch (String(status || '').trim()) {
+    case 'on_track':
+      return '正常'
+    case 'delayed':
+      return '延期'
+    case 'carried_over':
+      return '滚入'
+    case 'revised':
+      return '修订'
+    case 'unresolved':
+      return '未闭环'
+    default:
+      return String(status || '未知')
+  }
+}
+
 function getObstacleSeverity(obstacle: TaskObstacle) {
   return obstacle.severity || '中'
 }
@@ -333,18 +501,29 @@ function getObstacleTypeLabel(obstacle: TaskObstacle) {
   return String(label)
 }
 
-function getResponsibilityLabel(task: Task) {
-  const raw = task as Record<string, unknown>
-  return String(raw.participant_unit_name || raw.responsible_unit || raw.assignee_name || raw.assignee || '未指定责任主体')
+function getResponsibilityLabel(task?: Task | null) {
+  const raw = task as Record<string, unknown> | null | undefined
+  return String(raw?.participant_unit_name || raw?.responsible_unit || raw?.assignee_name || raw?.assignee || '未指定责任主体')
+}
+
+function getTaskBuildingLabel(task?: Task | null) {
+  const raw = task as Record<string, unknown> | null | undefined
+  return String(raw?.building_id || raw?.buildingId || raw?.building_type || raw?.buildingType || '未设置')
+}
+
+function getTaskSectionLabel(task?: Task | null) {
+  const raw = task as Record<string, unknown> | null | undefined
+  return String(raw?.section_id || raw?.sectionId || raw?.assignee_unit || raw?.responsible_unit || raw?.wbs_code || '未设置')
+}
+
+function getTaskSpecialtyLabel(task?: Task | null) {
+  const raw = task as Record<string, unknown> | null | undefined
+  return String(raw?.specialty_type || task?.specialty_type || '未设置')
 }
 
 function normalizeAnalysisView(value: string | null): AnalysisView {
   if (value === 'baseline' || value === 'monthly' || value === 'execution') {
     return 'progress_deviation'
-  }
-
-  if (value === 'license' || value === 'acceptance' || value === 'wbs') {
-    return 'progress'
   }
 
   if (value === 'progress' || value === 'progress_deviation' || value === 'risk' || value === 'change_log') {
@@ -372,18 +551,28 @@ export default function Reports() {
   const [materialSummary, setMaterialSummary] = useState<MaterialReportSummary | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<string | null>(null)
   const [criticalPathSummary, setCriticalPathSummary] = useState<CriticalPathSummaryModel | null>(null)
   const [criticalPathLoading, setCriticalPathLoading] = useState(false)
   const [secondaryExpanded, setSecondaryExpanded] = useState(false)
+  const [deviationFocus, setDeviationFocus] = useState<'all' | 'tasks' | 'risks' | 'conditions' | 'obstacles'>('all')
+  const [selectedDeviationRow, setSelectedDeviationRow] = useState<ProgressDeviationRow | null>(null)
   const [deviationData, setDeviationData] = useState<ProgressDeviationAnalysisResponse | null>(null)
   const [deviationLoading, setDeviationLoading] = useState(false)
   const [deviationError, setDeviationError] = useState<string | null>(null)
   const [deviationLock, setDeviationLock] = useState<BaselineVersionLock | null>(null)
   const [deviationLockError, setDeviationLockError] = useState<string | null>(null)
+  const [deviationTimeRange, setDeviationTimeRange] = useState<'all' | '7d' | '30d' | '90d'>('all')
+  const [deviationBuildingFilter, setDeviationBuildingFilter] = useState('all')
+  const [deviationSectionFilter, setDeviationSectionFilter] = useState('all')
+  const [deviationSpecialtyFilter, setDeviationSpecialtyFilter] = useState('all')
+  const [deviationLevelFilter, setDeviationLevelFilter] = useState('all')
   const [baselineLabel, setBaselineLabel] = useState('当前基线')
   const [changeLogs, setChangeLogs] = useState<ChangeLogRecord[]>([])
   const [changeLogLoading, setChangeLogLoading] = useState(false)
   const [changeLogError, setChangeLogError] = useState<string | null>(null)
+  const [issueSummaryData, setIssueSummaryData] = useState<IssueSummaryResponse | null>(null)
+  const [issueSummaryLoading, setIssueSummaryLoading] = useState(false)
 
   const activeView = normalizeAnalysisView(searchParams.get('view'))
   const deviationView = normalizeDeviationView(searchParams.get('view'))
@@ -413,6 +602,7 @@ export default function Reports() {
       toast({ title: '分析数据加载失败', description: '请稍后重试', variant: 'destructive' })
     } finally {
       setLoading(false)
+      if (!signal?.aborted) setLastRefreshedAt(new Date().toISOString())
     }
   }, [projectId])
 
@@ -432,6 +622,7 @@ export default function Reports() {
       setCriticalPathSummary(null)
     } finally {
       setCriticalPathLoading(false)
+      if (!signal?.aborted) setLastRefreshedAt(new Date().toISOString())
     }
   }, [projectId])
 
@@ -448,6 +639,8 @@ export default function Reports() {
       if (signal?.aborted) return
       console.error('[Reports] Failed to load data quality summary', err)
       setDataQualitySummary(null)
+    } finally {
+      if (!signal?.aborted) setLastRefreshedAt(new Date().toISOString())
     }
   }, [projectId])
 
@@ -464,6 +657,8 @@ export default function Reports() {
       if (signal?.aborted) return
       console.error('[Reports] Failed to load material summary', err)
       setMaterialSummary(null)
+    } finally {
+      if (!signal?.aborted) setLastRefreshedAt(new Date().toISOString())
     }
   }, [projectId])
 
@@ -548,6 +743,7 @@ export default function Reports() {
       toast({ title: '偏差分析加载失败', description: '请稍后重试', variant: 'destructive' })
     } finally {
       setDeviationLoading(false)
+      if (!signal?.aborted) setLastRefreshedAt(new Date().toISOString())
     }
   }, [projectId])
 
@@ -579,6 +775,7 @@ export default function Reports() {
       setChangeLogError(getApiErrorMessage(err, '变更记录加载失败，请稍后重试'))
     } finally {
       setChangeLogLoading(false)
+      if (!signal?.aborted) setLastRefreshedAt(new Date().toISOString())
     }
   }, [projectId])
 
@@ -588,12 +785,59 @@ export default function Reports() {
     return () => { c.abort() }
   }, [loadChangeLogs])
 
+  const loadIssueSummary = useCallback(async (signal?: AbortSignal) => {
+    if (!projectId) {
+      setIssueSummaryData(null)
+      return
+    }
+
+    setIssueSummaryLoading(true)
+    try {
+      const summary = await apiGet<unknown>(
+        `/api/issues/summary?projectId=${encodeURIComponent(projectId)}`,
+        { signal },
+      )
+      setIssueSummaryData(normalizeIssueSummaryResponse(summary, projectId))
+    } catch (err) {
+      if (signal?.aborted) return
+      console.error('[Reports] Failed to load issue summary', err)
+      setIssueSummaryData(null)
+    } finally {
+      setIssueSummaryLoading(false)
+      if (!signal?.aborted) setLastRefreshedAt(new Date().toISOString())
+    }
+  }, [projectId])
+
+  useEffect(() => {
+    const c = new AbortController()
+    void loadIssueSummary(c.signal)
+    return () => { c.abort() }
+  }, [loadIssueSummary])
+
   const summary = summaryData
   const projectScope = useStore((state) => selectProjectScopeOrEmpty(state, projectId))
   const projectTasks = useMemo(() => projectScope?.tasks ?? [], [projectScope?.tasks])
   const projectRisks = useMemo(() => projectScope?.risks ?? [], [projectScope?.risks])
   const projectConditions = useMemo(() => projectScope?.conditions ?? [], [projectScope?.conditions])
   const projectObstacles = useMemo(() => projectScope?.obstacles ?? [], [projectScope?.obstacles])
+  const scopeDimensions = useStore((state) => state.scopeDimensions)
+  const deviationTaskLookup = useMemo(() => new Map(projectTasks.map((task) => [String(task.id || ''), task])), [projectTasks])
+  const issueRows = useStore((state) => state.issueRows)
+  const projectIssues = useMemo(() => issueRows, [issueRows])
+  const activeProjectIssues = useMemo(() => projectIssues.filter((row) => row.status !== 'closed'), [projectIssues])
+  const recentProjectIssues = useMemo(
+    () =>
+      [...projectIssues]
+        .sort((left, right) => {
+          const leftAt = new Date(left.createdAt || 0).getTime()
+          const rightAt = new Date(right.createdAt || 0).getTime()
+          return rightAt - leftAt
+        })
+        .slice(0, 6),
+    [projectIssues],
+  )
+  const emptyIssueSummary = useMemo<IssueSummaryResponse>(() => normalizeIssueSummaryResponse(null, projectId || undefined), [projectId])
+  const issueSummary = issueSummaryData ?? emptyIssueSummary
   const milestoneTasks = useMemo(
     () =>
       projectTasks
@@ -671,19 +915,6 @@ export default function Reports() {
       ).sort((left, right) => right[1] - left[1]),
     [projectObstacles],
   )
-  const responsibilityAttribution = useMemo(
-    () =>
-      Array.from(
-        [...delayedTasks, ...projectTasks.filter((task) => !isCompletedTask(task) && isDelayedTask(task) === false)]
-          .slice(0, Math.max(delayedTasks.length, 6))
-          .reduce((map, task) => {
-            const key = getResponsibilityLabel(task)
-            map.set(key, (map.get(key) || 0) + 1)
-            return map
-          }, new Map<string, number>()),
-      ).sort((left, right) => right[1] - left[1]),
-    [delayedTasks, projectTasks],
-  )
   const delayStatisticsRows = useMemo(
     () =>
       delayedTasks.map((task) => {
@@ -730,7 +961,7 @@ export default function Reports() {
       {
         view: 'progress_deviation',
         title: '进度偏差分析',
-        description: '拆分基线偏差、月度完成情况和执行偏差三条主线，统一下钻查看。',
+        description: '拆分基线偏差、月度兑现偏差和执行偏差三条主线，统一下钻查看。',
         moduleLabel: '进度偏差',
         actionLabel: '进入偏差分析',
         icon: BarChart3,
@@ -779,7 +1010,7 @@ export default function Reports() {
       return {
         eyebrow: '里程碑分析',
         title: '项目进度总览分析',
-        subtitle: '',
+        subtitle: '从里程碑、专项准备和关键路径三个维度查看项目推进态势。',
         backLabel: '返回里程碑',
         backTo: projectId ? `/projects/${projectId}/milestones` : undefined,
         metrics: [
@@ -795,14 +1026,14 @@ export default function Reports() {
       return {
         eyebrow: '偏差分析',
         title: '进度偏差分析',
-        subtitle: '',
+        subtitle: '基线、月度兑现偏差和执行三视角联动，统一下钻偏差条目。',
         backLabel: '返回项目总览',
         backTo: projectId ? `/projects/${projectId}/dashboard` : undefined,
         metrics: [
           { title: '偏差任务', value: deviationData?.summary.deviated_items ?? 0, hint: `总条目 ${deviationData?.summary.total_items ?? 0}`, icon: <BarChart3 className="h-4 w-4" /> },
           { title: '待收口项', value: deviationData?.summary.unresolved_items ?? 0, hint: '基线/月度/执行链路未闭环条目', icon: <ClipboardList className="h-4 w-4" /> },
           { title: '滚入下月', value: deviationData?.summary.carryover_items ?? 0, hint: '影响月度兑现的跨月事项', icon: <RefreshCw className="h-4 w-4" /> },
-          { title: '当前主线', value: deviationViewLabel, hint: '可切换基线 / 月度 / 执行三条视角', icon: <Flag className="h-4 w-4" /> },
+          { title: '当前主线', value: deviationViewLabel, hint: '可切换基线 / 月度兑现偏差 / 执行三条视角', icon: <Flag className="h-4 w-4" /> },
         ] as MetricItem[],
       }
     }
@@ -811,7 +1042,7 @@ export default function Reports() {
       return {
         eyebrow: '风险分析',
         title: '风险与问题分析',
-        subtitle: '',
+        subtitle: '风险、问题、条件和阻碍在同一页联动分析。',
         backLabel: '返回风险与问题',
         backTo: projectId ? `/projects/${projectId}/risks` : undefined,
         metrics: [
@@ -827,7 +1058,7 @@ export default function Reports() {
       return {
         eyebrow: '任务管理分析',
         title: '变更记录分析',
-        subtitle: '',
+        subtitle: '范围、计划和执行层面的变更轨迹统一回溯。',
         backLabel: '返回任务管理',
         backTo: projectId ? `/projects/${projectId}/gantt` : undefined,
         metrics: [
@@ -842,7 +1073,7 @@ export default function Reports() {
     return {
       eyebrow: '里程碑分析',
       title: '项目进度总览分析',
-      subtitle: '',
+      subtitle: '从里程碑、专项准备和关键路径三个维度查看项目推进态势。',
       backLabel: '返回里程碑',
       backTo: projectId ? `/projects/${projectId}/milestones` : undefined,
       metrics: [
@@ -866,12 +1097,108 @@ export default function Reports() {
   const deviationRows = deviationMainline?.rows ?? deviationData?.rows.filter((row) => row.mainline === deviationMainlineKey[deviationView]) ?? []
   const deviationVersionEvents = deviationData?.trend_events ?? []
   const activeDeviationLock = deviationLock ?? deviationData?.version_lock ?? null
+  const deviationRowMeta = useMemo(
+    () =>
+      deviationRows.map((row) => {
+        const task = row.source_task_id ? deviationTaskLookup.get(row.source_task_id) ?? null : null
+        return {
+          row,
+          task,
+          buildingLabel: getTaskBuildingLabel(task),
+          sectionLabel: getTaskSectionLabel(task),
+          specialtyLabel: getTaskSpecialtyLabel(task),
+          levelLabel: getDeviationStatusLabel(row.status),
+          actualDateKey: row.actual_date ? row.actual_date.slice(0, 10) : '',
+        }
+      }),
+    [deviationRows, deviationTaskLookup],
+  )
+  const deviationFilterOptions = useMemo(() => {
+    const uniqueValues = (items: string[]) => [...new Set(items.map((value) => String(value || '').trim()).filter((value) => value && value !== '未设置'))].sort((left, right) => left.localeCompare(right, 'zh-CN'))
+    const taskScopeOptions = (section?: { selected?: string[]; options?: string[] }) => section?.selected?.length ? section.selected : section?.options ?? []
+    const buildingScope = scopeDimensions.find((section) => section.key === 'building')
+    const specialtyScope = scopeDimensions.find((section) => section.key === 'specialty')
+    const phaseScope = scopeDimensions.find((section) => section.key === 'phase')
+
+    return {
+      buildings: uniqueValues([
+        ...deviationRowMeta.map((item) => item.buildingLabel),
+        ...taskScopeOptions(buildingScope),
+      ]),
+      sections: uniqueValues([
+        ...deviationRowMeta.map((item) => item.sectionLabel),
+        ...taskScopeOptions(phaseScope),
+      ]),
+      specialties: uniqueValues([
+        ...deviationRowMeta.map((item) => item.specialtyLabel),
+        ...taskScopeOptions(specialtyScope),
+      ]),
+      levels: uniqueValues(deviationRowMeta.map((item) => String(item.row.status || '').trim())),
+    }
+  }, [deviationRowMeta, scopeDimensions])
+  const filteredDeviationRows = useMemo(
+    () =>
+      deviationRowMeta
+        .filter((item) => {
+          if (deviationTimeRange !== 'all') {
+            if (!item.actualDateKey) return false
+            const now = new Date()
+            const start = new Date(now)
+            const days = deviationTimeRange === '7d' ? 7 : deviationTimeRange === '30d' ? 30 : 90
+            start.setDate(start.getDate() - days)
+            const current = new Date(`${item.actualDateKey}T00:00:00.000Z`)
+            if (current < start) return false
+          }
+
+          if (deviationBuildingFilter !== 'all' && item.buildingLabel !== deviationBuildingFilter) return false
+          if (deviationSectionFilter !== 'all' && item.sectionLabel !== deviationSectionFilter) return false
+          if (deviationSpecialtyFilter !== 'all' && item.specialtyLabel !== deviationSpecialtyFilter) return false
+          if (deviationLevelFilter !== 'all' && item.row.status !== deviationLevelFilter) return false
+          return true
+        })
+        .map((item) => item.row),
+    [deviationBuildingFilter, deviationLevelFilter, deviationRowMeta, deviationSectionFilter, deviationSpecialtyFilter, deviationTimeRange],
+  )
+  const filteredDeviationRowIds = useMemo(
+    () => new Set(filteredDeviationRows.map((row) => row.id)),
+    [filteredDeviationRows],
+  )
+  const baselineDeviationChartRows = useMemo(() => {
+    const rows = deviationData?.chart_data?.baselineDeviation
+    if (!rows?.length) return filteredDeviationRows
+    return rows.filter((row) => filteredDeviationRowIds.has(row.id))
+  }, [deviationData?.chart_data?.baselineDeviation, filteredDeviationRowIds, filteredDeviationRows])
+  const executionDeviationChartRows = useMemo(() => {
+    const rows = deviationData?.chart_data?.executionDeviation
+    if (!rows?.length) return filteredDeviationRows
+    return rows.filter((row) => filteredDeviationRowIds.has(row.id))
+  }, [deviationData?.chart_data?.executionDeviation, filteredDeviationRowIds, filteredDeviationRows])
+  const monthlyFulfillmentBuckets = deviationData?.chart_data?.monthlyFulfillment ?? deviationData?.chart_data?.monthly_buckets
+  const responsibilityContribution = useMemo<ProgressDeviationResponsibilityContribution[]>(() => {
+    return deviationData?.responsibility_contribution ?? []
+  }, [deviationData?.responsibility_contribution])
+  const topDeviationCauses = useMemo<ProgressDeviationCauseSummary[]>(() => {
+    return deviationData?.top_deviation_causes ?? []
+  }, [deviationData?.top_deviation_causes])
+  useEffect(() => {
+    if (activeView !== 'progress_deviation') {
+      if (selectedDeviationRow !== null) {
+        setSelectedDeviationRow(null)
+      }
+      return
+    }
+
+    if (selectedDeviationRow && !filteredDeviationRows.some((row) => row.id === selectedDeviationRow.id)) {
+      setSelectedDeviationRow(null)
+    }
+  }, [activeView, filteredDeviationRows, selectedDeviationRow])
+
   const deviationChips = useMemo(
     () => [
-      { label: '任务', value: projectTasks.length },
-      { label: '风险', value: projectRisks.length },
-      { label: '条件', value: projectConditions.length },
-      { label: '阻碍', value: projectObstacles.length },
+      { key: 'tasks' as const, label: '任务', value: projectTasks.length },
+      { key: 'risks' as const, label: '风险', value: projectRisks.length },
+      { key: 'conditions' as const, label: '条件', value: projectConditions.length },
+      { key: 'obstacles' as const, label: '阻碍', value: projectObstacles.length },
     ],
     [projectConditions.length, projectObstacles.length, projectRisks.length, projectTasks.length],
   )
@@ -884,9 +1211,9 @@ export default function Reports() {
         hint: '非主线摘要默认折叠',
       },
       {
-        title: '月度完成情况',
+        title: '月度兑现偏差',
         value: `${summary?.overallProgress ?? 0}%`,
-        description: '月度完成情况受确认状态、延期与月末待处理事项共同影响。',
+        description: '月度兑现偏差受确认状态、延期与月末待处理事项共同影响。',
         hint: '非主线摘要默认折叠',
       },
       {
@@ -905,6 +1232,155 @@ export default function Reports() {
     subtitle: viewConfig.subtitle,
     backLabel: viewConfig.backLabel,
     backTo: viewConfig.backTo,
+  }
+
+  const handleRefreshReports = () => {
+    void loadSummary()
+    void loadCriticalPathSummary()
+    void loadDataQualitySummary()
+    void loadMaterialSummary()
+    void loadDeviationAnalysis()
+    void loadChangeLogs()
+    void loadIssueSummary()
+  }
+
+  const handleExportCurrentView = (format: 'xlsx' | 'pdf') => {
+    if (format === 'pdf') {
+      window.print()
+      return
+    }
+
+    const buildSheet = (rows: Record<string, unknown>[], emptyLabel: string) =>
+      XLSX.utils.json_to_sheet(rows.length > 0 ? rows : [{ 提示: emptyLabel }])
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+    const fileBase = `${projectName}-${pageHeaderConfig.title}-${timestamp}`
+      .replace(/[\\/:*?"<>|]+/g, '-')
+      .replace(/\s+/g, '_')
+
+    const workbook = XLSX.utils.book_new()
+    const overviewRows = currentMetrics.map((metric) => ({
+      指标: metric.title,
+      数值: typeof metric.value === 'number' ? metric.value : String(metric.value),
+      说明: metric.hint || '',
+    }))
+    XLSX.utils.book_append_sheet(workbook, buildSheet(overviewRows, '当前视图暂无概览数据'), '概览')
+
+    if (activeView === 'progress') {
+      XLSX.utils.book_append_sheet(
+        workbook,
+        buildSheet(
+          reportMilestoneCards.map((milestone) => ({
+            里程碑: milestone.name,
+            状态: milestone.statusLabel,
+            进度: milestone.progress,
+            计划日期: formatDateLabel(milestone.plannedDate),
+            当前计划: formatDateLabel(milestone.currentPlannedDate),
+            实际日期: formatDateLabel(milestone.actualDate),
+          })),
+          '当前视图暂无里程碑数据',
+        ),
+        '里程碑',
+      )
+      XLSX.utils.book_append_sheet(
+        workbook,
+        buildSheet(
+          delayedTasks.map((task) => ({
+            任务: getTaskDisplayName(task),
+            状态: getTaskStatus(task),
+            责任主体: getResponsibilityLabel(task),
+            计划完成: formatDateLabel(task.planned_end_date || task.end_date || null),
+            实际完成: formatDateLabel(task.actual_end_date || null),
+          })),
+          '当前视图暂无延期任务',
+        ),
+        '延期任务',
+      )
+    } else if (activeView === 'progress_deviation') {
+      XLSX.utils.book_append_sheet(
+        workbook,
+        buildSheet(
+          deviationRows.map((row) => ({
+            条目: row.title,
+            主线: deviationMainline?.label || row.mainline,
+            计划进度: row.planned_progress ?? '',
+            实际进度: row.actual_progress ?? '',
+            实际日期: formatDateLabel(row.actual_date || null),
+            偏差天数: row.deviation_days,
+            偏差率: `${row.deviation_rate}%`,
+            状态: row.status,
+            原因: row.reason || '',
+            映射状态: row.mapping_status || 'mapped',
+            合并到: row.merged_into?.title || '',
+            子项数: row.child_group?.child_count ?? '',
+          })),
+          '当前视图暂无偏差明细',
+        ),
+        '偏差明细',
+      )
+      XLSX.utils.book_append_sheet(
+        workbook,
+        buildSheet(
+          deviationVersionEvents.map((event) => ({
+            切换日期: event.switch_date,
+            从版本: event.from_version,
+            到版本: event.to_version,
+            说明: event.explanation,
+          })),
+          '当前视图暂无切换事件',
+        ),
+        '切换事件',
+      )
+    } else if (activeView === 'risk') {
+      XLSX.utils.book_append_sheet(
+        workbook,
+        buildSheet(
+          focusRisks.map((risk) => ({
+            风险: risk.title || '未命名风险',
+            描述: risk.description || '',
+            等级: risk.level || '',
+            来源: summarizeRiskSource(risk),
+            状态: parseStatusLabel(risk.status),
+          })),
+          '当前视图暂无风险清单',
+        ),
+        '风险清单',
+      )
+      XLSX.utils.book_append_sheet(
+        workbook,
+        buildSheet(
+          activeProjectIssues.map((issue) => ({
+            问题: issue.title,
+            状态: getIssueStatusLabel(issue.status),
+            来源: getIssueSourceLabel(issue.sourceType),
+            严重度: getIssueSeverityLabel(issue.severity),
+            创建时间: formatDateTimeLabel(issue.createdAt),
+            描述: issue.description || '',
+          })),
+          '当前视图暂无问题清单',
+        ),
+        '问题清单',
+      )
+    } else if (activeView === 'change_log') {
+      XLSX.utils.book_append_sheet(
+        workbook,
+        buildSheet(
+          recentChangeLogs.map((record) => ({
+            实体类型: record.entity_type,
+            字段: record.field_name,
+            来源: record.change_source || 'manual_adjusted',
+            旧值: record.old_value || '',
+            新值: record.new_value || '',
+            原因: record.change_reason || '',
+            时间: record.changed_at || '',
+          })),
+          '当前视图暂无变更记录',
+        ),
+        '变更记录',
+      )
+    }
+
+    XLSX.writeFile(workbook, `${fileBase}.xlsx`)
   }
 
   const openEntry = (entry: AnalysisEntry) => {
@@ -1022,8 +1498,14 @@ export default function Reports() {
     </>
   )
 
-  const renderProgressDeviationDetail = () => (
-    <>
+  const renderProgressDeviationDetail = () => {
+    const showTaskSections = deviationFocus === 'all' || deviationFocus === 'tasks'
+    const showRiskSections = deviationFocus === 'all' || deviationFocus === 'risks'
+    const showConditionSections = deviationFocus === 'all' || deviationFocus === 'conditions'
+    const showObstacleSections = deviationFocus === 'all' || deviationFocus === 'obstacles'
+
+    return (
+      <>
       <CriticalPathSummaryCard summary={criticalPathSummary} />
       <DeviationFocusHint
         activeView={deviationView}
@@ -1044,12 +1526,21 @@ export default function Reports() {
         className="flex flex-wrap gap-2 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
       >
         {deviationChips.map((chip) => (
-          <span key={chip.label} className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
+          <button
+            key={chip.label}
+            type="button"
+            onClick={() => setDeviationFocus(chip.key)}
+            className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+              deviationFocus === chip.key
+                ? 'bg-slate-900 text-white'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+            }`}
+          >
             {chip.label} {chip.value}
-          </span>
+          </button>
         ))}
         <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700">
-          当前聚焦 {deviationViewLabel}
+          当前聚焦 {getDeviationFocusLabel(deviationFocus)}
         </span>
       </div>
 
@@ -1061,9 +1552,9 @@ export default function Reports() {
           icon={<Flag className="h-4 w-4" />}
         />
         <MetricCard
-          title="月度完成情况"
+          title="月度兑现偏差"
           value={deviationData?.summary.monthly_plan_items ?? 0}
-          hint="聚焦当月完成情况、延期与月末待处理事项"
+          hint="聚焦月度计划兑现、延期与月末待处理事项"
           icon={<ClipboardList className="h-4 w-4" />}
         />
         <MetricCard
@@ -1110,13 +1601,101 @@ export default function Reports() {
         />
       ) : (
         <>
+          {showTaskSections ? (
+            <>
           <BaselineSwitchMarker events={deviationVersionEvents} baselineLabel={baselineLabel} />
 
-          <SCurveChart tasks={projectTasks} />
+          <Card data-testid="reports-deviation-filter-panel" className="border-slate-200 shadow-sm">
+            <CardHeader className="pb-4">
+              <CardTitle className="text-base">偏差筛选</CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+              <label className="space-y-1 text-xs text-slate-500">
+                <span>时间范围</span>
+                <select
+                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700"
+                  value={deviationTimeRange}
+                  onChange={(event) => setDeviationTimeRange(event.target.value as 'all' | '7d' | '30d' | '90d')}
+                >
+                  <option value="all">全部时间</option>
+                  <option value="7d">近 7 天</option>
+                  <option value="30d">近 30 天</option>
+                  <option value="90d">近 90 天</option>
+                </select>
+              </label>
+              <label className="space-y-1 text-xs text-slate-500">
+                <span>楼栋</span>
+                <select
+                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700"
+                  value={deviationBuildingFilter}
+                  onChange={(event) => setDeviationBuildingFilter(event.target.value)}
+                >
+                  <option value="all">全部楼栋</option>
+                  {deviationFilterOptions.buildings.map((value) => (
+                    <option key={value} value={value}>{value}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="space-y-1 text-xs text-slate-500">
+                <span>标段</span>
+                <select
+                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700"
+                  value={deviationSectionFilter}
+                  onChange={(event) => setDeviationSectionFilter(event.target.value)}
+                >
+                  <option value="all">全部标段</option>
+                  {deviationFilterOptions.sections.map((value) => (
+                    <option key={value} value={value}>{value}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="space-y-1 text-xs text-slate-500">
+                <span>专业</span>
+                <select
+                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700"
+                  value={deviationSpecialtyFilter}
+                  onChange={(event) => setDeviationSpecialtyFilter(event.target.value)}
+                >
+                  <option value="all">全部专业</option>
+                  {deviationFilterOptions.specialties.map((value) => (
+                    <option key={value} value={value}>{value}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="space-y-1 text-xs text-slate-500">
+                <span>偏差等级</span>
+                <select
+                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700"
+                  value={deviationLevelFilter}
+                  onChange={(event) => setDeviationLevelFilter(event.target.value)}
+                >
+                  <option value="all">全部等级</option>
+                  {deviationFilterOptions.levels.map((value) => (
+                    <option key={value} value={value}>{getDeviationStatusLabel(value)}</option>
+                  ))}
+                </select>
+              </label>
+            </CardContent>
+          </Card>
+
+          {deviationView === 'baseline' ? (
+            <BaselineDumbbellChart rows={baselineDeviationChartRows} mainlineLabel={deviationMainline?.label || deviationViewLabel} />
+          ) : deviationView === 'monthly' ? (
+            <MonthlyStackedBarChart
+              rows={filteredDeviationRows}
+              mainlineLabel={deviationMainline?.label || deviationViewLabel}
+              buckets={monthlyFulfillmentBuckets}
+            />
+          ) : (
+            <ExecutionScatterChart rows={executionDeviationChartRows} mainlineLabel={deviationMainline?.label || deviationViewLabel} />
+          )}
 
           <div className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(380px,0.9fr)]">
-            <ExecutionScatterChart rows={deviationRows} mainlineLabel={deviationMainline?.label || deviationViewLabel} />
-            <DeviationDetailTable rows={deviationRows} mainlineLabel={deviationMainline?.label || deviationViewLabel} />
+            <DeviationDetailTable
+              rows={filteredDeviationRows}
+              mainlineLabel={deviationMainline?.label || deviationViewLabel}
+              onSelectRow={(row) => setSelectedDeviationRow(row as ProgressDeviationRow)}
+            />
           </div>
 
           <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.9fr)]">
@@ -1138,21 +1717,62 @@ export default function Reports() {
               </CardContent>
             </Card>
 
-            <Card data-testid="reports-responsibility-attribution" className="border-slate-200 shadow-sm">
+            <Card data-testid="reports-responsibility-analysis" className="border-slate-200 shadow-sm">
               <CardHeader className="pb-4">
                 <CardTitle className="text-base">责任归因分析</CardTitle>
               </CardHeader>
-              <CardContent className="space-y-3">
-                {responsibilityAttribution.length > 0 ? (
-                  responsibilityAttribution.map(([owner, count]) => (
-                    <div key={owner} className="flex items-center justify-between rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
-                      <div className="text-sm font-medium text-slate-900">{owner}</div>
-                      <div className="text-xs text-slate-500">{count} 项偏差相关任务</div>
+              <CardContent className="space-y-6">
+                <div className="space-y-3">
+                  <div className="text-sm font-medium text-slate-700">责任贡献</div>
+                  {responsibilityContribution.length > 0 ? (
+                    responsibilityContribution.map((entry) => (
+                      <div key={entry.owner} className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <div className="text-sm font-medium text-slate-900">{entry.owner}</div>
+                            <div className="mt-1 text-xs text-slate-500">
+                              {entry.task_ids.length} 个任务 · {entry.count} 项偏差
+                            </div>
+                          </div>
+                          <div className="text-xs text-slate-500">{entry.percentage}%</div>
+                        </div>
+                        <div className="mt-2 h-2 rounded-full bg-white">
+                          <div
+                            className="h-2 rounded-full bg-blue-500"
+                            style={{ width: `${Math.max(entry.percentage, entry.count > 0 ? 8 : 0)}%` }}
+                          />
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+                      当前筛选条件下暂无责任贡献数据。
                     </div>
-                  ))
-                ) : (
-                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4" />
-                )}
+                  )}
+                </div>
+                <div className="space-y-3">
+                  <div className="text-sm font-medium text-slate-700">TOP3 偏差原因</div>
+                  {topDeviationCauses.length > 0 ? (
+                    topDeviationCauses.map((cause) => (
+                      <div key={cause.reason} className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="text-sm font-medium text-slate-900">{cause.reason}</div>
+                          <div className="text-xs text-slate-500">{cause.count} 项 · {cause.percentage}%</div>
+                        </div>
+                        <div className="mt-2 h-2 rounded-full bg-white">
+                          <div
+                            className="h-2 rounded-full bg-rose-400"
+                            style={{ width: `${Math.max(cause.percentage, cause.count > 0 ? 8 : 0)}%` }}
+                          />
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+                      当前筛选条件下暂无偏差原因数据。
+                    </div>
+                  )}
+                </div>
               </CardContent>
             </Card>
           </div>
@@ -1210,29 +1830,148 @@ export default function Reports() {
               </CardContent>
             </Card>
           </div>
+
+          <Dialog
+            open={Boolean(selectedDeviationRow)}
+            onOpenChange={(open) => {
+              if (!open) setSelectedDeviationRow(null)
+            }}
+          >
+            <DialogContent
+              data-testid="reports-deviation-row-drawer"
+              className="left-auto right-0 top-0 h-full max-h-none w-full max-w-3xl translate-x-0 translate-y-0 rounded-none border-l border-slate-200 bg-white p-0 shadow-2xl data-[state=open]:slide-in-from-right-0"
+            >
+              {selectedDeviationRow ? (
+                <div className="flex h-full flex-col">
+                  <div className="border-b border-slate-200 px-6 py-5">
+                    <DialogHeader className="space-y-2 text-left">
+                      <DialogTitle className="text-xl">{selectedDeviationRow.title}</DialogTitle>
+                      <DialogDescription className="text-sm text-slate-500">
+                        {deviationMainline?.label || deviationViewLabel} · 偏差 {selectedDeviationRow.deviation_days} 天
+                      </DialogDescription>
+                    </DialogHeader>
+                  </div>
+                  <div className="flex-1 space-y-5 overflow-y-auto px-6 py-5">
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <DetailStatCard
+                        label="计划进度"
+                        value={`${selectedDeviationRow.planned_progress ?? 0}%`}
+                        hint="计划口径"
+                      />
+                      <DetailStatCard
+                        label="实际进度"
+                        value={`${selectedDeviationRow.actual_progress ?? 0}%`}
+                        hint={selectedDeviationRow.actual_date || '无实际日期'}
+                      />
+                      <DetailStatCard
+                        label="偏差天数"
+                        value={selectedDeviationRow.deviation_days}
+                        hint={`${selectedDeviationRow.deviation_rate}% 偏差率`}
+                      />
+                      <DetailStatCard
+                        label="主线"
+                        value={deviationMainline?.label || deviationViewLabel}
+                        hint={selectedDeviationRow.mainline}
+                      />
+                    </div>
+
+                    <div className="grid gap-3 rounded-2xl border border-slate-100 bg-slate-50 p-4 text-sm text-slate-700 sm:grid-cols-2">
+                      <div>
+                        <div className="text-xs font-medium uppercase tracking-[0.08em] text-slate-400">状态</div>
+                        <div className="mt-1 text-slate-900">{selectedDeviationRow.status}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs font-medium uppercase tracking-[0.08em] text-slate-400">映射状态</div>
+                        <div className="mt-1 text-slate-900">{selectedDeviationRow.mapping_status || 'mapped'}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs font-medium uppercase tracking-[0.08em] text-slate-400">实际日期</div>
+                        <div className="mt-1 text-slate-900">{formatDateLabel(selectedDeviationRow.actual_date || null)}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs font-medium uppercase tracking-[0.08em] text-slate-400">原因</div>
+                        <div className="mt-1 text-slate-900">{selectedDeviationRow.reason || '暂无偏差原因'}</div>
+                      </div>
+                    </div>
+
+                    {selectedDeviationRow.merged_into || selectedDeviationRow.child_group ? (
+                      <div className="flex flex-wrap gap-2">
+                        {selectedDeviationRow.merged_into ? (
+                          <span className="rounded-full bg-blue-100 px-3 py-1 text-xs text-blue-700">
+                            合并到 {selectedDeviationRow.merged_into.title}
+                          </span>
+                        ) : null}
+                        {selectedDeviationRow.child_group ? (
+                          <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs text-emerald-700">
+                            子项组 {selectedDeviationRow.child_group.parent_title} · {selectedDeviationRow.child_group.child_count}
+                          </span>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+            </DialogContent>
+          </Dialog>
+
+            </>
+          ) : null}
         </>
       )}
-      <Card data-testid="reports-obstacle-type-summary" className="border-slate-200 shadow-sm">
-        <CardHeader className="pb-4">
-          <CardTitle className="text-base">阻碍类型汇总</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {obstacleTypeSummary.length > 0 ? (
-            obstacleTypeSummary.map(([type, count]) => (
-              <div key={type} className="flex items-center justify-between rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
-                <div className="text-sm font-medium text-slate-900">{type}</div>
-                <div className="text-xs text-slate-500">{count} 条阻碍</div>
-              </div>
-            ))
-          ) : (
-            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-              当前暂无阻碍类型数据。
-            </div>
-          )}
-        </CardContent>
-      </Card>
+      {showConditionSections ? (
+        <Card data-testid="reports-condition-summary" className="border-slate-200 shadow-sm">
+          <CardHeader className="pb-4">
+            <CardTitle className="text-base">条件未满足分析</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-3 md:grid-cols-3">
+            <DetailStatCard label="条件总数" value={projectConditions.length} hint="项目当前条件项总量" />
+            <DetailStatCard label="未满足任务" value={summary?.pendingConditionTaskCount ?? 0} hint="仍受条件限制的任务" />
+            <DetailStatCard label="活跃条件" value={summary?.pendingConditionCount ?? 0} hint="尚未满足的条件项" />
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {showRiskSections ? (
+        <Card data-testid="reports-risk-linkage-summary" className="border-slate-200 shadow-sm">
+          <CardHeader className="pb-4">
+            <CardTitle className="text-base">风险联动摘要</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-3 md:grid-cols-3">
+            <DetailStatCard label="活跃风险" value={projectRisks.length} hint={`摘要口径 ${summary?.activeRiskCount ?? projectRisks.length}`} />
+            <DetailStatCard label="活跃问题" value={issueSummary.active_issues} hint={`问题总数 ${issueSummary.total_issues}`} />
+            <DetailStatCard label="问题来源" value={issueSummary.source_counts.length} hint="来源分布已接入后端摘要" />
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {showObstacleSections ? (
+        <div className="grid gap-6 xl:grid-cols-2">
+          <MaterialArrivalSummaryCard summary={materialSummary} />
+
+          <Card data-testid="reports-obstacle-type-summary" className="border-slate-200 shadow-sm">
+            <CardHeader className="pb-4">
+              <CardTitle className="text-base">阻碍类型汇总</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {obstacleTypeSummary.length > 0 ? (
+                obstacleTypeSummary.map(([type, count]) => (
+                  <div key={type} className="flex items-center justify-between rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
+                    <div className="text-sm font-medium text-slate-900">{type}</div>
+                    <div className="text-xs text-slate-500">{count} 条阻碍</div>
+                  </div>
+                ))
+              ) : (
+                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+                  当前暂无阻碍类型数据。
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      ) : null}
     </>
   )
+  }
 
   const renderRiskDetail = () => {
     const riskSourceCounts = Array.from(
@@ -1242,6 +1981,17 @@ export default function Reports() {
         return map
       }, new Map<string, number>()),
     ).sort((left, right) => right[1] - left[1])
+    const issueTrend = issueSummary.trend.slice(-10)
+    const issueOpenCount = issueSummary.status_counts.open ?? 0
+    const issueInvestigatingCount = issueSummary.status_counts.investigating ?? 0
+    const issueResolvedCount = issueSummary.status_counts.resolved ?? 0
+    const issueClosedCount = issueSummary.status_counts.closed ?? 0
+    const issueCriticalCount = issueSummary.severity_counts.critical ?? 0
+    const issueSourceCounts = issueSummary.source_counts
+    const trendMaxValue = Math.max(
+      1,
+      ...issueTrend.map((point) => Math.max(point.newIssues, point.resolvedIssues, point.activeIssues)),
+    )
 
     return (
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(360px,0.9fr)]">
@@ -1287,6 +2037,10 @@ export default function Reports() {
           </CardContent>
         </Card>
 
+        <div className="xl:col-span-2">
+          <MaterialArrivalSummaryCard summary={materialSummary} />
+        </div>
+
         <Card className="border-slate-200 shadow-sm xl:col-span-2">
           <CardHeader className="pb-4">
             <CardTitle className="text-base">重点风险与问题清单</CardTitle>
@@ -1312,80 +2066,120 @@ export default function Reports() {
           </CardContent>
         </Card>
 
-        <Card data-testid="reports-material-arrival-summary" className="border-slate-200 shadow-sm xl:col-span-2">
+        <Card data-testid="reports-issue-analysis" className="border-slate-200 shadow-sm xl:col-span-2">
           <CardHeader className="pb-4">
-            <CardTitle className="text-base">材料到场率分析</CardTitle>
+            <CardTitle className="text-base">问题独立分析</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            {materialSummary ? (
-              <>
-                <div className="grid gap-3 md:grid-cols-3">
-                  <DetailStatCard
-                    label="预计到场总数"
-                    value={materialSummary.overview.totalExpectedCount}
-                    hint="按预计到场日期口径"
-                  />
-                  <DetailStatCard
-                    label="按时到场数"
-                    value={materialSummary.overview.onTimeCount}
-                    hint="实际到场 <= 预计到场"
-                  />
-                  <DetailStatCard
-                    label="整体到场率"
-                    value={`${materialSummary.overview.arrivalRate}%`}
-                    hint="近 6 个月与当前项目材料总览"
-                  />
-                </div>
-                <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
-                  <div className="space-y-3">
-                    <div className="text-sm font-medium text-slate-700">参建单位到场率</div>
-                    {materialSummary.byUnit.length > 0 ? (
-                      materialSummary.byUnit.map((row) => (
-                        <div key={row.participantUnitId ?? 'unassigned'} className="rounded-2xl border border-slate-100 bg-white px-4 py-3">
-                          <div className="flex items-center justify-between gap-3">
-                            <div>
-                              <div className="text-sm font-medium text-slate-900">{row.participantUnitName || '无归属单位'}</div>
-                              <div className="mt-1 flex flex-wrap gap-2 text-xs text-slate-500">
-                                {row.specialtyTypes.map((type) => (
-                                  <span key={type} className="rounded-full bg-slate-100 px-2 py-1">{type}</span>
-                                ))}
-                              </div>
-                            </div>
-                            <div className="text-right text-sm text-slate-700">
-                              <div className="text-lg font-semibold text-slate-900">{row.arrivalRate}%</div>
-                              <div>{row.onTimeCount} / {row.totalExpectedCount}</div>
-                            </div>
+            <div className="grid gap-3 md:grid-cols-4">
+              <DetailStatCard label="问题总数" value={issueSummary.total_issues} hint="后端汇总口径" />
+              <DetailStatCard label="活跃问题" value={issueSummary.active_issues} hint={`open ${issueOpenCount} · investigating ${issueInvestigatingCount}`} />
+              <DetailStatCard label="已解决 / 关闭" value={`${issueResolvedCount}/${issueClosedCount}`} hint={`严重问题 ${issueCriticalCount}`} />
+              <DetailStatCard label="来源类型" value={issueSourceCounts.length} hint="后端 issues/summary" />
+            </div>
+            <div className="grid gap-4 xl:grid-cols-2">
+              <div className="space-y-3">
+                <div className="text-sm font-medium text-slate-700">近 30 天趋势</div>
+                {issueSummaryLoading ? (
+                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
+                    问题摘要加载中
+                  </div>
+                ) : issueTrend.length > 0 ? (
+                  <div className="rounded-2xl border border-slate-100 bg-white p-4">
+                    <div className="flex items-end gap-2">
+                      {issueTrend.map((point) => (
+                        <div key={point.date} className="flex-1 space-y-2 text-center">
+                          <div className="flex h-40 items-end justify-center gap-1">
+                            <div
+                              className="w-2 rounded-full bg-blue-400"
+                              style={{ height: `${Math.max(6, (point.newIssues / trendMaxValue) * 100)}%` }}
+                              title={`${point.date} · 新增 ${point.newIssues}`}
+                            />
+                            <div
+                              className="w-2 rounded-full bg-emerald-400"
+                              style={{ height: `${Math.max(6, (point.resolvedIssues / trendMaxValue) * 100)}%` }}
+                              title={`${point.date} · 已解决 ${point.resolvedIssues}`}
+                            />
+                            <div
+                              className="w-2 rounded-full bg-slate-700"
+                              style={{ height: `${Math.max(6, (point.activeIssues / trendMaxValue) * 100)}%` }}
+                              title={`${point.date} · 活跃 ${point.activeIssues}`}
+                            />
+                          </div>
+                          <div className="text-[10px] text-slate-500">{point.date.slice(5)}</div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-3 text-xs text-slate-500">
+                      <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-blue-400" />新增</span>
+                      <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-emerald-400" />已解决</span>
+                      <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-slate-700" />活跃</span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
+                    当前项目暂无问题趋势数据。
+                  </div>
+                )}
+              </div>
+              <div className="space-y-3">
+                <div className="text-sm font-medium text-slate-700">来源分布</div>
+                {issueSourceCounts.length > 0 ? (
+                  issueSourceCounts.map((source) => (
+                    <div key={source.key} className="flex items-center justify-between rounded-2xl border border-slate-100 bg-white px-4 py-3">
+                      <div className="text-sm font-medium text-slate-900">{source.label}</div>
+                      <div className="text-xs text-slate-500">{source.count} 条问题</div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
+                    当前项目暂无问题来源数据。
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="grid gap-4 xl:grid-cols-2">
+              <div className="space-y-3">
+                <div className="text-sm font-medium text-slate-700">严重度分布</div>
+                {Object.entries(issueSummary.severity_counts).length > 0 ? (
+                  Object.entries(issueSummary.severity_counts)
+                    .sort((left, right) => right[1] - left[1])
+                    .map(([severity, count]) => (
+                      <div key={severity} className="flex items-center justify-between rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
+                        <div className="text-sm font-medium text-slate-900">{getIssueSeverityLabel(severity)}</div>
+                        <div className="text-xs text-slate-500">{count} 条问题</div>
+                      </div>
+                    ))
+                ) : (
+                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
+                    当前项目暂无问题严重度数据。
+                  </div>
+                )}
+              </div>
+              <div className="space-y-3">
+                <div className="text-sm font-medium text-slate-700">最近问题</div>
+                {issueSummary.recent_issues.length > 0 ? (
+                  issueSummary.recent_issues.map((row) => (
+                    <div key={row.id} className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-medium text-slate-900">{row.title}</div>
+                          <div className="mt-1 text-xs text-slate-500">
+                            {getIssueStatusLabel(row.status)} · {getIssueSourceLabel(row.source_type)}
                           </div>
                         </div>
-                      ))
-                    ) : (
-                      <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
-                        当前项目还没有材料到场记录。
+                        <div className="text-xs text-slate-500">{formatDateTimeLabel(row.created_at)}</div>
                       </div>
-                    )}
+                      {row.description ? <div className="mt-2 text-xs leading-5 text-slate-500">{row.description}</div> : null}
+                    </div>
+                  ))
+                ) : (
+                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
+                    当前项目暂无问题记录。
                   </div>
-                  <div className="space-y-3">
-                    <div className="text-sm font-medium text-slate-700">近 6 个月趋势</div>
-                    {materialSummary.monthlyTrend.map((row) => (
-                      <div key={row.month} className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="text-sm font-medium text-slate-900">{row.month}</div>
-                          <div className="text-sm text-slate-700">{row.arrivalRate}%</div>
-                        </div>
-                        <div className="mt-2 h-2 rounded-full bg-slate-200">
-                          <div className="h-2 rounded-full bg-emerald-500" style={{ width: `${Math.max(row.arrivalRate, row.totalExpectedCount > 0 ? 8 : 0)}%` }} />
-                        </div>
-                        <div className="mt-2 text-xs text-slate-500">
-                          按时 {row.onTimeCount} / 预计 {row.totalExpectedCount}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </>
-            ) : (
-              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5" />
-            )}
+                )}
+              </div>
+            </div>
           </CardContent>
         </Card>
       </div>
@@ -1509,19 +2303,37 @@ export default function Reports() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => {
-              void loadSummary()
-              void loadCriticalPathSummary()
-              void loadDataQualitySummary()
-            }}
-            loading={loading || criticalPathLoading}
+            onClick={handleRefreshReports}
+            loading={loading || criticalPathLoading || deviationLoading || changeLogLoading}
           >
             <RefreshCw className="mr-2 h-4 w-4" />
             刷新
           </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm" type="button">
+                <Download className="mr-2 h-4 w-4" />
+                导出
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-44">
+              <DropdownMenuItem onClick={() => handleExportCurrentView('xlsx')}>
+                <FileSpreadsheet className="mr-2 h-4 w-4" />
+                导出 Excel
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleExportCurrentView('pdf')}>
+                <Download className="mr-2 h-4 w-4" />
+                导出 PDF
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <div className="flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500">
+            <Clock3 className="h-3.5 w-3.5" />
+            最近刷新 {lastRefreshedAt ? formatDateTimeLabel(lastRefreshedAt) : '未刷新'}
+          </div>
         </PageHeader>
 
-        {dataQualitySummary ? (
+        {activeView === 'progress_deviation' && dataQualitySummary ? (
           <Card data-testid="reports-data-quality-banner" className="border-sky-200 bg-sky-50 shadow-sm">
             <CardContent className="flex flex-col gap-3 p-5 md:flex-row md:items-center md:justify-between">
               <div className="space-y-1">
@@ -1630,6 +2442,87 @@ function CriticalPathSummaryCard({
               <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
                 手动插链 {summary.manualInsertedCount}
               </span>
+            </div>
+          </>
+        ) : (
+          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5" />
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+function MaterialArrivalSummaryCard({
+  summary,
+}: {
+  summary: MaterialReportSummary | null
+}) {
+  const overview = summary?.overview ?? {
+    totalExpectedCount: 0,
+    onTimeCount: 0,
+    arrivalRate: 0,
+  }
+  const byUnit = Array.isArray(summary?.byUnit) ? summary.byUnit : []
+  const monthlyTrend = Array.isArray(summary?.monthlyTrend) ? summary.monthlyTrend : []
+
+  return (
+    <Card data-testid="reports-material-arrival-summary" className="border-slate-200 shadow-sm">
+      <CardHeader className="pb-4">
+        <CardTitle className="text-base">材料到场率分析</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {summary ? (
+          <>
+            <div className="grid gap-3 md:grid-cols-3">
+              <DetailStatCard label="预计到场总数" value={overview.totalExpectedCount} hint="按预计到场日期口径" />
+              <DetailStatCard label="按时到场数" value={overview.onTimeCount} hint="实际到场 <= 预计到场" />
+              <DetailStatCard label="整体到场率" value={`${overview.arrivalRate}%`} hint="近 6 个月与当前项目材料总览" />
+            </div>
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
+              <div className="space-y-3">
+                <div className="text-sm font-medium text-slate-700">参建单位到场率</div>
+                {byUnit.length > 0 ? (
+                  byUnit.map((row) => (
+                    <div key={row.participantUnitId ?? 'unassigned'} className="rounded-2xl border border-slate-100 bg-white px-4 py-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-medium text-slate-900">{row.participantUnitName || '无归属单位'}</div>
+                          <div className="mt-1 flex flex-wrap gap-2 text-xs text-slate-500">
+                            {row.specialtyTypes.map((type) => (
+                              <span key={type} className="rounded-full bg-slate-100 px-2 py-1">{type}</span>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="text-right text-sm text-slate-700">
+                          <div className="text-lg font-semibold text-slate-900">{row.arrivalRate}%</div>
+                          <div>{row.onTimeCount} / {row.totalExpectedCount}</div>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
+                    当前项目还没有材料到场记录。
+                  </div>
+                )}
+              </div>
+              <div className="space-y-3">
+                <div className="text-sm font-medium text-slate-700">近 6 个月趋势</div>
+                {monthlyTrend.map((row) => (
+                  <div key={row.month} className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="text-sm font-medium text-slate-900">{row.month}</div>
+                      <div className="text-sm text-slate-700">{row.arrivalRate}%</div>
+                    </div>
+                    <div className="mt-2 h-2 rounded-full bg-slate-200">
+                      <div className="h-2 rounded-full bg-emerald-500" style={{ width: `${Math.max(row.arrivalRate, row.totalExpectedCount > 0 ? 8 : 0)}%` }} />
+                    </div>
+                    <div className="mt-2 text-xs text-slate-500">
+                      按时 {row.onTimeCount} / 预计 {row.totalExpectedCount}
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           </>
         ) : (

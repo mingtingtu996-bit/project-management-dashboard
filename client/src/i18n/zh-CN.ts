@@ -15,7 +15,7 @@ export const zhCN = {
     structureCount: '条',
     criticalPath: '关键路径',
     precedingTask: '前置任务',
-    structureTitle: 'WBS 结构',
+    structureTitle: '执行任务树',
     milestoneToast: '已设置里程碑：{label}',
   },
   wbsTemplates: {

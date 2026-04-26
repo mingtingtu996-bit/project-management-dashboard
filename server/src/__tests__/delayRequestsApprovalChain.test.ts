@@ -3,6 +3,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 type Row = Record<string, any>
 
 const mocks = vi.hoisted(() => {
+  const state = {
+    criticalDisplayTaskIds: null as string[] | null,
+  }
+
   const tables: Record<string, Row[]> = {
     delay_requests: [],
     tasks: [
@@ -207,6 +211,35 @@ const mocks = vi.hoisted(() => {
       criticalTaskIds: ['task-1'],
       projectDuration: 3,
     })),
+    getProjectCriticalPathSnapshot: vi.fn(async (projectId: string) => {
+      const projectTasks = tables.tasks.filter((row) => row.project_id === projectId)
+      const displayTaskIds = state.criticalDisplayTaskIds ?? projectTasks.filter((row) => row.is_critical).map((row) => row.id)
+      return {
+        projectId,
+        autoTaskIds: displayTaskIds,
+        manualAttentionTaskIds: [],
+        manualInsertedTaskIds: [],
+        primaryChain: displayTaskIds.length > 0
+          ? { id: 'primary', source: 'auto', taskIds: displayTaskIds, totalDurationDays: 0, displayLabel: '关键路径' }
+          : null,
+        alternateChains: [],
+        displayTaskIds,
+        watchedTaskIds: [],
+        edges: [],
+        tasks: projectTasks.map((row) => ({
+          taskId: row.id,
+          title: row.title ?? '',
+          floatDays: row.is_critical ? 0 : 10,
+          durationDays: 1,
+          isAutoCritical: Boolean(row.is_critical),
+          isManualAttention: false,
+          isManualInserted: false,
+        })),
+        projectDurationDays: 0,
+        calculatedAt: '2026-04-01T00:00:00.000Z',
+      }
+    }),
+    state,
     logger: {
       info: vi.fn(),
       warn: vi.fn(),
@@ -261,6 +294,7 @@ vi.mock('../services/changeLogs.js', () => ({
 
 vi.mock('../services/projectCriticalPathService.js', () => ({
   recalculateProjectCriticalPath: mocks.recalculateProjectCriticalPath,
+  getProjectCriticalPathSnapshot: mocks.getProjectCriticalPathSnapshot,
 }))
 
 vi.mock('../services/warningChainService.js', () => ({
@@ -277,10 +311,13 @@ vi.mock('../middleware/logger.js', () => ({
 }))
 
 const { approveDelayRequest, createDelayRequest } = await import('../services/delayRequests.js')
+const { clearCriticalPathCache } = await import('../services/criticalPathHelpers.js')
 
 describe('delay request approval chain', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    clearCriticalPathCache()
+    mocks.state.criticalDisplayTaskIds = null
     mocks.tables.delay_requests = []
     mocks.tables.tasks = [
       {
@@ -381,6 +418,47 @@ describe('delay request approval chain', () => {
       type: 'critical_path_delay_request_submitted',
       severity: 'critical',
       is_broadcast: true,
+    }))
+  })
+
+  it('ignores legacy is_critical and chain_id when the latest critical path snapshot excludes the task', async () => {
+    mocks.state.criticalDisplayTaskIds = []
+    mocks.tables.tasks = [
+      {
+        id: 'task-1',
+        project_id: 'project-1',
+        title: '一期结构',
+        start_date: '2026-04-01',
+        end_date: '2026-04-03',
+        planned_end_date: '2026-04-03',
+        progress: 45,
+        status: 'in_progress',
+        dependencies: [],
+        is_critical: true,
+      },
+    ]
+
+    await createDelayRequest({
+      project_id: 'project-1',
+      task_id: 'task-1',
+      original_date: '2026-04-03',
+      delayed_date: '2026-04-06',
+      delay_days: 3,
+      reason: '关键材料延期',
+      requested_by: 'user-1',
+      chain_id: '00000000-0000-4000-8000-000000000001',
+    })
+
+    expect(mocks.persistNotification).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'delay_request_submitted',
+      severity: 'warning',
+      is_broadcast: false,
+      metadata: expect.objectContaining({
+        is_critical_task: false,
+      }),
+    }))
+    expect(mocks.persistNotification).not.toHaveBeenCalledWith(expect.objectContaining({
+      type: 'critical_path_delay_request_submitted',
     }))
   })
 

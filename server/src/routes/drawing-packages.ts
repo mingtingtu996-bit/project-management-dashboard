@@ -2,6 +2,7 @@
 import { v4 as uuidv4 } from 'uuid'
 
 import { asyncHandler } from '../middleware/errorHandler.js'
+import { authenticate, requireProjectEditor } from '../middleware/auth.js'
 import { executeSQL, executeSQLOne } from '../services/dbService.js'
 import {
   buildDrawingBoardView,
@@ -29,7 +30,10 @@ import {
   type DrawingVersionRecordSource,
 } from '../services/drawingPackageService.js'
 import { syncPackageCurrentDrawingCertificateLink } from '../services/drawingCertificateLinkService.js'
+import type { CertificateDependency, CertificateWorkItem } from '../types/db.js'
 import {
+  CERTIFICATE_DEPENDENCY_COLUMNS,
+  CERTIFICATE_WORK_ITEM_COLUMNS,
   ACCEPTANCE_PLAN_COLUMNS,
   ACCEPTANCE_RECORD_COLUMNS,
   ACCEPTANCE_REQUIREMENT_COLUMNS,
@@ -72,6 +76,8 @@ const DRAWING_TASK_CONDITION_SELECT = `SELECT ${DRAWING_TASK_CONDITION_COLUMNS} 
 const ACCEPTANCE_PLAN_SELECT = `SELECT ${ACCEPTANCE_PLAN_COLUMNS} FROM acceptance_plans`
 const ACCEPTANCE_REQUIREMENT_SELECT = `SELECT ${ACCEPTANCE_REQUIREMENT_COLUMNS} FROM acceptance_requirements`
 const ACCEPTANCE_RECORD_SELECT = `SELECT ${ACCEPTANCE_RECORD_COLUMNS} FROM acceptance_records`
+const CERTIFICATE_WORK_ITEM_SELECT = `SELECT ${CERTIFICATE_WORK_ITEM_COLUMNS} FROM certificate_work_items`
+const CERTIFICATE_DEPENDENCY_SELECT = `SELECT ${CERTIFICATE_DEPENDENCY_COLUMNS} FROM certificate_dependencies`
 
 function normalizeText(value: unknown, fallback: string | null = null): string | null {
   if (typeof value === 'string') {
@@ -361,11 +367,25 @@ async function loadProjectPackages(projectId: string, options?: { includeLinkedC
       acceptancePlans: [] as DrawingAcceptancePlanSource[],
       acceptanceRequirements: [] as DrawingAcceptanceRequirementSource[],
       acceptanceRecords: [] as DrawingAcceptanceRecordSource[],
+      certificateWorkItems: [] as CertificateWorkItem[],
+      certificateDependencies: [] as CertificateDependency[],
       issues: [] as DrawingEscalatedIssueSource[],
       risks: [] as DrawingEscalatedRiskSource[],
     }
   }
 
+  const [certificateWorkItems, certificateDependencies] = await Promise.all([
+    loadOptionalRows<CertificateWorkItem>(
+      `${CERTIFICATE_WORK_ITEM_SELECT} WHERE project_id = ? ORDER BY sort_order ASC, created_at ASC`,
+      [projectId],
+      'certificate_work_items',
+    ),
+    loadOptionalRows<CertificateDependency>(
+      `${CERTIFICATE_DEPENDENCY_SELECT} WHERE project_id = ? ORDER BY created_at ASC`,
+      [projectId],
+      'certificate_dependencies',
+    ),
+  ])
   const tasks = await loadOptionalRows<DrawingTaskSource>(
     `${DRAWING_TASK_SELECT} WHERE project_id = ? ORDER BY created_at ASC`,
     [projectId],
@@ -408,6 +428,8 @@ async function loadProjectPackages(projectId: string, options?: { includeLinkedC
     versions,
     items,
     reviewRules,
+    certificateWorkItems,
+    certificateDependencies,
     tasks,
     taskConditions,
     acceptancePlans,
@@ -430,12 +452,32 @@ async function loadDrawingPackageLinkedContext(input: {
   projectId: string
   packageId: string
   packageCode: string | null
-  drawingIds: string[]
+  drawingIds?: string[]
 }) {
   const taskPackageIds = uniqueNonEmpty([input.packageId])
   const taskPackageCodes = uniqueNonEmpty([input.packageCode])
   const requirementPackageIds = uniqueNonEmpty([input.packageId])
-  const requirementSourceEntityIds = uniqueNonEmpty([input.packageId, input.packageCode, ...input.drawingIds])
+  const [packageScopedDrawingsById, packageScopedDrawingsByCode] = await Promise.all([
+    loadOptionalRows<DrawingRecordSource>(
+      `${CONSTRUCTION_DRAWING_SELECT} WHERE project_id = ? AND package_id = ? ORDER BY created_at ASC`,
+      [input.projectId, input.packageId],
+      'construction_drawings',
+    ),
+    input.packageCode
+      ? loadOptionalRows<DrawingRecordSource>(
+        `${CONSTRUCTION_DRAWING_SELECT} WHERE project_id = ? AND package_code = ? ORDER BY created_at ASC`,
+        [input.projectId, input.packageCode],
+        'construction_drawings',
+      )
+      : Promise.resolve([] as DrawingRecordSource[]),
+  ])
+  const requirementSourceEntityIds = uniqueNonEmpty([
+    input.packageId,
+    input.packageCode,
+    ...(input.drawingIds ?? []),
+    ...packageScopedDrawingsById.map((drawing) => normalizeText(drawing.id)),
+    ...packageScopedDrawingsByCode.map((drawing) => normalizeText(drawing.id)),
+  ])
   const [taskConditions, acceptanceRequirements, issues, risks] = await Promise.all([
     taskPackageIds.length > 0 || taskPackageCodes.length > 0
       ? Promise.all([
@@ -583,6 +625,8 @@ export function registerDrawingPackageRoutes(router: Router) {
       drawings: data.drawings,
       versions: data.versions,
       reviewRules: data.reviewRules,
+      certificateWorkItems: data.certificateWorkItems,
+      certificateDependencies: data.certificateDependencies,
       tasks: data.tasks,
       taskConditions: data.taskConditions,
       acceptancePlans: data.acceptancePlans,
@@ -627,22 +671,43 @@ export function registerDrawingPackageRoutes(router: Router) {
     const packageLookup = resolveLegacyPackageId(packageRow, packageId)
     const detailPackageId = packageRow?.id || packageLookup
     const dataProjectId = normalizeText(packageRow?.project_id) || projectId || ''
-    const projectData = dataProjectId
-      ? await loadProjectPackages(dataProjectId)
-      : {
-        packages: [] as DrawingPackageSource[],
-        drawings: [] as DrawingRecordSource[],
-        versions: [] as DrawingVersionRecordSource[],
-        items: [] as DrawingPackageItemSource[],
-        reviewRules: [] as DrawingReviewRuleSource[],
-        tasks: [] as DrawingTaskSource[],
-        taskConditions: [] as DrawingTaskConditionSource[],
-        acceptancePlans: [] as DrawingAcceptancePlanSource[],
-        acceptanceRequirements: [] as DrawingAcceptanceRequirementSource[],
-        acceptanceRecords: [] as DrawingAcceptanceRecordSource[],
-        issues: [] as DrawingEscalatedIssueSource[],
-        risks: [] as DrawingEscalatedRiskSource[],
-      }
+    const emptyProjectData = {
+      packages: [] as DrawingPackageSource[],
+      drawings: [] as DrawingRecordSource[],
+      versions: [] as DrawingVersionRecordSource[],
+      items: [] as DrawingPackageItemSource[],
+      reviewRules: [] as DrawingReviewRuleSource[],
+      tasks: [] as DrawingTaskSource[],
+      taskConditions: [] as DrawingTaskConditionSource[],
+      acceptancePlans: [] as DrawingAcceptancePlanSource[],
+      acceptanceRequirements: [] as DrawingAcceptanceRequirementSource[],
+      acceptanceRecords: [] as DrawingAcceptanceRecordSource[],
+      issues: [] as DrawingEscalatedIssueSource[],
+      risks: [] as DrawingEscalatedRiskSource[],
+    }
+    const emptyLinkedContext = {
+      tasks: [] as DrawingTaskSource[],
+      taskConditions: [] as DrawingTaskConditionSource[],
+      acceptancePlans: [] as DrawingAcceptancePlanSource[],
+      acceptanceRequirements: [] as DrawingAcceptanceRequirementSource[],
+      acceptanceRecords: [] as DrawingAcceptanceRecordSource[],
+      issues: [] as DrawingEscalatedIssueSource[],
+      risks: [] as DrawingEscalatedRiskSource[],
+    }
+    const projectDataPromise = dataProjectId
+      ? loadProjectPackages(dataProjectId)
+      : Promise.resolve(emptyProjectData)
+    const linkedContextPromise = packageRow
+      ? ((projectId || normalizeText(packageRow.project_id) || '')
+        ? loadDrawingPackageLinkedContext({
+          projectId: projectId || normalizeText(packageRow.project_id) || '',
+          packageId: normalizeText(packageRow.id) || packageLookup,
+          packageCode: normalizeText(packageRow.package_code),
+          drawingIds: [],
+        })
+        : Promise.resolve(emptyLinkedContext))
+      : Promise.resolve(emptyLinkedContext)
+    const projectData = await projectDataPromise
     const scopedDrawings = packageRow
       ? selectPackageScopedDrawings(projectData.drawings, packageLookup, packageRow).filter((drawing) => (
         projectId ? normalizeText(drawing.project_id) === projectId : true
@@ -706,22 +771,16 @@ export function registerDrawingPackageRoutes(router: Router) {
 
     const resolvedProjectId = projectId || normalizeText(resolvedPackage.project_id) || ''
     const reviewRules = projectData.reviewRules
-    const linkedContext = resolvedProjectId
-      ? await loadDrawingPackageLinkedContext({
-        projectId: resolvedProjectId,
-        packageId: normalizeText(resolvedPackage.id) || packageLookup,
-        packageCode: normalizeText(resolvedPackage.package_code),
-        drawingIds: scopedDrawings.map((drawing) => normalizeText(drawing.id)).filter(Boolean),
-      })
-      : {
-        tasks: [] as DrawingTaskSource[],
-        taskConditions: [] as DrawingTaskConditionSource[],
-        acceptancePlans: [] as DrawingAcceptancePlanSource[],
-        acceptanceRequirements: [] as DrawingAcceptanceRequirementSource[],
-        acceptanceRecords: [] as DrawingAcceptanceRecordSource[],
-        issues: [] as DrawingEscalatedIssueSource[],
-        risks: [] as DrawingEscalatedRiskSource[],
-      }
+    const linkedContext = packageRow
+      ? await linkedContextPromise
+      : resolvedProjectId
+        ? await loadDrawingPackageLinkedContext({
+          projectId: resolvedProjectId,
+          packageId: normalizeText(resolvedPackage.id) || packageLookup,
+          packageCode: normalizeText(resolvedPackage.package_code),
+          drawingIds: scopedDrawings.map((drawing) => normalizeText(drawing.id)).filter(Boolean),
+        })
+        : emptyLinkedContext
 
     const detail = buildDrawingPackageDetailView({
       packageRow: resolvedPackage,
@@ -845,7 +904,9 @@ export function registerDrawingPackageRoutes(router: Router) {
     })
   }))
 
-  router.post('/packages', asyncHandler(async (req, res) => {
+  router.post('/packages',
+    requireProjectEditor((req) => req.body.projectId ?? req.body.project_id),
+    asyncHandler(async (req, res) => {
     const projectId = normalizeText(req.body.projectId ?? req.body.project_id)
     const packageCode = normalizeText(req.body.packageCode ?? req.body.package_code)
     const packageName = normalizeText(req.body.packageName ?? req.body.package_name)
@@ -971,7 +1032,12 @@ export function registerDrawingPackageRoutes(router: Router) {
     })
   }))
 
-  router.patch('/packages/:packageId', asyncHandler(async (req, res) => {
+  router.patch('/packages/:packageId',
+    requireProjectEditor(async (req) => {
+      const packageRow = await executeSQLOne<DrawingPackageSource>(`${DRAWING_PACKAGE_SELECT} WHERE id = ? LIMIT 1`, [req.params.packageId])
+      return packageRow?.project_id
+    }),
+    asyncHandler(async (req, res) => {
     const { packageId } = req.params
     const current = await executeSQLOne<DrawingPackageSource>(`${DRAWING_PACKAGE_SELECT} WHERE id = ? LIMIT 1`, [packageId])
     if (!current) {
@@ -1030,7 +1096,12 @@ export function registerDrawingPackageRoutes(router: Router) {
     })
   }))
 
-  router.post('/packages/:packageId/set-current-version', asyncHandler(async (req, res) => {
+  router.post('/packages/:packageId/set-current-version',
+    requireProjectEditor(async (req) => {
+      const packageRow = await executeSQLOne<DrawingPackageSource>(`${DRAWING_PACKAGE_SELECT} WHERE id = ? LIMIT 1`, [req.params.packageId])
+      return packageRow?.project_id
+    }),
+    asyncHandler(async (req, res) => {
     const { packageId } = req.params
     const drawingId = normalizeText(req.body.drawingId ?? req.body.drawing_id)
     const versionId = normalizeText(req.body.versionId ?? req.body.version_id)

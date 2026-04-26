@@ -97,7 +97,7 @@ describe('planning shared ui contract', () => {
     root?.render(
       <MemoryRouter initialEntries={[`/projects/${projectId}/planning/baseline`]}>
         <Routes>
-          <Route path="/projects/:id/planning/:tab" element={<PlanningWorkspace />} />
+          <Route path="/projects/:id/:surface/:tab" element={<PlanningWorkspace />} />
         </Routes>
       </MemoryRouter>,
     )
@@ -114,7 +114,7 @@ describe('planning shared ui contract', () => {
     root?.render(
       <MemoryRouter initialEntries={[`/projects/${projectId}/planning/monthly`]}>
         <Routes>
-          <Route path="/projects/:id/planning/:tab" element={<PlanningWorkspace />} />
+          <Route path="/projects/:id/:surface/:tab" element={<PlanningWorkspace />} />
         </Routes>
       </MemoryRouter>,
     )
@@ -132,9 +132,9 @@ describe('planning shared ui contract', () => {
     root?.unmount()
     root = createRoot(container)
     root.render(
-      <MemoryRouter initialEntries={[`/projects/${projectId}/planning/closeout`]}>
+      <MemoryRouter initialEntries={[`/projects/${projectId}/tasks/closeout`]}>
         <Routes>
-          <Route path="/projects/:id/planning/:tab" element={<PlanningWorkspace />} />
+          <Route path="/projects/:id/:surface/:tab" element={<PlanningWorkspace />} />
         </Routes>
       </MemoryRouter>,
     )
@@ -150,7 +150,7 @@ describe('planning shared ui contract', () => {
     root?.render(
       <MemoryRouter initialEntries={[`/projects/${projectId}/planning/monthly`]}>
         <Routes>
-          <Route path="/projects/:id/planning/:tab" element={<PlanningWorkspace />} />
+          <Route path="/projects/:id/:surface/:tab" element={<PlanningWorkspace />} />
         </Routes>
       </MemoryRouter>,
     )
@@ -172,7 +172,7 @@ describe('planning shared ui contract', () => {
     root.render(
       <MemoryRouter initialEntries={[`/projects/${projectId}/planning/monthly`]}>
         <Routes>
-          <Route path="/projects/:id/planning/:tab" element={<PlanningWorkspace />} />
+          <Route path="/projects/:id/:surface/:tab" element={<PlanningWorkspace />} />
         </Routes>
       </MemoryRouter>,
     )
@@ -190,9 +190,9 @@ describe('planning shared ui contract', () => {
 
   it('surfaces closeout concurrency and stale banners while keeping the drawer batch-disabled in batch mode', async () => {
     root?.render(
-      <MemoryRouter initialEntries={[`/projects/${projectId}/planning/closeout?closeout_day=7`]}>
+      <MemoryRouter initialEntries={[`/projects/${projectId}/tasks/closeout?closeout_day=7`]}>
         <Routes>
-          <Route path="/projects/:id/planning/:tab" element={<PlanningWorkspace />} />
+          <Route path="/projects/:id/:surface/:tab" element={<PlanningWorkspace />} />
         </Routes>
       </MemoryRouter>,
     )

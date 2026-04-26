@@ -140,6 +140,7 @@ const state = vi.hoisted(() => {
 
 vi.mock('../middleware/auth.js', () => ({
   authenticate: vi.fn((_req: unknown, _res: unknown, next: () => void) => next()),
+  requireProjectEditor: vi.fn(() => (_req: unknown, _res: unknown, next: () => void) => next()),
 }))
 
 vi.mock('../middleware/logger.js', () => ({

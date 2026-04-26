@@ -182,8 +182,9 @@ describe('project critical path service', () => {
 
     const refreshedAfterCreate = await recalculateProjectCriticalPath('project-1')
     expect(refreshedAfterCreate.snapshot.manualAttentionTaskIds).toEqual(['task-a'])
-    expect(refreshedAfterCreate.snapshot.displayTaskIds).toContain('task-a')
-    expect(refreshedAfterCreate.snapshot.tasks.some((task) => task.taskId === 'task-a')).toBe(true)
+    expect(refreshedAfterCreate.snapshot.watchedTaskIds).toEqual(['task-a'])
+    expect(refreshedAfterCreate.snapshot.displayTaskIds).toEqual(['task-b'])
+    expect(refreshedAfterCreate.snapshot.tasks.some((task) => task.taskId === 'task-a')).toBe(false)
 
     await deleteCriticalPathOverride('project-1', created.id)
 
@@ -217,13 +218,106 @@ describe('project critical path service', () => {
     expect(snapshot.manualAttentionTaskIds).toContain('task-a')
     expect(snapshot.manualInsertedTaskIds).toEqual(['task-c'])
     expect(snapshot.primaryChain).not.toBeNull()
-    expect(snapshot.displayTaskIds).toContain('task-a')
-    expect(snapshot.displayTaskIds).toContain('task-c')
+    expect(snapshot.watchedTaskIds).toEqual(['task-a'])
+    expect(snapshot.displayTaskIds).toEqual(['task-b', 'task-c'])
+    expect(snapshot.tasks.some((task) => task.taskId === 'task-a')).toBe(false)
     expect(snapshot.edges.some((edge) => edge.source === 'manual_link')).toBe(true)
 
     const overrides = await listCriticalPathOverrides('project-1')
     expect(overrides).toHaveLength(2)
     expect(overrides.map((override) => override.mode)).toEqual(['manual_attention', 'manual_insert'])
+  })
+
+  it('returns an empty failure snapshot when CPM fails before any successful cache exists', async () => {
+    mocks.tables.tasks = [
+      {
+        id: 'cycle-a',
+        project_id: 'project-empty-failure',
+        title: 'Cycle A',
+        start_date: '2026-04-01',
+        end_date: '2026-04-02',
+        planned_end_date: '2026-04-02',
+        dependencies: ['cycle-b'],
+        is_critical: false,
+      },
+      {
+        id: 'cycle-b',
+        project_id: 'project-empty-failure',
+        title: 'Cycle B',
+        start_date: '2026-04-01',
+        end_date: '2026-04-02',
+        planned_end_date: '2026-04-02',
+        dependencies: ['cycle-a'],
+        is_critical: false,
+      },
+    ]
+
+    const snapshot = await getProjectCriticalPathSnapshot('project-empty-failure')
+
+    expect(snapshot.calculationStatus).toBe('empty_after_failure')
+    expect(snapshot.displayTaskIds).toEqual([])
+    expect(snapshot.tasks).toEqual([])
+    expect(snapshot.projectDurationDays).toBe(0)
+    expect(snapshot.calculationFailureMessage).toContain('CRITICAL_PATH_CYCLE_DETECTED')
+  })
+
+  it('falls back to the last successful snapshot when a later recalculation fails', async () => {
+    mocks.tables.tasks = [
+      {
+        id: 'task-a',
+        project_id: 'project-cache-failure',
+        title: 'A',
+        start_date: '2026-04-01',
+        end_date: '2026-04-03',
+        planned_end_date: '2026-04-03',
+        dependencies: [],
+        is_critical: true,
+      },
+      {
+        id: 'task-b',
+        project_id: 'project-cache-failure',
+        title: 'B',
+        start_date: '2026-04-01',
+        end_date: '2026-04-08',
+        planned_end_date: '2026-04-08',
+        dependencies: [],
+        is_critical: false,
+      },
+    ]
+
+    const successSnapshot = await getProjectCriticalPathSnapshot('project-cache-failure')
+    expect(successSnapshot.displayTaskIds).toEqual(['task-b'])
+    expect(successSnapshot.calculatedAt).toBeTruthy()
+
+    mocks.tables.tasks = [
+      {
+        id: 'cycle-a',
+        project_id: 'project-cache-failure',
+        title: 'Cycle A',
+        start_date: '2026-04-01',
+        end_date: '2026-04-02',
+        planned_end_date: '2026-04-02',
+        dependencies: ['cycle-b'],
+        is_critical: false,
+      },
+      {
+        id: 'cycle-b',
+        project_id: 'project-cache-failure',
+        title: 'Cycle B',
+        start_date: '2026-04-01',
+        end_date: '2026-04-02',
+        planned_end_date: '2026-04-02',
+        dependencies: ['cycle-a'],
+        is_critical: false,
+      },
+    ]
+
+    const failedSnapshot = await getProjectCriticalPathSnapshot('project-cache-failure')
+
+    expect(failedSnapshot.calculationStatus).toBe('cached_after_failure')
+    expect(failedSnapshot.displayTaskIds).toEqual(successSnapshot.displayTaskIds)
+    expect(failedSnapshot.calculatedAt).toBe(successSnapshot.calculatedAt)
+    expect(failedSnapshot.calculationFailureMessage).toContain('CRITICAL_PATH_CYCLE_DETECTED')
   })
 
   it('rejects manual insert overrides without any anchor', async () => {

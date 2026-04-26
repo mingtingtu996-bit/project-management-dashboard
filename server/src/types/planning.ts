@@ -82,6 +82,10 @@ export interface BaselineVersion extends PlanningVersionBase {
   effective_to?: string | null
   revision_pool_count?: number
   observation_pool_count?: number
+  modified_item_count?: number
+  milestone_change_count?: number
+  critical_path_change_count?: number
+  mapping_affected_count?: number
 }
 
 export interface BaselineItem {
@@ -100,6 +104,8 @@ export interface BaselineItem {
   is_critical?: boolean
   mapping_status?: 'mapped' | 'pending' | 'missing' | 'merged'
   notes?: string | null
+  template_id?: string | null
+  template_node_id?: string | null
 }
 
 export interface MonthlyPlanVersion extends PlanningVersionBase {
@@ -157,7 +163,15 @@ export interface RevisionPoolCandidate {
   title: string
   reason: string
   severity: 'low' | 'medium' | 'high' | 'critical'
-  status: 'open' | 'submitted' | 'accepted' | 'rejected'
+  priority?: 'low' | 'medium' | 'high' | 'critical' | string | null
+  observation_window_start?: string | null
+  observation_window_end?: string | null
+  affects_critical_milestone?: boolean | null
+  consecutive_cross_month_count?: number | null
+  deferred_reason?: string | null
+  review_due_at?: string | null
+  reviewed_by?: string | null
+  status: 'open' | 'submitted' | 'accepted' | 'rejected' | 'deferred'
   submitted_at?: string | null
   reviewed_at?: string | null
   created_at?: string | null
@@ -221,6 +235,12 @@ export interface ObservationPoolReadRequest {
 export interface ObservationPoolReadResponse {
   items: RevisionPoolCandidate[]
   total: number
+  summary?: {
+    high_priority_count: number
+    consecutive_cross_month_count: number
+    critical_milestone_count: number
+    last_reviewed_at?: string | null
+  }
 }
 
 export interface ObservationPoolSubmitRequest {
@@ -232,6 +252,14 @@ export interface ObservationPoolSubmitRequest {
     source_type: RevisionPoolCandidate['source_type']
     source_id?: string | null
     severity?: RevisionPoolCandidate['severity']
+    priority?: RevisionPoolCandidate['priority']
+    observation_window_start?: string | null
+    observation_window_end?: string | null
+    affects_critical_milestone?: boolean | null
+    consecutive_cross_month_count?: number | null
+    deferred_reason?: string | null
+    review_due_at?: string | null
+    reviewed_by?: string | null
   }>
 }
 
@@ -566,6 +594,35 @@ export interface ProgressDeviationAttribution {
   }>
 }
 
+export interface ProgressDeviationMonthlyBucket {
+  month: string
+  on_track: number
+  delayed: number
+  carried_over: number
+  revised: number
+  unresolved: number
+}
+
+export interface ProgressDeviationResponsibilityContribution {
+  owner: string
+  count: number
+  percentage: number
+  task_ids: string[]
+}
+
+export interface ProgressDeviationCauseSummary {
+  reason: string
+  count: number
+  percentage: number
+}
+
+export interface ProgressDeviationChartData {
+  baselineDeviation: ProgressDeviationRow[]
+  monthlyFulfillment: ProgressDeviationMonthlyBucket[]
+  executionDeviation: ProgressDeviationRow[]
+  monthly_buckets: ProgressDeviationMonthlyBucket[]
+}
+
 export interface ProgressDeviationDataCompleteness {
   has_snapshot: boolean
   has_actual_progress: boolean
@@ -581,6 +638,7 @@ export interface ProgressDeviationRow {
   source_item_id?: string | null
   source_task_id?: string | null
   title: string
+  planned_date?: string | null
   planned_progress?: number | null
   actual_progress?: number | null
   actual_date?: string | null
@@ -649,6 +707,9 @@ export interface ProgressDeviationAnalysisResponse {
   mainlines: ProgressDeviationMainline[]
   mapping_monitoring: ProgressDeviationMappingMonitoring
   trend_events: ProgressDeviationTrendEvent[]
+  chart_data?: ProgressDeviationChartData | null
+  responsibility_contribution?: ProgressDeviationResponsibilityContribution[]
+  top_deviation_causes?: ProgressDeviationCauseSummary[]
   m1_m9_consistency?: MilestoneIntegrityReport
 }
 

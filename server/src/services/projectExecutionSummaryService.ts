@@ -1,14 +1,17 @@
-import { executeSQL, getProject, getRisks, getTasks } from './dbService.js'
+import { executeSQL, getProject, getRisks, getTasks, getIssues } from './dbService.js'
 import { calculateProjectHealth } from './projectHealthService.js'
+import { getCriticalPathTaskIds } from './criticalPathHelpers.js'
 import { logger } from '../middleware/logger.js'
 import type {
   DelayRequest,
+  Issue,
   MonthlyPlan,
   Notification,
   PlanningGovernanceState,
   Project,
   Risk,
   Task,
+  TaskBaselineItem,
 } from '../types/db.js'
 import {
   FAILED_ACCEPTANCE_STATUSES as FAILED_ACCEPTANCE_STATUS_VALUES,
@@ -93,6 +96,14 @@ export interface MilestoneOverviewItem {
   status: MilestoneLifecycleStatus
   statusLabel: string
   updatedAt: string
+  planned_date: string | null
+  current_planned_date: string | null
+  actual_date: string | null
+  parent_id: string | null
+  mapping_pending: boolean
+  merged_into: string | null
+  merged_into_name: string | null
+  non_base_labels: string[]
 }
 
 export interface MilestoneOverviewStats {
@@ -104,9 +115,44 @@ export interface MilestoneOverviewStats {
   completionRate: number
 }
 
+export interface MilestoneSummaryStats {
+  shiftedCount: number
+  baselineOnTimeCount: number
+  dueSoon30dCount: number
+  highRiskCount: number
+}
+
 export interface MilestoneOverview {
   items: MilestoneOverviewItem[]
   stats: MilestoneOverviewStats
+  summaryStats?: MilestoneSummaryStats
+  healthSummary?: {
+    status: 'normal' | 'needs_attention' | 'abnormal'
+    needsAttentionCount: number
+    mappingPendingCount: number
+    mergedCount: number
+    excessiveDeviationCount: number
+    incompleteDataCount: number
+  }
+}
+
+type DecoratedMilestoneTask = Task & {
+  milestone_mapping_pending?: boolean
+  milestone_merged_into?: string | null
+  milestone_merged_into_name?: string | null
+  milestone_non_base_labels?: string[]
+}
+
+type MilestoneBaselineSignal = {
+  mappingPending: boolean
+  mergedInto: string | null
+  mergedIntoName: string | null
+  labels: string[]
+}
+
+type MilestoneSignalBundle = {
+  baselineItemIds: Set<string>
+  signalsByRef: Map<string, MilestoneBaselineSignal>
 }
 
 export interface ProjectExecutionSummary {
@@ -130,6 +176,7 @@ export interface ProjectExecutionSummary {
   milestoneProgress: number
   riskCount: number
   activeRiskCount: number
+  activeIssueCount: number
   pendingConditionCount: number
   pendingConditionTaskCount: number
   activeObstacleCount: number
@@ -163,9 +210,17 @@ export interface ProjectExecutionSummary {
   planningGovernance: GovernanceStateSummary
 }
 
+export type GovernancePhase =
+  | 'free_edit'
+  | 'monthly_pending'
+  | 'formal_execution'
+  | 'pending_realign'
+  | 'reordering'
+  | 'closeout'
+
 const COMPLETED_STATUSES = new Set(['completed', 'done', '已完成'])
 const IN_PROGRESS_STATUSES = new Set(['in_progress', 'active', '进行中'])
-const CLOSED_RISK_STATUSES = new Set(['resolved', 'closed', 'mitigated', '已解决'])
+const CLOSED_RISK_STATUSES = new Set(['closed', '已关闭'])
 const SATISFIED_CONDITION_STATUSES = new Set(['completed', 'satisfied', 'confirmed', '已满足', '已确认'])
 const RESOLVED_OBSTACLE_STATUSES = new Set(['resolved', 'closed', '已解决'])
 
@@ -353,6 +408,55 @@ export function deriveMonthlyCloseStatus(
   return '进行中'
 }
 
+function deriveGovernancePhase(
+  monthlyPlans: MonthlyPlanRow[] = [],
+  governanceStates: PlanningGovernanceState[] = [],
+  planningGovernance: GovernanceStateSummary,
+  monthlyCloseStatus: MonthlyCloseStatus,
+  now = new Date(),
+): GovernancePhase {
+  const activeStates = governanceStates.filter((state) => state.status === 'active')
+  const activeKinds = new Set(activeStates.map((state) => String(state.kind ?? '').trim()).filter(Boolean))
+  const currentPlan = getCurrentMonthlyPlan(monthlyPlans, now)
+  const currentPlanStatus = normalizeStatus(currentPlan?.status)
+
+  const hasCloseoutSignal =
+    monthlyCloseStatus === '已超期' ||
+    planningGovernance.dashboardCloseoutOverdue ||
+    planningGovernance.dashboardForceUnlockAvailable ||
+    activeKinds.has('closeout_overdue_signal') ||
+    activeKinds.has('closeout_force_unlock')
+  if (hasCloseoutSignal) {
+    return 'closeout'
+  }
+
+  const hasReorderingSignal =
+    activeKinds.has('manual_reorder_session') ||
+    activeKinds.has('reorder_reminder') ||
+    activeKinds.has('reorder_escalation')
+  if (hasReorderingSignal) {
+    return 'reordering'
+  }
+
+  if (currentPlanStatus === 'pending_realign' || currentPlanStatus === 'revising') {
+    return 'pending_realign'
+  }
+
+  if (currentPlanStatus === 'draft') {
+    return 'monthly_pending'
+  }
+
+  if (currentPlanStatus === 'confirmed' || currentPlanStatus === 'closed') {
+    return 'formal_execution'
+  }
+
+  if (!currentPlan && activeStates.length === 0) {
+    return 'free_edit'
+  }
+
+  return 'monthly_pending'
+}
+
 function isShiftedMilestone(task: Partial<Task>): boolean {
   if (!task.is_milestone) return false
 
@@ -374,16 +478,18 @@ function getShiftedMilestoneCount(tasks: Task[]): number {
   return tasks.filter((task) => isShiftedMilestone(task)).length
 }
 
-function getCriticalPathAffectedTaskCount(
+async function getCriticalPathAffectedTaskCount(
+  projectId: string,
   tasks: Task[],
   pendingConditions: TaskConditionRow[],
   activeObstacles: TaskObstacleRow[],
-): number {
+): Promise<number> {
   const pendingConditionTaskIds = new Set(pendingConditions.map((item) => String(item.task_id ?? '')).filter(Boolean))
   const activeObstacleTaskIds = new Set(activeObstacles.map((item) => String(item.task_id ?? '')).filter(Boolean))
+  const criticalTaskIds = await getCriticalPathTaskIds(projectId)
 
   return tasks.filter((task) => {
-    if (!task.is_critical) return false
+    if (!criticalTaskIds.has(task.id)) return false
 
     const plannedEnd = getPlannedEndDate(task)
     const plannedTime = plannedEnd ? new Date(plannedEnd).getTime() : Number.NaN
@@ -469,8 +575,34 @@ export function summarizeUnreadWarningSignals(notifications: NotificationRow[] =
 function calculateOverallProgress(tasks: Task[]): number {
   const leafTasks = getLeafTasks(tasks)
   if (leafTasks.length === 0) return 0
-  const totalProgress = leafTasks.reduce((sum, task) => sum + Number(task.progress ?? 0), 0)
-  return Math.round(totalProgress / leafTasks.length)
+
+  let totalWeightedProgress = 0
+  let totalWeight = 0
+
+  for (const task of leafTasks) {
+    const progress = Number(task.progress ?? 0)
+
+    // Calculate planned duration in days
+    const startDate = task.planned_start_date || task.start_date
+    const endDate = task.planned_end_date || task.end_date
+
+    let weight = 1 // Default weight if no dates available
+
+    if (startDate && endDate) {
+      const start = new Date(startDate).getTime()
+      const end = new Date(endDate).getTime()
+
+      if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
+        weight = Math.max(1, Math.ceil((end - start) / 86400000)) // Duration in days, minimum 1
+      }
+    }
+
+    totalWeightedProgress += progress * weight
+    totalWeight += weight
+  }
+
+  if (totalWeight === 0) return 0
+  return Math.round(totalWeightedProgress / totalWeight)
 }
 
 function getNextMilestone(tasks: Task[]): NextMilestoneSummary | null {
@@ -541,12 +673,211 @@ function getMilestoneStatusLabel(status: MilestoneLifecycleStatus): string {
   }
 }
 
+const HIGH_RISK_MILESTONE_LABELS = new Set([
+  '待补映射',
+  '待人工承接',
+  '执行层已关闭',
+  '基线已移除',
+  '基线版本已移除',
+  '数据不完整',
+  '偏差过大',
+])
+
+function normalizeBaselineMappingStatus(value: unknown) {
+  const normalized = String(value ?? '').trim().toLowerCase()
+  if (normalized === 'pending' || normalized === 'missing' || normalized === 'merged' || normalized === 'mapped') {
+    return normalized
+  }
+  return 'mapped'
+}
+
+function pushUniqueLabel(target: string[], label: string) {
+  if (!label || target.includes(label)) return
+  target.push(label)
+}
+
+function buildMilestoneSignalBundle(items: TaskBaselineItem[]): MilestoneSignalBundle {
+  const itemById = new Map(items.map((item) => [item.id, item]))
+  const signalsByRef = new Map<string, MilestoneBaselineSignal>()
+  const itemsByRef = new Map<string, TaskBaselineItem[]>()
+
+  const attach = (ref: string | null | undefined, item: TaskBaselineItem) => {
+    const normalizedRef = String(ref ?? '').trim()
+    if (!normalizedRef) return
+    const list = itemsByRef.get(normalizedRef) ?? []
+    list.push(item)
+    itemsByRef.set(normalizedRef, list)
+  }
+
+  for (const item of items) {
+    attach(item.source_task_id ? `task:${item.source_task_id}` : null, item)
+    attach(item.source_milestone_id ? `milestone:${item.source_milestone_id}` : null, item)
+  }
+
+  for (const [ref, relatedItems] of itemsByRef.entries()) {
+    const orderedItems = relatedItems
+      .slice()
+      .sort((left, right) => Number(left.sort_order ?? 0) - Number(right.sort_order ?? 0))
+    const mergedRows = orderedItems.filter((item) => normalizeBaselineMappingStatus(item.mapping_status) === 'merged')
+    const mergeTarget =
+      mergedRows
+        .map((item) => itemById.get(String(item.parent_item_id ?? '').trim()) ?? null)
+        .find((item): item is TaskBaselineItem => Boolean(item))
+      ?? (orderedItems.length > 1 ? orderedItems[0] : null)
+    const labels: string[] = []
+    const mappingPending =
+      orderedItems.some((item) => {
+        const status = normalizeBaselineMappingStatus(item.mapping_status)
+        return status === 'pending' || status === 'missing'
+      }) || orderedItems.length > 1
+
+    if (mappingPending) {
+      pushUniqueLabel(labels, '待补映射')
+    }
+    if (orderedItems.length > 1) {
+      pushUniqueLabel(labels, '待人工承接')
+    }
+    if (mergedRows.length > 0) {
+      pushUniqueLabel(labels, '已合并映射')
+    }
+
+    signalsByRef.set(ref, {
+      mappingPending,
+      mergedInto: mergeTarget?.id ?? null,
+      mergedIntoName: mergeTarget?.title ?? null,
+      labels,
+    })
+  }
+
+  return {
+    baselineItemIds: new Set(items.map((item) => String(item.id))),
+    signalsByRef,
+  }
+}
+
+async function loadMilestoneSignalBundles(projectIds: string[]): Promise<Map<string, MilestoneSignalBundle>> {
+  const normalizedProjectIds = [...new Set(projectIds.map((projectId) => String(projectId ?? '').trim()).filter(Boolean))]
+  if (normalizedProjectIds.length === 0) {
+    return new Map()
+  }
+
+  const projectPlaceholders = normalizedProjectIds.map(() => '?').join(', ')
+  const baselineRows = await executeSQL<Array<{
+    id: string
+    project_id: string
+    status?: string | null
+    version?: number | null
+  }>[number]>(
+    `SELECT id, project_id, status, version
+       FROM task_baselines
+      WHERE project_id IN (${projectPlaceholders})
+        AND status IN ('confirmed', 'pending_realign', 'revising', 'archived')
+      ORDER BY project_id ASC, version DESC, updated_at DESC, created_at DESC`,
+    normalizedProjectIds,
+  )
+
+  const latestBaselineIdByProject = new Map<string, string>()
+  for (const row of baselineRows) {
+    const projectId = String(row.project_id ?? '').trim()
+    if (!projectId || latestBaselineIdByProject.has(projectId)) continue
+    latestBaselineIdByProject.set(projectId, String(row.id))
+  }
+
+  const baselineIds = [...latestBaselineIdByProject.values()]
+  if (baselineIds.length === 0) {
+    return new Map()
+  }
+
+  const baselinePlaceholders = baselineIds.map(() => '?').join(', ')
+  const baselineItems = await executeSQL<TaskBaselineItem>(
+    `SELECT id, project_id, baseline_version_id, parent_item_id, source_task_id, source_milestone_id,
+            title, sort_order, mapping_status
+       FROM task_baseline_items
+      WHERE baseline_version_id IN (${baselinePlaceholders})`,
+    baselineIds,
+  )
+
+  const baselineIdToProjectId = new Map(
+    [...latestBaselineIdByProject.entries()].map(([projectId, baselineId]) => [baselineId, projectId]),
+  )
+  const itemsByProject = new Map<string, TaskBaselineItem[]>()
+  for (const item of baselineItems) {
+    const projectId = baselineIdToProjectId.get(String(item.baseline_version_id ?? '').trim()) ?? String(item.project_id ?? '').trim()
+    if (!projectId) continue
+    const list = itemsByProject.get(projectId) ?? []
+    list.push(item)
+    itemsByProject.set(projectId, list)
+  }
+
+  const bundles = new Map<string, MilestoneSignalBundle>()
+  for (const projectId of normalizedProjectIds) {
+    bundles.set(projectId, buildMilestoneSignalBundle(itemsByProject.get(projectId) ?? []))
+  }
+  return bundles
+}
+
+function decorateTasksWithMilestoneSignals(tasks: Task[], bundle?: MilestoneSignalBundle): Task[] {
+  if (!bundle) return tasks
+
+  return tasks.map((task) => {
+    if (!task.is_milestone) return task
+
+    const taskSignal = bundle.signalsByRef.get(`task:${task.id}`)
+    const milestoneSignal = bundle.signalsByRef.get(`milestone:${task.id}`)
+    const labels = [
+      ...(taskSignal?.labels ?? []),
+      ...(milestoneSignal?.labels ?? []),
+    ].filter(Boolean)
+
+    if (task.baseline_item_id && !bundle.baselineItemIds.has(String(task.baseline_item_id))) {
+      pushUniqueLabel(labels, '基线版本已移除')
+    }
+
+    return {
+      ...task,
+      milestone_mapping_pending: Boolean(taskSignal?.mappingPending || milestoneSignal?.mappingPending),
+      milestone_merged_into: taskSignal?.mergedInto ?? milestoneSignal?.mergedInto ?? null,
+      milestone_merged_into_name: taskSignal?.mergedIntoName ?? milestoneSignal?.mergedIntoName ?? null,
+      milestone_non_base_labels: [...new Set(labels)],
+    } satisfies DecoratedMilestoneTask
+  })
+}
+
 export function buildMilestoneOverview(tasks: Task[] = []): MilestoneOverview {
   const items = tasks
     .filter((task) => task.is_milestone)
     .map((task) => {
+      const milestoneTask = task as DecoratedMilestoneTask
       const status = getMilestoneLifecycleStatus(task)
       const targetDate = getMilestoneTargetDate(task)
+
+      const non_base_labels = [...new Set(milestoneTask.milestone_non_base_labels ?? [])]
+
+      // 执行层已关闭: task completed but milestone not passed
+      if (task.status === 'completed' && task.progress < 100) {
+        pushUniqueLabel(non_base_labels, '执行层已关闭')
+      }
+
+      // 数据不完整: missing critical date fields
+      if (!(task.baseline_end || task.baseline_start) || !task.planned_end_date) {
+        pushUniqueLabel(non_base_labels, '数据不完整')
+      }
+
+      // 偏差过大: actual vs planned deviation exceeds threshold (30 days)
+      const baselineTargetDate = task.baseline_end || task.baseline_start || null
+      if (task.actual_end_date && baselineTargetDate) {
+        const actualDate = new Date(task.actual_end_date)
+        const plannedDate = new Date(baselineTargetDate)
+        const deviationDays = Math.abs((actualDate.getTime() - plannedDate.getTime()) / (1000 * 60 * 60 * 24))
+        if (deviationDays > 30) {
+          pushUniqueLabel(non_base_labels, '偏差过大')
+        }
+      }
+
+      // 未关联基线: is_milestone=true but no baseline_item_id
+      if (task.is_milestone && !task.baseline_item_id) {
+        pushUniqueLabel(non_base_labels, '未关联基线')
+      }
 
       return {
         id: String(task.id ?? ''),
@@ -557,6 +888,14 @@ export function buildMilestoneOverview(tasks: Task[] = []): MilestoneOverview {
         status,
         statusLabel: getMilestoneStatusLabel(status),
         updatedAt: String(task.updated_at || task.created_at || '').trim(),
+        planned_date: String(task.baseline_end || task.baseline_start || '').trim() || null,
+        current_planned_date: String(task.planned_end_date || task.end_date || '').trim() || null,
+        actual_date: String(task.actual_end_date || '').trim() || null,
+        parent_id: task.parent_id ? String(task.parent_id) : null,
+        mapping_pending: Boolean(milestoneTask.milestone_mapping_pending),
+        merged_into: milestoneTask.milestone_merged_into ?? null,
+        merged_into_name: milestoneTask.milestone_merged_into_name ?? null,
+        non_base_labels,
       }
     })
     .sort((left, right) => {
@@ -586,6 +925,41 @@ export function buildMilestoneOverview(tasks: Task[] = []): MilestoneOverview {
   const overdue = items.filter((item) => item.status === 'overdue').length
   const upcomingSoon = items.filter((item) => item.status === 'soon').length
   const pending = items.length - completed
+  const summaryStats: MilestoneSummaryStats = {
+    shiftedCount: getShiftedMilestoneCount(tasks),
+    baselineOnTimeCount: tasks.filter(
+      (task) =>
+        task.is_milestone
+        && isCompletedTask(task)
+        && Boolean(String(task.actual_end_date ?? '').trim())
+        && !isShiftedMilestone(task),
+    ).length,
+    dueSoon30dCount: items.filter((item) => {
+      if (item.status === 'completed') return false
+      if (!item.current_planned_date) return false
+      const plannedTime = new Date(item.current_planned_date).getTime()
+      if (Number.isNaN(plannedTime)) return false
+      const daysUntil = Math.ceil((plannedTime - Date.now()) / 86400000)
+      return daysUntil >= 0 && daysUntil <= 30
+    }).length,
+    highRiskCount: items.filter((item) => {
+      if (item.status === 'overdue') return true
+      return item.non_base_labels.some((label) => HIGH_RISK_MILESTONE_LABELS.has(label))
+    }).length,
+  }
+
+  const mappingPendingCount = items.filter((item) => item.mapping_pending).length
+  const mergedCount = items.filter((item) => item.merged_into !== null).length
+  const excessiveDeviationCount = items.filter((item) => item.non_base_labels.includes('偏差过大')).length
+  const incompleteDataCount = items.filter((item) => item.non_base_labels.includes('数据不完整')).length
+  const needsAttentionCount = items.filter((item) => item.non_base_labels.length > 0).length
+
+  const healthStatus: 'normal' | 'needs_attention' | 'abnormal' =
+    needsAttentionCount === 0
+      ? 'normal'
+      : needsAttentionCount < 3
+        ? 'needs_attention'
+        : 'abnormal'
 
   return {
     items,
@@ -596,6 +970,15 @@ export function buildMilestoneOverview(tasks: Task[] = []): MilestoneOverview {
       overdue,
       upcomingSoon,
       completionRate: items.length > 0 ? Math.round((completed / items.length) * 100) : 0,
+    },
+    summaryStats,
+    healthSummary: {
+      status: healthStatus,
+      needsAttentionCount,
+      mappingPendingCount,
+      mergedCount,
+      excessiveDeviationCount,
+      incompleteDataCount,
     },
   }
 }
@@ -679,10 +1062,11 @@ export function summarizeSupplementaryProjectData(input: {
   }
 }
 
-function calculateSummaryForProject(
+async function calculateSummaryForProject(
   project: Project,
   tasks: Task[],
   risks: Risk[],
+  issues: Issue[],
   conditions: TaskConditionRow[],
   obstacles: TaskObstacleRow[],
   delayRequests: DelayRequestRow[],
@@ -691,7 +1075,7 @@ function calculateSummaryForProject(
   supplementary: SupplementaryProjectSummary,
   governanceStates: PlanningGovernanceState[] = [],
   health: { score: number; status: ProjectExecutionSummary['healthStatus'] },
-): ProjectExecutionSummary {
+): Promise<ProjectExecutionSummary> {
   const leafTasks = getLeafTasks(tasks)
   const completedTaskCount = leafTasks.filter(isCompletedTask).length
   const inProgressTaskCount = leafTasks.filter(isInProgressTask).length
@@ -700,6 +1084,10 @@ function calculateSummaryForProject(
   const completedMilestones = milestoneOverview.stats.completed
   const milestoneProgress = milestoneOverview.stats.completionRate
   const activeRisks = risks.filter(isActiveRisk)
+  const activeIssues = issues.filter((issue) => {
+    const status = String(issue.status ?? '').trim().toLowerCase()
+    return !['resolved', 'closed', '已解决', '已关闭'].includes(status)
+  })
   const pendingConditions = conditions.filter(isPendingCondition)
   const activeObstacles = obstacles.filter(isActiveObstacle)
   const pendingConditionTaskCount = new Set(pendingConditions.map((item) => item.task_id).filter(Boolean)).size
@@ -710,9 +1098,10 @@ function calculateSummaryForProject(
   const attentionRequired = health.score < 60 || milestoneOverview.stats.overdue > 0
   const monthlyCloseStatus = deriveMonthlyCloseStatus(monthlyPlans, governanceStates)
   const closeoutOverdueDays = getCloseoutOverdueDays(governanceStates)
+  const governancePhase = deriveGovernancePhase(monthlyPlans, governanceStates, planningGovernance, monthlyCloseStatus)
   const warningSignals = summarizeUnreadWarningSignals(notifications)
   const shiftedMilestoneCount = getShiftedMilestoneCount(tasks)
-  const criticalPathAffectedTasks = getCriticalPathAffectedTaskCount(leafTasks, pendingConditions, activeObstacles)
+  const criticalPathAffectedTasks = await getCriticalPathAffectedTaskCount(project.id, leafTasks, pendingConditions, activeObstacles)
   const plannedEndDate = project.planned_end_date || project.end_date || null
   const daysUntilPlannedEnd = plannedEndDate
     ? Math.ceil((new Date(plannedEndDate).getTime() - Date.now()) / 86400000)
@@ -739,6 +1128,7 @@ function calculateSummaryForProject(
     milestoneProgress,
     riskCount: activeRisks.length,
     activeRiskCount: activeRisks.length,
+    activeIssueCount: activeIssues.length,
     pendingConditionCount: pendingConditions.length,
     pendingConditionTaskCount,
     activeObstacleCount: activeObstacles.length,
@@ -769,7 +1159,10 @@ function calculateSummaryForProject(
     healthStatus: health.status,
     nextMilestone: getNextMilestone(tasks),
     milestoneOverview,
-    planningGovernance,
+    planningGovernance: {
+      ...planningGovernance,
+      governancePhase,
+    },
   }
 }
 
@@ -784,6 +1177,7 @@ export interface GovernanceStateSummary {
   dashboardCloseoutOverdue: boolean
   dashboardForceUnlockAvailable: boolean
   hasActiveGovernanceSignal: boolean
+  governancePhase?: GovernancePhase
 }
 
 function getPersistedProjectHealth(project: Pick<Project, 'health_score' | 'health_status'>): {
@@ -842,7 +1236,7 @@ async function loadSummaryProjects(): Promise<Project[]> {
 async function loadSummaryTasks(): Promise<Task[]> {
   return executeSQL<Task>(
     `SELECT id, project_id, parent_id, title, description, status, progress, is_milestone,
-            planned_end_date, end_date, actual_end_date, delay_count, is_critical,
+            planned_end_date, end_date, actual_end_date, baseline_start, baseline_end, baseline_item_id, delay_count, is_critical,
             created_at, updated_at
        FROM tasks`,
   )
@@ -862,6 +1256,7 @@ export async function getProjectExecutionSummary(projectId: string): Promise<Pro
   const [
     tasks,
     risks,
+    issues,
     conditions,
     obstacles,
     delayRequests,
@@ -871,9 +1266,11 @@ export async function getProjectExecutionSummary(projectId: string): Promise<Pro
     acceptancePlans,
     constructionDrawings,
     governanceStates,
+    milestoneSignalBundles,
   ] = await Promise.all([
     getTasks(projectId),
     getRisks(projectId),
+    getIssues(projectId),
     executeSQL<TaskConditionRow>('SELECT * FROM task_conditions WHERE project_id = ? ORDER BY created_at ASC', [projectId]),
     executeSQL<TaskObstacleRow>('SELECT * FROM task_obstacles WHERE project_id = ? ORDER BY created_at DESC', [projectId]),
     executeSQL<DelayRequestRow>('SELECT id, project_id, task_id, status, created_at, updated_at FROM delay_requests WHERE project_id = ? ORDER BY created_at DESC', [projectId]),
@@ -883,13 +1280,16 @@ export async function getProjectExecutionSummary(projectId: string): Promise<Pro
     executeSQL<AcceptancePlanRow>('SELECT id, project_id, status FROM acceptance_plans WHERE project_id = ? ORDER BY created_at ASC', [projectId]),
     executeSQL<ConstructionDrawingRow>('SELECT id, project_id, status, review_status FROM construction_drawings WHERE project_id = ? ORDER BY created_at ASC', [projectId]),
     loadPlanningGovernanceStates(projectId),
+    loadMilestoneSignalBundles([projectId]),
   ])
+  const decoratedTasks = decorateTasksWithMilestoneSignals(tasks, milestoneSignalBundles.get(projectId))
   const health = await resolveSummaryHealth(project)
 
-  return calculateSummaryForProject(
+  return await calculateSummaryForProject(
     project,
-    tasks,
+    decoratedTasks,
     risks,
+    issues,
     conditions,
     obstacles,
     delayRequests,
@@ -910,6 +1310,7 @@ export async function getAllProjectExecutionSummaries(): Promise<ProjectExecutio
     projects,
     tasks,
     risks,
+    issues,
     conditions,
     obstacles,
     delayRequests,
@@ -923,6 +1324,7 @@ export async function getAllProjectExecutionSummaries(): Promise<ProjectExecutio
     loadSummaryProjects(),
     loadSummaryTasks(),
     loadSummaryRisks(),
+    executeSQL<Issue>('SELECT id, project_id, status FROM issues'),
     executeSQL<TaskConditionRow>('SELECT id, project_id, task_id, is_satisfied, status FROM task_conditions'),
     executeSQL<TaskObstacleRow>('SELECT id, project_id, task_id, is_resolved, status FROM task_obstacles'),
     executeSQL<DelayRequestRow>('SELECT id, project_id, task_id, status, created_at, updated_at FROM delay_requests'),
@@ -933,9 +1335,15 @@ export async function getAllProjectExecutionSummaries(): Promise<ProjectExecutio
     executeSQL<ConstructionDrawingRow>('SELECT id, project_id, status, review_status FROM construction_drawings'),
     loadPlanningGovernanceStates(),
   ])
+  const milestoneSignalBundles = await loadMilestoneSignalBundles(projects.map((project) => project.id))
+  const decoratedTasks = tasks.map((task) => {
+    const bundle = milestoneSignalBundles.get(task.project_id)
+    return decorateTasksWithMilestoneSignals([task], bundle)[0] ?? task
+  })
 
   const tasksByProject = new Map<string, Task[]>()
   const risksByProject = new Map<string, Risk[]>()
+  const issuesByProject = new Map<string, Issue[]>()
   const conditionsByProject = new Map<string, TaskConditionRow[]>()
   const obstaclesByProject = new Map<string, TaskObstacleRow[]>()
   const delayRequestsByProject = new Map<string, DelayRequestRow[]>()
@@ -946,7 +1354,7 @@ export async function getAllProjectExecutionSummaries(): Promise<ProjectExecutio
   const constructionDrawingsByProject = new Map<string, ConstructionDrawingRow[]>()
   const governanceStatesByProject = new Map<string, PlanningGovernanceState[]>()
 
-  for (const task of tasks) {
+  for (const task of decoratedTasks) {
     const list = tasksByProject.get(task.project_id) || []
     list.push(task)
     tasksByProject.set(task.project_id, list)
@@ -956,6 +1364,12 @@ export async function getAllProjectExecutionSummaries(): Promise<ProjectExecutio
     const list = risksByProject.get(risk.project_id) || []
     list.push(risk)
     risksByProject.set(risk.project_id, list)
+  }
+
+  for (const issue of issues) {
+    const list = issuesByProject.get(issue.project_id) || []
+    list.push(issue)
+    issuesByProject.set(issue.project_id, list)
   }
 
   for (const condition of conditions) {
@@ -1038,23 +1452,26 @@ export async function getAllProjectExecutionSummaries(): Promise<ProjectExecutio
   )
   const healthByProject = new Map(healthResults)
 
-  return projects.map((project) =>
-    calculateSummaryForProject(
-      project,
-      tasksByProject.get(project.id) || [],
-      risksByProject.get(project.id) || [],
-      conditionsByProject.get(project.id) || [],
-      obstaclesByProject.get(project.id) || [],
-      delayRequestsByProject.get(project.id) || [],
-      monthlyPlansByProject.get(project.id) || [],
-      notificationsByProject.get(project.id) || [],
-      summarizeSupplementaryProjectData({
-        preMilestones: preMilestonesByProject.get(project.id) || [],
-        acceptancePlans: acceptancePlansByProject.get(project.id) || [],
-        constructionDrawings: constructionDrawingsByProject.get(project.id) || [],
-      }),
-      governanceStatesByProject.get(project.id) || [],
-      healthByProject.get(project.id) || getPersistedProjectHealth(project),
+  return await Promise.all(
+    projects.map(async (project) =>
+      await calculateSummaryForProject(
+        project,
+        tasksByProject.get(project.id) || [],
+        risksByProject.get(project.id) || [],
+        issuesByProject.get(project.id) || [],
+        conditionsByProject.get(project.id) || [],
+        obstaclesByProject.get(project.id) || [],
+        delayRequestsByProject.get(project.id) || [],
+        monthlyPlansByProject.get(project.id) || [],
+        notificationsByProject.get(project.id) || [],
+        summarizeSupplementaryProjectData({
+          preMilestones: preMilestonesByProject.get(project.id) || [],
+          acceptancePlans: acceptancePlansByProject.get(project.id) || [],
+          constructionDrawings: constructionDrawingsByProject.get(project.id) || [],
+        }),
+        governanceStatesByProject.get(project.id) || [],
+        healthByProject.get(project.id) || getPersistedProjectHealth(project),
+      ),
     ),
   )
 }

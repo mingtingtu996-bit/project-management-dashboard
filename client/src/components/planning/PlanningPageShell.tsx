@@ -31,8 +31,6 @@ export function PlanningPageShell({
   children,
   className,
 }: PlanningPageShellProps) {
-  void description
-
   return (
     <div data-testid="planning-shared-shell" className={cn('space-y-4 px-4 py-5 sm:px-6 lg:px-8', className)}>
       <Card variant="detail" className="overflow-hidden">
@@ -52,6 +50,7 @@ export function PlanningPageShell({
                 </div>
                 <div className="space-y-1">
                   <h1 className="text-2xl font-semibold tracking-tight text-slate-900 sm:text-3xl">{title}</h1>
+                  {description && <p className="text-sm text-slate-500 mt-1">{description}</p>}
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-2">{actions}</div>

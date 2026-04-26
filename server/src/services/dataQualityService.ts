@@ -1,4 +1,5 @@
 ﻿import { v4 as uuidv4 } from 'uuid'
+import { isCriticalPathTask, getCriticalPathTaskIds } from './criticalPathHelpers.js'
 import { normalizeProjectPermissionLevel } from '../auth/access.js'
 import type {
   DataConfidenceSnapshot,
@@ -681,9 +682,10 @@ export class DataQualityService {
     return { tasks, conditions, snapshots }
   }
 
-  private detectTrendFindings(projectId: string, tasks: Task[]): DataQualityFindingDraft[] {
+  private async detectTrendFindings(projectId: string, tasks: Task[]): Promise<DataQualityFindingDraft[]> {
     const nowAt = Date.now()
     const findings: DataQualityFindingDraft[] = []
+    const criticalTaskIds = await getCriticalPathTaskIds(projectId)
 
     for (const task of tasks) {
       if (!isInProgressTask(task) || isCompletedTask(task)) continue
@@ -702,7 +704,8 @@ export class DataQualityService {
 
       const progressRate = clamp(Number(task.progress ?? 0) / 100, 0, 1)
       const deviationRatio = progressRate / timeConsumedRate
-      const focusThreshold = task.is_critical ? 0.8 : 0.7
+      const isCritical = criticalTaskIds.has(task.id)
+      const focusThreshold = isCritical ? 0.8 : 0.7
 
       let severity: FindingSeverity | null = null
       if (deviationRatio < 0.5 && remainingDays < 3) {
@@ -731,7 +734,7 @@ export class DataQualityService {
           progress_rate: roundScore(progressRate),
           time_consumed_rate: roundScore(timeConsumedRate),
           remaining_days: remainingDays,
-          is_critical_task: Boolean(task.is_critical),
+          is_critical_task: isCritical,
           assignee_name: task.assignee_name ?? task.assignee ?? null,
           participant_unit_name: task.participant_unit_name ?? task.assignee_unit ?? null,
         },
@@ -741,9 +744,10 @@ export class DataQualityService {
     return findings
   }
 
-  private detectSnapshotGapFindings(projectId: string, tasks: Task[], latestSnapshots: Map<string, TaskProgressSnapshot>): DataQualityFindingDraft[] {
+  private async detectSnapshotGapFindings(projectId: string, tasks: Task[], latestSnapshots: Map<string, TaskProgressSnapshot>): Promise<DataQualityFindingDraft[]> {
     const nowAt = Date.now()
     const findings: DataQualityFindingDraft[] = []
+    const criticalTaskIds = await getCriticalPathTaskIds(projectId)
 
     for (const task of tasks) {
       if (!isInProgressTask(task) || isCompletedTask(task)) continue
@@ -762,6 +766,7 @@ export class DataQualityService {
       if (gapDays < 3) continue
 
       const severity: FindingSeverity = gapDays >= 7 ? 'critical' : 'warning'
+      const isCritical = criticalTaskIds.has(task.id)
       findings.push({
         finding_key: buildFindingKey('SNAPSHOT_GAP', task.id),
         project_id: projectId,
@@ -770,7 +775,7 @@ export class DataQualityService {
         rule_type: 'anomaly',
         severity,
         dimension_key: `task:${task.id}`,
-        summary: `任务“${task.title}”最近 ${gapDays} 天没有新的进度快照，请尽快补录。`,
+        summary: `任务”${task.title}”最近 ${gapDays} 天没有新的进度快照，请尽快补录。`,
         details_json: {
           task_id: task.id,
           task_title: task.title,
@@ -778,7 +783,7 @@ export class DataQualityService {
           latest_snapshot_date: latestSnapshot?.snapshot_date ?? latestSnapshot?.created_at ?? null,
           assignee_name: task.assignee_name ?? task.assignee ?? null,
           participant_unit_name: task.participant_unit_name ?? task.assignee_unit ?? null,
-          is_critical_task: Boolean(task.is_critical),
+          is_critical_task: isCritical,
         },
       })
     }
@@ -786,8 +791,9 @@ export class DataQualityService {
     return findings
   }
 
-  private detectProgressJumpFindings(projectId: string, tasks: Task[], snapshotsByTask: Map<string, TaskProgressSnapshot[]>): DataQualityFindingDraft[] {
+  private async detectProgressJumpFindings(projectId: string, tasks: Task[], snapshotsByTask: Map<string, TaskProgressSnapshot[]>): Promise<DataQualityFindingDraft[]> {
     const findings: DataQualityFindingDraft[] = []
+    const criticalTaskIds = await getCriticalPathTaskIds(projectId)
 
     for (const task of tasks) {
       const snapshots = snapshotsByTask.get(task.id) ?? []
@@ -804,6 +810,7 @@ export class DataQualityService {
       if (progressDelta < 40) continue
 
       const severity: FindingSeverity = progressDelta >= 60 || daysBetween <= 1 ? 'critical' : 'warning'
+      const isCritical = criticalTaskIds.has(task.id)
       findings.push({
         finding_key: buildFindingKey('PROGRESS_JUMP', task.id),
         project_id: projectId,
@@ -812,7 +819,7 @@ export class DataQualityService {
         rule_type: 'anomaly',
         severity,
         dimension_key: `task:${task.id}`,
-        summary: `任务“${task.title}”在 ${daysBetween} 天内进度跳变 ${progressDelta}%，请核对填报依据。`,
+        summary: `任务”${task.title}”在 ${daysBetween} 天内进度跳变 ${progressDelta}%，请核对填报依据。`,
         details_json: {
           task_id: task.id,
           task_title: task.title,
@@ -822,7 +829,7 @@ export class DataQualityService {
           previous_progress: previous.progress,
           assignee_name: task.assignee_name ?? task.assignee ?? null,
           participant_unit_name: task.participant_unit_name ?? task.assignee_unit ?? null,
-          is_critical_task: Boolean(task.is_critical),
+          is_critical_task: isCritical,
         },
       })
     }
@@ -830,9 +837,10 @@ export class DataQualityService {
     return findings
   }
 
-  private detectProgressTimeMismatchFindings(projectId: string, tasks: Task[]): DataQualityFindingDraft[] {
+  private async detectProgressTimeMismatchFindings(projectId: string, tasks: Task[]): Promise<DataQualityFindingDraft[]> {
     const nowAt = Date.now()
     const findings: DataQualityFindingDraft[] = []
+    const criticalTaskIds = await getCriticalPathTaskIds(projectId)
 
     for (const task of tasks) {
       const startAt = toTimestamp(resolveTaskStart(task))
@@ -855,6 +863,7 @@ export class DataQualityService {
 
       if (!severity) continue
 
+      const isCritical = criticalTaskIds.has(task.id)
       findings.push({
         finding_key: buildFindingKey('PROGRESS_TIME_MISMATCH', task.id),
         project_id: projectId,
@@ -863,7 +872,7 @@ export class DataQualityService {
         rule_type: 'anomaly',
         severity,
         dimension_key: `task:${task.id}`,
-        summary: `任务“${task.title}”的工期消耗与当前进度明显不匹配，请复核填报真实性。`,
+        summary: `任务”${task.title}”的工期消耗与当前进度明显不匹配，请复核填报真实性。`,
         details_json: {
           task_id: task.id,
           task_title: task.title,
@@ -871,7 +880,7 @@ export class DataQualityService {
           progress_rate: roundScore(progressRate),
           assignee_name: task.assignee_name ?? task.assignee ?? null,
           participant_unit_name: task.participant_unit_name ?? task.assignee_unit ?? null,
-          is_critical_task: Boolean(task.is_critical),
+          is_critical_task: isCritical,
         },
       })
     }
@@ -919,9 +928,10 @@ export class DataQualityService {
     return findings
   }
 
-  private detectParentChildFindings(projectId: string, tasks: Task[]): DataQualityFindingDraft[] {
+  private async detectParentChildFindings(projectId: string, tasks: Task[]): Promise<DataQualityFindingDraft[]> {
     const findings: DataQualityFindingDraft[] = []
     const childrenByParent = new Map<string, Task[]>()
+    const criticalTaskIds = await getCriticalPathTaskIds(projectId)
 
     for (const task of tasks) {
       if (!task.parent_id) continue
@@ -936,6 +946,7 @@ export class DataQualityService {
 
       const unfinishedChildren = children.filter((child) => !isCompletedTask(child))
       if (unfinishedChildren.length > 0 && isCompletedTask(task)) {
+        const isCritical = criticalTaskIds.has(task.id)
         findings.push({
           finding_key: buildFindingKey('PARENT_CHILD_INCONSISTENT', task.id),
           project_id: projectId,
@@ -944,7 +955,7 @@ export class DataQualityService {
           rule_type: 'cross_check',
           severity: 'critical',
           dimension_key: `task:${task.id}`,
-          summary: `任务“${task.title}”已标记完成，但仍有 ${unfinishedChildren.length} 个子项未完成。`,
+          summary: `任务”${task.title}”已标记完成，但仍有 ${unfinishedChildren.length} 个子项未完成。`,
           details_json: {
             task_id: task.id,
             task_title: task.title,
@@ -952,7 +963,7 @@ export class DataQualityService {
             child_task_titles: unfinishedChildren.map((child) => child.title),
             assignee_name: task.assignee_name ?? task.assignee ?? null,
             participant_unit_name: task.participant_unit_name ?? task.assignee_unit ?? null,
-            is_critical_task: Boolean(task.is_critical),
+            is_critical_task: isCritical,
           },
         })
       }
@@ -961,9 +972,10 @@ export class DataQualityService {
     return findings
   }
 
-  private detectDependencyFindings(projectId: string, tasks: Task[]): DataQualityFindingDraft[] {
+  private async detectDependencyFindings(projectId: string, tasks: Task[]): Promise<DataQualityFindingDraft[]> {
     const findings: DataQualityFindingDraft[] = []
     const taskMap = new Map(tasks.map((task) => [task.id, task]))
+    const criticalTaskIds = await getCriticalPathTaskIds(projectId)
 
     for (const task of tasks) {
       const dependencyIds = Array.isArray(task.dependencies) ? task.dependencies : []
@@ -975,15 +987,16 @@ export class DataQualityService {
 
       if (blockedBy.length === 0) continue
 
+      const isCritical = criticalTaskIds.has(task.id)
       findings.push({
         finding_key: buildFindingKey('DEPENDENCY_INCONSISTENT', task.id),
         project_id: projectId,
         task_id: task.id,
         rule_code: 'DEPENDENCY_INCONSISTENT',
         rule_type: 'cross_check',
-        severity: task.is_critical ? 'critical' : 'warning',
+        severity: isCritical ? 'critical' : 'warning',
         dimension_key: `task:${task.id}`,
-        summary: `任务“${task.title}”已开始，但前置任务仍有 ${blockedBy.length} 项未完成。`,
+        summary: `任务”${task.title}”已开始，但前置任务仍有 ${blockedBy.length} 项未完成。`,
         details_json: {
           task_id: task.id,
           task_title: task.title,
@@ -991,7 +1004,7 @@ export class DataQualityService {
           dependency_task_titles: blockedBy.map((dependency) => dependency.title),
           assignee_name: task.assignee_name ?? task.assignee ?? null,
           participant_unit_name: task.participant_unit_name ?? task.assignee_unit ?? null,
-          is_critical_task: Boolean(task.is_critical),
+          is_critical_task: isCritical,
         },
       })
     }
@@ -999,9 +1012,10 @@ export class DataQualityService {
     return findings
   }
 
-  private detectMilestonePredecessorFindings(projectId: string, tasks: Task[]): DataQualityFindingDraft[] {
+  private async detectMilestonePredecessorFindings(projectId: string, tasks: Task[]): Promise<DataQualityFindingDraft[]> {
     const findings: DataQualityFindingDraft[] = []
     const taskMap = new Map(tasks.map((task) => [task.id, task]))
+    const criticalTaskIds = await getCriticalPathTaskIds(projectId)
 
     for (const task of tasks) {
       if (!task.is_milestone || !isCompletedTask(task)) continue
@@ -1014,6 +1028,7 @@ export class DataQualityService {
 
       if (unfinished.length === 0) continue
 
+      const isCritical = criticalTaskIds.has(task.id)
       findings.push({
         finding_key: buildFindingKey('MILESTONE_PREDECESSOR_INCONSISTENT', task.id),
         project_id: projectId,
@@ -1022,7 +1037,7 @@ export class DataQualityService {
         rule_type: 'cross_check',
         severity: 'critical',
         dimension_key: `task:${task.id}`,
-        summary: `关键节点“${task.title}”已标记完成，但前置任务尚未全部完成。`,
+        summary: `关键节点”${task.title}”已标记完成，但前置任务尚未全部完成。`,
         details_json: {
           task_id: task.id,
           task_title: task.title,
@@ -1030,7 +1045,7 @@ export class DataQualityService {
           dependency_task_titles: unfinished.map((dependency) => dependency.title),
           assignee_name: task.assignee_name ?? task.assignee ?? null,
           participant_unit_name: task.participant_unit_name ?? task.assignee_unit ?? null,
-          is_critical_task: Boolean(task.is_critical),
+          is_critical_task: isCritical,
         },
       })
     }
@@ -1038,9 +1053,10 @@ export class DataQualityService {
     return findings
   }
 
-  private detectConditionFindings(projectId: string, tasks: Task[], conditions: TaskCondition[]): DataQualityFindingDraft[] {
+  private async detectConditionFindings(projectId: string, tasks: Task[], conditions: TaskCondition[]): Promise<DataQualityFindingDraft[]> {
     const findings: DataQualityFindingDraft[] = []
     const pendingConditionByTask = new Map<string, TaskCondition[]>()
+    const criticalTaskIds = await getCriticalPathTaskIds(projectId)
 
     for (const condition of conditions) {
       const isSatisfied = condition.is_satisfied === true
@@ -1056,15 +1072,16 @@ export class DataQualityService {
       const pendingConditions = pendingConditionByTask.get(task.id) ?? []
       if (pendingConditions.length === 0 || !isStartedTask(task)) continue
 
+      const isCritical = criticalTaskIds.has(task.id)
       findings.push({
         finding_key: buildFindingKey('CONDITION_UNSATISFIED_STARTED', task.id),
         project_id: projectId,
         task_id: task.id,
         rule_code: 'CONDITION_UNSATISFIED_STARTED',
         rule_type: 'cross_check',
-        severity: task.is_critical ? 'critical' : 'warning',
+        severity: isCritical ? 'critical' : 'warning',
         dimension_key: `task:${task.id}`,
-        summary: `任务“${task.title}”已进入执行，但仍有 ${pendingConditions.length} 项开工条件未满足。`,
+        summary: `任务”${task.title}”已进入执行，但仍有 ${pendingConditions.length} 项开工条件未满足。`,
         details_json: {
           task_id: task.id,
           task_title: task.title,
@@ -1072,7 +1089,7 @@ export class DataQualityService {
           condition_names: pendingConditions.map((condition) => condition.condition_name),
           assignee_name: task.assignee_name ?? task.assignee ?? null,
           participant_unit_name: task.participant_unit_name ?? task.assignee_unit ?? null,
-          is_critical_task: Boolean(task.is_critical),
+          is_critical_task: isCritical,
         },
       })
     }
@@ -1080,9 +1097,10 @@ export class DataQualityService {
     return findings
   }
 
-  private detectAssigneeWorkloadFindings(projectId: string, tasks: Task[]): DataQualityFindingDraft[] {
+  private async detectAssigneeWorkloadFindings(projectId: string, tasks: Task[]): Promise<DataQualityFindingDraft[]> {
     const findings: DataQualityFindingDraft[] = []
     const progressWindows = buildProgressWindows(tasks)
+    const criticalTaskIds = await getCriticalPathTaskIds(projectId)
 
     for (const task of tasks) {
       const assigneeName = String(task.assignee_name ?? task.assignee ?? '').trim()
@@ -1096,6 +1114,7 @@ export class DataQualityService {
       if (overlapCount < 5) continue
 
       const severity: FindingSeverity = overlapCount >= 8 ? 'critical' : 'warning'
+      const isCritical = criticalTaskIds.has(task.id)
       findings.push({
         finding_key: buildFindingKey('ASSIGNEE_WORKLOAD_ABNORMAL', task.id),
         project_id: projectId,
@@ -1104,14 +1123,14 @@ export class DataQualityService {
         rule_type: 'cross_check',
         severity,
         dimension_key: `assignee:${assigneeName}`,
-        summary: `责任人“${assigneeName}”当前有 ${overlapCount} 项同时段在途任务，工作量异常。`,
+        summary: `责任人”${assigneeName}”当前有 ${overlapCount} 项同时段在途任务，工作量异常。`,
         details_json: {
           task_id: task.id,
           task_title: task.title,
           assignee_name: assigneeName,
           overlap_count: overlapCount,
           participant_unit_name: task.participant_unit_name ?? task.assignee_unit ?? null,
-          is_critical_task: Boolean(task.is_critical),
+          is_critical_task: isCritical,
         },
       })
     }
@@ -1119,13 +1138,13 @@ export class DataQualityService {
     return findings
   }
 
-  private detectCrossCheckFindings(projectId: string, tasks: Task[], conditions: TaskCondition[]) {
+  private async detectCrossCheckFindings(projectId: string, tasks: Task[], conditions: TaskCondition[]) {
     return [
-      ...this.detectParentChildFindings(projectId, tasks),
-      ...this.detectDependencyFindings(projectId, tasks),
-      ...this.detectMilestonePredecessorFindings(projectId, tasks),
-      ...this.detectConditionFindings(projectId, tasks, conditions),
-      ...this.detectAssigneeWorkloadFindings(projectId, tasks),
+      ...await this.detectParentChildFindings(projectId, tasks),
+      ...await this.detectDependencyFindings(projectId, tasks),
+      ...await this.detectMilestonePredecessorFindings(projectId, tasks),
+      ...await this.detectConditionFindings(projectId, tasks, conditions),
+      ...await this.detectAssigneeWorkloadFindings(projectId, tasks),
     ]
   }
 
@@ -1511,13 +1530,29 @@ export class DataQualityService {
     const latestSnapshots = getLatestSnapshotMap(snapshots)
     const snapshotsByTask = getSnapshotsByTask(snapshots)
 
+    const [
+      trendFindings,
+      snapshotGapFindings,
+      progressJumpFindings,
+      progressTimeMismatchFindings,
+      batchSameValueFindings,
+      crossCheckFindings,
+    ] = await Promise.all([
+      this.detectTrendFindings(projectId, tasks),
+      this.detectSnapshotGapFindings(projectId, tasks, latestSnapshots),
+      this.detectProgressJumpFindings(projectId, tasks, snapshotsByTask),
+      this.detectProgressTimeMismatchFindings(projectId, tasks),
+      Promise.resolve(this.detectBatchSameValueFindings(projectId, tasks, latestSnapshots)),
+      this.detectCrossCheckFindings(projectId, tasks, conditions),
+    ])
+
     const drafts = this.dedupeFindings([
-      ...this.detectTrendFindings(projectId, tasks),
-      ...this.detectSnapshotGapFindings(projectId, tasks, latestSnapshots),
-      ...this.detectProgressJumpFindings(projectId, tasks, snapshotsByTask),
-      ...this.detectProgressTimeMismatchFindings(projectId, tasks),
-      ...this.detectBatchSameValueFindings(projectId, tasks, latestSnapshots),
-      ...this.detectCrossCheckFindings(projectId, tasks, conditions),
+      ...trendFindings,
+      ...snapshotGapFindings,
+      ...progressJumpFindings,
+      ...progressTimeMismatchFindings,
+      ...batchSameValueFindings,
+      ...crossCheckFindings,
     ])
 
     const taskTitleById = new Map(tasks.map((task) => [task.id, task.title]))
@@ -1579,7 +1614,7 @@ export class DataQualityService {
       ? tasks.map((task) => (task.id === previewTaskId ? previewTask : task))
       : [...tasks, previewTask]
 
-    const findings = this.dedupeFindings(this.detectCrossCheckFindings(projectId, previewTasks, conditions))
+    const findings = this.dedupeFindings(await this.detectCrossCheckFindings(projectId, previewTasks, conditions))
       .map((finding) => toFindingRow(finding, nowIso()))
       .filter((finding) => finding.status === 'active' && findingRelatesToTask(finding, previewTaskId))
 

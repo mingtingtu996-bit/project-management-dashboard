@@ -250,7 +250,7 @@ describe('PlanningWorkspace monthly skeleton', () => {
     const { container, cleanup } = mount(
       <MemoryRouter initialEntries={['/projects/project-1/planning/monthly']}>
         <Routes>
-          <Route path="/projects/:id/planning/*" element={<PlanningWorkspace />} />
+          <Route path="/projects/:id/:surface/*" element={<PlanningWorkspace />} />
         </Routes>
       </MemoryRouter>,
     )
@@ -275,7 +275,7 @@ describe('PlanningWorkspace monthly skeleton', () => {
     const { container, cleanup } = mount(
       <MemoryRouter initialEntries={['/projects/project-1/planning/monthly']}>
         <Routes>
-          <Route path="/projects/:id/planning/*" element={<PlanningWorkspace />} />
+          <Route path="/projects/:id/:surface/*" element={<PlanningWorkspace />} />
         </Routes>
       </MemoryRouter>,
     )
@@ -307,7 +307,7 @@ describe('PlanningWorkspace monthly skeleton', () => {
     const { container, cleanup } = mount(
       <MemoryRouter initialEntries={['/projects/project-1/planning/monthly']}>
         <Routes>
-          <Route path="/projects/:id/planning/*" element={<PlanningWorkspace />} />
+          <Route path="/projects/:id/:surface/*" element={<PlanningWorkspace />} />
         </Routes>
       </MemoryRouter>,
     )
@@ -335,7 +335,7 @@ describe('PlanningWorkspace monthly skeleton', () => {
     const { container, cleanup } = mount(
       <MemoryRouter initialEntries={['/projects/project-1/planning/monthly?monthly_confirm_state=failed']}>
         <Routes>
-          <Route path="/projects/:id/planning/*" element={<PlanningWorkspace />} />
+          <Route path="/projects/:id/:surface/*" element={<PlanningWorkspace />} />
         </Routes>
       </MemoryRouter>,
     )
@@ -366,7 +366,7 @@ describe('PlanningWorkspace monthly skeleton', () => {
     const { container, cleanup } = mount(
       <MemoryRouter initialEntries={['/projects/project-1/planning/revision-pool']}>
         <Routes>
-          <Route path="/projects/:id/planning/*" element={<PlanningWorkspace />} />
+          <Route path="/projects/:id/:surface/*" element={<PlanningWorkspace />} />
         </Routes>
       </MemoryRouter>,
     )
@@ -417,7 +417,7 @@ describe('PlanningWorkspace monthly skeleton', () => {
       mount(
         <MemoryRouter initialEntries={['/projects/project-1/planning/baseline']}>
           <Routes>
-            <Route path="/projects/:id/planning/*" element={<PlanningWorkspace />} />
+            <Route path="/projects/:id/:surface/*" element={<PlanningWorkspace />} />
             <Route path="/projects/:id/gantt" element={<RouteSearchProbe testId="planning-route-probe" />} />
             <Route path="/projects/:id/reports" element={<RouteSearchProbe testId="planning-route-probe" />} />
           </Routes>
@@ -448,9 +448,9 @@ describe('PlanningWorkspace monthly skeleton', () => {
 
   it('renders the closeout shell and keeps the force-close path available while surfacing remaining items', async () => {
     const { container, cleanup } = mount(
-      <MemoryRouter initialEntries={['/projects/project-1/planning/closeout']}>
+      <MemoryRouter initialEntries={['/projects/project-1/tasks/closeout']}>
         <Routes>
-          <Route path="/projects/:id/planning/*" element={<PlanningWorkspace />} />
+          <Route path="/projects/:id/:surface/*" element={<PlanningWorkspace />} />
         </Routes>
       </MemoryRouter>,
     )
@@ -478,9 +478,9 @@ describe('PlanningWorkspace monthly skeleton', () => {
 
   it('processes a single closeout item without jumping to the next month draft', async () => {
     const { container, cleanup } = mount(
-      <MemoryRouter initialEntries={['/projects/project-1/planning/closeout']}>
+      <MemoryRouter initialEntries={['/projects/project-1/tasks/closeout']}>
         <Routes>
-          <Route path="/projects/:id/planning/*" element={<PlanningWorkspace />} />
+          <Route path="/projects/:id/:surface/*" element={<PlanningWorkspace />} />
         </Routes>
       </MemoryRouter>,
     )
@@ -502,9 +502,9 @@ describe('PlanningWorkspace monthly skeleton', () => {
 
   it('switches the closeout reason branch and reveals the batch layer', async () => {
     const { container, cleanup } = mount(
-      <MemoryRouter initialEntries={['/projects/project-1/planning/closeout']}>
+      <MemoryRouter initialEntries={['/projects/project-1/tasks/closeout']}>
         <Routes>
-          <Route path="/projects/:id/planning/*" element={<PlanningWorkspace />} />
+          <Route path="/projects/:id/:surface/*" element={<PlanningWorkspace />} />
         </Routes>
       </MemoryRouter>,
     )
@@ -536,9 +536,9 @@ describe('PlanningWorkspace monthly skeleton', () => {
 
   it('shows generation failure state without clearing the closeout draft', async () => {
     const { container, cleanup } = mount(
-      <MemoryRouter initialEntries={['/projects/project-1/planning/closeout?closeout_confirm_state=failed']}>
+      <MemoryRouter initialEntries={['/projects/project-1/tasks/closeout?closeout_confirm_state=failed']}>
         <Routes>
-          <Route path="/projects/:id/planning/*" element={<PlanningWorkspace />} />
+          <Route path="/projects/:id/:surface/*" element={<PlanningWorkspace />} />
         </Routes>
       </MemoryRouter>,
     )
@@ -562,9 +562,9 @@ describe('PlanningWorkspace monthly skeleton', () => {
 
   it('processes all remaining closeout items and jumps to the next month draft after confirm', async () => {
     const { container, cleanup } = mount(
-      <MemoryRouter initialEntries={['/projects/project-1/planning/closeout']}>
+      <MemoryRouter initialEntries={['/projects/project-1/tasks/closeout']}>
         <Routes>
-          <Route path="/projects/:id/planning/*" element={<PlanningWorkspace />} />
+          <Route path="/projects/:id/:surface/*" element={<PlanningWorkspace />} />
         </Routes>
       </MemoryRouter>,
     )
@@ -603,9 +603,9 @@ describe('PlanningWorkspace monthly skeleton', () => {
 
   it('surfaces concurrency, stale, and overdue banners in the detail drawer', async () => {
     const { container, cleanup } = mount(
-      <MemoryRouter initialEntries={['/projects/project-1/planning/closeout']}>
+      <MemoryRouter initialEntries={['/projects/project-1/tasks/closeout']}>
         <Routes>
-          <Route path="/projects/:id/planning/*" element={<PlanningWorkspace />} />
+          <Route path="/projects/:id/:surface/*" element={<PlanningWorkspace />} />
         </Routes>
       </MemoryRouter>,
     )

@@ -6,6 +6,8 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { StatusBadge } from '@/components/ui/status-badge'
+import { Textarea } from '@/components/ui/textarea'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 export type ScopeDimensionKey = 'building' | 'specialty' | 'phase' | 'region'
 
@@ -19,8 +21,22 @@ export interface ScopeDimensionSection {
 
 export type ScopeDraft = Record<ScopeDimensionKey, string[]>
 
+export interface ProjectBasicInfoDraft {
+  projectName: string
+  projectDescription: string
+  projectLocation: string
+  projectStatus: string
+  projectPhase: string
+  plannedStartDate: string
+  plannedEndDate: string
+  actualStartDate: string
+  actualEndDate: string
+}
+
 interface ProjectInfoCardProps {
   projectName: string
+  projectDescription?: string
+  projectLocation?: string
   projectType?: string
   buildingType?: string
   structureType?: string
@@ -37,10 +53,13 @@ interface ProjectInfoCardProps {
   healthScore?: number
   healthStatus?: string
   status?: string
+  projectPhase?: string
   scopeSections?: ScopeDimensionSection[]
   onSaveScope?: (sections: ScopeDraft) => Promise<void>
+  onSaveBasicInfo?: (draft: ProjectBasicInfoDraft) => Promise<void>
   scopeLoading?: boolean
   scopeSaving?: boolean
+  basicInfoSaving?: boolean
 }
 
 const healthColorMap: Record<string, string> = {
@@ -51,6 +70,20 @@ const healthColorMap: Record<string, string> = {
 }
 
 const SCOPE_KEYS: ScopeDimensionKey[] = ['building', 'specialty', 'phase', 'region']
+
+const PROJECT_STATUS_OPTIONS = [
+  { value: '未开始', label: '未开始' },
+  { value: '进行中', label: '进行中' },
+  { value: '已完成', label: '已完成' },
+  { value: '已暂停', label: '已暂停' },
+]
+
+const PROJECT_PHASE_OPTIONS = [
+  { value: 'pre-construction', label: '前期准备' },
+  { value: 'construction', label: '建设实施' },
+  { value: 'completion', label: '竣工收尾' },
+  { value: 'delivery', label: '交付阶段' },
+]
 
 const SCOPE_META: Record<ScopeDimensionKey, { label: string; description: string }> = {
   building: { label: '建筑维度', description: '楼栋 / 建筑类型' },
@@ -79,6 +112,60 @@ function toReadableNumber(value?: number, suffix = '') {
   return `${value.toLocaleString()}${suffix}`
 }
 
+function normalizeProjectStatus(status?: string | null) {
+  switch (String(status ?? '').trim()) {
+    case 'active':
+    case 'in_progress':
+      return '进行中'
+    case 'completed':
+      return '已完成'
+    case 'paused':
+    case 'archived':
+      return '已暂停'
+    case '未开始':
+    case '进行中':
+    case '已完成':
+    case '已暂停':
+      return String(status ?? '').trim()
+    default:
+      return '未开始'
+  }
+}
+
+function normalizePhaseValue(value?: string | null) {
+  const normalized = String(value ?? '').trim()
+  return PROJECT_PHASE_OPTIONS.some((option) => option.value === normalized) ? normalized : ''
+}
+
+function formatProjectPhaseLabel(value?: string | null) {
+  const normalized = normalizePhaseValue(value)
+  return PROJECT_PHASE_OPTIONS.find((option) => option.value === normalized)?.label || '未设置'
+}
+
+function buildBasicInfoDraft(props: {
+  projectName: string
+  projectDescription?: string
+  projectLocation?: string
+  status?: string
+  projectPhase?: string
+  plannedStartDate?: string
+  plannedEndDate?: string
+  actualStartDate?: string
+  actualEndDate?: string
+}): ProjectBasicInfoDraft {
+  return {
+    projectName: props.projectName,
+    projectDescription: props.projectDescription ?? '',
+    projectLocation: props.projectLocation ?? '',
+    projectStatus: normalizeProjectStatus(props.status),
+    projectPhase: normalizePhaseValue(props.projectPhase),
+    plannedStartDate: props.plannedStartDate ?? '',
+    plannedEndDate: props.plannedEndDate ?? '',
+    actualStartDate: props.actualStartDate ?? '',
+    actualEndDate: props.actualEndDate ?? '',
+  }
+}
+
 function buildScopeDraft(sections?: ScopeDimensionSection[]): ScopeDraft {
   const sectionMap = new Map<ScopeDimensionKey, ScopeDimensionSection>(
     (sections ?? []).map((section) => [section.key, section]),
@@ -103,6 +190,8 @@ function Field({ label, value }: { label: string; value: string }) {
 
 export default function ProjectInfoCard({
   projectName,
+  projectDescription,
+  projectLocation,
   projectType,
   buildingType,
   structureType,
@@ -119,11 +208,28 @@ export default function ProjectInfoCard({
   healthScore,
   healthStatus,
   status = 'active',
+  projectPhase,
   scopeSections,
   onSaveScope,
+  onSaveBasicInfo,
   scopeLoading = false,
   scopeSaving = false,
+  basicInfoSaving = false,
 }: ProjectInfoCardProps) {
+  const [basicInfoExpanded, setBasicInfoExpanded] = useState(Boolean(onSaveBasicInfo))
+  const [basicInfoDraft, setBasicInfoDraft] = useState<ProjectBasicInfoDraft>(() =>
+    buildBasicInfoDraft({
+      projectName,
+      projectDescription,
+      projectLocation,
+      status,
+      projectPhase,
+      plannedStartDate,
+      plannedEndDate,
+      actualStartDate,
+      actualEndDate,
+    }),
+  )
   const [scopeExpanded, setScopeExpanded] = useState(Boolean(onSaveScope) || scopeLoading)
   const [scopeDraft, setScopeDraft] = useState<ScopeDraft>(() => buildScopeDraft(scopeSections))
   const [scopeDraftInputs, setScopeDraftInputs] = useState<Record<ScopeDimensionKey, string>>({
@@ -141,6 +247,32 @@ export default function ProjectInfoCard({
   useEffect(() => {
     setScopeDraft(buildScopeDraft(scopeSections))
   }, [scopeSections])
+
+  useEffect(() => {
+    setBasicInfoDraft(
+      buildBasicInfoDraft({
+        projectName,
+        projectDescription,
+        projectLocation,
+        status,
+        projectPhase,
+        plannedStartDate,
+        plannedEndDate,
+        actualStartDate,
+        actualEndDate,
+      }),
+    )
+  }, [
+    actualEndDate,
+    actualStartDate,
+    plannedEndDate,
+    plannedStartDate,
+    projectDescription,
+    projectLocation,
+    projectName,
+    projectPhase,
+    status,
+  ])
 
   const plannedDuration = useMemo(() => {
     if (!plannedStartDate || !plannedEndDate) return null
@@ -198,6 +330,22 @@ export default function ProjectInfoCard({
       specialty: unique(scopeDraft.specialty ?? []),
       phase: unique(scopeDraft.phase ?? []),
       region: unique(scopeDraft.region ?? []),
+    })
+  }
+
+  const handleSaveBasicInfo = async () => {
+    if (!onSaveBasicInfo) return
+    await onSaveBasicInfo({
+      ...basicInfoDraft,
+      projectName: basicInfoDraft.projectName.trim(),
+      projectDescription: basicInfoDraft.projectDescription.trim(),
+      projectLocation: basicInfoDraft.projectLocation.trim(),
+      projectStatus: normalizeProjectStatus(basicInfoDraft.projectStatus),
+      projectPhase: normalizePhaseValue(basicInfoDraft.projectPhase),
+      plannedStartDate: basicInfoDraft.plannedStartDate.trim(),
+      plannedEndDate: basicInfoDraft.plannedEndDate.trim(),
+      actualStartDate: basicInfoDraft.actualStartDate.trim(),
+      actualEndDate: basicInfoDraft.actualEndDate.trim(),
     })
   }
 
@@ -326,7 +474,162 @@ export default function ProjectInfoCard({
       </CardHeader>
 
       <CardContent className="space-y-4">
+        {onSaveBasicInfo && (
+          <div className="rounded-2xl border border-slate-100 bg-slate-50/70 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">基础信息</p>
+                <p className="text-sm text-slate-600">项目名称、描述、位置、状态与阶段</p>
+              </div>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-8 px-3 text-xs"
+                onClick={() => setBasicInfoExpanded((previous) => !previous)}
+              >
+                {basicInfoExpanded ? <ChevronUp className="mr-1 h-3.5 w-3.5" /> : <ChevronDown className="mr-1 h-3.5 w-3.5" />}
+                {basicInfoExpanded ? '收起编辑' : '展开编辑'}
+              </Button>
+            </div>
+
+            {basicInfoExpanded && (
+              <div className="mt-4 space-y-4 rounded-xl border border-slate-200 bg-white p-4">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="space-y-2 md:col-span-2">
+                    <p className="text-xs text-slate-500">项目名称</p>
+                    <Input
+                      value={basicInfoDraft.projectName}
+                      onChange={(event) => setBasicInfoDraft((previous) => ({ ...previous, projectName: event.target.value }))}
+                      placeholder="请输入项目名称"
+                    />
+                  </div>
+                  <div className="space-y-2 md:col-span-2">
+                    <p className="text-xs text-slate-500">项目描述</p>
+                    <Textarea
+                      value={basicInfoDraft.projectDescription}
+                      onChange={(event) => setBasicInfoDraft((previous) => ({ ...previous, projectDescription: event.target.value }))}
+                      placeholder="请输入项目描述"
+                      className="min-h-[96px]"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <p className="text-xs text-slate-500">项目位置</p>
+                    <Input
+                      value={basicInfoDraft.projectLocation}
+                      onChange={(event) => setBasicInfoDraft((previous) => ({ ...previous, projectLocation: event.target.value }))}
+                      placeholder="请输入项目位置"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <p className="text-xs text-slate-500">项目状态</p>
+                    <Select
+                      value={basicInfoDraft.projectStatus}
+                      onValueChange={(value) => setBasicInfoDraft((previous) => ({ ...previous, projectStatus: value }))}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="请选择项目状态" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {PROJECT_STATUS_OPTIONS.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <p className="text-xs text-slate-500">当前阶段</p>
+                    <Select
+                      value={basicInfoDraft.projectPhase}
+                      onValueChange={(value) => setBasicInfoDraft((previous) => ({ ...previous, projectPhase: value }))}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="请选择当前阶段" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {PROJECT_PHASE_OPTIONS.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <p className="text-xs text-slate-500">计划开始</p>
+                    <Input
+                      type="date"
+                      value={basicInfoDraft.plannedStartDate}
+                      onChange={(event) => setBasicInfoDraft((previous) => ({ ...previous, plannedStartDate: event.target.value }))}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <p className="text-xs text-slate-500">计划结束</p>
+                    <Input
+                      type="date"
+                      value={basicInfoDraft.plannedEndDate}
+                      onChange={(event) => setBasicInfoDraft((previous) => ({ ...previous, plannedEndDate: event.target.value }))}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <p className="text-xs text-slate-500">实际开始</p>
+                    <Input
+                      type="date"
+                      value={basicInfoDraft.actualStartDate}
+                      onChange={(event) => setBasicInfoDraft((previous) => ({ ...previous, actualStartDate: event.target.value }))}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <p className="text-xs text-slate-500">实际结束</p>
+                    <Input
+                      type="date"
+                      value={basicInfoDraft.actualEndDate}
+                      onChange={(event) => setBasicInfoDraft((previous) => ({ ...previous, actualEndDate: event.target.value }))}
+                    />
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-2">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    disabled={basicInfoSaving}
+                    onClick={() => {
+                      setBasicInfoDraft(
+                        buildBasicInfoDraft({
+                          projectName,
+                          projectDescription,
+                          projectLocation,
+                          status,
+                          projectPhase,
+                          plannedStartDate,
+                          plannedEndDate,
+                          actualStartDate,
+                          actualEndDate,
+                        }),
+                      )
+                      setBasicInfoExpanded(false)
+                    }}
+                  >
+                    取消
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={() => void handleSaveBasicInfo()}
+                    disabled={basicInfoSaving || basicInfoDraft.projectName.trim().length === 0}
+                  >
+                    {basicInfoSaving ? '保存中' : '保存基础信息'}
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-6">
+          <Field label="项目位置" value={projectLocation || '未设置'} />
+          <Field label="当前阶段" value={formatProjectPhaseLabel(projectPhase)} />
           <Field label="项目类型" value={projectType || '未设置'} />
           <Field label="建筑类型" value={buildingType || '未设置'} />
           <Field label="结构类型" value={structureType || '未设置'} />

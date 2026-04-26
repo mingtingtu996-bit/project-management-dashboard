@@ -2,6 +2,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { AuthContext } from '@/context/AuthContext'
 import { usePermissions } from '../usePermissions'
 
 const authState = vi.hoisted(() => ({
@@ -18,10 +19,6 @@ const projectState = vi.hoisted(() => ({
     name: 'Sample Project',
     owner_id: 'user-2',
   },
-}))
-
-vi.mock('@/hooks/useAuth', () => ({
-  useAuth: vi.fn(() => authState),
 }))
 
 vi.mock('@/hooks/useStore', () => ({
@@ -41,6 +38,27 @@ function Probe() {
     <div data-testid="result">
       {permissions.permissionLevel}:{permissions.canEdit ? 'edit' : 'read'}
     </div>
+  )
+}
+
+function renderProbe(root: Root | null) {
+  root?.render(
+    <AuthContext.Provider
+      value={{
+        authState: {
+          isAuthenticated: authState.isAuthenticated,
+          user: authState.user as never,
+          loading: false,
+        },
+        login: vi.fn(),
+        logout: vi.fn(),
+        register: vi.fn(),
+        changePassword: vi.fn(),
+        updateProfile: vi.fn(),
+      }}
+    >
+      <Probe />
+    </AuthContext.Provider>,
   )
 }
 
@@ -81,7 +99,7 @@ describe('usePermissions', () => {
     } as Response)
 
     await act(async () => {
-      root?.render(<Probe />)
+      renderProbe(root)
       await flush()
       await flush()
     })
@@ -99,7 +117,7 @@ describe('usePermissions', () => {
     projectState.project.owner_id = 'user-1'
 
     await act(async () => {
-      root?.render(<Probe />)
+      renderProbe(root)
       await flush()
     })
 

@@ -12,6 +12,7 @@ vi.mock('react-router-dom', () => ({
 }))
 
 vi.mock('@/hooks/useStore', () => ({
+  useCurrentProject: () => ({ id: 'project-1', name: '示例项目', role: 'owner' }),
   useStore: () => ({
     currentProject: { id: 'project-1', name: '示例项目' },
     projects: [{ id: 'project-1', name: '示例项目' }],

@@ -42,6 +42,7 @@ interface AcceptanceLedgerProps {
   onBatchResponsibleUnitUpdate?: (planIds: string[], responsibleUnit: string) => void | Promise<void>
   onBatchPhaseUpdate?: (planIds: string[], phaseCode: string) => void | Promise<void>
   timeScale: AcceptanceTimelineScale
+  canEdit?: boolean
 }
 
 // Sortable plan row wrapper
@@ -61,7 +62,7 @@ function SortablePlanRow({ planId, children }: { planId: string; children: (drag
   )
 }
 
-export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClick, onStatusChange, onDateUpdate, onReorder, onBatchStatusChange, onBatchDateUpdate, onBatchResponsibleUnitUpdate, onBatchPhaseUpdate, timeScale }: AcceptanceLedgerProps) {
+export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClick, onStatusChange, onDateUpdate, onReorder, onBatchStatusChange, onBatchDateUpdate, onBatchResponsibleUnitUpdate, onBatchPhaseUpdate, timeScale, canEdit = true }: AcceptanceLedgerProps) {
   const [searchQuery, setSearchQuery] = useState('')
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
   const [groupMode, setGroupMode] = useState<GroupMode>('phase')
@@ -72,6 +73,7 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
   const [batchUnit, setBatchUnit] = useState('')
   const [batchPhase, setBatchPhase] = useState('preparation')
   const [batchActionLoading, setBatchActionLoading] = useState(false)
+  const editable = canEdit !== false
 
   const dndSensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -273,11 +275,11 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
           </button>
         ))}
         <div className="ml-auto flex items-center gap-2">
-          <button type="button" onClick={selectAll} className="flex items-center gap-1 rounded-full border border-slate-200 bg-white px-3 py-1 text-slate-500 hover:bg-slate-50" data-testid="acceptance-select-all">
+          <button type="button" onClick={selectAll} disabled={!editable} className="flex items-center gap-1 rounded-full border border-slate-200 bg-white px-3 py-1 text-slate-500 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50" data-testid="acceptance-select-all">
             <CheckSquare className="h-3.5 w-3.5" />全选
           </button>
           {selectedPlanIds.size > 0 && (
-            <button type="button" onClick={clearSelection} className="flex items-center gap-1 rounded-full border border-slate-200 bg-white px-3 py-1 text-slate-500 hover:bg-slate-50" data-testid="acceptance-clear-selection">
+            <button type="button" onClick={clearSelection} disabled={!editable} className="flex items-center gap-1 rounded-full border border-slate-200 bg-white px-3 py-1 text-slate-500 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50" data-testid="acceptance-clear-selection">
               <X className="h-3.5 w-3.5" />清除({selectedPlanIds.size})
             </button>
           )}
@@ -290,33 +292,33 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
           <div className="flex flex-wrap items-center gap-3">
             {onBatchStatusChange && (
               <div className="flex items-center gap-2">
-                <select value={batchStatus} onChange={(e) => setBatchStatus(e.target.value as AcceptanceStatus)} className="rounded-md border border-blue-200 bg-white px-2 py-1 text-sm">
+                <select value={batchStatus} onChange={(e) => setBatchStatus(e.target.value as AcceptanceStatus)} disabled={!editable} className="rounded-md border border-blue-200 bg-white px-2 py-1 text-sm">
                   {ACCEPTANCE_STATUSES.map((s) => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}
                 </select>
-                <Button size="sm" variant="outline" disabled={batchActionLoading} onClick={() => void handleBatchStatus()} data-testid="acceptance-batch-status-apply">批量改状态</Button>
+                <Button size="sm" variant="outline" disabled={!editable || batchActionLoading} onClick={() => void handleBatchStatus()} data-testid="acceptance-batch-status-apply">批量改状态</Button>
               </div>
             )}
             {onBatchDateUpdate && (
               <div className="flex items-center gap-2">
-                <input type="date" value={batchDate} onChange={(e) => setBatchDate(e.target.value)} className="rounded-md border border-blue-200 bg-white px-2 py-1 text-sm" />
-                <Button size="sm" variant="outline" disabled={batchActionLoading || !batchDate} onClick={() => void handleBatchDate()} data-testid="acceptance-batch-date-apply">批量改日期</Button>
+                <input type="date" value={batchDate} onChange={(e) => setBatchDate(e.target.value)} disabled={!editable} className="rounded-md border border-blue-200 bg-white px-2 py-1 text-sm disabled:cursor-not-allowed disabled:opacity-50" />
+                <Button size="sm" variant="outline" disabled={!editable || batchActionLoading || !batchDate} onClick={() => void handleBatchDate()} data-testid="acceptance-batch-date-apply">批量改日期</Button>
               </div>
             )}
             {onBatchResponsibleUnitUpdate && (
               <div className="flex items-center gap-2">
-                <input value={batchUnit} onChange={(e) => setBatchUnit(e.target.value)} placeholder="责任单位" className="rounded-md border border-blue-200 bg-white px-2 py-1 text-sm" />
-                <Button size="sm" variant="outline" disabled={batchActionLoading || !batchUnit.trim()} onClick={() => void handleBatchUnit()} data-testid="acceptance-batch-unit-apply">批量改责任单位</Button>
+                <input value={batchUnit} onChange={(e) => setBatchUnit(e.target.value)} disabled={!editable} placeholder="责任单位" className="rounded-md border border-blue-200 bg-white px-2 py-1 text-sm disabled:cursor-not-allowed disabled:opacity-50" />
+                <Button size="sm" variant="outline" disabled={!editable || batchActionLoading || !batchUnit.trim()} onClick={() => void handleBatchUnit()} data-testid="acceptance-batch-unit-apply">批量改责任单位</Button>
               </div>
             )}
             {onBatchPhaseUpdate && (
               <div className="flex items-center gap-2">
-                <select value={batchPhase} onChange={(e) => setBatchPhase(e.target.value)} className="rounded-md border border-blue-200 bg-white px-2 py-1 text-sm">
+                <select value={batchPhase} onChange={(e) => setBatchPhase(e.target.value)} disabled={!editable} className="rounded-md border border-blue-200 bg-white px-2 py-1 text-sm">
                   <option value="preparation">准备阶段</option>
                   <option value="special_acceptance">专项验收</option>
                   <option value="unit_completion">单位工程验收</option>
                   <option value="completion_acceptance">竣工验收</option>
                 </select>
-                <Button size="sm" variant="outline" disabled={batchActionLoading} onClick={() => void handleBatchPhase()} data-testid="acceptance-batch-phase-apply">批量调整阶段</Button>
+                <Button size="sm" variant="outline" disabled={!editable || batchActionLoading} onClick={() => void handleBatchPhase()} data-testid="acceptance-batch-phase-apply">批量调整阶段</Button>
               </div>
             )}
           </div>
@@ -492,21 +494,23 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
                           {badge}
                         </Badge>
                       ))}
-                      {onStatusChange && node && !['passed', 'archived'].includes(plan.status) && (
+                      {editable && onStatusChange && node && !['passed', 'archived'].includes(plan.status) && (
                         <button
                           type="button"
                           onClick={(e) => { e.stopPropagation(); onStatusChange(node.id, 'passed') }}
+                          disabled={!editable}
                           className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
                           data-testid={`acceptance-quick-pass-${plan.id}`}
                         >
                           标记通过
                         </button>
                       )}
-                      {!hasPlannedDate && onDateUpdate && (
+                      {!hasPlannedDate && editable && onDateUpdate && (
                         <input
                           type="date"
                           onClick={(e) => e.stopPropagation()}
                           onChange={(e) => { if (e.target.value) onDateUpdate(plan.id, e.target.value) }}
+                          disabled={!editable}
                           className="rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs text-amber-800 focus:border-amber-400 focus:outline-none"
                           data-testid={`acceptance-quick-date-${plan.id}`}
                           title="快速排期"

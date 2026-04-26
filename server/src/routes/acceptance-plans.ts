@@ -611,7 +611,13 @@ router.put('/:id', requireProjectEditor(async (req) => {
   res.json(response)
 }))
 
-router.patch('/:id/status', asyncHandler(async (req, res) => {
+router.patch('/:id/status', requireProjectEditor(async (req) => {
+  const row = await executeSQLOne(
+    'SELECT project_id FROM acceptance_plans WHERE id = ? LIMIT 1',
+    [req.params.id]
+  ) as any
+  return row?.project_id
+}), asyncHandler(async (req, res) => {
   const { id } = req.params
   const { status, actual_date } = req.body ?? {}
   logger.info('Updating acceptance plan status', { id, status })

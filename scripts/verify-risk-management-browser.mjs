@@ -333,7 +333,7 @@ async function main() {
     await page.getByTestId('risk-detail-dialog').waitFor({ state: 'hidden', timeout: 10000 })
     await page.waitForFunction(() => document.querySelectorAll('[role="dialog"]').length === 0, undefined, { timeout: 10000 })
 
-    const problemStreamTrigger = page.getByTestId('risk-stream-problems')
+    const problemStreamTrigger = page.getByTestId('risk-stream-issues')
     await problemStreamTrigger.waitFor({ state: 'visible', timeout: 10000 })
     await problemStreamTrigger.evaluate((node) => {
       if (node instanceof HTMLElement) {

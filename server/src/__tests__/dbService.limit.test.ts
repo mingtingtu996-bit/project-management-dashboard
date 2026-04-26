@@ -126,7 +126,7 @@ describe('executeSQL LIMIT parsing', () => {
 
   it('rejects LIKE filters explicitly', async () => {
     await expect(
-      executeSQL('SELECT * FROM standard_processes WHERE name LIKE ?', ['%主体%']),
+      executeSQL('SELECT * FROM tasks WHERE title LIKE ?', ['%主体%']),
     ).rejects.toThrow('LIKE is not supported')
   })
 

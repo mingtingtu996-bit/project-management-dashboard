@@ -291,7 +291,7 @@ async function main() {
 
     const targetUrl = `${baseUrl}/#/projects/${projectId}/milestones`
     await page.goto(targetUrl, { waitUntil: 'domcontentloaded' })
-    await page.getByTestId('milestone-health-strip').waitFor({ state: 'visible', timeout: 20000 })
+    await page.getByTestId('milestone-health-summary').waitFor({ state: 'visible', timeout: 20000 })
     await page.getByTestId('milestone-child-group').waitFor({ state: 'visible', timeout: 20000 })
 
     const initialUrl = page.url()

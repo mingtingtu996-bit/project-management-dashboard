@@ -368,31 +368,15 @@ export const requireProjectMember = (getProjectId: (req: Request) => string | un
 }
 
 /**
- * 检查用户是否有编辑权限（owner或editor）
+ * 检查用户是否有编辑权限（owner / admin / editor）
  * 提取公共逻辑
  */
 async function isProjectEditor(userId: string, projectId: string): Promise<boolean> {
   if (!isUuidLike(userId) || !isUuidLike(projectId)) {
     return false
   }
-
-  // 检查是否是项目所有者（优先检查）
-  const projectOwner = await executeSQLOne<{ owner_id?: string | null }>(
-    'SELECT owner_id FROM projects WHERE id = ? LIMIT 1',
-    [projectId]
-  )
-
-  if (projectOwner?.owner_id === userId) {
-    return true
-  }
-
-  // 检查是否有编辑权限（检查 permission_level）
-  const member = await executeSQLOne(
-    'SELECT permission_level FROM project_members WHERE project_id = ? AND user_id = ? AND permission_level IN (?, ?) LIMIT 1',
-    [projectId, userId, 'owner', 'editor']
-  )
-
-  return member !== null
+  const permissionLevel = await getProjectPermissionLevel(userId, projectId)
+  return permissionLevel === 'owner' || permissionLevel === 'editor'
 }
 
 async function isProjectOwner(userId: string, projectId: string): Promise<boolean> {
@@ -402,7 +386,7 @@ async function isProjectOwner(userId: string, projectId: string): Promise<boolea
 
 /**
  * 项目编辑权限检查中间件工厂
- * 检查用户是否有编辑权限（owner或editor）
+ * 检查用户是否有编辑权限（owner / admin / editor）
  */
 export const requireProjectEditor = (getProjectId: (req: Request) => string | undefined | Promise<string | undefined>) => {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {

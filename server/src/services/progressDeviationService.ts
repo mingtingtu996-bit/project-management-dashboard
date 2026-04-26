@@ -12,11 +12,14 @@ import type {
   ProgressDeviationChildGroup,
   ProgressDeviationChildGroupItem,
   ProgressDeviationAnalysisResponse,
+  ProgressDeviationChartData,
+  ProgressDeviationCauseSummary,
   ProgressDeviationAttribution,
   ProgressDeviationDataCompleteness,
   ProgressDeviationMainline,
   ProgressDeviationReadRequest,
   ProgressDeviationMappingMonitoring,
+  ProgressDeviationResponsibilityContribution,
   ProgressDeviationMappingStatus,
   ProgressDeviationMergedInto,
   ProgressDeviationRow,
@@ -71,7 +74,7 @@ export const progressDeviationContracts = {
   path: '/api/progress-deviation',
   requestShape: '{ project_id: string, baseline_version_id: string, monthly_plan_version_id?: string, lock?: boolean }',
   responseShape:
-    '{ project_id: string, baseline_version_id: string, monthly_plan_version_id?: string | null, version_lock?: BaselineVersionLock | null, summary: {...}, rows: [...], mainlines: [...], mapping_monitoring: {...}, trend_events: [...], m1_m9_consistency: {...}, attribution, data_completeness, mapping_status, merged_into, child_group, actual_date }',
+    '{ project_id: string, baseline_version_id: string, monthly_plan_version_id?: string | null, version_lock?: BaselineVersionLock | null, summary: {...}, rows: [...], mainlines: [...], mapping_monitoring: {...}, trend_events: [...], chart_data: {...}, responsibility_contribution: [...], top_deviation_causes: [...], m1_m9_consistency: {...}, planned_date, actual_date, attribution, data_completeness, mapping_status, merged_into, child_group }',
   errorCodes: ['NOT_FOUND', 'DEVIATION_ANALYSIS_UNAVAILABLE', 'LOCK_HELD', 'LOCK_EXPIRED', 'VALIDATION_ERROR'],
 }
 
@@ -270,6 +273,7 @@ function buildBaselineRows(params: {
       source_item_id: item.id,
       source_task_id: task?.id ?? null,
       title: item.title,
+      planned_date: item.planned_end_date ?? null,
       planned_progress: plannedProgress,
       actual_progress: actualProgress === null ? null : round1(actualProgress),
       actual_date: actualEndDate,
@@ -323,6 +327,7 @@ function buildMonthlyPlanRows(params: {
       source_item_id: item.id,
       source_task_id: task?.id ?? null,
       title: item.title,
+      planned_date: item.planned_end_date ?? null,
       planned_progress: plannedProgress,
       actual_progress: actualProgress === null ? null : round1(actualProgress),
       actual_date: actualEndDate,
@@ -366,6 +371,7 @@ function buildExecutionRows(params: {
       source_item_id: snapshot?.monthly_plan_item_id ?? snapshot?.baseline_item_id ?? null,
       source_task_id: task.id,
       title: task.title,
+      planned_date: snapshot?.snapshot_date ?? task.planned_end_date ?? null,
       planned_progress: plannedProgress,
       actual_progress: actualProgress === null ? null : round1(actualProgress),
       actual_date: task.actual_end_date ?? task.end_date ?? task.updated_at ?? null,
@@ -484,6 +490,115 @@ function buildRowCompleteness(params: {
     has_planning_link: hasPlanningLink,
     has_attribution: hasAttribution,
   }
+}
+
+function getTaskResponsibilityLabel(task?: PlanningTaskRow | null): string {
+  if (!task) return '未指定责任主体'
+
+  const raw = task as unknown as Record<string, unknown>
+  return normalizeText(
+    raw.participant_unit_name ??
+    raw.responsible_unit ??
+    raw.assignee_name ??
+    raw.assignee ??
+    raw.owner_name ??
+    raw.owner ??
+    task.title
+  ) || '未指定责任主体'
+}
+
+function buildMonthlyDeviationBuckets(rows: ProgressDeviationRow[]): ProgressDeviationChartData['monthly_buckets'] {
+  const buckets = new Map<string, ProgressDeviationChartData['monthly_buckets'][number]>()
+
+  for (const row of rows) {
+    const sourceDate = normalizeText(row.planned_date ?? row.actual_date)
+    const month = sourceDate ? (sourceDate.length >= 7 ? sourceDate.slice(0, 7) : sourceDate) : '未设置'
+    const bucket = buckets.get(month) ?? {
+      month,
+      on_track: 0,
+      delayed: 0,
+      carried_over: 0,
+      revised: 0,
+      unresolved: 0,
+    }
+
+    switch (row.status) {
+      case 'on_track':
+        bucket.on_track += 1
+        break
+      case 'carried_over':
+        bucket.carried_over += 1
+        break
+      case 'revised':
+        bucket.revised += 1
+        break
+      case 'unresolved':
+        bucket.unresolved += 1
+        break
+      default:
+        bucket.delayed += 1
+        break
+    }
+
+    buckets.set(month, bucket)
+  }
+
+  return [...buckets.values()].sort((left, right) => left.month.localeCompare(right.month))
+}
+
+function buildResponsibilityContribution(
+  rows: ProgressDeviationRow[],
+  tasks: PlanningTaskRow[],
+): ProgressDeviationResponsibilityContribution[] {
+  const deviationRows = rows.filter((row) => row.status !== 'on_track')
+  if (deviationRows.length === 0) return []
+
+  const total = Math.max(deviationRows.length, 1)
+  const { byId } = getTaskLookup(tasks)
+  const buckets = new Map<string, { owner: string; count: number; taskIds: string[] }>()
+
+  for (const row of deviationRows) {
+    const task = row.source_task_id ? byId.get(row.source_task_id) ?? null : null
+    const owner = getTaskResponsibilityLabel(task)
+    const bucket = buckets.get(owner) ?? { owner, count: 0, taskIds: [] }
+    bucket.count += 1
+    if (row.source_task_id && !bucket.taskIds.includes(row.source_task_id)) {
+      bucket.taskIds.push(row.source_task_id)
+    }
+    buckets.set(owner, bucket)
+  }
+
+  return [...buckets.values()]
+    .map((bucket) => ({
+      owner: bucket.owner,
+      count: bucket.count,
+      percentage: round1((bucket.count / total) * 100),
+      task_ids: bucket.taskIds,
+    }))
+    .sort((left, right) => right.count - left.count)
+    .slice(0, 6)
+}
+
+function buildTopDeviationCauses(rows: ProgressDeviationRow[]): ProgressDeviationCauseSummary[] {
+  const deviationRows = rows.filter((row) => row.status !== 'on_track')
+  if (deviationRows.length === 0) return []
+
+  const total = Math.max(deviationRows.length, 1)
+  const buckets = new Map<string, number>()
+
+  for (const row of deviationRows) {
+    const reason = normalizeText(row.reason) || '未说明原因'
+    buckets.set(reason, (buckets.get(reason) || 0) + 1)
+  }
+
+  return [...buckets.entries()]
+    .map(([reason, count]) => ({
+      reason,
+      count,
+      percentage: round1((count / total) * 100),
+    }))
+    .sort((left, right) => right.count - left.count)
+    .slice(0, 3)
 }
 
 function enrichDeviationRows(params: {
@@ -1016,6 +1131,15 @@ export async function getProgressDeviationAnalysis(
     monthly_plan_items: monthlyRows.length,
     execution_items: executionRows.length,
   }
+  const monthlyBuckets = buildMonthlyDeviationBuckets(rows)
+  const chartData: ProgressDeviationChartData = {
+    baselineDeviation: baselineRows,
+    monthlyFulfillment: monthlyBuckets,
+    executionDeviation: executionRows,
+    monthly_buckets: monthlyBuckets,
+  }
+  const responsibilityContribution = buildResponsibilityContribution(rows, tasks)
+  const topDeviationCauses = buildTopDeviationCauses(rows)
 
   try {
     await syncProgressDeviationDataGapNotification(projectId, rows)
@@ -1036,6 +1160,9 @@ export async function getProgressDeviationAnalysis(
     mainlines,
     mapping_monitoring: mappingMonitoring,
     trend_events: trendEvents,
+    chart_data: chartData,
+    responsibility_contribution: responsibilityContribution,
+    top_deviation_causes: topDeviationCauses,
     m1_m9_consistency: milestoneConsistency,
   }
 }

@@ -364,7 +364,7 @@ async function main() {
     await page.getByTestId('baseline-info-bar').waitFor({ state: 'visible', timeout: 20000 })
     await page.getByTestId('baseline-version-switcher').waitFor({ state: 'visible', timeout: 20000 })
     await page.getByTestId('baseline-diff-preview').waitFor({ state: 'visible', timeout: 20000 })
-    await page.getByTestId('baseline-open-revision-pool').waitFor({ state: 'visible', timeout: 20000 })
+    await page.getByTestId('baseline-info-open-revision-pool').waitFor({ state: 'visible', timeout: 20000 })
 
     const initialUrl = page.url()
     assert(initialUrl.includes('/planning/baseline'), `Unexpected Baseline URL: ${initialUrl}`)
@@ -372,7 +372,7 @@ async function main() {
 
     await page.getByTestId('baseline-version-chip-baseline-v6').click()
     await page.getByTestId('baseline-info-bar').getByText('只读查看态').first().waitFor({ state: 'visible', timeout: 10000 })
-    await page.getByTestId('baseline-open-revision-pool').waitFor({ state: 'visible', timeout: 10000 })
+    await page.getByTestId('baseline-info-open-revision-pool').waitFor({ state: 'visible', timeout: 10000 })
     await page.getByTestId('baseline-open-change-log').waitFor({ state: 'visible', timeout: 10000 })
 
     assert(apiFailures.length === 0, `API proxy failures detected: ${JSON.stringify(apiFailures)}`)

@@ -7,6 +7,8 @@
   end_date?: string | null
   parent_id?: string | null
   is_critical?: boolean | null
+  lagLevel?: 'none' | 'mild' | 'moderate' | 'severe' | null
+  lagStatus?: '正常' | '轻度滞后' | '中度滞后' | '严重滞后' | null
 }
 
 type TaskConditionLike = {
@@ -30,6 +32,9 @@ export type TaskConditionSummary = {
   total: number
   satisfied: number
 }
+
+export type TaskLagLevel = 'none' | 'mild' | 'moderate' | 'severe'
+export type TaskLagStatus = '正常' | '轻度滞后' | '中度滞后' | '严重滞后'
 
 export type TaskBusinessStatusCode =
   | 'completed'
@@ -60,6 +65,7 @@ export type ProjectTaskProgressSnapshot = {
   activeObstacleCount: number
   activeObstacleTaskCount: number
   readyToStartTaskCount: number
+  laggedTaskCount: number
   taskConditionMap: Record<string, TaskConditionSummary>
   obstacleCountMap: Record<string, number>
 }
@@ -72,17 +78,17 @@ export const TASK_STATUS_THEME = {
   },
   lagging_severe: {
     code: 'lagging_severe',
-    label: '\u8fdb\u5ea6\u4e25\u91cd\u6ede\u540e',
+    label: '严重滞后',
     cls: 'bg-orange-100 text-orange-700 border border-orange-200',
   },
   lagging_moderate: {
     code: 'lagging_moderate',
-    label: '\u8fdb\u5ea6\u6162',
+    label: '中度滞后',
     cls: 'bg-amber-100 text-amber-700 border border-amber-200',
   },
   lagging_mild: {
     code: 'lagging_mild',
-    label: '\u8fdb\u5ea6\u504f\u6162',
+    label: '轻度滞后',
     cls: 'bg-amber-50 text-amber-600 border border-amber-200',
   },
   pending_conditions: {
@@ -155,6 +161,115 @@ export function isActiveRisk(risk: RiskLike): boolean {
   return !CLOSED_RISK_STATUSES.has(normalizeStatus(risk.status))
 }
 
+function normalizeLagLevel(value: unknown): TaskLagLevel | null {
+  const normalized = String(value ?? '').trim().toLowerCase()
+  switch (normalized) {
+    case 'none':
+    case 'normal':
+    case '正常':
+      return 'none'
+    case 'mild':
+    case '轻度滞后':
+      return 'mild'
+    case 'moderate':
+    case '中度滞后':
+      return 'moderate'
+    case 'severe':
+    case '严重滞后':
+      return 'severe'
+    default:
+      return null
+  }
+}
+
+function normalizeLagStatus(value: unknown): TaskLagStatus | null {
+  const normalized = String(value ?? '').trim()
+  switch (normalized) {
+    case '正常':
+      return '正常'
+    case '轻度滞后':
+      return '轻度滞后'
+    case '中度滞后':
+      return '中度滞后'
+    case '严重滞后':
+      return '严重滞后'
+    default:
+      return null
+  }
+}
+
+function calculateLegacyLagLevel(task: TaskLike): TaskLagLevel | null {
+  const status = normalizeStatus(task.status)
+  if (status !== 'in_progress' && status !== 'blocked') return null
+  if (!task.planned_start_date || !task.planned_end_date) return null
+
+  const start = new Date(task.planned_start_date).getTime()
+  const end = new Date(task.planned_end_date).getTime()
+  if (Number.isNaN(start) || Number.isNaN(end)) return null
+
+  const duration = Math.round((end - start) / 86400000)
+  if (duration <= 3) return null
+
+  const now = Date.now()
+  if (now >= end) return null
+
+  const elapsed = Math.max(0, Math.round((now - start) / 86400000))
+  const timeRatio = elapsed / duration
+  if (timeRatio <= 0) return null
+
+  const progress = Number(task.progress ?? 0)
+  const biasRatio = (progress / 100) / timeRatio
+  const remaining = Math.round((end - now) / 86400000)
+  const threshold = task.is_critical ? 0.8 : 0.7
+
+  if (biasRatio < 0.5 && remaining < 3) return 'severe'
+  if (biasRatio < 0.5) return 'moderate'
+  if (biasRatio < threshold) return 'mild'
+  return null
+}
+
+export function getTaskLagLevel(task: TaskLike): TaskLagLevel | null {
+  const explicitLagLevel = normalizeLagLevel(task.lagLevel)
+  if (explicitLagLevel !== null) {
+    return explicitLagLevel === 'none' ? null : explicitLagLevel
+  }
+
+  const explicitLagStatus = normalizeLagStatus(task.lagStatus)
+  if (explicitLagStatus) {
+    switch (explicitLagStatus) {
+      case '轻度滞后':
+        return 'mild'
+      case '中度滞后':
+        return 'moderate'
+      case '严重滞后':
+        return 'severe'
+      default:
+        return null
+    }
+  }
+
+  return calculateLegacyLagLevel(task)
+}
+
+export function getTaskLagStatus(task: TaskLike): TaskLagStatus {
+  const explicitLagStatus = normalizeLagStatus(task.lagStatus)
+  if (explicitLagStatus) {
+    return explicitLagStatus
+  }
+
+  const lagLevel = getTaskLagLevel(task) ?? 'none'
+  switch (lagLevel) {
+    case 'mild':
+      return '轻度滞后'
+    case 'moderate':
+      return '中度滞后'
+    case 'severe':
+      return '严重滞后'
+    default:
+      return '正常'
+  }
+}
+
 export function getLeafTasks<T extends TaskLike>(tasks: T[]): T[] {
   const parentIds = new Set(tasks.map((task) => task.parent_id).filter(Boolean))
   const leafTasks = tasks.filter((task) => !parentIds.has(task.id ?? ''))
@@ -209,33 +324,19 @@ export function buildTaskObstacleSummary(
 export type LaggingLevel = 'lagging_severe' | 'lagging_moderate' | 'lagging_mild'
 
 export function isLaggingTask(task: TaskLike): LaggingLevel | null {
-  const status = normalizeStatus(task.status)
-  if (status !== 'in_progress' && status !== 'blocked') return null
-  if (!task.planned_start_date || !task.planned_end_date) return null
+  const lagLevel = getTaskLagLevel(task)
+  if (!lagLevel) return null
 
-  const today = Date.now()
-  const start = new Date(task.planned_start_date).getTime()
-  const end = new Date(task.planned_end_date).getTime()
-  if (Number.isNaN(start) || Number.isNaN(end)) return null
-
-  const duration = Math.round((end - start) / 86400000)
-  if (duration <= 3) return null
-
-  if (today >= end) return null // 已逾期，走逾期逻辑
-
-  const elapsed = Math.max(0, Math.round((today - start) / 86400000))
-  const timeRatio = elapsed / duration
-  if (timeRatio <= 0) return null
-
-  const progress = Number(task.progress ?? 0)
-  const biasRatio = (progress / 100) / timeRatio
-  const remaining = Math.round((end - today) / 86400000)
-  const threshold = task.is_critical ? 0.8 : 0.7
-
-  if (biasRatio < 0.5 && remaining < 3) return 'lagging_severe'
-  if (biasRatio < 0.5) return 'lagging_moderate'
-  if (biasRatio < threshold) return 'lagging_mild'
-  return null
+  switch (lagLevel) {
+    case 'mild':
+      return 'lagging_mild'
+    case 'moderate':
+      return 'lagging_moderate'
+    case 'severe':
+      return 'lagging_severe'
+    default:
+      return null
+  }
 }
 
 export function getTaskBusinessStatus(
@@ -282,6 +383,7 @@ export function buildProjectTaskProgressSnapshot(
   const progressBaseTaskCount = leafTasks.length > 0 ? leafTasks.length : tasks.length
   const completedTaskCount = leafTasks.filter(isCompletedTask).length
   const inProgressTaskCount = leafTasks.filter(isInProgressTask).length
+  const laggedTaskCount = leafTasks.filter((task) => getTaskLagLevel(task) !== null).length
 
   let delayedTaskCount = 0
   let delayDays = 0
@@ -336,6 +438,7 @@ export function buildProjectTaskProgressSnapshot(
     activeObstacleCount: activeObstacles.length,
     activeObstacleTaskCount,
     readyToStartTaskCount,
+    laggedTaskCount,
     taskConditionMap,
     obstacleCountMap,
   }

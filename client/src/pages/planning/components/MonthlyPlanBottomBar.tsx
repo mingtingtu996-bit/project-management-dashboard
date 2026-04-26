@@ -6,15 +6,23 @@ import { ArrowRightCircle, BadgeInfo, Sparkles } from 'lucide-react'
 interface MonthlyPlanBottomBarProps {
   draftStatus: PlanningDraftStatus
   quickAvailable: boolean
+  canSaveDraft: boolean
+  canStandardConfirm: boolean
+  onSaveDraft: () => void
   onQuickConfirmEntry: () => void
   onStandardConfirmEntry: () => void
+  readOnly?: boolean
 }
 
 export function MonthlyPlanBottomBar({
   draftStatus,
   quickAvailable,
+  canSaveDraft,
+  canStandardConfirm,
+  onSaveDraft,
   onQuickConfirmEntry,
   onStandardConfirmEntry,
+  readOnly = false,
 }: MonthlyPlanBottomBarProps) {
   return (
     <div data-testid="planning-shared-batch-bar" className="fixed bottom-4 left-0 right-0 z-40 px-4">
@@ -44,10 +52,21 @@ export function MonthlyPlanBottomBar({
               <Button
                 type="button"
                 size="sm"
+                variant="outline"
+                className="mt-3 gap-2 border-cyan-200 bg-transparent text-cyan-100 hover:bg-cyan-500/10"
+                data-testid="monthly-plan-save-draft-entry"
+                onClick={onSaveDraft}
+                disabled={readOnly || !canSaveDraft}
+              >
+                保存草稿
+              </Button>
+              <Button
+                type="button"
+                size="sm"
                 className="mt-3 gap-2 bg-cyan-500 text-slate-950 hover:bg-cyan-400"
                 data-testid="monthly-plan-quick-confirm-entry"
                 onClick={onQuickConfirmEntry}
-                disabled={!quickAvailable}
+                disabled={readOnly || !quickAvailable}
               >
                 <ArrowRightCircle className="h-4 w-4" />
                 快速确认入口
@@ -66,6 +85,7 @@ export function MonthlyPlanBottomBar({
                 className="mt-3 gap-2 border-slate-600 bg-transparent text-slate-100 hover:bg-white/10"
                 data-testid="monthly-plan-standard-confirm-entry"
                 onClick={onStandardConfirmEntry}
+                disabled={readOnly || !canStandardConfirm}
               >
                 <BadgeInfo className="h-4 w-4" />
                 标准确认入口

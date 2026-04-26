@@ -29,6 +29,8 @@ export interface PlanningBootstrapNode {
   reference_days?: number | null
   is_milestone?: boolean
   source_id?: string | null
+  template_id?: string | null
+  template_node_id?: string | null
   children?: PlanningBootstrapNode[]
 }
 
@@ -278,6 +280,8 @@ export function buildTemplateNodesFromTasks(tasks: Array<Partial<Task> & Record<
         reference_days: task.reference_duration ?? task.ai_duration ?? null,
         is_milestone: Boolean(task.is_milestone),
         source_id: id || null,
+        template_id: String((task as { template_id?: string | null }).template_id ?? '') || null,
+        template_node_id: String((task as { template_node_id?: string | null }).template_node_id ?? id ?? '') || null,
         children: buildLevel(id || null),
       }
     })
@@ -292,6 +296,8 @@ export function buildTemplateNodesFromTasks(tasks: Array<Partial<Task> & Record<
     reference_days: task.reference_duration ?? task.ai_duration ?? null,
     is_milestone: Boolean(task.is_milestone),
     source_id: String(task.id ?? '') || null,
+    template_id: String((task as { template_id?: string | null }).template_id ?? '') || null,
+    template_node_id: String((task as { template_node_id?: string | null }).template_node_id ?? task.id ?? '') || null,
   }))
 }
 
@@ -304,6 +310,7 @@ export function buildTemplateNodesFromMilestones(
     reference_days: null,
     is_milestone: true,
     source_id: String(milestone.id ?? '') || null,
+    template_node_id: String(milestone.id ?? '') || null,
   }))
 }
 
@@ -441,6 +448,8 @@ export function buildBaselineItemsFromTemplateNodes(
         is_critical: false,
         mapping_status: sourceMapping.mappingStatus,
         notes: node.description ?? null,
+        template_id: node.template_id ?? null,
+        template_node_id: node.template_node_id ?? null,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       }

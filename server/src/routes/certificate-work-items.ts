@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import { asyncHandler } from '../middleware/errorHandler.js'
-import { authenticate } from '../middleware/auth.js'
+import { authenticate, requireProjectEditor } from '../middleware/auth.js'
 import { logger } from '../middleware/logger.js'
 import { executeSQL, executeSQLOne, supabase } from '../services/dbService.js'
 import type { ApiResponse } from '../types/index.js'
@@ -302,6 +302,7 @@ router.get(
 
 router.post(
   '/',
+  requireProjectEditor((req) => req.params.projectId),
   asyncHandler(async (req, res) => {
     const projectId = req.params.projectId as string | undefined
     const payload = normalizeCreatePayload(req.body ?? {})
@@ -328,6 +329,7 @@ router.post(
 
 router.post(
   '/bulk-import',
+  requireProjectEditor((req) => req.params.projectId),
   asyncHandler(async (req, res) => {
     const projectId = req.params.projectId as string | undefined
     const rawItems = Array.isArray(req.body?.items) ? req.body.items : []
@@ -390,6 +392,7 @@ router.post(
 
 router.patch(
   '/batch',
+  requireProjectEditor((req) => req.params.projectId),
   asyncHandler(async (req, res) => {
     const projectId = req.params.projectId as string | undefined
     const ids = Array.isArray(req.body?.ids) ? req.body.ids.filter(Boolean).map((value: unknown) => String(value)) : []
@@ -475,6 +478,7 @@ router.patch(
 
 router.patch(
   '/:id',
+  requireProjectEditor((req) => req.params.projectId),
   asyncHandler(async (req, res) => {
     const projectId = req.params.projectId as string | undefined
     const { id } = req.params
@@ -532,6 +536,7 @@ router.patch(
 
 router.delete(
   '/batch',
+  requireProjectEditor((req) => req.params.projectId),
   asyncHandler(async (req, res) => {
     const projectId = req.params.projectId as string | undefined
     const ids = Array.isArray(req.body?.ids) ? req.body.ids.filter(Boolean).map((value: unknown) => String(value)) : []
@@ -586,6 +591,7 @@ router.delete(
 
 router.delete(
   '/:id',
+  requireProjectEditor((req) => req.params.projectId),
   asyncHandler(async (req, res) => {
     const projectId = req.params.projectId as string | undefined
     const { id } = req.params

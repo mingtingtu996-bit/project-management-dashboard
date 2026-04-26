@@ -443,12 +443,12 @@ describe('shared summary dashboards', () => {
       await flush()
     })
 
-    await waitForText(container, ['64%', '81', '2/5', '专项准备度', '快捷入口'])
+    await waitForText(container, ['64%', '81', '2/5', '现场快照与对比'])
 
     expect(container.textContent).toContain('64%')
     expect(container.textContent).toContain('81')
     expect(container.textContent).toContain('2/5')
-    expect(container.textContent).toContain('专项准备度')
+    expect(container.textContent).not.toContain('专项准备度')
     expect(dashboardSummarySpy).toHaveBeenCalledWith(
       'project-1',
       expect.objectContaining({ signal: expect.anything() }),

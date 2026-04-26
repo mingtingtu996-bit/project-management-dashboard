@@ -44,6 +44,7 @@ export function DrawingDetailDrawer({
   onAddDrawing,
   onCreateIssue,
   onCreateRisk,
+  canEdit = true,
 }: {
   open: boolean
   detail: DrawingPackageDetailView | null
@@ -53,6 +54,7 @@ export function DrawingDetailDrawer({
   onAddDrawing?: () => void
   onCreateIssue?: (signal: DrawingSignalView) => void
   onCreateRisk?: (signal: DrawingSignalView) => void
+  canEdit?: boolean
 }) {
   useDialogFocusRestore(open)
   const packageCard = detail?.package
@@ -76,12 +78,12 @@ export function DrawingDetailDrawer({
                   {DRAWING_REVIEW_MODE_LABELS[packageCard.reviewMode]}
                 </Badge>
               )}
-              {onAddDrawing && (
+              {onAddDrawing && canEdit ? (
                 <Button size="sm" variant="outline" onClick={onAddDrawing} data-testid="drawing-detail-add-drawing">
                   <Plus className="mr-2 h-4 w-4" />
                   补录图纸
                 </Button>
-              )}
+              ) : null}
             </div>
           </DialogHeader>
 
@@ -178,9 +180,11 @@ export function DrawingDetailDrawer({
                               {record.isCurrentVersion && (
                                 <Badge className="rounded-full px-2.5 py-1 text-xs">当前</Badge>
                               )}
-                              <Button size="sm" variant="outline" onClick={() => onSetCurrentVersion(record.versionId)}>
+                              {canEdit ? (
+                                <Button size="sm" variant="outline" onClick={() => onSetCurrentVersion(record.versionId)}>
                                 设为当前
-                              </Button>
+                                </Button>
+                              ) : null}
                             </div>
                           </div>
                         ))}

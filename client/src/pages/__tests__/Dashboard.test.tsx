@@ -275,18 +275,15 @@ describe('Dashboard contract', () => {
     expect(livePanel!.compareDocumentPosition(snapshotPanel!) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
 
     expect(container.textContent).toContain('全局摘要')
-    expect(container.textContent).toContain('当下优先级信号区')
-    expect(container.textContent).toContain('导流快照')
+    expect(container.textContent).toContain('现场快照与对比')
+    expect(container.textContent).toContain('日 / 周 / 月固定对比')
     expect(container.textContent).toContain('问题与风险快照')
-    expect(container.textContent).toContain(PROJECT_NAVIGATION_LABELS.reports)
-    expect(container.textContent).toContain('专项管理')
+    expect(container.textContent).toContain('最近待完成任务')
     expect(container.textContent).not.toContain('模块分析')
     expect(container.textContent).not.toContain('最高优先级问题')
     expect(container.textContent).not.toContain('证照管理')
     expect(container.textContent).not.toContain('项目脉冲')
     expect(container.textContent).toContain('月度趋势')
-    expect(container.textContent).toContain('月度计划')
-    expect(container.textContent).toContain('月末关账')
   })
 
   it('uses the shared dashboard label in the empty state', async () => {
@@ -416,6 +413,7 @@ describe('Dashboard contract', () => {
       milestoneProgress: 33,
       riskCount: 1,
       activeRiskCount: 1,
+      activeIssueCount: 0,
       pendingConditionCount: 0,
       pendingConditionTaskCount: 0,
       activeObstacleCount: 0,
@@ -480,7 +478,7 @@ describe('Dashboard contract', () => {
     const monthlyEntry = container.querySelector('[data-testid="dashboard-governance-open-monthly"]')
     const closeoutEntry = container.querySelector('[data-testid="dashboard-governance-open-closeout"]')
     expect(monthlyEntry?.getAttribute('href')).toBe(`/projects/${projectId}/planning/monthly`)
-    expect(closeoutEntry?.getAttribute('href')).toBe(`/projects/${projectId}/planning/closeout`)
+    expect(closeoutEntry?.getAttribute('href')).toBe(`/projects/${projectId}/tasks/closeout`)
   })
 
   it('reads live panel data from shared slices instead of page-local fetch truth', () => {

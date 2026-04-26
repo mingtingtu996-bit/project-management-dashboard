@@ -2,7 +2,7 @@ import express from 'express'
 import supertest from 'supertest'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-type TableName = 'monthly_plans' | 'monthly_plan_items' | 'planning_governance_states'
+type TableName = 'monthly_plans' | 'monthly_plan_items' | 'planning_governance_states' | 'projects' | 'project_members'
 type Row = Record<string, any>
 
 const state = vi.hoisted(() => {
@@ -10,6 +10,8 @@ const state = vi.hoisted(() => {
     monthly_plans: [],
     monthly_plan_items: [],
     planning_governance_states: [],
+    projects: [],
+    project_members: [],
   }
 
   function clone<T>(value: T): T {
@@ -101,6 +103,7 @@ const state = vi.hoisted(() => {
   return {
     tables,
     projectRole: 'owner',
+    currentUserId: 'owner-1',
     existingLock: null as Record<string, any> | null,
     acquiredLock: null as Record<string, any> | null,
     unlockedLock: null as Record<string, any> | null,
@@ -122,9 +125,10 @@ const state = vi.hoisted(() => {
 
 vi.mock('../middleware/auth.js', () => ({
   authenticate: vi.fn((req: any, _res: any, next: () => void) => {
-    req.user = { id: 'owner-1' }
+    req.user = { id: state.currentUserId }
     next()
   }),
+  requireProjectMember: vi.fn(() => (_req: any, _res: any, next: () => void) => next()),
   requireProjectEditor: vi.fn(() => (_req: any, _res: any, next: () => void) => next()),
 }))
 
@@ -212,6 +216,7 @@ describe('monthly plan force-close route', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     state.projectRole = 'owner'
+    state.currentUserId = 'owner-1'
     state.existingLock = null
     state.acquiredLock = null
     state.unlockedLock = null
@@ -230,6 +235,10 @@ describe('monthly plan force-close route', () => {
       closeout_at: null,
       created_at: '2026-04-01T00:00:00.000Z',
       updated_at: '2026-04-01T00:00:00.000Z',
+    })
+    state.tables.projects.push({
+      id: 'project-1',
+      owner_id: 'owner-1',
     })
     state.tables.monthly_plan_items.push({
       id: 'plan-item-1',
@@ -263,6 +272,7 @@ describe('monthly plan force-close route', () => {
 
   it('rejects force-close for non-owner users', async () => {
     state.projectRole = 'pm'
+    state.currentUserId = 'member-1'
 
     const response = await supertest(buildApp()).post('/api/monthly-plans/plan-1/force-close')
 
@@ -326,6 +336,7 @@ describe('monthly plan force-close route', () => {
     expect(lockResponse.status).toBe(409)
     expect(lockResponse.body.error.code).toBe('LOCK_HELD')
 
+    state.tables.monthly_plans[0].status = 'draft'
     const batchResponse = await request
       .post('/api/monthly-plans/plan-1/items/batch-target-progress')
       .send({ target_progress: 65 })

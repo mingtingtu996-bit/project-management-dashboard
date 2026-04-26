@@ -1,5 +1,5 @@
 import { useState, useEffect, lazy, Suspense, useCallback, type ReactElement } from 'react'
-import { HashRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom'
+import { HashRouter, Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom'
 
 import { ConditionWarningModal } from '@/components/ConditionWarningModal'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
@@ -41,7 +41,6 @@ const PreMilestones = lazy(() => import('@/pages/PreMilestones'))
 const Notifications = lazy(() => import('@/pages/Notifications'))
 const Reports = lazy(() => import('@/pages/Reports'))
 const Materials = lazy(() => import('@/pages/Materials'))
-const TeamMembers = lazy(() => import('@/pages/TeamMembers'))
 const TaskSummary = lazy(() => import('@/pages/TaskSummary'))
 const ResponsibilityView = lazy(() => import('@/pages/ResponsibilityView'))
 const WBSTemplates = lazy(() => import('@/pages/WBSTemplates'))
@@ -121,6 +120,15 @@ function withRouteBoundary(element: ReactElement) {
       <Suspense fallback={<PageLoader />}>{element}</Suspense>
     </ErrorBoundary>
   )
+}
+
+function PlanningCloseoutRedirect() {
+  const { id } = useParams<{ id: string }>()
+  if (!id) {
+    return <Navigate to="/company" replace />
+  }
+
+  return <Navigate to={`/projects/${id}/tasks/closeout`} replace />
 }
 
 function AppContent() {
@@ -347,14 +355,14 @@ function AppContent() {
                 <Route path="acceptance" element={withRouteBoundary(<AcceptanceTimeline />)} />
                 <Route path="pre-milestones" element={withRouteBoundary(<PreMilestones />)} />
                 <Route path="reports" element={withRouteBoundary(<Reports />)} />
-                <Route path="team" element={withRouteBoundary(<TeamMembers />)} />
                 <Route path="task-summary" element={withRouteBoundary(<TaskSummary />)} />
                 <Route path="responsibility" element={withRouteBoundary(<ResponsibilityView />)} />
                 <Route path="planning/wbs-templates" element={withRouteBoundary(<WBSTemplates />)} />
                 <Route path="wbs-templates" element={<Navigate to="planning/wbs-templates" replace />} />
                 <Route path="planning/baseline" element={withRouteBoundary(<BaselinePage />)} />
                 <Route path="planning/monthly" element={withRouteBoundary(<MonthlyPlanPage />)} />
-                <Route path="planning/closeout" element={withRouteBoundary(<CloseoutPage />)} />
+                <Route path="tasks/closeout" element={withRouteBoundary(<CloseoutPage />)} />
+                <Route path="planning/closeout" element={<PlanningCloseoutRedirect />} />
                 <Route path="planning/*" element={withRouteBoundary(<PlanningWorkspace />)} />
                 <Route path="drawings" element={withRouteBoundary(<Drawings />)} />
                 <Route path="materials" element={withRouteBoundary(<Materials />)} />

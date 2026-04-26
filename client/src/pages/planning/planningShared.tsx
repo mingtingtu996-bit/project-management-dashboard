@@ -17,8 +17,6 @@ import type { Task } from '@/pages/GanttViewTypes'
 export const PLANNING_PAGE_TABS = [
   { key: 'baseline', label: '项目基线' },
   { key: 'monthly', label: '月度计划' },
-  { key: 'revision-pool', label: '计划修订候选' },
-  { key: 'deviation', label: '偏差分析' },
 ] as const
 
 export type PlanningPageTabKey = (typeof PLANNING_PAGE_TABS)[number]['key']
@@ -104,6 +102,17 @@ export type PlanningGovernanceSnapshot = {
 export type BaselineDetail = BaselineVersion & { items: BaselineItem[] }
 export type MonthlyPlanDetail = MonthlyPlanVersion & { items: MonthlyPlanItem[] }
 export type PlanningDraftType = 'baseline' | 'monthly_plan'
+
+export interface MonthlyPlanChangeSummary {
+  addedCount: number
+  removedCount: number
+  dateShiftCount: number
+  progressAdjustmentCount: number
+  milestoneAdjustCount: number
+  totalChangeCount: number
+  threshold: number
+  isLargeScale: boolean
+}
 
 export type DraftLockResponse = { lock: PlanningDraftLockRecord }
 

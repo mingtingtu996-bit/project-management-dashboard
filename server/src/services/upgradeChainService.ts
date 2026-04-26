@@ -927,7 +927,7 @@ export async function ensureObstacleEscalatedIssue(obstacle: {
     .from('issues')
     .select('*')
     .eq('source_type', 'obstacle_escalated')
-    .eq('source_id', obstacleId)
+    .or(`source_id.eq.${obstacleId},source_entity_id.eq.${obstacleId}`)
     .order('created_at', { ascending: false })
 
   if (error) throw new Error(error.message)
@@ -980,8 +980,8 @@ export async function markObstacleEscalatedIssuePendingManualClose(obstacleId: s
   const { data, error } = await supabase
     .from('issues')
     .select('*')
-    .eq('source_id', obstacleId)
     .eq('source_type', 'obstacle_escalated')
+    .or(`source_id.eq.${obstacleId},source_entity_id.eq.${obstacleId}`)
     .in('status', ['open', 'investigating'])
 
   if (error) throw new Error(error.message)

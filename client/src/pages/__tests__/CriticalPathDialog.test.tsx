@@ -1,6 +1,5 @@
-import { act, type ReactElement } from 'react'
-import { createRoot, type Root } from 'react-dom/client'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { render, screen, waitFor } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
 
 import type { CriticalPathSnapshot } from '@/lib/criticalPath'
 import type { Task } from '@/pages/GanttViewTypes'
@@ -45,29 +44,7 @@ function createSnapshot(): CriticalPathSnapshot {
 }
 
 describe('CriticalPathDialog contract', () => {
-  let container: HTMLDivElement
-  let root: Root | null = null
-
-  function render(node: ReactElement) {
-    act(() => {
-      root?.render(node)
-    })
-  }
-
-  beforeEach(() => {
-    container = document.createElement('div')
-    document.body.appendChild(container)
-    root = createRoot(container)
-  })
-
-  afterEach(() => {
-    act(() => {
-      root?.unmount()
-    })
-    document.body.innerHTML = ''
-  })
-
-  it('renders snapshot summary and nested critical path graph when open', () => {
+  it('renders snapshot summary and nested critical path graph when open', async () => {
     render(
       <CriticalPathDialog
         open
@@ -86,14 +63,16 @@ describe('CriticalPathDialog contract', () => {
       />,
     )
 
-    expect(document.body.querySelector('[data-testid=\"critical-path-dialog\"]')).toBeTruthy()
-    expect(document.body.querySelector('[data-testid=\"critical-path-graph\"]')).toBeTruthy()
+    await waitFor(() => expect(screen.getByTestId('critical-path-dialog')).toBeTruthy())
+    expect(screen.getByTestId('critical-path-dialog-drag-handle')).toBeTruthy()
+    expect(screen.getByTestId('critical-path-dialog').getAttribute('style')).toContain('resize: both')
+    expect(screen.getByTestId('critical-path-graph')).toBeTruthy()
     expect(document.body.textContent).toContain('关键路径图谱')
     expect(document.body.textContent).toContain('工期 5 天')
     expect(document.body.textContent).toContain('关注 1 项')
   })
 
-  it('shows loading summary text when snapshot is not ready', () => {
+  it('shows loading summary text when snapshot is not ready', async () => {
     render(
       <CriticalPathDialog
         open
@@ -108,7 +87,7 @@ describe('CriticalPathDialog contract', () => {
       />,
     )
 
-    expect(document.body.querySelector('[data-testid=\"critical-path-dialog\"]')).toBeTruthy()
+    await waitFor(() => expect(screen.getByTestId('critical-path-dialog')).toBeTruthy())
     expect(document.body.textContent).toContain('等待关键路径快照加载')
   })
 })

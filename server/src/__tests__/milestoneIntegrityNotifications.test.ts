@@ -65,7 +65,7 @@ describe('milestone integrity notification sync', () => {
     )
 
     expect(state.insertNotification).toHaveBeenCalledWith(expect.objectContaining({
-      type: 'milestone_missing_data',
+      type: 'milestone_mapping_pending',
       notification_type: 'planning-governance-milestone',
       source_entity_type: 'milestone_integrity',
       source_entity_id: 'milestone-1',
@@ -88,7 +88,7 @@ describe('milestone integrity notification sync', () => {
       {
         id: 'notification-1',
         project_id: 'project-1',
-        type: 'milestone_needs_attention',
+        type: 'milestone_mapping_pending',
         source_entity_type: 'milestone_integrity',
         source_entity_id: 'milestone-1',
         status: 'unread',

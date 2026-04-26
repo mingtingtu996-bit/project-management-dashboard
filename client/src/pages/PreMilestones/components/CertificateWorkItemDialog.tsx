@@ -1,4 +1,4 @@
-import { Dispatch, SetStateAction } from 'react'
+import type { Dispatch, SetStateAction } from 'react'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import type { CertificateBoardItem, CertificateWorkItem, CertificateWorkItemFormData } from '../types'
@@ -76,14 +76,12 @@ export function CertificateWorkItemDialog({
               className="rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
             >
               <option value="pending">待启动</option>
-              <option value="preparing_documents">资料准备中</option>
-              <option value="internal_review">报审中</option>
-              <option value="external_submission">报批中</option>
+              <option value="in_progress">进行中</option>
+              <option value="submitted">已申报</option>
               <option value="supplement_required">待补正</option>
-              <option value="approved">已批复</option>
-              <option value="issued">已领证</option>
-              <option value="expired">已失效</option>
-              <option value="voided">已作废</option>
+              <option value="completed">已完成</option>
+              <option value="blocked">已阻塞</option>
+              <option value="cancelled">已取消</option>
             </select>
           </label>
 

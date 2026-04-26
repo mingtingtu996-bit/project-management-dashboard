@@ -6,10 +6,9 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { useDialogFocusRestore } from '@/hooks/useDialogFocusRestore'
 import { cn } from '@/lib/utils'
-import type { CloseoutConfirmMode } from './CloseoutConfirmDialog'
 import type { CloseoutItem } from './CloseoutGroupedList'
 
-export type CloseoutReasonBranch = 'system' | 'manual' | 'escalation'
+export type CloseoutReasonBranch = 'system' | 'carryover' | 'close' | 'manual' | 'force'
 
 interface CloseoutDetailDrawerProps {
   open: boolean
@@ -19,6 +18,7 @@ interface CloseoutDetailDrawerProps {
   forceCloseUnlocked: boolean
   reasonBranch: CloseoutReasonBranch
   reasonLeaf: string
+  readOnly?: boolean
   onClose: () => void
   onToggleBatchLayer: (open: boolean) => void
   onSelectReasonBranch: (branch: CloseoutReasonBranch) => void
@@ -35,21 +35,33 @@ const REASON_TREE: Array<{
 }> = [
   {
     branch: 'system',
-    label: '按系统建议',
-    description: '适用于正常月份的快速采纳路径。',
-    leaves: ['采纳系统建议', '确认无其他变更'],
+    label: '当月已消化关闭',
+    description: '适用于当月已完成、可直接关闭的事项。',
+    leaves: ['确认已完成', '继续保持关闭'],
+  },
+  {
+    branch: 'carryover',
+    label: '条目延后至后续阶段',
+    description: '适用于需要延后到后续阶段继续处理的事项。',
+    leaves: ['延后至下月', '等待后续阶段'],
+  },
+  {
+    branch: 'close',
+    label: '条目取消或不再需要',
+    description: '适用于已取消或后续无需继续跟踪的事项。',
+    leaves: ['确认取消', '标记不再需要'],
   },
   {
     branch: 'manual',
-    label: '补录关闭原因',
-    description: '',
-    leaves: ['资料已补齐', '线下确认完成', '等待补件'],
+    label: '条目合并到其他条目',
+    description: '适用于当前条目已被其他条目承接或合并的场景。',
+    leaves: ['合并到其他条目', '转移至承接项'],
   },
   {
-    branch: 'escalation',
-    label: '升级复核',
-    description: '适用于并发、过期或超期事项。',
-    leaves: ['提交项目负责人复核', '提交公司管理员复核'],
+    branch: 'force',
+    label: '因范围变更移出',
+    description: '适用于范围收缩或边界变更导致移出的事项。',
+    leaves: ['按范围变更移出', '从本月清单移除'],
   },
 ]
 
@@ -58,11 +70,13 @@ function ReasonCascader({
   leaf,
   onSelectBranch,
   onSelectLeaf,
+  readOnly = false,
 }: {
   branch: CloseoutReasonBranch
   leaf: string
   onSelectBranch: (branch: CloseoutReasonBranch) => void
   onSelectLeaf: (leaf: string) => void
+  readOnly?: boolean
 }) {
   const active = REASON_TREE.find((item) => item.branch === branch) ?? REASON_TREE[0]
 
@@ -79,6 +93,7 @@ function ReasonCascader({
             type="button"
             variant={branch === option.branch ? 'default' : 'outline'}
             size="sm"
+            disabled={readOnly}
             onClick={() => {
               onSelectBranch(option.branch)
               onSelectLeaf(option.leaves[0])
@@ -91,6 +106,8 @@ function ReasonCascader({
         ))}
       </div>
 
+      {active.description ? <div className="text-xs leading-5 text-slate-500">{active.description}</div> : null}
+
       <div className="grid gap-2 sm:grid-cols-2">
         {active.leaves.map((item) => (
           <Button
@@ -98,6 +115,7 @@ function ReasonCascader({
             type="button"
             variant={leaf === item ? 'secondary' : 'outline'}
             size="sm"
+            disabled={readOnly}
             onClick={() => onSelectLeaf(item)}
             className="justify-start rounded-2xl"
             data-testid={`closeout-reason-leaf-${item}`}
@@ -115,6 +133,15 @@ function ReasonCascader({
   )
 }
 
+function SnapshotField({ label, value, className }: { label: string; value: string; className?: string }) {
+  return (
+    <div className={cn('rounded-xl border border-slate-200 bg-slate-50 px-3 py-2', className)}>
+      <div className="text-xs text-slate-500">{label}</div>
+      <div className="mt-1 text-sm font-medium text-slate-900">{value}</div>
+    </div>
+  )
+}
+
 export function CloseoutDetailDrawer({
   open,
   item,
@@ -123,6 +150,7 @@ export function CloseoutDetailDrawer({
   forceCloseUnlocked,
   reasonBranch,
   reasonLeaf,
+  readOnly = false,
   onClose,
   onToggleBatchLayer,
   onSelectReasonBranch,
@@ -131,6 +159,7 @@ export function CloseoutDetailDrawer({
   onProcessSelectedItems,
 }: CloseoutDetailDrawerProps) {
   useDialogFocusRestore(open)
+  const editable = !readOnly
   const visibleBanners = useMemo(
     () => ({
       concurrency: item?.status === 'concurrency' || selectedItems.some((entry) => entry.status === 'concurrency'),
@@ -231,11 +260,56 @@ export function CloseoutDetailDrawer({
               </div>
             </div>
 
+            <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="text-sm font-medium text-slate-900">两栏对比</div>
+                <Badge variant="secondary">月计划 / 当前排期</Badge>
+              </div>
+              {(() => {
+                const planStart = item?.planStartLabel ?? '未设置'
+                const planEnd = item?.planEndLabel ?? '未设置'
+                const planProgress = item?.planProgressLabel ?? '未设置'
+                const taskStart = item?.taskStartLabel ?? '未设置'
+                const taskEnd = item?.taskEndLabel ?? '未设置'
+                const taskProgress = item?.taskProgressLabel ?? '未设置'
+                const hasDiff = planStart !== taskStart || planEnd !== taskEnd || planProgress !== taskProgress
+
+                return (
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div
+                      className={cn(
+                        'space-y-2 rounded-2xl border p-3',
+                        hasDiff ? 'border-amber-200 bg-amber-50' : 'border-white/80 bg-white',
+                      )}
+                    >
+                      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">月计划快照</div>
+                      <SnapshotField label="计划开始" value={planStart} />
+                      <SnapshotField label="计划结束" value={planEnd} />
+                      <SnapshotField label="计划进度" value={planProgress} />
+                    </div>
+                    <div
+                      className={cn(
+                        'space-y-2 rounded-2xl border p-3',
+                        hasDiff ? 'border-amber-200 bg-amber-50' : 'border-white/80 bg-white',
+                      )}
+                    >
+                      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">当前排期快照</div>
+                      <SnapshotField label="任务名称" value={item?.taskTitle ?? '未关联当前任务'} />
+                      <SnapshotField label="计划开始" value={taskStart} />
+                      <SnapshotField label="计划结束" value={taskEnd} />
+                      <SnapshotField label="当前进度" value={taskProgress} />
+                    </div>
+                  </div>
+                )
+              })()}
+            </div>
+
             <ReasonCascader
               branch={reasonBranch}
               leaf={reasonLeaf}
               onSelectBranch={onSelectReasonBranch}
               onSelectLeaf={onSelectReasonLeaf}
+              readOnly={readOnly}
             />
 
             <div className="flex flex-wrap items-center gap-2">
@@ -245,6 +319,7 @@ export function CloseoutDetailDrawer({
                 onClick={onProcessCurrentItem}
                 className="gap-2"
                 data-testid="closeout-single-process-entry"
+                disabled={!editable}
               >
                 处理当前条目
               </Button>
@@ -253,6 +328,7 @@ export function CloseoutDetailDrawer({
                 variant="outline"
                 onClick={() => onToggleBatchLayer(!batchLayerOpen)}
                 data-testid="closeout-batch-layer-toggle"
+                disabled={!editable}
               >
                 {batchLayerOpen ? '收起批量补录层' : '打开批量补录层'}
               </Button>
@@ -292,12 +368,12 @@ export function CloseoutDetailDrawer({
               <Button
                 type="button"
                 onClick={onProcessSelectedItems}
-                disabled={!selectedItems.length}
+                disabled={!editable || !selectedItems.length}
                 data-testid="closeout-batch-process-entry"
               >
                 处理所选项
               </Button>
-              <Button type="button" variant="outline" onClick={() => onToggleBatchLayer(false)}>
+              <Button type="button" variant="outline" onClick={() => onToggleBatchLayer(false)} disabled={!editable}>
                 稍后处理
               </Button>
             </div>

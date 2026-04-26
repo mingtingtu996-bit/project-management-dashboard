@@ -105,6 +105,30 @@ const mocks = vi.hoisted(() => {
     },
     recordTaskProgressSnapshot: vi.fn(async () => undefined),
     recalculateProjectCriticalPath: vi.fn(async () => undefined),
+    getProjectCriticalPathSnapshot: vi.fn(async (projectId: string) => ({
+      projectId,
+      autoTaskIds: [],
+      manualAttentionTaskIds: [],
+      manualInsertedTaskIds: [],
+      primaryChain: null,
+      alternateChains: [],
+      displayTaskIds: [],
+      watchedTaskIds: [],
+      edges: [],
+      tasks: tables.tasks
+        .filter((row) => row.project_id === projectId)
+        .map((row) => ({
+          taskId: row.id,
+          title: row.title ?? '',
+          floatDays: 10,
+          durationDays: 1,
+          isAutoCritical: false,
+          isManualAttention: false,
+          isManualInserted: false,
+        })),
+      projectDurationDays: 0,
+      calculatedAt: '2026-04-01T00:00:00.000Z',
+    })),
     persistNotification: vi.fn(async (payload: any) => payload),
     writeLog: vi.fn(async () => undefined),
     writeStatusTransitionLog: vi.fn(async () => undefined),
@@ -124,6 +148,7 @@ vi.mock('../services/dbService.js', () => ({
 
 vi.mock('../services/projectCriticalPathService.js', () => ({
   recalculateProjectCriticalPath: mocks.recalculateProjectCriticalPath,
+  getProjectCriticalPathSnapshot: mocks.getProjectCriticalPathSnapshot,
 }))
 
 vi.mock('../services/warningChainService.js', () => ({

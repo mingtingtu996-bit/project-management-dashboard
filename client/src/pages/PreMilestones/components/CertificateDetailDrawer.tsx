@@ -1,16 +1,24 @@
 import type { ReactNode } from 'react'
-import { useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { useDialogFocusRestore } from '@/hooks/useDialogFocusRestore'
+import { createEmptyConditionForm } from '../constants'
+import { ConditionsDialog } from './ConditionsDialog'
 import { CertificateDependencyMatrix } from './CertificateDependencyMatrix'
+import { CertificateDependenciesDialog } from './CertificateDependenciesDialog'
+import { PreMilestoneDependenciesDialog } from './PreMilestoneDependenciesDialog'
 import type {
+  CertificateBoardItem,
   CertificateDetailResponse,
   CertificateLinkedIssue,
   CertificateLinkedRisk,
   CertificateLinkedWarning,
+  ConditionFormData,
+  PreMilestoneCondition,
+  PreMilestone,
 } from '../types'
 import {
   getCertificateStatusThemeKey,
@@ -24,13 +32,31 @@ interface CertificateDetailDrawerProps {
   onClose: () => void
   onSelectCertificate: (certificateId: string) => void
   onSelectWorkItem: (workItemId: string) => void
+  onSubmitCondition: (payload: {
+    conditionId: string | null
+    preMilestoneId: string
+    form: ConditionFormData
+  }) => Promise<void> | void
+  onUpdateConditionStatus: (conditionId: string, status: string) => Promise<void> | void
+  onDeleteCondition: (conditionId: string) => Promise<void> | void
   onEscalateIssue: (workItemId?: string | null) => void | Promise<void>
   onEscalateRisk: (workItemId?: string | null) => void | Promise<void>
+  onCreateCertificateDependency: (payload: {
+    predecessor_type: 'certificate' | 'work_item'
+    predecessor_id: string
+    successor_type: 'certificate' | 'work_item'
+    successor_id: string
+    dependency_kind: 'hard' | 'soft'
+    notes?: string | null
+  }) => Promise<void> | void
+  onDeleteCertificateDependency: (dependencyId: string) => Promise<void> | void
   escalatingIssue?: boolean
   escalatingRisk?: boolean
   selectedCertificateId?: string | null
   selectedWorkItemId?: string | null
   projectId?: string | null
+  certificates?: CertificateBoardItem[]
+  canEdit?: boolean
 }
 
 const WARNING_LEVEL_LABEL: Record<CertificateLinkedWarning['warning_level'], string> = {
@@ -148,25 +174,117 @@ export function CertificateDetailDrawer({
   onClose,
   onSelectCertificate,
   onSelectWorkItem,
+  onSubmitCondition,
+  onUpdateConditionStatus,
+  onDeleteCondition,
   onEscalateIssue,
   onEscalateRisk,
+  onCreateCertificateDependency,
+  onDeleteCertificateDependency,
   escalatingIssue = false,
   escalatingRisk = false,
   selectedCertificateId,
   selectedWorkItemId,
   projectId,
+  certificates = [],
+  canEdit = true,
 }: CertificateDetailDrawerProps) {
   useDialogFocusRestore(open)
   const workItemsSectionRef = useRef<HTMLDivElement>(null)
+  const [conditionDialogOpen, setConditionDialogOpen] = useState(false)
+  const [certificateDependenciesOpen, setCertificateDependenciesOpen] = useState(false)
+  const [preMilestoneDependenciesOpen, setPreMilestoneDependenciesOpen] = useState(false)
+  const [conditionForm, setConditionForm] = useState<ConditionFormData>(() => createEmptyConditionForm())
+  const [editingConditionId, setEditingConditionId] = useState<string | null>(null)
   const riskHubHref = projectId ? `/projects/${projectId}/risks` : null
   const linkedWarnings = detail?.linkedWarnings || []
   const linkedIssues = detail?.linkedIssues || []
   const linkedRisks = detail?.linkedRisks || []
+  const certificateConditions = detail?.conditions || []
+  const siblingCertificates = certificates.filter((item) => item.id !== detail?.certificate.id)
   const selectedWorkItem = detail?.workItems.find((item) => item.id === selectedWorkItemId) || null
   const escalationTargetLabel = selectedWorkItem?.item_name || detail?.certificate.certificate_name || '当前证照'
   const escalationTargetHint = selectedWorkItem
     ? '当前会把选中的办理事项软链接到问题 / 风险主链。'
     : '当前会把证照卡点软链接到问题 / 风险主链。'
+  const conditionMilestone = useMemo<PreMilestone | null>(() => {
+    if (!detail) return null
+    const now = detail.certificate.latest_record_at || new Date().toISOString()
+    return {
+      id: detail.certificate.id,
+      project_id: projectId || '',
+      milestone_type: String(detail.certificate.certificate_type || 'certificate'),
+      name: detail.certificate.certificate_name,
+      description: detail.certificate.block_reason || undefined,
+      status: detail.certificate.status as PreMilestone['status'],
+      lead_unit: detail.certificate.approving_authority || undefined,
+      planned_start_date: detail.certificate.next_action_due_date || undefined,
+      planned_end_date: detail.certificate.planned_finish_date || undefined,
+      actual_start_date: undefined,
+      actual_end_date: detail.certificate.actual_finish_date || undefined,
+      responsible_user_id: undefined,
+      sort_order: 0,
+      notes: detail.certificate.next_action || undefined,
+      certificate_no: detail.certificate.document_no || undefined,
+      created_by: undefined,
+      created_at: now,
+      updated_at: now,
+    } as PreMilestone
+  }, [detail, projectId])
+
+  useEffect(() => {
+    if (open) return
+    setConditionDialogOpen(false)
+    setCertificateDependenciesOpen(false)
+    setPreMilestoneDependenciesOpen(false)
+    handleCancelEditCondition()
+  }, [open])
+
+  const handleOpenConditionsDialog = () => {
+    if (!canEdit) return
+    setEditingConditionId(null)
+    setConditionForm(createEmptyConditionForm())
+    setConditionDialogOpen(true)
+  }
+
+  const handleStartEditCondition = (condition: PreMilestoneCondition) => {
+    if (!canEdit) return
+    setEditingConditionId(condition.id)
+    setConditionForm({
+      condition_type: condition.condition_type || '',
+      condition_name: condition.condition_name || '',
+      description: condition.description || '',
+      target_date: condition.target_date || condition.due_date || '',
+    })
+    setConditionDialogOpen(true)
+  }
+
+  const handleCancelEditCondition = () => {
+    setEditingConditionId(null)
+    setConditionForm(createEmptyConditionForm())
+  }
+
+  const handleSubmitCondition = async () => {
+    if (!canEdit) return
+    if (!conditionMilestone) return
+    await onSubmitCondition({
+      conditionId: editingConditionId,
+      preMilestoneId: conditionMilestone.id,
+      form: conditionForm,
+    })
+    setConditionDialogOpen(false)
+    handleCancelEditCondition()
+  }
+
+  const handleUpdateConditionStatus = async (conditionId: string, status: string) => {
+    if (!canEdit) return
+    await onUpdateConditionStatus(conditionId, status)
+  }
+
+  const handleDeleteCondition = async (conditionId: string) => {
+    if (!canEdit) return
+    await onDeleteCondition(conditionId)
+  }
 
   return (
     <>
@@ -239,6 +357,33 @@ export function CertificateDetailDrawer({
               </div>
             </section>
 
+            {siblingCertificates.length > 0 ? (
+              <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h4 className="text-sm font-semibold text-slate-900">证照切换</h4>
+                    <p className="mt-1 text-xs text-slate-500">快速跳转同项目其他证照。</p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {[detail.certificate, ...siblingCertificates].map((certificate) => (
+                      <button
+                        key={certificate.id}
+                        type="button"
+                        onClick={() => onSelectCertificate(certificate.id)}
+                        className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                          selectedCertificateId === certificate.id
+                            ? 'bg-blue-600 text-white'
+                            : 'border border-slate-200 bg-slate-50 text-slate-600 hover:border-blue-300 hover:text-blue-700'
+                        }`}
+                      >
+                        {certificate.certificate_name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </section>
+            ) : null}
+
             <section className="grid gap-4 xl:grid-cols-[1.3fr_1fr]">
               <div className="grid gap-4">
                 <div ref={workItemsSectionRef} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -247,8 +392,10 @@ export function CertificateDetailDrawer({
                       <h4 className="text-sm font-semibold text-slate-900">共享事项与依赖</h4>
                       <p className="mt-1 text-xs text-slate-500">展示当前证件受到哪些事项影响，以及这些事项还会影响哪些证件。</p>
                     </div>
-                    <div className="flex gap-2">
+                    <div className="flex flex-wrap gap-2">
                       <Button variant="outline" size="sm" onClick={() => workItemsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>查看共享事项</Button>
+                      {canEdit ? <Button variant="outline" size="sm" onClick={() => setCertificateDependenciesOpen(true)}>管理证照依赖</Button> : null}
+                      {canEdit ? <Button variant="outline" size="sm" onClick={() => setPreMilestoneDependenciesOpen(true)}>管理前置依赖</Button> : null}
                       <Button variant="outline" size="sm" onClick={onClose}>关闭</Button>
                     </div>
                   </div>
@@ -286,31 +433,76 @@ export function CertificateDetailDrawer({
               <div className="grid gap-4">
                 <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
                   <div className="flex flex-wrap items-center justify-between gap-3">
+                    <h4 className="text-sm font-semibold text-slate-900">条件清单</h4>
+                    {canEdit ? (
+                      <Button variant="outline" size="sm" onClick={handleOpenConditionsDialog}>
+                        管理条件
+                      </Button>
+                    ) : null}
+                  </div>
+                  <div className="mt-3 grid gap-2">
+                    {certificateConditions.length > 0 ? (
+                      certificateConditions.map((condition) => (
+                        <div key={condition.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="font-medium text-slate-900">{condition.condition_name}</div>
+                            <StatusBadge
+                              status={condition.is_satisfied ? 'completed' : condition.status === '未满足' ? 'warning' : 'pending'}
+                              fallbackLabel={condition.status}
+                              className="px-2 py-0.5 text-[11px]"
+                            >
+                              {condition.is_satisfied ? '已满足' : condition.status}
+                            </StatusBadge>
+                          </div>
+                          <div className="mt-1 text-xs text-slate-500">
+                            {condition.condition_type}
+                            {condition.responsible_person ? ` · 责任人：${condition.responsible_person}` : ''}
+                            {condition.due_date ? ` · 截止：${condition.due_date}` : ''}
+                          </div>
+                          {condition.description ? <div className="mt-1 text-xs leading-5 text-slate-600">{condition.description}</div> : null}
+                        </div>
+                      ))
+                    ) : (
+                      <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+                        暂无条件清单。
+                      </div>
+                    )}
+                  </div>
+                </section>
+
+                <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
                       <h4 className="text-sm font-semibold text-slate-900">升级处置</h4>
                       <p className="mt-1 text-xs text-slate-500">
                         当前对象：{escalationTargetLabel}。{escalationTargetHint}
                       </p>
                     </div>
-                    <div className="flex flex-wrap gap-2">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        disabled={escalatingIssue}
-                        onClick={() => void onEscalateIssue(selectedWorkItem?.id || null)}
-                      >
-                        {escalatingIssue ? '升级中...' : '升级为问题'}
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        disabled={escalatingRisk}
-                        onClick={() => void onEscalateRisk(selectedWorkItem?.id || null)}
-                      >
-                        {escalatingRisk ? '升级中...' : '升级为风险'}
-                      </Button>
-                    </div>
+                    {canEdit ? (
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={escalatingIssue}
+                          onClick={() => void onEscalateIssue(selectedWorkItem?.id || null)}
+                        >
+                          {escalatingIssue ? '升级中...' : '升级为问题'}
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          disabled={escalatingRisk}
+                          onClick={() => void onEscalateRisk(selectedWorkItem?.id || null)}
+                        >
+                          {escalatingRisk ? '升级中...' : '升级为风险'}
+                        </Button>
+                      </div>
+                    ) : (
+                      <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-500">
+                        当前为只读模式
+                      </div>
+                    )}
                   </div>
                   <div className="mt-3 rounded-xl border border-dashed border-slate-200 bg-slate-50 p-3 text-xs text-slate-500">
                     只复用共享 `issues / risks` 主链，通过 `source_entity` 做软链接，不在前期证照域内新增平行状态链。
@@ -449,6 +641,48 @@ export function CertificateDetailDrawer({
         )}
         </div>
       </div>
+      {conditionDialogOpen && conditionMilestone ? (
+        <ConditionsDialog
+          selectedMilestone={conditionMilestone}
+          conditions={certificateConditions}
+          conditionForm={conditionForm}
+          setConditionForm={setConditionForm}
+          editingConditionId={editingConditionId}
+          onClose={() => {
+            setConditionDialogOpen(false)
+            handleCancelEditCondition()
+          }}
+          onSubmitCondition={() => void handleSubmitCondition()}
+          onStartEditCondition={handleStartEditCondition}
+          onCancelEditCondition={handleCancelEditCondition}
+          onUpdateConditionStatus={(conditionId, status) => void handleUpdateConditionStatus(conditionId, status)}
+          onDeleteCondition={(conditionId) => void handleDeleteCondition(conditionId)}
+          readOnly={!canEdit}
+        />
+      ) : null}
+      {canEdit ? (
+        <>
+          <CertificateDependenciesDialog
+            open={certificateDependenciesOpen}
+            currentCertificateId={detail?.certificate.id || selectedCertificateId || null}
+            currentCertificateName={detail?.certificate.certificate_name || null}
+            selectedWorkItemId={selectedWorkItemId}
+            certificates={certificates}
+            workItems={detail?.workItems || []}
+            dependencies={detail?.dependencies || []}
+            onClose={() => setCertificateDependenciesOpen(false)}
+            onCreateDependency={(payload) => onCreateCertificateDependency(payload)}
+            onDeleteDependency={(dependencyId) => onDeleteCertificateDependency(dependencyId)}
+          />
+          <PreMilestoneDependenciesDialog
+            open={preMilestoneDependenciesOpen}
+            projectId={projectId}
+            certificates={certificates}
+            currentCertificateId={detail?.certificate.id || selectedCertificateId || null}
+            onClose={() => setPreMilestoneDependenciesOpen(false)}
+          />
+        </>
+      ) : null}
     </>
   )
 }

@@ -337,7 +337,6 @@ export function exportRisksToExcel(projectId: string): void {
     '状态': getRiskStatusText(risk.status),
     '概率(%)': risk.probability || 0,
     '影响(%)': risk.impact || 0,
-    '应对措施': risk.mitigation || ''
   }))
   
   const wb = XLSX.utils.book_new()
@@ -345,7 +344,7 @@ export function exportRisksToExcel(projectId: string): void {
   
   ws['!cols'] = [
     { wch: 25 }, { wch: 30 }, { wch: 10 }, { wch: 10 },
-    { wch: 10 }, { wch: 10 }, { wch: 30 }
+    { wch: 10 }, { wch: 10 }
   ]
   
   XLSX.utils.book_append_sheet(wb, ws, '风险列表')
@@ -574,9 +573,8 @@ function getRiskLevelText(level: string): string {
 function getRiskStatusText(status: string): string {
   const map: Record<string, string> = {
     'identified': '已识别',
-    'monitoring': '监控中',
-    'mitigated': '已缓解',
-    'resolved': '已解决'
+    'mitigating': '处理中',
+    'closed': '已关闭',
   }
   return map[status] || status
 }

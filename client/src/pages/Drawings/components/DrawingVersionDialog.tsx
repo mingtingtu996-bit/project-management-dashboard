@@ -68,6 +68,7 @@ export function DrawingVersionDialog({
   onOpenChange,
   onSetCurrentVersion,
   onCreateVersion,
+  canEdit = true,
 }: {
   open: boolean
   packageCard: DrawingPackageCard | null
@@ -76,6 +77,7 @@ export function DrawingVersionDialog({
   onOpenChange: (open: boolean) => void
   onSetCurrentVersion: (versionId: string) => void
   onCreateVersion?: (draft: DrawingVersionCreateDraft) => Promise<boolean | void> | boolean | void
+  canEdit?: boolean
 }) {
   const { toast } = useToast()
   const navigate = useNavigate()
@@ -198,7 +200,7 @@ export function DrawingVersionDialog({
                       </div>
                     </button>
 
-                    {!version.isCurrentVersion ? (
+                    {!version.isCurrentVersion && canEdit ? (
                       <Button size="sm" variant="outline" onClick={() => onSetCurrentVersion(version.versionId)}>
                         设为当前有效版
                       </Button>
@@ -333,7 +335,7 @@ export function DrawingVersionDialog({
         </div>
 
         <DialogFooter>
-          {createMode ? (
+          {createMode && canEdit ? (
             <>
               <Button
                 variant="outline"
@@ -353,7 +355,7 @@ export function DrawingVersionDialog({
                 保存版本
               </Button>
             </>
-          ) : (
+          ) : canEdit ? (
             <Button
               variant="outline"
               data-testid="drawing-version-upload-btn"
@@ -366,7 +368,7 @@ export function DrawingVersionDialog({
               <Upload className="mr-2 h-4 w-4" />
               上传新版本
             </Button>
-          )}
+          ) : null}
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             关闭
           </Button>

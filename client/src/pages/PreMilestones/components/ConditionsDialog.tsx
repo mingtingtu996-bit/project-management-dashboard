@@ -1,10 +1,11 @@
-import type { Dispatch, SetStateAction } from 'react'
 import {
   Calendar,
   CheckCircle,
+  Edit2,
   Trash2,
   X,
 } from 'lucide-react'
+import type { Dispatch, SetStateAction } from 'react'
 import type {
   ConditionFormData,
   PreMilestone,
@@ -16,10 +17,14 @@ interface ConditionsDialogProps {
   conditions: PreMilestoneCondition[]
   conditionForm: ConditionFormData
   setConditionForm: Dispatch<SetStateAction<ConditionFormData>>
+  editingConditionId?: string | null
   onClose: () => void
-  onAddCondition: () => void
+  onSubmitCondition: () => void
+  onStartEditCondition: (condition: PreMilestoneCondition) => void
+  onCancelEditCondition: () => void
   onUpdateConditionStatus: (conditionId: string, status: string) => void
   onDeleteCondition: (conditionId: string) => void
+  readOnly?: boolean
 }
 
 export function ConditionsDialog({
@@ -27,10 +32,14 @@ export function ConditionsDialog({
   conditions,
   conditionForm,
   setConditionForm,
+  editingConditionId,
   onClose,
-  onAddCondition,
+  onSubmitCondition,
+  onStartEditCondition,
+  onCancelEditCondition,
   onUpdateConditionStatus,
   onDeleteCondition,
+  readOnly = false,
 }: ConditionsDialogProps) {
   if (!selectedMilestone) {
     return null
@@ -53,61 +62,75 @@ export function ConditionsDialog({
         </div>
 
         <div className="p-6">
-          <div className="mb-6 bg-gray-50 rounded-xl p-4 border border-gray-100">
-            <h3 className="text-sm font-medium text-gray-900 mb-3">添加新条件</h3>
-            <div className="grid grid-cols-2 gap-3 mb-3">
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">条件类型</label>
-                <select
-                  value={conditionForm.condition_type}
-                  onChange={(event) => setConditionForm((previous) => ({ ...previous, condition_type: event.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="all">请选择</option>
-                  <option value="资料">资料</option>
-                  <option value="费用">费用</option>
-                  <option value="审批">审批</option>
-                  <option value="其他">其他</option>
-                </select>
+          {!readOnly ? (
+            <div className="mb-6 bg-gray-50 rounded-xl p-4 border border-gray-100">
+              <h3 className="text-sm font-medium text-gray-900 mb-3">添加新条件</h3>
+              <div className="grid grid-cols-2 gap-3 mb-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">条件类型</label>
+                  <select
+                    value={conditionForm.condition_type}
+                    onChange={(event) => setConditionForm((previous) => ({ ...previous, condition_type: event.target.value }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="all">请选择</option>
+                    <option value="资料">资料</option>
+                    <option value="费用">费用</option>
+                    <option value="审批">审批</option>
+                    <option value="其他">其他</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">目标日期</label>
+                  <input
+                    type="date"
+                    value={conditionForm.target_date}
+                    onChange={(event) => setConditionForm((previous) => ({ ...previous, target_date: event.target.value }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
               </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">目标日期</label>
+              <div className="mb-3">
+                <label className="block text-xs font-medium text-gray-700 mb-1">
+                  条件名称 <span className="text-red-500">*</span>
+                </label>
                 <input
-                  type="date"
-                  value={conditionForm.target_date}
-                  onChange={(event) => setConditionForm((previous) => ({ ...previous, target_date: event.target.value }))}
+                  type="text"
+                  value={conditionForm.condition_name}
+                  onChange={(event) => setConditionForm((previous) => ({ ...previous, condition_name: event.target.value }))}
                   className="w-full px-3 py-2 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
+              <div className="mb-3">
+                <label className="block text-xs font-medium text-gray-700 mb-1">描述</label>
+                <textarea
+                  value={conditionForm.description}
+                  onChange={(event) => setConditionForm((previous) => ({ ...previous, description: event.target.value }))}
+                  rows={2}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <button
+                onClick={onSubmitCondition}
+                disabled={!conditionForm.condition_name}
+                className="px-4 py-2 bg-blue-600 text-white rounded-xl text-sm hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {editingConditionId ? '保存修改' : '添加条件'}
+              </button>
+              {editingConditionId ? (
+                <button
+                  onClick={onCancelEditCondition}
+                  className="ml-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-xl text-sm hover:bg-gray-200"
+                >
+                  取消编辑
+                </button>
+              ) : null}
             </div>
-            <div className="mb-3">
-              <label className="block text-xs font-medium text-gray-700 mb-1">
-                条件名称 <span className="text-red-500">*</span>
-              </label>
-              <input
-                type="text"
-                value={conditionForm.condition_name}
-                onChange={(event) => setConditionForm((previous) => ({ ...previous, condition_name: event.target.value }))}
-                className="w-full px-3 py-2 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
+          ) : (
+            <div className="mb-6 rounded-xl border border-dashed border-gray-200 bg-gray-50 p-4 text-sm text-gray-500">
+              当前为只读模式，仅可查看条件清单。
             </div>
-            <div className="mb-3">
-              <label className="block text-xs font-medium text-gray-700 mb-1">描述</label>
-              <textarea
-                value={conditionForm.description}
-                onChange={(event) => setConditionForm((previous) => ({ ...previous, description: event.target.value }))}
-                rows={2}
-                className="w-full px-3 py-2 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-            <button
-              onClick={onAddCondition}
-              disabled={!conditionForm.condition_name}
-              className="px-4 py-2 bg-blue-600 text-white rounded-xl text-sm hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              添加条件
-            </button>
-          </div>
+          )}
 
           <div>
             <h3 className="text-sm font-medium text-gray-900 mb-3">
@@ -161,30 +184,38 @@ export function ConditionsDialog({
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-2">
-                        {condition.status === '待处理' && (
+                      {!readOnly ? (
+                        <div className="flex items-center gap-2">
                           <button
-                            onClick={() => onUpdateConditionStatus(condition.id, '已满足')}
-                            className="px-3 py-1 bg-emerald-100 text-emerald-700 rounded-md hover:bg-emerald-200 text-xs font-medium transition-colors"
+                            onClick={() => onStartEditCondition(condition)}
+                            className="p-1 hover:bg-gray-100 rounded text-gray-500 hover:text-blue-600"
                           >
-                            标记完成
+                            <Edit2 className="w-4 h-4" />
                           </button>
-                        )}
-                        {condition.status === '已满足' && (
+                          {condition.status === '待处理' && (
+                            <button
+                              onClick={() => onUpdateConditionStatus(condition.id, '已满足')}
+                              className="px-3 py-1 bg-emerald-100 text-emerald-700 rounded-md hover:bg-emerald-200 text-xs font-medium transition-colors"
+                            >
+                              标记完成
+                            </button>
+                          )}
+                          {condition.status === '已满足' && (
+                            <button
+                              onClick={() => onUpdateConditionStatus(condition.id, '已确认')}
+                              className="px-3 py-1 bg-blue-100 text-blue-700 rounded-md hover:bg-blue-200 text-xs font-medium transition-colors"
+                            >
+                              确认
+                            </button>
+                          )}
                           <button
-                            onClick={() => onUpdateConditionStatus(condition.id, '已确认')}
-                            className="px-3 py-1 bg-blue-100 text-blue-700 rounded-md hover:bg-blue-200 text-xs font-medium transition-colors"
+                            onClick={() => onDeleteCondition(condition.id)}
+                            className="p-1 hover:bg-gray-100 rounded text-gray-500 hover:text-red-600"
                           >
-                            确认
+                            <Trash2 className="w-4 h-4" />
                           </button>
-                        )}
-                        <button
-                          onClick={() => onDeleteCondition(condition.id)}
-                          className="p-1 hover:bg-gray-100 rounded text-gray-500 hover:text-red-600"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
+                        </div>
+                      ) : null}
                     </div>
                   </div>
                 ))}

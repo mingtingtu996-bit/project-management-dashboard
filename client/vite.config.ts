@@ -7,6 +7,7 @@ export default defineConfig({
   // 部署到根目录
   base: './',
   resolve: {
+    dedupe: ['react', 'react-dom'],
     alias: {
       "@": path.resolve(__dirname, "./src"),
       // 绕过 pnpm 符号链接问题，直接指定 chart.js 的真实路径

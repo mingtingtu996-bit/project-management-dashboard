@@ -23,6 +23,19 @@ vi.mock('@/hooks/useStore', () => ({
   useCurrentProject: () => ({ id: 'project-1', name: '责任主体示例项目' }),
 }))
 
+vi.mock('@/hooks/usePermissions', () => ({
+  usePermissions: () => ({
+    permissionLevel: 'owner',
+    globalRole: 'project_admin',
+    canManageTeam: true,
+    canEdit: true,
+    loading: false,
+    can: () => true,
+    canAny: () => true,
+    canAll: () => true,
+  }),
+}))
+
 vi.mock('@/hooks/use-toast', () => ({
   useToast: () => ({ toast }),
 }))

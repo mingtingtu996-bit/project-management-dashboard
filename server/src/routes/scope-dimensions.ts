@@ -428,6 +428,64 @@ async function saveDictionaryRow(input: {
   return stored
 }
 
+async function updateDictionaryRowById(
+  id: string,
+  input: {
+    label?: string
+    code?: string | null
+    is_active?: boolean
+    sort_order?: number | null
+  },
+) {
+  const existing = await loadDictionaryRowById(id)
+  if (!existing) {
+    throw new Error('Scope dictionary row not found')
+  }
+
+  const nextLabel = normalizeText(input.label ?? existing.label)
+  if (!nextLabel) {
+    throw new Error('label is required')
+  }
+
+  const { data: conflictRows, error: conflictError } = await supabase
+    .from('scope_dimensions')
+    .select('*')
+    .eq('dimension_key', existing.dimension_key)
+    .eq('label', nextLabel)
+    .neq('id', id)
+    .limit(1)
+
+  if (conflictError) {
+    throw new Error(conflictError.message)
+  }
+
+  if ((conflictRows ?? []).length > 0) {
+    throw new Error(`Scope dimension label already exists: ${nextLabel}`)
+  }
+
+  const payload = {
+    ...existing,
+    label: nextLabel,
+    code: input.code ?? existing.code ?? null,
+    is_active: input.is_active ?? existing.is_active ?? true,
+    sort_order: input.sort_order ?? existing.sort_order ?? null,
+    version: Number(existing.version ?? 0) + 1 || 1,
+    updated_at: now(),
+  }
+
+  const { error } = await supabase.from('scope_dimensions').update(payload).eq('id', id)
+  if (error) {
+    throw new Error(error.message)
+  }
+
+  const stored = await loadDictionaryRowById(id)
+  if (!stored) {
+    throw new Error('Failed to persist scope dictionary row')
+  }
+
+  return stored
+}
+
 router.get(
   '/',
   asyncHandler(async (req, res) => {
@@ -446,6 +504,7 @@ router.get(
       project_id: string | null
       sections: ScopeSection[]
       dictionary: Record<ScopeDimensionKey, string[]>
+      rows: ScopeDimension[]
     }> = {
       success: true,
       data: {
@@ -455,6 +514,7 @@ router.get(
           acc[section.key] = section.options
           return acc
         }, {} as Record<ScopeDimensionKey, string[]>),
+        rows: dictionary,
       },
       timestamp: now(),
     }
@@ -495,6 +555,41 @@ router.post(
 )
 
 router.put(
+  '/rows/:id',
+  asyncHandler(async (req, res) => {
+    const id = normalizeText(req.params.id)
+    if (!id) {
+      return res.status(400).json(validationError('id is required'))
+    }
+
+    const existing = await loadDictionaryRowById(id)
+    if (!existing) {
+      const response: ApiResponse = {
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'Scope dictionary row not found' },
+        timestamp: now(),
+      }
+      return res.status(404).json(response)
+    }
+
+    const row = await updateDictionaryRowById(id, {
+      label: normalizeText(req.body?.label) || existing.label,
+      code: normalizeNullableText(req.body?.code),
+      is_active: normalizeBoolean(req.body?.is_active, Boolean(existing.is_active)),
+      sort_order: typeof req.body?.sort_order === 'number' ? req.body.sort_order : Number(existing.sort_order ?? 0),
+    })
+
+    const response: ApiResponse<ScopeDimension> = {
+      success: true,
+      data: row,
+      timestamp: now(),
+    }
+
+    res.json(response)
+  }),
+)
+
+router.put(
   '/:projectId',
   asyncHandler(async (req, res) => {
     const projectId = normalizeText(req.params.projectId)
@@ -526,6 +621,7 @@ router.put(
       project_id: string
       sections: ScopeSection[]
       dictionary: Record<ScopeDimensionKey, string[]>
+      rows: ScopeDimension[]
     }> = {
       success: true,
       data: {
@@ -535,6 +631,7 @@ router.put(
           acc[section.key] = section.options
           return acc
         }, {} as Record<ScopeDimensionKey, string[]>),
+        rows: dictionary,
       },
       timestamp: now(),
     }

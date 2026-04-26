@@ -42,6 +42,10 @@ vi.mock('../middleware/auth.js', () => ({
     req.user = { id: 'user-1' }
     next()
   }),
+  requireProjectEditor: vi.fn((getProjectId: (req: any) => string) => (req: any, _res: any, next: () => void) => {
+    void getProjectId(req)
+    next()
+  }),
 }))
 
 vi.mock('../middleware/logger.js', () => ({

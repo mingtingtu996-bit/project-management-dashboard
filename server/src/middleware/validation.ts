@@ -125,6 +125,7 @@ const taskBaseSchema = z.object({
   dependencies: z.array(z.string()).optional().nullable(),
   milestone_id: uuidSchema.optional().nullable(),
   specialty_type: z.string().optional().nullable(),
+  phase_id: uuidSchema.optional().nullable(),
   reference_duration: z.number().optional().nullable(),
   first_progress_at: z.string().optional().nullable(),
   is_critical: z.boolean().optional().nullable(),
@@ -242,6 +243,7 @@ export const taskSchema = taskBaseSchema.superRefine((data, ctx) => {
 
 export const taskUpdateSchema = taskBaseSchema.partial().extend({
   version: z.number().int().positive().optional(),
+  force: z.boolean().optional(),
 }).superRefine((data, ctx) => {
   applyTaskDateValidation(data, ctx, { requireBothDates: false })
 })

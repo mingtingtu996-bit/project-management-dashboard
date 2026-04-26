@@ -30,9 +30,11 @@ function mappingStatusLabel(status?: DetailRow['mapping_status']) {
 export function DeviationDetailTable({
   rows,
   mainlineLabel,
+  onSelectRow,
 }: {
   rows: DetailRow[]
   mainlineLabel: string
+  onSelectRow?: (row: DetailRow) => void
 }) {
   return (
     <Card data-testid="deviation-detail-table" className="border-slate-200 shadow-sm">
@@ -53,7 +55,19 @@ export function DeviationDetailTable({
             </thead>
             <tbody className="divide-y divide-slate-100 bg-white">
               {rows.map((row) => (
-                <tr key={row.id} className="align-top">
+                <tr
+                  key={row.id}
+                  className={`align-top ${onSelectRow ? 'cursor-pointer transition-colors hover:bg-slate-50' : ''}`}
+                  role={onSelectRow ? 'button' : undefined}
+                  tabIndex={onSelectRow ? 0 : undefined}
+                  onClick={onSelectRow ? () => onSelectRow(row) : undefined}
+                  onKeyDown={onSelectRow ? (event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault()
+                      onSelectRow(row)
+                    }
+                  } : undefined}
+                >
                   <td className="px-4 py-3">
                     <div className="font-medium text-slate-900">{row.title}</div>
                     <div className="mt-1 text-xs text-slate-500">

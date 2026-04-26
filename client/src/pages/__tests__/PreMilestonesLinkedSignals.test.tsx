@@ -444,7 +444,7 @@ describe('PreMilestones linked signals', () => {
       )
     })
 
-    await waitForText(container, ['证照与验收', '前期证照'])
+    await waitForText(container, ['专项管理', '前期证照'])
 
     const trigger = Array.from(container.querySelectorAll('[role="button"]')).find((button) =>
       button.textContent?.includes('用地规划许可证'),
@@ -485,7 +485,7 @@ describe('PreMilestones linked signals', () => {
       )
     })
 
-    await waitForText(container, ['证照与验收', '前期证照'])
+    await waitForText(container, ['专项管理', '前期证照'])
 
     const trigger = Array.from(container.querySelectorAll('[role="button"]')).find((button) =>
       button.textContent?.includes('用地规划许可证'),
@@ -553,7 +553,7 @@ describe('PreMilestones linked signals', () => {
       )
     })
 
-    await waitForText(container, ['证照与验收', '前期证照'])
+    await waitForText(container, ['专项管理', '前期证照'])
 
     expect(container.querySelectorAll('[role="tab"]')).toHaveLength(0)
     expect(container.querySelector('[data-testid="pre-milestones-go-drawings"]')).toBeTruthy()

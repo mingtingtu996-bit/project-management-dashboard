@@ -198,6 +198,7 @@ vi.mock('../middleware/auth.js', () => ({
     req.user = { id: 'owner-1' }
     next()
   }),
+  requireProjectMember: vi.fn(() => (_req: any, _res: any, next: () => void) => next()),
   requireProjectEditor: vi.fn(() => (_req: any, _res: any, next: () => void) => next()),
 }))
 

@@ -1,8 +1,7 @@
-import { act } from 'react'
-import { createRoot, type Root } from 'react-dom/client'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { CriticalPathOverrideInput, CriticalPathOverrideRecord, CriticalPathSnapshot } from '@/lib/criticalPath'
+import type { CriticalPathOverrideInput, CriticalPathSnapshot } from '@/lib/criticalPath'
 import type { Task } from '@/pages/GanttViewTypes'
 
 import { CriticalPathGraph } from '../CriticalPathGraph'
@@ -121,20 +120,7 @@ function createAlternateChainSnapshot(): CriticalPathSnapshot {
   }
 }
 
-async function flush() {
-  await Promise.resolve()
-}
-
-function clickNode(element: Element | null) {
-  if (!element) {
-    throw new Error('Expected node element to exist')
-  }
-  element.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-}
-
 describe('CriticalPathGraph', () => {
-  let container: HTMLDivElement
-  let root: Root | null = null
   let originalCreateObjectURL: typeof URL.createObjectURL | undefined
   let originalRevokeObjectURL: typeof URL.revokeObjectURL | undefined
   let anchorClickSpy: ReturnType<typeof vi.spyOn>
@@ -142,9 +128,6 @@ describe('CriticalPathGraph', () => {
   let revokeObjectUrlMock: ReturnType<typeof vi.fn>
 
   beforeEach(() => {
-    container = document.createElement('div')
-    document.body.appendChild(container)
-    root = createRoot(container)
     originalCreateObjectURL = URL.createObjectURL
     originalRevokeObjectURL = URL.revokeObjectURL
     createObjectUrlMock = vi.fn(() => 'blob:critical-path')
@@ -163,10 +146,6 @@ describe('CriticalPathGraph', () => {
   })
 
   afterEach(() => {
-    act(() => {
-      root?.unmount()
-    })
-    root = null
     anchorClickSpy.mockRestore()
     Object.defineProperty(URL, 'createObjectURL', {
       configurable: true,
@@ -178,194 +157,194 @@ describe('CriticalPathGraph', () => {
       writable: true,
       value: originalRevokeObjectURL,
     })
-    container.remove()
+    document.body.innerHTML = ''
   })
 
   it('renders an svg DAG and lets us switch the selected node from the graph', async () => {
-    await act(async () => {
-      root?.render(
-        <CriticalPathGraph
-          projectName="示例项目"
-          tasks={[
-            createTask('task-a', '基础施工'),
-            createTask('task-b', '主体结构'),
-            createTask('task-c', '机电安装'),
-            createTask('task-d', '专项协调'),
-          ]}
-          snapshot={createSnapshot()}
-          overrides={[]}
-          onRefresh={vi.fn()}
-          onCreateOverride={vi.fn()}
-          onDeleteOverride={vi.fn()}
-        />,
-      )
-      await flush()
-    })
+    render(
+      <CriticalPathGraph
+        projectName="示例项目"
+        tasks={[
+          createTask('task-a', '基础施工'),
+          createTask('task-b', '主体结构'),
+          createTask('task-c', '机电安装'),
+          createTask('task-d', '专项协调'),
+        ]}
+        snapshot={createSnapshot()}
+        overrides={[]}
+        onRefresh={vi.fn()}
+        onCreateOverride={vi.fn()}
+        onDeleteOverride={vi.fn()}
+      />,
+    )
 
-    expect(container.querySelector('[data-testid=\"critical-path-svg\"]')).not.toBeNull()
-    expect(container.querySelector('[data-testid=\"critical-path-svg-node-task-a\"]')).not.toBeNull()
-    expect(container.textContent).toContain('基础施工')
+    expect(screen.getByTestId('critical-path-svg')).toBeTruthy()
+    expect(screen.getByTestId('critical-path-svg-node-task-a')).toBeTruthy()
+    expect(document.body.textContent).toContain('基础施工')
 
-    await act(async () => {
-      clickNode(container.querySelector('[data-testid=\"critical-path-svg-node-task-d\"]'))
-      await flush()
-    })
+    fireEvent.click(screen.getByTestId('critical-path-svg-node-task-d'))
 
-    expect(container.textContent).toContain('专项协调')
-    expect(container.textContent).toContain('浮动 4 天 · 工期 2 天')
+    await waitFor(() => expect(document.body.textContent).toContain('专项协调'))
+    expect(document.body.textContent).toContain('浮动 4 天 · 工期 2 天')
   })
 
   it('submits a manual attention override for the task selected from the graph', async () => {
-    const onCreateOverride = vi.fn<(input: CriticalPathOverrideInput) => void>()
-    const overrides: CriticalPathOverrideRecord[] = []
+    const onCreateOverride = vi.fn()
 
-    await act(async () => {
-      root?.render(
-        <CriticalPathGraph
-          projectName="示例项目"
-          tasks={[
-            createTask('task-a', '基础施工'),
-            createTask('task-b', '主体结构'),
-            createTask('task-c', '机电安装'),
-            createTask('task-d', '专项协调'),
-          ]}
-          snapshot={createSnapshot()}
-          overrides={overrides}
-          onRefresh={vi.fn()}
-          onCreateOverride={onCreateOverride}
-          onDeleteOverride={vi.fn()}
-        />,
-      )
-      await flush()
-    })
+    render(
+      <CriticalPathGraph
+        projectName="示例项目"
+        tasks={[
+          createTask('task-a', '基础施工'),
+          createTask('task-b', '主体结构'),
+          createTask('task-c', '机电安装'),
+          createTask('task-d', '专项协调'),
+        ]}
+        snapshot={createSnapshot()}
+        overrides={[]}
+        onRefresh={vi.fn()}
+        onCreateOverride={onCreateOverride}
+        onDeleteOverride={vi.fn()}
+      />,
+    )
 
-    await act(async () => {
-      clickNode(container.querySelector('[data-testid=\"critical-path-svg-node-task-d\"]'))
-      await flush()
-    })
+    fireEvent.click(screen.getByTestId('critical-path-svg-node-task-d'))
+    fireEvent.click(screen.getByTestId('critical-path-create-attention'))
 
-    const attentionButton = container.querySelector('[data-testid=\"critical-path-create-attention\"]')
-    expect(attentionButton).not.toBeNull()
-
-    await act(async () => {
-      ;(attentionButton as HTMLButtonElement).click()
-      await flush()
-    })
-
-    expect(onCreateOverride).toHaveBeenCalledWith({
-      taskId: 'task-d',
-      mode: 'manual_attention',
-      reason: '来自关键路径视图',
-    })
+    await waitFor(() =>
+      expect(onCreateOverride).toHaveBeenCalledWith({
+        taskId: 'task-d',
+        mode: 'manual_attention',
+        reason: '来自关键路径视图',
+      } satisfies CriticalPathOverrideInput),
+    )
   })
 
   it('supports zoom controls and svg export from the graph toolbar', async () => {
-    await act(async () => {
-      root?.render(
-        <CriticalPathGraph
-          projectName="示例项目"
-          tasks={[
-            createTask('task-a', '基础施工'),
-            createTask('task-b', '主体结构'),
-            createTask('task-c', '机电安装'),
-            createTask('task-d', '专项协调'),
-          ]}
-          snapshot={createSnapshot()}
-          overrides={[]}
-          onRefresh={vi.fn()}
-          onCreateOverride={vi.fn()}
-          onDeleteOverride={vi.fn()}
-        />,
-      )
-      await flush()
+    render(
+      <CriticalPathGraph
+        projectName="示例项目"
+        tasks={[
+          createTask('task-a', '基础施工'),
+          createTask('task-b', '主体结构'),
+          createTask('task-c', '机电安装'),
+          createTask('task-d', '专项协调'),
+        ]}
+        snapshot={createSnapshot()}
+        overrides={[]}
+        onRefresh={vi.fn()}
+        onCreateOverride={vi.fn()}
+        onDeleteOverride={vi.fn()}
+      />,
+    )
+
+    const zoomInButton = screen.getByTestId('critical-path-zoom-in')
+    const centerButton = screen.getByTestId('critical-path-center-selected')
+    const exportSvgButton = screen.getByTestId('critical-path-export-svg')
+
+    expect(zoomInButton).toBeTruthy()
+    expect(centerButton).toBeTruthy()
+    expect(exportSvgButton).toBeTruthy()
+    expect(screen.getByTestId('critical-path-zoom-level').textContent).toContain('100%')
+
+    fireEvent.click(zoomInButton)
+    fireEvent.click(centerButton)
+
+    expect(screen.getByTestId('critical-path-zoom-level').textContent).toContain('110%')
+
+    fireEvent.click(exportSvgButton)
+
+    await waitFor(() => {
+      expect(createObjectUrlMock).toHaveBeenCalled()
+      expect(anchorClickSpy).toHaveBeenCalled()
+      expect(revokeObjectUrlMock).toHaveBeenCalled()
     })
-
-    const zoomInButton = container.querySelector('[data-testid=\"critical-path-zoom-in\"]')
-    const centerButton = container.querySelector('[data-testid=\"critical-path-center-selected\"]')
-    const exportSvgButton = container.querySelector('[data-testid=\"critical-path-export-svg\"]')
-
-    expect(zoomInButton).not.toBeNull()
-    expect(centerButton).not.toBeNull()
-    expect(exportSvgButton).not.toBeNull()
-    expect(container.querySelector('[data-testid=\"critical-path-zoom-level\"]')?.textContent).toContain('100%')
-
-    await act(async () => {
-      ;(zoomInButton as HTMLButtonElement).click()
-      ;(centerButton as HTMLButtonElement).click()
-      await flush()
-    })
-
-    expect(container.querySelector('[data-testid=\"critical-path-zoom-level\"]')?.textContent).toContain('110%')
-
-    await act(async () => {
-      ;(exportSvgButton as HTMLButtonElement).click()
-      await flush()
-    })
-
-    expect(createObjectUrlMock).toHaveBeenCalled()
-    expect(anchorClickSpy).toHaveBeenCalled()
-    expect(revokeObjectUrlMock).toHaveBeenCalled()
   })
 
   it('renders manual insert edges with the required orange dashed styling', async () => {
-    await act(async () => {
-      root?.render(
-        <CriticalPathGraph
-          projectName="示例项目"
-          tasks={[
-            createTask('task-a', '基础施工'),
-            createTask('task-b', '主体结构'),
-            createTask('task-c', '临建改造'),
-          ]}
-          snapshot={createManualInsertSnapshot()}
-          overrides={[]}
-          onRefresh={vi.fn()}
-          onCreateOverride={vi.fn()}
-          onDeleteOverride={vi.fn()}
-        />,
-      )
-      await flush()
-    })
+    render(
+      <CriticalPathGraph
+        projectName="示例项目"
+        tasks={[
+          createTask('task-a', '基础施工'),
+          createTask('task-b', '主体结构'),
+          createTask('task-c', '临建改造'),
+        ]}
+        snapshot={createManualInsertSnapshot()}
+        overrides={[]}
+        onRefresh={vi.fn()}
+        onCreateOverride={vi.fn()}
+        onDeleteOverride={vi.fn()}
+      />,
+    )
 
-    const manualEdge = container.querySelector('[data-testid=\"critical-path-svg-edge-edge-b-c\"]')
-    expect(manualEdge).not.toBeNull()
-    expect(manualEdge?.getAttribute('stroke')).toBe('#fb923c')
-    expect(manualEdge?.getAttribute('stroke-dasharray')).toBe('7 5')
+    fireEvent.click(screen.getByTestId('critical-path-lane-alternate-manual'))
+
+    await waitFor(() => expect(screen.getByTestId('critical-path-svg-edge-edge-b-c')).toBeTruthy())
+    const manualEdge = screen.getByTestId('critical-path-svg-edge-edge-b-c')
+    expect(manualEdge.getAttribute('stroke')).toBe('#fb923c')
+    expect(manualEdge.getAttribute('stroke-dasharray')).toBe('7 5')
+  })
+
+  it('shows a cached failure banner when the snapshot comes from a failed recalculation', async () => {
+    render(
+      <CriticalPathGraph
+        projectName="示例项目"
+        tasks={[
+          createTask('task-a', '基础施工'),
+          createTask('task-b', '主体结构'),
+          createTask('task-c', '机电安装'),
+          createTask('task-d', '专项协调'),
+        ]}
+        snapshot={{
+          ...createSnapshot(),
+          calculationStatus: 'cached_after_failure',
+          calculatedAt: '2026-04-26T08:00:00.000Z',
+          calculationFailedAt: '2026-04-26T09:00:00.000Z',
+          calculationFailureMessage: 'CRITICAL_PATH_CYCLE_DETECTED:task-b',
+        }}
+        overrides={[]}
+        onRefresh={vi.fn()}
+        onCreateOverride={vi.fn()}
+        onDeleteOverride={vi.fn()}
+      />,
+    )
+
+    const banner = screen.getByTestId('critical-path-calculation-cached-banner')
+    expect(banner.textContent).toContain('最新计算失败')
+    expect(banner.textContent).toContain('CRITICAL_PATH_CYCLE_DETECTED')
+    expect(banner.textContent).toContain('快照时间')
   })
 
   it('keeps alternate chains collapsed by default and expands them on demand', async () => {
-    await act(async () => {
-      root?.render(
-        <CriticalPathGraph
-          projectName="示例项目"
-          tasks={[
-            createTask('task-a', '基础施工'),
-            createTask('task-b', '主体结构'),
-            createTask('task-c', '机电安装'),
-            createTask('task-e', '幕墙深化'),
-            createTask('task-f', '幕墙施工'),
-          ]}
-          snapshot={createAlternateChainSnapshot()}
-          overrides={[]}
-          onRefresh={vi.fn()}
-          onCreateOverride={vi.fn()}
-          onDeleteOverride={vi.fn()}
-        />,
-      )
-      await flush()
+    render(
+      <CriticalPathGraph
+        projectName="示例项目"
+        tasks={[
+          createTask('task-a', '基础施工'),
+          createTask('task-b', '主体结构'),
+          createTask('task-c', '机电安装'),
+          createTask('task-e', '幕墙深化'),
+          createTask('task-f', '幕墙施工'),
+        ]}
+        snapshot={createAlternateChainSnapshot()}
+        overrides={[]}
+        onRefresh={vi.fn()}
+        onCreateOverride={vi.fn()}
+        onDeleteOverride={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByTestId('critical-path-alternate-collapsed-alternate-auto-1')).toBeTruthy()
+    expect(screen.queryByTestId('critical-path-alternate-content-alternate-auto-1')).toBeNull()
+
+    fireEvent.click(screen.getByTestId('critical-path-alternate-toggle-alternate-auto-1'))
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('critical-path-alternate-collapsed-alternate-auto-1')).toBeNull()
+      expect(screen.getByTestId('critical-path-alternate-content-alternate-auto-1')).toBeTruthy()
     })
-
-    expect(container.querySelector('[data-testid=\"critical-path-alternate-collapsed-alternate-auto-1\"]')).not.toBeNull()
-    expect(container.querySelector('[data-testid=\"critical-path-alternate-content-alternate-auto-1\"]')).toBeNull()
-
-    await act(async () => {
-      ;(container.querySelector('[data-testid=\"critical-path-alternate-toggle-alternate-auto-1\"]') as HTMLButtonElement).click()
-      await flush()
-    })
-
-    expect(container.querySelector('[data-testid=\"critical-path-alternate-collapsed-alternate-auto-1\"]')).toBeNull()
-    expect(container.querySelector('[data-testid=\"critical-path-alternate-content-alternate-auto-1\"]')).not.toBeNull()
-    expect(container.textContent).toContain('幕墙深化')
-    expect(container.textContent).toContain('幕墙施工')
+    expect(document.body.textContent).toContain('幕墙深化')
+    expect(document.body.textContent).toContain('幕墙施工')
   })
 })

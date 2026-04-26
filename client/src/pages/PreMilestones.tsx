@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { AlertTriangle, ArrowRight, FolderOpen, Plus, RefreshCw } from 'lucide-react'
 import { Breadcrumb } from '@/components/Breadcrumb'
@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useStore } from '@/hooks/useStore'
+import { usePermissions } from '@/hooks/usePermissions'
 import { useToast } from '@/hooks/use-toast'
 import type {
   ApiResponse,
@@ -125,6 +126,7 @@ export default function PreMilestones() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const { currentProject, projects } = useStore()
+  const { canEdit } = usePermissions({ projectId: currentProject?.id })
   const { toast } = useToast()
 
   const projectOptions = useMemo<ProjectOption[]>(
@@ -138,14 +140,20 @@ export default function PreMilestones() {
   const [detail, setDetail] = useState<CertificateDetailResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const selectedCertificateId = searchParams.get('cert') || null
-  const setSelectedCertificateId = (id: string | null) => {
+  const selectedCertificateIdRef = useRef<string | null>(selectedCertificateId)
+
+  useEffect(() => {
+    selectedCertificateIdRef.current = selectedCertificateId
+  }, [selectedCertificateId])
+
+  const setSelectedCertificateId = useCallback((id: string | null) => {
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev)
       if (id) next.set('cert', id)
       else next.delete('cert')
       return next
     }, { replace: true })
-  }
+  }, [setSearchParams])
   const [selectedWorkItemId, setSelectedWorkItemId] = useState<string | null>(null)
   const [hoveredWorkItemId, setHoveredWorkItemId] = useState<string | null>(null)
   const [hoveredCertificateType, setHoveredCertificateType] = useState<string | null>(null)
@@ -195,7 +203,7 @@ export default function PreMilestones() {
               boardResult.data.certificates.find((item) => item.is_blocked)?.id ||
               boardResult.data.certificates[0]?.id ||
               null
-            setSelectedCertificateId(selectedCertificateId || nextCertificateId)
+            setSelectedCertificateId(selectedCertificateIdRef.current || nextCertificateId)
           }
 
           if (ledgerResult.success && ledgerResult.data) {
@@ -213,7 +221,7 @@ export default function PreMilestones() {
     return () => {
       cancelled = true
     }
-  }, [selectedProjectId])
+  }, [selectedProjectId, setSelectedCertificateId])
 
   useEffect(() => {
     if (!selectedProjectId || !selectedCertificateId) return
@@ -256,9 +264,10 @@ export default function PreMilestones() {
   )
 
   const overdueItems = useMemo(
-    () => workItems.filter((item) => item.status !== 'issued' && isBeforeToday(item.planned_finish_date)),
+    () => workItems.filter((item) => !['completed', 'cancelled'].includes(String(item.status)) && isBeforeToday(item.planned_finish_date)),
     [workItems]
   )
+  const criticalItems = summary?.criticalItems ?? []
 
   const openDetailForCertificate = (certificateId: string) => {
     setSelectedCertificateId(certificateId)
@@ -276,6 +285,10 @@ export default function PreMilestones() {
   }
 
   const openCreateDialog = (prefill?: CertificateWorkItemFormData) => {
+    if (!canEdit) {
+      toast({ title: '当前为只读模式', description: '没有编辑权限，无法新增办理事项', variant: 'destructive' })
+      return
+    }
     setEditingItem(null)
     setDialogMode('create')
     setFormData(prefill || createEmptyWorkItemForm())
@@ -283,6 +296,10 @@ export default function PreMilestones() {
   }
 
   const openEditDialog = (item: CertificateWorkItem) => {
+    if (!canEdit) {
+      toast({ title: '当前为只读模式', description: '没有编辑权限，无法修改办理事项', variant: 'destructive' })
+      return
+    }
     setEditingItem(item)
     setDialogMode('edit')
     setFormData(buildFormFromItem(item, selectedCertificateId))
@@ -334,6 +351,10 @@ export default function PreMilestones() {
   }
 
   const handleEscalate = async (target: 'issue' | 'risk', workItemId?: string | null) => {
+    if (!canEdit) {
+      toast({ title: '当前为只读模式', description: '没有编辑权限，无法升级为问题或风险', variant: 'destructive' })
+      return
+    }
     if (!selectedProjectId || !selectedCertificateId) {
       toast({ title: '请先选择证照', variant: 'destructive' })
       return
@@ -379,6 +400,10 @@ export default function PreMilestones() {
   }
 
   const handleSaveWorkItem = async () => {
+    if (!canEdit) {
+      toast({ title: '当前为只读模式', description: '没有编辑权限，无法保存办理事项', variant: 'destructive' })
+      return
+    }
     if (!selectedProjectId) {
       toast({ title: '请先选择项目', variant: 'destructive' })
       return
@@ -441,20 +466,213 @@ export default function PreMilestones() {
     }
   }
 
+  const refreshSelectedDetail = async (certificateId: string | null = selectedCertificateId) => {
+    if (selectedProjectId && certificateId) {
+      await refreshDetail(certificateId)
+    }
+  }
+
+  const handleSubmitCondition = async (payload: {
+    conditionId: string | null
+    preMilestoneId: string
+    form: {
+      condition_type: string
+      condition_name: string
+      description: string
+      target_date: string
+    }
+  }) => {
+    if (!selectedProjectId || !payload.preMilestoneId) return
+
+    const isEditing = Boolean(payload.conditionId)
+    const url = isEditing
+      ? `${API_BASE}/api/pre-milestone-conditions/${encodeURIComponent(payload.conditionId || '')}`
+      : `${API_BASE}/api/pre-milestone-conditions`
+    const method = isEditing ? 'PUT' : 'POST'
+
+    try {
+      const response = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pre_milestone_id: payload.preMilestoneId,
+          condition_type: payload.form.condition_type,
+          condition_name: payload.form.condition_name,
+          description: payload.form.description || null,
+          target_date: payload.form.target_date || null,
+        }),
+      })
+
+      const result = (await response.json()) as ApiResponse<unknown>
+      if (result.success) {
+        toast({ title: isEditing ? '已更新条件' : '已新增条件' })
+        await refreshData()
+        await refreshSelectedDetail(payload.preMilestoneId)
+        return
+      }
+
+      toast({
+        title: isEditing ? '更新条件失败' : '新增条件失败',
+        description: result.error?.message || '请稍后重试',
+        variant: 'destructive',
+      })
+    } catch (error) {
+      console.error('Failed to submit condition', error)
+      toast({
+        title: isEditing ? '更新条件失败' : '新增条件失败',
+        description: '请检查网络连接',
+        variant: 'destructive',
+      })
+    }
+  }
+
+  const handleUpdateConditionStatus = async (conditionId: string, status: string) => {
+    if (!conditionId) return
+
+    try {
+      const response = await fetch(`${API_BASE}/api/pre-milestone-conditions/${encodeURIComponent(conditionId)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+      })
+      const result = (await response.json()) as ApiResponse<unknown>
+      if (result.success) {
+        toast({ title: '已更新条件状态' })
+        await refreshData()
+        await refreshSelectedDetail()
+        return
+      }
+
+      toast({
+        title: '更新条件状态失败',
+        description: result.error?.message || '请稍后重试',
+        variant: 'destructive',
+      })
+    } catch (error) {
+      console.error('Failed to update condition status', error)
+      toast({
+        title: '更新条件状态失败',
+        description: '请检查网络连接',
+        variant: 'destructive',
+      })
+    }
+  }
+
+  const handleDeleteCondition = async (conditionId: string) => {
+    if (!conditionId) return
+
+    try {
+      const response = await fetch(`${API_BASE}/api/pre-milestone-conditions/${encodeURIComponent(conditionId)}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+      })
+      const result = (await response.json()) as ApiResponse<unknown>
+      if (result.success) {
+        toast({ title: '已删除条件' })
+        await refreshData()
+        await refreshSelectedDetail()
+        return
+      }
+
+      toast({
+        title: '删除条件失败',
+        description: result.error?.message || '请稍后重试',
+        variant: 'destructive',
+      })
+    } catch (error) {
+      console.error('Failed to delete condition', error)
+      toast({
+        title: '删除条件失败',
+        description: '请检查网络连接',
+        variant: 'destructive',
+      })
+    }
+  }
+
+  const handleCreateCertificateDependency = async (payload: {
+    predecessor_type: 'certificate' | 'work_item'
+    predecessor_id: string
+    successor_type: 'certificate' | 'work_item'
+    successor_id: string
+    dependency_kind: 'hard' | 'soft'
+    notes?: string | null
+  }) => {
+    if (!selectedProjectId) return
+
+    try {
+      const response = await fetch(`${API_BASE}/api/projects/${selectedProjectId}/certificate-dependencies`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      const result = (await response.json()) as ApiResponse<unknown>
+      if (result.success) {
+        toast({ title: '已新增证照依赖' })
+        await refreshData()
+        await refreshSelectedDetail()
+        return
+      }
+
+      toast({
+        title: '新增证照依赖失败',
+        description: result.error?.message || '请稍后重试',
+        variant: 'destructive',
+      })
+    } catch (error) {
+      console.error('Failed to create certificate dependency', error)
+      toast({
+        title: '新增证照依赖失败',
+        description: '请检查网络连接',
+        variant: 'destructive',
+      })
+    }
+  }
+
+  const handleDeleteCertificateDependency = async (dependencyId: string) => {
+    if (!selectedProjectId) return
+
+    try {
+      const response = await fetch(`${API_BASE}/api/projects/${selectedProjectId}/certificate-dependencies/${encodeURIComponent(dependencyId)}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+      })
+      const result = (await response.json()) as ApiResponse<unknown>
+      if (result.success) {
+        toast({ title: '已删除证照依赖' })
+        await refreshData()
+        await refreshSelectedDetail()
+        return
+      }
+
+      toast({
+        title: '删除证照依赖失败',
+        description: result.error?.message || '请稍后重试',
+        variant: 'destructive',
+      })
+    } catch (error) {
+      console.error('Failed to delete certificate dependency', error)
+      toast({
+        title: '删除证照依赖失败',
+        description: '请检查网络连接',
+        variant: 'destructive',
+      })
+    }
+  }
+
   return (
     <div data-testid="pre-milestones-page" className="min-h-screen bg-slate-50 p-6 page-enter">
       <Breadcrumb
         items={[
           { label: '公司驾驶舱', href: '/company' },
           ...(currentProjectName ? [{ label: currentProjectName, href: `/projects/${selectedProjectId}` }] : []),
-          { label: '证照与验收' },
+          { label: '专项管理' },
           { label: '前期证照' },
         ]}
         className="mb-4"
       />
 
       <PageHeader
-        eyebrow="证照与验收"
+        eyebrow="专项管理"
         title="前期证照"
       />
 
@@ -514,6 +732,7 @@ export default function PreMilestones() {
             type="button"
             onClick={() => openCreateDialog(buildFormFromItem(null, selectedCertificateId))}
             className="bg-slate-900 text-white hover:bg-slate-800"
+            disabled={!canEdit}
           >
             <Plus className="h-4 w-4" />
             新增办理事项
@@ -616,6 +835,7 @@ export default function PreMilestones() {
             items={workItems}
             certificates={certificates}
             sharedItems={sharedItems}
+            canEdit={canEdit}
             selectedWorkItemId={selectedWorkItemId}
             filterByWorkItemId={selectedWorkItemId}
             quickFilter={ledgerQuickFilter}
@@ -638,17 +858,19 @@ export default function PreMilestones() {
         </div>
       )}
 
-      <CertificateWorkItemDialog
-        open={dialogOpen}
-        mode={dialogMode}
-        formData={formData}
-        setFormData={setFormData}
-        certificates={certificates}
-        onClose={() => setDialogOpen(false)}
-        onSave={() => void handleSaveWorkItem()}
-        onToggleCertificate={toggleCertificateInForm}
-        editingItem={editingItem}
-      />
+      {canEdit ? (
+        <CertificateWorkItemDialog
+          open={dialogOpen}
+          mode={dialogMode}
+          formData={formData}
+          setFormData={setFormData}
+          certificates={certificates}
+          onClose={() => setDialogOpen(false)}
+          onSave={() => void handleSaveWorkItem()}
+          onToggleCertificate={toggleCertificateInForm}
+          editingItem={editingItem}
+        />
+      ) : null}
 
       <CertificateDetailDrawer
         open={detailOpen}
@@ -663,11 +885,18 @@ export default function PreMilestones() {
         }}
         onEscalateIssue={(workItemId) => void handleEscalate('issue', workItemId)}
         onEscalateRisk={(workItemId) => void handleEscalate('risk', workItemId)}
+        onSubmitCondition={handleSubmitCondition}
+        onUpdateConditionStatus={handleUpdateConditionStatus}
+        onDeleteCondition={handleDeleteCondition}
+        onCreateCertificateDependency={handleCreateCertificateDependency}
+        onDeleteCertificateDependency={handleDeleteCertificateDependency}
         escalatingIssue={escalatingTarget === 'issue'}
         escalatingRisk={escalatingTarget === 'risk'}
         selectedCertificateId={selectedCertificateId}
         selectedWorkItemId={selectedWorkItemId}
         projectId={selectedProjectId}
+        certificates={certificates}
+        canEdit={canEdit}
       />
 
       <Dialog open={expectedDateDialogOpen} onOpenChange={setExpectedDateDialogOpen}>
@@ -694,6 +923,28 @@ export default function PreMilestones() {
                 ) : null}
               </ul>
             </div>
+            {criticalItems.length > 0 ? (
+              <div className="rounded-xl border border-slate-200 bg-white p-3">
+                <div className="mb-2 text-xs font-medium text-slate-900">关键项</div>
+                <div className="space-y-2">
+                  {criticalItems.slice(0, 6).map((item) => (
+                    <div key={`${item.itemType}:${item.itemId}`} className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-medium text-slate-900">{item.title}</span>
+                        <span className={`rounded-full px-2 py-0.5 font-medium ${item.itemType === 'certificate' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}>
+                          {mapCertificateStatusLabel(item.status)}
+                        </span>
+                      </div>
+                      <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-slate-500">
+                        {item.dueDate ? <span>截止：{item.dueDate}</span> : null}
+                        {item.isOverdue ? <span className="text-red-600">已逾期</span> : null}
+                      </div>
+                      {item.blockReason ? <div className="mt-1 text-[11px] text-amber-700">{item.blockReason}</div> : null}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </div>
         </DialogContent>
       </Dialog>

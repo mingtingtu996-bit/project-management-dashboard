@@ -15,10 +15,9 @@ import {
   SHARED_TREE_LAYOUT,
   TreeDiamondIcon,
 } from '@/components/tree/SharedTreePrimitives'
-import { Button } from '@/components/ui/button'
 import type { CriticalTaskSnapshot } from '@/lib/criticalPath'
 import { LoadingState } from '@/components/ui/loading-state'
-import { StatusBadge } from '@/components/ui/status-badge'
+import { getTaskLagLevel } from '@/lib/taskBusinessStatus'
 import { cn } from '@/lib/utils'
 
 import { MILESTONE_LEVEL_CONFIG, SPECIALTY_TYPES, getWBSNodeIcon, type Task, type TaskCondition, type WBSNode } from './GanttViewTypes'
@@ -88,6 +87,7 @@ export function TaskRowIdentityCell({
   onToggleInlineConditions: (taskId: string, event: MouseEvent) => void
 }) {
   const iconInfo = getWBSNodeIcon(node)
+  const lagLevel = getTaskLagLevel(task)
 
   return (
     <div className={cn('flex h-full min-w-0 shrink-0 items-center', SHARED_TREE_LAYOUT.firstColumnClass)}>
@@ -176,8 +176,12 @@ export function TaskRowIdentityCell({
             className={`text-sm font-medium truncate max-w-[200px] text-left hover:text-blue-600 transition-colors ${
               isOverdue
                 ? 'text-red-600'
-                : task.status === 'blocked'
-                  ? 'text-amber-700'
+                : lagLevel === 'severe'
+                  ? 'text-orange-700'
+                  : lagLevel === 'moderate'
+                    ? 'text-amber-700'
+                    : lagLevel === 'mild'
+                      ? 'text-yellow-700'
                   : task.status === 'completed'
                     ? 'text-gray-400 line-through'
                     : task.status === 'in_progress'
@@ -280,13 +284,13 @@ export function TaskRowMetaChips({
           {criticalTask.isAutoCritical && (
             <span
               data-testid={'gantt-critical-badge-' + taskId}
-              className="flex-shrink-0 px-1.5 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-700 border border-purple-200 cursor-help"
+              className="flex-shrink-0 px-1.5 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700 border border-red-200 cursor-help"
               title={'关键任务 浮动时间: ' + criticalTask.floatDays + '天'}
-            >
-              关键 +{criticalTask.floatDays}天
-            </span>
+              >
+                关键 +{criticalTask.floatDays}天
+              </span>
           )}
-          {criticalTask.isManualAttention && !criticalTask.isAutoCritical && (
+          {criticalTask.isManualAttention && (
             <span
               data-testid={'gantt-critical-attention-badge-' + taskId}
               className="flex-shrink-0 px-1.5 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700 border border-amber-200"
@@ -298,7 +302,7 @@ export function TaskRowMetaChips({
           {criticalTask.isManualInserted && (
             <span
               data-testid={'gantt-critical-insert-badge-' + taskId}
-              className="flex-shrink-0 px-1.5 py-0.5 rounded text-xs font-medium bg-violet-100 text-violet-700 border border-violet-200"
+              className="flex-shrink-0 px-1.5 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-700 border border-orange-200"
               title="手动插链任务"
             >
               插链
@@ -316,16 +320,8 @@ export function TaskRowDetailCells({
   isOverdue,
   actualProgress,
   rolledProgress,
-  inlineProgressTaskId,
-  inlineProgressValue,
-  onInlineProgressValueChange,
-  onInlineProgressSave,
-  onCancelInlineProgressEdit,
-  onStartInlineProgressEdit,
-  getTaskFloat,
-  isOnCriticalPath,
-  onOpenConditionDialog,
-  onOpenObstacleDialog,
+  bizStatus,
+  criticalTask,
   onOpenEditDialog,
   onDeleteTask,
   onViewTaskSummary,
@@ -336,29 +332,36 @@ export function TaskRowDetailCells({
   isOverdue: boolean
   actualProgress: number
   rolledProgress: number
-  inlineProgressTaskId: string | null
-  inlineProgressValue: number
-  onInlineProgressValueChange: (value: number) => void
-  onInlineProgressSave: (taskId: string, value: number) => void
-  onCancelInlineProgressEdit: () => void
-  onStartInlineProgressEdit: (task: Task) => void
-  getTaskFloat: (taskId: string) => number
-  isOnCriticalPath: (taskId: string) => boolean
-  onOpenConditionDialog: (task: Task) => void
-  onOpenObstacleDialog: (task: Task) => void
+  bizStatus: BusinessStatusView
+  criticalTask: CriticalTaskSnapshot | null
   onOpenEditDialog: (task?: Task, parentId?: string) => void
   onDeleteTask: (taskId: string) => void
   onViewTaskSummary: (taskId: string) => void
   onStatusChange?: (taskId: string, status: string) => void
 }) {
-  const planDays = task.reference_duration
-  const actualDays = task.start_date && task.end_date
-    ? Math.max(1, Math.ceil((new Date(task.end_date).getTime() - new Date(task.start_date).getTime()) / 86400000) + 1)
-    : null
-  const aiDays = task.ai_duration
-  const diffColor = planDays && actualDays ? actualDays > planDays ? 'text-red-600' : actualDays < planDays ? 'text-emerald-600' : 'text-gray-500' : 'text-gray-500'
-  const float = getTaskFloat(task.id)
   const isMilestoneLeaf = Boolean(task.is_milestone && !hasChildren)
+  const lagLevel = getTaskLagLevel(task)
+  const criticalProgressClass = criticalTask
+    ? criticalTask.isManualInserted
+      ? 'bg-orange-500'
+      : criticalTask.isManualAttention
+        ? 'bg-amber-400'
+        : criticalTask.isAutoCritical
+          ? 'bg-red-500'
+          : 'bg-gray-300'
+    : task.status === 'completed'
+      ? 'bg-emerald-500'
+      : isOverdue
+        ? 'bg-red-500'
+        : lagLevel === 'severe'
+          ? 'bg-orange-500'
+          : lagLevel === 'moderate'
+            ? 'bg-amber-400'
+            : lagLevel === 'mild'
+              ? 'bg-yellow-400'
+              : task.status === 'in_progress'
+                ? 'bg-blue-500'
+                : 'bg-gray-300'
   const milestoneProgressLabel =
     task.status === 'completed'
       ? '已完成'
@@ -369,11 +372,13 @@ export function TaskRowDetailCells({
   return (
     <>
       <div className="flex-shrink-0 w-24">
-        <StatusBadge
-          status={task.status ?? 'pending'}
-          fallbackLabel="待开始"
-          className="text-xs font-medium"
-        />
+        <span
+          data-testid={`gantt-task-status-${task.id}`}
+          className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${bizStatus.cls}`}
+        >
+          {bizStatus.label}
+          {bizStatus.badge && <span className="opacity-80">· {bizStatus.badge.text}</span>}
+        </span>
       </div>
 
       <div className="flex-shrink-0 w-32 px-3">
@@ -382,42 +387,20 @@ export function TaskRowDetailCells({
             <span className="font-medium">关键节点</span>
             <span className="tabular-nums">{milestoneProgressLabel}</span>
           </div>
-        ) : inlineProgressTaskId === task.id ? (
-          <div className="flex items-center gap-1.5" data-testid={`gantt-task-progress-editor-${task.id}`}>
-            <input
-              type="range"
-              min={0}
-              max={100}
-              step={5}
-              value={inlineProgressValue}
-              onChange={(event) => onInlineProgressValueChange(Number(event.target.value))}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') onInlineProgressSave(task.id, inlineProgressValue)
-                if (event.key === 'Escape') onCancelInlineProgressEdit()
-              }}
-              className="flex-1 h-1.5 accent-blue-500"
-              autoFocus
-              data-testid={`gantt-task-progress-input-${task.id}`}
-            />
-            <span className="text-xs font-medium w-7 text-right tabular-nums text-blue-600">{inlineProgressValue}%</span>
-            <Button size="sm" variant="outline" className="h-7 px-2 text-[11px]" onClick={() => onInlineProgressSave(task.id, inlineProgressValue)} data-testid={`gantt-task-progress-save-${task.id}`}>
-              保存
-            </Button>
-            <Button size="sm" variant="ghost" className="h-7 px-2 text-[11px]" onClick={onCancelInlineProgressEdit} data-testid={`gantt-task-progress-cancel-${task.id}`}>
-              取消
-            </Button>
-          </div>
         ) : (
           <div
-            className="flex items-center gap-1.5 cursor-pointer group/prog"
-            title={hasChildren ? '实际进度 ' + actualProgress + '% / 子任务汇总 ' + rolledProgress + '%' : '实际进度 ' + actualProgress + '%'}
-            onClick={() => onStartInlineProgressEdit(task)}
+            className="flex items-center gap-1.5"
+            title={
+              hasChildren
+                ? '实际进度 ' + actualProgress + '% / 子任务汇总 ' + rolledProgress + '%（已收口到右侧详情抽屉录进展）'
+                : '实际进度 ' + actualProgress + '%（已收口到右侧详情抽屉录进展）'
+            }
             data-testid={`gantt-task-progress-display-${task.id}`}
           >
             <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
-              <div className={'h-full rounded-full transition-all ' + (task.status === 'completed' ? 'bg-emerald-500' : isOverdue ? 'bg-red-500' : task.status === 'in_progress' ? 'bg-blue-500' : task.status === 'blocked' ? 'bg-amber-500' : 'bg-gray-300')} style={{ width: actualProgress + '%' }} />
+              <div className={'h-full rounded-full transition-all ' + criticalProgressClass} style={{ width: actualProgress + '%' }} />
             </div>
-            <span className="text-xs font-medium w-7 text-right tabular-nums text-gray-600 group-hover/prog:text-blue-500">
+            <span className="text-xs font-medium w-7 text-right tabular-nums text-gray-600">
               {actualProgress}%
             </span>
             {hasChildren && (
@@ -434,32 +417,18 @@ export function TaskRowDetailCells({
       </div>
 
       <div className="flex-shrink-0 w-28 text-xs text-gray-500 tabular-nums">
-        {task.start_date && task.end_date
-          ? <span>{task.start_date} ~ <span className={isOverdue ? 'text-red-600 font-medium' : ''}>{task.end_date}</span></span>
-          : task.start_date || task.end_date
-            ? <span>{task.start_date || task.end_date}</span>
-            : <span className="text-muted-foreground/40 italic">待定</span>}
+        <span className="text-muted-foreground/40 italic" title="工期信息已收口到右侧详情抽屉">
+          —
+        </span>
       </div>
 
-      <div className="flex-shrink-0 w-24 text-xs tabular-nums flex flex-col gap-0.5">
-        {!planDays && !actualDays && !aiDays ? (
-          <span className="text-muted-foreground/30 text-center">—</span>
-        ) : (
-          <>
-            {planDays && <span className="text-gray-500" title="计划工期">计划{planDays}天</span>}
-            {actualDays && <span className={diffColor} title="实际/排期工期">实际{actualDays}天{planDays && actualDays !== planDays ? (actualDays > planDays ? ' ↗' : ' ↘') : ''}</span>}
-            {aiDays && <span className="text-purple-500" title="AI 推荐工期">AI {aiDays}天</span>}
-          </>
-        )}
+      <div className="flex-shrink-0 w-24 text-center text-xs text-muted-foreground/40" title="工期信息已收口到右侧详情抽屉">
+        —
       </div>
 
       {!hasChildren ? (
-        <div className="flex-shrink-0 w-16 text-[10px]">
-          {isOnCriticalPath(task.id) ? (
-            <span className="inline-flex items-center rounded bg-red-50 px-1.5 py-0.5 font-medium text-red-600" title="关键任务：无缓冲时间，延期会直接影响项目工期">关键</span>
-          ) : float > 0 ? (
-            <span className="inline-flex items-center rounded bg-blue-50 px-1.5 py-0.5 tabular-nums text-blue-500" title={'浮动时间 ' + float + ' 天：此任务可延迟最多 ' + float + ' 天而不影响项目工期'}>缓冲{float}天</span>
-          ) : null}
+        <div className="flex-shrink-0 w-16 text-center text-[10px] text-muted-foreground/40" title="关键路径信息已收口到左侧颜色与右侧抽屉">
+          —
         </div>
       ) : (
         <div className="flex-shrink-0 w-16" />
@@ -486,32 +455,6 @@ export function TaskRowDetailCells({
             <CheckCircle2 className="h-3.5 w-3.5" />
           </button>
         )}
-        {onStatusChange && task.status === 'in_progress' && (
-          <button
-            title="标记受阻"
-            onClick={() => onStatusChange(task.id, 'blocked')}
-            className="p-1.5 hover:bg-amber-50 rounded text-gray-300 hover:text-amber-600 transition-colors"
-            data-testid={`row-block-task-${task.id}`}
-          >
-            <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" /></svg>
-          </button>
-        )}
-        {onStatusChange && task.status === 'blocked' && (
-          <button
-            title="恢复进行中"
-            onClick={() => onStatusChange(task.id, 'in_progress')}
-            className="p-1.5 hover:bg-blue-50 rounded text-gray-300 hover:text-blue-500 transition-colors"
-            data-testid={`row-unblock-task-${task.id}`}
-          >
-            <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
-          </button>
-        )}
-        <button title="开工条件管理" onClick={() => onOpenConditionDialog(task)} className="p-1.5 hover:bg-green-50 rounded text-gray-300 hover:text-green-600 transition-colors">
-          <ShieldCheck className="h-3.5 w-3.5" />
-        </button>
-        <button title="阻碍记录" onClick={() => onOpenObstacleDialog(task)} className="p-1.5 hover:bg-amber-50 rounded text-gray-300 hover:text-amber-600 transition-colors">
-          <AlertOctagon className="h-3.5 w-3.5" />
-        </button>
         <button title="添加子任务" onClick={() => onOpenEditDialog(undefined, task.id)} className="p-1.5 hover:bg-blue-50 rounded text-blue-400 hover:text-blue-600 transition-colors">
           <Plus className="h-3.5 w-3.5" />
         </button>
@@ -539,7 +482,6 @@ export function TaskRowConditionPanel({
   expandedConditionTaskId,
   inlineConditions,
   onToggleInlineConditions,
-  onOpenConditionDialog,
   onToggleCondition,
   indentPx,
 }: {
@@ -548,7 +490,6 @@ export function TaskRowConditionPanel({
   expandedConditionTaskId: string | null
   inlineConditions: TaskCondition[] | undefined
   onToggleInlineConditions: (taskId: string, event: MouseEvent) => void
-  onOpenConditionDialog: (task: Task) => void
   onToggleCondition?: (condition: TaskCondition) => void
   indentPx: number
 }) {
@@ -597,9 +538,6 @@ export function TaskRowConditionPanel({
           ))}
         </div>
       )}
-      <button onClick={(event) => { event.stopPropagation(); onOpenConditionDialog(task) }} className="mt-2 text-xs text-green-600 hover:text-green-800 hover:underline">
-        管理条件 ↗
-      </button>
     </div>
   )
 }
