@@ -253,6 +253,7 @@ export async function authFetch<T = unknown>(
 
     const response = await fetch(url, {
       ...options,
+      cache: options?.cache ?? (isApiPath(url) ? 'no-store' : undefined),
       credentials: 'include',
       headers: {
         ...getAuthHeaders(),

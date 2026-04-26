@@ -91,4 +91,24 @@ describe('apiClient global error toasts', () => {
       variant: 'destructive',
     }))
   })
+
+  it('bypasses browser cache for API requests by default', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response('{"data":[]}', {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    await expect(apiGet('/api/risks?projectId=project-1')).resolves.toEqual([])
+
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/risks?projectId=project-1',
+      expect.objectContaining({
+        cache: 'no-store',
+        credentials: 'include',
+        method: 'GET',
+      }),
+    )
+  })
 })
