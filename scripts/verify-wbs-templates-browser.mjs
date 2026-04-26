@@ -330,7 +330,7 @@ async function main() {
     await commercialCard.getByRole('heading', { name: '商业办公综合体（塔楼+裙房）WBS模板' }).waitFor({ state: 'visible', timeout: 10000 })
     await page.getByTestId('wbs-template-selected-suggestion-count').getByText('已选 1 / 1').waitFor({ state: 'visible', timeout: 10000 })
     await page.getByTestId('wbs-template-apply-feedback').click()
-    await page.getByText('已确认采纳建议').waitFor({ state: 'visible', timeout: 10000 })
+    await page.getByRole('status').filter({ hasText: '已确认采纳建议' }).first().waitFor({ state: 'visible', timeout: 10000 })
     await page.screenshot({ path: join(outputDir, 'wbs-templates-quality-panel.png'), fullPage: true })
 
     assert(apiFailures.length === 0, `API proxy failures detected: ${JSON.stringify(apiFailures)}`)
