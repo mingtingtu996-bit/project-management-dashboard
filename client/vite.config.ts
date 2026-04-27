@@ -23,18 +23,11 @@ export default defineConfig({
         manualChunks(id) {
           if (!id.includes('node_modules')) return undefined
 
-          if (id.includes('react/') || id.includes('react-dom/') || id.includes('react-router-dom/')) {
-            return 'vendor-react'
-          }
-
-          if (id.includes('@radix-ui')) return 'vendor-radix'
-          if (id.includes('lucide-react')) return 'vendor-icons'
           if (id.includes('@dnd-kit')) return 'vendor-dnd'
           if (id.includes('chart.js') || id.includes('react-chartjs-2')) return 'vendor-charts'
           if (id.includes('xlsx')) return 'vendor-xlsx'
-          if (id.includes('@supabase')) return 'vendor-supabase'
 
-          return 'vendor'
+          return undefined
         },
       },
     },
