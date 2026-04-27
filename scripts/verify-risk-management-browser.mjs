@@ -335,11 +335,7 @@ async function main() {
 
     const problemStreamTrigger = page.getByTestId('risk-stream-issues')
     await problemStreamTrigger.waitFor({ state: 'visible', timeout: 10000 })
-    await problemStreamTrigger.evaluate((node) => {
-      if (node instanceof HTMLElement) {
-        node.click()
-      }
-    })
+    await problemStreamTrigger.click()
     await page.waitForTimeout(200)
     const issueDetailTrigger = page.locator('[data-testid="risk-detail-open-issue-issue-1"]').first()
     await issueDetailTrigger.waitFor({ state: 'visible', timeout: 10000 })
@@ -384,11 +380,7 @@ async function main() {
 
     const riskStreamTrigger = page.getByTestId('risk-stream-risks')
     await riskStreamTrigger.waitFor({ state: 'visible', timeout: 10000 })
-    await riskStreamTrigger.evaluate((node) => {
-      if (node instanceof HTMLElement) {
-        node.click()
-      }
-    })
+    await riskStreamTrigger.click()
     await page.waitForTimeout(200)
 
     const chainTrigger = page.getByTestId('risk-chain-workspace').getByTestId('risk-open-chain-risk-risk-1').first()
