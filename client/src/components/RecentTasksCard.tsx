@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { safeJsonParse, safeStorageGet } from '@/lib/browserStorage'
-import { getTaskDisplayStatus, isCompletedTask } from '@/lib/dashboardStatus'
+import { getTaskDisplayStatus, isCompletedTask } from '@/lib/taskBusinessStatus'
 import { getStatusTheme } from '@/lib/statusTheme'
 
 interface RawTask {

@@ -80,6 +80,9 @@ jobs:
       - name: Server typecheck
         run: npm run typecheck
 
+      - name: Server route aggregation guard
+        run: npm run guard:route-aggregation
+
       - name: Server executeSQL guard
         run: npm run guard:execute-sql
 
@@ -354,3 +357,4 @@ jobs:
           SLACK_COLOR: good
           SLACK_TITLE: 'Project Management System deployed to self-hosted server'
           SLACK_MESSAGE: 'Commit: ${{ github.sha }}\nEnvironment: ${{ env.DEPLOY_TARGET }}'
+

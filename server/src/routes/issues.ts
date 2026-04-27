@@ -9,6 +9,7 @@ import {
   getIssues,
   getIssue,
 } from '../services/dbService.js'
+import { isActiveIssue } from '../utils/issueStatus.js'
 import {
   confirmIssuePendingManualCloseInMainChain,
   createIssueInMainChain,
@@ -34,11 +35,6 @@ function normalizeIssueKey(value?: string | null) {
   return String(value ?? '').trim()
 }
 
-function isActiveIssueStatus(status?: string | null) {
-  const normalized = normalizeIssueKey(status).toLowerCase()
-  return normalized !== 'closed'
-}
-
 async function findDuplicateIssue(input: {
   project_id: string
   title: string
@@ -53,7 +49,7 @@ async function findDuplicateIssue(input: {
 
   const issues = await getIssues(input.project_id)
   return issues.find((issue) => {
-    if (!isActiveIssueStatus(issue.status)) return false
+    if (!isActiveIssue(issue)) return false
     return (
       normalizeIssueKey(issue.project_id) === projectId
       && normalizeIssueKey(issue.source_type) === sourceType
@@ -215,12 +211,14 @@ router.get('/summary', asyncHandler(async (req, res) => {
     runningTrend.push(point)
   }
 
+  // eslint-disable-next-line -- route-level-aggregation-approved
   const statusCounts = issues.reduce((counts, issue) => {
     const key = normalizeIssueStatus(issue.status) || 'open'
     counts[key] = (counts[key] || 0) + 1
     return counts
   }, {} as Record<string, number>)
 
+  // eslint-disable-next-line -- route-level-aggregation-approved
   const severityCounts = issues.reduce((counts, issue) => {
     const key = String(issue.severity || 'medium')
     counts[key] = (counts[key] || 0) + 1
@@ -228,6 +226,7 @@ router.get('/summary', asyncHandler(async (req, res) => {
   }, {} as Record<string, number>)
 
   const sourceCounts = Array.from(
+    // eslint-disable-next-line -- route-level-aggregation-approved
     issues.reduce((map, issue) => {
       const key = String(issue.source_type || 'manual')
       map.set(key, (map.get(key) || 0) + 1)

@@ -13,12 +13,11 @@ import { PlanningIntegrityService } from './services/planningIntegrityService.js
 import { planningGovernanceService } from './services/planningGovernanceService.js'
 import { scanAllProjectBaselineValidity } from './services/baselineGovernanceService.js'
 import { materialArrivalReminderService } from './services/materialArrivalReminderService.js'
-import { recordProjectHealthSnapshots } from './services/projectHealthService.js'
+import { recordProjectDailySnapshots } from './services/projectDailySnapshotService.js'
 import { SystemAnomalyService } from './services/systemAnomalyService.js'
 import { WarningService } from './services/warningService.js'
 import { weeklyDigestService } from './services/weeklyDigestService.js'
 
-const MAX_TIMEOUT_MS = 2_147_483_647
 const DAY_IN_MS = 24 * 60 * 60 * 1000
 const HOUR_IN_MS = 60 * 60 * 1000
 
@@ -200,67 +199,56 @@ class DelayRequestReminderJob {
   }
 }
 
-class HealthHistorySnapshotJob {
+class ProjectDailySnapshotJob {
   private timer: NodeJS.Timeout | null = null
+  private startTimer: NodeJS.Timeout | null = null
   private isRunning = false
-  private nextRun: Date | null = null
 
   start() {
-    if (this.timer) {
-      logger.warn('Health history snapshot job is already running')
+    if (this.timer || this.startTimer) {
+      logger.warn('Project daily snapshot job is already running')
       return
     }
 
-    this.scheduleNextRun()
+    const now = new Date()
+    const nextRun = new Date(now)
+    nextRun.setHours(0, 10, 0, 0)
+    if (nextRun <= now) {
+      nextRun.setDate(nextRun.getDate() + 1)
+    }
+
+    const initialDelay = Math.max(nextRun.getTime() - now.getTime(), 0)
+    logger.info('Project daily snapshot job scheduled', {
+      nextRun: nextRun.toISOString(),
+      trigger: 'daily_00_10',
+      initialDelay,
+    })
+
+    this.startTimer = setTimeout(() => {
+      this.startTimer = null
+      void this.execute('scheduler')
+      this.timer = setInterval(() => {
+        void this.execute('scheduler')
+      }, DAY_IN_MS)
+    }, initialDelay)
   }
 
   stop() {
+    if (this.startTimer) {
+      clearTimeout(this.startTimer)
+      this.startTimer = null
+    }
+
     if (this.timer) {
-      clearTimeout(this.timer)
+      clearInterval(this.timer)
       this.timer = null
-      this.nextRun = null
-      logger.info('Health history snapshot job stopped')
+      logger.info('Project daily snapshot job stopped')
     }
-  }
-
-  private scheduleNextRun() {
-    const now = new Date()
-    const firstDayThisMonth = new Date(now.getFullYear(), now.getMonth(), 1, 0, 5, 0, 0)
-    const nextRun =
-      firstDayThisMonth > now
-        ? firstDayThisMonth
-        : new Date(now.getFullYear(), now.getMonth() + 1, 1, 0, 5, 0, 0)
-
-    this.scheduleForDate(nextRun)
-  }
-
-  private scheduleForDate(targetDate: Date) {
-    const delay = Math.max(targetDate.getTime() - Date.now(), 0)
-    this.nextRun = targetDate
-
-    logger.info('Health history snapshot job scheduled', {
-      nextRun: targetDate.toISOString(),
-      remainingMs: delay,
-    })
-
-    if (delay > MAX_TIMEOUT_MS) {
-      this.timer = setTimeout(() => {
-        this.timer = null
-        this.scheduleForDate(targetDate)
-      }, MAX_TIMEOUT_MS)
-      return
-    }
-
-    this.timer = setTimeout(async () => {
-      this.timer = null
-      await this.execute('scheduler')
-      this.scheduleNextRun()
-    }, delay)
   }
 
   private async execute(triggeredBy: 'scheduler' | 'manual' = 'scheduler') {
     if (this.isRunning) {
-      logger.warn('Health history snapshot job is already running, skip tick')
+      logger.warn('Project daily snapshot job is already running, skip tick')
       return
     }
 
@@ -268,26 +256,26 @@ class HealthHistorySnapshotJob {
     const jobId = createJobId()
 
     try {
-      logger.info('Start health history snapshot recording', { triggeredBy, jobId })
+      logger.info('Start project daily snapshot recording', { triggeredBy, jobId })
       const { attempts, value } = await runJobWithRetry(
         {
-          jobName: 'healthHistorySnapshotJob',
+          jobName: 'projectDailySnapshotJob',
           triggeredBy,
           jobId,
         },
-        async () => recordProjectHealthSnapshots(),
+        async () => recordProjectDailySnapshots(),
       )
 
-      logger.info('Health history snapshot recording completed', {
+      logger.info('Project daily snapshot recording completed', {
         triggeredBy,
         jobId,
         attempts,
         recorded: value.recorded,
         failed: value.failed,
-        period: value.period,
+        snapshotDate: value.snapshotDate,
       })
     } catch (error) {
-      logger.error('Health history snapshot recording failed', {
+      logger.error('Project daily snapshot recording failed', {
         triggeredBy,
         jobId,
         error: error instanceof Error ? error.message : String(error),
@@ -776,7 +764,7 @@ class MaterialArrivalReminderJob {
 
 const conditionAlertJob = new ConditionAlertJob()
 const delayRequestReminderJob = new DelayRequestReminderJob()
-const healthHistorySnapshotJob = new HealthHistorySnapshotJob()
+const projectDailySnapshotJob = new ProjectDailySnapshotJob()
 const dataQualityJob = new DataQualityJob()
 const planningGovernanceJob = new PlanningGovernanceJob()
 const operationalNotificationJob = new OperationalNotificationJob()
@@ -793,8 +781,8 @@ function startAllJobs() {
   conditionAlertJob.start()
   console.log('Condition/obstacle warning job started (hourly)')
 
-  healthHistorySnapshotJob.start()
-  console.log('Health history snapshot job started (monthly 1st 00:05)')
+  projectDailySnapshotJob.start()
+  console.log('Project daily snapshot job started (daily 00:10)')
 
   dataQualityJob.start()
   console.log('Data quality job started (daily 02:30)')
@@ -837,7 +825,7 @@ function startAllJobs() {
     planningGovernanceJob.stop()
     delayRequestReminderJob.stop()
     responsibilityAlertJob.stop()
-    healthHistorySnapshotJob.stop()
+    projectDailySnapshotJob.stop()
     dataQualityJob.stop()
     operationalNotificationJob.stop()
     notificationLifecycleJob.stop()

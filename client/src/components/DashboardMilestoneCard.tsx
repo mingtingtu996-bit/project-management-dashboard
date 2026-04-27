@@ -38,6 +38,7 @@ export default function DashboardMilestoneCard({
   const params = useParams<{ id?: string; projectId?: string }>();
   const urlProjectId = params.id || params.projectId || '';
   const projectId = recentMilestones[0]?.projectId || urlProjectId || '';
+  const reportsHref = projectId ? `/projects/${projectId}/reports?view=progress_deviation` : '/reports?view=progress_deviation';
 
   // 计算剩余天数
   const getDaysRemaining = (dueDate: string): { text: string; isOverdue: boolean; isUrgent: boolean } => {
@@ -71,12 +72,20 @@ export default function DashboardMilestoneCard({
   return (
     <Card variant="metric" className="h-full">
       <CardHeader className="pb-2">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <CardTitle className="text-sm font-medium text-gray-700">里程碑追踪</CardTitle>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm text-blue-600 font-medium">{completed}/{total}</span>
             <span className="text-xs rounded-full bg-amber-50 px-2 py-0.5 text-amber-700">偏移 {upcoming}</span>
             <span className="text-xs rounded-full bg-red-50 px-2 py-0.5 text-red-700">逾期 {overdue}</span>
+            <Link
+              data-testid="dashboard-milestone-reports-link"
+              to={reportsHref}
+              className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 transition-colors hover:text-blue-800 hover:underline"
+            >
+              查看详细分析
+              <ChevronRight className="h-3.5 w-3.5" />
+            </Link>
             <button 
               onClick={() => setExpanded(!expanded)}
               className="p-1 hover:bg-gray-100 rounded-full transition-colors"

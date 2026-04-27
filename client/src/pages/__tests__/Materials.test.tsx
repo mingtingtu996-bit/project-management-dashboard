@@ -13,6 +13,7 @@ const permissionState = vi.hoisted(() => ({
 const materialsApiMock = vi.hoisted(() => ({
   analyzeLinkedTaskDelayRisk: vi.fn(),
   estimateLinkedTaskDuration: vi.fn(),
+  getSummary: vi.fn(),
   getWeeklyDigest: vi.fn(),
   list: vi.fn(),
   listChangeLogs: vi.fn(),
@@ -179,6 +180,15 @@ describe('Materials page', () => {
       generated_at: '2026-04-22T08:30:00.000Z',
       overall_progress: 62,
       health_score: 78,
+    })
+    materialsApiMock.getSummary.mockResolvedValue({
+      overview: {
+        totalExpectedCount: 3,
+        onTimeCount: 1,
+        arrivalRate: 33,
+      },
+      byUnit: [],
+      monthlyTrend: [],
     })
     materialsApiMock.estimateLinkedTaskDuration.mockResolvedValue({
       id: 'estimate-1',

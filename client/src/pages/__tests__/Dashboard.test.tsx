@@ -284,6 +284,11 @@ describe('Dashboard contract', () => {
     expect(container.textContent).not.toContain('证照管理')
     expect(container.textContent).not.toContain('项目脉冲')
     expect(container.textContent).toContain('月度趋势')
+
+    expect(container.querySelector('[data-testid="dashboard-task-reports-link"]')?.getAttribute('href')).toBe('/projects/project-1/reports?view=progress')
+    expect(container.querySelector('[data-testid="dashboard-milestone-reports-link"]')?.getAttribute('href')).toBe('/projects/project-1/reports?view=progress_deviation')
+    expect(container.querySelector('[data-testid="dashboard-risk-reports-link"]')?.getAttribute('href')).toBe('/projects/project-1/reports?view=risk')
+    expect(container.querySelector('[data-testid="dashboard-compare-reports-link"]')?.getAttribute('href')).toBe('/projects/project-1/reports?view=change_log')
   })
 
   it('uses the shared dashboard label in the empty state', async () => {

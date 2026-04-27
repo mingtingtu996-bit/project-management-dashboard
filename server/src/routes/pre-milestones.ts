@@ -5,6 +5,8 @@ import { createRisk, createTask, executeSQL, executeSQLOne, getIssues, getRisks 
 import { asyncHandler } from '../middleware/errorHandler.js'
 import { authenticate, requireProjectEditor } from '../middleware/auth.js'
 import { logger } from '../middleware/logger.js'
+import { isActiveIssue } from '../utils/issueStatus.js'
+import { isActiveRisk } from '../utils/riskStatus.js'
 import type { ApiResponse } from '../types/index.js'
 import type { PreMilestone } from '../types/db.js'
 import { ValidationService } from '../services/validationService.js'
@@ -364,14 +366,6 @@ function normalizePreMilestoneRecord<T extends PreMilestoneRouteRecord | null | 
   } as unknown as T
 }
 
-function isActiveIssueStatus(status: unknown) {
-  return normalizeLookupKey(status).toLowerCase() !== 'closed'
-}
-
-function isActiveRiskStatus(status: unknown) {
-  return normalizeLookupKey(status).toLowerCase() !== 'closed'
-}
-
 async function findDuplicateEscalatedIssue(input: {
   projectId: string
   title: string
@@ -381,7 +375,7 @@ async function findDuplicateEscalatedIssue(input: {
   const issues = await getIssues(input.projectId).catch(() => [])
   return (
     issues.find((issue) =>
-      isActiveIssueStatus(issue.status) &&
+      isActiveIssue(issue) &&
       normalizeLookupKey(issue.source_type) === 'manual' &&
       normalizeLookupKey(issue.title).toLowerCase() === normalizeLookupKey(input.title).toLowerCase() &&
       normalizeLookupKey(issue.source_entity_type) === normalizeLookupKey(input.sourceEntityType) &&
@@ -399,7 +393,7 @@ async function findDuplicateEscalatedRisk(input: {
   const risks = await getRisks(input.projectId).catch(() => [])
   return (
     risks.find((risk) =>
-      isActiveRiskStatus(risk.status) &&
+      isActiveRisk(risk) &&
       normalizeLookupKey(risk.source_type) === 'manual' &&
       normalizeLookupKey(risk.title).toLowerCase() === normalizeLookupKey(input.title).toLowerCase() &&
       normalizeLookupKey(risk.source_entity_type) === normalizeLookupKey(input.sourceEntityType) &&

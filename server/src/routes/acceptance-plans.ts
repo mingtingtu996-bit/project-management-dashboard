@@ -283,6 +283,7 @@ router.get('/batch/nodes', asyncHandler(async (req, res) => {
   )
 
   // 按计划ID分组
+  // eslint-disable-next-line -- route-level-aggregation-approved
   const grouped = (data || []).reduce((acc: Record<string, AcceptanceNode[]>, node: any) => {
     if (!acc[node.acceptance_plan_id]) {
       acc[node.acceptance_plan_id] = []

@@ -113,12 +113,12 @@ export const TASK_STATUS_THEME = {
   },
 } as const
 
-const COMPLETED_STATUSES = new Set(['completed'])
+const COMPLETED_STATUSES = new Set(['completed', 'done', '\u5df2\u5b8c\u6210'])
 const IN_PROGRESS_STATUSES = new Set(['in_progress', 'blocked'])
 const TODO_STATUSES = new Set(['todo'])
-const SATISFIED_CONDITION_STATUSES = new Set(['\u5df2\u6ee1\u8db3', '\u5df2\u786e\u8ba4'])
-const RESOLVED_OBSTACLE_STATUSES = new Set(['\u5df2\u89e3\u51b3'])
-const CLOSED_RISK_STATUSES = new Set(['resolved', 'closed', 'mitigated', '\u5df2\u89e3\u51b3'])
+const SATISFIED_CONDITION_STATUSES = new Set(['completed', 'satisfied', 'confirmed', '\u5df2\u6ee1\u8db3', '\u5df2\u786e\u8ba4'])
+const RESOLVED_OBSTACLE_STATUSES = new Set(['resolved', 'closed', '\u5df2\u89e3\u51b3'])
+const CLOSED_RISK_STATUSES = new Set(['closed', '\u5df2\u5173\u95ed'])
 
 export function normalizeStatus(value: unknown): string {
   return String(value ?? '').trim().toLowerCase()
@@ -134,6 +134,27 @@ export function isCompletedTask(task: TaskLike): boolean {
 
 export function isInProgressTask(task: TaskLike): boolean {
   return IN_PROGRESS_STATUSES.has(normalizeStatus(task.status))
+}
+
+export function isBlockedTask(task: TaskLike): boolean {
+  const status = normalizeStatus(task.status)
+  return ['blocked', '受阻', 'obstacle', 'obstructed'].includes(status)
+}
+
+export function getTaskDisplayStatus(task: TaskLike): 'pending' | 'in_progress' | 'blocked' | 'completed' {
+  if (isCompletedTask(task)) {
+    return 'completed'
+  }
+
+  if (isBlockedTask(task)) {
+    return 'blocked'
+  }
+
+  if (isInProgressTask(task)) {
+    return 'in_progress'
+  }
+
+  return 'pending'
 }
 
 export function isTodoTask(task: TaskLike): boolean {

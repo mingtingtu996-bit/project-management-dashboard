@@ -6,7 +6,6 @@
 import { logger } from '../middleware/logger.js'
 import { supabase } from './dbService.js'
 import { PlanningHealthService } from './planningHealthService.js'
-import { isProjectActiveStatus } from '../utils/projectStatus.js'
 
 export type HealthStatus = '健康' | '亚健康' | '预警' | '危险'
 
@@ -23,12 +22,6 @@ export interface HealthDetails {
 export interface HealthScoreResult {
   score: number
   details: HealthDetails
-}
-
-export interface HealthSnapshotResult {
-  recorded: number
-  failed: number
-  period: string
 }
 
 const planningHealthService = new PlanningHealthService()
@@ -56,10 +49,6 @@ function toHealthDetails(score: number, breakdown: {
     totalScore: score,
     healthStatus: mapHealthStatus(score),
   } satisfies HealthDetails
-}
-
-export function getHealthHistoryPeriod(date = new Date()): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
 }
 
 export async function calculateProjectHealth(projectId: string): Promise<HealthScoreResult> {
@@ -126,60 +115,6 @@ export async function updateAllProjectsHealth(): Promise<number> {
   }
 
   return updatedCount
-}
-
-export async function recordProjectHealthSnapshots(period = getHealthHistoryPeriod()): Promise<HealthSnapshotResult> {
-  const { data: projects, error } = await supabase
-    .from('projects')
-    .select('id, name, status')
-
-  if (error) {
-    throw new Error(`获取活跃项目列表失败: ${error.message}`)
-  }
-
-  const activeProjects = ((projects ?? []) as Array<{ id: string; name?: string | null; status?: string | null }>).filter(
-    (project) => isProjectActiveStatus(project.status),
-  )
-
-  if (activeProjects.length === 0) {
-    return { recorded: 0, failed: 0, period }
-  }
-
-  let recorded = 0
-  let failed = 0
-
-  for (const project of activeProjects) {
-    try {
-      const result = await calculateProjectHealth(project.id)
-      await persistProjectHealth(project.id, result)
-
-      const { error: upsertError } = await supabase
-        .from('project_health_history')
-        .upsert({
-          project_id: project.id,
-          health_score: result.score,
-          health_status: result.details.healthStatus,
-          period,
-          details: result.details,
-          recorded_at: new Date().toISOString(),
-        }, { onConflict: 'project_id,period' })
-
-      if (upsertError) {
-        throw upsertError
-      }
-
-      recorded += 1
-    } catch (error) {
-      failed += 1
-      logger.warn('[projectHealthService] failed to record health snapshot', {
-        projectId: project.id,
-        projectName: project.name ?? null,
-        error: error instanceof Error ? error.message : String(error),
-      })
-    }
-  }
-
-  return { recorded, failed, period }
 }
 
 export function enqueueProjectHealthUpdate(projectId: string, trigger = 'event') {

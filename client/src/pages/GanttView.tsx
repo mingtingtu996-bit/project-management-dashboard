@@ -788,25 +788,6 @@ export default function GanttView() {
     return getDependencyChain(hoveredTaskId, taskMap)
   }, [hoveredTaskId, taskMap])
 
-  const computeRolledProgress = useCallback((node: WBSNode): number => {
-    if (node.children.length === 0) {
-      return node.progress || 0
-    }
-    const childAvg = node.children.reduce((sum, c) => sum + computeRolledProgress(c), 0) / node.children.length
-    return Math.round(childAvg)
-  }, [])
-
-  // 濮瑰洦鈧槒绻樻惔?map閿涙askId -> rolledProgress
-  const rolledProgressMap = useMemo(() => {
-    const map: Record<string, number> = {}
-    function walk(node: WBSNode) {
-      map[node.id] = computeRolledProgress(node)
-      node.children.forEach(walk)
-    }
-    wbsTree.forEach(walk)
-    return map
-  }, [wbsTree, computeRolledProgress])
-
   const buildingOptions = useMemo(() => {
     return wbsTree.map(node => ({
       id: node.id,
@@ -888,14 +869,13 @@ export default function GanttView() {
     })
   }, [flatList, debouncedSearchText, filterStatus, filterPriority, filterCritical, filterSpecialty, filterBuilding, buildingNodeIds, criticalPathDisplayTaskIds])
 
-  const activeFilterCount = [
-    debouncedSearchText ? 1 : 0,
-    filterStatus !== 'all' ? 1 : 0,
-    filterPriority !== 'all' ? 1 : 0,
-    filterCritical ? 1 : 0,
-    filterSpecialty !== 'all' ? 1 : 0,
-    filterBuilding !== 'all' ? 1 : 0,
-  ].reduce((a, b) => a + b, 0)
+  let activeFilterCount = 0
+  if (debouncedSearchText) activeFilterCount += 1
+  if (filterStatus !== 'all') activeFilterCount += 1
+  if (filterPriority !== 'all') activeFilterCount += 1
+  if (filterCritical) activeFilterCount += 1
+  if (filterSpecialty !== 'all') activeFilterCount += 1
+  if (filterBuilding !== 'all') activeFilterCount += 1
 
   const clearAllFilters = () => {
     setSearchText('')
@@ -3430,7 +3410,12 @@ export default function GanttView() {
       updateTask(task.id, task)
     })
 
-    const versionConflictCount = failures.filter(({ message }) => message.includes('VERSION_MISMATCH')).length
+    let versionConflictCount = 0
+    for (const failure of failures) {
+      if (failure.message.includes('VERSION_MISMATCH')) {
+        versionConflictCount += 1
+      }
+    }
     toast({
       title: '部分任务同步失败',
       description: versionConflictCount > 0
@@ -3445,8 +3430,15 @@ export default function GanttView() {
     const selectedTaskEntries = [...selectedIds]
       .map((taskId) => ({ id: taskId, task: tasks.find((item) => item.id === taskId) }))
       .filter((entry): entry is { id: string; task: Task } => Boolean(entry.task))
-    const alreadyDone = selectedTaskEntries.filter(({ task }) => task.status === 'completed').length
-    const tasksToPersist = selectedTaskEntries.filter(({ task }) => task.status !== 'completed')
+    let alreadyDone = 0
+    const tasksToPersist: typeof selectedTaskEntries = []
+    for (const entry of selectedTaskEntries) {
+      if (entry.task.status === 'completed') {
+        alreadyDone += 1
+      } else {
+        tasksToPersist.push(entry)
+      }
+    }
     const optimisticUpdatedAt = new Date().toISOString()
     const optimisticActualDate = toDateValue(optimisticUpdatedAt)
 
@@ -3794,16 +3786,15 @@ export default function GanttView() {
               <GanttTaskRows
                 tasks={tasks as Task[]}
                 flatList={flatList}
-                filteredFlatList={filteredFlatList}
-                collapsed={collapsed}
-                selectedIds={selectedIds}
-                expandedConditionTaskId={expandedConditionTaskId}
-                inlineConditionsMap={inlineConditionsMap}
-                taskProgressSnapshot={taskProgressSnapshot}
-                rolledProgressMap={rolledProgressMap}
-                inlineTitleTaskId={inlineTitleTaskId}
+              filteredFlatList={filteredFlatList}
+              collapsed={collapsed}
+              selectedIds={selectedIds}
+              expandedConditionTaskId={expandedConditionTaskId}
+              inlineConditionsMap={inlineConditionsMap}
+              taskProgressSnapshot={taskProgressSnapshot}
+              inlineTitleTaskId={inlineTitleTaskId}
                 inlineTitleValue={inlineTitleValue}
-                onClearFilters={clearAllFilters}
+              onClearFilters={clearAllFilters}
                 onToggleCollapse={toggleCollapse}
                 onToggleSelect={toggleSelect}
                 onSelectTask={(task) => setSelectedTask((previous) => (previous?.id === task.id ? null : task))}

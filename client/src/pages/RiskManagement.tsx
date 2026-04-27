@@ -153,6 +153,25 @@ function normalizeSeverity(value: unknown): RiskRow['severity'] {
   return 'medium'
 }
 
+function normalizeRiskStatusFilter(value: string | null): 'all' | RiskRow['status'] {
+  const raw = String(value ?? '').trim().toLowerCase()
+  if (raw === 'identified' || raw === 'mitigating' || raw === 'closed') return raw
+  if (raw === '已识别') return 'identified'
+  if (raw === '处理中') return 'mitigating'
+  if (raw === '已关闭') return 'closed'
+  return 'all'
+}
+
+function normalizeRiskSeverityFilter(value: string | null): 'all' | RiskRow['severity'] {
+  const raw = String(value ?? '').trim().toLowerCase()
+  if (raw === 'critical' || raw === 'high' || raw === 'medium' || raw === 'low') return raw
+  if (raw === '严重' || raw === 'severe') return 'critical'
+  if (raw === '高') return 'high'
+  if (raw === '中') return 'medium'
+  if (raw === '低') return 'low'
+  return 'all'
+}
+
 function getSourceLabel(sourceType: string) {
   if (sourceType === 'warning_converted') return '预警确认'
   if (sourceType === 'warning_auto_escalated') return '预警自动升级'
@@ -583,6 +602,8 @@ export default function RiskManagement() {
   const [riskViewMode, setRiskViewMode] = useState<ChainViewMode>('task')
   const [warningViewMode, setWarningViewMode] = useState<ChainViewMode>('task')
   const [riskSourceFilter, setRiskSourceFilter] = useState<SourceFilterValue>('all')
+  const [riskStatusFilter, setRiskStatusFilter] = useState<'all' | RiskRow['status']>('all')
+  const [riskSeverityFilter, setRiskSeverityFilter] = useState<'all' | RiskRow['severity']>('all')
   const [warningSourceFilter, setWarningSourceFilter] = useState<SourceFilterValue>('all')
   const [riskShowPendingManualCloseOnly, setRiskShowPendingManualCloseOnly] = useState(false)
   const [issueViewMode, setIssueViewMode] = useState<ChainViewMode>('task')
@@ -606,6 +627,13 @@ export default function RiskManagement() {
   const [manualIssueSeverity, setManualIssueSeverity] = useState<IssueRow['severity']>('medium')
   const [priorityDrafts, setPriorityDrafts] = useState<Record<string, number>>({})
   const [muteDurationHours, setMuteDurationHours] = useState<AllowedMuteHours>(24)
+  const routeRiskFilters = useMemo(() => {
+    const query = new URLSearchParams(location.search)
+    return {
+      status: normalizeRiskStatusFilter(query.get('status')),
+      severity: normalizeRiskSeverityFilter(query.get('level')),
+    }
+  }, [location.search])
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     if (!projectId) return
@@ -768,8 +796,12 @@ export default function RiskManagement() {
   const filteredRisks = useMemo(() => riskRows.filter((row) => {
     if (riskShowPendingManualCloseOnly && !row.pendingManualClose) return false
     if (riskSourceFilter !== 'all' && getSourceBucket(row.sourceType) !== riskSourceFilter) return false
+    const effectiveStatusFilter = riskStatusFilter !== 'all' ? riskStatusFilter : routeRiskFilters.status
+    const effectiveSeverityFilter = riskSeverityFilter !== 'all' ? riskSeverityFilter : routeRiskFilters.severity
+    if (effectiveStatusFilter !== 'all' && row.status !== effectiveStatusFilter) return false
+    if (effectiveSeverityFilter !== 'all' && row.severity !== effectiveSeverityFilter) return false
     return true
-  }), [riskRows, riskShowPendingManualCloseOnly, riskSourceFilter])
+  }), [riskRows, riskSeverityFilter, riskShowPendingManualCloseOnly, riskSourceFilter, riskStatusFilter, routeRiskFilters.severity, routeRiskFilters.status])
   const filteredIssues = useMemo(() => issueRows.filter((row) => {
     if (issueShowPendingManualCloseOnly && !row.pendingManualClose) return false
     if (issueSourceFilter !== 'all' && getSourceBucket(row.sourceType) !== issueSourceFilter) return false
@@ -1187,6 +1219,14 @@ export default function RiskManagement() {
     const requestedStream = query.get('stream') || query.get('tab')
     if (requestedStream === 'warnings' || requestedStream === 'risks' || requestedStream === 'issues') {
       setActiveStream(requestedStream)
+    }
+
+    const nextRiskStatusFilter = normalizeRiskStatusFilter(query.get('status'))
+    const nextRiskSeverityFilter = normalizeRiskSeverityFilter(query.get('level'))
+    setRiskStatusFilter(nextRiskStatusFilter)
+    setRiskSeverityFilter(nextRiskSeverityFilter)
+    if (nextRiskStatusFilter !== 'all' || nextRiskSeverityFilter !== 'all') {
+      setActiveStream('risks')
     }
 
     const issueId = query.get('issueId')

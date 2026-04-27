@@ -8,7 +8,7 @@ import pg from 'pg'
 const { Client } = pg
 
 const MIGRATION_FILE_PATTERN = /^(?<version>\d{3}[a-z]?)_(?<name>[a-z0-9_]+)\.sql$/i
-const NON_CANONICAL_TOKENS = ['verify', 'fixed', 'final']
+const NON_CANONICAL_TOKENS = ['verify', 'fixed', 'final', 'rollback']
 export const BASELINE_SENTINEL_TABLES = ['projects', 'tasks', 'users', 'notifications'] as const
 
 export type MigrationFile = {

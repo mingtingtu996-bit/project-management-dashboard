@@ -81,6 +81,13 @@ const notificationsQuerySchema = z.object({
   unread_only: z.union([z.string(), z.number(), z.boolean()]).optional(),
 }).passthrough()
 
+const notificationSummaryQuerySchema = z.object({
+  projectId: z.string().trim().min(1).optional(),
+  project_id: z.string().trim().min(1).optional(),
+  userId: z.string().trim().min(1).optional(),
+  user_id: z.string().trim().min(1).optional(),
+}).passthrough()
+
 const acknowledgeGroupBodySchema = z.object({
   ids: z.array(z.string().trim().min(1)).optional(),
 }).passthrough()
@@ -157,6 +164,144 @@ function isUnreadNotification(notification: Notification) {
 function isUnreadCountCandidate(notification: Notification) {
   if (isMutedNotification(notification)) return false
   return String(notification.status ?? '').toLowerCase() === 'unread' || !isReadFlag(notification.is_read)
+}
+
+function isPlanningMappingNotification(notification: Notification) {
+  const token = `${notification.category ?? ''} ${notification.notification_type ?? ''} ${notification.type ?? ''} ${notification.title ?? ''} ${notification.content ?? ''}`.toLowerCase()
+  return (
+    notification.category === 'planning_mapping_orphan' ||
+    notification.notification_type === 'planning-governance-mapping' ||
+    notification.type === 'planning_gov_mapping_orphan_pointer' ||
+    (notification.source_entity_type === 'planning_governance' && /(mapping|orphan|孤立|映射)/.test(token))
+  )
+}
+
+function getReminderTab(notification: Notification): 'business-warning' | 'system-exception' | 'flow-reminder' {
+  if (isPlanningMappingNotification(notification)) {
+    return 'system-exception'
+  }
+
+  if (
+    notification.notification_type === 'business-warning' ||
+    notification.notification_type === 'system-exception' ||
+    notification.notification_type === 'flow-reminder'
+  ) {
+    return notification.notification_type
+  }
+
+  const token = `${notification.category ?? ''} ${notification.type ?? ''} ${notification.title ?? ''} ${notification.content ?? ''}`.toLowerCase()
+
+  if (
+    notification.category === 'risk' ||
+    notification.category === 'problem' ||
+    /(风险|问题|预警|告警)/.test(token)
+  ) {
+    return 'business-warning'
+  }
+
+  if (
+    notification.category === 'materials' ||
+    notification.source_entity_type === 'project_material' ||
+    notification.notification_type === 'material_arrival_reminder' ||
+    notification.notification_type === 'material_arrival_overdue' ||
+    notification.type === 'material_arrival_reminder' ||
+    notification.type === 'material_arrival_overdue' ||
+    /(材料|到场|逾期未到)/.test(token)
+  ) {
+    return 'flow-reminder'
+  }
+
+  if (
+    /(任务|wbs|条件|阻碍|延期|里程碑|证照|验收|图纸|许可)/.test(token) ||
+    Boolean(notification.task_id) ||
+    Boolean(((notification as unknown) as Record<string, unknown>).milestone_id ?? ((notification as unknown) as Record<string, unknown>).milestoneId)
+  ) {
+    return 'flow-reminder'
+  }
+
+  return 'system-exception'
+}
+
+function isReminderNotification(notification: Notification) {
+  if (isPlanningMappingNotification(notification)) {
+    return true
+  }
+
+  if (
+    notification.notification_type === 'business-warning' ||
+    notification.notification_type === 'system-exception' ||
+    notification.notification_type === 'flow-reminder'
+  ) {
+    return true
+  }
+
+  const token = `${notification.category ?? ''} ${notification.type ?? ''} ${notification.title ?? ''} ${notification.content ?? ''}`.toLowerCase()
+  return (
+    notification.category === 'materials' ||
+    notification.source_entity_type === 'project_material' ||
+    notification.notification_type === 'material_arrival_reminder' ||
+    notification.notification_type === 'material_arrival_overdue' ||
+    notification.type === 'material_arrival_reminder' ||
+    notification.type === 'material_arrival_overdue' ||
+    notification.category === 'system' ||
+    notification.category === 'risk' ||
+    notification.category === 'problem' ||
+    !notification.category ||
+    /(材料|到场|逾期未到)/.test(token) ||
+    token.includes('reminder') ||
+    token.includes('warning') ||
+    token.includes('risk') ||
+    token.includes('problem') ||
+    token.includes('condition') ||
+    token.includes('obstacle') ||
+    token.includes('acceptance') ||
+    token.includes('delay') ||
+    token.includes('notice')
+  )
+}
+
+type NotificationSummary = {
+  pendingCount: number
+  processedCount: number
+  businessWarningCount: number
+  systemExceptionCount: number
+  systemExceptionMappingCount: number
+  flowReminderCount: number
+  linkedProjectCount: number
+  allCount: number
+}
+
+function buildNotificationSummary(notifications: Notification[]): NotificationSummary {
+  const reminders = notifications.filter(isReminderNotification)
+  const counts: NotificationSummary = {
+    pendingCount: 0,
+    processedCount: 0,
+    businessWarningCount: 0,
+    systemExceptionCount: 0,
+    systemExceptionMappingCount: 0,
+    flowReminderCount: 0,
+    linkedProjectCount: 0,
+    allCount: 0,
+  }
+
+  for (const item of reminders) {
+    counts.allCount += 1
+    if (isUnreadNotification(item)) counts.pendingCount += 1
+    if (!isUnreadNotification(item)) counts.processedCount += 1
+    if (Boolean(item.project_id)) counts.linkedProjectCount += 1
+
+    const reminderTab = getReminderTab(item)
+    if (reminderTab === 'business-warning') counts.businessWarningCount += 1
+    if (reminderTab === 'system-exception') {
+      counts.systemExceptionCount += 1
+      if (isPlanningMappingNotification(item)) {
+        counts.systemExceptionMappingCount += 1
+      }
+    }
+    if (reminderTab === 'flow-reminder') counts.flowReminderCount += 1
+  }
+
+  return counts
 }
 
 function serializeNotification(notification: Notification) {
@@ -348,6 +493,32 @@ router.get('/unread', validate(notificationsQuerySchema, 'query'), asyncHandler(
   const response: ApiResponse<{ count: number }> = {
     success: true,
     data: { count },
+    timestamp: new Date().toISOString(),
+  }
+
+  res.json(response)
+}))
+
+/**
+ * 获取提醒中心摘要统计
+ * GET /api/notifications/summary?projectId=xxx&userId=xxx
+ */
+router.get('/summary', validate(notificationSummaryQuerySchema, 'query'), asyncHandler(async (req, res) => {
+  const projectId = String(req.query.projectId ?? req.query.project_id ?? '').trim() || undefined
+  const userId = String(req.query.userId ?? req.query.user_id ?? '').trim() || undefined
+
+  logger.info('Fetching notification summary', { projectId, userId })
+
+  await syncNotificationStateForRead(projectId)
+  const notifications = await listPersistedNotificationsForScope(projectId)
+  const summary = buildNotificationSummary(
+    notifications.filter((item) => !projectId || item.project_id === projectId)
+      .filter((item) => matchesNotificationRecipient(item, userId)),
+  )
+
+  const response: ApiResponse<NotificationSummary> = {
+    success: true,
+    data: summary,
     timestamp: new Date().toISOString(),
   }
 

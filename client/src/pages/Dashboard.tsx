@@ -21,7 +21,7 @@ import { useStore } from '@/hooks/useStore'
 import { useToast } from '@/hooks/use-toast'
 import { PROJECT_NAVIGATION_LABELS } from '@/config/navigation'
 import { apiGet, apiPut, getApiErrorMessage, isAbortError } from '@/lib/apiClient'
-import { getTaskDisplayStatus, isCompletedTask, isDelayedTask } from '@/lib/dashboardStatus'
+import { getTaskDisplayStatus, isCompletedTask, isDelayedTask } from '@/lib/taskBusinessStatus'
 import { DashboardApiService, type ProjectSummary } from '@/services/dashboardApi'
 import { DataQualityApiService, type DataQualityProjectSummary } from '@/services/dataQualityApi'
 import type { Project } from '@/lib/supabase'
@@ -989,6 +989,7 @@ function DashboardMonthlyTrend({ projectId }: { projectId: string }) {
 
 // 问题与风险 2×2 语义色网格
 function IssueRiskGrid({ summaryData, projectId }: { summaryData: ProjectSummary | null; projectId: string }) {
+  const riskReportsHref = `/projects/${projectId}/reports?view=risk`
   const cells = [
     {
       label: '活跃风险数',
@@ -1031,16 +1032,29 @@ function IssueRiskGrid({ summaryData, projectId }: { summaryData: ProjectSummary
       to: `/projects/${projectId}/gantt`,
     },
   ]
-  const totalSignals = cells.reduce((total, cell) => total + cell.value, 0)
+  let totalSignals = 0
+  for (const cell of cells) {
+    totalSignals += Number(cell.value) || 0
+  }
 
   return (
     <Card data-testid="dashboard-risk-snapshot" className="card-l2 border-slate-100">
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between gap-3">
           <CardTitle className="text-base text-slate-900">问题与风险快照</CardTitle>
-          <Badge variant={totalSignals > 0 ? 'destructive' : 'secondary'}>
-            {totalSignals > 0 ? `${totalSignals} 条需处理信号` : '当前无活跃信号'}
-          </Badge>
+          <div className="flex items-center gap-3">
+            <Badge variant={totalSignals > 0 ? 'destructive' : 'secondary'}>
+              {totalSignals > 0 ? `${totalSignals} 条需处理信号` : '当前无活跃信号'}
+            </Badge>
+            <Link
+              data-testid="dashboard-risk-reports-link"
+              to={riskReportsHref}
+              className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 transition-colors hover:text-blue-800 hover:underline"
+            >
+              查看详细分析
+              <ArrowRight className="h-3.5 w-3.5" />
+            </Link>
+          </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -1343,18 +1357,18 @@ export default function Dashboard() {
   }, [responsibilitySummary])
 
   const taskStatusSummary = useMemo(() => {
-    return scopedTasks.reduce(
-      (acc, task) => {
-        const displayStatus = getTaskDisplayStatus(task)
-        if (displayStatus === 'completed') acc.completed += 1
-        else if (displayStatus === 'in_progress') acc.inProgress += 1
-        else acc.notStarted += 1
+    const summary = { completed: 0, inProgress: 0, notStarted: 0, delayed: 0 }
 
-        if (isDelayedTask(task)) acc.delayed += 1
-        return acc
-      },
-      { completed: 0, inProgress: 0, notStarted: 0, delayed: 0 },
-    )
+    for (const task of scopedTasks) {
+      const displayStatus = getTaskDisplayStatus(task)
+      if (displayStatus === 'completed') summary.completed += 1
+      else if (displayStatus === 'in_progress') summary.inProgress += 1
+      else summary.notStarted += 1
+
+      if (isDelayedTask(task)) summary.delayed += 1
+    }
+
+    return summary
   }, [scopedTasks])
 
   const todayKey = getCalendarDayKey(new Date())
@@ -1609,7 +1623,15 @@ export default function Dashboard() {
                         status: summaryData.nextMilestone.daysRemaining < 0 ? 'delayed' : 'pending',
                         projectId,
                         assignee: scopedTasks.find((t) => t.milestone_id === summaryData.nextMilestone?.id)?.assignee_name || undefined,
-                        relatedTasks: scopedTasks.filter((t) => t.milestone_id === summaryData.nextMilestone?.id).length || undefined,
+                        relatedTasks: (() => {
+                          let count = 0
+                          for (const task of scopedTasks) {
+                            if (task.milestone_id === summaryData.nextMilestone?.id) {
+                              count += 1
+                            }
+                          }
+                          return count || undefined
+                        })(),
                         onTimeRate: summaryData.totalMilestones > 0 && summaryData.completedMilestones > 0
                           ? Math.round((summaryData.completedMilestones / summaryData.totalMilestones) * 100)
                           : undefined,

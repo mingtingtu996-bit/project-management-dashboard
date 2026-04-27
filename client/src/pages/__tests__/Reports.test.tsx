@@ -89,7 +89,7 @@ function findButton(container: HTMLElement, label: string) {
 
 async function renderReports(root: Root | null, initialEntry: string) {
   root?.render(
-    <MemoryRouter initialEntries={[initialEntry]}>
+    <MemoryRouter key={initialEntry} initialEntries={[initialEntry]}>
       <Routes>
         <Route path="/projects/:id/reports" element={<Reports />} />
       </Routes>
@@ -156,6 +156,58 @@ describe('Reports story coverage', () => {
     apiClientMock.apiGet.mockImplementation(async (url: string) => {
       if (url.startsWith('/api/data-quality/project-summary?')) {
         return dataQualitySummaryResponse(projectId)
+      }
+
+      if (url.startsWith(`/api/scope-dimensions?projectId=${projectId}`)) {
+        return {
+          project_id: projectId,
+          sections: [
+            {
+              key: 'building',
+              label: '楼栋',
+              description: '楼栋切片',
+              options: ['A 座', 'B 座'],
+              selected: ['A 座'],
+            },
+            {
+              key: 'specialty',
+              label: '专业',
+              description: '专业切片',
+              options: ['结构', '机电'],
+              selected: ['结构'],
+            },
+            {
+              key: 'phase',
+              label: '阶段',
+              description: '阶段切片',
+              options: ['前期', '施工'],
+              selected: ['施工'],
+            },
+            {
+              key: 'region',
+              label: '区域',
+              description: '区域切片',
+              options: ['南区', '北区'],
+              selected: ['南区'],
+            },
+          ],
+        }
+      }
+
+      if (url.startsWith('/api/analytics/project-trend?')) {
+        return {
+          projectId,
+          metric: 'overall_progress',
+          from: '2026-04-01',
+          to: '2026-04-30',
+          groupBy: 'none',
+          granularity: 'week',
+          points: [
+            { date: '2026-04-01', value: 60 },
+            { date: '2026-04-08', value: 61 },
+            { date: '2026-04-15', value: 64 },
+          ],
+        }
       }
 
       if (url.startsWith(`/api/projects/${projectId}/materials/summary`)) {
@@ -281,6 +333,7 @@ describe('Reports story coverage', () => {
               deviation_days: 1,
               deviation_rate: 2,
               status: 'in_progress',
+              source_task_id: 'task-1',
               reason: '执行中节点',
               child_group: {
                 group_id: 'group-2',
@@ -552,6 +605,12 @@ describe('Reports story coverage', () => {
     expect(container.textContent).not.toContain('返回项目 Dashboard')
     expect(container.textContent).not.toContain('返回 Dashboard')
     expect(container.querySelector('[data-testid="analysis-entry-progress_deviation"]')).toBeTruthy()
+    const acceptanceLink = container.querySelector('[data-testid="reports-acceptance-summary-link"]') as HTMLAnchorElement | null
+    expect(acceptanceLink).toBeTruthy()
+    const acceptanceUrl = new URL(acceptanceLink!.href)
+    expect(acceptanceUrl.pathname).toBe('/projects/project-1/acceptance')
+    expect(acceptanceUrl.searchParams.get('status')).toBe('passed')
+    expect(acceptanceUrl.searchParams.get('phase')).toBe('all')
     expect(container.textContent).toContain('责任归因分析')
     expect(container.querySelector('[data-testid="deviation-tabs"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="deviation-focus-hint"]')).toBeTruthy()
@@ -612,6 +671,21 @@ describe('Reports story coverage', () => {
     expect(container.querySelector('[data-testid="baseline-switch-marker"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="deviation-version-note"]')).toBeTruthy()
     expect(container.textContent).toContain('child_group')
+
+    const deviationRow = container.querySelector('[data-testid="deviation-detail-table"] tr[role="button"]') as HTMLTableRowElement | null
+    expect(deviationRow).toBeTruthy()
+    act(() => {
+      deviationRow?.click()
+    })
+
+    await waitForText(document.body, ['查看对应 Gantt'])
+
+    const ganttLink = document.body.querySelector('[data-testid="reports-open-gantt-from-deviation"]') as HTMLAnchorElement | null
+    expect(ganttLink).toBeTruthy()
+    const ganttUrl = new URL(ganttLink!.href)
+    expect(ganttUrl.pathname).toBe('/projects/project-1/gantt')
+    expect(ganttUrl.searchParams.get('view')).toBe('gantt')
+    expect(ganttUrl.searchParams.get('highlight')).toBe('task-1')
   })
 
   it('keeps WBS content folded into the canonical progress analysis route', async () => {
@@ -623,10 +697,58 @@ describe('Reports story coverage', () => {
     expect(container.textContent).not.toContain('验收进度分析')
     expect(container.textContent).not.toContain('WBS完成度分析')
     expect(container.querySelector('[data-testid="reports-module-tabs"]')).toBeTruthy()
+    expect(container.querySelector('[data-testid="reports-trend-panel"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="reports-critical-path-summary"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="analysis-entry-progress_deviation"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="analysis-entry-risk"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="analysis-entry-change_log"]')).toBeTruthy()
+  })
+
+  it('links report summaries and deviation rows to downstream project pages', async () => {
+    await renderReports(root, `/projects/${projectId}/reports?view=progress`)
+
+    await waitForText(container, ['项目进度总览分析', '验收通过'])
+
+    const acceptanceLink = container.querySelector('[data-testid="reports-acceptance-summary-link"]') as HTMLAnchorElement | null
+    expect(acceptanceLink).toBeTruthy()
+    const acceptanceUrl = new URL(acceptanceLink!.href)
+    expect(acceptanceUrl.pathname).toBe('/projects/project-1/acceptance')
+    expect(acceptanceUrl.searchParams.get('status')).toBe('passed')
+    expect(acceptanceUrl.searchParams.get('phase')).toBe('all')
+
+    await renderReports(root, `/projects/${projectId}/reports?view=risk`)
+    await waitForText(container, ['风险与问题分析', '重点风险与问题清单'])
+
+    const riskLink = container.querySelector('[data-testid="reports-risk-drilldown-risk-1"]') as HTMLAnchorElement | null
+    expect(riskLink).toBeTruthy()
+    const riskUrl = new URL(riskLink!.href)
+    expect(riskUrl.pathname).toBe('/projects/project-1/risks')
+    expect(riskUrl.searchParams.get('status')).toBe('all')
+    expect(riskUrl.searchParams.get('level')).toBe('high')
+
+    const materialLink = container.querySelector('[data-testid="reports-material-specialty-link-unit-1-幕墙"]') as HTMLAnchorElement | null
+    expect(materialLink).toBeTruthy()
+    const materialUrl = new URL(materialLink!.href)
+    expect(materialUrl.pathname).toBe('/projects/project-1/materials')
+    expect(materialUrl.searchParams.get('specialty')).toBe('幕墙')
+
+    await renderReports(root, `/projects/${projectId}/reports?view=execution`)
+    await waitForText(container, ['执行偏差', '基线版本切换标记'])
+
+    const deviationRow = container.querySelector('[data-testid="deviation-detail-table"] tr[role="button"]') as HTMLTableRowElement | null
+    expect(deviationRow).toBeTruthy()
+    act(() => {
+      deviationRow?.click()
+    })
+
+    await waitForText(document.body, ['查看对应 Gantt'])
+
+    const ganttLink = document.body.querySelector('[data-testid="reports-open-gantt-from-deviation"]') as HTMLAnchorElement | null
+    expect(ganttLink).toBeTruthy()
+    const ganttUrl = new URL(ganttLink!.href)
+    expect(ganttUrl.pathname).toBe('/projects/project-1/gantt')
+    expect(ganttUrl.searchParams.get('view')).toBe('gantt')
+    expect(ganttUrl.searchParams.get('highlight')).toBe('task-1')
   })
 
   it('shows the current view markers directly from the chosen route', async () => {
@@ -664,6 +786,19 @@ describe('Reports story coverage', () => {
     expect(container.querySelector('[data-testid="analysis-entry-progress"]')).toBeTruthy()
     expect(container.textContent).toContain('处置入口')
     expect(container.textContent).toContain('重点风险与问题清单')
+
+    const riskLink = container.querySelector('[data-testid="reports-risk-drilldown-risk-1"]') as HTMLAnchorElement | null
+    expect(riskLink).toBeTruthy()
+    const riskUrl = new URL(riskLink!.href)
+    expect(riskUrl.pathname).toBe('/projects/project-1/risks')
+    expect(riskUrl.searchParams.get('status')).toBe('all')
+    expect(riskUrl.searchParams.get('level')).toBe('high')
+
+    const materialLink = container.querySelector('[data-testid="reports-material-specialty-link-unit-1-幕墙"]') as HTMLAnchorElement | null
+    expect(materialLink).toBeTruthy()
+    const materialUrl = new URL(materialLink!.href)
+    expect(materialUrl.pathname).toBe('/projects/project-1/materials')
+    expect(materialUrl.searchParams.get('specialty')).toBe('幕墙')
   })
   it('renders material arrival summary in the risk module', async () => {
     await renderReports(root, `/projects/${projectId}/reports?view=risk`)

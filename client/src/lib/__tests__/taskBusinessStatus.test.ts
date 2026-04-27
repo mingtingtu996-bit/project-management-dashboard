@@ -3,6 +3,11 @@ import { describe, expect, it } from 'vitest'
 import {
   buildProjectTaskProgressSnapshot,
   calculateProjectHealthScore,
+  getTaskDisplayStatus,
+  isActiveObstacle,
+  isActiveRisk,
+  isCompletedTask,
+  isPendingCondition,
   getTaskBusinessStatus,
   getTaskLagLevel,
   getTaskLagStatus,
@@ -75,6 +80,32 @@ describe('taskBusinessStatus', () => {
         { conditionSummary: { total: 1, satisfied: 1 }, activeObstacleCount: 0 },
       ),
     ).toEqual(TASK_STATUS_THEME.ready)
+  })
+
+  it('maps task display status for dashboard and recent tasks cards', () => {
+    expect(getTaskDisplayStatus({ id: 'done', status: 'completed', progress: 100 })).toBe('completed')
+    expect(getTaskDisplayStatus({ id: 'blocked', status: 'blocked', progress: 20 })).toBe('blocked')
+    expect(getTaskDisplayStatus({ id: 'running', status: 'in_progress', progress: 20 })).toBe('in_progress')
+    expect(getTaskDisplayStatus({ id: 'todo', status: 'todo', progress: 0 })).toBe('pending')
+  })
+
+  it('uses the BI v1.2 canonical status sets for frontend-only display helpers', () => {
+    expect(isCompletedTask({ id: 'done', status: 'done', progress: 0 })).toBe(true)
+    expect(isCompletedTask({ id: 'cn-done', status: '已完成', progress: 0 })).toBe(true)
+    expect(isCompletedTask({ id: 'full-progress', status: 'in_progress', progress: 100 })).toBe(true)
+
+    expect(isPendingCondition({ status: 'completed' })).toBe(false)
+    expect(isPendingCondition({ status: 'confirmed' })).toBe(false)
+    expect(isPendingCondition({ status: '已确认' })).toBe(false)
+
+    expect(isActiveObstacle({ status: 'resolved' })).toBe(false)
+    expect(isActiveObstacle({ status: 'closed' })).toBe(false)
+    expect(isActiveObstacle({ is_resolved: 0, status: 'resolved' })).toBe(true)
+
+    expect(isActiveRisk({ status: 'resolved' })).toBe(true)
+    expect(isActiveRisk({ status: 'mitigated' })).toBe(true)
+    expect(isActiveRisk({ status: 'closed' })).toBe(false)
+    expect(isActiveRisk({ status: '已关闭' })).toBe(false)
   })
 
   it('derives lag labels and snapshot counts from explicit lag fields', () => {

@@ -17,6 +17,7 @@ import type {
 import { query as rawQuery } from '../database.js'
 import { normalizeProjectPermissionLevel } from '../auth/access.js'
 import { logger } from '../middleware/logger.js'
+import { isCompletedTask, isCompletedTaskStatus } from '../utils/taskStatus.js'
 import type { WriteLifecycleLogParams, WriteLogParams } from './changeLogs.js'
 import {
   PROTECTED_ISSUE_SOURCE_TYPES,
@@ -905,15 +906,6 @@ function isInProgressState(status?: string | null): boolean {
   return ['in_progress', '进行中'].includes(String(status ?? '').trim())
 }
 
-function isCompletedState(status?: string | null): boolean {
-  return ['completed', '已完成'].includes(String(status ?? '').trim())
-}
-
-function isCompletedTaskLike(task?: { status?: string | null; progress?: number | null } | null): boolean {
-  if (!task) return false
-  return isCompletedState(task.status) || Number(task.progress ?? 0) >= 100
-}
-
 function normalizeTaskProgressValue(value: unknown): number {
   const numeric = Number(value)
   if (!Number.isFinite(numeric) || !Number.isInteger(numeric) || numeric < 0 || numeric > 100) {
@@ -975,8 +967,8 @@ function resolveTaskSnapshotEventType(task: any, previousTask?: any | null) {
     return isMilestone ? 'milestone_created' : 'task_created'
   }
 
-  const previousCompleted = isCompletedState(previousTask.status) || Number(previousTask.progress ?? 0) >= 100
-  const nextCompleted = isCompletedState(task?.status) || Number(task?.progress ?? 0) >= 100
+  const previousCompleted = isCompletedTask(previousTask)
+  const nextCompleted = isCompletedTask(task)
   if (previousCompleted && !nextCompleted) {
     return isMilestone ? 'milestone_reopened' : 'task_reopened'
   }
@@ -1477,7 +1469,7 @@ export async function updateTask(
   if ('assignee_id' in fields && !('assignee_user_id' in fields)) {
     fields.assignee_user_id = fields.assignee_id ?? null
   }
-  if (!options.allowReopen && fields.status !== undefined && isCompletedState(fields.status)) {
+  if (!options.allowReopen && fields.status !== undefined && isCompletedTaskStatus(fields.status)) {
     fields.progress = 100
   }
   if (fields.progress !== undefined) {
@@ -1489,12 +1481,12 @@ export async function updateTask(
   const previousProgress = Number(oldTask.progress ?? 0)
   const nextProgress = Number(mergedTask.progress ?? oldTask.progress ?? 0)
   const isFirstProgressAdvance = previousProgress === 0 && nextProgress > 0 && !oldTask.first_progress_at
-  const wasCompleted = isCompletedTaskLike(oldTask)
+  const wasCompleted = isCompletedTask(oldTask)
   const requestsReopen =
     wasCompleted
     && (
       (fields.progress !== undefined && nextProgress < 100)
-      || (fields.status !== undefined && !isCompletedState(nextStatus))
+      || (fields.status !== undefined && !isCompletedTaskStatus(nextStatus))
     )
 
   if (requestsReopen && !options.allowReopen) {
@@ -1539,7 +1531,7 @@ export async function updateTask(
     nextProgress > 0
   )
   const autoActualEnd = !oldTask.actual_end_date && (
-    nextProgress >= 100 || isCompletedState(nextStatus)
+    isCompletedTask({ status: nextStatus, progress: nextProgress })
   )
   const autoFirstProgress = !oldTask.first_progress_at && nextProgress > 0
   const updatePayload = {

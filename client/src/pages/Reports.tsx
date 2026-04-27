@@ -1,5 +1,5 @@
 ﻿import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   ArrowLeft,
   BarChart3,
@@ -11,6 +11,7 @@ import {
   Flag,
   LockKeyhole,
   RefreshCw,
+  ArrowRight,
   ShieldAlert,
   type LucideIcon,
 } from 'lucide-react'
@@ -24,6 +25,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { LoadingState } from '@/components/ui/loading-state'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { toast } from '@/hooks/use-toast'
 import { apiGet, getApiErrorMessage } from '@/lib/apiClient'
@@ -31,6 +33,8 @@ import {
   selectProjectScopeOrEmpty,
   useCurrentProject,
   useStore,
+  type ScopeDimensionKey,
+  type ScopeDimensionSection,
 } from '@/hooks/useStore'
 import type { Risk, Task, TaskCondition, TaskObstacle } from '@/lib/supabase'
 import { DashboardApiService, type CriticalPathSummaryModel, type ProjectSummary } from '@/services/dashboardApi'
@@ -70,6 +74,36 @@ type DetailStat = {
   label: string
   value: string | number
   hint: string
+  to?: string
+  testId?: string
+}
+
+type ReportMetricKey =
+  | 'overall_progress'
+  | 'health_score'
+  | 'delay_days'
+  | 'active_risk_count'
+  | 'active_obstacle_count'
+  | 'active_delay_requests'
+
+type ReportTimeRange = 'all' | '7d' | '30d' | '90d'
+type ReportDimensionKey = 'none' | ScopeDimensionKey
+type ReportGranularity = 'day' | 'week' | 'month'
+
+type ReportTrendPoint = {
+  date: string
+  value: number | null
+  group?: string | null
+}
+
+type ReportTrendResponse = {
+  projectId: string
+  metric: ReportMetricKey
+  from: string
+  to: string
+  groupBy: ReportDimensionKey
+  granularity: ReportGranularity
+  points: ReportTrendPoint[]
 }
 
 type ProgressDeviationMainlineKey = 'baseline' | 'monthly_plan' | 'execution'
@@ -269,13 +303,28 @@ function MetricCard({ title, value, hint, icon }: MetricItem) {
   )
 }
 
-function DetailStatCard({ label, value, hint }: DetailStat) {
+function DetailStatCard({ label, value, hint, to, testId }: DetailStat) {
   void hint
 
-  return (
-    <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+  const content = (
+    <>
       <div className="text-xs text-slate-500">{label}</div>
       <div className="mt-2 text-2xl font-semibold text-slate-900">{value}</div>
+    </>
+  )
+  const className = "rounded-2xl border border-slate-100 bg-slate-50 p-4 transition-colors"
+
+  if (to) {
+    return (
+      <Link data-testid={testId} to={to} className={`block ${className} hover:border-blue-200 hover:bg-blue-50/60`}>
+        {content}
+      </Link>
+    )
+  }
+
+  return (
+    <div data-testid={testId} className={className}>
+      {content}
     </div>
   )
 }
@@ -539,6 +588,113 @@ function normalizeDeviationView(value: string | null): DeviationView {
   }
 
   return 'execution'
+}
+
+function buildCountSummary<T>(
+  items: readonly T[],
+  getKey: (item: T) => string | null | undefined,
+) {
+  const counts = new Map<string, number>()
+
+  for (const item of items) {
+    const key = String(getKey(item) ?? '').trim()
+    if (!key) continue
+    counts.set(key, (counts.get(key) ?? 0) + 1)
+  }
+
+  return Array.from(counts.entries()).sort((left, right) => right[1] - left[1])
+}
+
+function buildChangeLogTypeCounts(changeLogs: ChangeLogRecord[]) {
+  const counts = {
+    scopeRelated: 0,
+    planningRelated: 0,
+    executionRelated: 0,
+  }
+
+  for (const record of changeLogs) {
+    if (['task', 'milestone', 'baseline'].includes(record.entity_type)) {
+      counts.scopeRelated += 1
+    }
+    if (['delay_request', 'monthly_plan'].includes(record.entity_type)) {
+      counts.planningRelated += 1
+    }
+    if (['risk', 'issue', 'task_condition', 'task_obstacle'].includes(record.entity_type)) {
+      counts.executionRelated += 1
+    }
+  }
+
+  return counts
+}
+
+function buildDelayObstacleCorrelationRows(delayedTasks: Task[], projectObstacles: TaskObstacle[]) {
+  return delayedTasks
+    .map((task) => {
+      let activeObstacleCount = 0
+      const obstacleTypeLabels = new Set<string>()
+
+      for (const obstacle of projectObstacles) {
+        if (obstacle.task_id !== task.id) continue
+
+        const label = getObstacleTypeLabel(obstacle)
+        if (label) obstacleTypeLabels.add(label)
+
+        if (String(obstacle.status || '').trim() !== '已解决') {
+          activeObstacleCount += 1
+        }
+      }
+
+      return {
+        id: String(task.id || ''),
+        title: getTaskDisplayName(task),
+        activeObstacleCount,
+        obstacleTypes: Array.from(obstacleTypeLabels),
+      }
+    })
+    .filter((row) => row.activeObstacleCount > 0)
+}
+
+const REPORT_METRIC_OPTIONS: Array<{ value: ReportMetricKey; label: string; description: string }> = [
+  { value: 'overall_progress', label: '总体进度', description: '项目整体加权进度' },
+  { value: 'health_score', label: '健康度', description: '项目综合健康分' },
+  { value: 'delay_days', label: '延期天数', description: '累计延期时间' },
+  { value: 'active_risk_count', label: '活跃风险数', description: '当前活跃风险数量' },
+  { value: 'active_obstacle_count', label: '阻碍数', description: '当前活跃阻碍数量' },
+  { value: 'active_delay_requests', label: '延期审批数', description: '活跃延期审批数量' },
+]
+
+const REPORT_TIME_RANGE_OPTIONS: Array<{ value: ReportTimeRange; label: string; granularity: ReportGranularity }> = [
+  { value: '7d', label: '近 7 天', granularity: 'day' },
+  { value: '30d', label: '近 30 天', granularity: 'week' },
+  { value: '90d', label: '近 90 天', granularity: 'month' },
+  { value: 'all', label: '全部时间', granularity: 'month' },
+]
+
+function formatReportDateKey(value: Date) {
+  return value.toISOString().slice(0, 10)
+}
+
+function resolveReportTrendWindow(range: ReportTimeRange) {
+  const now = new Date()
+  const to = formatReportDateKey(now)
+  if (range === 'all') {
+    return {
+      from: undefined as string | undefined,
+      to: undefined as string | undefined,
+      granularity: 'month' as ReportGranularity,
+    }
+  }
+
+  const days = range === '7d' ? 6 : range === '30d' ? 29 : 89
+  const fromDate = new Date(now)
+  fromDate.setDate(fromDate.getDate() - days)
+
+  const selectedGranularity = REPORT_TIME_RANGE_OPTIONS.find((item) => item.value === range)?.granularity ?? 'month'
+  return {
+    from: formatReportDateKey(fromDate),
+    to,
+    granularity: selectedGranularity,
+  }
 }
 
 export default function Reports() {
@@ -821,6 +977,13 @@ export default function Reports() {
   const projectConditions = useMemo(() => projectScope?.conditions ?? [], [projectScope?.conditions])
   const projectObstacles = useMemo(() => projectScope?.obstacles ?? [], [projectScope?.obstacles])
   const scopeDimensions = useStore((state) => state.scopeDimensions)
+  const [reportsScopeDimensions, setReportsScopeDimensions] = useState<ScopeDimensionSection[]>([])
+  const [trendMetric, setTrendMetric] = useState<ReportMetricKey>('overall_progress')
+  const [trendTimeRange, setTrendTimeRange] = useState<ReportTimeRange>('30d')
+  const [trendDimension, setTrendDimension] = useState<ReportDimensionKey>('none')
+  const [trendData, setTrendData] = useState<ReportTrendResponse | null>(null)
+  const [trendLoading, setTrendLoading] = useState(false)
+  const [trendError, setTrendError] = useState<string | null>(null)
   const deviationTaskLookup = useMemo(() => new Map(projectTasks.map((task) => [String(task.id || ''), task])), [projectTasks])
   const issueRows = useStore((state) => state.issueRows)
   const projectIssues = useMemo(() => issueRows, [issueRows])
@@ -838,6 +1001,85 @@ export default function Reports() {
   )
   const emptyIssueSummary = useMemo<IssueSummaryResponse>(() => normalizeIssueSummaryResponse(null, projectId || undefined), [projectId])
   const issueSummary = issueSummaryData ?? emptyIssueSummary
+  useEffect(() => {
+    if (!projectId) {
+      setReportsScopeDimensions([])
+      return
+    }
+
+    const controller = new AbortController()
+    void (async () => {
+      try {
+        const response = await apiGet<{ project_id: string | null; sections: ScopeDimensionSection[] }>(
+          `/api/scope-dimensions?projectId=${encodeURIComponent(projectId)}`,
+          { signal: controller.signal },
+        )
+        if (!controller.signal.aborted) {
+          setReportsScopeDimensions(Array.isArray(response.sections) ? response.sections : [])
+        }
+      } catch (err) {
+        if (controller.signal.aborted) return
+        console.error('[Reports] Failed to load scope dimensions', err)
+        setReportsScopeDimensions([])
+      }
+    })()
+
+    return () => {
+      controller.abort()
+    }
+  }, [projectId])
+
+  useEffect(() => {
+    if (!projectId) {
+      setTrendData(null)
+      setTrendError(null)
+      setTrendLoading(false)
+      return
+    }
+
+    const controller = new AbortController()
+    const window = resolveReportTrendWindow(trendTimeRange)
+    const query = new URLSearchParams({
+      projectId,
+      metric: trendMetric,
+      groupBy: trendDimension,
+      granularity: window.granularity,
+    })
+
+    if (window.from) {
+      query.set('from', window.from)
+    }
+    if (window.to) {
+      query.set('to', window.to)
+    }
+
+    setTrendLoading(true)
+    setTrendError(null)
+    void (async () => {
+      try {
+        const data = await apiGet<ReportTrendResponse>(`/api/analytics/project-trend?${query.toString()}`, {
+          signal: controller.signal,
+        })
+        if (!controller.signal.aborted) {
+          setTrendData(data)
+        }
+      } catch (err) {
+        if (controller.signal.aborted) return
+        console.error('[Reports] Failed to load trend analytics', err)
+        setTrendData(null)
+        setTrendError(getApiErrorMessage(err, '趋势数据加载失败，请稍后重试'))
+      } finally {
+        if (!controller.signal.aborted) {
+          setTrendLoading(false)
+        }
+      }
+    })()
+
+    return () => {
+      controller.abort()
+    }
+  }, [projectId, trendDimension, trendMetric, trendTimeRange])
+
   const milestoneTasks = useMemo(
     () =>
       projectTasks
@@ -905,14 +1147,7 @@ export default function Reports() {
     [projectTasks],
   )
   const obstacleTypeSummary = useMemo(
-    () =>
-      Array.from(
-        projectObstacles.reduce((map, obstacle) => {
-          const key = getObstacleTypeLabel(obstacle)
-          map.set(key, (map.get(key) || 0) + 1)
-          return map
-        }, new Map<string, number>()),
-      ).sort((left, right) => right[1] - left[1]),
+    () => buildCountSummary(projectObstacles, (obstacle) => getObstacleTypeLabel(obstacle)),
     [projectObstacles],
   )
   const delayStatisticsRows = useMemo(
@@ -933,17 +1168,7 @@ export default function Reports() {
     [delayedTasks],
   )
   const delayObstacleCorrelationRows = useMemo(
-    () =>
-      delayedTasks.map((task) => {
-        const relatedObstacles = projectObstacles.filter((obstacle) => obstacle.task_id === task.id)
-        const activeObstacleCount = relatedObstacles.filter((obstacle) => String(obstacle.status || '').trim() !== '已解决').length
-        return {
-          id: String(task.id || ''),
-          title: getTaskDisplayName(task),
-          activeObstacleCount,
-          obstacleTypes: Array.from(new Set(relatedObstacles.map((obstacle) => getObstacleTypeLabel(obstacle)))).filter(Boolean),
-        }
-      }).filter((row) => row.activeObstacleCount > 0),
+    () => buildDelayObstacleCorrelationRows(delayedTasks, projectObstacles),
     [delayedTasks, projectObstacles],
   )
 
@@ -992,16 +1217,10 @@ export default function Reports() {
   const activeEntry = analysisEntries.find((entry) => entry.view === activeView)
 
   const changeLogSourceSummary = useMemo(
-    () =>
-      Array.from(
-        changeLogs.reduce((map, record) => {
-          const key = record.change_source || 'manual_adjusted'
-          map.set(key, (map.get(key) || 0) + 1)
-          return map
-        }, new Map<string, number>()),
-      ).sort((left, right) => right[1] - left[1]),
+    () => buildCountSummary(changeLogs, (record) => record.change_source || 'manual_adjusted'),
     [changeLogs],
   )
+  const changeLogTypeCounts = useMemo(() => buildChangeLogTypeCounts(changeLogs), [changeLogs])
   const recentChangeLogs = useMemo(() => changeLogs.slice(0, 8), [changeLogs])
   const deviationViewLabel = viewLabels[deviationView]
 
@@ -1063,8 +1282,8 @@ export default function Reports() {
         backTo: projectId ? `/projects/${projectId}/gantt` : undefined,
         metrics: [
           { title: '变更记录', value: changeLogs.length, hint: '项目级变更留痕总数', icon: <ClipboardList className="h-4 w-4" /> },
-          { title: '延期相关', value: changeLogs.filter((record) => record.entity_type === 'delay_request').length, hint: '计划调整与延期审批记录', icon: <RefreshCw className="h-4 w-4" /> },
-          { title: '任务 / 里程碑', value: changeLogs.filter((record) => record.entity_type === 'task' || record.entity_type === 'milestone').length, hint: '任务与关键节点变更', icon: <Flag className="h-4 w-4" /> },
+          { title: '延期相关', value: changeLogTypeCounts.planningRelated, hint: '计划调整与延期审批记录', icon: <RefreshCw className="h-4 w-4" /> },
+          { title: '任务 / 里程碑', value: changeLogTypeCounts.scopeRelated, hint: '任务与关键节点变更', icon: <Flag className="h-4 w-4" /> },
           { title: '最近来源', value: changeLogSourceSummary[0]?.[0] || '暂无', hint: `最近 50 条共 ${changeLogs.length} 条`, icon: <BarChart3 className="h-4 w-4" /> },
         ] as MetricItem[],
       }
@@ -1084,17 +1303,38 @@ export default function Reports() {
       ] as MetricItem[],
     }
 
-  }, [activeView, changeLogSourceSummary, changeLogs, deviationData, deviationViewLabel, projectId, projectName, summary])
+  }, [activeView, changeLogSourceSummary, changeLogTypeCounts, changeLogs, deviationData, deviationViewLabel, projectId, projectName, summary])
 
   const currentMetrics = viewConfig.metrics
+  const reportScopeSections = reportsScopeDimensions.length > 0 ? reportsScopeDimensions : scopeDimensions
+  const selectedTrendMetric = REPORT_METRIC_OPTIONS.find((option) => option.value === trendMetric) ?? REPORT_METRIC_OPTIONS[0]
+  const selectedTrendRange = REPORT_TIME_RANGE_OPTIONS.find((option) => option.value === trendTimeRange) ?? REPORT_TIME_RANGE_OPTIONS[1]
+  const selectedTrendDimension = reportScopeSections.find((section) => section.key === trendDimension) ?? null
+  const trendPoints = trendData?.points ?? []
   const hasSummary = Boolean(summary)
+
+  useEffect(() => {
+    if (trendDimension !== 'none' && !reportScopeSections.some((section) => section.key === trendDimension)) {
+      setTrendDimension('none')
+    }
+  }, [reportScopeSections, trendDimension])
   const deviationMainlineKey: Record<DeviationView, ProgressDeviationMainlineKey> = {
     baseline: 'baseline',
     monthly: 'monthly_plan',
     execution: 'execution',
   }
   const deviationMainline = deviationData?.mainlines.find((mainline) => mainline.key === deviationMainlineKey[deviationView]) ?? null
-  const deviationRows = deviationMainline?.rows ?? deviationData?.rows.filter((row) => row.mainline === deviationMainlineKey[deviationView]) ?? []
+  const deviationRowDetails = useMemo(
+    () => new Map((deviationData?.rows ?? []).map((row) => [row.id, row] as const)),
+    [deviationData?.rows],
+  )
+  const deviationRows = useMemo(() => {
+    const rows = deviationMainline?.rows ?? deviationData?.rows.filter((row) => row.mainline === deviationMainlineKey[deviationView]) ?? []
+    return rows.map((row) => {
+      const detail = deviationRowDetails.get(row.id)
+      return detail ? { ...row, ...detail } : row
+    })
+  }, [deviationData?.rows, deviationMainline?.rows, deviationMainlineKey[deviationView], deviationRowDetails, deviationView])
   const deviationVersionEvents = deviationData?.trend_events ?? []
   const activeDeviationLock = deviationLock ?? deviationData?.version_lock ?? null
   const deviationRowMeta = useMemo(
@@ -1159,6 +1399,18 @@ export default function Reports() {
         .map((item) => item.row),
     [deviationBuildingFilter, deviationLevelFilter, deviationRowMeta, deviationSectionFilter, deviationSpecialtyFilter, deviationTimeRange],
   )
+  const deviationTableRows = useMemo(() => {
+    if (deviationView !== 'execution') {
+      return filteredDeviationRows
+    }
+
+    return [...filteredDeviationRows].sort((left, right) => {
+      const leftLinked = left.source_task_id ? 1 : 0
+      const rightLinked = right.source_task_id ? 1 : 0
+      if (rightLinked !== leftLinked) return rightLinked - leftLinked
+      return Math.abs(right.deviation_days) - Math.abs(left.deviation_days)
+    })
+  }, [deviationView, filteredDeviationRows])
   const filteredDeviationRowIds = useMemo(
     () => new Set(filteredDeviationRows.map((row) => row.id)),
     [filteredDeviationRows],
@@ -1401,7 +1653,13 @@ export default function Reports() {
             <DetailStatCard label="整体完成率" value={`${summary?.overallProgress ?? 0}%`} hint={`任务总数 ${summary?.totalTasks ?? 0}`} />
             <DetailStatCard label="里程碑完成率" value={`${summary?.milestoneProgress ?? 0}%`} hint={`${summary?.completedMilestones ?? 0}/${summary?.totalMilestones ?? 0}`} />
             <DetailStatCard label="延期任务" value={summary?.delayedTaskCount ?? delayedTasks.length} hint={`累计延期 ${summary?.delayDays ?? 0} 天`} />
-            <DetailStatCard label="下一里程碑" value={summary?.nextMilestone?.daysRemaining ?? '--'} hint={summary?.nextMilestone?.name || '待识别关键节点'} />
+            <DetailStatCard
+              label="验收通过"
+              value={`${summary?.passedAcceptancePlanCount ?? 0}/${summary?.acceptancePlanCount ?? 0}`}
+              hint={`进行中 ${summary?.inProgressAcceptancePlanCount ?? 0} · 需补充 ${summary?.failedAcceptancePlanCount ?? 0}`}
+              to={projectId ? `/projects/${projectId}/acceptance?status=passed&phase=all` : '/acceptance?status=passed&phase=all'}
+              testId="reports-acceptance-summary-link"
+            />
           </div>
         </CardContent>
       </Card>
@@ -1565,6 +1823,16 @@ export default function Reports() {
         />
       </div>
 
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <DetailStatCard
+          label="验收通过"
+          value={`${summary?.passedAcceptancePlanCount ?? 0}/${summary?.acceptancePlanCount ?? 0}`}
+          hint={`进行中 ${summary?.inProgressAcceptancePlanCount ?? 0} · 需补充 ${summary?.failedAcceptancePlanCount ?? 0}`}
+          to={projectId ? `/projects/${projectId}/acceptance?status=passed&phase=all` : '/acceptance?status=passed&phase=all'}
+          testId="reports-acceptance-summary-link"
+        />
+      </div>
+
       <Card data-testid="reports-deviation-lock-card" className="border-slate-200 shadow-sm">
         <CardContent className="flex flex-wrap items-center justify-between gap-4 p-5">
           <div className="space-y-1">
@@ -1692,7 +1960,7 @@ export default function Reports() {
 
           <div className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(380px,0.9fr)]">
             <DeviationDetailTable
-              rows={filteredDeviationRows}
+              rows={deviationTableRows}
               mainlineLabel={deviationMainline?.label || deviationViewLabel}
               onSelectRow={(row) => setSelectedDeviationRow(row as ProgressDeviationRow)}
             />
@@ -1875,6 +2143,18 @@ export default function Reports() {
                       />
                     </div>
 
+                    {selectedDeviationRow.source_task_id ? (
+                      <Button asChild variant="outline" className="w-full justify-between rounded-2xl border-slate-200 bg-white">
+                        <Link
+                          data-testid="reports-open-gantt-from-deviation"
+                          to={`/projects/${projectId}/gantt?view=gantt&highlight=${encodeURIComponent(selectedDeviationRow.source_task_id)}`}
+                        >
+                          查看对应 Gantt
+                          <ArrowRight className="h-4 w-4" />
+                        </Link>
+                      </Button>
+                    ) : null}
+
                     <div className="grid gap-3 rounded-2xl border border-slate-100 bg-slate-50 p-4 text-sm text-slate-700 sm:grid-cols-2">
                       <div>
                         <div className="text-xs font-medium uppercase tracking-[0.08em] text-slate-400">状态</div>
@@ -1946,7 +2226,7 @@ export default function Reports() {
 
       {showObstacleSections ? (
         <div className="grid gap-6 xl:grid-cols-2">
-          <MaterialArrivalSummaryCard summary={materialSummary} />
+          <MaterialArrivalSummaryCard summary={materialSummary} projectId={projectId} />
 
           <Card data-testid="reports-obstacle-type-summary" className="border-slate-200 shadow-sm">
             <CardHeader className="pb-4">
@@ -1974,13 +2254,7 @@ export default function Reports() {
   }
 
   const renderRiskDetail = () => {
-    const riskSourceCounts = Array.from(
-      projectRisks.reduce((map, risk) => {
-        const source = summarizeRiskSource(risk)
-        map.set(source, (map.get(source) || 0) + 1)
-        return map
-      }, new Map<string, number>()),
-    ).sort((left, right) => right[1] - left[1])
+    const riskSourceCounts = buildCountSummary(projectRisks, (risk) => summarizeRiskSource(risk))
     const issueTrend = issueSummary.trend.slice(-10)
     const issueOpenCount = issueSummary.status_counts.open ?? 0
     const issueInvestigatingCount = issueSummary.status_counts.investigating ?? 0
@@ -2038,7 +2312,7 @@ export default function Reports() {
         </Card>
 
         <div className="xl:col-span-2">
-          <MaterialArrivalSummaryCard summary={materialSummary} />
+          <MaterialArrivalSummaryCard summary={materialSummary} projectId={projectId} />
         </div>
 
         <Card className="border-slate-200 shadow-sm xl:col-span-2">
@@ -2051,17 +2325,30 @@ export default function Reports() {
                 暂无重点风险与问题
               </div>
             ) : (
-              focusRisks.map((risk) => (
-                <div key={risk.id} className="grid gap-3 rounded-2xl border border-slate-100 bg-white px-4 py-4 md:grid-cols-[minmax(0,1.3fr)_140px_140px_140px]">
-                  <div>
-                    <div className="text-sm font-medium text-slate-900">{risk.title || '未命名风险'}</div>
-                    <div className="mt-1 text-xs text-slate-500">{risk.description || '暂无备注'}</div>
-                  </div>
-                  <div className="text-sm text-slate-700">等级 {risk.level || '未分类'}</div>
-                  <div className="text-sm text-slate-700">来源 {summarizeRiskSource(risk)}</div>
-                  <div className="text-sm text-slate-700">状态 {parseStatusLabel(risk.status)}</div>
-                </div>
-              ))
+              focusRisks.map((risk) => {
+                const normalizedStatus = String(risk.status ?? '').trim().toLowerCase()
+                const normalizedLevel = String(risk.level ?? '').trim().toLowerCase()
+                const riskHref = projectId
+                  ? `/projects/${projectId}/risks?status=${['identified', 'mitigating', 'closed'].includes(normalizedStatus) ? normalizedStatus : 'all'}&level=${['critical', 'high', 'medium', 'low'].includes(normalizedLevel) ? normalizedLevel : 'all'}`
+                  : '/risks'
+
+                return (
+                  <Link
+                    key={risk.id}
+                    data-testid={`reports-risk-drilldown-${risk.id}`}
+                    to={riskHref}
+                    className="grid gap-3 rounded-2xl border border-slate-100 bg-white px-4 py-4 transition-colors hover:border-blue-200 hover:bg-blue-50/40 md:grid-cols-[minmax(0,1.3fr)_140px_140px_140px]"
+                  >
+                    <div>
+                      <div className="text-sm font-medium text-slate-900">{risk.title || '未命名风险'}</div>
+                      <div className="mt-1 text-xs text-slate-500">{risk.description || '暂无备注'}</div>
+                    </div>
+                    <div className="text-sm text-slate-700">等级 {risk.level || '未分类'}</div>
+                    <div className="text-sm text-slate-700">来源 {summarizeRiskSource(risk)}</div>
+                    <div className="text-sm text-slate-700">状态 {parseStatusLabel(risk.status)}</div>
+                  </Link>
+                )
+              })
             )}
           </CardContent>
         </Card>
@@ -2195,17 +2482,17 @@ export default function Reports() {
         <div className="grid gap-3 md:grid-cols-3">
           <DetailStatCard
             label="范围/结构相关"
-            value={changeLogs.filter((record) => ['task', 'milestone', 'baseline'].includes(record.entity_type)).length}
+            value={changeLogTypeCounts.scopeRelated}
             hint="任务、节点与基线层变更"
           />
           <DetailStatCard
             label="计划调整相关"
-            value={changeLogs.filter((record) => ['delay_request', 'monthly_plan'].includes(record.entity_type)).length}
+            value={changeLogTypeCounts.planningRelated}
             hint="延期审批与月计划修正"
           />
           <DetailStatCard
             label="执行/异常相关"
-            value={changeLogs.filter((record) => ['risk', 'issue', 'task_condition', 'task_obstacle'].includes(record.entity_type)).length}
+            value={changeLogTypeCounts.executionRelated}
             hint="风险、问题、条件与阻碍联动"
           />
         </div>
@@ -2391,6 +2678,102 @@ export default function Reports() {
               ))}
             </div>
 
+            <Card data-testid="reports-trend-panel" className="border-slate-200 shadow-sm">
+              <CardHeader className="pb-4">
+                <CardTitle className="text-base">指标 / 时间 / 维度</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid gap-3 md:grid-cols-3">
+                  <label className="space-y-1 text-xs text-slate-500">
+                    <span>指标选择器</span>
+                    <Select value={trendMetric} onValueChange={(value) => setTrendMetric(value as ReportMetricKey)}>
+                      <SelectTrigger className="h-10 rounded-xl border-slate-200 bg-white text-sm text-slate-700">
+                        <SelectValue placeholder="选择指标" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {REPORT_METRIC_OPTIONS.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </label>
+
+                  <label className="space-y-1 text-xs text-slate-500">
+                    <span>时间范围</span>
+                    <Select value={trendTimeRange} onValueChange={(value) => setTrendTimeRange(value as ReportTimeRange)}>
+                      <SelectTrigger className="h-10 rounded-xl border-slate-200 bg-white text-sm text-slate-700">
+                        <SelectValue placeholder="选择时间范围" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {REPORT_TIME_RANGE_OPTIONS.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </label>
+
+                  <label className="space-y-1 text-xs text-slate-500">
+                    <span>维度选择器</span>
+                    <Select value={trendDimension} onValueChange={(value) => setTrendDimension(value as ReportDimensionKey)}>
+                      <SelectTrigger className="h-10 rounded-xl border-slate-200 bg-white text-sm text-slate-700">
+                        <SelectValue placeholder="选择维度" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">全部维度</SelectItem>
+                        {reportScopeSections.map((section) => (
+                          <SelectItem key={section.key} value={section.key}>
+                            {section.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </label>
+                </div>
+
+                <div className="flex flex-wrap gap-2 text-xs text-slate-500">
+                  <span className="rounded-full bg-slate-100 px-3 py-1">当前指标 {selectedTrendMetric.label}</span>
+                  <span className="rounded-full bg-slate-100 px-3 py-1">时间范围 {selectedTrendRange.label}</span>
+                  <span className="rounded-full bg-slate-100 px-3 py-1">
+                    维度 {selectedTrendDimension?.label || '全部维度'}
+                  </span>
+                  <span className="rounded-full bg-slate-100 px-3 py-1">
+                    维度切片 {selectedTrendDimension?.options.length ?? reportScopeSections.length} 项
+                  </span>
+                </div>
+
+                {trendError ? (
+                  <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                    {trendError}
+                  </div>
+                ) : trendLoading && trendPoints.length === 0 ? (
+                  <LoadingState label="趋势数据加载中" className="min-h-24 rounded-2xl border border-dashed border-slate-200 bg-slate-50" />
+                ) : trendPoints.length > 0 ? (
+                  <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                    {trendPoints.slice(0, 9).map((point) => (
+                      <div key={`${point.date}-${point.group || 'none'}`} className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="text-sm font-medium text-slate-900">{point.date}</div>
+                          <div className="text-lg font-semibold text-slate-900">{point.value ?? '--'}</div>
+                        </div>
+                        <div className="mt-2 flex items-center justify-between gap-2 text-xs text-slate-500">
+                          <span>{selectedTrendMetric.label}</span>
+                          <span>{point.group || '全量'}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
+                    暂无趋势数据。
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
             {renderActiveDetail()}
           </DeviationShell>
         ) : loading ? (
@@ -2454,8 +2837,10 @@ function CriticalPathSummaryCard({
 
 function MaterialArrivalSummaryCard({
   summary,
+  projectId,
 }: {
   summary: MaterialReportSummary | null
+  projectId?: string
 }) {
   const overview = summary?.overview ?? {
     totalExpectedCount: 0,
@@ -2488,9 +2873,19 @@ function MaterialArrivalSummaryCard({
                         <div>
                           <div className="text-sm font-medium text-slate-900">{row.participantUnitName || '无归属单位'}</div>
                           <div className="mt-1 flex flex-wrap gap-2 text-xs text-slate-500">
-                            {row.specialtyTypes.map((type) => (
-                              <span key={type} className="rounded-full bg-slate-100 px-2 py-1">{type}</span>
-                            ))}
+                            {row.specialtyTypes.map((type) => {
+                              const specialtyHref = projectId ? `/projects/${projectId}/materials?specialty=${encodeURIComponent(type)}` : '/materials'
+                              return (
+                                <Link
+                                  key={type}
+                                  data-testid={`reports-material-specialty-link-${row.participantUnitId ?? 'unassigned'}-${type}`}
+                                  to={specialtyHref}
+                                  className="rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-600 transition-colors hover:bg-blue-50 hover:text-blue-700"
+                                >
+                                  {type}
+                                </Link>
+                              )
+                            })}
                           </div>
                         </div>
                         <div className="text-right text-sm text-slate-700">

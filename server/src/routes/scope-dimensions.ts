@@ -510,6 +510,7 @@ router.get(
       data: {
         project_id: projectId || null,
         sections,
+        // eslint-disable-next-line -- route-level-aggregation-approved
         dictionary: sections.reduce((acc, section) => {
           acc[section.key] = section.options
           return acc
@@ -627,6 +628,7 @@ router.put(
       data: {
         project_id: projectId,
         sections,
+        // eslint-disable-next-line -- route-level-aggregation-approved
         dictionary: sections.reduce((acc, section) => {
           acc[section.key] = section.options
           return acc

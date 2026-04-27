@@ -477,6 +477,14 @@ export default function DashboardCompareCard({ projectId }: DashboardCompareCard
             <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs text-slate-600">
               日 / 周 / 月固定对比
             </div>
+            <Link
+              data-testid="dashboard-compare-reports-link"
+              to={projectId ? `/projects/${projectId}/reports?view=change_log` : '/reports?view=change_log'}
+              className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 transition-colors hover:text-blue-800 hover:underline"
+            >
+              查看详细分析
+              <ArrowRight className="h-3.5 w-3.5" />
+            </Link>
           </div>
         </div>
       </CardHeader>

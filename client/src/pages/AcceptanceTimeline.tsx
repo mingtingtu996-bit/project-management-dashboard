@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useLocation, useParams } from 'react-router-dom'
 import { CheckCircle2, List, Network, Palette, Plus } from 'lucide-react'
 
 import { Breadcrumb } from '@/components/Breadcrumb'
@@ -96,6 +96,16 @@ function getBuildingLabel(buildingId?: string | null) {
   return normalized || '全部楼栋'
 }
 
+function normalizePhaseFilter(value: string | null) {
+  const normalized = String(value ?? '').trim()
+  return normalized || 'all'
+}
+
+function getAcceptancePhaseLabel(value: string) {
+  if (value === 'all') return '全部阶段'
+  return ACCEPTANCE_PHASE_OPTIONS.find((phase) => phase.value === value)?.label || value
+}
+
 const ACCEPTANCE_TIMELINE_BUCKET_DAY_SPAN: Record<AcceptanceTimelineScale, number> = {
   month: 30,
   biweek: 14,
@@ -115,6 +125,7 @@ function shiftIsoDate(value: string, days: number) {
 
 export default function AcceptanceTimeline() {
   const { id } = useParams<{ id: string }>()
+  const location = useLocation()
   const { toast } = useToast()
   const currentProject = useStore((state) => state.currentProject)
   const projectId = id || currentProject?.id || ''
@@ -137,6 +148,7 @@ export default function AcceptanceTimeline() {
   const [timeScale, setTimeScale] = useState<AcceptanceTimelineScale>('month')
   const [scopeFilter, setScopeFilter] = useState<'all' | (typeof SCOPE_LEVEL_ORDER)[number]>('all')
   const [buildingFilter, setBuildingFilter] = useState('all')
+  const [phaseFilter, setPhaseFilter] = useState('all')
   const [viewMode, setViewMode] = useState<AcceptanceTimelineViewMode>(() => {
     if (typeof window === 'undefined' || !projectId) return 'graph'
     const persisted = safeStorageGet(window.sessionStorage, `acceptanceView:${projectId}`)
@@ -174,8 +186,39 @@ export default function AcceptanceTimeline() {
     safeStorageSet(window.sessionStorage, `acceptanceView:${projectId}`, viewMode)
   }, [projectId, viewMode])
 
+  useEffect(() => {
+    const query = new URLSearchParams(location.search)
+    const nextStatusFilter = query.get('status')
+    const nextPhaseFilter = normalizePhaseFilter(query.get('phase'))
+
+    if (nextStatusFilter && ACCEPTANCE_STATUS_OPTIONS.includes(nextStatusFilter as AcceptanceStatus)) {
+      setStatusFilter(nextStatusFilter as AcceptanceStatus)
+    } else if (nextStatusFilter === 'all' || nextStatusFilter === '') {
+      setStatusFilter('all')
+    }
+
+    setPhaseFilter(nextPhaseFilter)
+  }, [location.search])
+
   const allTypes = useMemo(() => [...DEFAULT_ACCEPTANCE_TYPES, ...customTypes], [customTypes])
   const buildingOptions = useMemo(() => [...new Set(plans.map((plan) => String(plan.building_id ?? '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-CN')), [plans])
+  const phaseOptions = useMemo(() => {
+    const knownOptions = new Map<string, { value: string; label: string }>()
+    for (const option of ACCEPTANCE_PHASE_OPTIONS) {
+      knownOptions.set(option.value, option)
+    }
+
+    const planPhaseCodes = [...new Set(plans.map((plan) => String(plan.phase_code ?? '').trim()).filter(Boolean))]
+    const extraPhaseCodes = planPhaseCodes.filter((code) => !knownOptions.has(code))
+    if (phaseFilter !== 'all' && !knownOptions.has(phaseFilter) && !extraPhaseCodes.includes(phaseFilter)) {
+      extraPhaseCodes.unshift(phaseFilter)
+    }
+
+    return [
+      ...ACCEPTANCE_PHASE_OPTIONS,
+      ...extraPhaseCodes.map((value) => ({ value, label: value })),
+    ]
+  }, [phaseFilter, plans])
   const scopeOptions = useMemo(() => {
     const values = [...new Set(plans.map((plan) => normalizeScopeLevel(plan.scope_level)))]
     return values.sort((a, b) => SCOPE_LEVEL_ORDER.indexOf(a) - SCOPE_LEVEL_ORDER.indexOf(b))
@@ -183,6 +226,7 @@ export default function AcceptanceTimeline() {
   const visiblePlans = useMemo(() => plans.filter((plan) => {
     if (scopeFilter !== 'all' && normalizeScopeLevel(plan.scope_level) !== scopeFilter) return false
     if (buildingFilter !== 'all' && String(plan.building_id ?? '').trim() !== buildingFilter) return false
+    if (phaseFilter !== 'all' && String(plan.phase_code ?? '').trim() !== phaseFilter) return false
     if (statusFilter !== 'all' && normalizeAcceptanceStatus(plan.status) !== statusFilter) return false
     if (blockedOnly && !isAcceptanceBlocked(plan, plans)) return false
     if (upcomingOnly) {
@@ -193,7 +237,7 @@ export default function AcceptanceTimeline() {
       if (diff < 0 || diff > 30 * 24 * 60 * 60 * 1000) return false
     }
     return true
-  }), [blockedOnly, buildingFilter, plans, scopeFilter, statusFilter, upcomingOnly])
+  }), [blockedOnly, buildingFilter, phaseFilter, plans, scopeFilter, statusFilter, upcomingOnly])
   const visiblePhaseGroups = useMemo(() => groupAcceptanceByPhase(visiblePlans), [visiblePlans])
   const flowLayout = useMemo(() => buildAcceptanceFlowLayout(visiblePlans, timeScale), [timeScale, visiblePlans])
   const selectedNode = useMemo(() => flowLayout.nodes.find((node) => node.id === selectedNodeId) || null, [flowLayout.nodes, selectedNodeId])
@@ -464,6 +508,7 @@ export default function AcceptanceTimeline() {
             <Badge variant="outline" className="rounded-full px-3 py-1">项目：{projectName}</Badge>
             <Badge variant="outline" className="rounded-full px-3 py-1">楼栋：{getBuildingLabel(buildingFilter === 'all' ? null : buildingFilter)}</Badge>
             <Badge variant="outline" className="rounded-full px-3 py-1">范围：{scopeFilter === 'all' ? '全部范围' : getScopeLevelLabel(scopeFilter)}</Badge>
+            <Badge variant="outline" className="rounded-full px-3 py-1">阶段：{getAcceptancePhaseLabel(phaseFilter)}</Badge>
           </div>
         </div>
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-7">
@@ -487,7 +532,7 @@ export default function AcceptanceTimeline() {
             <Badge variant="outline" className="rounded-full px-3 py-1">楼栋：{getBuildingLabel(buildingFilter === 'all' ? null : buildingFilter)}</Badge>
           </div>
         </div>
-        <div className="mt-4 grid gap-3 lg:grid-cols-2 2xl:grid-cols-5">
+        <div className="mt-4 grid gap-3 lg:grid-cols-2 2xl:grid-cols-6">
           <div className="space-y-1">
             <Label htmlFor="acceptance-scope-select" className="text-xs text-slate-500">范围</Label>
             <select
@@ -512,6 +557,19 @@ export default function AcceptanceTimeline() {
             >
               <option value="all">全部楼栋</option>
               {buildingOptions.map((buildingId) => <option key={buildingId} value={buildingId}>{buildingId}</option>)}
+            </select>
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="acceptance-phase-select" className="text-xs text-slate-500">阶段</Label>
+            <select
+              id="acceptance-phase-select"
+              value={phaseFilter}
+              onChange={(event) => setPhaseFilter(event.target.value)}
+              className="w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm"
+              data-testid="acceptance-phase-select"
+            >
+              <option value="all">全部阶段</option>
+              {phaseOptions.map((phase) => <option key={phase.value} value={phase.value}>{phase.label}</option>)}
             </select>
           </div>
           <div className="space-y-1">

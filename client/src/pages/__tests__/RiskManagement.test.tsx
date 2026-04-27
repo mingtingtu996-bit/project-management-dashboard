@@ -267,6 +267,7 @@ describe('RiskManagement', () => {
       if (url.includes('/api/issues')) return issuesData as never
       if (url.includes('/api/risks')) return risksData as never
       if (url.includes('/api/task-obstacles')) return obstaclesData as never
+      if (url.includes('/api/change-logs')) return [] as never
       throw new Error(`Unexpected url: ${url}`)
     })
 
@@ -334,6 +335,72 @@ describe('RiskManagement', () => {
       await flush()
       await flush()
     })
+  })
+
+  it('filters risks by route status and level', async () => {
+    warningsData = []
+    issuesData = []
+    obstaclesData = []
+    risksData = [
+      {
+        id: 'risk-route-match',
+        project_id: projectId,
+        task_id: 'task-route',
+        title: '路由匹配风险',
+        description: '应该保留',
+        category: 'schedule',
+        level: 'high',
+        probability: 80,
+        impact: 70,
+        status: 'mitigating',
+        created_at: '2026-04-01T00:00:00.000Z',
+        updated_at: '2026-04-01T00:00:00.000Z',
+        version: 1,
+      },
+      {
+        id: 'risk-route-miss',
+        project_id: projectId,
+        task_id: 'task-route',
+        title: '路由不匹配风险',
+        description: '应该被过滤',
+        category: 'schedule',
+        level: 'low',
+        probability: 10,
+        impact: 20,
+        status: 'identified',
+        created_at: '2026-04-02T00:00:00.000Z',
+        updated_at: '2026-04-02T00:00:00.000Z',
+        version: 1,
+      },
+    ]
+    mockedUseLocation.mockReturnValue({
+      pathname: `/projects/${projectId}/risks`,
+      search: '?stream=risks&status=mitigating&level=high',
+      hash: '',
+      state: null,
+      key: 'risk-route-filter',
+    })
+
+    await act(async () => {
+      root?.render(<RiskManagement />)
+      await flush()
+      await flush()
+    })
+
+    const riskWorkspace = container.querySelector('[data-testid="risk-chain-workspace"]') as HTMLElement | null
+    expect(riskWorkspace).toBeTruthy()
+
+    await waitForCondition(
+      () =>
+        Boolean(
+          riskWorkspace?.textContent?.includes('路由匹配风险') &&
+          !riskWorkspace.textContent?.includes('路由不匹配风险'),
+        ),
+      riskWorkspace ?? container,
+    )
+
+    expect(riskWorkspace?.textContent).toContain('路由匹配风险')
+    expect(riskWorkspace?.textContent).not.toContain('路由不匹配风险')
   })
 
   it('surfaces task-derived warnings in the active warning area', async () => {
@@ -658,6 +725,7 @@ describe('RiskManagement', () => {
       if (url.includes('/api/risks')) return risksData as never
       if (url.includes('/api/warnings')) return [] as never
       if (url.includes('/api/task-obstacles')) return [] as never
+      if (url.includes('/api/change-logs')) return [] as never
       throw new Error(`Unexpected url: ${url}`)
     })
 

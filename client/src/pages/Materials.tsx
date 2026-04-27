@@ -46,6 +46,7 @@ import {
 import {
   MaterialsApiService,
   type MaterialChangeLogRecord,
+  type MaterialReportSummary,
   type MaterialMutationPayload,
   type MaterialReminderRecord,
   type MaterialTaskDelayRisk,
@@ -155,11 +156,6 @@ function buildCreatePayload(form: MaterialFormState): MaterialMutationPayload {
     requires_inspection: requiresInspection,
     inspection_done: requiresInspection ? form.inspection_done : false,
   }
-}
-
-function isMaterialOnTime(material: Pick<ProjectMaterialRecord, 'expected_arrival_date' | 'actual_arrival_date'>) {
-  if (!material.actual_arrival_date) return false
-  return material.actual_arrival_date <= material.expected_arrival_date
 }
 
 function formatDateTimeLabel(value?: string | null) {
@@ -661,6 +657,7 @@ export default function Materials() {
   const [error, setError] = useState<string | null>(null)
   const [materials, setMaterials] = useState<ProjectMaterialRecord[]>([])
   const [participantUnits, setParticipantUnits] = useState<ParticipantUnitSummary[]>([])
+  const [materialSummary, setMaterialSummary] = useState<MaterialReportSummary | null>(null)
   const [statusFilter, setStatusFilter] = useState<MaterialStatusFilter>('all')
   const [searchKeyword, setSearchKeyword] = useState(searchParams.get('q') || '')
   const [unitFilter, setUnitFilter] = useState(searchParams.get('unit') || 'all')
@@ -701,12 +698,14 @@ export default function Materials() {
         MaterialsApiService.list(projectId, { signal }),
         MaterialsApiService.listParticipantUnits(projectId, { signal }),
       ])
+      const nextSummary = await MaterialsApiService.getSummary(projectId, { signal }).catch(() => null)
       const [nextReminders, nextDigest] = await Promise.allSettled([
         MaterialsApiService.listReminders(projectId, { signal }),
         MaterialsApiService.getWeeklyDigest(projectId, { signal }),
       ])
       setMaterials(nextMaterials ?? [])
       setParticipantUnits(nextUnits ?? [])
+      setMaterialSummary(nextSummary)
       setReminders(nextReminders.status === 'fulfilled' ? nextReminders.value ?? [] : [])
       setLatestDigest(nextDigest.status === 'fulfilled' ? nextDigest.value ?? null : null)
       setError(null)
@@ -733,16 +732,17 @@ export default function Materials() {
 
   const summary = useMemo(() => buildMaterialSummaryCounts(materials), [materials])
   const weeklySummary = useMemo(() => {
-    const onTimeCount = materials.filter(isMaterialOnTime).length
+    const overview = materialSummary?.overview ?? null
+    const onTimeCount = overview?.onTimeCount ?? 0
     return {
-      totalExpectedCount: materials.length,
+      totalExpectedCount: overview?.totalExpectedCount ?? materials.length,
       onTimeCount,
-      arrivalRate: materials.length > 0 ? Math.round((onTimeCount / materials.length) * 100) : 0,
+      arrivalRate: overview?.arrivalRate ?? 0,
       arrivedThisWeek: summary.arrivedThisWeek,
       overdueArrival: summary.overdueArrival,
       pendingInspection: summary.pendingInspection,
     }
-  }, [materials, summary.arrivedThisWeek, summary.overdueArrival, summary.pendingInspection])
+  }, [materialSummary, materials.length, summary.arrivedThisWeek, summary.overdueArrival, summary.pendingInspection])
   const specialtyOptions = useMemo(
     () => [...new Set(materials.map((item) => item.specialty_type).filter((value): value is string => Boolean(value)))].sort((left, right) => left.localeCompare(right, 'zh-CN')),
     [materials],

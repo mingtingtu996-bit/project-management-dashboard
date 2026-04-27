@@ -8,6 +8,7 @@ import { executeSQL, executeSQLOne } from './dbService.js'
 import { listActiveProjectIds } from './activeProjectService.js'
 import { MilestoneIntegrityService } from './milestoneIntegrityService.js'
 import { PlanningIntegrityService } from './planningIntegrityService.js'
+import { isCompletedTask, isInProgressTask } from '../utils/taskStatus.js'
 import {
   insertNotification,
   listNotifications,
@@ -71,16 +72,6 @@ function uniqueStrings(values: Array<string | null | undefined>) {
 function toTimestamp(value?: string | null) {
   if (!value) return Number.NaN
   return new Date(value).getTime()
-}
-
-function isCompletedTask(task: Partial<Task>) {
-  const status = String(task.status ?? '').trim().toLowerCase()
-  return status === 'completed' || status === '已完成' || Number(task.progress ?? 0) >= 100
-}
-
-function isInProgressTask(task: Partial<Task>) {
-  const status = String(task.status ?? '').trim().toLowerCase()
-  return status === 'in_progress' || status === '进行中' || Number(task.progress ?? 0) > 0
 }
 
 function isNotStartedTask(task: Partial<Task>) {

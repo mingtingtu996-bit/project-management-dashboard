@@ -3,7 +3,7 @@ import { LoadingState } from '@/components/ui/loading-state';
 import { ChevronDown, ChevronUp, TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import { useState, useEffect, useMemo } from 'react';
 import { useCountUp } from '@/hooks/useCountUp';
-import { getHealthLevel, type HealthDetails } from '@/lib/healthScore';
+import { getHealthCardDisplay, getHealthDimensionDisplay, getHealthProgressDisplay, getHealthTrendDisplay, type HealthTrend } from '@/lib/healthDisplay';
 
 // 进度详情数据类型
 interface ProgressDetails {
@@ -30,9 +30,19 @@ interface ProgressDetails {
   entityType: 'tasks' | 'risks' | 'milestones';
 }
 
+interface HealthDetails {
+  baseScore?: number;
+  taskCompletionScore: number;
+  milestoneBonusScore: number;
+  delayPenaltyScore: number;
+  riskPenaltyScore: number;
+  totalScore?: number;
+  healthStatus?: 'excellent' | 'good' | 'warning' | 'critical';
+}
+
 interface DashboardHealthCardProps {
   healthScore: number;
-  trend: 'up' | 'down' | 'stable';
+  trend: HealthTrend;
   details: string;
   lastUpdated?: string;
   healthDetails?: HealthDetails;
@@ -53,8 +63,9 @@ export default function DashboardHealthCard({
   const [progressDetails, setProgressDetails] = useState<ProgressDetails | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const colors = getHealthLevel(healthScore);
+  const healthDisplay = getHealthCardDisplay(healthScore);
   const animScore = useCountUp(Math.round(healthScore), { duration: 1000, delay: 0 });
+  const trendDisplay = getHealthTrendDisplay(trend);
 
   // 5维度数据 - 与UI设计文件一致（含基础分）- 使用useMemo缓存
   const dimensions = useMemo(() => healthDetails ? [
@@ -93,22 +104,6 @@ export default function DashboardHealthCard({
     }
   }, [expanded, projectId, progressDetails]);
 
-  // 获取进度条颜色 - 使用useMemo缓存
-  const getProgressColor = useMemo(() => (progress: number) => {
-    if (progress >= 80) return 'bg-emerald-500';
-    if (progress >= 60) return 'bg-blue-500';
-    if (progress >= 40) return 'bg-amber-500';
-    return 'bg-red-500';
-  }, []);
-
-  // 获取进度文字颜色 - 使用useMemo缓存
-  const getProgressTextColor = useMemo(() => (progress: number) => {
-    if (progress >= 80) return 'text-emerald-600';
-    if (progress >= 60) return 'text-blue-600';
-    if (progress >= 40) return 'text-amber-600';
-    return 'text-red-600';
-  }, []);
-
   return (
     <Card variant="metric" className="h-full">
       <CardContent className="p-5">
@@ -129,27 +124,27 @@ export default function DashboardHealthCard({
 
         {/* 大数字 + 状态标签 + 趋势 */}
         <div className="flex flex-col items-center mb-6">
-          <span className={`text-6xl font-bold ${colors.text}`}>{animScore}</span>
+          <span className={`text-6xl font-bold ${healthDisplay.textClass}`}>{animScore}</span>
           <div className="flex items-center gap-2 mt-2">
-            <span className={`px-3 py-1 text-sm font-medium rounded-full ${colors.bg.replace('bg-', 'bg-').replace('500', '50')} ${colors.text}`}>
-              {colors.label}
+            <span className={`px-3 py-1 text-sm font-medium rounded-full ${healthDisplay.badgeClass}`}>
+              {healthDisplay.label}
             </span>
             {trend === 'up' && (
-              <span className="flex items-center gap-0.5 text-xs text-emerald-600 font-medium">
+              <span className={`flex items-center gap-0.5 text-xs font-medium ${trendDisplay.textClass}`}>
                 <TrendingUp className="h-3.5 w-3.5" />
-                上升
+                {trendDisplay.label}
               </span>
             )}
             {trend === 'down' && (
-              <span className="flex items-center gap-0.5 text-xs text-red-500 font-medium">
+              <span className={`flex items-center gap-0.5 text-xs font-medium ${trendDisplay.textClass}`}>
                 <TrendingDown className="h-3.5 w-3.5" />
-                下降
+                {trendDisplay.label}
               </span>
             )}
             {trend === 'stable' && (
-              <span className="flex items-center gap-0.5 text-xs text-gray-400 font-medium">
+              <span className={`flex items-center gap-0.5 text-xs font-medium ${trendDisplay.textClass}`}>
                 <Minus className="h-3.5 w-3.5" />
-                持平
+                {trendDisplay.label}
               </span>
             )}
           </div>
@@ -158,27 +153,25 @@ export default function DashboardHealthCard({
         {/* 5维度进度条 - 仅展开时显示 */}
         {expanded && (
           <div className="space-y-3 mb-6">
-            {dimensions.map((dim, idx) => (
-              <div key={idx} className="flex items-center gap-3">
-                <span className={`w-20 text-sm flex-shrink-0 ${dim.isBase ? 'text-gray-400' : 'text-gray-600'}`}>{dim.name}</span>
-                <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
-                  <div 
-                    className={`h-full rounded-full transition-all duration-700 ${
-                      dim.isBase ? 'bg-gray-300' :
-                      dim.isPositive ? 'bg-emerald-500' : 'bg-red-400'
-                    }`}
-                    style={{ width: `${getProgressWidth(dim.score)}%` }}
-                  />
+            {dimensions.map((dim, idx) => {
+              const tone = getHealthDimensionDisplay(dim.isBase, dim.isPositive)
+
+              return (
+                <div key={idx} className="flex items-center gap-3">
+                  <span className={`w-20 text-sm flex-shrink-0 ${tone.textClass}`}>{dim.name}</span>
+                  <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all duration-700 ${tone.barClass}`}
+                      style={{ width: `${getProgressWidth(dim.score)}%` }}
+                    />
+                  </div>
+                  <span className={`w-14 text-right font-semibold text-sm ${tone.textClass}`}>
+                    {dim.isBase ? dim.score : (dim.score > 0 ? `+${dim.score}` : dim.score)}
+                    {dim.isBase && <span className="text-[10px] font-normal ml-0.5">固定</span>}
+                  </span>
                 </div>
-                <span className={`w-14 text-right font-semibold text-sm ${
-                  dim.isBase ? 'text-gray-400' :
-                  dim.isPositive ? 'text-emerald-600' : 'text-red-500'
-                }`}>
-                  {dim.isBase ? dim.score : (dim.score > 0 ? `+${dim.score}` : dim.score)}
-                  {dim.isBase && <span className="text-[10px] font-normal ml-0.5">固定</span>}
-                </span>
-              </div>
-            ))}
+              )
+            })}
           </div>
         )}
 
@@ -243,20 +236,24 @@ export default function DashboardHealthCard({
                   <h4 className="text-purple-700 font-semibold mb-3">分项进度</h4>
                   {progressDetails.buildingProgress.length > 0 ? (
                     <div className="space-y-3">
-                      {progressDetails.buildingProgress.map((building) => (
-                        <div key={building.id} className="flex items-center gap-3">
-                          <span className="w-20 text-sm text-gray-600 flex-shrink-0">{building.name}</span>
-                          <div className="flex-1 h-2 bg-gray-200 rounded-full overflow-hidden">
-                            <div 
-                              className={`h-full rounded-full ${getProgressColor(building.progress)}`} 
-                              style={{ width: `${building.progress}%` }} 
-                            />
+                      {progressDetails.buildingProgress.map((building) => {
+                        const tone = getHealthProgressDisplay(building.progress)
+
+                        return (
+                          <div key={building.id} className="flex items-center gap-3">
+                            <span className="w-20 text-sm text-gray-600 flex-shrink-0">{building.name}</span>
+                            <div className="flex-1 h-2 bg-gray-200 rounded-full overflow-hidden">
+                              <div
+                                className={`h-full rounded-full ${tone.barClass}`}
+                                style={{ width: `${building.progress}%` }}
+                              />
+                            </div>
+                            <span className={`text-sm font-medium ${tone.textClass}`}>
+                              {building.progress}%
+                            </span>
                           </div>
-                          <span className={`text-sm font-medium ${getProgressTextColor(building.progress)}`}>
-                            {building.progress}%
-                          </span>
-                        </div>
-                      ))}
+                        )
+                      })}
                     </div>
                   ) : (
                     <div className="text-sm text-gray-500 py-2">

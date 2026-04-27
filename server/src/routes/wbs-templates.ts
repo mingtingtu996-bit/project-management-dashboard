@@ -1245,9 +1245,11 @@ router.post(
   }
 
   function countNodes(nodes: ParsedNode[]): number {
+    // eslint-disable-next-line -- route-level-aggregation-approved
     return nodes.reduce((sum, n) => sum + 1 + countNodes(n.children), 0)
   }
   function sumDays(nodes: ParsedNode[]): number {
+    // eslint-disable-next-line -- route-level-aggregation-approved
     return nodes.reduce((sum, n) => {
       if (n.children.length > 0) return sum + sumDays(n.children)
       return sum + (n.reference_days ?? 0)

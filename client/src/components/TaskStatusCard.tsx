@@ -143,13 +143,24 @@ export function TaskStatusCard({
 
   const tasksHref = projectId ? `/projects/${projectId}/gantt` : '/company'
   const summaryHref = projectId ? `/projects/${projectId}/task-summary` : '/task-summary'
+  const reportsHref = projectId ? `/projects/${projectId}/reports?view=progress` : '/reports?view=progress'
 
   return (
     <Card variant="metric">
       <CardHeader className="pb-3">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <CardTitle className="text-base font-semibold text-gray-800">任务执行概况</CardTitle>
-          <span className="text-sm text-gray-400">共 {total} 个任务</span>
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-gray-400">共 {total} 个任务</span>
+            <Link
+              data-testid="dashboard-task-reports-link"
+              to={reportsHref}
+              className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 transition-colors hover:text-blue-800 hover:underline"
+            >
+              查看详细分析
+              <ChevronRight className="h-3.5 w-3.5" />
+            </Link>
+          </div>
         </div>
       </CardHeader>
 

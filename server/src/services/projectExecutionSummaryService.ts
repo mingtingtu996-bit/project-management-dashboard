@@ -1,6 +1,12 @@
 import { executeSQL, getProject, getRisks, getTasks, getIssues } from './dbService.js'
 import { calculateProjectHealth } from './projectHealthService.js'
 import { getCriticalPathTaskIds } from './criticalPathHelpers.js'
+import { isActiveIssue } from '../utils/issueStatus.js'
+import { isActiveObstacle } from '../utils/obstacleStatus.js'
+import { isActiveRisk } from '../utils/riskStatus.js'
+import { calculateOverallProgress, getLeafTasks } from '../utils/progressCalculation.js'
+import { isCompletedMilestone, isCompletedTask, isInProgressTask } from '../utils/taskStatus.js'
+import { isPendingCondition } from '../utils/conditionStatus.js'
 import { logger } from '../middleware/logger.js'
 import type {
   DelayRequest,
@@ -218,12 +224,6 @@ export type GovernancePhase =
   | 'reordering'
   | 'closeout'
 
-const COMPLETED_STATUSES = new Set(['completed', 'done', '已完成'])
-const IN_PROGRESS_STATUSES = new Set(['in_progress', 'active', '进行中'])
-const CLOSED_RISK_STATUSES = new Set(['closed', '已关闭'])
-const SATISFIED_CONDITION_STATUSES = new Set(['completed', 'satisfied', 'confirmed', '已满足', '已确认'])
-const RESOLVED_OBSTACLE_STATUSES = new Set(['resolved', 'closed', '已解决'])
-
 const COMPLETED_PRE_MILESTONE_STATUSES = new Set(['已取得', '已完成', '已批复', 'issued', 'voided', 'approved'])
 const ACTIVE_PRE_MILESTONE_STATUSES = new Set(['待申请', '办理中', 'pending', 'preparing_documents', 'internal_review', 'external_submission', 'supplement_required'])
 const OVERDUE_PRE_MILESTONE_STATUSES = new Set(['已过期', '需延期', 'expired'])
@@ -235,36 +235,6 @@ const REVIEWING_DRAWING_STATUSES = new Set(['编制中', '审图中', '审查中
 
 function normalizeStatus(value: unknown): string {
   return String(value ?? '').trim().toLowerCase()
-}
-
-function isCompletedTask(task: Partial<Task>): boolean {
-  return COMPLETED_STATUSES.has(normalizeStatus(task.status)) || Number(task.progress ?? 0) >= 100
-}
-
-function isInProgressTask(task: Partial<Task>): boolean {
-  return IN_PROGRESS_STATUSES.has(normalizeStatus(task.status))
-}
-
-function isCompletedMilestone(task: Partial<Task>): boolean {
-  return Boolean(task.is_milestone) && isCompletedTask(task)
-}
-
-function isActiveRisk(risk: Partial<Risk>): boolean {
-  return !CLOSED_RISK_STATUSES.has(normalizeStatus(risk.status))
-}
-
-function isPendingCondition(condition: TaskConditionRow): boolean {
-  if (condition.is_satisfied !== undefined && condition.is_satisfied !== null) {
-    return !Boolean(condition.is_satisfied)
-  }
-  return !SATISFIED_CONDITION_STATUSES.has(normalizeStatus(condition.status))
-}
-
-function isActiveObstacle(obstacle: TaskObstacleRow): boolean {
-  if (obstacle.is_resolved !== undefined && obstacle.is_resolved !== null) {
-    return !Boolean(obstacle.is_resolved)
-  }
-  return !RESOLVED_OBSTACLE_STATUSES.has(normalizeStatus(obstacle.status))
 }
 
 function getProjectStatusLabel(status?: string | null): string {
@@ -290,12 +260,6 @@ function getHealthStatus(score: number): ProjectExecutionSummary['healthStatus']
   if (score >= 60) return '亚健康'
   if (score >= 40) return '预警'
   return '危险'
-}
-
-function getLeafTasks(tasks: Task[]): Task[] {
-  const parentIds = new Set(tasks.map((task) => task.parent_id).filter(Boolean))
-  const leafTasks = tasks.filter((task) => !parentIds.has(task.id))
-  return leafTasks.length > 0 ? leafTasks : tasks
 }
 
 function getPlannedEndDate(task: Partial<Task>): string | null {
@@ -570,39 +534,6 @@ export function summarizeUnreadWarningSignals(notifications: NotificationRow[] =
     highestWarningLevel: normalizeWarningLevel(topNotification),
     highestWarningSummary: summary || null,
   }
-}
-
-function calculateOverallProgress(tasks: Task[]): number {
-  const leafTasks = getLeafTasks(tasks)
-  if (leafTasks.length === 0) return 0
-
-  let totalWeightedProgress = 0
-  let totalWeight = 0
-
-  for (const task of leafTasks) {
-    const progress = Number(task.progress ?? 0)
-
-    // Calculate planned duration in days
-    const startDate = task.planned_start_date || task.start_date
-    const endDate = task.planned_end_date || task.end_date
-
-    let weight = 1 // Default weight if no dates available
-
-    if (startDate && endDate) {
-      const start = new Date(startDate).getTime()
-      const end = new Date(endDate).getTime()
-
-      if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
-        weight = Math.max(1, Math.ceil((end - start) / 86400000)) // Duration in days, minimum 1
-      }
-    }
-
-    totalWeightedProgress += progress * weight
-    totalWeight += weight
-  }
-
-  if (totalWeight === 0) return 0
-  return Math.round(totalWeightedProgress / totalWeight)
 }
 
 function getNextMilestone(tasks: Task[]): NextMilestoneSummary | null {
@@ -1084,10 +1015,7 @@ async function calculateSummaryForProject(
   const completedMilestones = milestoneOverview.stats.completed
   const milestoneProgress = milestoneOverview.stats.completionRate
   const activeRisks = risks.filter(isActiveRisk)
-  const activeIssues = issues.filter((issue) => {
-    const status = String(issue.status ?? '').trim().toLowerCase()
-    return !['resolved', 'closed', '已解决', '已关闭'].includes(status)
-  })
+  const activeIssues = issues.filter(isActiveIssue)
   const pendingConditions = conditions.filter(isPendingCondition)
   const activeObstacles = obstacles.filter(isActiveObstacle)
   const pendingConditionTaskCount = new Set(pendingConditions.map((item) => item.task_id).filter(Boolean)).size

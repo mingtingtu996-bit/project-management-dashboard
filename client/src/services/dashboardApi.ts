@@ -82,6 +82,29 @@ export interface ProjectSummary {
   }
 }
 
+export interface CompanySummaryHealthHistory {
+  thisMonth: number | null
+  lastMonth: number | null
+  change: number | null
+  thisMonthPeriod: string | null
+  lastMonthPeriod: string | null
+  periods: Array<{
+    period: string
+    value: number | null
+  }>
+}
+
+export interface CompanySummaryResponse {
+  projectCount: number
+  averageHealth: number
+  averageProgress: number
+  attentionProjectCount: number
+  lowHealthProjectCount: number
+  overdueMilestoneProjectCount: number
+  healthHistory: CompanySummaryHealthHistory
+  ranking: ProjectSummary[]
+}
+
 export interface MilestoneSummary {
   projectId: string
   projectName: string
@@ -103,6 +126,41 @@ interface DeliveryCountdownItem {
 
 function normalizeArray<T>(value: T[] | null | undefined): T[] {
   return Array.isArray(value) ? value : []
+}
+
+function normalizeNumber(value: unknown, fallback = 0): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback
+}
+
+function normalizeCompanySummary(value: CompanySummaryResponse | null | undefined): CompanySummaryResponse {
+  const raw = (value ?? {}) as Partial<CompanySummaryResponse>
+  const ranking = normalizeArray(raw.ranking)
+  const healthHistory = raw.healthHistory ?? {
+    thisMonth: null,
+    lastMonth: null,
+    change: null,
+    thisMonthPeriod: null,
+    lastMonthPeriod: null,
+    periods: [],
+  }
+
+  return {
+    projectCount: normalizeNumber(raw.projectCount, ranking.length),
+    averageHealth: normalizeNumber(raw.averageHealth),
+    averageProgress: normalizeNumber(raw.averageProgress),
+    attentionProjectCount: normalizeNumber(raw.attentionProjectCount),
+    lowHealthProjectCount: normalizeNumber(raw.lowHealthProjectCount),
+    overdueMilestoneProjectCount: normalizeNumber(raw.overdueMilestoneProjectCount),
+    healthHistory: {
+      thisMonth: typeof healthHistory.thisMonth === 'number' ? healthHistory.thisMonth : null,
+      lastMonth: typeof healthHistory.lastMonth === 'number' ? healthHistory.lastMonth : null,
+      change: typeof healthHistory.change === 'number' ? healthHistory.change : null,
+      thisMonthPeriod: healthHistory.thisMonthPeriod ?? null,
+      lastMonthPeriod: healthHistory.lastMonthPeriod ?? null,
+      periods: normalizeArray(healthHistory.periods),
+    },
+    ranking,
+  }
 }
 
 function normalizeSummaryStatus(status?: string | null): string {
@@ -133,6 +191,14 @@ export class DashboardApiService {
       withFreshSummaryOptions(options),
     )
     return normalizeArray(data)
+  }
+
+  static async getCompanySummary(options?: RequestInit): Promise<CompanySummaryResponse> {
+    const data = await apiGet<CompanySummaryResponse>(
+      '/api/dashboard/company-summary',
+      withFreshSummaryOptions(options),
+    )
+    return normalizeCompanySummary(data)
   }
 
   static async getProjectSummary(projectId: string, options?: RequestInit): Promise<ProjectSummary | null> {

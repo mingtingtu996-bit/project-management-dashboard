@@ -674,8 +674,15 @@ export default function Milestones() {
       : milestoneHealthSummary.status === 'needs_attention'
         ? `${milestoneHealthSummary.needsAttentionCount} 个里程碑需要关注`
         : `${milestoneHealthSummary.needsAttentionCount} 个里程碑存在异常`
-  const countByLabel = (label: string) =>
-    milestoneOverview.items.filter((item) => (item.non_base_labels ?? []).includes(label)).length
+  const countByLabel = (label: string) => {
+    let count = 0
+    for (const item of milestoneOverview.items) {
+      if ((item.non_base_labels ?? []).includes(label)) {
+        count += 1
+      }
+    }
+    return count
+  }
   const healthBreakdown = {
     mappingPending: milestoneHealthSummary.mappingPendingCount,
     pendingTakeover: countByLabel('待人工承接'),

@@ -7,6 +7,9 @@
 import { supabase } from './dbService.js';
 import { v4 as uuidv4 } from 'uuid';
 import dotenv from 'dotenv';
+import { isActiveIssue } from '../utils/issueStatus.js';
+import { isActiveRisk } from '../utils/riskStatus.js';
+import { isActiveWarning } from '../utils/warningStatus.js';
 
 // 加载环境变量
 dotenv.config();
@@ -71,24 +74,8 @@ export interface RiskTrendSummary {
   }>;
 }
 
-const CLOSED_RISK_STATUSES = new Set(['closed', '已关闭'])
-const CLOSED_ISSUE_STATUSES = new Set(['resolved', 'closed', '已解决', '已关闭'])
-const RESOLVED_WARNING_STATUSES = new Set(['resolved', 'closed', '已解决', '已关闭'])
-
 function normalizeText(value: unknown) {
   return String(value ?? '').trim().toLowerCase()
-}
-
-function isClosedRiskStatus(status?: string | null) {
-  return CLOSED_RISK_STATUSES.has(normalizeText(status))
-}
-
-function isClosedIssueStatus(status?: string | null) {
-  return CLOSED_ISSUE_STATUSES.has(normalizeText(status))
-}
-
-function isResolvedWarningStatus(status?: string | null) {
-  return RESOLVED_WARNING_STATUSES.has(normalizeText(status))
 }
 
 function toIsoDate(value: string | null | undefined) {
@@ -227,7 +214,7 @@ class RiskStatisticsService {
     const resolvedCritical = resolvedRisks.filter(r => r.level === 'critical').length;
 
     // 当前存量统计
-    const activeRisks = currentRisks.filter(r => !isClosedRiskStatus(r.status));
+    const activeRisks = currentRisks.filter(isActiveRisk);
     const highCount = activeRisks.filter(r => r.level === 'high').length;
     const mediumCount = activeRisks.filter(r => r.level === 'medium').length;
     const lowCount = activeRisks.filter(r => r.level === 'low').length;
@@ -373,7 +360,7 @@ class RiskStatisticsService {
           if (point) point.newIssues += 1
         }
 
-        if (isClosedIssueStatus(issue.status)) {
+        if (!isActiveIssue(issue)) {
           const resolvedDate = toIsoDate(issue.updated_at)
           if (resolvedDate && trendMap.has(resolvedDate)) {
             const point = trendMap.get(resolvedDate)
@@ -391,7 +378,7 @@ class RiskStatisticsService {
           if (point) point.newWarnings += 1
         }
 
-        if (isResolvedWarningStatus(warning.status)) {
+        if (!isActiveWarning(warning)) {
           const resolvedDate = toIsoDate(warning.updated_at)
           if (resolvedDate && trendMap.has(resolvedDate)) {
             const point = trendMap.get(resolvedDate)
@@ -414,7 +401,7 @@ class RiskStatisticsService {
       }
 
       const currentRiskRows = (currentRisksResult.data ?? []) as Array<{ level?: string | null; status?: string | null; source_type?: string | null; title?: string | null }>
-      const activeRiskRows = currentRiskRows.filter((risk) => !isClosedRiskStatus(risk.status))
+      const activeRiskRows = currentRiskRows.filter((risk) => isActiveRisk(risk))
       const currentCriticalRisks = activeRiskRows.filter((risk) => normalizeText(risk.level) === 'critical').length
       const sourceTypeBreakdown = Array.from(
         activeRiskRows.reduce((map, risk) => {

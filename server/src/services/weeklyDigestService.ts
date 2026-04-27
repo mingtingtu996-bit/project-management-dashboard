@@ -1,6 +1,9 @@
 import { supabase } from './dbService.js'
 import { isProjectActiveStatus } from '../utils/projectStatus.js'
 import { getCriticalPathTaskIds } from './criticalPathHelpers.js'
+import { calculateWeightedProgress } from '../utils/progressCalculation.js'
+import { isActiveObstacle } from '../utils/obstacleStatus.js'
+import { isCompletedTask } from '../utils/taskStatus.js'
 import type { WeeklyDigest } from '../types/db.js'
 
 function getWeekStart(date: Date): string {
@@ -13,25 +16,6 @@ function getWeekStart(date: Date): string {
 
 function daysBetween(a: string, b: Date): number {
   return Math.round((b.getTime() - new Date(a).getTime()) / 86400000)
-}
-
-function getWeightedProgress(tasks: Array<{ progress?: number | null; planned_start_date?: string | null; planned_end_date?: string | null }>): number {
-  if (!tasks.length) return 0
-  const getWeight = (t: typeof tasks[0]) => {
-    if (!t.planned_start_date || !t.planned_end_date) return 1
-    return Math.max(1, Math.round(
-      (new Date(t.planned_end_date).getTime() - new Date(t.planned_start_date).getTime()) / 86400000
-    ))
-  }
-  const totalWeight = tasks.reduce((s, t) => s + getWeight(t), 0)
-  return Math.round(tasks.reduce((s, t) => s + (t.progress || 0) * getWeight(t), 0) / (totalWeight || 1))
-}
-
-function isActiveObstacle(row: { status?: string | null; resolved_at?: string | null }): boolean {
-  if (row.resolved_at) return false
-  const status = String(row.status ?? '').trim().toLowerCase()
-  if (!status) return true
-  return ['active', 'resolving', '待处理', '处理中'].includes(status)
 }
 
 export class WeeklyDigestService {
@@ -59,7 +43,7 @@ export class WeeklyDigestService {
       planned_start_date?: string | null; planned_end_date?: string | null
       assignee?: string | null
     }>
-    const overallProgress = getWeightedProgress(tasks)
+    const overallProgress = calculateWeightedProgress(tasks)
 
     // 2. 上周进度（从上周 digest 取）
     const { data: prevDigestRows } = await supabase
@@ -72,12 +56,12 @@ export class WeeklyDigestService {
     const prevProgress = (prevDigestRows?.[0] as WeeklyDigest | undefined)?.overall_progress ?? null
     const progressChange = prevProgress !== null ? Number((overallProgress - Number(prevProgress)).toFixed(2)) : null
 
-    // 3. 健康度（最新记录）
+    // 3. 健康度（最新项目日快照）
     const { data: healthRows } = await supabase
-      .from('project_health_history')
+      .from('project_daily_snapshot')
       .select('health_score')
       .eq('project_id', projectId)
-      .order('recorded_at', { ascending: false })
+      .order('snapshot_date', { ascending: false })
       .limit(1)
     const healthScore = (healthRows?.[0] as { health_score?: number | null } | undefined)?.health_score ?? null
 
@@ -93,7 +77,7 @@ export class WeeklyDigestService {
     const completedMilestonesCount = (snapshotRows || []).filter((r: { event_type: string }) => r.event_type === 'milestone_completed').length
 
     // 5. 关键路径状态
-    const criticalTasks = tasks.filter(t => criticalTaskIdsSet.has(t.id) && t.status !== 'completed' && t.status !== '已完成')
+    const criticalTasks = tasks.filter((task) => criticalTaskIdsSet.has(task.id) && !isCompletedTask(task))
     const criticalTasksCount = criticalTasks.length
     const criticalTaskIds = criticalTasks.map((task) => task.id)
     let criticalBlockedCount = 0
@@ -122,15 +106,15 @@ export class WeeklyDigestService {
       .neq('status', '已完成')
       .not('planned_end_date', 'is', null)
       .order('planned_end_date', { ascending: true })
-    const criticalMilestones = (milestoneRows || []).filter((m: { id: string }) => criticalTaskIdsSet.has(m.id))
+    const criticalMilestones = (milestoneRows || []).filter((m: { id: string; status?: string | null; progress?: number | null }) =>
+      criticalTaskIdsSet.has(m.id) && !isCompletedTask(m),
+    )
     const nearestMs = (criticalMilestones[0] as { title: string; planned_end_date: string } | undefined)
     const criticalNearestMilestone = nearestMs?.title ?? null
     const criticalNearestDelayDays = nearestMs ? daysBetween(nearestMs.planned_end_date, today) : null
 
     // 6. Top 5 偏差任务（未完成且有计划结束日期，按延期天数降序）
-    const incompleteTasks = tasks.filter(t =>
-      t.status !== 'completed' && t.status !== '已完成' && t.planned_end_date
-    )
+    const incompleteTasks = tasks.filter((task) => !isCompletedTask(task) && Boolean(task.planned_end_date))
     const withDelay = incompleteTasks
       .map(t => ({ ...t, delayDays: daysBetween(t.planned_end_date!, today) }))
       .filter(t => t.delayDays > 0)

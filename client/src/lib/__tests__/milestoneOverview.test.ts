@@ -1,64 +1,79 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildMilestoneOverview, getMilestoneLifecycleStatus } from '../milestoneOverview'
+import { createEmptyMilestoneOverview, getMilestoneLifecycleStatus, normalizeMilestoneOverview } from '../milestoneOverview'
 
 describe('milestone overview', () => {
-  it('classifies milestone tasks from the shared task list', () => {
-    const now = new Date()
-    const futureDate = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
-    const pastDate = new Date(now.getTime() - 10 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
-    const farPastDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
-    const overview = buildMilestoneOverview([
-      {
-        id: 'm1',
-        title: '主体封顶',
-        status: 'completed',
-        progress: 100,
-        is_milestone: true,
-        planned_end_date: farPastDate,
-        created_at: '2026-03-01T00:00:00.000Z',
-        updated_at: '2026-04-01T00:00:00.000Z',
+  it('normalizes backend milestone overview payloads', () => {
+    const overview = normalizeMilestoneOverview({
+      items: [
+        {
+          id: 'm1',
+          name: '主体封顶',
+          description: '结构节点',
+          targetDate: '2026-04-01',
+          planned_date: '2026-03-15',
+          current_planned_date: '2026-03-18',
+          actual_date: '2026-03-22',
+          progress: 100,
+          status: 'completed',
+          statusLabel: '已完成',
+          updatedAt: '2026-04-01T00:00:00.000Z',
+          parent_id: null,
+          mapping_pending: false,
+          merged_into: null,
+          merged_into_name: null,
+          non_base_labels: ['执行层已关闭'],
+        },
+      ],
+      stats: {
+        total: 1,
+        pending: 0,
+        completed: 1,
+        overdue: 0,
+        upcomingSoon: 0,
+        completionRate: 100,
       },
-      {
-        id: 'm2',
-        title: '地下室施工',
-        status: 'in_progress',
-        progress: 60,
-        is_milestone: true,
-        planned_end_date: futureDate,
-        created_at: '2026-03-01T00:00:00.000Z',
-        updated_at: '2026-04-02T00:00:00.000Z',
+      summaryStats: {
+        shiftedCount: 1,
+        baselineOnTimeCount: 1,
+        dueSoon30dCount: 0,
+        highRiskCount: 0,
       },
-      {
-        id: 'm3',
-        title: '桩基开工',
-        status: 'todo',
-        progress: 0,
-        is_milestone: true,
-        planned_end_date: pastDate,
-        created_at: '2026-03-01T00:00:00.000Z',
-        updated_at: '2026-03-28T00:00:00.000Z',
+      healthSummary: {
+        status: 'normal',
+        needsAttentionCount: 0,
+        mappingPendingCount: 0,
+        mergedCount: 0,
+        excessiveDeviationCount: 0,
+        incompleteDataCount: 0,
       },
-      {
-        id: 'task-1',
-        title: '普通任务',
-        status: 'in_progress',
-        progress: 40,
-        is_milestone: false,
-        planned_end_date: futureDate,
-        created_at: '2026-03-01T00:00:00.000Z',
-        updated_at: '2026-04-02T00:00:00.000Z',
-      },
-    ] as never)
+    })
 
-    expect(overview.items.map((item) => item.id)).toEqual(['m3', 'm2', 'm1'])
+    expect(overview.items).toHaveLength(1)
+    expect(overview.items[0].name).toBe('主体封顶')
     expect(overview.stats).toEqual({
-      total: 3,
-      pending: 2,
+      total: 1,
+      pending: 0,
       completed: 1,
-      overdue: 1,
-      upcomingSoon: 1,
-      completionRate: 33,
+      overdue: 0,
+      upcomingSoon: 0,
+      completionRate: 100,
+    })
+    expect(overview.summaryStats?.shiftedCount).toBe(1)
+    expect(overview.healthSummary?.status).toBe('normal')
+  })
+
+  it('creates an empty overview for missing payloads', () => {
+    expect(createEmptyMilestoneOverview()).toEqual({
+      items: [],
+      stats: {
+        total: 0,
+        pending: 0,
+        completed: 0,
+        overdue: 0,
+        upcomingSoon: 0,
+        completionRate: 0,
+      },
     })
   })
 

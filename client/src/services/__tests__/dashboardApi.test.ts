@@ -55,4 +55,59 @@ describe('DashboardApiService cache policy', () => {
       }),
     )
   })
+
+  it('requests company summary with no-store cache', async () => {
+    mocks.apiGet.mockResolvedValueOnce({
+      projectCount: 0,
+      averageHealth: 0,
+      averageProgress: 0,
+      attentionProjectCount: 0,
+      lowHealthProjectCount: 0,
+      overdueMilestoneProjectCount: 0,
+      healthHistory: {
+        thisMonth: null,
+        lastMonth: null,
+        change: null,
+        thisMonthPeriod: null,
+        lastMonthPeriod: null,
+        periods: [],
+      },
+      ranking: [],
+    })
+
+    await DashboardApiService.getCompanySummary()
+
+    expect(mocks.apiGet).toHaveBeenCalledWith(
+      '/api/dashboard/company-summary',
+      expect.objectContaining({
+        cache: 'no-store',
+      }),
+    )
+  })
+
+  it('normalizes malformed company summary payloads', async () => {
+    mocks.apiGet.mockResolvedValueOnce({
+      projectCount: 1,
+      healthHistory: {
+        thisMonth: 72,
+        periods: null,
+      },
+    })
+
+    const summary = await DashboardApiService.getCompanySummary()
+
+    expect(summary).toMatchObject({
+      projectCount: 1,
+      averageHealth: 0,
+      averageProgress: 0,
+      attentionProjectCount: 0,
+      ranking: [],
+      healthHistory: {
+        thisMonth: 72,
+        lastMonth: null,
+        change: null,
+        periods: [],
+      },
+    })
+  })
 })

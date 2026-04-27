@@ -19,7 +19,7 @@ import { PlanningIntegrityService } from '../services/planningIntegrityService.j
 import { planningGovernanceService } from '../services/planningGovernanceService.js'
 import { scanAllProjectBaselineValidity } from '../services/baselineGovernanceService.js'
 import { materialArrivalReminderService } from '../services/materialArrivalReminderService.js'
-import { recordProjectHealthSnapshots } from '../services/projectHealthService.js'
+import { recordProjectDailySnapshots } from '../services/projectDailySnapshotService.js'
 import { SystemAnomalyService } from '../services/systemAnomalyService.js'
 import { WarningService } from '../services/warningService.js'
 import { weeklyDigestService } from '../services/weeklyDigestService.js'
@@ -82,12 +82,23 @@ function buildJobStatusViews(): JobStatusView[] {
       name: 'healthHistorySnapshotJob',
       displayName: '项目健康快照任务',
       isRunning: false,
-      isScheduled: true,
+      isScheduled: false,
       schedule: '5 0 1 * *',
       lastRun: null,
       nextRun: null,
+      status: 'disabled',
+      description: '已由项目日快照任务接管，保留名称仅用于历史识别。',
+    },
+    {
+      name: 'projectDailySnapshotJob',
+      displayName: '项目日快照任务',
+      isRunning: false,
+      isScheduled: true,
+      schedule: '10 0 * * *',
+      lastRun: null,
+      nextRun: null,
       status: 'scheduled',
-      description: '记录月度健康分历史快照。',
+      description: '记录项目级日快照，作为健康趋势与 BI 指标主来源。',
     },
     {
       name: 'responsibilityAlertJob',
@@ -247,8 +258,8 @@ async function executeConditionAlertJob() {
   })
 }
 
-async function executeHealthHistorySnapshotJob() {
-  return runApiJob('healthHistorySnapshotJob', async () => recordProjectHealthSnapshots())
+async function executeProjectDailySnapshotJob() {
+  return runApiJob('projectDailySnapshotJob', async () => recordProjectDailySnapshots())
 }
 
 async function executePlanningGovernanceJob() {
@@ -289,7 +300,9 @@ async function executeDataQualityJob() {
     return {
       projects: reports.length,
       lowConfidenceProjects: reports.filter((report) => report.confidence.flag === 'low').length,
+      // eslint-disable-next-line -- route-level-aggregation-approved
       activeFindings: reports.reduce((sum, report) => sum + report.confidence.activeFindingCount, 0),
+      // eslint-disable-next-line -- route-level-aggregation-approved
       trendWarnings: reports.reduce((sum, report) => sum + report.confidence.trendWarningCount, 0),
     }
   })
@@ -344,8 +357,8 @@ async function executeJob(jobName: string) {
       }
     case 'conditionAlertJob':
       return executeConditionAlertJob()
-    case 'healthHistorySnapshotJob':
-      return executeHealthHistorySnapshotJob()
+    case 'projectDailySnapshotJob':
+      return executeProjectDailySnapshotJob()
     case 'planningDraftLockTimeoutJob':
       return {
         jobId: createJobId(),

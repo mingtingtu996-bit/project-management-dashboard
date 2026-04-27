@@ -1,6 +1,6 @@
 {
-  "last_updated": "2026-04-19T12:15:00+08:00",
-  "current_phase": 10,
+  "last_updated": "2026-04-27T22:46:26.140+08:00",
+  "current_phase": 16,
   "execution_order": [
     "10.1",
     "10.2a-a-impl",
@@ -162,7 +162,30 @@
     "14.2-review",
     "14.6a-story-e2e",
     "14.6a-impl",
-    "14.6-review"
+    "14.6-review",
+    "16.1",
+    "16.2",
+    "16.4",
+    "16.3",
+    "16.3-gate",
+    "16.5",
+    "16.6",
+    "16.7",
+    "16.8",
+    "16.9",
+    "16.step1-compile",
+    "16.step1-gate",
+    "16.step1-post",
+    "16.10",
+    "16.11",
+    "16.12",
+    "16.13",
+    "16.14",
+    "16.15",
+    "16.step2-compile",
+    "16.step2-gate",
+    "16.step2-post",
+    "16.17"
   ],
   "current_execution_scope": {
     "authoritative_queue": "execution_order",
@@ -182,12 +205,13 @@
       "11.",
       "13.",
       "14.",
-      "15."
+      "15.",
+      "16."
     ],
     "excluded_prefixes": [
       "10.0"
     ],
-    "note": "current_execution_scope widened to allow 10.3-10.7 plus DW/11/12/13 entry; execution_order now carries the four special-plan main chains; step-level prerequisites and DW.G1 remain authoritative"
+    "note": "Phase 16 v1.2 BI化两步走 added to execution scope; v1.1前后端对齐实施清单已上线，v1.2 以该上线版本为基线执行"
   },
   "execution_policy": {
     "auto_continue": true,
@@ -641,7 +665,9 @@
     "15.8",
     "15.9",
     "15.10",
-    "15.11"
+    "15.11",
+    "16.step1",
+    "16.step2"
   ],
   "steps": {
     "1.1": {
@@ -973,11 +999,11 @@
       "note": "DW.4 completed: PreMilestones 已为纯前期证照页面，无图纸tab/CRUD/组件残留；图纸入口收口为'查看施工图纸'按钮跳转到/projects/:id/drawings；Drawings成为唯一图纸主承载页"
     },
     "10.4": {
-      "status": "pending",
+      "status": "completed",
       "note": "10.4 note normalized"
     },
     "10.5": {
-      "status": "pending",
+      "status": "completed",
       "note": "10.5 note normalized"
     },
     "DW.5": {
@@ -997,7 +1023,7 @@
       "note": "DW.8 completed: 图纸与任务/验收联动、自动问题识别与 issue/risk 升级已打通"
     },
     "10.6": {
-      "status": "pending",
+      "status": "completed",
       "note": "10.6 note normalized"
     },
     "10.7": {
@@ -1781,6 +1807,176 @@
     "15.11-review": {
       "status": "completed",
       "note": "15.11 review completed; reference_days now drives baseline planned dates during template application and completed-project template generation is visible in the governance UI"
+    },
+    "16.1": {
+      "status": "completed",
+      "note": "引用链扫描与死代码确认: dashboardCalculations/healthScore/healthAdapter/DashboardHealthCard。纯扫描步骤，输出三分类清单"
+    },
+    "16.2": {
+      "status": "completed",
+      "note": "定稿 project_daily_snapshot 结构、索引、RLS — 迁移脚本 115_create_project_daily_snapshot.sql + 回滚脚本 115_rollback_project_daily_snapshot.sql；开工前按 server/migrations 当前最大编号再次复核",
+      "prerequisites": [
+        "16.1"
+      ]
+    },
+    "16.3": {
+      "status": "completed",
+      "note": "落迁移脚本 + 回填脚本 + projectDailySnapshotService (引用 16.4 的公共函数) + 新快照 job",
+      "prerequisites": [
+        "16.2",
+        "16.4"
+      ]
+    },
+    "16.3-gate": {
+      "status": "completed",
+      "type": "manual_gate",
+      "note": "验收通过：migrate:plan 仅 115；migrate:pending 已执行且 ledger=122/pending=0；backfill recorded=3 failed=0；2026-04-27 快照 recorded=1 failed=0；二次 UPSERT 后 total=4/today=1/duplicate_groups=0；结构/索引/RLS/唯一约束已查验；2026-04-27 补充复核：运行时代码已删除旧 project_health_history 兼容写入函数与旧调度任务",
+      "prerequisites": [
+        "16.3"
+      ]
+    },
+    "16.5": {
+      "status": "completed",
+      "note": "落 company-summary 端点（projectCount/averageHealth/averageProgress/attentionProjectCount/ranking/healthHistory），不再单独返回 heatmap；新增路由、公司聚合服务、前端 API 契约和测试已通过",
+      "prerequisites": [
+        "16.1",
+        "16.3-gate"
+      ]
+    },
+    "16.6": {
+      "status": "completed",
+      "note": "CompanyCockpit 切到 company-summary，停止单独调 avg-history；页面刷新改为单次 company-summary + risks/issues，测试已更新",
+      "prerequisites": [
+        "16.5"
+      ]
+    },
+    "16.7": {
+      "status": "completed",
+      "note": "抽离 healthDisplay.ts，改 DashboardHealthCard.tsx；健康卡展示样式与趋势/维度/进度色带已收口，相关测试通过"
+    },
+    "16.8": {
+      "status": "completed",
+      "note": "删除 healthScore.ts / healthAdapter.ts / dashboardCalculations.ts；DashboardHealthCard 已切断旧类型依赖，客户端 typecheck 与相关测试通过",
+      "prerequisites": [
+        "16.7"
+      ]
+    },
+    "16.9": {
+      "status": "completed",
+      "note": "建 metricRegistry.ts（15 个指标白名单，覆盖 health_score / overall_progress / delay_days 等核心 BI 口径）；服务器 typecheck 与相关测试通过"
+    },
+    "16.step1-compile": {
+      "status": "completed",
+      "note": "第一步编译与测试已通过：client/server typecheck 通过，client vitest 78 files / 427 tests 通过，server vitest 139 files / 621 tests 通过",
+      "prerequisites": [
+        "16.6",
+        "16.8",
+        "16.9"
+      ]
+    },
+    "16.step1-gate": {
+      "status": "completed",
+      "type": "manual_gate",
+      "note": "人工验收通过：Dashboard / CompanyCockpit / Reports 与全页面回归冒烟通过；CompanyCockpit 已确认请求 company-summary 且不再请求 avg-history；当天快照 count=1，重跑 UPSERT 后 count=1 duplicateGroups=0；周报生成落库成功。验收中修复 company-summary 异常结构兜底与浏览器验收脚本旧契约；2026-04-27 补充复核：server/src 非测试运行时代码已无 project_health_history / recordProjectHealthSnapshots / HealthHistorySnapshotJob 残留",
+      "prerequisites": [
+        "16.step1-compile"
+      ]
+    },
+    "16.step1": {
+      "status": "completed",
+      "note": "Phase 16 第一步（收口）已完成；company-summary、project_daily_snapshot、healthDisplay、metricRegistry 和人工关卡均已落地"
+    },
+    "16.step1-post": {
+      "status": "completed",
+      "note": "CLAUDE.md 已追加数据聚合规范，明确路由层禁止自行 .reduce() 出新指标，统一从 projectExecutionSummaryService 或 project_daily_snapshot 取值；2026-04-27 补充复核：已通过契约测试固化禁止旧 project_health_history 写链回归",
+      "prerequisites": [
+        "16.step1-gate"
+      ]
+    },
+    "16.10": {
+      "status": "completed",
+      "note": "已输出维度字段与钻取目标页核对清单，覆盖任务/风险/材料/验收四链路与 GanttView/RiskManagement/Materials/AcceptanceTimeline 参数现状",
+      "prerequisites": [
+        "16.step1-post"
+      ]
+    },
+    "16.11": {
+      "status": "completed",
+      "note": "人工验收通过：project-trend / company-trend 端点已落地并接入 /api/analytics；REQ-65~75 静态验收通过；server typecheck 通过；analyticsRoutes 与 metricRegistry 测试 2 files / 6 tests 通过",
+      "prerequisites": [
+        "16.10"
+      ]
+    },
+    "16.12": {
+      "status": "completed",
+      "note": "Reports 接 scope-dimensions + 指标/时间/维度选择器；同步清理 milestoneOverview/Materials/Milestones/GanttView/Notifications 前端聚合残留（REQ-78~82 + REQ-101~106）；dashboardStatus.ts 迁移删除：先在 taskBusinessStatus.ts 补齐 getTaskDisplayStatus，再改 Dashboard.tsx/RecentTasksCard.tsx 导入，最后删文件（REQ-128~132）；2026-04-27 补充完善第11章：taskBusinessStatus 前端状态集已对齐 completed/done/已完成、条件满足、阻碍关闭、风险关闭口径，相关单测与 client typecheck/full tests 通过",
+      "prerequisites": [
+        "16.11"
+      ]
+    },
+    "16.13": {
+      "status": "completed",
+      "note": "补 RiskManagement / AcceptanceTimeline URL query 参数解析",
+      "prerequisites": [
+        "16.10"
+      ]
+    },
+    "16.14": {
+      "status": "completed",
+      "note": "Dashboard -> Reports 深度跳转链路",
+      "prerequisites": [
+        "16.12"
+      ]
+    },
+    "16.15": {
+      "status": "completed",
+      "note": "打通 Reports -> 业务页钻取链路",
+      "prerequisites": [
+        "16.12",
+        "16.13"
+      ]
+    },
+    "16.step2-compile": {
+      "status": "completed",
+      "note": "第二步编译测试与联调",
+      "prerequisites": [
+        "16.14",
+        "16.15"
+      ]
+    },
+    "16.step2-gate": {
+      "status": "completed",
+      "type": "manual_gate",
+      "note": "人工验收通过：16.12~16.15 均完成；EXECUTION_PROGRESS.json 可被 JSON.parse 解析；client typecheck 通过；client vitest 78 files / 432 tests 通过；server typecheck 通过；server vitest 140 files / 624 tests 通过。验收中修复 RiskManagement route-filter 测试条件的 boolean 类型门禁。",
+      "prerequisites": [
+        "16.step2-compile"
+      ]
+    },
+    "16.step2": {
+      "status": "completed",
+      "note": "Phase 16 第二步（最小可用 BI 能力层）已完成；路由层 .reduce() 静态守卫已上线并接入 CI。"
+    },
+    "16.step2-post": {
+      "status": "completed",
+      "note": "§10.2 静态检查层已落地并完成人工审查验收：server/src/routes/ 增加 route aggregation guard，现存 reduce 位点已全部加审批注释，并已接入 CI；guard、server typecheck、server tests 均通过。",
+      "prerequisites": [
+        "16.step2-gate"
+      ]
+    },
+    "16.17": {
+      "status": "completed",
+      "type": "ops_gate",
+      "note": "【运行切换】用户确认当前无人使用，批准以一次性对账替代 7 天观察窗；2026-04 对账通过 oldRows=1/newRows=1/oldAvg=82/newAvg=82/明细差异=0；已停旧 healthHistorySnapshotJob 自动调度，jobs 入口改为 projectDailySnapshotJob，avg-history 与项目历史读取切到 project_daily_snapshot；guard/typecheck/schedulerJobContracts 均通过",
+      "prerequisites": [
+        "16.step2-post"
+      ]
+    },
+    "16.4": {
+      "status": "completed",
+      "note": "口径统一前置: 创建 utils/taskStatus.ts (isCompletedTask + COMPLETED_TASK_STATUSES 常量 + isCompletedMilestone + isCompletedTaskStatus) + utils/riskStatus.ts (isActiveRisk, 排除 closed/已关闭) + utils/progressCalculation.ts (从 projectExecutionSummaryService 提取已有的工期加权实现) + utils/obstacleStatus.ts (isActiveObstacle) + utils/conditionStatus.ts (isPendingCondition) + utils/issueStatus.ts (isActiveIssue, 从 riskStatisticsService 私有函数提取) + utils/warningStatus.ts (isActiveWarning, 从 riskStatisticsService 私有函数提取)；所有消费方改为引用公共版本（Supabase .in() 查询引用常量）；七个函数各需单测（REQ-133~137 + REQ-146 + REQ-158~159）；额外覆盖: dbService.ts + task-summaries.ts + responsibilityInsightService.ts + taskWriteChainService.ts → taskStatus.ts, progressDeviationService.ts → obstacleStatus.ts, dashboard.ts 5 处里程碑判定 → isCompletedMilestone, riskStatisticsService.ts → issueStatus.ts + warningStatus.ts, pre-milestones.ts → riskStatus.ts, issues.ts → issueStatus.ts（REQ-147~161）；2026-04-27 补充完善第11章：已删除 dbService 私有 isCompletedState/isCompletedTaskLike，task-summaries 改为 isCompletedTask/isCompletedMilestone 并补静态防回归测试；server typecheck/full tests 通过",
+      "prerequisites": [
+        "16.1"
+      ]
     }
   },
   "model_ownership": {

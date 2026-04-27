@@ -246,6 +246,88 @@ describe('AcceptanceTimeline linked data', () => {
     expect(text).toContain('Risk A')
   })
 
+  it('applies route query filters for status and phase', async () => {
+    vi.mocked(acceptanceApi.getFlowSnapshot).mockResolvedValueOnce({
+      catalogs: [],
+      plans: [
+        {
+          id: 'plan-pass',
+          project_id: 'project-1',
+          milestone_id: 'milestone-pass',
+          type_id: 'completion_record',
+          type_name: 'Completion Record',
+          type_color: 'bg-blue-500',
+          name: 'Passed Plan',
+          description: 'matched by query params',
+          planned_date: '2026-04-01',
+          actual_date: '2026-04-02',
+          status: 'passed',
+          phase_code: 'phase1',
+          phase_order: 1,
+          predecessor_plan_ids: [],
+          successor_plan_ids: [],
+          display_badges: [],
+          overlay_tags: [],
+          is_system: false,
+          created_at: '2026-04-01T00:00:00.000Z',
+          updated_at: '2026-04-02T00:00:00.000Z',
+        },
+        {
+          id: 'plan-draft',
+          project_id: 'project-1',
+          milestone_id: 'milestone-draft',
+          type_id: 'pre_acceptance',
+          type_name: 'Pre Acceptance',
+          type_color: 'bg-slate-500',
+          name: 'Draft Plan',
+          description: 'should be filtered out',
+          planned_date: '2026-04-03',
+          actual_date: null,
+          status: 'draft',
+          phase_code: 'phase2',
+          phase_order: 2,
+          predecessor_plan_ids: [],
+          successor_plan_ids: [],
+          display_badges: [],
+          overlay_tags: [],
+          is_system: false,
+          created_at: '2026-04-03T00:00:00.000Z',
+          updated_at: '2026-04-03T00:00:00.000Z',
+        },
+      ],
+      dependencies: [],
+      requirements: [],
+      records: [],
+    })
+    vi.mocked(acceptanceApi.getProjectSummary).mockResolvedValueOnce({
+      totalCount: 2,
+      passedCount: 1,
+      inProgressCount: 0,
+      notStartedCount: 1,
+      blockedCount: 0,
+      dueSoon30dCount: 0,
+      keyMilestoneCount: 2,
+      completionRate: 50,
+    })
+
+    act(() => {
+      root?.render(
+        <MemoryRouter initialEntries={[`/projects/${projectId}/acceptance?status=passed&phase=phase1`]} >
+          <Routes>
+            <Route path="/projects/:id/acceptance" element={<AcceptanceTimeline />} />
+          </Routes>
+        </MemoryRouter>,
+      )
+    })
+
+    await waitFor(() => Boolean(document.querySelector('[data-testid="acceptance-list-row-plan-pass"]')))
+
+    expect(document.querySelector('[data-testid="acceptance-list-row-plan-pass"]')).toBeTruthy()
+    expect(document.querySelector('[data-testid="acceptance-list-row-plan-draft"]')).toBeNull()
+    expect((document.querySelector('[data-testid="acceptance-phase-select"]') as HTMLSelectElement | null)?.value).toBe('phase1')
+    expect((document.querySelector('[data-testid="acceptance-status-select"]') as HTMLSelectElement | null)?.value).toBe('passed')
+  })
+
   it('disables submit when required acceptance conditions are not yet satisfied', async () => {
     vi.mocked(acceptanceApi.getFlowSnapshot).mockResolvedValueOnce({
       catalogs: [],

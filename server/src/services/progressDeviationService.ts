@@ -7,6 +7,7 @@ import {
 } from './baselineVersionLock.js'
 import { evaluateMilestoneIntegrityRows } from './milestoneIntegrityService.js'
 import { insertNotification, listNotifications, updateNotificationById } from './notificationStore.js'
+import { isActiveObstacle } from '../utils/obstacleStatus.js'
 import type {
   BaselineVersion,
   ProgressDeviationChildGroup,
@@ -437,7 +438,7 @@ function buildRowAttribution(params: {
     }))
 
   const activeObstacles = (params.obstaclesByTask.get(taskId) ?? [])
-    .filter((obstacle) => !['resolved', '已解决', 'closed'].includes(String(obstacle.status ?? '').trim()))
+    .filter((obstacle) => isActiveObstacle(obstacle))
     .map((obstacle) => ({
       id: obstacle.id,
       description: obstacle.description,

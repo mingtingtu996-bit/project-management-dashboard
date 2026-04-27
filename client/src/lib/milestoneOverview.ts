@@ -1,5 +1,5 @@
-import { isCompletedTask, normalizeStatus } from './taskBusinessStatus'
 import type { Task } from './supabase'
+import { isCompletedTask } from './taskBusinessStatus'
 
 export type MilestoneLifecycleStatus = 'completed' | 'overdue' | 'soon' | 'upcoming'
 
@@ -58,10 +58,17 @@ function pickTargetDate(task: Pick<Task, 'planned_end_date' | 'end_date'>): stri
   return String(task.planned_end_date || task.end_date || '').trim() || null
 }
 
-function toTime(value: string | null): number {
-  if (!value) return Number.POSITIVE_INFINITY
-  const time = new Date(value).getTime()
-  return Number.isNaN(time) ? Number.POSITIVE_INFINITY : time
+function getStatusLabel(status: MilestoneLifecycleStatus): string {
+  switch (status) {
+    case 'completed':
+      return '已完成'
+    case 'overdue':
+      return '已逾期'
+    case 'soon':
+      return '即将到期'
+    default:
+      return '待完成'
+  }
 }
 
 export function getMilestoneLifecycleStatus(
@@ -82,171 +89,75 @@ export function getMilestoneLifecycleStatus(
   return 'upcoming'
 }
 
-function getStatusLabel(status: MilestoneLifecycleStatus): string {
-  switch (status) {
-    case 'completed':
-      return '已完成'
-    case 'overdue':
-      return '已逾期'
-    case 'soon':
-      return '即将到期'
-    default:
-      return '待完成'
+function normalizeMilestoneStats(value?: Partial<MilestoneOverviewStats> | null): MilestoneOverviewStats {
+  return {
+    total: Number(value?.total ?? 0),
+    pending: Number(value?.pending ?? 0),
+    completed: Number(value?.completed ?? 0),
+    overdue: Number(value?.overdue ?? 0),
+    upcomingSoon: Number(value?.upcomingSoon ?? 0),
+    completionRate: Number(value?.completionRate ?? 0),
   }
 }
 
-function isShiftedMilestone(task: Pick<Task, 'is_milestone' | 'planned_end_date' | 'end_date' | 'actual_end_date' | 'status' | 'progress'>): boolean {
-  if (!task.is_milestone) return false
+function normalizeSummaryStats(value?: Partial<MilestoneSummaryStats> | null): MilestoneSummaryStats | undefined {
+  if (!value) return undefined
 
-  const targetDate = pickTargetDate(task)
-  if (!targetDate) return false
-
-  const plannedTime = new Date(targetDate).getTime()
-  if (Number.isNaN(plannedTime)) return false
-
-  const actualEnd = String(task.actual_end_date || '').trim() || null
-  if (actualEnd) {
-    const actualTime = new Date(actualEnd).getTime()
-    return Number.isFinite(actualTime) && actualTime > plannedTime
+  return {
+    shiftedCount: Number(value.shiftedCount ?? 0),
+    baselineOnTimeCount: Number(value.baselineOnTimeCount ?? 0),
+    dueSoon30dCount: Number(value.dueSoon30dCount ?? 0),
+    highRiskCount: Number(value.highRiskCount ?? 0),
   }
-
-  return !isCompletedTask(task) && plannedTime < Date.now()
 }
 
-function buildNonBaseLabels(task: Task): string[] {
-  const labels: string[] = []
-  const targetDate = pickTargetDate(task)
-  const baselineDate = String(task.baseline_end || task.baseline_start || '').trim() || null
+function normalizeHealthSummary(value?: Partial<MilestoneHealthSummary> | null): MilestoneHealthSummary | undefined {
+  if (!value) return undefined
 
-  if (task.status === 'completed' && Number(task.progress ?? 0) < 100) {
-    labels.push('执行层已关闭')
+  return {
+    status: value.status ?? 'normal',
+    needsAttentionCount: Number(value.needsAttentionCount ?? 0),
+    mappingPendingCount: Number(value.mappingPendingCount ?? 0),
+    mergedCount: Number(value.mergedCount ?? 0),
+    excessiveDeviationCount: Number(value.excessiveDeviationCount ?? 0),
+    incompleteDataCount: Number(value.incompleteDataCount ?? 0),
   }
-
-  if (!(task.baseline_end || task.baseline_start) || !task.planned_end_date) {
-    labels.push('数据不完整')
-  }
-
-  if (task.is_milestone && !task.baseline_item_id) {
-    labels.push('未关联基线')
-  }
-
-  if (baselineDate && String(task.actual_end_date || '').trim()) {
-    const actualTime = new Date(String(task.actual_end_date)).getTime()
-    const baselineTime = new Date(baselineDate).getTime()
-    if (Number.isFinite(actualTime) && Number.isFinite(baselineTime)) {
-      const deviationDays = Math.abs((actualTime - baselineTime) / 86400000)
-      if (deviationDays > 30) {
-        labels.push('偏差过大')
-      }
-    }
-  }
-
-  if (!baselineDate && targetDate) {
-    labels.push('未关联基线')
-  }
-
-  return [...new Set(labels)]
 }
 
-export function buildMilestoneOverview(tasks: Task[] = []): MilestoneOverview {
-  const items = tasks
-    .filter((task) => task.is_milestone)
-    .map((task) => {
-      const status = getMilestoneLifecycleStatus(task)
-      const targetDate = pickTargetDate(task)
-      const non_base_labels = buildNonBaseLabels(task)
-      return {
-        id: String(task.id ?? ''),
-        name: String(task.title || task.name || '未命名里程碑').trim() || '未命名里程碑',
-        description: String(task.description || '').trim(),
-        targetDate,
-        planned_date: String(task.baseline_end || task.baseline_start || '').trim() || null,
-        current_planned_date: String(task.planned_end_date || task.end_date || '').trim() || null,
-        actual_date: String(task.actual_end_date || '').trim() || null,
-        progress: isCompletedTask(task) ? 100 : Math.max(0, Math.min(100, Number(task.progress ?? 0))),
-        status,
-        statusLabel: getStatusLabel(status),
-        updatedAt: String(task.updated_at || task.created_at || '').trim(),
-        parent_id: task.parent_id ? String(task.parent_id) : null,
-        mapping_pending: Boolean(task.is_milestone && !task.baseline_item_id),
-        merged_into: null,
-        merged_into_name: null,
-        non_base_labels,
-      }
-    })
-    .sort((left, right) => {
-      const statusOrder: Record<MilestoneLifecycleStatus, number> = {
-        overdue: 0,
-        soon: 1,
-        upcoming: 2,
-        completed: 3,
-      }
-
-      const statusDiff = statusOrder[left.status] - statusOrder[right.status]
-      if (statusDiff !== 0) return statusDiff
-
-      const dateDiff = toTime(left.targetDate) - toTime(right.targetDate)
-      if (dateDiff !== 0) return dateDiff
-
-      return left.name.localeCompare(right.name, 'zh-Hans-CN')
-    })
-
-  const completed = items.filter((item) => item.status === 'completed').length
-  const overdue = items.filter((item) => item.status === 'overdue').length
-  const upcomingSoon = items.filter((item) => item.status === 'soon').length
-  const pending = items.length - completed
-  const summaryStats: MilestoneSummaryStats = {
-    shiftedCount: tasks.filter((task) => isShiftedMilestone(task)).length,
-    baselineOnTimeCount: tasks.filter(
-      (task) =>
-        task.is_milestone
-        && isCompletedTask(task)
-        && Boolean(String(task.actual_end_date || '').trim())
-        && !isShiftedMilestone(task),
-    ).length,
-    dueSoon30dCount: tasks.filter((task) => {
-      if (!task.is_milestone || isCompletedTask(task)) return false
-      const targetDate = pickTargetDate(task)
-      if (!targetDate) return false
-      const targetTime = new Date(targetDate).getTime()
-      if (Number.isNaN(targetTime)) return false
-      const daysUntil = Math.ceil((targetTime - Date.now()) / 86400000)
-      return daysUntil >= 0 && daysUntil <= 30
-    }).length,
-    highRiskCount: items.filter((item) =>
-      item.status === 'overdue'
-      || (item.non_base_labels ?? []).some((label) => label !== '未关联基线'),
-    ).length,
+export function createEmptyMilestoneOverview(): MilestoneOverview {
+  return {
+    items: [],
+    stats: normalizeMilestoneStats(),
   }
+}
 
-  const healthSummary: MilestoneHealthSummary = {
-    status: summaryStats.highRiskCount === 0 && items.length > 0 ? 'normal' : summaryStats.highRiskCount > 3 ? 'abnormal' : summaryStats.highRiskCount > 0 ? 'needs_attention' : 'normal',
-    needsAttentionCount: items.filter((item) => (item.non_base_labels ?? []).length > 0).length,
-    mappingPendingCount: items.filter((item) => item.mapping_pending).length,
-    mergedCount: items.filter((item) => item.merged_into !== null).length,
-    excessiveDeviationCount: items.filter((item) => (item.non_base_labels ?? []).includes('偏差过大')).length,
-    incompleteDataCount: items.filter((item) => (item.non_base_labels ?? []).includes('数据不完整')).length,
-  }
+export function normalizeMilestoneOverview(value?: Partial<MilestoneOverview> | null): MilestoneOverview {
+  const items = Array.isArray(value?.items)
+    ? value.items.map((item) => ({
+      ...item,
+      id: String(item.id ?? ''),
+      name: String(item.name ?? '未命名里程碑').trim() || '未命名里程碑',
+      description: String(item.description ?? '').trim(),
+      targetDate: item.targetDate ?? null,
+      planned_date: item.planned_date ?? null,
+      current_planned_date: item.current_planned_date ?? null,
+      actual_date: item.actual_date ?? null,
+      progress: Number(item.progress ?? 0),
+      status: item.status ?? 'upcoming',
+      statusLabel: item.statusLabel ?? getStatusLabel(item.status ?? 'upcoming'),
+      updatedAt: String(item.updatedAt ?? '').trim(),
+      parent_id: item.parent_id ?? null,
+      mapping_pending: Boolean(item.mapping_pending),
+      merged_into: item.merged_into ?? null,
+      merged_into_name: item.merged_into_name ?? null,
+      non_base_labels: Array.isArray(item.non_base_labels) ? item.non_base_labels.map((label) => String(label)) : undefined,
+    }))
+    : []
 
   return {
     items,
-    stats: {
-      total: items.length,
-      pending,
-      completed,
-      overdue,
-      upcomingSoon,
-      completionRate: items.length > 0 ? Math.round((completed / items.length) * 100) : 0,
-    },
-    summaryStats,
-    healthSummary,
+    stats: normalizeMilestoneStats(value?.stats),
+    summaryStats: normalizeSummaryStats(value?.summaryStats),
+    healthSummary: normalizeHealthSummary(value?.healthSummary),
   }
-}
-
-export function formatMilestoneStatus(status: string): string {
-  const normalized = normalizeStatus(status)
-  if (normalized === 'completed') return '已完成'
-  if (normalized === 'overdue') return '已逾期'
-  if (normalized === 'soon') return '即将到期'
-  return '待完成'
 }

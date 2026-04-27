@@ -13,6 +13,13 @@ import { authenticate, requireProjectMember } from '../middleware/auth.js'
 import { logger } from '../middleware/logger.js'
 import type { ApiResponse } from '../types/index.js'
 import { getVisibleProjectIds } from '../auth/access.js'
+import { calculateWeightedProgress } from '../utils/progressCalculation.js'
+import { isCompletedMilestone } from '../utils/taskStatus.js'
+import {
+  buildCompanySummaryResponse,
+  loadCompanyHealthHistoryRows,
+  type CompanySummaryResponse,
+} from '../services/companySummaryService.js'
 
 const router = Router()
 
@@ -73,6 +80,34 @@ router.get('/projects-summary', asyncHandler(async (req, res) => {
   res.json(response)
 }))
 
+// GET /api/dashboard/company-summary
+router.get('/company-summary', asyncHandler(async (req, res) => {
+  logger.info('Fetching company execution summary')
+
+  const [summaries, healthHistoryRows] = await Promise.all([
+    getAllProjectExecutionSummaries(),
+    loadCompanyHealthHistoryRows(),
+  ])
+
+  let visibleSummaries = summaries
+  if (req.user?.id) {
+    const visibleProjectIds = await getVisibleProjectIds(req.user.id, req.user.globalRole)
+    if (visibleProjectIds) {
+      const visibleProjectIdSet = new Set(visibleProjectIds)
+      visibleSummaries = summaries.filter((summary) => visibleProjectIdSet.has(summary.id))
+    }
+  }
+
+  const companySummary = buildCompanySummaryResponse(visibleSummaries, healthHistoryRows)
+
+  const response: ApiResponse<CompanySummaryResponse> = {
+    success: true,
+    data: companySummary,
+    timestamp: new Date().toISOString(),
+  }
+  res.json(response)
+}))
+
 // 计算整体进度
 function calculateOverallProgress(tasks: any[]) {
   const today = new Date()
@@ -86,22 +121,14 @@ function calculateOverallProgress(tasks: any[]) {
     }
   }
   
-  // 当前进度：工期加权平均（无日期任务取权重 1 天）
-  const getWeight = (t: any): number => {
-    if (!t.planned_start_date || !t.planned_end_date) return 1
-    return Math.max(1, Math.round(
-      (new Date(t.planned_end_date).getTime() - new Date(t.planned_start_date).getTime()) / 86400000
-    ))
-  }
-  const totalWeight = tasks.reduce((sum, t) => sum + getWeight(t), 0)
-  const currentProgress = Math.round(
-    tasks.reduce((sum, t) => sum + (t.progress || 0) * getWeight(t), 0) / (totalWeight || 1)
-  )
+  // 当前进度：直接复用 BI 统一的工期加权口径
+  const currentProgress = calculateWeightedProgress(tasks)
   
   // 目标进度：基于计划时间计算
   let targetProgress = 0
   const tasksWithDates = tasks.filter((t: any) => t.planned_start_date && t.planned_end_date)
   if (tasksWithDates.length > 0) {
+    // eslint-disable-next-line -- route-level-aggregation-approved
     const totalPlannedProgress = tasksWithDates.reduce((sum, t) => {
       const start = new Date(t.planned_start_date)
       const end = new Date(t.planned_end_date)
@@ -430,14 +457,14 @@ router.get('/milestones-summary', asyncHandler(async (req, res) => {
   const now = new Date()
   const thirtyDaysLater = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)
 
-  const completed = milestones.filter((m: any) => m.status === 'completed' || m.status === '已完成')
+  const completed = milestones.filter((m: any) => isCompletedMilestone(m))
   const overdue = milestones.filter((m: any) => {
-    if (m.status === 'completed' || m.status === '已完成') return false
+    if (isCompletedMilestone(m)) return false
     const targetDate = new Date(m.planned_end_date || m.target_date || m.due_date || '')
     return targetDate < now
   })
   const upcoming = milestones.filter((m: any) => {
-    if (m.status === 'completed' || m.status === '已完成') return false
+    if (isCompletedMilestone(m)) return false
     const targetDate = new Date(m.planned_end_date || m.target_date || m.due_date || '')
     return targetDate >= now && targetDate <= thirtyDaysLater
   })
@@ -445,7 +472,7 @@ router.get('/milestones-summary', asyncHandler(async (req, res) => {
   // 即将到期的里程碑（30天内），按日期排序
   const upcomingMilestones = milestones
     .filter((m: any) => {
-      if (m.status === 'completed' || m.status === '已完成') return false
+      if (isCompletedMilestone(m)) return false
       const targetDate = new Date(m.planned_end_date || m.target_date || m.due_date || '')
       return targetDate <= thirtyDaysLater
     })

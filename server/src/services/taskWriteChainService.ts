@@ -3,6 +3,7 @@ import { logger } from '../middleware/logger.js'
 import { query as rawQuery } from '../database.js'
 import { SystemAnomalyService } from './systemAnomalyService.js'
 import { WarningService } from './warningService.js'
+import { isCompletedTask } from '../utils/taskStatus.js'
 import {
   createTask as createTaskRecord,
   executeSQL,
@@ -98,18 +99,11 @@ function readTaskAssigneeLabel(task?: Task | null) {
   return String(task?.assignee_name ?? task?.assignee ?? '').trim()
 }
 
-function isCompletedTaskState(status?: string | null) {
-  const normalized = String(status ?? '').trim().toLowerCase()
-  return normalized === 'completed' || normalized === '已完成'
-}
-
 function justCompletedTask(previousTask?: Task | null, nextTask?: Task | null) {
   const previousCompleted =
-    isCompletedTaskState(previousTask?.status)
-    || Number(previousTask?.progress ?? 0) >= 100
+    isCompletedTask({ status: previousTask?.status ?? null, progress: previousTask?.progress ?? null })
   const nextCompleted =
-    isCompletedTaskState(nextTask?.status)
-    || Number(nextTask?.progress ?? 0) >= 100
+    isCompletedTask({ status: nextTask?.status ?? null, progress: nextTask?.progress ?? null })
 
   return !previousCompleted && nextCompleted
 }

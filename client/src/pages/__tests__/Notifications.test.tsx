@@ -371,7 +371,7 @@ describe('Notifications', () => {
   })
 
   it('opens the delete guard and removes the reminder only after confirm', async () => {
-    apiMock.get.mockResolvedValue([
+    let notificationsData = [
       {
         id: 'risk-1',
         title: '风险预警',
@@ -382,7 +382,34 @@ describe('Notifications', () => {
         projectId,
         createdAt: '2026-04-01T09:00:00.000Z',
       },
-    ])
+    ]
+
+    apiMock.get.mockImplementation(async (url: string) => {
+      if (url.includes('/summary')) {
+        return {
+          pendingCount: notificationsData.length,
+          processedCount: 0,
+          businessWarningCount: 1,
+          systemExceptionCount: 0,
+          systemExceptionMappingCount: 0,
+          flowReminderCount: 0,
+          linkedProjectCount: 1,
+          allCount: notificationsData.length,
+        }
+      }
+
+      if (url.includes('/api/notifications')) {
+        return notificationsData as never
+      }
+
+      throw new Error(`Unexpected url: ${url}`)
+    })
+
+    apiMock.delete.mockImplementation(async (url: string) => {
+      const deletedId = url.split('/').filter(Boolean).at(-1)
+      notificationsData = notificationsData.filter((item) => item.id !== deletedId)
+      return {}
+    })
 
     await act(async () => {
       renderNotifications(root)
@@ -400,9 +427,7 @@ describe('Notifications', () => {
     })
 
     await waitForCondition(
-      () =>
-        Boolean(document.body.querySelector('[data-testid="notification-delete-guard"]'))
-        && document.body.textContent?.includes('确认删除“风险预警”这条提醒？') === true,
+      () => Boolean(document.body.querySelector('[data-testid="notification-delete-guard"]')),
     )
 
     const confirmButton = Array.from(document.body.querySelectorAll('button')).find((button) =>

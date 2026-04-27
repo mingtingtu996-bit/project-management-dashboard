@@ -11,7 +11,7 @@ import type { Project } from '@/lib/localDb'
 import { syncProjectCacheFromApi, toPersistedProject } from '@/lib/projectPersistence'
 import { normalizeGlobalRole } from '@/lib/roleLabels'
 import type { Issue, Risk } from '@/lib/supabase'
-import { DashboardApiService, type ProjectSummary } from '@/services/dashboardApi'
+import { DashboardApiService, type CompanySummaryResponse, type ProjectSummary } from '@/services/dashboardApi'
 import { Activity, FolderKanban, ShieldAlert, Target } from 'lucide-react'
 
 import {
@@ -150,6 +150,7 @@ export default function CompanyCockpit() {
   const [projects, setLocalProjects] = useState<Project[]>([])
   const [summaries, setSummaries] = useState<ProjectSummary[]>([])
   const [healthHistory, setHealthHistory] = useState<HealthHistory>(EMPTY_HEALTH_HISTORY)
+  const [companySummary, setCompanySummary] = useState<CompanySummaryResponse | null>(null)
   const [companyRisks, setCompanyRisks] = useState<Risk[]>([])
   const [companyIssues, setCompanyIssues] = useState<Issue[]>([])
   const [loading, setLoading] = useState(true)
@@ -176,15 +177,15 @@ export default function CompanyCockpit() {
       setLoading(false)
       shellReady = true
 
-      const [projectSummaries, history, risks, issues] = await Promise.all([
-        DashboardApiService.getAllProjectsSummary(),
-        apiGet<HealthHistory>('/api/health-score/avg-history').catch(() => EMPTY_HEALTH_HISTORY),
+      const [summaryData, risks, issues] = await Promise.all([
+        DashboardApiService.getCompanySummary(),
         apiGet<Risk[]>('/api/risks').catch(() => []),
         apiGet<Issue[]>('/api/issues').catch(() => []),
       ])
 
-      setSummaries(projectSummaries)
-      setHealthHistory(history)
+      setSummaries(summaryData.ranking)
+      setHealthHistory(summaryData.healthHistory)
+      setCompanySummary(summaryData)
       setCompanyRisks(risks)
       setCompanyIssues(issues)
     } catch (err) {
@@ -271,17 +272,15 @@ export default function CompanyCockpit() {
   }, [filteredProjects, summaryMap])
 
   const stats = useMemo(() => {
-    const total = projects.length
+    const total = companySummary?.projectCount ?? 0
     const inProgress = summaries.filter((summary) => mapSummaryStatusToTab(summary.statusLabel) === 'in_progress').length
     const completed = summaries.filter((summary) => mapSummaryStatusToTab(summary.statusLabel) === 'completed').length
     const paused = summaries.filter((summary) => mapSummaryStatusToTab(summary.statusLabel) === 'paused').length
-    const averageHealth =
-      summaries.length > 0 ? Math.round(summaries.reduce((sum, item) => sum + item.healthScore, 0) / summaries.length) : 0
-    const averageProgress =
-      summaries.length > 0 ? Math.round(summaries.reduce((sum, item) => sum + item.overallProgress, 0) / summaries.length) : 0
-    const attentionProjectCount = summaries.filter((summary) => summary.attentionRequired || summary.healthScore < 60 || (summary.milestoneOverview?.stats?.overdue ?? 0) > 0).length
-    const lowHealthProjectCount = summaries.filter((summary) => summary.healthScore < 60).length
-    const overdueMilestoneProjectCount = summaries.filter((summary) => (summary.milestoneOverview?.stats?.overdue ?? 0) > 0).length
+    const averageHealth = companySummary?.averageHealth ?? 0
+    const averageProgress = companySummary?.averageProgress ?? 0
+    const attentionProjectCount = companySummary?.attentionProjectCount ?? 0
+    const lowHealthProjectCount = companySummary?.lowHealthProjectCount ?? 0
+    const overdueMilestoneProjectCount = companySummary?.overdueMilestoneProjectCount ?? 0
 
     return {
       total,
@@ -294,7 +293,7 @@ export default function CompanyCockpit() {
       lowHealthProjectCount,
       overdueMilestoneProjectCount,
     }
-  }, [projects.length, summaries])
+  }, [companySummary, summaries])
 
   const tabItems = useMemo(
     () => [

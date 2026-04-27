@@ -26,7 +26,7 @@ afterEach(() => {
 })
 
 describe('migration runner contract', () => {
-  it('discovers canonical migration files and filters out backup/verify/final variants', async () => {
+  it('discovers canonical migration files and filters out backup/verify/final/rollback variants', async () => {
     const migrations = await discoverMigrationFiles(resolve(serverRoot, 'migrations'))
     const filenames = migrations.map((item) => item.filename)
     const versions = migrations.map((item) => item.version)
@@ -39,6 +39,7 @@ describe('migration runner contract', () => {
     expect(filenames).not.toContain('037_create_task_conditions_and_obstacles_final.sql')
     expect(filenames).not.toContain('037_create_task_conditions_and_obstacles_fixed.sql')
     expect(filenames).not.toContain('038_verify_tables.sql')
+    expect(filenames).not.toContain('115_rollback_project_daily_snapshot.sql')
     expect(filenames).not.toContain('009_create_warnings_table.sql.bak')
 
     expect(filenames.indexOf('009b_fix_delivery_issues.sql')).toBeGreaterThan(

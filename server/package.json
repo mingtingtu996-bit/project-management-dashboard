@@ -8,6 +8,8 @@
     "start": "node dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "guard:execute-sql": "vitest run src/__tests__/executeSqlGuard.test.ts",
+    "guard:route-aggregation": "node scripts/guard-route-aggregation.mjs",
+    "reconcile:health-history": "node scripts/reconcile-health-history-window.mjs",
     "test": "vitest --run",
     "test:watch": "vitest",
     "health:snapshot": "tsx -r dotenv/config run-health-history-snapshot.ts",
@@ -53,3 +55,4 @@
     "vitest": "^2.1.0"
   }
 }
+

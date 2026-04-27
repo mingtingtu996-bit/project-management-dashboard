@@ -6,7 +6,7 @@ const state = vi.hoisted(() => {
   const tables = {
     tasks: [] as TableRow[],
     weekly_digests: [] as TableRow[],
-    project_health_history: [] as TableRow[],
+    project_daily_snapshot: [] as TableRow[],
     task_progress_snapshots: [] as TableRow[],
     responsibility_alert_states: [] as TableRow[],
     risks: [] as TableRow[],
@@ -163,10 +163,10 @@ describe('weeklyDigestService', () => {
         is_milestone: true,
       },
     )
-    state.tables.project_health_history.push({
+    state.tables.project_daily_snapshot.push({
       project_id: 'project-1',
       health_score: 82,
-      recorded_at: recentISO,
+      snapshot_date: recentISO.slice(0, 10),
     })
     state.tables.task_progress_snapshots.push(
       { project_id: 'project-1', event_type: 'task_completed', created_at: recentISO },
@@ -220,6 +220,7 @@ describe('weeklyDigestService', () => {
       critical_blocked_count: 1,
       completed_tasks_count: 1,
       completed_milestones_count: 1,
+      health_score: 82,
       new_risks_count: 1,
       new_obstacles_count: 3,
     })

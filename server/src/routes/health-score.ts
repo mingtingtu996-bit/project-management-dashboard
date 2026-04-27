@@ -12,8 +12,9 @@ import { authenticate } from '../middleware/auth.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import { logger } from '../middleware/logger.js'
 import { validate } from '../middleware/validation.js'
+import { recordProjectDailySnapshots } from '../services/projectDailySnapshotService.js'
 import { REQUEST_TIMEOUT_BUDGETS, runWithRequestBudget } from '../services/requestBudgetService.js'
-import { calculateProjectHealth, recordProjectHealthSnapshots, updateProjectHealth, updateAllProjectsHealth } from '../services/projectHealthService.js'
+import { calculateProjectHealth, updateProjectHealth, updateAllProjectsHealth } from '../services/projectHealthService.js'
 import type { ApiResponse } from '../types/index.js'
 
 const router = express.Router()
@@ -41,6 +42,62 @@ function errorResponse(message: string, code: string, details?: unknown): ApiRes
     },
     timestamp: nowIso(),
   }
+}
+
+function formatMonthKey(date = new Date()) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+}
+
+function getPreviousMonthKey(date = new Date()) {
+  const previous = new Date(date.getFullYear(), date.getMonth() - 1, 1)
+  return formatMonthKey(previous)
+}
+
+function monthStart(monthKey: string) {
+  return `${monthKey}-01`
+}
+
+function nextMonthStart(monthKey: string) {
+  const [year, month] = monthKey.split('-').map(Number)
+  return monthStart(formatMonthKey(new Date(year, month, 1)))
+}
+
+function snapshotDateToMonthKey(value: unknown) {
+  const text = String(value ?? '').slice(0, 10)
+  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text.slice(0, 7) : null
+}
+
+function toFiniteNumber(value: unknown) {
+  const next = Number(value)
+  return Number.isFinite(next) ? next : null
+}
+
+function average(values: number[]) {
+  if (values.length === 0) return null
+  // eslint-disable-next-line -- route-level-aggregation-approved
+  return Math.round(values.reduce((sum, value) => sum + value, 0) / values.length)
+}
+
+function latestMonthlySnapshotRows<T extends {
+  project_id: string | null
+  snapshot_date: string | null
+  health_score?: number | null
+}>(rows: T[]) {
+  const latestRows = new Map<string, T>()
+
+  for (const row of rows) {
+    const period = snapshotDateToMonthKey(row.snapshot_date)
+    const projectId = String(row.project_id ?? '').trim()
+    if (!period || !projectId) continue
+
+    const key = `${period}::${projectId}`
+    const current = latestRows.get(key)
+    if (!current || String(row.snapshot_date) > String(current.snapshot_date)) {
+      latestRows.set(key, row)
+    }
+  }
+
+  return [...latestRows.values()]
 }
 
 /**
@@ -91,30 +148,34 @@ router.get('/avg-history', asyncHandler(async (_req, res) => {
         const supabaseKey = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY || ''
         const supabase = createClient(supabaseUrl, supabaseKey)
 
-        const now = new Date()
-        const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
-        const lastMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1)
-        const lastMonth = `${lastMonthDate.getFullYear()}-${String(lastMonthDate.getMonth() + 1).padStart(2, '0')}`
+        const thisMonth = formatMonthKey()
+        const lastMonth = getPreviousMonthKey()
 
         const { data, error } = await supabase
-          .from('project_health_history')
-          .select('period, health_score')
-          .in('period', [thisMonth, lastMonth])
+          .from('project_daily_snapshot')
+          .select('project_id, snapshot_date, health_score')
+          .gte('snapshot_date', monthStart(lastMonth))
+          .lt('snapshot_date', nextMonthStart(thisMonth))
+          .order('snapshot_date', { ascending: true })
+          .order('project_id', { ascending: true })
 
         if (error) {
-          logger.warn('查询历史均值失败（可能表未创建）', { message: error.message })
+          logger.warn('查询日快照历史均值失败（可能表未创建）', { message: error.message })
           return { thisMonth: null, lastMonth: null, change: null }
         }
 
-        const rows = data || []
-        const thisMonthScores = rows.filter((row) => row.period === thisMonth).map((row) => row.health_score)
-        const lastMonthScores = rows.filter((row) => row.period === lastMonth).map((row) => row.health_score)
+        const rows = latestMonthlySnapshotRows(data || [])
+        const thisMonthScores = rows
+          .filter((row) => snapshotDateToMonthKey(row.snapshot_date) === thisMonth)
+          .map((row) => toFiniteNumber(row.health_score))
+          .filter((value): value is number => value !== null)
+        const lastMonthScores = rows
+          .filter((row) => snapshotDateToMonthKey(row.snapshot_date) === lastMonth)
+          .map((row) => toFiniteNumber(row.health_score))
+          .filter((value): value is number => value !== null)
 
-        const avg = (values: number[]) =>
-          values.length ? Math.round(values.reduce((sum, value) => sum + value, 0) / values.length) : null
-
-        const thisAvg = avg(thisMonthScores)
-        const lastAvg = avg(lastMonthScores)
+        const thisAvg = average(thisMonthScores)
+        const lastAvg = average(lastMonthScores)
         const change = thisAvg !== null && lastAvg !== null ? thisAvg - lastAvg : null
 
         return {
@@ -147,16 +208,16 @@ router.post('/record-snapshot', asyncHandler(async (_req, res) => {
         operation: 'health_score.record_snapshot',
         timeoutMs: REQUEST_TIMEOUT_BUDGETS.batchWriteMs,
       },
-      async () => recordProjectHealthSnapshots(),
+      async () => recordProjectDailySnapshots(),
     )
 
     res.json({
       success: true,
       data: result,
-      message: `成功记录 ${result.recorded} 个项目的健康度快照（${result.period}）`,
+      message: `成功记录 ${result.recorded} 个项目的日快照（${result.snapshotDate}）`,
     })
   } catch (error: any) {
-    logger.error('记录健康度快照失败', { error })
+    logger.error('记录项目日快照失败', { error })
     res.status(error?.statusCode || 500).json(
       errorResponse(
         error instanceof Error ? error.message : '未知错误',
@@ -198,18 +259,27 @@ router.get(
       const supabase = createClient(supabaseUrl, supabaseKey)
 
       const { data, error } = await supabase
-        .from('project_health_history')
-        .select('period, health_score, health_status, recorded_at')
+        .from('project_daily_snapshot')
+        .select('project_id, snapshot_date, health_score, health_status, updated_at')
         .eq('project_id', projectId)
-        .order('period', { ascending: false })
-        .limit(months)
+        .order('snapshot_date', { ascending: false })
 
       if (error) {
-        logger.warn('查询健康度历史失败（可能表未创建）', { message: error.message, projectId })
+        logger.warn('查询日快照健康度历史失败（可能表未创建）', { message: error.message, projectId })
         return res.json({ success: true, data: [] })
       }
 
-      res.json({ success: true, data: data || [] })
+      const monthlyRows = latestMonthlySnapshotRows(data || [])
+        .sort((left, right) => String(right.snapshot_date).localeCompare(String(left.snapshot_date)))
+        .slice(0, months)
+        .map((row) => ({
+          period: snapshotDateToMonthKey(row.snapshot_date),
+          health_score: row.health_score,
+          health_status: row.health_status,
+          recorded_at: row.updated_at ?? row.snapshot_date,
+        }))
+
+      res.json({ success: true, data: monthlyRows })
     } catch (error) {
       logger.error('获取健康度历史失败', { error, projectId: req.params.projectId })
       res.json({ success: true, data: [] })

@@ -106,6 +106,27 @@ const mockProjectSummary = {
   },
 }
 
+const mockCompanySummary = {
+  projectCount: 1,
+  averageHealth: 72,
+  averageProgress: 48,
+  attentionProjectCount: 1,
+  lowHealthProjectCount: 0,
+  overdueMilestoneProjectCount: 1,
+  healthHistory: {
+    thisMonth: 72,
+    lastMonth: 69,
+    change: 3,
+    thisMonthPeriod: '2026-04',
+    lastMonthPeriod: '2026-03',
+    periods: [
+      { period: '2026-03', value: 69 },
+      { period: '2026-04', value: 72 },
+    ],
+  },
+  ranking: [mockProjectSummary],
+}
+
 const mockTasks = [
   {
     id: 'task-1',
@@ -259,6 +280,10 @@ function buildMockResponse(urlString) {
     return json({ success: true, data: [mockProjectSummary] })
   }
 
+  if (pathname === '/api/dashboard/company-summary') {
+    return json({ success: true, data: mockCompanySummary })
+  }
+
   if (pathname === '/api/health-score/avg-history') {
     return json({
       success: true,
@@ -383,6 +408,7 @@ async function main() {
   const consoleErrors = []
   const pageErrors = []
   const apiFailures = []
+  const requestedPaths = []
   let result = null
 
   try {
@@ -401,6 +427,7 @@ async function main() {
 
     await page.route(`${baseUrl}/api/**`, async (route) => {
       const requestUrl = route.request().url()
+      requestedPaths.push(new URL(requestUrl).pathname)
 
       if (shouldUseMockApi) {
         await route.fulfill(buildMockResponse(requestUrl))
@@ -436,6 +463,8 @@ async function main() {
 
     const initialUrl = page.url()
     assert(initialUrl.includes('/#/company'), `Unexpected cockpit URL: ${initialUrl}`)
+    assert(requestedPaths.includes('/api/dashboard/company-summary'), 'Company cockpit did not request /api/dashboard/company-summary')
+    assert(!requestedPaths.includes('/api/health-score/avg-history'), 'Company cockpit still requested /api/health-score/avg-history')
 
     const ganttLinks = page.getByTestId('company-project-gantt-link')
     const ganttCount = await ganttLinks.count()
@@ -474,6 +503,7 @@ async function main() {
       initialUrl,
       ganttCount,
       reminderCount,
+      requestedPaths: [...new Set(requestedPaths)],
       ganttUrl,
       notificationsUrl,
       apiFailures,

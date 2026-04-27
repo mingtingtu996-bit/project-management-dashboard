@@ -2,6 +2,7 @@ import { persistNotification } from './warningChainService.js'
 import { getMembers, supabase } from './dbService.js'
 import { getCriticalPathTaskIds } from './criticalPathHelpers.js'
 import { logger } from '../middleware/logger.js'
+import { isCompletedTask } from '../utils/taskStatus.js'
 import type {
   ProjectMember,
   ResponsibilityAlertState,
@@ -174,11 +175,6 @@ function normalizeDimensionLabel(dimension: ResponsibilityDimension) {
 
 function uniqueRecipients(values: Array<string | null | undefined>) {
   return Array.from(new Set(values.map((value) => String(value ?? '').trim()).filter(Boolean)))
-}
-
-function isCompletedTask(task: Pick<Task, 'status' | 'progress' | 'actual_end_date'>) {
-  const status = normalizeStatus(task.status)
-  return status === 'completed' || status === '已完成' || Number(task.progress ?? 0) >= 100 || Boolean(task.actual_end_date)
 }
 
 function parseDate(value?: string | null) {

@@ -52,6 +52,7 @@ import authChangePasswordRouter from './routes/auth-change-password.js'
 import authProfileRouter from './routes/auth-profile.js'
 import authResetPasswordRouter from './routes/auth-reset-password.js'
 import dashboardRouter from './routes/dashboard.js'
+import analyticsRouter from './routes/analytics.js'
 import dataQualityRouter from './routes/data-quality.js'
 import taskConditionsRouter from './routes/task-conditions.js'
 import taskObstaclesRouter from './routes/task-obstacles.js'
@@ -248,6 +249,7 @@ app.use('/api/invitations', invitationsRouter)
 
 // Dashboard
 app.use('/api/dashboard', dashboardRouter)
+app.use('/api/analytics', analyticsRouter)
 app.use('/api/data-quality', dataQualityRouter)
 
 app.use('/api/task-conditions', taskConditionsRouter)

@@ -18,6 +18,7 @@ import {
   listNotifications,
   updateNotificationById,
 } from './notificationStore.js'
+import { isCompletedTask, isInProgressTask } from '../utils/taskStatus.js'
 
 const DAY_MS = 24 * 60 * 60 * 1000
 const DATA_CONFIDENCE_LOW_THRESHOLD = 70
@@ -238,11 +239,6 @@ function diffDays(startAt: number, endAt: number) {
   return Math.max(0, Math.ceil((endAt - startAt) / DAY_MS))
 }
 
-function isCompletedTask(task: Partial<Task>) {
-  const status = String(task.status ?? '').trim().toLowerCase()
-  return status === 'completed' || status === 'done' || status === '已完成' || Number(task.progress ?? 0) >= 100
-}
-
 function isStartedTask(task: Partial<Task>) {
   const status = String(task.status ?? '').trim().toLowerCase()
   return (
@@ -251,16 +247,6 @@ function isStartedTask(task: Partial<Task>) {
     status === 'active' ||
     Number(task.progress ?? 0) > 0 ||
     Boolean(task.actual_start_date)
-  )
-}
-
-function isInProgressTask(task: Partial<Task>) {
-  const status = String(task.status ?? '').trim().toLowerCase()
-  return (
-    status === 'in_progress' ||
-    status === 'active' ||
-    status === '进行中' ||
-    (Number(task.progress ?? 0) > 0 && Number(task.progress ?? 0) < 100)
   )
 }
 

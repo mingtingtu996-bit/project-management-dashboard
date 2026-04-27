@@ -1,4 +1,6 @@
 ﻿import type { ReactNode } from 'react'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -30,7 +32,7 @@ const mockedUseAuth = vi.mocked(useAuth)
 const apiGetSpy = vi.spyOn(apiClient, 'apiGet')
 const syncProjectCacheFromApiSpy = vi.spyOn(projectPersistence, 'syncProjectCacheFromApi')
 const dashboardSummarySpy = vi.spyOn(DashboardApiService, 'getProjectSummary')
-const cockpitSummarySpy = vi.spyOn(DashboardApiService, 'getAllProjectsSummary')
+const companySummarySpy = vi.spyOn(DashboardApiService, 'getCompanySummary')
 
 function buildAuthState(globalRole: 'company_admin' | 'regular' = 'company_admin') {
   return {
@@ -86,15 +88,6 @@ describe('shared summary dashboards', () => {
     mockedUseNavigate.mockReturnValue(vi.fn())
     mockedUseAuth.mockReturnValue(buildAuthState())
     apiGetSpy.mockImplementation(async (url: string) => {
-      if (url === '/api/health-score/avg-history') {
-        return {
-          thisMonth: 77,
-          lastMonth: 72,
-          change: 5,
-          lastMonthPeriod: '2026-03',
-        } as never
-      }
-
       if (url === '/api/projects/project-1/critical-path') {
         return {
           projectId: 'project-1',
@@ -239,65 +232,84 @@ describe('shared summary dashboards', () => {
         daysRemaining: 35,
       },
     } as never)
-    cockpitSummarySpy.mockResolvedValue([
-      {
-        id: 'project-1',
-        name: '城市中心广场项目（二期）',
-        status: 'active',
-        statusLabel: '进行中',
-        plannedEndDate: '2026-12-31',
-        daysUntilPlannedEnd: 120,
-        totalTasks: 16,
-        leafTaskCount: 12,
-        completedTaskCount: 7,
-        inProgressTaskCount: 5,
-        delayedTaskCount: 2,
-        delayDays: 6,
-        delayCount: 2,
-        overallProgress: 72,
-        taskProgress: 72,
-        totalMilestones: 5,
-        completedMilestones: 3,
-        milestoneProgress: 60,
-        riskCount: 3,
-        activeRiskCount: 2,
-        pendingConditionCount: 1,
-        pendingConditionTaskCount: 1,
-        activeObstacleCount: 1,
-        activeObstacleTaskCount: 1,
-        preMilestoneCount: 4,
-        completedPreMilestoneCount: 2,
-        activePreMilestoneCount: 1,
-        overduePreMilestoneCount: 1,
-        acceptancePlanCount: 3,
-        passedAcceptancePlanCount: 1,
-        inProgressAcceptancePlanCount: 1,
-        failedAcceptancePlanCount: 1,
-        constructionDrawingCount: 6,
-        issuedConstructionDrawingCount: 3,
-        reviewingConstructionDrawingCount: 2,
-        attentionRequired: true,
-        scheduleVarianceDays: 6,
-        activeDelayRequests: 2,
-        activeObstacles: 1,
-        monthlyCloseStatus: '已超期',
-        closeoutOverdueDays: 5,
-        unreadWarningCount: 3,
-        highestWarningLevel: 'critical',
-        highestWarningSummary: '关键路径任务受阻',
-        shiftedMilestoneCount: 2,
-        criticalPathAffectedTasks: 1,
-        healthScore: 88,
-        healthStatus: '健康',
-        nextMilestone: {
-          id: 'milestone-1',
-          name: '主体封顶',
-          targetDate: '2026-08-30',
-          status: 'in_progress',
-          daysRemaining: 35,
-        },
+    companySummarySpy.mockResolvedValue({
+      projectCount: 1,
+      averageHealth: 88,
+      averageProgress: 72,
+      attentionProjectCount: 1,
+      lowHealthProjectCount: 0,
+      overdueMilestoneProjectCount: 1,
+      healthHistory: {
+        thisMonth: 77,
+        lastMonth: 72,
+        change: 5,
+        thisMonthPeriod: '2026-04',
+        lastMonthPeriod: '2026-03',
+        periods: [
+          { period: '2026-03', value: 72 },
+          { period: '2026-04', value: 77 },
+        ],
       },
-    ] as never)
+      ranking: [
+        {
+          id: 'project-1',
+          name: '城市中心广场项目（二期）',
+          status: 'active',
+          statusLabel: '进行中',
+          plannedEndDate: '2026-12-31',
+          daysUntilPlannedEnd: 120,
+          totalTasks: 16,
+          leafTaskCount: 12,
+          completedTaskCount: 7,
+          inProgressTaskCount: 5,
+          delayedTaskCount: 2,
+          delayDays: 6,
+          delayCount: 2,
+          overallProgress: 72,
+          taskProgress: 72,
+          totalMilestones: 5,
+          completedMilestones: 3,
+          milestoneProgress: 60,
+          riskCount: 3,
+          activeRiskCount: 2,
+          pendingConditionCount: 1,
+          pendingConditionTaskCount: 1,
+          activeObstacleCount: 1,
+          activeObstacleTaskCount: 1,
+          preMilestoneCount: 4,
+          completedPreMilestoneCount: 2,
+          activePreMilestoneCount: 1,
+          overduePreMilestoneCount: 1,
+          acceptancePlanCount: 3,
+          passedAcceptancePlanCount: 1,
+          inProgressAcceptancePlanCount: 1,
+          failedAcceptancePlanCount: 1,
+          constructionDrawingCount: 6,
+          issuedConstructionDrawingCount: 3,
+          reviewingConstructionDrawingCount: 2,
+          attentionRequired: true,
+          scheduleVarianceDays: 6,
+          activeDelayRequests: 2,
+          activeObstacles: 1,
+          monthlyCloseStatus: '已超期',
+          closeoutOverdueDays: 5,
+          unreadWarningCount: 3,
+          highestWarningLevel: 'critical',
+          highestWarningSummary: '关键路径任务受阻',
+          shiftedMilestoneCount: 2,
+          criticalPathAffectedTasks: 1,
+          healthScore: 88,
+          healthStatus: '健康',
+          nextMilestone: {
+            id: 'milestone-1',
+            name: '主体封顶',
+            targetDate: '2026-08-30',
+            status: 'in_progress',
+            daysRemaining: 35,
+          },
+        },
+      ],
+    } as never)
 
     useStore.setState({
       currentProject: {
@@ -412,7 +424,7 @@ describe('shared summary dashboards', () => {
     apiGetSpy.mockReset()
     syncProjectCacheFromApiSpy.mockReset()
     dashboardSummarySpy.mockReset()
-    cockpitSummarySpy.mockReset()
+    companySummarySpy.mockReset()
     useStore.setState({ currentProject: null } as never)
     useStore.setState({
       projects: [] as never,
@@ -497,8 +509,18 @@ describe('shared summary dashboards', () => {
     expect(container.textContent).toContain('图纸')
     expect(container.textContent).toContain('任务列表')
     expect(container.textContent).toContain('关键路径任务受阻')
-    expect(cockpitSummarySpy).toHaveBeenCalled()
+    expect(companySummarySpy).toHaveBeenCalled()
+    expect(apiGetSpy.mock.calls.some(([url]) => url === '/api/health-score/avg-history')).toBe(false)
     expect(syncProjectCacheFromApiSpy).toHaveBeenCalled()
+  })
+
+  it('CompanyCockpit does not keep frontend BI aggregation fallbacks', () => {
+    const source = readFileSync(join(process.cwd(), 'src/pages/CompanyCockpit.tsx'), 'utf8')
+
+    expect(source).not.toMatch(/reduce\(\(sum,\s*item\)\s*=>\s*sum\s*\+\s*item\.healthScore/)
+    expect(source).not.toMatch(/reduce\(\(sum,\s*item\)\s*=>\s*sum\s*\+\s*item\.overallProgress/)
+    expect(source).not.toMatch(/filter\(\(summary\)\s*=>\s*summary\.healthScore\s*<\s*60/)
+    expect(source).not.toMatch(/summary\.attentionRequired\s*\|\|\s*summary\.healthScore\s*<\s*60/)
   })
 
   it('blocks regular users from loading company-wide cockpit data', async () => {
@@ -516,7 +538,7 @@ describe('shared summary dashboards', () => {
     await waitForText(container, ['公司驾驶舱仅公司管理员可见'])
 
     expect(container.querySelector('[data-testid="company-cockpit-access-denied"]')).not.toBeNull()
-    expect(cockpitSummarySpy).not.toHaveBeenCalled()
+    expect(companySummarySpy).not.toHaveBeenCalled()
     expect(syncProjectCacheFromApiSpy).not.toHaveBeenCalled()
   })
 })

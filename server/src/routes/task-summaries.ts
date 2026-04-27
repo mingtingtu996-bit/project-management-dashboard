@@ -14,6 +14,7 @@ import { asyncHandler } from '../middleware/errorHandler.js'
 import { authenticate } from '../middleware/auth.js'
 import { validate, validateIdParam } from '../middleware/validation.js'
 import { logger } from '../middleware/logger.js'
+import { isCompletedMilestone, isCompletedTask } from '../utils/taskStatus.js'
 import type { ApiResponse } from '../types/index.js'
 import type { TaskCompletionReport } from '../types/db.js'
 
@@ -166,9 +167,7 @@ async function loadMonthlyFulfillmentTrend(projectId: string, months = 6) {
         if (!item.source_task_id) return false
         const taskStatus = taskStatusMap.get(item.source_task_id)
         if (!taskStatus) return false
-        const status = String(taskStatus.status ?? '').trim().toLowerCase()
-        const progress = Number(taskStatus.progress ?? 0)
-        return status === 'completed' || status === 'done' || status === '已完成' || progress >= 100
+        return isCompletedTask(taskStatus)
       }).length
 
       const rate = committedCount > 0 ? Math.round((fulfilledCount / committedCount) * 100) : 0
@@ -316,7 +315,6 @@ router.get('/projects/:id/task-summary', validateIdParam, asyncHandler(async (re
         .from('tasks')
         .select(selectClause)
         .eq('project_id', projectId)
-        .in('status', ['已完成', 'completed'])
         .order('updated_at', { ascending: false })
 
       if (date_from) {
@@ -332,7 +330,7 @@ router.get('/projects/:id/task-summary', validateIdParam, asyncHandler(async (re
     'id, title, assignee, assignee_unit, participant_unit_id, status, start_date, end_date, progress, is_milestone, updated_at',
     'id, title, assignee, assignee_unit, status, start_date, end_date, progress, is_milestone, updated_at',
     `task-summary:${projectId}`,
-  )
+  ).then((rows) => rows.filter((task: any) => isCompletedTask(task)))
 
   const timelineReadyPromise = isTaskTimelineEventStoreReady(projectId)
   const monthlyFulfillmentPromise = loadMonthlyFulfillmentTrend(projectId)
@@ -392,6 +390,7 @@ router.get('/projects/:id/task-summary', validateIdParam, asyncHandler(async (re
       })
       .map((t: any) => {
         const delays = delayMap[t.id] || []
+        // eslint-disable-next-line -- route-level-aggregation-approved
         const delayTotal = delays.reduce((sum: number, d: any) => sum + (d.delay_days || 0), 0)
         // 用 end_date 作为计划结束日，updated_at 作为实际完成时间
         const endDate = t.end_date as string | null
@@ -442,6 +441,7 @@ router.get('/projects/:id/task-summary', validateIdParam, asyncHandler(async (re
     .filter((t: any) => !assignedTaskIds.has(t.id))
     .map((t: any) => {
       const delays = delayMap[t.id] || []
+      // eslint-disable-next-line -- route-level-aggregation-approved
       const delayTotal = delays.reduce((sum: number, d: any) => sum + (d.delay_days || 0), 0)
       const endDate = t.end_date as string | null
       const completedAt = t.updated_at as string | null
@@ -482,9 +482,7 @@ router.get('/projects/:id/task-summary', validateIdParam, asyncHandler(async (re
     total_completed: allTasks.length,
     on_time_count: allTasks.filter((t: any) => t.status_label === 'on_time').length,
     delayed_count: allTasks.filter((t: any) => t.status_label === 'delayed').length,
-    completed_milestone_count: (milestones || []).filter((m: any) =>
-      m.status === '已完成' || m.status === 'completed'
-    ).length,
+    completed_milestone_count: (milestones || []).filter((m: any) => isCompletedMilestone(m)).length,
   }
 
   const response: ApiResponse = {
@@ -508,9 +506,8 @@ router.get('/projects/:id/task-summary/trend', validateIdParam, asyncHandler(asy
   // 用 end_date 作为计划完成时间，updated_at 近似实际完成时间
   const { data: rows, error } = await supabase
     .from('tasks')
-    .select('end_date, updated_at')
+    .select('end_date, updated_at, status, progress')
     .eq('project_id', projectId)
-    .in('status', ['已完成', 'completed'])
     .not('end_date', 'is', null)
     .gte('end_date', fromDate)
 
@@ -519,6 +516,7 @@ router.get('/projects/:id/task-summary/trend', validateIdParam, asyncHandler(asy
   // JS 层按月聚合（以 end_date 的月份归类）
   const monthMap: Record<string, { month: string; total: number; on_time: number; delayed: number }> = {}
   for (const r of (rows || [])) {
+    if (!isCompletedTask(r)) continue
     const endDate = r.end_date as string
     const completedAt = (r.updated_at as string)?.slice(0, 10) || endDate
     const month = endDate.slice(0, 7) // "YYYY-MM"
@@ -541,15 +539,15 @@ router.get('/projects/:id/task-summary/assignees', validateIdParam, asyncHandler
 
   const { data: rows, error } = await supabase
     .from('tasks')
-    .select('assignee, end_date, updated_at')
+    .select('assignee, end_date, updated_at, status, progress')
     .eq('project_id', projectId)
-    .in('status', ['已完成', 'completed'])
 
   if (error) throw new Error(`[assignees] 查询失败: ${error.message}`)
 
   // JS 层按责任人聚合（以 end_date vs updated_at 判断是否按时）
   const map: Record<string, { total: number; on_time: number; delayed: number }> = {}
   for (const r of (rows || [])) {
+    if (!isCompletedTask(r)) continue
     const key = r.assignee || '未分配'
     if (!map[key]) map[key] = { total: 0, on_time: 0, delayed: 0 }
     map[key].total++
@@ -719,6 +717,7 @@ router.get('/projects/:id/task-summary/compare', validateIdParam, asyncHandler(a
 
     // 汇总统计
     const taskDetails = Array.from(taskChanges.values())
+    // eslint-disable-next-line -- route-level-aggregation-approved
     const totalProgressChange = taskDetails.reduce((sum, t) => sum + t.progress_delta, 0)
     const tasksUpdated = taskDetails.length
     const tasksCompleted = taskDetails.filter(t => t.progress_after >= 100).length
@@ -887,7 +886,7 @@ router.get('/projects/:id/daily-progress', validateIdParam, asyncHandler(async (
     const todaySnapshot = todaySnapshotMap.get(task.id) as any
     const previousSnapshot = previousSnapshotMap.get(task.id) as any
     const currentProgress = todaySnapshot?.progress ?? task.progress ?? 0
-    const isCompleted = task.status === '已完成' || task.status === 'completed'
+    const isCompleted = isCompletedTask({ status: task.status, progress: currentProgress })
     
     // 尝试从快照获取之前的进度
     const prevProgress = previousSnapshot?.progress ?? Math.max(0, currentProgress - 10) // 降级：假设进度增加10%
@@ -927,7 +926,7 @@ router.get('/projects/:id/daily-progress', validateIdParam, asyncHandler(async (
       obstacles_closed: obstaclesClosed,
       delayed_tasks: (updatedTasks || []).filter((task: any) => {
         const endDate = task.end_date ? String(task.end_date).slice(0, 10) : ''
-        const isCompleted = task.status === '已完成' || task.status === 'completed'
+        const isCompleted = isCompletedTask(task)
         return Boolean(endDate) && !isCompleted && endDate <= targetDate
       }).length,
     },

@@ -36,7 +36,6 @@ interface GanttTaskRowsProps {
   expandedConditionTaskId: string | null
   inlineConditionsMap: Record<string, TaskCondition[]>
   taskProgressSnapshot: ProjectTaskProgressSnapshot
-  rolledProgressMap: Record<string, number>
   inlineTitleTaskId: string | null
   inlineTitleValue: string
   onClearFilters: () => void
@@ -100,7 +99,7 @@ const TaskRow = memo(function TaskRow(
   const conditionSummary = props.taskProgressSnapshot.taskConditionMap[task.id]
   const obstacleCount = props.taskProgressSnapshot.obstacleCountMap[task.id] || 0
   const actualProgress = Number(task.progress ?? 0)
-  const rolledProgress = hasChildren ? props.rolledProgressMap[task.id] ?? 0 : actualProgress
+  const rolledProgress = actualProgress
   const criticalTask = props.getCriticalPathTask(task.id)
   const overrideFlags = props.criticalPathOverrideFlags?.get(task.id)
   const lagLevel = getTaskLagLevel(task)

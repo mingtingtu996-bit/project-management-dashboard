@@ -157,6 +157,28 @@ interface NotificationDeleteTarget {
   targetLabel: string
 }
 
+interface NotificationCounts {
+  pendingCount: number
+  processedCount: number
+  businessWarningCount: number
+  systemExceptionCount: number
+  systemExceptionMappingCount: number
+  flowReminderCount: number
+  linkedProjectCount: number
+  allCount: number
+}
+
+const EMPTY_NOTIFICATION_COUNTS: NotificationCounts = {
+  pendingCount: 0,
+  processedCount: 0,
+  businessWarningCount: 0,
+  systemExceptionCount: 0,
+  systemExceptionMappingCount: 0,
+  flowReminderCount: 0,
+  linkedProjectCount: 0,
+  allCount: 0,
+}
+
 const TAB_OPTIONS: Array<{ value: ReminderTab; label: string }> = [
   { value: 'all', label: '全部' },
   { value: 'unread', label: '未读' },
@@ -410,6 +432,24 @@ function getNotificationStateLabel(notification: NormalizedNotification) {
   return '未读'
 }
 
+function normalizeNotificationCounts(value: unknown): NotificationCounts {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return EMPTY_NOTIFICATION_COUNTS
+  }
+
+  const record = value as Record<string, unknown>
+  return {
+    pendingCount: Number(record.pendingCount ?? 0),
+    processedCount: Number(record.processedCount ?? 0),
+    businessWarningCount: Number(record.businessWarningCount ?? 0),
+    systemExceptionCount: Number(record.systemExceptionCount ?? 0),
+    systemExceptionMappingCount: Number(record.systemExceptionMappingCount ?? 0),
+    flowReminderCount: Number(record.flowReminderCount ?? 0),
+    linkedProjectCount: Number(record.linkedProjectCount ?? 0),
+    allCount: Number(record.allCount ?? 0),
+  }
+}
+
 export default function Notifications() {
   const currentProject = useCurrentProject()
   const setCurrentProject = useSetCurrentProject()
@@ -443,6 +483,7 @@ export default function Notifications() {
   const [deleteTarget, setDeleteTarget] = useState<NotificationDeleteTarget | null>(null)
   const [deleteSubmitting, setDeleteSubmitting] = useState(false)
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({})
+  const [notificationCounts, setNotificationCounts] = useState<NotificationCounts>(EMPTY_NOTIFICATION_COUNTS)
   const assigneeDropdownRef = useRef<HTMLDivElement>(null)
   const settingsPanelRef = useRef<HTMLDivElement>(null)
   const realtimeRefreshTimeoutRef = useRef<number | null>(null)
@@ -491,6 +532,7 @@ export default function Notifications() {
     if (authLoading || !isAuthenticated) {
       setLoadError(null)
       setSharedSliceStatus('notifications', { loading: false, error: null })
+      setNotificationCounts(EMPTY_NOTIFICATION_COUNTS)
       if (!options?.silent) {
         setLoading(false)
       }
@@ -514,7 +556,21 @@ export default function Notifications() {
         url += `&projectId=${effectiveProjectId}`
       }
 
-      const response = await api.get<NotificationApiItem[]>(url)
+      let summaryUrl = '/api/notifications/summary'
+      if (effectiveProjectId) {
+        summaryUrl += `?projectId=${effectiveProjectId}`
+      }
+
+      const [responseResult, summaryResult] = await Promise.allSettled([
+        api.get<NotificationApiItem[]>(url),
+        api.get<NotificationCounts>(summaryUrl),
+      ])
+
+      if (responseResult.status !== 'fulfilled') {
+        throw responseResult.reason
+      }
+
+      const response = responseResult.value
       if (!Array.isArray(response)) {
         throw new Error('\u63d0\u9192\u6570\u636e\u683c\u5f0f\u4e0d\u6b63\u786e')
       }
@@ -523,6 +579,11 @@ export default function Notifications() {
         .filter(isReminderNotification)
 
       setNotifications(normalized)
+      if (summaryResult.status === 'fulfilled') {
+        setNotificationCounts(normalizeNotificationCounts(summaryResult.value))
+      } else {
+        setNotificationCounts(EMPTY_NOTIFICATION_COUNTS)
+      }
       setSharedSliceStatus('notifications', { loading: false, error: null })
     } catch (error) {
       console.error('Failed to load notifications:', error)
@@ -532,6 +593,7 @@ export default function Notifications() {
 
       // 10.10b: 不清空 store 数据，保留上次成功加载的内容；仅设置 error 状态
       setSharedSliceStatus('notifications', { loading: false, error: message })
+      setNotificationCounts(EMPTY_NOTIFICATION_COUNTS)
       if (!silent) {
         setLoadError(message)
         toast({ title: '加载失败', description: message, variant: 'destructive' })
@@ -549,6 +611,7 @@ export default function Notifications() {
       setLoading(false)
       setLoadError(null)
       setSharedSliceStatus('notifications', { loading: false, error: null })
+      setNotificationCounts(EMPTY_NOTIFICATION_COUNTS)
       return
     }
     void loadNotifications()
@@ -605,6 +668,7 @@ export default function Notifications() {
     try {
       await api.put(`/api/notifications/${id}/acknowledge`)
       patchNotifications([id], { isRead: true, isMuted: false, muteExpired: false, mutedUntil: undefined, status: 'acknowledged' })
+      void loadNotifications({ silent: true })
     } catch (error) {
       console.error('Failed to acknowledge notification:', error)
     }
@@ -619,6 +683,7 @@ export default function Notifications() {
         mutedUntil: buildMutedUntil(muteHours),
         status: 'muted',
       })
+      void loadNotifications({ silent: true })
     } catch (error) {
       console.error('Failed to mute notification:', error)
     }
@@ -629,6 +694,7 @@ export default function Notifications() {
     try {
       await api.put('/api/notifications/acknowledge-group', { ids })
       patchNotifications(ids, { isRead: true, isMuted: false, muteExpired: false, mutedUntil: undefined, status: 'acknowledged' })
+      void loadNotifications({ silent: true })
     } catch (error) {
       console.error('Failed to acknowledge notifications:', error)
     }
@@ -644,6 +710,7 @@ export default function Notifications() {
         mutedUntil: buildMutedUntil(muteHours),
         status: 'muted',
       })
+      void loadNotifications({ silent: true })
     } catch (error) {
       console.error('Failed to mute notifications:', error)
     }
@@ -657,6 +724,7 @@ export default function Notifications() {
       }
       await api.put(url)
       setNotifications(notifications.map((item) => ({ ...item, isRead: true, isMuted: false, muteExpired: false, mutedUntil: undefined, status: 'read' })))
+      void loadNotifications({ silent: true })
     } catch (error) {
       console.error('Failed to mark all as read:', error)
     }
@@ -678,6 +746,7 @@ export default function Notifications() {
       await api.delete(`/api/notifications/${deleteTarget.id}`)
       setNotifications(notifications.filter((item) => item.id !== deleteTarget.id))
       setDeleteTarget(null)
+      void loadNotifications({ silent: true })
       toast({
         title: '提醒已删除',
         description: `“${deleteTarget.title}”已从提醒中心移除，不会影响原业务数据。`,
@@ -711,14 +780,14 @@ export default function Notifications() {
     [currentProject?.id, notifications],
   )
 
-  const pendingCount = decoratedNotifications.filter((item) => !item.isRead && !item.isMuted).length
-  const processedCount = decoratedNotifications.filter((item) => item.isRead || item.isMuted).length
-  const businessWarningCount = decoratedNotifications.filter((item) => getReminderTab(item) === 'business-warning').length
-  const systemExceptionCount = decoratedNotifications.filter((item) => getReminderTab(item) === 'system-exception').length
-  const systemExceptionMappingCount = decoratedNotifications.filter((item) => getReminderTab(item) === 'system-exception' && isPlanningMappingNotification(item)).length
-  const flowReminderCount = decoratedNotifications.filter((item) => getReminderTab(item) === 'flow-reminder').length
-  const linkedProjectCount = decoratedNotifications.filter((item) => Boolean(item.projectId)).length
-  const allCount = decoratedNotifications.length
+  const pendingCount = notificationCounts.pendingCount
+  const processedCount = notificationCounts.processedCount
+  const businessWarningCount = notificationCounts.businessWarningCount
+  const systemExceptionCount = notificationCounts.systemExceptionCount
+  const systemExceptionMappingCount = notificationCounts.systemExceptionMappingCount
+  const flowReminderCount = notificationCounts.flowReminderCount
+  const linkedProjectCount = notificationCounts.linkedProjectCount
+  const allCount = notificationCounts.allCount
 
   const assigneeList = useMemo(
     () => Array.from(new Set(decoratedNotifications.map((item) => item.assignee).filter(Boolean) as string[])).sort(),

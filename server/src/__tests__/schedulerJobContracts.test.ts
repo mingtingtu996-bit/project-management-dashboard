@@ -7,7 +7,7 @@
  *  §4.10.5  responsibilityAlertJob — scanned/abnormalSubjects / getNextRunTime()
  *  §4.10.6  delayRequestReminderJob — reminder/escalation 两类 / initialDelay 对齐 09:00
  *  §4.10.7  dataQualityJob — confidence.flag='low' 统计 / initialDelay 对齐 02:30
- *  §4.10.12 healthHistorySnapshotJob — 月度健康快照
+ *  §4.10.12 projectDailySnapshotJob — 项目日快照
  *  §4.10.13 weeklyDigestJob/materialArrivalReminderJob — 周一09:00对齐 / 到货提醒
  *  §4.10 顶层 — baseline pending_realign / data-quality panel / Dashboard刷新
  *  §3.7 — 优先级分数 / change_logs priority / pendingManualClose / 通知去重
@@ -192,7 +192,7 @@ describe('§4.10.6 delayRequestReminderJob', () => {
     // delayRequestReminderJob.start() 先调用 execute，再 setTimeout
     const delayJobSection = schedulerSource.slice(
       schedulerSource.indexOf('class DelayRequestReminderJob'),
-      schedulerSource.indexOf('class HealthHistorySnapshotJob'),
+      schedulerSource.indexOf('class ProjectDailySnapshotJob'),
     )
     expect(delayJobSection).toContain("void this.execute('scheduler')")
     expect(delayJobSection).toContain('setDate(nextRun.getDate() + 1)')
@@ -202,7 +202,7 @@ describe('§4.10.6 delayRequestReminderJob', () => {
     const schedulerSource = readServerFile('src', 'scheduler.ts')
     const section = schedulerSource.slice(
       schedulerSource.indexOf('class DelayRequestReminderJob'),
-      schedulerSource.indexOf('class HealthHistorySnapshotJob'),
+      schedulerSource.indexOf('class ProjectDailySnapshotJob'),
     )
     expect(section).toContain('if (this.isRunning)')
     expect(section).toContain('skip tick')
@@ -259,32 +259,56 @@ describe('§4.10.7 dataQualityJob', () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §4.10.12 healthHistorySnapshotJob
+// §4.10.12 projectDailySnapshotJob
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('§4.10.12 healthHistorySnapshotJob', () => {
-  it('月度健康快照：对活跃项目写入 project_health_history 表', () => {
-    const serviceSource = readServerFile('src', 'services', 'projectHealthService.ts')
-    expect(serviceSource).toContain("from('project_health_history')")
+describe('§4.10.12 projectDailySnapshotJob', () => {
+  it('项目日快照：对项目写入 project_daily_snapshot 表', () => {
+    const serviceSource = readServerFile('src', 'services', 'projectDailySnapshotService.ts')
+    expect(serviceSource).toContain("from('project_daily_snapshot')")
     expect(serviceSource).toContain('.upsert(')
-    expect(serviceSource).toContain("onConflict: 'project_id,period'")
+    expect(serviceSource).toContain("onConflict: 'project_id,snapshot_date'")
   })
 
-  it('recordProjectHealthSnapshots 返回 { recorded, failed, period }', () => {
-    const serviceSource = readServerFile('src', 'services', 'projectHealthService.ts')
-    expect(serviceSource).toContain('recorded: 0, failed: 0, period')
-    expect(serviceSource).toContain('return { recorded, failed, period }')
+  it('recordProjectDailySnapshots 返回 { recorded, failed, snapshotDate }', () => {
+    const serviceSource = readServerFile('src', 'services', 'projectDailySnapshotService.ts')
+    expect(serviceSource).toContain('recorded: 0, failed: 0, snapshotDate')
+    expect(serviceSource).toContain('return { recorded, failed, snapshotDate }')
   })
 
-  it('healthHistorySnapshotJob 使用 setTimeout 链式调度（每月1日00:05）', () => {
+  it('scheduler 只启动项目日快照，不再启动旧月度健康历史任务', () => {
     const schedulerSource = readServerFile('src', 'scheduler.ts')
-    const section = schedulerSource.slice(
-      schedulerSource.indexOf('class HealthHistorySnapshotJob'),
-      schedulerSource.indexOf('class DataQualityJob'),
+    expect(schedulerSource).not.toContain('class HealthHistorySnapshotJob')
+    expect(schedulerSource).not.toContain('recordProjectHealthSnapshots')
+    expect(schedulerSource).not.toContain("jobName: 'healthHistorySnapshotJob'")
+    expect(schedulerSource).not.toContain('healthHistorySnapshotJob.start()')
+    expect(schedulerSource).toContain('projectDailySnapshotJob.start()')
+    expect(schedulerSource).toContain("jobName: 'projectDailySnapshotJob'")
+  })
+
+  it('projectHealthService no longer writes the legacy project_health_history table', () => {
+    const serviceSource = readServerFile('src', 'services', 'projectHealthService.ts')
+    expect(serviceSource).not.toContain('recordProjectHealthSnapshots')
+    expect(serviceSource).not.toContain('project_health_history')
+  })
+
+  it('jobs route exposes projectDailySnapshotJob and disables the legacy healthHistorySnapshotJob schedule', () => {
+    const jobsRouteSource = readServerFile('src', 'routes', 'jobs.ts')
+    expect(jobsRouteSource).toContain("name: 'projectDailySnapshotJob'")
+    expect(jobsRouteSource).toContain("case 'projectDailySnapshotJob'")
+    expect(jobsRouteSource).toContain("runApiJob('projectDailySnapshotJob'")
+    expect(jobsRouteSource).toContain("name: 'healthHistorySnapshotJob'")
+    expect(jobsRouteSource).toContain("status: 'disabled'")
+  })
+
+  it('/api/health-score/avg-history reads from project_daily_snapshot after the BI switch', () => {
+    const routeSource = readServerFile('src', 'routes', 'health-score.ts')
+    const avgHistorySection = routeSource.slice(
+      routeSource.indexOf("router.get('/avg-history'"),
+      routeSource.indexOf("router.post('/record-snapshot'"),
     )
-    expect(section).toContain('0, 5, 0, 0')
-    expect(section).toContain('scheduleNextRun()')
-    expect(section).toContain("jobName: 'healthHistorySnapshotJob'")
+    expect(avgHistorySection).toContain("from('project_daily_snapshot')")
+    expect(avgHistorySection).not.toContain("from('project_health_history')")
   })
 })
 
@@ -378,11 +402,11 @@ describe('§4.10 顶层 — 健康度定时计算后 Dashboard 刷新', () => {
     expect(schedulerSource).toContain('healthReports:')
   })
 
-  it('recordProjectHealthSnapshots 将 health_score 写入 project_health_history', () => {
-    const serviceSource = readServerFile('src', 'services', 'projectHealthService.ts')
+  it('recordProjectDailySnapshots 将 health_score 写入 project_daily_snapshot', () => {
+    const serviceSource = readServerFile('src', 'services', 'projectDailySnapshotService.ts')
     expect(serviceSource).toContain('health_score:')
     expect(serviceSource).toContain('health_status:')
-    expect(serviceSource).toContain("from('project_health_history')")
+    expect(serviceSource).toContain("from('project_daily_snapshot')")
   })
 })
 
