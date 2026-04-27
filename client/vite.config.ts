@@ -15,12 +15,27 @@ export default defineConfig({
     },
   },
   build: {
-    // 关闭首屏 modulepreload，避免公网环境首屏并发拉取过多静态资源
+    // 关闭首屏 modulepreload，避免公网环境首屏并发拉取过多静态资源。
+    // 路由与重型能力仍保留动态拆包，避免 BI 页面继续膨胀首包。
     modulePreload: false,
-    // 公网环境偶发静态资源请求失败时，优先保证首屏只依赖单一入口脚本
     rollupOptions: {
       output: {
-        inlineDynamicImports: true,
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return undefined
+
+          if (id.includes('react/') || id.includes('react-dom/') || id.includes('react-router-dom/')) {
+            return 'vendor-react'
+          }
+
+          if (id.includes('@radix-ui')) return 'vendor-radix'
+          if (id.includes('lucide-react')) return 'vendor-icons'
+          if (id.includes('@dnd-kit')) return 'vendor-dnd'
+          if (id.includes('chart.js') || id.includes('react-chartjs-2')) return 'vendor-charts'
+          if (id.includes('xlsx')) return 'vendor-xlsx'
+          if (id.includes('@supabase')) return 'vendor-supabase'
+
+          return 'vendor'
+        },
       },
     },
     // 启用CSS代码分割

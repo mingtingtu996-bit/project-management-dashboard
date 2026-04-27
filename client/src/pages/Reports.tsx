@@ -49,7 +49,8 @@ import { DeviationTabs, type DeviationView } from './Reports/components/Deviatio
 import { ExecutionScatterChart } from './Reports/components/ExecutionScatterChart'
 import { BaselineDumbbellChart } from './Reports/components/BaselineDumbbellChart'
 import { MonthlyStackedBarChart } from './Reports/components/MonthlyStackedBarChart'
-import * as XLSX from 'xlsx'
+
+type XlsxModule = typeof import('xlsx')
 
 type MetricItem = {
   title: string
@@ -1496,11 +1497,13 @@ export default function Reports() {
     void loadIssueSummary()
   }
 
-  const handleExportCurrentView = (format: 'xlsx' | 'pdf') => {
+  const handleExportCurrentView = async (format: 'xlsx' | 'pdf') => {
     if (format === 'pdf') {
       window.print()
       return
     }
+
+    const XLSX: XlsxModule = await import('xlsx')
 
     const buildSheet = (rows: Record<string, unknown>[], emptyLabel: string) =>
       XLSX.utils.json_to_sheet(rows.length > 0 ? rows : [{ 提示: emptyLabel }])
@@ -2604,11 +2607,11 @@ export default function Reports() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-44">
-              <DropdownMenuItem onClick={() => handleExportCurrentView('xlsx')}>
+              <DropdownMenuItem onClick={() => { void handleExportCurrentView('xlsx') }}>
                 <FileSpreadsheet className="mr-2 h-4 w-4" />
                 导出 Excel
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => handleExportCurrentView('pdf')}>
+              <DropdownMenuItem onClick={() => { void handleExportCurrentView('pdf') }}>
                 <Download className="mr-2 h-4 w-4" />
                 导出 PDF
               </DropdownMenuItem>

@@ -56,6 +56,7 @@
     "verify:risk-guard": "node scripts/verify-risk-guard-browser.mjs",
     "verify:monitoring": "node scripts/verify-monitoring-browser.mjs",
     "verify:workflow-contract": "npm test --workspace=server -- src/__tests__/deployWorkflowContract.test.ts",
+    "verify:client-bundle-budget": "node scripts/check-client-bundle-budget.mjs client/dist --entry-gzip-kb 350 --max-chunk-gzip-kb 900 --total-gzip-kb 1600",
     "deploy:lighthouse:server": "bash scripts/deploy-lighthouse-server.sh",
     "deploy:lighthouse:up": "docker compose -f deploy/docker-compose.lighthouse.yml up -d --build",
     "deploy:lighthouse:down": "docker compose -f deploy/docker-compose.lighthouse.yml down",

@@ -121,6 +121,9 @@ jobs:
           VITE_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
 
+      - name: Check frontend bundle budget
+        run: node scripts/check-client-bundle-budget.mjs client/dist --entry-gzip-kb 350 --max-chunk-gzip-kb 900 --total-gzip-kb 1600
+
       - name: Upload frontend build
         uses: actions/upload-artifact@v7
         with:

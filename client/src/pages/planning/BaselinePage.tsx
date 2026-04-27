@@ -26,7 +26,6 @@ import type {
   RevisionPoolCandidate,
 } from '@/types/planning'
 import { AlertTriangle, FileDiff, FileSpreadsheet, FolderGit2, History, LockKeyhole, FilePlus2, Calendar } from 'lucide-react'
-import * as XLSX from 'xlsx'
 
 import { BaselineBottomBar } from './components/BaselineBottomBar'
 import { BaselineConfirmDialog, type BaselineConfirmState } from './components/BaselineConfirmDialog'
@@ -74,6 +73,7 @@ type BaselineImportPreview = {
   rows: BaselineImportPreviewRow[]
   warnings: string[]
 }
+type XlsxModule = typeof import('xlsx')
 
 const BASELINE_EDITABLE_FIELDS: EditableField[] = ['title', 'start', 'end', 'progress']
 
@@ -234,7 +234,8 @@ function buildBaselineImportPreview(params: {
 function normalizeImportDate(value: unknown) {
   if (value == null || value === '') return null
   if (typeof value === 'number' && Number.isFinite(value)) {
-    return XLSX.SSF.format('yyyy-mm-dd', value)
+    const excelEpoch = Date.UTC(1899, 11, 30)
+    return new Date(excelEpoch + Math.floor(value) * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
   }
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
     return value.toISOString().slice(0, 10)
@@ -259,6 +260,7 @@ function normalizeImportMilestone(value: unknown) {
 }
 
 async function parseBaselineImportFile(file: File): Promise<BaselineImportPreview> {
+  const XLSX: XlsxModule = await import('xlsx')
   const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' })
   const sheetName = workbook.SheetNames[0]
   const sheet = workbook.Sheets[sheetName]
