@@ -342,6 +342,9 @@ jobs:
             -i ~/.ssh/project-management-deploy \
             -p "$DEPLOY_PORT" \
             -o IdentitiesOnly=yes \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=40 \
+            -o TCPKeepAlive=yes \
             "$DEPLOY_USER@$DEPLOY_HOST" \
             "APP_DIR=\"$DEPLOY_PATH\" RELEASE_SHA=\"$RELEASE_SHA\" HEALTH_URL=\"${DEPLOY_HEALTH_URL:-http://127.0.0.1/api/health}\" bash -s" < scripts/deploy-lighthouse-server.sh
 
