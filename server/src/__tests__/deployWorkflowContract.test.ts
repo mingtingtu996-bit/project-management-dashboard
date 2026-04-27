@@ -53,6 +53,8 @@ describe('deploy workflow contract', () => {
     expect(workflow).toContain('SUPABASE_MIGRATION_URL')
     expect(workflow).toContain('SUPABASE_POOLER_HOST')
     expect(workflow).toContain('aws-0-ap-southeast-1.pooler.supabase.com')
+    expect(workflow).toContain("await client.query('select 1')")
+    expect(workflow).toContain('Pooler candidate')
     expect(workflow).toContain('connection_source=SUPABASE pooler URL')
     expect(workflow).toContain('Database migration skipped')
     expect(workflow).toContain('deploy-server:')
