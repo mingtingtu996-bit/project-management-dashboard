@@ -20,13 +20,43 @@ if [ ! -f "$ENV_FILE" ]; then
   exit 1
 fi
 
+backup_tracked_changes() {
+  local backup_dir="$1"
+  local changed_names_file
+
+  mkdir -p "$backup_dir/files"
+  git status --porcelain --untracked-files=no > "$backup_dir/status.txt"
+  git diff --binary > "$backup_dir/unstaged.diff" || true
+  git diff --cached --binary > "$backup_dir/staged.diff" || true
+
+  changed_names_file="$(mktemp)"
+  git diff --name-only -z > "$changed_names_file"
+  git diff --cached --name-only -z >> "$changed_names_file"
+
+  sort -zu "$changed_names_file" | while IFS= read -r -d '' changed_path; do
+    if [ -e "$changed_path" ]; then
+      mkdir -p "$backup_dir/files/$(dirname "$changed_path")"
+      cp -a -- "$changed_path" "$backup_dir/files/$changed_path"
+    fi
+  done
+
+  rm -f "$changed_names_file"
+}
+
 if [ -d .git ]; then
   tracked_changes="$(git status --porcelain --untracked-files=no)"
-  if [ -n "$tracked_changes" ] && [ "${ALLOW_DIRTY_DEPLOY:-}" != "1" ]; then
+  if [ -n "$tracked_changes" ] && [ -z "${RELEASE_ARCHIVE:-}" ] && [ "${ALLOW_DIRTY_DEPLOY:-}" != "1" ]; then
     echo "Deployment directory has tracked local changes. Refusing to overwrite them." >&2
     echo "$tracked_changes" >&2
     echo "Clean or back up the server working tree, or set ALLOW_DIRTY_DEPLOY=1 intentionally." >&2
     exit 1
+  fi
+
+  if [ -n "$tracked_changes" ]; then
+    dirty_backup_dir="${DIRTY_DEPLOY_BACKUP_ROOT:-deploy/backups/dirty-working-tree}/$(date -u +%Y%m%dT%H%M%SZ)-${RELEASE_SHA:0:12}"
+    echo "Deployment directory has tracked local changes. Backing them up to $APP_DIR/$dirty_backup_dir before deploying."
+    echo "$tracked_changes"
+    backup_tracked_changes "$dirty_backup_dir"
   fi
 elif [ -z "${RELEASE_ARCHIVE:-}" ]; then
   echo "Deployment directory is not a git repository: $APP_DIR" >&2
