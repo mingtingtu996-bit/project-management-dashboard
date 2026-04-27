@@ -1702,18 +1702,6 @@ export default function RiskManagement() {
           </Card>
         ) : null}
 
-        <div className="grid gap-4 lg:grid-cols-3">
-          <OverviewCard title="预警" count={activeWarnings.length} hint="待确认或待处理的业务预警" icon={Bell} actionLabel="查看预警" onAction={() => setActiveStream('warnings')}>
-            {activeWarnings.length === 0 ? <EmptyState icon={Bell} title="暂无预警" className="py-8" /> : <div className="space-y-3">{activeWarnings.slice(0, 3).map((item) => <div key={item.id}>{renderWarningEntry(item)}</div>)}</div>}
-          </OverviewCard>
-          <OverviewCard title="风险" count={activeRisks.length} hint="风险主数据源使用 /api/risks" icon={ShieldAlert} actionLabel="查看风险" onAction={() => setActiveStream('risks')}>
-            {activeRisks.length === 0 ? <EmptyState icon={ShieldAlert} title="暂无风险" className="py-8" /> : <div className="space-y-3">{activeRisks.slice(0, 3).map((row) => <div key={row.id}>{renderRiskEntry(row)}</div>)}</div>}
-          </OverviewCard>
-          <OverviewCard title="问题" count={activeIssues.length} hint="问题主数据源使用 /api/issues，并按优先级排序" icon={XCircle} actionLabel="查看问题" onAction={() => setActiveStream('issues')}>
-            {activeIssues.length === 0 ? <EmptyState icon={XCircle} title="暂无问题" className="py-8" /> : <div className="space-y-3">{activeIssues.slice(0, 3).map((row) => <div key={row.id}>{renderIssueEntry(row)}</div>)}</div>}
-          </OverviewCard>
-        </div>
-
         <div data-testid="risk-trend-summary" className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           {trendSummary.map((item) => (
             <div key={item.label} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
@@ -2169,12 +2157,6 @@ export default function RiskManagement() {
       />
     </div>
   )
-}
-
-function OverviewCard({ title, count, hint, icon: Icon, actionLabel, onAction, children }: { title: string; count: number; hint: string; icon: typeof Bell; actionLabel: string; onAction: () => void; children: ReactNode }) {
-  void hint
-
-  return <Card className="overflow-hidden border-slate-200 shadow-sm"><CardHeader className="pb-3"><div className="flex items-start justify-between gap-3"><div className="space-y-1"><CardTitle className="flex items-center gap-2 text-base"><Icon className="h-4 w-4" />{title}</CardTitle></div><div className="rounded-2xl bg-slate-50 px-3 py-2 text-right"><div className="text-2xl font-semibold text-slate-900">{count}</div><div className="text-xs text-slate-500">条</div></div></div></CardHeader><CardContent className="space-y-4 pt-0">{children}<Button variant="outline" size="sm" onClick={onAction}>{actionLabel}</Button></CardContent></Card>
 }
 
 function SummaryMetricCard({ title, value, hint, icon: Icon }: { title: string; value: string | number; hint: string; icon: typeof Activity }) {
