@@ -247,24 +247,40 @@ jobs:
         run: |
           if [ -n "${DATABASE_URL}" ]; then
             echo "can_run=true" >> "$GITHUB_OUTPUT"
+            echo "connection_source=SUPABASE_MIGRATION_URL" >> "$GITHUB_OUTPUT"
+          elif { [ -n "${SUPABASE_HOST}" ] || [ -n "${SUPABASE_URL}" ]; } && [ -n "${SUPABASE_PASSWORD}" ]; then
+            echo "can_run=true" >> "$GITHUB_OUTPUT"
+            echo "connection_source=SUPABASE component secrets" >> "$GITHUB_OUTPUT"
           else
             echo "can_run=false" >> "$GITHUB_OUTPUT"
             {
               echo "### Database migration skipped"
               echo ""
-              echo "- Missing \`SUPABASE_MIGRATION_URL\` GitHub secret."
-              echo "- Hosted GitHub runners cannot reach the current IPv6-only direct Supabase database host."
+              echo "- Missing migration database credentials."
+              echo "- Provide \`SUPABASE_MIGRATION_URL\`, or provide \`SUPABASE_HOST\`/\`SUPABASE_URL\` plus \`SUPABASE_PASSWORD\`."
               echo "- Deployment will continue without applying migrations in CI."
             } >> "$GITHUB_STEP_SUMMARY"
           fi
         env:
           DATABASE_URL: ${{ secrets.SUPABASE_MIGRATION_URL }}
+          SUPABASE_HOST: ${{ secrets.SUPABASE_HOST }}
+          SUPABASE_PORT: ${{ secrets.SUPABASE_PORT }}
+          SUPABASE_DATABASE: ${{ secrets.SUPABASE_DATABASE }}
+          SUPABASE_USER: ${{ secrets.SUPABASE_USER }}
+          SUPABASE_PASSWORD: ${{ secrets.SUPABASE_PASSWORD }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
 
       - name: Apply pending migrations
         if: steps.migration-config.outputs.can_run == 'true'
         run: npm run migrate:pending
         env:
           DATABASE_URL: ${{ secrets.SUPABASE_MIGRATION_URL }}
+          SUPABASE_HOST: ${{ secrets.SUPABASE_HOST }}
+          SUPABASE_PORT: ${{ secrets.SUPABASE_PORT }}
+          SUPABASE_DATABASE: ${{ secrets.SUPABASE_DATABASE }}
+          SUPABASE_USER: ${{ secrets.SUPABASE_USER }}
+          SUPABASE_PASSWORD: ${{ secrets.SUPABASE_PASSWORD }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
 
   deploy-server:
     name: Deploy To Self-hosted Server
