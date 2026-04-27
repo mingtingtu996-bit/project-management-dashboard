@@ -51,6 +51,7 @@ const CloseoutPage = lazy(() => import('@/pages/planning/CloseoutPage'))
 const PlanningWorkspace = lazy(() => import('@/pages/planning/PlanningWorkspace'))
 const Drawings = lazy(() => import('@/pages/Drawings'))
 const MonitoringDashboard = lazy(() => import('@/components/monitoring/MonitoringDashboard'))
+const DesignPreview = lazy(() => import('@/pages/DesignPreview'))
 const PENDING_AUTH_REDIRECT_KEY = 'pending_auth_redirect'
 let lastProjectCacheSyncKey: string | null = null
 let projectCacheSyncPromise: Promise<ReturnType<typeof getCachedProjects>> | null = null
@@ -370,6 +371,7 @@ function AppContent() {
               <Route path="/dashboard" element={<Navigate to="/company" replace />} />
               <Route path="/notifications" element={withRouteBoundary(<Notifications />)} />
               <Route path="/monitoring" element={withRouteBoundary(<MonitoringDashboard />)} />
+              <Route path="/design-preview" element={withRouteBoundary(<DesignPreview />)} />
               <Route path="/join/:code" element={withRouteBoundary(<JoinProject />)} />
             </Routes>
           </div>
