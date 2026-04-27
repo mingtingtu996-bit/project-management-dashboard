@@ -344,12 +344,21 @@ jobs:
           DEPLOY_HEALTH_URL: ${{ secrets.DEPLOY_HEALTH_URL }}
           RELEASE_SHA: ${{ github.sha }}
         run: |
+          RELEASE_ARCHIVE="/tmp/project-management-${RELEASE_SHA}.tar.gz"
+          git archive --format=tar.gz --output "$RELEASE_ARCHIVE" "$RELEASE_SHA"
+          scp \
+            -i ~/.ssh/project-management-deploy \
+            -P "$DEPLOY_PORT" \
+            -o IdentitiesOnly=yes \
+            "$RELEASE_ARCHIVE" \
+            "$DEPLOY_USER@$DEPLOY_HOST:$RELEASE_ARCHIVE"
+
           ssh \
             -i ~/.ssh/project-management-deploy \
             -p "$DEPLOY_PORT" \
             -o IdentitiesOnly=yes \
             "$DEPLOY_USER@$DEPLOY_HOST" \
-            "APP_DIR=\"$DEPLOY_PATH\" RELEASE_SHA=\"$RELEASE_SHA\" HEALTH_URL=\"${DEPLOY_HEALTH_URL:-http://127.0.0.1/api/health}\" bash -s" < scripts/deploy-lighthouse-server.sh
+            "APP_DIR=\"$DEPLOY_PATH\" RELEASE_SHA=\"$RELEASE_SHA\" RELEASE_ARCHIVE=\"$RELEASE_ARCHIVE\" HEALTH_URL=\"${DEPLOY_HEALTH_URL:-http://127.0.0.1/api/health}\" bash -s" < scripts/deploy-lighthouse-server.sh
 
       - name: Send deployment notification
         if: ${{ env.HAS_SLACK_WEBHOOK == 'true' }}

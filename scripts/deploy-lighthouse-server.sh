@@ -15,21 +15,21 @@ esac
 
 cd "$APP_DIR"
 
-if [ ! -d .git ]; then
-  echo "Deployment directory is not a git repository: $APP_DIR" >&2
-  exit 1
-fi
-
 if [ ! -f "$ENV_FILE" ]; then
   echo "Missing production env file: $APP_DIR/$ENV_FILE" >&2
   exit 1
 fi
 
-tracked_changes="$(git status --porcelain --untracked-files=no)"
-if [ -n "$tracked_changes" ] && [ "${ALLOW_DIRTY_DEPLOY:-}" != "1" ]; then
-  echo "Deployment directory has tracked local changes. Refusing to overwrite them." >&2
-  echo "$tracked_changes" >&2
-  echo "Clean or back up the server working tree, or set ALLOW_DIRTY_DEPLOY=1 intentionally." >&2
+if [ -d .git ]; then
+  tracked_changes="$(git status --porcelain --untracked-files=no)"
+  if [ -n "$tracked_changes" ] && [ "${ALLOW_DIRTY_DEPLOY:-}" != "1" ]; then
+    echo "Deployment directory has tracked local changes. Refusing to overwrite them." >&2
+    echo "$tracked_changes" >&2
+    echo "Clean or back up the server working tree, or set ALLOW_DIRTY_DEPLOY=1 intentionally." >&2
+    exit 1
+  fi
+elif [ -z "${RELEASE_ARCHIVE:-}" ]; then
+  echo "Deployment directory is not a git repository: $APP_DIR" >&2
   exit 1
 fi
 
@@ -98,8 +98,25 @@ retry() {
   done
 }
 
-retry 5 10 git fetch --depth=1 origin "$RELEASE_SHA"
-git checkout --force "$RELEASE_SHA"
+if [ -n "${RELEASE_ARCHIVE:-}" ]; then
+  if [ ! -f "$RELEASE_ARCHIVE" ]; then
+    echo "Missing release archive: $RELEASE_ARCHIVE" >&2
+    exit 1
+  fi
+
+  echo "Deploying release archive for $RELEASE_SHA"
+  if [ -d .git ]; then
+    git ls-files -z | xargs -0 -r rm -f --
+  fi
+  tar -xzf "$RELEASE_ARCHIVE" -C "$APP_DIR"
+  rm -f "$RELEASE_ARCHIVE"
+elif [ -d .git ]; then
+  retry 5 10 git fetch --depth=1 origin "$RELEASE_SHA"
+  git checkout --force "$RELEASE_SHA"
+else
+  echo "Deployment directory is not a git repository and no release archive was provided: $APP_DIR" >&2
+  exit 1
+fi
 
 mkdir -p deploy/data/logs
 
