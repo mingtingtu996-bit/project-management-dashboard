@@ -310,7 +310,8 @@ describe('GanttView source contracts', () => {
   it('keeps delay review and form defaults aligned to planned end date truth', () => {
     const source = readGanttViewSource()
 
-    expect(source.includes('delayedDate: toDateValue(selectedTask.planned_end_date || selectedTask.end_date)')).toBe(true)
+    expect(source.includes('const defaultDelayedDate = toDateValue(selectedTask.planned_end_date || selectedTask.end_date)')).toBe(true)
+    expect(source.includes('delayedDate: taskChanged ? defaultDelayedDate : (previous.delayedDate || defaultDelayedDate)')).toBe(true)
     expect(source.includes("const currentDelayBaseDate = selectedTask?.planned_end_date || selectedTask?.end_date || ''")).toBe(true)
     expect(source.includes("const originalPlannedEndDate = selectedTask.planned_end_date || selectedTask.end_date || ''")).toBe(true)
     expect(source.includes('delayedDate: toDateValue(nextTask.planned_end_date || nextTask.end_date)')).toBe(true)
