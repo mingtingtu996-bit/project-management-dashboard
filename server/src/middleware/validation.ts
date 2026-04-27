@@ -354,7 +354,6 @@ export const conditionSchema = z.object({
 
 export const conditionUpdateSchema = conditionSchema.partial().extend({
   id: uuidSchema.optional(),
-  target_date: z.string().min(1),
 })
 
 export const obstacleSchema = z.object({

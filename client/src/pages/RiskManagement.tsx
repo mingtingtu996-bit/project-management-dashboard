@@ -1662,39 +1662,12 @@ export default function RiskManagement() {
           </Card>
         ) : null}
 
-        <div className="grid gap-4 lg:grid-cols-3">
-          <OverviewCard title="预警" count={activeWarnings.length} hint="待确认或待处理的业务预警" icon={Bell} actionLabel="查看预警" onAction={() => setActiveStream('warnings')}>
-            {activeWarnings.length === 0 ? <EmptyState icon={Bell} title="暂无预警" className="py-8" /> : <div className="space-y-3">{activeWarnings.slice(0, 3).map((item) => <div key={item.id}>{renderWarningEntry(item)}</div>)}</div>}
-          </OverviewCard>
-          <OverviewCard title="风险" count={activeRisks.length} hint="风险主数据源使用 /api/risks" icon={ShieldAlert} actionLabel="查看风险" onAction={() => setActiveStream('risks')}>
-            {activeRisks.length === 0 ? <EmptyState icon={ShieldAlert} title="暂无风险" className="py-8" /> : <div className="space-y-3">{activeRisks.slice(0, 3).map((row) => <div key={row.id}>{renderRiskEntry(row)}</div>)}</div>}
-          </OverviewCard>
-          <OverviewCard title="问题" count={activeIssues.length} hint="问题主数据源使用 /api/issues，并按优先级排序" icon={XCircle} actionLabel="查看问题" onAction={() => setActiveStream('issues')}>
-            {activeIssues.length === 0 ? <EmptyState icon={XCircle} title="暂无问题" className="py-8" /> : <div className="space-y-3">{activeIssues.slice(0, 3).map((row) => <div key={row.id}>{renderIssueEntry(row)}</div>)}</div>}
-          </OverviewCard>
-        </div>
-
-        <div data-testid="risk-trend-summary" className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          {trendSummary.map((item) => (
-            <div key={item.label} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-              <div className="text-xs uppercase tracking-[0.16em] text-slate-500">{item.label}</div>
-              <div className="mt-2 text-2xl font-semibold text-slate-900">{item.value}</div>
-              <div className="mt-2 text-xs leading-5 text-slate-500">{item.hint}</div>
-            </div>
-          ))}
-        </div>
-
-        <Card className="border-slate-200 shadow-sm">
-          <CardHeader className="pb-3"><button type="button" data-testid="risk-trend-toggle" className="flex w-full items-center justify-between text-left" onClick={() => setTrendExpanded((value) => !value)}><CardTitle className="flex items-center gap-2 text-base"><BarChart3 className="h-4 w-4" />趋势分析</CardTitle>{trendExpanded ? <ChevronUp className="h-4 w-4 text-slate-400" /> : <ChevronDown className="h-4 w-4 text-slate-400" />}</button></CardHeader>
-          {trendExpanded ? <CardContent className="pt-0"><RiskTrendChart defaultExpanded /></CardContent> : null}
-        </Card>
-
         <Card data-testid="risk-chain-workspace" className="border-slate-200 shadow-sm">
           <CardHeader className="space-y-4">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
               <div className="space-y-1">
                 <CardTitle className="text-base">链路双视图工作区</CardTitle>
-                <div className="text-sm text-slate-500">预警、风险、问题三张独立工作台，筛选与视图状态彼此隔离。</div>
+                <div className="text-sm text-slate-500">预警、风险、问题统一在一处处理，按任务归类或时间轴双视图切换。</div>
               </div>
               <Tabs value={activeStream} onValueChange={(value) => setActiveStream(value as ChainStream)}>
                 <TabsList className="grid h-auto grid-cols-3 gap-1 rounded-2xl bg-slate-100 p-1">
@@ -1848,6 +1821,21 @@ export default function RiskManagement() {
               </>
             ) : null}
           </CardContent>
+        </Card>
+
+        <div data-testid="risk-trend-summary" className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          {trendSummary.map((item) => (
+            <div key={item.label} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+              <div className="text-xs uppercase tracking-[0.16em] text-slate-500">{item.label}</div>
+              <div className="mt-2 text-2xl font-semibold text-slate-900">{item.value}</div>
+              <div className="mt-2 text-xs leading-5 text-slate-500">{item.hint}</div>
+            </div>
+          ))}
+        </div>
+
+        <Card className="border-slate-200 shadow-sm">
+          <CardHeader className="pb-3"><button type="button" data-testid="risk-trend-toggle" className="flex w-full items-center justify-between text-left" onClick={() => setTrendExpanded((value) => !value)}><CardTitle className="flex items-center gap-2 text-base"><BarChart3 className="h-4 w-4" />趋势分析</CardTitle>{trendExpanded ? <ChevronUp className="h-4 w-4 text-slate-400" /> : <ChevronDown className="h-4 w-4 text-slate-400" />}</button></CardHeader>
+          {trendExpanded ? <CardContent className="pt-0"><RiskTrendChart defaultExpanded /></CardContent> : null}
         </Card>
 
       </div>
@@ -2129,12 +2117,6 @@ export default function RiskManagement() {
       />
     </div>
   )
-}
-
-function OverviewCard({ title, count, hint, icon: Icon, actionLabel, onAction, children }: { title: string; count: number; hint: string; icon: typeof Bell; actionLabel: string; onAction: () => void; children: ReactNode }) {
-  void hint
-
-  return <Card className="overflow-hidden border-slate-200 shadow-sm"><CardHeader className="pb-3"><div className="flex items-start justify-between gap-3"><div className="space-y-1"><CardTitle className="flex items-center gap-2 text-base"><Icon className="h-4 w-4" />{title}</CardTitle></div><div className="rounded-2xl bg-slate-50 px-3 py-2 text-right"><div className="text-2xl font-semibold text-slate-900">{count}</div><div className="text-xs text-slate-500">条</div></div></div></CardHeader><CardContent className="space-y-4 pt-0">{children}<Button variant="outline" size="sm" onClick={onAction}>{actionLabel}</Button></CardContent></Card>
 }
 
 function SummaryMetricCard({ title, value, hint, icon: Icon }: { title: string; value: string | number; hint: string; icon: typeof Activity }) {

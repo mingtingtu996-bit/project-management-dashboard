@@ -804,6 +804,97 @@ export function registerDrawingPackageRoutes(router: Router) {
     })
   }))
 
+  router.patch('/packages/:packageId/items/:itemId',
+    requireProjectEditor(async (req) => {
+      const packageRow = await findDrawingPackageByIdentifier(req.params.packageId)
+      return packageRow?.project_id
+    }),
+    asyncHandler(async (req, res) => {
+    const { packageId, itemId } = req.params
+    const packageRow = await findDrawingPackageByIdentifier(packageId)
+    if (!packageRow) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'PACKAGE_NOT_FOUND', message: '图纸包不存在' },
+        timestamp: new Date().toISOString(),
+      })
+    }
+
+    const normalizedPackageId = normalizeText(packageRow.id)
+    const currentItem = await executeSQLOne<DrawingPackageItemSource>(
+      `${DRAWING_PACKAGE_ITEM_SELECT} WHERE package_id = ? AND id = ? LIMIT 1`,
+      [normalizedPackageId, itemId],
+    )
+    if (!currentItem) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'ITEM_NOT_FOUND', message: '应有项不存在' },
+        timestamp: new Date().toISOString(),
+      })
+    }
+
+    const nextStatus = normalizeText(req.body.status)
+    if (!nextStatus || !['missing', 'available', 'outdated'].includes(nextStatus)) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'INVALID_ITEM_STATUS', message: '应有项状态必须是 missing / available / outdated' },
+        timestamp: new Date().toISOString(),
+      })
+    }
+
+    const hasLinkedDrawing = Boolean(normalizeText(currentItem.current_drawing_id))
+    const nextNotes = req.body.notes === undefined
+      ? normalizeText(currentItem.notes)
+      : normalizeText(req.body.notes)
+    const requestedVersion = normalizeText(req.body.currentVersion ?? req.body.current_version)
+    const nextCurrentVersion = requestedVersion
+      ?? (nextStatus === 'available' && !hasLinkedDrawing
+        ? '手动确认补全'
+        : nextStatus === 'missing' && !hasLinkedDrawing
+          ? null
+          : normalizeText(currentItem.current_version))
+
+    await executeSQL(
+      `UPDATE drawing_package_items
+          SET status = ?, notes = ?, current_version = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE package_id = ? AND id = ?`,
+      [nextStatus, nextNotes, nextCurrentVersion, normalizedPackageId, itemId],
+    )
+
+    const updatedItems = await executeSQL<DrawingPackageItemSource>(
+      `${DRAWING_PACKAGE_ITEM_SELECT} WHERE package_id = ? ORDER BY sort_order ASC`,
+      [normalizedPackageId],
+    )
+    const requiredItems = updatedItems.filter((item) => normalizeBoolean(item.is_required))
+    const completedRequiredItems = requiredItems.filter((item) => (
+      normalizeText(item.current_drawing_id) || normalizeText(item.status) === 'available'
+    ))
+    const missingRequiredCount = Math.max(requiredItems.length - completedRequiredItems.length, 0)
+    const completenessRatio = requiredItems.length > 0
+      ? Math.round((completedRequiredItems.length / requiredItems.length) * 100)
+      : 0
+
+    await executeSQL(
+      'UPDATE drawing_packages SET missing_required_count = ?, completeness_ratio = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+      [missingRequiredCount, completenessRatio, normalizedPackageId],
+    )
+
+    const updatedItem = await executeSQLOne<DrawingPackageItemSource>(
+      `${DRAWING_PACKAGE_ITEM_SELECT} WHERE package_id = ? AND id = ? LIMIT 1`,
+      [normalizedPackageId, itemId],
+    )
+
+    res.json({
+      success: true,
+      data: {
+        item: updatedItem,
+        missingRequiredCount,
+        completenessRatio,
+      },
+      timestamp: new Date().toISOString(),
+    })
+  }))
+
   router.get('/packages/:packageId/versions', asyncHandler(async (req, res) => {
     const { packageId } = req.params
 

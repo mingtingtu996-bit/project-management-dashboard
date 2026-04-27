@@ -335,12 +335,9 @@ async function main() {
 
     const problemStreamTrigger = page.getByTestId('risk-stream-issues')
     await problemStreamTrigger.waitFor({ state: 'visible', timeout: 10000 })
-    await problemStreamTrigger.evaluate((node) => {
-      if (node instanceof HTMLElement) {
-        node.click()
-      }
-    })
-    await page.waitForTimeout(200)
+    await problemStreamTrigger.scrollIntoViewIfNeeded()
+    await problemStreamTrigger.click()
+    await page.getByTestId('risk-chain-workspace').getByText('结构面移交偏晚').waitFor({ state: 'visible', timeout: 10000 })
     const issueDetailTrigger = page.locator('[data-testid="risk-detail-open-issue-issue-1"]').first()
     await issueDetailTrigger.waitFor({ state: 'visible', timeout: 10000 })
     await issueDetailTrigger.evaluate((node) => {
@@ -384,12 +381,9 @@ async function main() {
 
     const riskStreamTrigger = page.getByTestId('risk-stream-risks')
     await riskStreamTrigger.waitFor({ state: 'visible', timeout: 10000 })
-    await riskStreamTrigger.evaluate((node) => {
-      if (node instanceof HTMLElement) {
-        node.click()
-      }
-    })
-    await page.waitForTimeout(200)
+    await riskStreamTrigger.scrollIntoViewIfNeeded()
+    await riskStreamTrigger.click()
+    await page.getByTestId('risk-chain-workspace').getByText('塔楼结构进度风险').waitFor({ state: 'visible', timeout: 10000 })
 
     const chainTrigger = page.getByTestId('risk-chain-workspace').getByTestId('risk-open-chain-risk-risk-1').first()
     await chainTrigger.waitFor({ state: 'visible', timeout: 10000 })

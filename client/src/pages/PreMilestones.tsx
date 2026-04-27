@@ -17,6 +17,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useStore } from '@/hooks/useStore'
 import { usePermissions } from '@/hooks/usePermissions'
 import { useToast } from '@/hooks/use-toast'
+import { getAuthHeaders } from '@/lib/apiClient'
 import type {
   ApiResponse,
   CertificateBoardItem,
@@ -87,10 +88,22 @@ function buildEscalationUrl(projectId: string, certificateId: string, target: 'i
   return `${API_BASE}/api/projects/${projectId}/pre-milestones/${certificateId}/escalate-${target}`
 }
 
+function mergeRequestHeaders(headers?: HeadersInit): HeadersInit {
+  const merged = new Headers(getAuthHeaders())
+  if (headers) {
+    new Headers(headers).forEach((value, key) => {
+      merged.set(key, value)
+    })
+  }
+  return Object.fromEntries(merged.entries())
+}
+
 function withFreshDataOptions(options?: RequestInit): RequestInit {
   return {
     ...(options ?? {}),
     cache: 'no-store',
+    credentials: 'include',
+    headers: mergeRequestHeaders(options?.headers),
   }
 }
 
@@ -366,13 +379,13 @@ export default function PreMilestones() {
     try {
       const response = await fetch(
         buildEscalationUrl(selectedProjectId, requestCertificateId, target),
-        {
+        withFreshDataOptions({
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             work_item_id: workItemId || null,
           }),
-        }
+        })
       )
 
       const result = (await response.json()) as ApiResponse<{ title?: string }>
@@ -423,7 +436,7 @@ export default function PreMilestones() {
         : `${API_BASE}/api/projects/${selectedProjectId}/certificate-work-items`
       const method = isEdit ? 'PATCH' : 'POST'
 
-      const response = await fetch(url, {
+      const response = await fetch(url, withFreshDataOptions({
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -443,7 +456,7 @@ export default function PreMilestones() {
           notes: formData.notes || null,
           certificate_ids: resolvedCertificateIds,
         }),
-      })
+      }))
 
       const result = (await response.json()) as ApiResponse<CertificateWorkItem>
       if (result.success) {
@@ -491,7 +504,7 @@ export default function PreMilestones() {
     const method = isEditing ? 'PUT' : 'POST'
 
     try {
-      const response = await fetch(url, {
+      const response = await fetch(url, withFreshDataOptions({
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -501,7 +514,7 @@ export default function PreMilestones() {
           description: payload.form.description || null,
           target_date: payload.form.target_date || null,
         }),
-      })
+      }))
 
       const result = (await response.json()) as ApiResponse<unknown>
       if (result.success) {
@@ -530,11 +543,11 @@ export default function PreMilestones() {
     if (!conditionId) return
 
     try {
-      const response = await fetch(`${API_BASE}/api/pre-milestone-conditions/${encodeURIComponent(conditionId)}`, {
+      const response = await fetch(`${API_BASE}/api/pre-milestone-conditions/${encodeURIComponent(conditionId)}`, withFreshDataOptions({
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status }),
-      })
+      }))
       const result = (await response.json()) as ApiResponse<unknown>
       if (result.success) {
         toast({ title: '已更新条件状态' })
@@ -562,10 +575,10 @@ export default function PreMilestones() {
     if (!conditionId) return
 
     try {
-      const response = await fetch(`${API_BASE}/api/pre-milestone-conditions/${encodeURIComponent(conditionId)}`, {
+      const response = await fetch(`${API_BASE}/api/pre-milestone-conditions/${encodeURIComponent(conditionId)}`, withFreshDataOptions({
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
-      })
+      }))
       const result = (await response.json()) as ApiResponse<unknown>
       if (result.success) {
         toast({ title: '已删除条件' })
@@ -600,11 +613,11 @@ export default function PreMilestones() {
     if (!selectedProjectId) return
 
     try {
-      const response = await fetch(`${API_BASE}/api/projects/${selectedProjectId}/certificate-dependencies`, {
+      const response = await fetch(`${API_BASE}/api/projects/${selectedProjectId}/certificate-dependencies`, withFreshDataOptions({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
-      })
+      }))
       const result = (await response.json()) as ApiResponse<unknown>
       if (result.success) {
         toast({ title: '已新增证照依赖' })
@@ -632,10 +645,10 @@ export default function PreMilestones() {
     if (!selectedProjectId) return
 
     try {
-      const response = await fetch(`${API_BASE}/api/projects/${selectedProjectId}/certificate-dependencies/${encodeURIComponent(dependencyId)}`, {
+      const response = await fetch(`${API_BASE}/api/projects/${selectedProjectId}/certificate-dependencies/${encodeURIComponent(dependencyId)}`, withFreshDataOptions({
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
-      })
+      }))
       const result = (await response.json()) as ApiResponse<unknown>
       if (result.success) {
         toast({ title: '已删除证照依赖' })

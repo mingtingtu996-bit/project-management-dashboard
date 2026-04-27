@@ -22,7 +22,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { usePermissions } from '@/hooks/usePermissions'
 import { useStore } from '@/hooks/useStore'
 import { useToast } from '@/hooks/use-toast'
-import { apiDelete, apiGet, apiPost, apiPut, getApiErrorMessage, isAbortError } from '@/lib/apiClient'
+import { apiDelete, apiGet, apiPatch, apiPost, apiPut, getApiErrorMessage, isAbortError } from '@/lib/apiClient'
 import { safeJsonParse, safeStorageGet, safeStorageSet } from '@/lib/browserStorage'
 import { cn } from '@/lib/utils'
 
@@ -37,6 +37,7 @@ import type {
   DrawingLedgerRow,
   DrawingPackageCard,
   DrawingPackageDetailView,
+  DrawingPackageItemView,
   DrawingSignalView,
   DrawingsBoardResponse,
   DrawingsLedgerResponse,
@@ -239,6 +240,7 @@ export default function Drawings() {
   const [detailLoading, setDetailLoading] = useState(false)
   const [selectedPackage, setSelectedPackage] = useState<DrawingPackageCard | null>(null)
   const [selectedDetail, setSelectedDetail] = useState<DrawingPackageDetailView | null>(null)
+  const [updatingRequiredItemIds, setUpdatingRequiredItemIds] = useState<Set<string>>(() => new Set())
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [versionDialogOpen, setVersionDialogOpen] = useState(false)
   const [versionPackage, setVersionPackage] = useState<DrawingPackageCard | null>(null)
@@ -533,6 +535,37 @@ export default function Drawings() {
     }
     return detail
   }, [loadPackageDetail, selectedDetail?.package.packageId, selectedPackage?.packageId])
+
+  const handleToggleRequiredItemCompletion = useCallback(async (item: DrawingPackageItemView, completed: boolean) => {
+    const packageId = selectedDetail?.package.packageId ?? selectedPackage?.packageId
+    if (!packageId || !canEdit) return
+
+    setUpdatingRequiredItemIds((current) => new Set(current).add(item.itemId))
+    try {
+      await apiPatch(`${API_BASE}/api/construction-drawings/packages/${encodeURIComponent(packageId)}/items/${encodeURIComponent(item.itemId)}`, {
+        status: completed ? 'available' : 'missing',
+        notes: completed ? '详情页手动确认补全' : '',
+        currentVersion: completed ? (item.currentVersion || '手动确认补全') : null,
+      })
+      await Promise.all([refreshAll(), refreshSelectedDetail()])
+      toast({
+        title: completed ? '缺项已标记为补全' : '应有项已恢复为缺失',
+        description: item.itemName,
+      })
+    } catch (error) {
+      toast({
+        title: '应有项状态更新失败',
+        description: getApiErrorMessage(error, '请稍后重试。'),
+        variant: 'destructive',
+      })
+    } finally {
+      setUpdatingRequiredItemIds((current) => {
+        const next = new Set(current)
+        next.delete(item.itemId)
+        return next
+      })
+    }
+  }, [canEdit, refreshAll, refreshSelectedDetail, selectedDetail?.package.packageId, selectedPackage?.packageId, toast])
 
   useEffect(() => {
     void refreshAll()
@@ -1236,6 +1269,8 @@ export default function Drawings() {
         } : undefined}
         onCreateIssue={canEdit ? (signal) => void createManualIssue(signal) : undefined}
         onCreateRisk={canEdit ? (signal) => void createManualRisk(signal) : undefined}
+        onToggleRequiredItemCompletion={(item, completed) => void handleToggleRequiredItemCompletion(item, completed)}
+        updatingRequiredItemIds={updatingRequiredItemIds}
         canEdit={canEdit}
       />
 

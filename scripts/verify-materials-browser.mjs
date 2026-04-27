@@ -533,11 +533,16 @@ async function main() {
     const materialsUrl = `${baseUrl}/#/projects/${projectId}/materials`
     await page.goto(materialsUrl, { waitUntil: 'domcontentloaded' })
     await page.getByTestId('materials-page').waitFor({ state: 'visible', timeout: 20000 })
+    await page.getByTestId('materials-entry-panel').waitFor({ state: 'visible', timeout: 20000 })
+    await page.getByTestId('materials-filter-panel').waitFor({ state: 'visible', timeout: 20000 })
     await page.getByTestId('material-detail-trigger-material-1').waitFor({ state: 'visible', timeout: 20000 })
 
     const initialText = await page.locator('body').innerText()
     assert(initialText.includes(TEXT.pageTitle), 'Materials page title did not render')
     assert(initialText.includes(TEXT.unassignedBanner), 'Materials page missing unassigned banner')
+    const entryBox = await page.getByTestId('materials-entry-panel').boundingBox()
+    const filterBox = await page.getByTestId('materials-filter-panel').boundingBox()
+    assert(entryBox && filterBox && entryBox.y < filterBox.y, 'Materials entry panel should render above filter panel')
     await page.screenshot({ path: join(outputDir, 'materials-page-initial.png'), fullPage: true })
 
     await page.getByTestId('material-detail-trigger-material-1').click()

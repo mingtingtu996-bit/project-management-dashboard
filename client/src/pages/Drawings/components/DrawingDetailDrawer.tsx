@@ -17,6 +17,7 @@ import type {
   DrawingLinkedAcceptanceView,
   DrawingLinkedTaskView,
   DrawingPackageDetailView,
+  DrawingPackageItemView,
   DrawingSignalView,
 } from '../types'
 
@@ -44,6 +45,8 @@ export function DrawingDetailDrawer({
   onAddDrawing,
   onCreateIssue,
   onCreateRisk,
+  onToggleRequiredItemCompletion,
+  updatingRequiredItemIds,
   canEdit = true,
 }: {
   open: boolean
@@ -54,6 +57,8 @@ export function DrawingDetailDrawer({
   onAddDrawing?: () => void
   onCreateIssue?: (signal: DrawingSignalView) => void
   onCreateRisk?: (signal: DrawingSignalView) => void
+  onToggleRequiredItemCompletion?: (item: DrawingPackageItemView, completed: boolean) => void
+  updatingRequiredItemIds?: Set<string>
   canEdit?: boolean
 }) {
   useDialogFocusRestore(open)
@@ -137,18 +142,43 @@ export function DrawingDetailDrawer({
                         {detail.requiredItems.map((item) => (
                           <div
                             key={item.itemId}
-                            className="flex items-center justify-between gap-3 rounded-2xl border border-slate-100 bg-slate-50 px-3 py-2"
+                            className="flex flex-col gap-3 rounded-2xl border border-slate-100 bg-slate-50 px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
                           >
                             <div>
                               <div className="text-sm font-medium text-slate-900">{item.itemName}</div>
-                              <div className="text-xs text-slate-500">{item.itemCode}</div>
+                              <div className="text-xs text-slate-500">
+                                {item.itemCode}
+                                {item.currentVersion ? ` · ${item.currentVersion}` : ''}
+                              </div>
                             </div>
-                            <Badge
-                              variant={item.status === 'missing' ? 'destructive' : 'secondary'}
-                              className="rounded-full px-2.5 py-1 text-xs"
-                            >
-                              {itemStatusLabel(item.status)}
-                            </Badge>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <label className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs ${
+                                item.status === 'missing'
+                                  ? 'border-amber-200 bg-white text-amber-800'
+                                  : 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                              }`}>
+                                <input
+                                  type="checkbox"
+                                  data-testid={`drawing-required-item-complete-${item.itemId}`}
+                                  checked={item.status !== 'missing'}
+                                  disabled={
+                                    !canEdit
+                                    || !onToggleRequiredItemCompletion
+                                    || updatingRequiredItemIds?.has(item.itemId)
+                                    || Boolean(item.currentDrawingId)
+                                    || item.status === 'outdated'
+                                  }
+                                  onChange={(event) => onToggleRequiredItemCompletion?.(item, event.target.checked)}
+                                />
+                                {updatingRequiredItemIds?.has(item.itemId) ? '保存中' : item.status === 'missing' ? '勾选补全' : '已补全'}
+                              </label>
+                              <Badge
+                                variant={item.status === 'missing' ? 'destructive' : 'secondary'}
+                                className="rounded-full px-2.5 py-1 text-xs"
+                              >
+                                {itemStatusLabel(item.status)}
+                              </Badge>
+                            </div>
                           </div>
                         ))}
                       </div>

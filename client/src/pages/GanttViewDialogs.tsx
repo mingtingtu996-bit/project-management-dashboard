@@ -238,7 +238,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
   return (
     <>
       <Dialog open={props.dialogOpen} onOpenChange={props.setDialogOpen}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="flex max-h-[90vh] max-w-lg flex-col overflow-hidden">
           <DialogHeader>
             <DialogTitle>
               {props.editingTask ? '编辑任务' : props.newTaskParentId ? '添加子任务' : '新建任务'}
@@ -250,7 +250,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
               <p className="text-xs text-muted-foreground">上级任务：{parentTaskName}</p>
             )}
           </DialogHeader>
-          <div className="space-y-4 py-4">
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-1 py-4 pr-2">
             <div className="space-y-2">
               <Label>任务名称 <span className="text-red-500">*</span></Label>
               <Input
@@ -636,7 +636,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
               </>
             )}
           </div>
-          <DialogFooter>
+          <DialogFooter className="border-t bg-background pt-4">
             <Button variant="outline" onClick={() => props.setDialogOpen(false)}>取消</Button>
             <Button onClick={props.handleSaveTask} disabled={props.taskSaving}>
               <Save className="mr-2 h-4 w-4" />

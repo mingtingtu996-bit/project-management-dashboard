@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { chromium } from 'playwright'
+import { primeBrowserAuth } from './browser-auth-fixture.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const scriptsDir = dirname(__filename)
@@ -270,6 +271,7 @@ async function main() {
   const consoleErrors = []
   const pageErrors = []
   const apiFailures = []
+  const authHeaderFailures = []
 
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1800 } })
@@ -278,6 +280,7 @@ async function main() {
     await page.addInitScript((seenKey) => {
       window.localStorage.setItem(seenKey, '1')
     }, onboardingSeenKey)
+    await primeBrowserAuth(page)
 
     page.on('console', (message) => {
       if (message.type() === 'error') {
@@ -292,6 +295,16 @@ async function main() {
     await page.route(`${baseUrl}/api/**`, async (route) => {
       const requestUrl = route.request().url()
       const requestMethod = route.request().method().toUpperCase()
+      const requestPath = new URL(requestUrl).pathname
+      const requiresBearerAuth = [
+        '/api/planning/wbs-templates',
+        '/api/task-baselines',
+        '/api/wbs-template-governance',
+      ].some((prefix) => requestPath.startsWith(prefix))
+      const authorization = route.request().headers().authorization || ''
+      if (requiresBearerAuth && authorization !== 'Bearer browser-verify-token') {
+        authHeaderFailures.push({ url: requestUrl, authorization })
+      }
 
       if (shouldUseMockApi) {
         await route.fulfill(buildMockResponse(requestUrl, requestMethod))
@@ -334,6 +347,7 @@ async function main() {
     await page.screenshot({ path: join(outputDir, 'wbs-templates-quality-panel.png'), fullPage: true })
 
     assert(apiFailures.length === 0, `API proxy failures detected: ${JSON.stringify(apiFailures)}`)
+    assert(authHeaderFailures.length === 0, `API auth headers missing: ${JSON.stringify(authHeaderFailures)}`)
     assert(pageErrors.length === 0, `Browser page errors detected: ${pageErrors.join(' | ')}`)
     assert(consoleErrors.length === 0, `Browser console errors detected: ${consoleErrors.join(' | ')}`)
 
@@ -343,6 +357,7 @@ async function main() {
       qualityPanelVisible: true,
       feedbackApplied: true,
       apiFailures,
+      authHeaderFailures,
       consoleErrors,
       pageErrors,
       screenshots: {
@@ -358,6 +373,7 @@ async function main() {
       mode: shouldUseMockApi ? 'mock-api' : 'proxy-api',
       error: error instanceof Error ? error.message : String(error),
       apiFailures,
+      authHeaderFailures,
       consoleErrors,
       pageErrors,
     }

@@ -277,14 +277,14 @@ export function ScopeDimensionsDialog({ projectId, open, onOpenChange }: ScopeDi
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl overflow-hidden" data-testid="gantt-scope-dimensions-dialog">
+      <DialogContent className="flex max-h-[90vh] max-w-4xl flex-col overflow-hidden" data-testid="gantt-scope-dimensions-dialog">
         <DialogHeader>
           <DialogTitle>范围维度</DialogTitle>
           <DialogDescription className="sr-only">维护项目的范围维度绑定</DialogDescription>
           <div className="text-xs text-muted-foreground">编辑当前项目的建筑、专业、阶段和区域维度。</div>
         </DialogHeader>
 
-        <div className="space-y-4">
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
           {error ? (
             <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
               {error}
@@ -465,7 +465,7 @@ export function ScopeDimensionsDialog({ projectId, open, onOpenChange }: ScopeDi
           )}
         </div>
 
-        <DialogFooter className="gap-2 sm:gap-2">
+        <DialogFooter className="border-t bg-background pt-4 gap-2 sm:gap-2">
           <Button type="button" variant="ghost" onClick={handleReset} disabled={loading || saving}>
             <RefreshCw className="mr-2 h-4 w-4" />
             重置

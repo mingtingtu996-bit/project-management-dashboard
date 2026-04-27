@@ -461,6 +461,7 @@ async function main() {
   const consoleErrors = []
   const pageErrors = []
   const apiFailures = []
+  const authHeaderFailures = []
 
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1800 } })
@@ -479,6 +480,13 @@ async function main() {
 
     await page.route(`${baseUrl}/api/**`, async (route) => {
       const requestUrl = route.request().url()
+      const requestPath = new URL(requestUrl).pathname
+      const requiresBearerAuth = requestPath.startsWith('/api/projects/')
+        || requestPath.startsWith('/api/pre-milestone-conditions')
+      const authorization = route.request().headers().authorization || ''
+      if (requiresBearerAuth && authorization !== 'Bearer browser-verify-token') {
+        authHeaderFailures.push({ url: requestUrl, authorization })
+      }
 
       if (shouldUseMockApi) {
         await route.fulfill(buildMockResponse(requestUrl))
@@ -533,6 +541,7 @@ async function main() {
     await page.screenshot({ path: join(outputDir, 'pre-milestones-detail-drawer.png'), fullPage: true })
 
     assert(apiFailures.length === 0, `API proxy failures detected: ${JSON.stringify(apiFailures)}`)
+    assert(authHeaderFailures.length === 0, `API auth headers missing: ${JSON.stringify(authHeaderFailures)}`)
     assert(pageErrors.length === 0, `Browser page errors detected: ${pageErrors.join(' | ')}`)
     assert(consoleErrors.length === 0, `Browser console errors detected: ${consoleErrors.join(' | ')}`)
 
@@ -543,6 +552,7 @@ async function main() {
       detailVisible: true,
       issueEscalationVisible: true,
       apiFailures,
+      authHeaderFailures,
       consoleErrors,
       pageErrors,
       screenshots: {
@@ -559,6 +569,7 @@ async function main() {
       mode: shouldUseMockApi ? 'mock-api' : 'proxy-api',
       error: error instanceof Error ? error.message : String(error),
       apiFailures,
+      authHeaderFailures,
       consoleErrors,
       pageErrors,
     }

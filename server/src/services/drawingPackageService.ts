@@ -1075,7 +1075,9 @@ export function buildDrawingBoardView(source: {
       reviewRules: source.reviewRules,
     })
     const requiredItems = packageItems.filter((item) => item.is_required !== false && item.is_required !== 0)
-    const completedRequiredItems = requiredItems.filter((item) => item.current_drawing_id)
+    const completedRequiredItems = requiredItems.filter((item) => (
+      item.current_drawing_id || normalizeString(item.status) === 'available'
+    ))
     const hasPackageItems = packageItems.length > 0
     const missingRequiredCount = hasPackageItems
       ? Math.max(requiredItems.length - completedRequiredItems.length, 0)
@@ -1838,16 +1840,22 @@ export function buildDrawingPackageDetailView(input: {
   })
 
   const items = input.requiredItems.map<DrawingPackageItemView>((item) => {
+    const storedStatus = normalizeString(item.status)
     const hasDrawing = Boolean(item.current_drawing_id)
     const drawing = input.drawings.find((record) => normalizeString(record.id) === normalizeString(item.current_drawing_id))
     const currentVersion = normalizeString(item.current_version, normalizeString(drawing?.version_no ?? drawing?.version, ''))
+    const status: DrawingPackageItemView['status'] = hasDrawing
+      ? (drawing && !toBoolean(drawing.is_current_version) ? 'outdated' : 'available')
+      : storedStatus === 'available' || storedStatus === 'outdated'
+        ? storedStatus
+        : 'missing'
     return {
       itemId: normalizeString(item.id),
       itemCode: normalizeString(item.item_code, normalizeString(item.id)),
       itemName: normalizeString(item.item_name, '未命名应有项'),
       disciplineType: normalizeString(item.discipline_type ?? drawing?.discipline_type ?? input.packageRow.discipline_type, '其他'),
       isRequired: toBoolean(item.is_required),
-      status: hasDrawing ? (drawing && !toBoolean(drawing.is_current_version) ? 'outdated' : 'available') : 'missing',
+      status,
       currentDrawingId: normalizeString(item.current_drawing_id) || null,
       currentVersion,
       notes: normalizeString(item.notes),

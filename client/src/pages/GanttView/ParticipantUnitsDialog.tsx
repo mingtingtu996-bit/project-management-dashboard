@@ -44,6 +44,7 @@ export interface ParticipantUnitsDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   loading: boolean
+  error?: string | null
   saving: boolean
   units: ParticipantUnitRecord[]
   draft: ParticipantUnitDraft
@@ -60,6 +61,7 @@ export function ParticipantUnitsDialog({
   open,
   onOpenChange,
   loading,
+  error,
   saving,
   units,
   draft,
@@ -71,13 +73,14 @@ export function ParticipantUnitsDialog({
 }: ParticipantUnitsDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl" aria-describedby={undefined}>
+      <DialogContent className="flex max-h-[90vh] max-w-4xl flex-col overflow-hidden" aria-describedby={undefined}>
         <DialogHeader>
           <DialogTitle>参建单位台账</DialogTitle>
           <DialogDescription className="sr-only">参建单位台账</DialogDescription>
         </DialogHeader>
 
-        <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
+        <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+          <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
           <div className="space-y-3">
             <div className="flex items-center justify-between gap-3">
               <div>
@@ -95,6 +98,10 @@ export function ParticipantUnitsDialog({
                   label="参建单位加载中"
                   className="min-h-24 rounded-lg border border-dashed bg-transparent"
                 />
+              ) : error ? (
+                <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+                  {error}
+                </div>
               ) : units.length > 0 ? (
                 units.map((unit) => (
                   <div key={unit.id} className="rounded-lg border bg-background p-3">
@@ -208,8 +215,9 @@ export function ParticipantUnitsDialog({
 
           </div>
         </div>
+        </div>
 
-        <DialogFooter className="gap-2 sm:justify-between">
+        <DialogFooter className="border-t bg-background pt-4 gap-2 sm:justify-between">
           <div />
           <div className="flex items-center gap-2">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>

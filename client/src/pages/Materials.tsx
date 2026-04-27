@@ -1204,73 +1204,12 @@ export default function Materials() {
         </Card>
       </section>
 
-      <Card className="border-slate-200 shadow-sm">
-        <CardHeader className="pb-4">
-          <CardTitle className="text-base text-slate-900">筛选与录入</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-5">
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <label className="space-y-1 text-sm text-slate-600">
-              <span>搜索</span>
-              <input
-                data-testid="materials-search-input"
-                value={searchKeyword}
-                onChange={(event) => {
-                  setSearchKeyword(event.target.value)
-                  updateSearchFilter('q', event.target.value)
-                }}
-                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
-                placeholder="按材料、单位、专项或日期搜索"
-              />
-            </label>
-            <label className="space-y-1 text-sm text-slate-600">
-              <span>状态筛选</span>
-              <select
-                value={statusFilter}
-                onChange={(event) => setStatusFilter(event.target.value as MaterialStatusFilter)}
-                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
-              >
-                {STATUS_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="space-y-1 text-sm text-slate-600">
-              <span>参建单位</span>
-              <select
-                value={unitFilter}
-                onChange={(event) => updateSearchFilter('unit', event.target.value)}
-                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
-              >
-                <option value="all">全部单位</option>
-                {participantUnits.map((unit) => (
-                  <option key={unit.id} value={unit.id}>
-                    {unit.unit_name}
-                  </option>
-                ))}
-                <option value="__unassigned__">无归属单位</option>
-              </select>
-            </label>
-            <label className="space-y-1 text-sm text-slate-600">
-              <span>专项类型</span>
-              <select
-                value={specialtyFilter}
-                onChange={(event) => updateSearchFilter('specialty', event.target.value)}
-                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
-              >
-                <option value="all">全部专项</option>
-                {specialtyOptions.map((option) => (
-                  <option key={option} value={option}>
-                    {option}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-
-          {!isReadOnly && (
+      {!isReadOnly && (
+        <Card className="border-slate-200 shadow-sm" data-testid="materials-entry-panel">
+          <CardHeader className="pb-4">
+            <CardTitle className="text-base text-slate-900">材料录入</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-5">
             <div className="space-y-4 rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
               <div className="flex flex-wrap gap-2">
                 {[
@@ -1602,7 +1541,75 @@ export default function Materials() {
                 </div>
               )}
             </div>
-          )}
+          </CardContent>
+        </Card>
+      )}
+
+      <Card className="border-slate-200 shadow-sm" data-testid="materials-filter-panel">
+        <CardHeader className="pb-4">
+          <CardTitle className="text-base text-slate-900">材料筛选</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <label className="space-y-1 text-sm text-slate-600">
+              <span>搜索</span>
+              <input
+                data-testid="materials-search-input"
+                value={searchKeyword}
+                onChange={(event) => {
+                  setSearchKeyword(event.target.value)
+                  updateSearchFilter('q', event.target.value)
+                }}
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                placeholder="按材料、单位、专项或日期搜索"
+              />
+            </label>
+            <label className="space-y-1 text-sm text-slate-600">
+              <span>状态筛选</span>
+              <select
+                value={statusFilter}
+                onChange={(event) => setStatusFilter(event.target.value as MaterialStatusFilter)}
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+              >
+                {STATUS_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="space-y-1 text-sm text-slate-600">
+              <span>参建单位</span>
+              <select
+                value={unitFilter}
+                onChange={(event) => updateSearchFilter('unit', event.target.value)}
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+              >
+                <option value="all">全部单位</option>
+                {participantUnits.map((unit) => (
+                  <option key={unit.id} value={unit.id}>
+                    {unit.unit_name}
+                  </option>
+                ))}
+                <option value="__unassigned__">无归属单位</option>
+              </select>
+            </label>
+            <label className="space-y-1 text-sm text-slate-600">
+              <span>专项类型</span>
+              <select
+                value={specialtyFilter}
+                onChange={(event) => updateSearchFilter('specialty', event.target.value)}
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+              >
+                <option value="all">全部专项</option>
+                {specialtyOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
         </CardContent>
       </Card>
 

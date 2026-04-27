@@ -450,6 +450,7 @@ export default function GanttView() {
   const location = useLocation()
   const searchParams = useMemo(() => new URLSearchParams(location.search), [location.search])
   const timelineViewRef = useRef<TaskTimelineViewHandle | null>(null)
+  const delayRequestTaskIdRef = useRef<string | null>(null)
   const currentProject = useCurrentProject()
   const currentUser = useStore((state) => state.currentUser)
   const { canEdit } = usePermissions()
@@ -592,35 +593,32 @@ export default function GanttView() {
 
   useEffect(() => {
     const nextViewMode = normalizeGanttViewMode(searchParams.get('view'))
-    if (nextViewMode && nextViewMode !== viewMode) {
-      setViewMode(nextViewMode)
+    if (nextViewMode) {
+      setViewMode((current) => (current === nextViewMode ? current : nextViewMode))
     }
 
     const nextScale = normalizeTimelineScale(searchParams.get('scale'))
-    if (nextScale && nextScale !== timelineScale) {
-      setTimelineScale(nextScale)
+    if (nextScale) {
+      setTimelineScale((current) => (current === nextScale ? current : nextScale))
     }
 
     const nextCompareMode = normalizeTimelineCompareMode(searchParams.get('compare'))
-    if (nextCompareMode && nextCompareMode !== timelineCompareMode) {
-      setTimelineCompareMode(nextCompareMode)
+    if (nextCompareMode) {
+      setTimelineCompareMode((current) => (current === nextCompareMode ? current : nextCompareMode))
     }
 
     const nextBaselineVersionId = searchParams.get('baselineVersionId')
     if (
       nextBaselineVersionId &&
-      nextBaselineVersionId !== timelineBaselineVersionId &&
       validBaselineOptionIds.has(nextBaselineVersionId)
     ) {
-      setTimelineBaselineVersionId(nextBaselineVersionId)
+      setTimelineBaselineVersionId((current) => (
+        current === nextBaselineVersionId ? current : nextBaselineVersionId
+      ))
     }
   }, [
     searchParams,
-    timelineBaselineVersionId,
-    timelineCompareMode,
-    timelineScale,
     validBaselineOptionIds,
-    viewMode,
   ])
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingTask, setEditingTask] = useState<Task | null>(null)
@@ -758,6 +756,7 @@ export default function GanttView() {
   const [participantUnitsOpen, setParticipantUnitsOpen] = useState(false)
   const [participantUnitsLoading, setParticipantUnitsLoading] = useState(false)
   const [participantUnitsLoaded, setParticipantUnitsLoaded] = useState(false)
+  const [participantUnitsError, setParticipantUnitsError] = useState<string | null>(null)
   const [participantUnitSaving, setParticipantUnitSaving] = useState(false)
   const [participantUnitDraft, setParticipantUnitDraft] = useState<ParticipantUnitDraft>(() => createEmptyParticipantUnitDraft(id))
   const [projectMembers, setProjectMembers] = useState<GanttProjectMember[]>([])
@@ -1169,18 +1168,26 @@ export default function GanttView() {
 
   useEffect(() => {
     if (!selectedTask?.id) {
+      delayRequestTaskIdRef.current = null
       setDelayRequestForm((previous) => ({ ...previous, delayedDate: '', reason: '' }))
       setDelayFormErrors({})
       return
     }
 
+    const taskChanged = delayRequestTaskIdRef.current !== selectedTask.id
+    delayRequestTaskIdRef.current = selectedTask.id
+    const defaultDelayedDate = toDateValue(selectedTask.planned_end_date || selectedTask.end_date)
+    const defaultBaselineVersionId = baselineOptions[0]?.id || ''
+
     setDelayRequestForm((previous) => ({
-      delayedDate: toDateValue(selectedTask.planned_end_date || selectedTask.end_date),
-      reason: '',
-      baselineVersionId: previous.baselineVersionId || baselineOptions[0]?.id || '',
+      delayedDate: taskChanged ? defaultDelayedDate : (previous.delayedDate || defaultDelayedDate),
+      reason: taskChanged ? '' : previous.reason,
+      baselineVersionId: previous.baselineVersionId || defaultBaselineVersionId,
     }))
-    setDelayFormErrors({})
-  }, [baselineOptions, selectedTask?.end_date, selectedTask?.id])
+    if (taskChanged) {
+      setDelayFormErrors({})
+    }
+  }, [baselineOptions, selectedTask?.end_date, selectedTask?.id, selectedTask?.planned_end_date])
 
   const criticalPathSummaryText = useMemo(() => {
     if (!criticalPathSummary) return ''
@@ -1414,10 +1421,12 @@ export default function GanttView() {
     if (!id) {
       setParticipantUnits([])
       setParticipantUnitsLoaded(false)
+      setParticipantUnitsError(null)
       return
     }
 
     setParticipantUnitsLoading(true)
+    setParticipantUnitsError(null)
     try {
       const data = await apiGet<ParticipantUnitRecord[]>(
         `/api/participant-units?projectId=${encodeURIComponent(id)}`,
@@ -1430,11 +1439,11 @@ export default function GanttView() {
     } catch (error) {
       if (!isAbortError(error)) {
         console.error('加载参建单位台账失败:', error)
+        setParticipantUnitsError(getApiErrorMessage(error, '参建单位台账加载失败'))
+        setParticipantUnitsLoaded(true)
       }
     } finally {
-      if (!options?.signal?.aborted) {
-        setParticipantUnitsLoading(false)
-      }
+      setParticipantUnitsLoading(false)
     }
   }, [id, setParticipantUnits])
 
@@ -1491,6 +1500,7 @@ export default function GanttView() {
     if (!id) {
       setParticipantUnits([])
       setParticipantUnitsLoaded(false)
+      setParticipantUnitsError(null)
       setParticipantUnitDraft(createEmptyParticipantUnitDraft(null))
       setProjectSummary(null)
       setDataQualitySummary(null)
@@ -1579,8 +1589,6 @@ export default function GanttView() {
     dialogOpen,
     id,
     loadParticipantUnits,
-    participantUnitsLoaded,
-    participantUnitsLoading,
     participantUnitsOpen,
   ])
 
@@ -1626,6 +1634,9 @@ export default function GanttView() {
     if (!id || typeof window === 'undefined') {
       return
     }
+    if (selectedTask?.id || dialogOpen || conditionDialogOpen || obstacleDialogOpen || participantUnitsOpen || scopeDimensionsOpen) {
+      return
+    }
 
     let activeController: AbortController | null = null
     const refreshVisiblePage = () => {
@@ -1643,7 +1654,16 @@ export default function GanttView() {
       window.clearInterval(timer)
       activeController?.abort()
     }
-  }, [id, refreshGanttProjectData])
+  }, [
+    conditionDialogOpen,
+    dialogOpen,
+    id,
+    obstacleDialogOpen,
+    participantUnitsOpen,
+    refreshGanttProjectData,
+    scopeDimensionsOpen,
+    selectedTask?.id,
+  ])
 
   useEffect(() => {
     setParticipantUnitDraft(createEmptyParticipantUnitDraft(id))
@@ -2312,6 +2332,8 @@ export default function GanttView() {
 
   const openParticipantUnitsDialog = useCallback(() => {
     setParticipantUnitDraft(createEmptyParticipantUnitDraft(id))
+    setParticipantUnitsLoaded(false)
+    setParticipantUnitsError(null)
     setParticipantUnitsOpen(true)
   }, [id])
 
@@ -4074,6 +4096,7 @@ export default function GanttView() {
           }
         }}
         loading={participantUnitsLoading}
+        error={participantUnitsError}
         saving={participantUnitSaving}
         units={participantUnits}
         draft={participantUnitDraft}

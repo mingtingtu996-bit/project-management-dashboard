@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { LoadingState } from '@/components/ui/loading-state'
 import { safeStorageGet, safeStorageSet } from '@/lib/browserStorage'
+import { getAuthHeaders } from '@/lib/apiClient'
 import { useToast } from '@/hooks/use-toast'
 import { useStore } from '@/hooks/useStore'
 
@@ -84,6 +85,25 @@ type PlanningBootstrapGuide = {
 const API_BASE = '/api/planning/wbs-templates'
 const GOVERNANCE_API_BASE = '/api/wbs-template-governance'
 const GUIDE_KEY_PREFIX = 'planning:wbs:onboarding:seen'
+
+function mergeRequestHeaders(headers?: HeadersInit): HeadersInit {
+  const merged = new Headers(getAuthHeaders())
+  if (headers) {
+    new Headers(headers).forEach((value, key) => {
+      merged.set(key, value)
+    })
+  }
+  return Object.fromEntries(merged.entries())
+}
+
+function withRequestContext(options: RequestInit = {}): RequestInit {
+  return {
+    ...options,
+    cache: options.cache ?? 'no-store',
+    credentials: 'include',
+    headers: mergeRequestHeaders(options.headers),
+  }
+}
 
 function normalizeProjectLabel(status?: string | null) {
   switch (String(status ?? '').trim()) {
@@ -414,8 +434,8 @@ export default function WBSTemplates() {
 
       try {
         const [templateResponse, contextResponse] = await Promise.all([
-          fetch(`${API_BASE}?project_id=${encodeURIComponent(projectId)}`, { signal: controller.signal }),
-          fetch(`${API_BASE}/bootstrap/context?project_id=${encodeURIComponent(projectId)}`, { signal: controller.signal }),
+          fetch(`${API_BASE}?project_id=${encodeURIComponent(projectId)}`, withRequestContext({ signal: controller.signal })),
+          fetch(`${API_BASE}/bootstrap/context?project_id=${encodeURIComponent(projectId)}`, withRequestContext({ signal: controller.signal })),
         ])
 
         const templateJson = await templateResponse.json()
@@ -487,7 +507,7 @@ export default function WBSTemplates() {
       setQualityReport(null)
       setQualityLoading(true)
       try {
-        const response = await fetch(`${GOVERNANCE_API_BASE}/${encodeURIComponent(selectedTemplate.id)}/reference-days`)
+        const response = await fetch(`${GOVERNANCE_API_BASE}/${encodeURIComponent(selectedTemplate.id)}/reference-days`, withRequestContext())
         const result = await response.json()
 
         if (!cancelled && result.success) {
@@ -559,11 +579,11 @@ export default function WBSTemplates() {
         endpoint = `${API_BASE}/bootstrap/from-completed-project`
       }
 
-      const response = await fetch(endpoint, {
+      const response = await fetch(endpoint, withRequestContext({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
-      })
+      }))
       const result = await response.json()
 
       if (!result.success) {
@@ -640,14 +660,14 @@ export default function WBSTemplates() {
     setApplyingFeedback(true)
 
     try {
-      const response = await fetch(`${GOVERNANCE_API_BASE}/${encodeURIComponent(selectedTemplate.id)}/reference-days/confirm`, {
+      const response = await fetch(`${GOVERNANCE_API_BASE}/${encodeURIComponent(selectedTemplate.id)}/reference-days/confirm`, withRequestContext({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           apply_all: selectedPaths.length === allSuggestionPaths.length,
           selected_paths: selectedPaths,
         }),
-      })
+      }))
       const result = await response.json()
 
       if (!result.success) {
@@ -670,7 +690,7 @@ export default function WBSTemplates() {
         )
       }
 
-      const refreshedQualityResponse = await fetch(`${GOVERNANCE_API_BASE}/${encodeURIComponent(selectedTemplate.id)}/reference-days`)
+      const refreshedQualityResponse = await fetch(`${GOVERNANCE_API_BASE}/${encodeURIComponent(selectedTemplate.id)}/reference-days`, withRequestContext())
       const refreshedQualityResult = await refreshedQualityResponse.json()
       if (refreshedQualityResult.success) {
         setQualityReport(refreshedQualityResult.data as TemplateQualityApiResponse)

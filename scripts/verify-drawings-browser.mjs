@@ -241,6 +241,17 @@ const detailPayload = {
   ],
 }
 
+function markRequiredItemCompleted() {
+  const item = detailPayload.requiredItems.find((candidate) => candidate.itemId === 'item-2')
+  if (item) {
+    item.status = 'available'
+    item.currentVersion = '手动确认补全'
+    item.notes = '详情页手动确认补全'
+  }
+  packageStructure.missingRequiredCount = 0
+  packageStructure.completenessRatio = 100
+}
+
 const mockProject = {
   id: projectId,
   name: '鍥剧焊娴忚鍣ㄨ仈璋冮」鐩?',
@@ -317,6 +328,19 @@ function buildMockResponse(urlString) {
     return json({ success: true, data: mockProject })
   }
 
+  if (pathname === `/api/members/${projectId}/me`) {
+    return json({
+      success: true,
+      data: {
+        userId: 'drawings-owner-1',
+        displayName: '图纸管理员',
+        permissionLevel: 'owner',
+        canEdit: true,
+        canManageTeam: true,
+      },
+    })
+  }
+
   if (
     pathname === '/api/tasks'
     || pathname === '/api/risks'
@@ -360,6 +384,18 @@ function buildMockResponse(urlString) {
 
   if (pathname === `/api/construction-drawings/packages/${packageStructure.packageId}/detail`) {
     return json({ success: true, data: detailPayload })
+  }
+
+  if (pathname === `/api/construction-drawings/packages/${packageStructure.packageId}/items/item-2`) {
+    markRequiredItemCompleted()
+    return json({
+      success: true,
+      data: {
+        item: detailPayload.requiredItems.find((candidate) => candidate.itemId === 'item-2'),
+        missingRequiredCount: 0,
+        completenessRatio: 100,
+      },
+    })
   }
 
   if (pathname === `/api/construction-drawings/packages/${packageStructure.packageId}/versions`) {
@@ -465,6 +501,17 @@ async function main() {
     assert(drawerText.includes(packageStructure.packageName), `Drawing detail drawer missing package name: ${packageStructure.packageName}`)
     await page.screenshot({ path: join(outputDir, 'drawings-page-detail.png'), fullPage: true })
 
+    const completeMissingItem = page.getByTestId('drawing-required-item-complete-item-2')
+    await completeMissingItem.waitFor({ state: 'visible', timeout: 10000 })
+    await completeMissingItem.click()
+    await page.waitForFunction(() => {
+      const input = document.querySelector('[data-testid="drawing-required-item-complete-item-2"]')
+      return input instanceof HTMLInputElement && input.checked
+    }, undefined, { timeout: 10000 })
+    const completedDrawerText = await page.getByTestId('drawing-detail-drawer').innerText()
+    assert(completedDrawerText.includes('已补全'), 'Drawing required item completion checkbox did not persist')
+    await page.screenshot({ path: join(outputDir, 'drawings-page-required-item-completed.png'), fullPage: true })
+
     await page.getByRole('button', { name: '查看版本窗口' }).click()
     await page.getByTestId('drawing-version-row-version-2').waitFor({ state: 'visible', timeout: 10000 })
     await page.screenshot({ path: join(outputDir, 'drawings-page-versions.png'), fullPage: true })
@@ -485,6 +532,7 @@ async function main() {
         initial: join(outputDir, 'drawings-page-initial.png'),
         search: join(outputDir, 'drawings-page-search.png'),
         detail: join(outputDir, 'drawings-page-detail.png'),
+        requiredItemCompleted: join(outputDir, 'drawings-page-required-item-completed.png'),
         versions: join(outputDir, 'drawings-page-versions.png'),
       },
     }

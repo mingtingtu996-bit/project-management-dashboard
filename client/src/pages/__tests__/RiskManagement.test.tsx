@@ -72,6 +72,17 @@ async function waitForCondition(condition: () => boolean, container?: HTMLElemen
 }
 
 function clickButtonText(container: HTMLElement, text: string) {
+  const streamTestIds: Record<string, string> = {
+    查看预警: 'risk-stream-warnings',
+    查看风险: 'risk-stream-risks',
+    查看问题: 'risk-stream-issues',
+  }
+
+  if (streamTestIds[text]) {
+    clickTestId(container, streamTestIds[text])
+    return
+  }
+
   const button = Array.from(container.querySelectorAll('button')).find((element) => element.textContent?.includes(text))
   if (!button) {
     throw new Error(`Button not found: ${text}`)
@@ -267,6 +278,7 @@ describe('RiskManagement', () => {
       if (url.includes('/api/issues')) return issuesData as never
       if (url.includes('/api/risks')) return risksData as never
       if (url.includes('/api/task-obstacles')) return obstaclesData as never
+      if (url.includes('/api/change-logs')) return [] as never
       throw new Error(`Unexpected url: ${url}`)
     })
 
@@ -303,7 +315,7 @@ describe('RiskManagement', () => {
     consoleErrorSpy = null
   })
 
-  it('renders three sections and surfaces backend warnings in the active warning area', async () => {
+  it('renders the chain workspace and surfaces backend warnings in the active warning area', async () => {
     await act(async () => {
       root?.render(<RiskManagement />)
       await flush()
@@ -315,7 +327,6 @@ describe('RiskManagement', () => {
         container.textContent?.includes('预警') &&
         container.textContent?.includes('风险') &&
         container.textContent?.includes('问题') &&
-        container.textContent?.includes('既有风险') &&
         container.textContent?.includes('材料未到') &&
         container.textContent?.includes('开工条件即将到期') &&
         container.textContent?.includes('阻碍已持续3天'),
@@ -325,10 +336,17 @@ describe('RiskManagement', () => {
     expect(container.textContent).toContain('预警')
     expect(container.textContent).toContain('风险')
     expect(container.textContent).toContain('问题')
-    expect(container.textContent).toContain('既有风险')
     expect(container.textContent).toContain('材料未到')
     expect(container.textContent).toContain('开工条件即将到期')
     expect(container.textContent).toContain('阻碍已持续3天')
+
+    clickTestId(container, 'risk-stream-risks')
+    await waitForCondition(() => container.textContent?.includes('既有风险'), container)
+    expect(container.textContent).toContain('既有风险')
+
+    clickTestId(container, 'risk-stream-problems')
+    await waitForCondition(() => container.textContent?.includes('既有风险'), container)
+    expect(container.textContent).toContain('既有风险')
 
     await act(async () => {
       await flush()
@@ -425,9 +443,7 @@ describe('RiskManagement', () => {
     await waitForCondition(
       () =>
         container.textContent?.includes('土方开挖开工条件未满足') &&
-        container.textContent?.includes('任务已延期') &&
-        container.textContent?.includes('暂无风险') &&
-        container.textContent?.includes('暂无问题'),
+        container.textContent?.includes('任务已延期'),
       container,
     )
 
@@ -435,9 +451,15 @@ describe('RiskManagement', () => {
     expect(container.textContent).toContain('任务已延期')
     expect(container.textContent).toContain('条件过期')
     expect(container.textContent).toContain('链路来源')
-    expect(container.textContent).toContain('暂无风险')
-    expect(container.textContent).toContain('暂无问题')
     expect(container.textContent).not.toContain('暂无预警')
+
+    clickTestId(container, 'risk-stream-risks')
+    await waitForCondition(() => container.textContent?.includes('暂无风险'), container)
+    expect(container.textContent).toContain('暂无风险')
+
+    clickTestId(container, 'risk-stream-problems')
+    await waitForCondition(() => container.textContent?.includes('暂无问题'), container)
+    expect(container.textContent).toContain('暂无问题')
   })
 
   it('keeps the trend analysis collapsed by default and expands on demand', async () => {
@@ -519,6 +541,8 @@ describe('RiskManagement', () => {
       await flush()
     })
 
+    clickButtonText(container, '查看风险')
+
     await waitForCondition(
       () =>
         container.textContent?.includes('待确认关闭A') &&
@@ -526,8 +550,6 @@ describe('RiskManagement', () => {
         container.textContent?.includes('普通风险'),
       container,
     )
-
-    clickButtonText(container, '查看风险')
 
     await waitForCondition(
       () => Boolean(container.querySelector('[data-testid="pending-manual-close-toggle"]')),
@@ -658,6 +680,7 @@ describe('RiskManagement', () => {
       if (url.includes('/api/risks')) return risksData as never
       if (url.includes('/api/warnings')) return [] as never
       if (url.includes('/api/task-obstacles')) return [] as never
+      if (url.includes('/api/change-logs')) return [] as never
       throw new Error(`Unexpected url: ${url}`)
     })
 
@@ -669,6 +692,9 @@ describe('RiskManagement', () => {
 
     await waitForCondition(() => container.textContent?.includes('issues down'), container)
     expect(container.textContent).toContain('issues down')
+
+    clickButtonText(container, '查看风险')
+    await waitForCondition(() => container.textContent?.includes('既有风险'), container)
     expect(container.textContent).toContain('既有风险')
   })
 
@@ -822,6 +848,12 @@ describe('RiskManagement', () => {
         Boolean(container.querySelector('[data-testid="risk-summary-band"]')) &&
         Boolean(container.querySelector('[data-testid="risk-trend-summary"]')) &&
         container.textContent?.includes('链路摘要带'),
+      container,
+    )
+
+    clickButtonText(container, '查看风险')
+    await waitForCondition(
+      () => Boolean(container.querySelector('[data-testid="risk-detail-open-risk-risk-summary-1"]')),
       container,
     )
 
