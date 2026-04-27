@@ -87,7 +87,7 @@ git checkout --force "$RELEASE_SHA"
 mkdir -p deploy/data/logs
 
 run_docker_compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" build api
-run_docker_compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" run --rm --no-deps api node dist/scripts/run-pending-migrations.js
+run_docker_compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" run --rm --no-deps -T api node dist/scripts/run-pending-migrations.js < /dev/null
 
 run_docker_compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --build --remove-orphans
 run_docker_compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" ps

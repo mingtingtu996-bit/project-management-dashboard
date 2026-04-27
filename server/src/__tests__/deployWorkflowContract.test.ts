@@ -92,7 +92,7 @@ describe('deploy workflow contract', () => {
     expect(deployScript).toContain('read_env_value SUPABASE_ANON_KEY')
     expect(deployScript).toContain('export VITE_SUPABASE_URL VITE_SUPABASE_ANON_KEY')
     expect(deployScript).toContain('build api')
-    expect(deployScript).toContain('node dist/scripts/run-pending-migrations.js')
+    expect(deployScript).toContain('run --rm --no-deps -T api node dist/scripts/run-pending-migrations.js < /dev/null')
 
     const serverDockerfile = readFileSync(resolve(workspaceRoot, 'server', 'Dockerfile'), 'utf8')
     expect(serverDockerfile).toContain('COPY migrations ./migrations')
