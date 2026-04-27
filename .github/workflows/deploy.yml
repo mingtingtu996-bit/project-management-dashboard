@@ -255,6 +255,10 @@ jobs:
           const fs = require('node:fs')
           const { Client } = require('pg')
 
+          function append(file, value) {
+            fs.appendFileSync(file, `${value}\n`)
+          }
+
           const supabaseHost = process.env.SUPABASE_HOST
           const supabaseUrl = process.env.SUPABASE_URL
           const password = process.env.SUPABASE_PASSWORD
@@ -367,6 +371,8 @@ jobs:
                 if (await canConnect(candidate.url)) {
                   console.log(`Using ${candidate.label} for migrations`)
                   fs.appendFileSync(process.env.GITHUB_ENV, `DATABASE_URL=${candidate.url}\n`)
+                  append(process.env.GITHUB_OUTPUT, 'can_run=true')
+                  append(process.env.GITHUB_OUTPUT, 'connection_source=SUPABASE pooler URL')
                   return
                 }
               } catch (error) {
@@ -374,14 +380,17 @@ jobs:
               }
             }
 
-            throw new Error('Unable to connect to any known Supabase pooler host; set SUPABASE_MIGRATION_URL or SUPABASE_POOLER_HOST.')
+            append(process.env.GITHUB_OUTPUT, 'can_run=false')
+            append(process.env.GITHUB_STEP_SUMMARY, '### Database migration skipped in GitHub Actions')
+            append(process.env.GITHUB_STEP_SUMMARY, '')
+            append(process.env.GITHUB_STEP_SUMMARY, '- Existing Supabase component secrets are present, but GitHub Hosted Runner could not reach a usable migration pooler.')
+            append(process.env.GITHUB_STEP_SUMMARY, '- Self-hosted deployment will run pending migrations from the server network.')
+            append(process.env.GITHUB_STEP_SUMMARY, '- To force CI-side migrations, set `SUPABASE_MIGRATION_URL` to the exact Supabase pooler/session connection string.')
           })().catch((error) => {
             console.error(error)
             process.exit(1)
           })
           NODE
-            echo "can_run=true" >> "$GITHUB_OUTPUT"
-            echo "connection_source=SUPABASE pooler URL" >> "$GITHUB_OUTPUT"
           else
             echo "can_run=false" >> "$GITHUB_OUTPUT"
             {

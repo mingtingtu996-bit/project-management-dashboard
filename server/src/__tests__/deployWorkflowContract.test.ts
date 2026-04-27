@@ -54,6 +54,7 @@ describe('deploy workflow contract', () => {
     expect(workflow).toContain('SUPABASE_POOLER_HOST')
     expect(workflow).toContain('Supabase transaction pooler')
     expect(workflow).toContain('@${dbHost}:6543/${database}')
+    expect(workflow).toContain('Self-hosted deployment will run pending migrations from the server network.')
     expect(workflow).toContain('aws-0-ap-southeast-1.pooler.supabase.com')
     expect(workflow).toContain("await client.query('select 1')")
     expect(workflow).toContain('Pooler candidate')
@@ -90,6 +91,11 @@ describe('deploy workflow contract', () => {
     expect(deployScript).toContain('read_env_value SUPABASE_URL')
     expect(deployScript).toContain('read_env_value SUPABASE_ANON_KEY')
     expect(deployScript).toContain('export VITE_SUPABASE_URL VITE_SUPABASE_ANON_KEY')
+    expect(deployScript).toContain('build api')
+    expect(deployScript).toContain('node dist/scripts/run-pending-migrations.js')
+
+    const serverDockerfile = readFileSync(resolve(workspaceRoot, 'server', 'Dockerfile'), 'utf8')
+    expect(serverDockerfile).toContain('COPY migrations ./migrations')
 
     expect(workflow).not.toContain('passWithNoTests')
     expect(workflow).toContain('npm run migrate:pending')
