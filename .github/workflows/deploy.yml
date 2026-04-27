@@ -246,9 +246,34 @@ jobs:
         id: migration-config
         run: |
           if [ -n "${DATABASE_URL}" ]; then
+            echo "::add-mask::${DATABASE_URL}"
+            echo "DATABASE_URL=${DATABASE_URL}" >> "$GITHUB_ENV"
             echo "can_run=true" >> "$GITHUB_OUTPUT"
             echo "connection_source=SUPABASE_MIGRATION_URL" >> "$GITHUB_OUTPUT"
-          elif { [ -n "${SUPABASE_HOST}" ] || [ -n "${SUPABASE_URL}" ]; } && [ -n "${SUPABASE_PASSWORD}" ]; then
+          elif [ -n "${SUPABASE_URL}" ] && [ -n "${SUPABASE_PASSWORD}" ]; then
+            node <<'NODE'
+          const fs = require('node:fs')
+
+          const supabaseUrl = process.env.SUPABASE_URL
+          const password = process.env.SUPABASE_PASSWORD
+          const poolerHost = process.env.SUPABASE_POOLER_HOST || 'aws-0-ap-southeast-1.pooler.supabase.com'
+          const poolerPort = process.env.SUPABASE_POOLER_PORT || '6543'
+
+          const projectRef = new URL(supabaseUrl).hostname.split('.')[0]
+          if (!projectRef) {
+            throw new Error('Unable to derive Supabase project ref from SUPABASE_URL')
+          }
+
+          const user = encodeURIComponent(`postgres.${projectRef}`)
+          const encodedPassword = encodeURIComponent(password)
+          const connectionString = `postgresql://${user}:${encodedPassword}@${poolerHost}:${poolerPort}/postgres`
+
+          console.log(`::add-mask::${connectionString}`)
+          fs.appendFileSync(process.env.GITHUB_ENV, `DATABASE_URL=${connectionString}\n`)
+          NODE
+            echo "can_run=true" >> "$GITHUB_OUTPUT"
+            echo "connection_source=SUPABASE pooler URL" >> "$GITHUB_OUTPUT"
+          elif [ -n "${SUPABASE_HOST}" ] && [ -n "${SUPABASE_PASSWORD}" ]; then
             echo "can_run=true" >> "$GITHUB_OUTPUT"
             echo "connection_source=SUPABASE component secrets" >> "$GITHUB_OUTPUT"
           else
@@ -257,7 +282,7 @@ jobs:
               echo "### Database migration skipped"
               echo ""
               echo "- Missing migration database credentials."
-              echo "- Provide \`SUPABASE_MIGRATION_URL\`, or provide \`SUPABASE_HOST\`/\`SUPABASE_URL\` plus \`SUPABASE_PASSWORD\`."
+              echo "- Provide \`SUPABASE_MIGRATION_URL\`, or provide \`SUPABASE_URL\` plus \`SUPABASE_PASSWORD\` so CI can use the Supabase pooler."
               echo "- Deployment will continue without applying migrations in CI."
             } >> "$GITHUB_STEP_SUMMARY"
           fi
@@ -269,12 +294,13 @@ jobs:
           SUPABASE_USER: ${{ secrets.SUPABASE_USER }}
           SUPABASE_PASSWORD: ${{ secrets.SUPABASE_PASSWORD }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_POOLER_HOST: ${{ secrets.SUPABASE_POOLER_HOST }}
+          SUPABASE_POOLER_PORT: ${{ secrets.SUPABASE_POOLER_PORT }}
 
       - name: Apply pending migrations
         if: steps.migration-config.outputs.can_run == 'true'
         run: npm run migrate:pending
         env:
-          DATABASE_URL: ${{ secrets.SUPABASE_MIGRATION_URL }}
           SUPABASE_HOST: ${{ secrets.SUPABASE_HOST }}
           SUPABASE_PORT: ${{ secrets.SUPABASE_PORT }}
           SUPABASE_DATABASE: ${{ secrets.SUPABASE_DATABASE }}
