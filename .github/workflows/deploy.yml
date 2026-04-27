@@ -289,10 +289,13 @@ jobs:
             throw new Error('Unable to derive Supabase project ref from SUPABASE_HOST or SUPABASE_URL')
           }
 
+          const database = String(process.env.SUPABASE_DATABASE || 'postgres').trim()
           const role = String(process.env.SUPABASE_USER || 'postgres').trim()
           const poolerUser = role.includes('.') ? role : `${role}.${projectRef}`
-          const user = encodeURIComponent(poolerUser)
+          const directUser = encodeURIComponent(role.includes('.') ? role.split('.')[0] : role)
+          const sessionUser = encodeURIComponent(poolerUser)
           const encodedPassword = encodeURIComponent(password)
+          const dbHost = supabaseHost || `db.${projectRef}.supabase.co`
 
           const configuredPoolerHost = String(process.env.SUPABASE_POOLER_HOST || '').trim()
           const poolerHosts = [
@@ -318,6 +321,26 @@ jobs:
 
           const uniquePoolerHosts = [...new Set(poolerHosts)]
 
+          function buildCandidates() {
+            const candidates = [
+              {
+                label: 'Supabase transaction pooler',
+                url: `postgresql://${directUser}:${encodedPassword}@${dbHost}:6543/${database}`,
+              },
+            ]
+
+            for (const poolerHost of uniquePoolerHosts) {
+              for (const poolerPort of poolerPorts) {
+                candidates.push({
+                  label: `Supabase shared pooler ${poolerHost}:${poolerPort}`,
+                  url: `postgresql://${sessionUser}:${encodedPassword}@${poolerHost}:${poolerPort}/${database}`,
+                })
+              }
+            }
+
+            return candidates
+          }
+
           async function canConnect(connectionString) {
             const client = new Client({
               connectionString,
@@ -337,20 +360,17 @@ jobs:
           }
 
           ;(async () => {
-            for (const poolerHost of uniquePoolerHosts) {
-              for (const poolerPort of poolerPorts) {
-                const connectionString = `postgresql://${user}:${encodedPassword}@${poolerHost}:${poolerPort}/postgres`
-                console.log(`::add-mask::${connectionString}`)
+            for (const candidate of buildCandidates()) {
+              console.log(`::add-mask::${candidate.url}`)
 
-                try {
-                  if (await canConnect(connectionString)) {
-                    console.log(`Using Supabase pooler host ${poolerHost}:${poolerPort} for migrations`)
-                    fs.appendFileSync(process.env.GITHUB_ENV, `DATABASE_URL=${connectionString}\n`)
-                    return
-                  }
-                } catch (error) {
-                  console.log(`Pooler candidate ${poolerHost}:${poolerPort} rejected: ${error.message}`)
+              try {
+                if (await canConnect(candidate.url)) {
+                  console.log(`Using ${candidate.label} for migrations`)
+                  fs.appendFileSync(process.env.GITHUB_ENV, `DATABASE_URL=${candidate.url}\n`)
+                  return
                 }
+              } catch (error) {
+                console.log(`Pooler candidate ${candidate.label} rejected: ${error.message}`)
               }
             }
 

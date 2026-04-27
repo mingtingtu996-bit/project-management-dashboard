@@ -52,6 +52,8 @@ describe('deploy workflow contract', () => {
     expect(workflow).toContain('Check migration connection secret')
     expect(workflow).toContain('SUPABASE_MIGRATION_URL')
     expect(workflow).toContain('SUPABASE_POOLER_HOST')
+    expect(workflow).toContain('Supabase transaction pooler')
+    expect(workflow).toContain('@${dbHost}:6543/${database}')
     expect(workflow).toContain('aws-0-ap-southeast-1.pooler.supabase.com')
     expect(workflow).toContain("await client.query('select 1')")
     expect(workflow).toContain('Pooler candidate')
