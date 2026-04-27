@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   calculateOverallProgress,
   calculateWeightedProgress,
@@ -14,6 +15,9 @@ import {
 } from '../utils/taskStatus.js'
 import { isActiveWarning } from '../utils/warningStatus.js'
 import { isPendingCondition } from '../utils/conditionStatus.js'
+
+const testDir = dirname(fileURLToPath(import.meta.url))
+const sourcePath = (...segments: string[]) => join(testDir, '..', ...segments)
 
 describe('BI status utilities', () => {
   it('normalizes task completion and milestone completion consistently', () => {
@@ -70,8 +74,8 @@ describe('BI status utilities', () => {
   })
 
   it('keeps completion checks delegated to the shared taskStatus utility', () => {
-    const dbServiceSource = readFileSync(join(process.cwd(), 'src/services/dbService.ts'), 'utf8')
-    const taskSummarySource = readFileSync(join(process.cwd(), 'src/routes/task-summaries.ts'), 'utf8')
+    const dbServiceSource = readFileSync(sourcePath('services/dbService.ts'), 'utf8')
+    const taskSummarySource = readFileSync(sourcePath('routes/task-summaries.ts'), 'utf8')
 
     expect(dbServiceSource).toContain("from '../utils/taskStatus.js'")
     expect(dbServiceSource).not.toContain('function isCompletedTaskLike')
