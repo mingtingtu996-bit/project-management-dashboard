@@ -12,6 +12,7 @@ import type { Project } from '../types/db.js'
 import { getVisibleProjectIds } from '../auth/access.js'
 import { executeSQL } from '../services/dbService.js'
 import { dataQualityService } from '../services/dataQualityService.js'
+import { getProjectBootstrap } from '../services/projectBootstrapService.js'
 
 const router = Router()
 const supabase = new SupabaseService()
@@ -143,6 +144,31 @@ router.get('/:id/export', validateIdParam, requireProjectMember(req => req.param
     timestamp: new Date().toISOString(),
   }
 
+  res.json(response)
+}))
+
+// 项目页初始化聚合数据。v1.2.2 性能收口：将项目壳层初始化的多路 GET 合并为一次 bootstrap。
+router.get('/:id/bootstrap', validateIdParam, requireProjectMember(req => req.params.id), asyncHandler(async (req, res) => {
+  const { id } = req.params
+  const changeLogLimit = Number(req.query.changeLogLimit ?? req.query.change_log_limit ?? 100)
+  logger.info('Fetching project bootstrap payload', { id, changeLogLimit })
+
+  const payload = await getProjectBootstrap(id, req.user!.id, { changeLogLimit })
+
+  if (!payload) {
+    const response: ApiResponse = {
+      success: false,
+      error: { code: 'PROJECT_NOT_FOUND', message: '项目不存在' },
+      timestamp: new Date().toISOString(),
+    }
+    return res.status(404).json(response)
+  }
+
+  const response: ApiResponse<typeof payload> = {
+    success: true,
+    data: payload,
+    timestamp: new Date().toISOString(),
+  }
   res.json(response)
 }))
 

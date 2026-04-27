@@ -305,6 +305,37 @@ type ProjectFetchResult =
   | { kind: 'not_found' }
   | { kind: 'error'; error: unknown }
 
+type ProjectBootstrapPayload = {
+  project?: StoreProject | null
+  tasks?: ApiTask[] | null
+  risks?: ApiRisk[] | null
+  conditions?: ApiCondition[] | null
+  obstacles?: ApiObstacle[] | null
+  warnings?: ApiWarning[] | null
+  issues?: ApiIssue[] | null
+  delayRequests?: ApiDelayRequest[] | null
+  changeLogs?: ApiChangeLog[] | null
+  taskProgressSnapshots?: ApiTaskProgressSnapshot[] | null
+}
+
+type ProjectBootstrapFetchResult =
+  | { kind: 'found'; payload: ProjectBootstrapPayload; project: StoreProject; source: 'bootstrap' }
+  | { kind: 'not_found' }
+  | { kind: 'error'; error: unknown }
+
+type NormalizedProjectSlices = {
+  tasksData: Task[]
+  risksData: Risk[]
+  milestonesData: Milestone[]
+  conditionsData: TaskCondition[]
+  obstaclesData: TaskObstacle[]
+  warningsData: WarningRecord[]
+  issuesData: IssueRecord[]
+  delayRequestsData: DelayRequestRecord[]
+  changeLogsData: ChangeLogEntry[]
+  taskProgressSnapshotsData: TaskProgressSnapshotRecord[]
+}
+
 export type ProjectInitStatus = 'idle' | 'loading' | 'project_ready' | 'loaded' | 'not_found' | 'error'
 
 async function fetchAndCacheProject(id: string, signal: AbortSignal): Promise<ProjectFetchResult> {
@@ -415,6 +446,84 @@ export function useProjectInit(options: UseProjectInitOptions = {}) {
       }
 
       try {
+        if (mode !== 'gantt') {
+          const bootstrapResult = await fetchProjectBootstrap(id, controller.signal)
+
+          if (bootstrapResult.kind === 'not_found') {
+            setCurrentProject(null)
+            setStatus('not_found')
+            return
+          }
+
+          if (bootstrapResult.kind === 'found') {
+            setCurrentProject(bootstrapResult.project)
+            setStatus('project_ready')
+            setSharedSliceStatus('warnings', { loading: true, error: null })
+            setSharedSliceStatus('issueRows', { loading: true, error: null })
+            setSharedSliceStatus('problemRows', { loading: true, error: null })
+            setSharedSliceStatus('delayRequests', { loading: true, error: null })
+            setSharedSliceStatus('changeLogs', { loading: true, error: null })
+            setSharedSliceStatus('taskProgressSnapshots', { loading: true, error: null })
+
+            const {
+              tasksData,
+              risksData,
+              milestonesData,
+              conditionsData,
+              obstaclesData,
+              warningsData,
+              issuesData,
+              delayRequestsData,
+              changeLogsData,
+              taskProgressSnapshotsData,
+            } = normalizeProjectSlices(id, bootstrapResult.payload, { useTaskProgressFallback: true })
+
+            if (controller.signal.aborted) return
+
+            setTasks(tasksData)
+            setRisks(risksData)
+            setMilestones(milestonesData)
+            setConditions(conditionsData)
+            setObstacles(obstaclesData)
+            setWarnings(warningsData)
+            setIssueRows(issuesData)
+            setProblemRows(obstaclesData)
+            setDelayRequests(delayRequestsData)
+            setChangeLogs(changeLogsData)
+            setTaskProgressSnapshots(taskProgressSnapshotsData)
+            setSharedSliceStatus('warnings', { loading: false, error: null })
+            setSharedSliceStatus('issueRows', { loading: false, error: null })
+            setSharedSliceStatus('problemRows', { loading: false, error: null })
+            setSharedSliceStatus('delayRequests', { loading: false, error: null })
+            setSharedSliceStatus('changeLogs', { loading: false, error: null })
+            setSharedSliceStatus('taskProgressSnapshots', { loading: false, error: null })
+            setHydratedProjectId(id)
+            setStatus('loaded')
+
+            if (import.meta.env.DEV) {
+              console.log('[useProjectInit] initialized project from bootstrap payload', {
+                projectId: id,
+                source: bootstrapResult.source,
+                tasks: tasksData.length,
+                risks: risksData.length,
+                milestones: milestonesData.length,
+                conditions: conditionsData.length,
+                obstacles: obstaclesData.length,
+                warnings: warningsData.length,
+                issues: issuesData.length,
+                delayRequests: delayRequestsData.length,
+                changeLogs: changeLogsData.length,
+                taskProgressSnapshots: taskProgressSnapshotsData.length,
+              })
+            }
+            return
+          }
+
+          if (import.meta.env.DEV) {
+            console.warn('[useProjectInit] bootstrap failed, falling back to legacy fan-out', bootstrapResult.error)
+          }
+        }
+
         const projectResult = await fetchAndCacheProject(id, controller.signal)
 
         if (projectResult.kind === 'not_found') {
@@ -640,5 +749,103 @@ export function useProjectInit(options: UseProjectInitOptions = {}) {
     isHydrated: status === 'loaded' && !!currentProject && currentProject.id === id && hydratedProjectId === id,
     isLoading: status === 'loading',
     retry,
+  }
+}
+
+async function fetchProjectBootstrap(id: string, signal: AbortSignal): Promise<ProjectBootstrapFetchResult> {
+  try {
+    const payload = await apiGet<ProjectBootstrapPayload>(
+      `/api/projects/${id}/bootstrap?changeLogLimit=100`,
+      { signal },
+    )
+
+    if (!payload?.project?.id) {
+      return { kind: 'error', error: new Error('项目初始化数据无效') }
+    }
+
+    const projectWithId: StoreProject & { id: string } = {
+      ...payload.project,
+      id: payload.project.id,
+    }
+
+    return {
+      kind: 'found',
+      payload,
+      project: cacheProject(projectWithId),
+      source: 'bootstrap',
+    }
+  } catch (error) {
+    if (isAbortError(error)) throw error
+    if (error instanceof ApiClientError && error.status === 404) {
+      return { kind: 'not_found' }
+    }
+    return { kind: 'error', error }
+  }
+}
+
+function buildFallbackTaskProgressSnapshots(
+  projectId: string,
+  tasksData: Task[],
+  conditionsData: TaskCondition[],
+  obstaclesData: TaskObstacle[],
+): TaskProgressSnapshotRecord[] {
+  return tasksData
+    .filter((task): task is Task & { id: string } => Boolean(task.id))
+    .map((task) => {
+      const snapshot = buildProjectTaskProgressSnapshot(
+        [task],
+        conditionsData.filter((condition) => condition.task_id === task.id),
+        obstaclesData.filter((obstacle) => obstacle.task_id === task.id),
+      )
+      return {
+        id: `local-${task.id}`,
+        task_id: task.id,
+        project_id: projectId,
+        recorded_at: task.updated_at ?? task.created_at ?? new Date().toISOString(),
+        progress: Number(task.progress ?? 0),
+        status: String(task.status ?? 'todo'),
+        condition_count: snapshot.taskConditionMap[task.id]?.total ?? 0,
+        satisfied_condition_count: snapshot.taskConditionMap[task.id]?.satisfied ?? 0,
+        active_obstacle_count: snapshot.obstacleCountMap[task.id] ?? 0,
+        risk_count: 0,
+        issue_count: 0,
+        payload: null,
+        created_at: task.created_at ?? null,
+        updated_at: task.updated_at ?? null,
+      }
+    })
+}
+
+function normalizeProjectSlices(
+  projectId: string,
+  payload: ProjectBootstrapPayload,
+  options: { useTaskProgressFallback?: boolean } = {},
+): NormalizedProjectSlices {
+  const tasksData = normalizeArray(payload.tasks).map(normalizeTask)
+  const risksData = normalizeArray(payload.risks).map(normalizeRisk)
+  const conditionsData = normalizeArray(payload.conditions).map(normalizeCondition)
+  const obstaclesData = normalizeArray(payload.obstacles).map(normalizeObstacle)
+  const milestonesData = tasksData.filter((task) => Boolean(task.is_milestone)).map(toMilestone)
+  const warningsData = normalizeArray(payload.warnings).map(normalizeWarning)
+  const issuesData = normalizeArray(payload.issues).map(normalizeIssue)
+  const delayRequestsData = normalizeArray(payload.delayRequests).map(normalizeDelayRequest)
+  const changeLogsData = normalizeArray(payload.changeLogs).map(normalizeChangeLog)
+  const rawTaskProgressSnapshots = normalizeArray(payload.taskProgressSnapshots)
+  const taskProgressSnapshotsData =
+    options.useTaskProgressFallback && rawTaskProgressSnapshots.length === 0
+      ? buildFallbackTaskProgressSnapshots(projectId, tasksData, conditionsData, obstaclesData)
+      : rawTaskProgressSnapshots.map(normalizeTaskProgressSnapshot)
+
+  return {
+    tasksData,
+    risksData,
+    milestonesData,
+    conditionsData,
+    obstaclesData,
+    warningsData,
+    issuesData,
+    delayRequestsData,
+    changeLogsData,
+    taskProgressSnapshotsData,
   }
 }

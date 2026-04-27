@@ -35,6 +35,16 @@ describe('Wave8 performance source contracts', () => {
     expect(source.includes("isHydrated: status === 'loaded'")).toBe(true)
   })
 
+  it('uses the v1.2.2 project bootstrap endpoint before falling back to legacy fan-out', () => {
+    const source = readWorkspaceSource('src/hooks/useProjectInit.ts')
+
+    expect(source.includes("fetchProjectBootstrap(id, controller.signal)")).toBe(true)
+    expect(source.includes('`/api/projects/${id}/bootstrap?changeLogLimit=100`')).toBe(true)
+    expect(source.includes('bootstrap failed, falling back to legacy fan-out')).toBe(true)
+    expect(source.indexOf('fetchProjectBootstrap(id, controller.signal)'))
+      .toBeLessThan(source.indexOf('fetchAndCacheProject(id, controller.signal)'))
+  })
+
   it('routes gantt through lightweight project init instead of the full shared-slice bootstrap', () => {
     const source = readWorkspaceSource('src/components/layout/ProjectLayout.tsx')
     const initSource = readWorkspaceSource('src/hooks/useProjectInit.ts')
