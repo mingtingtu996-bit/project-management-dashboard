@@ -81,7 +81,24 @@ run_docker_compose() {
   fi
 }
 
-git fetch --depth=1 origin "$RELEASE_SHA"
+retry() {
+  local max_attempts="$1"
+  local delay_seconds="$2"
+  shift 2
+
+  local attempt=1
+  until "$@"; do
+    if [ "$attempt" -ge "$max_attempts" ]; then
+      return 1
+    fi
+
+    echo "Command failed, retrying in ${delay_seconds}s (${attempt}/${max_attempts})..." >&2
+    sleep "$delay_seconds"
+    attempt=$((attempt + 1))
+  done
+}
+
+retry 5 10 git fetch --depth=1 origin "$RELEASE_SHA"
 git checkout --force "$RELEASE_SHA"
 
 mkdir -p deploy/data/logs
