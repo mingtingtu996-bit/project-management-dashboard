@@ -20,6 +20,7 @@ const LOG_FILE_PATH = process.env.LOG_FILE_PATH
   ? path.resolve(process.env.LOG_FILE_PATH)
   : path.join(LOG_DIR, 'server.log')
 const MEMORY_LOG_LIMIT = Number(process.env.LOG_MEMORY_LIMIT ?? 1000)
+const SLOW_API_REQUEST_THRESHOLD_MS = Number(process.env.SLOW_API_REQUEST_THRESHOLD_MS ?? 1200)
 const ENABLE_PERSISTED_LOGS =
   process.env.LOG_PERSIST === 'false'
     ? false
@@ -148,13 +149,25 @@ export function requestLogger(req: Request, res: Response, next: NextFunction) {
   })
 
   res.on('finish', () => {
+    const durationMs = Date.now() - start
     logger.info('Request completed', {
       requestId,
       method: req.method,
       path: req.path,
       status: res.statusCode,
-      durationMs: Date.now() - start,
+      durationMs,
     })
+
+    if (req.path.startsWith('/api/') && durationMs >= SLOW_API_REQUEST_THRESHOLD_MS) {
+      logger.warn('Slow API request detected', {
+        requestId,
+        method: req.method,
+        path: req.path,
+        status: res.statusCode,
+        durationMs,
+        thresholdMs: SLOW_API_REQUEST_THRESHOLD_MS,
+      })
+    }
   })
 
   next()

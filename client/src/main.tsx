@@ -7,12 +7,16 @@ import { initMonitoring } from "./lib/monitoring"
 import { bindStorageWarningToToast } from "./lib/browserStorage"
 import { bindApiErrorToToast } from "./lib/apiClient"
 import { installGlobalRuntimeErrorHandlers } from "./lib/runtimeErrorReporter"
+import { installPerformanceEvidenceReporting } from "./lib/performanceEvidenceReporter"
 
 // 初始化存储服务（尝试连接Supabase，成功则自动切换到同步模式）
 storageService.initialize()
 bindStorageWarningToToast()
 bindApiErrorToToast()
 installGlobalRuntimeErrorHandlers()
+installPerformanceEvidenceReporting({
+  enabled: import.meta.env.VITE_PERFORMANCE_EVIDENCE_ENABLED !== 'false',
+})
 
 // 初始化监控系统
 initMonitoring({
