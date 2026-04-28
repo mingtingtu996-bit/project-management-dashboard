@@ -87,6 +87,7 @@ import drawingReviewRulesRouter from './routes/drawing-review-rules.js'
 import criticalPathsRouter from './routes/critical-paths.js'
 import issuesRouter from './routes/issues.js'
 import clientErrorsRouter from './routes/client-errors.js'
+import performanceReportsRouter from './routes/performance-reports.js'
 import scopeDimensionsRouter from './routes/scope-dimensions.js'
 import participantUnitsRouter from './routes/participant-units.js'
 import projectMaterialsRouter from './routes/project-materials.js'
@@ -301,6 +302,7 @@ app.use('/api/projects', criticalPathsRouter)
 // 问题域（10.1 建立基础模型）
 app.use('/api/issues', issuesRouter)
 app.use('/api/client-errors', clientErrorsRouter)
+app.use('/api/performance-reports', performanceReportsRouter)
 app.use('/api/participant-units', participantUnitsRouter)
 app.use('/api/projects', weeklyDigestRouter)
 

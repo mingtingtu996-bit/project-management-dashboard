@@ -57,6 +57,28 @@ describe('Wave8 performance source contracts', () => {
     expect(source.includes('apiReadInflight.set(cacheKey, request)')).toBe(true)
   })
 
+  it('keeps the v1.2.4 online performance evidence loop wired end to end', () => {
+    const reporterSource = readWorkspaceSource('src/lib/performanceEvidenceReporter.ts')
+    const apiClientSource = readWorkspaceSource('src/lib/apiClient.ts')
+    const mainSource = readWorkspaceSource('src/main.tsx')
+    const serverIndexSource = readWorkspaceSource('../server/src/index.ts')
+    const performanceRouteSource = readWorkspaceSource('../server/src/routes/performance-reports.ts')
+    const serverLoggerSource = readWorkspaceSource('../server/src/middleware/logger.ts')
+
+    expect(reporterSource.includes("endpoint: '/api/performance-reports'")).toBe(true)
+    expect(reporterSource.includes('PerformanceObserver.supportedEntryTypes')).toBe(true)
+    expect(reporterSource.includes('reportApiPerformanceEvidence')).toBe(true)
+    expect(reporterSource.includes('navigator.sendBeacon')).toBe(true)
+    expect(mainSource.includes('installPerformanceEvidenceReporting({')).toBe(true)
+    expect(apiClientSource.includes("import { reportApiPerformanceEvidence } from '@/lib/performanceEvidenceReporter'")).toBe(true)
+    expect(apiClientSource.includes("cacheStatus: 'network'")).toBe(true)
+    expect(serverIndexSource.includes("import performanceReportsRouter from './routes/performance-reports.js'")).toBe(true)
+    expect(serverIndexSource.includes("app.use('/api/performance-reports', performanceReportsRouter)")).toBe(true)
+    expect(performanceRouteSource.includes('Client performance evidence reported')).toBe(true)
+    expect(performanceRouteSource.includes('Client performance threshold exceeded')).toBe(true)
+    expect(serverLoggerSource.includes('Slow API request detected')).toBe(true)
+  })
+
   it('routes gantt through lightweight project init instead of the full shared-slice bootstrap', () => {
     const source = readWorkspaceSource('src/components/layout/ProjectLayout.tsx')
     const initSource = readWorkspaceSource('src/hooks/useProjectInit.ts')

@@ -1,5 +1,6 @@
 import { safeJsonParse, safeStorageGet, safeStorageRemove, safeStorageSet } from '@/lib/browserStorage'
 import { toast } from '@/hooks/use-toast'
+import { reportApiPerformanceEvidence } from '@/lib/performanceEvidenceReporter'
 
 /**
  * 通用 API 客户端
@@ -261,6 +262,20 @@ function cloneApiPayload<T>(value: T): T {
   }
 }
 
+function getRequestStartedAt(): number {
+  if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
+    return performance.now()
+  }
+  return Date.now()
+}
+
+function getRequestDurationMs(startedAt: number): number {
+  const now = typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now()
+  return Math.max(0, now - startedAt)
+}
+
 function normalizeHeadersForCache(headers: HeadersInit): Array<[string, string]> {
   const normalizedHeaders = new Headers(headers)
   const entries: Array<[string, string]> = []
@@ -331,6 +346,7 @@ export async function authFetch<T = unknown>(
   url: string,
   options?: AuthFetchOptions
 ): Promise<T> {
+  const requestStartedAt = getRequestStartedAt()
   const {
     runtimeCache = 'default',
     runtimeCacheTtlMs = DEFAULT_API_READ_CACHE_TTL_MS,
@@ -360,10 +376,29 @@ export async function authFetch<T = unknown>(
 
     if (cacheKey) {
       const cached = readApiRuntimeCache<T>(cacheKey)
-      if (cached.hit) return cached.value
+      if (cached.hit) {
+        void reportApiPerformanceEvidence({
+          url,
+          method,
+          statusCode: 200,
+          durationMs: getRequestDurationMs(requestStartedAt),
+          cacheStatus: 'runtime_cache',
+        })
+        return cached.value
+      }
 
       const inflight = apiReadInflight.get(cacheKey) as Promise<T> | undefined
-      if (inflight && dedupe) return cloneApiPayload(await inflight)
+      if (inflight && dedupe) {
+        const payload = cloneApiPayload(await inflight)
+        void reportApiPerformanceEvidence({
+          url,
+          method,
+          statusCode: 200,
+          durationMs: getRequestDurationMs(requestStartedAt),
+          cacheStatus: 'inflight',
+        })
+        return payload
+      }
     }
 
     const request = (async () => {
@@ -381,6 +416,14 @@ export async function authFetch<T = unknown>(
 
       const data = await response.json()
       const payload = (data.data ?? data) as T
+
+      void reportApiPerformanceEvidence({
+        url,
+        method,
+        statusCode: response.status,
+        durationMs: getRequestDurationMs(requestStartedAt),
+        cacheStatus: 'network',
+      })
 
       if (cacheKey) {
         writeApiRuntimeCache(cacheKey, payload, runtimeCacheTtlMs)
@@ -404,6 +447,16 @@ export async function authFetch<T = unknown>(
     }
 
     if (error instanceof ApiClientError) {
+      if (error.message !== OFFLINE_WRITE_BLOCK_MESSAGE) {
+        void reportApiPerformanceEvidence({
+          url,
+          method,
+          statusCode: error.status,
+          durationMs: getRequestDurationMs(requestStartedAt),
+          cacheStatus: 'network',
+          errorCode: error.code,
+        })
+      }
       dispatchApiErrorToast(error, method)
       throw error
     }
@@ -413,6 +466,14 @@ export async function authFetch<T = unknown>(
         status: null,
         url,
         code: 'network_error',
+      })
+      void reportApiPerformanceEvidence({
+        url,
+        method,
+        statusCode: null,
+        durationMs: getRequestDurationMs(requestStartedAt),
+        cacheStatus: 'network',
+        errorCode: wrappedError.code,
       })
       dispatchApiErrorToast(wrappedError, method)
       throw wrappedError
