@@ -12,8 +12,17 @@ const SERVER_UNAVAILABLE_HINT = '接口服务暂不可用，请确认后端服�
 const OFFLINE_WRITE_BLOCK_MESSAGE = '当前处于离线状态，无法保存或提交内容，请恢复网络后重试。'
 const API_ERROR_TOAST_EVENT = 'workbuddy:api-error'
 const API_ERROR_TOAST_DEDUPE_MS = 4000
+const DEFAULT_API_READ_CACHE_TTL_MS = 2500
+const MAX_API_READ_CACHE_ENTRIES = 80
 
 export type ApiErrorCode = 'backend_unavailable' | 'network_error' | 'http_error'
+export type ApiRuntimeCacheMode = 'default' | 'off'
+
+export interface AuthFetchOptions extends RequestInit {
+  runtimeCache?: ApiRuntimeCacheMode
+  runtimeCacheTtlMs?: number
+  dedupe?: boolean
+}
 
 type ApiErrorToastDetail = {
   key: string
@@ -48,6 +57,8 @@ export class ApiClientError extends Error {
 }
 
 const apiErrorToastTimestamps = new Map<string, number>()
+const apiReadCache = new Map<string, { expiresAt: number; value: unknown }>()
+const apiReadInflight = new Map<string, Promise<unknown>>()
 
 function shouldDispatchApiErrorToast(key: string): boolean {
   const now = Date.now()
@@ -212,6 +223,8 @@ function getStoredToken(): string | null {
 export function persistAuthToken(token: string | null): void {
   if (typeof window === 'undefined') return
 
+  clearApiClientRuntimeCache()
+
   if (token) {
     safeStorageSet(localStorage, 'auth_token', token)
     safeStorageSet(localStorage, 'access_token', token)
@@ -236,11 +249,95 @@ export function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === 'AbortError'
 }
 
+function cloneApiPayload<T>(value: T): T {
+  try {
+    if (typeof structuredClone === 'function') {
+      return structuredClone(value)
+    }
+
+    return JSON.parse(JSON.stringify(value)) as T
+  } catch {
+    return value
+  }
+}
+
+function normalizeHeadersForCache(headers: HeadersInit): Array<[string, string]> {
+  const normalizedHeaders = new Headers(headers)
+  const entries: Array<[string, string]> = []
+
+  normalizedHeaders.forEach((value, key) => {
+    entries.push([key.toLowerCase(), value])
+  })
+
+  return entries.sort(([keyA], [keyB]) => keyA.localeCompare(keyB))
+}
+
+function mergeHeaders(baseHeaders: HeadersInit, extraHeaders?: HeadersInit): Headers {
+  const headers = new Headers(baseHeaders)
+  if (extraHeaders) {
+    new Headers(extraHeaders).forEach((value, key) => {
+      headers.set(key, value)
+    })
+  }
+  return headers
+}
+
+function getApiReadCacheKey(url: string, method: string, options: RequestInit, headers: HeadersInit): string | null {
+  if (method !== 'GET' || !isApiPath(url) || options.signal || options.body) return null
+  return JSON.stringify(['api-read', url, normalizeHeadersForCache(headers)])
+}
+
+function pruneApiReadCache(now = Date.now()): void {
+  for (const [key, entry] of apiReadCache.entries()) {
+    if (entry.expiresAt <= now) {
+      apiReadCache.delete(key)
+    }
+  }
+
+  while (apiReadCache.size > MAX_API_READ_CACHE_ENTRIES) {
+    const oldestKey = apiReadCache.keys().next().value
+    if (!oldestKey) break
+    apiReadCache.delete(oldestKey)
+  }
+}
+
+export function clearApiClientRuntimeCache(): void {
+  apiReadCache.clear()
+  apiReadInflight.clear()
+}
+
+function readApiRuntimeCache<T>(key: string): { hit: true; value: T } | { hit: false } {
+  const now = Date.now()
+  const cached = apiReadCache.get(key)
+
+  if (!cached) return { hit: false }
+  if (cached.expiresAt <= now) {
+    apiReadCache.delete(key)
+    return { hit: false }
+  }
+
+  return { hit: true, value: cloneApiPayload(cached.value as T) }
+}
+
+function writeApiRuntimeCache<T>(key: string, value: T, ttlMs: number): void {
+  pruneApiReadCache()
+  apiReadCache.set(key, {
+    expiresAt: Date.now() + ttlMs,
+    value: cloneApiPayload(value),
+  })
+}
+
 export async function authFetch<T = unknown>(
   url: string,
-  options?: RequestInit
+  options?: AuthFetchOptions
 ): Promise<T> {
-  const method = (options?.method || 'GET').toUpperCase()
+  const {
+    runtimeCache = 'default',
+    runtimeCacheTtlMs = DEFAULT_API_READ_CACHE_TTL_MS,
+    dedupe = true,
+    ...fetchOptions
+  } = options ?? {}
+  const method = (fetchOptions.method || 'GET').toUpperCase()
 
   try {
     if (typeof window !== 'undefined' && !window.navigator.onLine && method !== 'GET' && method !== 'HEAD') {
@@ -251,23 +348,56 @@ export async function authFetch<T = unknown>(
       })
     }
 
-    const response = await fetch(url, {
-      ...options,
-      cache: options?.cache ?? (isApiPath(url) ? 'no-store' : undefined),
-      credentials: 'include',
-      headers: {
-        ...getAuthHeaders(),
-        ...(options?.headers || {}),
-      },
-    })
-
-    if (!response.ok) {
-      const errorText = await response.text()
-      throw buildHttpError(url, response.status, errorText)
+    if (method !== 'GET' && method !== 'HEAD') {
+      clearApiClientRuntimeCache()
     }
 
-    const data = await response.json()
-    return (data.data ?? data) as T
+    const headers = mergeHeaders(getAuthHeaders(), fetchOptions.headers)
+    const cacheKey =
+      runtimeCache === 'off' || runtimeCacheTtlMs <= 0
+        ? null
+        : getApiReadCacheKey(url, method, fetchOptions, headers)
+
+    if (cacheKey) {
+      const cached = readApiRuntimeCache<T>(cacheKey)
+      if (cached.hit) return cached.value
+
+      const inflight = apiReadInflight.get(cacheKey) as Promise<T> | undefined
+      if (inflight && dedupe) return cloneApiPayload(await inflight)
+    }
+
+    const request = (async () => {
+      const response = await fetch(url, {
+        ...fetchOptions,
+        cache: fetchOptions.cache ?? (isApiPath(url) ? 'no-store' : undefined),
+        credentials: 'include',
+        headers,
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw buildHttpError(url, response.status, errorText)
+      }
+
+      const data = await response.json()
+      const payload = (data.data ?? data) as T
+
+      if (cacheKey) {
+        writeApiRuntimeCache(cacheKey, payload, runtimeCacheTtlMs)
+      }
+
+      return payload
+    })()
+
+    if (cacheKey && dedupe) {
+      apiReadInflight.set(cacheKey, request)
+      request.then(
+        () => apiReadInflight.delete(cacheKey),
+        () => apiReadInflight.delete(cacheKey),
+      )
+    }
+
+    return await request
   } catch (error) {
     if (isAbortError(error)) {
       throw error
@@ -292,7 +422,7 @@ export async function authFetch<T = unknown>(
   }
 }
 
-export async function apiGet<T = unknown>(url: string, options?: RequestInit): Promise<T> {
+export async function apiGet<T = unknown>(url: string, options?: AuthFetchOptions): Promise<T> {
   return authFetch<T>(url, {
     ...options,
     method: 'GET',
