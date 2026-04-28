@@ -45,6 +45,18 @@ describe('Wave8 performance source contracts', () => {
       .toBeLessThan(source.indexOf('fetchAndCacheProject(id, controller.signal)'))
   })
 
+  it('keeps the v1.2.3 api read path protected by short runtime cache and in-flight dedupe', () => {
+    const source = readWorkspaceSource('src/lib/apiClient.ts')
+
+    expect(source.includes('const DEFAULT_API_READ_CACHE_TTL_MS = 2500')).toBe(true)
+    expect(source.includes('const apiReadCache = new Map')).toBe(true)
+    expect(source.includes('const apiReadInflight = new Map')).toBe(true)
+    expect(source.includes('export function clearApiClientRuntimeCache()')).toBe(true)
+    expect(source.includes("if (method !== 'GET' && method !== 'HEAD')")).toBe(true)
+    expect(source.includes('clearApiClientRuntimeCache()')).toBe(true)
+    expect(source.includes('apiReadInflight.set(cacheKey, request)')).toBe(true)
+  })
+
   it('routes gantt through lightweight project init instead of the full shared-slice bootstrap', () => {
     const source = readWorkspaceSource('src/components/layout/ProjectLayout.tsx')
     const initSource = readWorkspaceSource('src/hooks/useProjectInit.ts')
