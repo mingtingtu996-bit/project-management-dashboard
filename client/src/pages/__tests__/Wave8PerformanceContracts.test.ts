@@ -92,6 +92,20 @@ describe('Wave8 performance source contracts', () => {
     expect(performanceRouteSource.includes('不做无证据的大范围改造')).toBe(true)
   })
 
+  it('keeps the v1.2.6 online performance evidence check executable after deployment', () => {
+    const packageSource = readWorkspaceSource('../package.json')
+    const deploySource = readWorkspaceSource('../scripts/deploy-lighthouse-server.sh')
+    const checkSource = readWorkspaceSource('../scripts/check-performance-evidence-summary.mjs')
+
+    expect(packageSource.includes('"verify:performance-evidence"')).toBe(true)
+    expect(packageSource.includes('"verify:performance-evidence:unit"')).toBe(true)
+    expect(deploySource.includes('PERFORMANCE_SUMMARY_URL')).toBe(true)
+    expect(deploySource.includes('/api/performance-reports/summary')).toBe(true)
+    expect(checkSource.includes('evaluateSummary')).toBe(true)
+    expect(checkSource.includes('Performance release gate is fail.')).toBe(true)
+    expect(checkSource.includes('Insufficient data is configured as failure.')).toBe(true)
+  })
+
   it('routes gantt through lightweight project init instead of the full shared-slice bootstrap', () => {
     const source = readWorkspaceSource('src/components/layout/ProjectLayout.tsx')
     const initSource = readWorkspaceSource('src/hooks/useProjectInit.ts')

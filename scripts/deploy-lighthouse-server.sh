@@ -7,6 +7,7 @@ set -euo pipefail
 COMPOSE_FILE="${COMPOSE_FILE:-deploy/docker-compose.lighthouse.yml}"
 ENV_FILE="${ENV_FILE:-deploy/env/server.production.env}"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1/api/health}"
+PERFORMANCE_SUMMARY_URL="${PERFORMANCE_SUMMARY_URL:-}"
 
 case "$APP_DIR" in
   "~") APP_DIR="$HOME" ;;
@@ -128,6 +129,15 @@ retry() {
   done
 }
 
+derive_performance_summary_url() {
+  local health_url="$1"
+  if [[ "$health_url" == */api/health ]]; then
+    echo "${health_url%/api/health}/api/performance-reports/summary"
+  else
+    echo "${health_url%/}/api/performance-reports/summary"
+  fi
+}
+
 if [ -n "${RELEASE_ARCHIVE:-}" ]; then
   if [ ! -f "$RELEASE_ARCHIVE" ]; then
     echo "Missing release archive: $RELEASE_ARCHIVE" >&2
@@ -155,3 +165,10 @@ run_docker_compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" ps
 
 curl --fail --silent --show-error "$HEALTH_URL" >/tmp/project-management-health.json
 cat /tmp/project-management-health.json
+
+if [ -z "$PERFORMANCE_SUMMARY_URL" ]; then
+  PERFORMANCE_SUMMARY_URL="$(derive_performance_summary_url "$HEALTH_URL")"
+fi
+
+curl --fail --silent --show-error "$PERFORMANCE_SUMMARY_URL" >/tmp/project-management-performance-summary.json
+cat /tmp/project-management-performance-summary.json
