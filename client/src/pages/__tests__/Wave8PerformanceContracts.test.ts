@@ -79,6 +79,19 @@ describe('Wave8 performance source contracts', () => {
     expect(serverLoggerSource.includes('Slow API request detected')).toBe(true)
   })
 
+  it('keeps the v1.2.5 online evidence summary ready for precise performance governance', () => {
+    const performanceRouteSource = readWorkspaceSource('../server/src/routes/performance-reports.ts')
+
+    expect(performanceRouteSource.includes("router.get('/summary'")).toBe(true)
+    expect(performanceRouteSource.includes('buildPerformanceEvidenceSummary')).toBe(true)
+    expect(performanceRouteSource.includes('topSlowApis')).toBe(true)
+    expect(performanceRouteSource.includes('topSlowRoutes')).toBe(true)
+    expect(performanceRouteSource.includes('topWebVitals')).toBe(true)
+    expect(performanceRouteSource.includes('topLongTasks')).toBe(true)
+    expect(performanceRouteSource.includes('insufficient_data')).toBe(true)
+    expect(performanceRouteSource.includes('不做无证据的大范围改造')).toBe(true)
+  })
+
   it('routes gantt through lightweight project init instead of the full shared-slice bootstrap', () => {
     const source = readWorkspaceSource('src/components/layout/ProjectLayout.tsx')
     const initSource = readWorkspaceSource('src/hooks/useProjectInit.ts')
