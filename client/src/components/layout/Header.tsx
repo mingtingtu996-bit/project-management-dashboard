@@ -9,6 +9,7 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
+import { Separator } from '@/components/ui/separator'
 import { useAuth } from '@/hooks/useAuth'
 import { useAuthDialog } from '@/hooks/useAuthDialog'
 import { usePermissions } from '@/hooks/usePermissions'
@@ -103,10 +104,10 @@ export default function Header() {
   }
 
   return (
-    <header className="sticky top-0 z-20 flex h-[72px] items-center justify-between border-b border-slate-200/80 bg-white/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-white/90 lg:px-8">
+    <header className="sticky top-0 z-20 flex h-[72px] items-center justify-between bg-white/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-white/90 lg:px-8">
       <div className="flex min-w-0 items-center gap-4">
         <div className="hidden lg:block">
-          <div className="text-[18px] font-bold tracking-tight text-slate-900">{title}</div>
+          <div className="text-lg font-bold tracking-tight text-slate-900">{title}</div>
           <div className="text-xs text-slate-500">{contextLabel}</div>
         </div>
 
@@ -156,7 +157,7 @@ export default function Header() {
           <Link to="/notifications" aria-label="打开提醒中心">
             <Bell className="h-5 w-5" />
             {bellBadgeCount > 0 ? (
-              <span className="absolute -top-0.5 -right-0.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white">
+              <span className="absolute -top-0.5 -right-0.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-red-700 px-1 text-xs font-bold text-white">
                 {bellBadgeCount > 99 ? '99+' : bellBadgeCount}
               </span>
             ) : null}
@@ -222,6 +223,7 @@ export default function Header() {
           <ProjectTeamManagementDrawer open={teamDrawerOpen} onOpenChange={setTeamDrawerOpen} projectId={currentProject.id} projectName={currentProject.name} />
         ) : null}
       </div>
+      <Separator className="absolute bottom-0 left-0 right-0 border-slate-200/80" />
     </header>
   )
 }

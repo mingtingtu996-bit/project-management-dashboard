@@ -4,6 +4,7 @@ import { AlertTriangle, Lock, RefreshCw, Users2, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import { Separator } from '@/components/ui/separator'
 import { useDialogFocusRestore } from '@/hooks/useDialogFocusRestore'
 import { cn } from '@/lib/utils'
 import type { CloseoutItem } from './CloseoutGroupedList'
@@ -79,55 +80,83 @@ function ReasonCascader({
   readOnly?: boolean
 }) {
   const active = REASON_TREE.find((item) => item.branch === branch) ?? REASON_TREE[0]
+  const activeLeaf = active.leaves.includes(leaf) ? leaf : active.leaves[0]
+  const breadcrumb = ['根', active.label, activeLeaf]
 
   return (
     <div data-testid="closeout-reason-cascader" className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4">
       <div className="space-y-1">
         <div className="text-sm font-medium text-slate-900">关闭原因级联</div>
+        <div data-testid="closeout-reason-breadcrumb" className="flex flex-wrap items-center gap-1 text-xs text-slate-500">
+          {breadcrumb.map((part, index) => (
+            <span key={`${part}-${index}`} className={cn(index > 0 && 'inline-flex items-center gap-1')}>
+              {index > 0 ? <span className="text-slate-400">&gt;</span> : null}
+              <span className={index === breadcrumb.length - 1 ? 'font-medium text-blue-700' : ''}>{part}</span>
+            </span>
+          ))}
+        </div>
       </div>
 
-      <div className="flex flex-wrap gap-2">
+      <div className="grid gap-2 sm:grid-cols-2">
         {REASON_TREE.map((option) => (
           <Button
             key={option.branch}
             type="button"
-            variant={branch === option.branch ? 'default' : 'outline'}
-            size="sm"
+            variant="outline"
             disabled={readOnly}
             onClick={() => {
               onSelectBranch(option.branch)
               onSelectLeaf(option.leaves[0])
             }}
-            className="rounded-full"
+            className={cn(
+              'h-auto min-w-0 justify-start whitespace-normal rounded-xl px-3 py-2 text-left',
+              branch === option.branch
+                ? 'border-blue-500 bg-blue-50 text-blue-900 hover:bg-blue-50'
+                : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50',
+            )}
             data-testid={`closeout-reason-branch-${option.branch}`}
           >
-            {option.label}
+            <span className="flex min-w-0 w-full flex-col items-start gap-1">
+              <span className="flex w-full min-w-0 items-center justify-between gap-2">
+                <span className="min-w-0 truncate">{option.label}</span>
+                <Badge variant="outline" className="shrink-0 bg-white text-slate-600">
+                  {option.leaves.length}
+                </Badge>
+              </span>
+              <span className="whitespace-normal break-words text-xs font-normal leading-5 text-slate-400">{option.description}</span>
+            </span>
           </Button>
         ))}
       </div>
-
-      {active.description ? <div className="text-xs leading-5 text-slate-500">{active.description}</div> : null}
 
       <div className="grid gap-2 sm:grid-cols-2">
         {active.leaves.map((item) => (
           <Button
             key={item}
             type="button"
-            variant={leaf === item ? 'secondary' : 'outline'}
+            variant="outline"
             size="sm"
             disabled={readOnly}
             onClick={() => onSelectLeaf(item)}
-            className="justify-start rounded-2xl"
+            className={cn(
+              'justify-between rounded-xl',
+              leaf === item
+                ? 'border-blue-500 bg-blue-50 text-blue-900 hover:bg-blue-50'
+                : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50',
+            )}
             data-testid={`closeout-reason-leaf-${item}`}
           >
-            {item}
+            <span>{item}</span>
+            <Badge variant="outline" className="bg-white text-slate-500">
+              0
+            </Badge>
           </Button>
         ))}
       </div>
 
       <div className="text-xs text-slate-500">
         当前分支：<span className="font-medium text-slate-900">{active.label}</span> · 已选原因：
-        <span className="font-medium text-slate-900"> {leaf}</span>
+        <span className="font-medium text-slate-900"> {activeLeaf}</span>
       </div>
     </div>
   )
@@ -174,22 +203,27 @@ export function CloseoutDetailDrawer({
       data-testid="closeout-detail-drawer"
       aria-disabled={batchLayerOpen ? 'true' : undefined}
       className={cn(
-        'sticky top-4 flex h-[calc(100vh-180px)] flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm transition-all',
+        'sticky top-4 flex h-[calc(100vh-180px)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm transition-all',
         open ? 'translate-x-0 opacity-100' : 'translate-x-2 opacity-90',
         batchLayerOpen ? 'pointer-events-none opacity-70' : ''
       )}
     >
-      <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
-        <div className="space-y-1">
-          <div className="text-sm font-semibold text-slate-900">处理抽屉</div>
+      <div data-testid="closeout-detail-drawer-header" className="flex items-center justify-between gap-3 px-4 py-3">
+        <div className="min-w-0 space-y-1">
+          <div className="truncate text-sm font-semibold text-slate-900">{item?.title ?? '请选择关账事项'}</div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="outline">{item?.systemSuggestion ?? '待选择'}</Badge>
+            {item?.commitmentLabel ? <Badge variant="secondary">{item.commitmentLabel}</Badge> : null}
+          </div>
         </div>
         <Button type="button" variant="ghost" size="sm" onClick={onClose} className="gap-2">
           <X className="h-4 w-4" />
           关闭
         </Button>
       </div>
+      <Separator />
 
-      <div className="flex-1 space-y-4 overflow-y-auto p-4">
+      <div data-testid="closeout-detail-drawer-body" className="flex-1 space-y-4 overflow-y-auto p-4">
         {forceCloseUnlocked ? (
           <div className="flex items-start gap-3 rounded-2xl border border-cyan-200 bg-cyan-50 p-4 text-sm text-cyan-800">
             <Lock className="mt-0.5 h-5 w-5 shrink-0" />
@@ -239,10 +273,9 @@ export function CloseoutDetailDrawer({
           <CardContent className="space-y-3 p-4">
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0 space-y-1">
-                <div className="text-sm font-semibold text-slate-900">{item?.title ?? '请选择关账事项'}</div>
+                <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">基本信息</div>
                 {item?.summary ? <p className="text-xs leading-5 text-slate-500">{item.summary}</p> : null}
               </div>
-              <Badge variant="outline">{item?.systemSuggestion ?? '待选择'}</Badge>
             </div>
 
             <div className="grid gap-2 sm:grid-cols-3">
@@ -260,9 +293,11 @@ export function CloseoutDetailDrawer({
               </div>
             </div>
 
+            <Separator />
+
             <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="text-sm font-medium text-slate-900">两栏对比</div>
+                <div className="text-sm font-medium text-slate-900">关联任务</div>
                 <Badge variant="secondary">月计划 / 当前排期</Badge>
               </div>
               {(() => {
@@ -282,7 +317,7 @@ export function CloseoutDetailDrawer({
                         hasDiff ? 'border-amber-200 bg-amber-50' : 'border-white/80 bg-white',
                       )}
                     >
-                      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">月计划快照</div>
+                      <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">月计划快照</div>
                       <SnapshotField label="计划开始" value={planStart} />
                       <SnapshotField label="计划结束" value={planEnd} />
                       <SnapshotField label="计划进度" value={planProgress} />
@@ -293,7 +328,7 @@ export function CloseoutDetailDrawer({
                         hasDiff ? 'border-amber-200 bg-amber-50' : 'border-white/80 bg-white',
                       )}
                     >
-                      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">当前排期快照</div>
+                      <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">当前排期快照</div>
                       <SnapshotField label="任务名称" value={item?.taskTitle ?? '未关联当前任务'} />
                       <SnapshotField label="计划开始" value={taskStart} />
                       <SnapshotField label="计划结束" value={taskEnd} />
@@ -304,6 +339,10 @@ export function CloseoutDetailDrawer({
               })()}
             </div>
 
+            <Separator />
+
+            <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">关闭原因</div>
+
             <ReasonCascader
               branch={reasonBranch}
               leaf={reasonLeaf}
@@ -311,28 +350,6 @@ export function CloseoutDetailDrawer({
               onSelectLeaf={onSelectReasonLeaf}
               readOnly={readOnly}
             />
-
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                type="button"
-                variant="default"
-                onClick={onProcessCurrentItem}
-                className="gap-2"
-                data-testid="closeout-single-process-entry"
-                disabled={!editable}
-              >
-                处理当前条目
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => onToggleBatchLayer(!batchLayerOpen)}
-                data-testid="closeout-batch-layer-toggle"
-                disabled={!editable}
-              >
-                {batchLayerOpen ? '收起批量补录层' : '打开批量补录层'}
-              </Button>
-            </div>
           </CardContent>
         </Card>
 
@@ -351,16 +368,16 @@ export function CloseoutDetailDrawer({
             <div className="grid gap-2">
               {selectedItems.length ? (
                 selectedItems.map((selected) => (
-                  <div
+                  <Card
                     key={selected.id}
                     className="flex items-center justify-between rounded-xl border border-white/80 bg-white px-3 py-2 text-sm"
                   >
                     <span className="font-medium text-slate-900">{selected.title}</span>
                     <span className="text-xs text-slate-500">{selected.systemSuggestion}</span>
-                  </div>
+                  </Card>
                 ))
               ) : (
-                <div className="rounded-xl border border-white/80 bg-white px-3 py-2" />
+                <Card className="rounded-xl border border-white/80 bg-white px-3 py-2" />
               )}
             </div>
 
@@ -379,6 +396,31 @@ export function CloseoutDetailDrawer({
             </div>
           </div>
         ) : null}
+      </div>
+      <Separator />
+      <div data-testid="closeout-detail-drawer-footer" className="flex flex-wrap items-center justify-end gap-2 px-4 py-3">
+        <Button type="button" variant="outline" onClick={onClose} disabled={!editable}>
+          取消
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => onToggleBatchLayer(!batchLayerOpen)}
+          data-testid="closeout-batch-layer-toggle"
+          disabled={!editable}
+        >
+          {batchLayerOpen ? '收起批量补录层' : '打开批量补录层'}
+        </Button>
+        <Button
+          type="button"
+          variant="default"
+          onClick={onProcessCurrentItem}
+          className="gap-2"
+          data-testid="closeout-single-process-entry"
+          disabled={!editable}
+        >
+          确认关闭当前条目
+        </Button>
       </div>
     </aside>
   )

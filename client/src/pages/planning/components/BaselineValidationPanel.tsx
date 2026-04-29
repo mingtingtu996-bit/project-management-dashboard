@@ -3,6 +3,7 @@ import { useMemo } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Separator } from '@/components/ui/separator'
 import { cn } from '@/lib/utils'
 import { AlertTriangle, Info, ShieldAlert, LocateFixed } from 'lucide-react'
 
@@ -86,7 +87,7 @@ export function BaselineValidationPanel({ issues, emptyLabel = '当前没有待�
 
   return (
     <Card className="border-slate-200 shadow-sm">
-      <CardHeader className="space-y-3 border-b border-slate-100 bg-slate-50/80">
+      <CardHeader className="space-y-3 bg-slate-50/80">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="space-y-1">
             <CardTitle className="text-lg">异常校核区</CardTitle>
@@ -99,6 +100,7 @@ export function BaselineValidationPanel({ issues, emptyLabel = '当前没有待�
         </div>
 
       </CardHeader>
+      <Separator />
 
       <CardContent className="space-y-4 p-4">
         {totalCount === 0 ? (
@@ -115,7 +117,7 @@ export function BaselineValidationPanel({ issues, emptyLabel = '当前没有待�
                 data-testid={`baseline-validation-group-${group.level}`}
                 className="rounded-2xl border border-slate-200 bg-white shadow-sm"
               >
-                <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 px-4 py-3">
+                <div className="flex flex-wrap items-start justify-between gap-3 px-4 py-3">
                   <div className="space-y-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <Icon className="h-4 w-4 text-slate-500" />
@@ -133,6 +135,7 @@ export function BaselineValidationPanel({ issues, emptyLabel = '当前没有待�
                     <div className="text-xs text-slate-500">合计 {formatMinutes(estimatedMinutes)}</div>
                   </div>
                 </div>
+                <Separator />
 
                 <div className="space-y-2 p-4">
                   {group.issues.map((issue) => {

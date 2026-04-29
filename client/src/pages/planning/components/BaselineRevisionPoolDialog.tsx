@@ -19,6 +19,7 @@ import {
   BaselineRevisionCandidateList,
   type BaselineRevisionCandidate,
 } from './BaselineRevisionCandidateList'
+import { cn } from '@/lib/utils'
 
 interface BaselineRevisionPoolDialogProps {
   open: boolean
@@ -77,6 +78,12 @@ export function BaselineRevisionPoolDialog({
   const [windowEndFilter, setWindowEndFilter] = useState('')
   const [criticalMilestoneOnly, setCriticalMilestoneOnly] = useState(false)
   const activeCandidate = candidates.find((item) => item.id === activeCandidateId) ?? candidates[0] ?? null
+  const currentStep = deferredReasonVisible || deferredReason.trim() ? 3 : basketItems.length > 0 ? 2 : 1
+  const steps = [
+    { index: 1, label: '选择变更' },
+    { index: 2, label: '确认已选' },
+    { index: 3, label: '标注暂缓原因' },
+  ]
   const getCandidateStatus = (candidateId: string, candidate: BaselineRevisionCandidate) => {
     if (deferredCandidateIds.includes(candidateId) || candidate.status === 'deferred') return 'deferred'
     if (candidate.status === 'accepted') return 'accepted'
@@ -150,7 +157,7 @@ export function BaselineRevisionPoolDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent data-testid="baseline-revision-pool-dialog" className="max-w-6xl">
+      <DialogContent data-testid="baseline-revision-pool-dialog" className="max-w-[720px]">
         <DialogHeader className="text-left">
           <div className="flex flex-wrap items-center gap-2">
             <DialogTitle>计划修订候选</DialogTitle>
@@ -162,6 +169,27 @@ export function BaselineRevisionPoolDialog({
             先看候选总览和优先级，再决定纳入修订、标记延期，或带入修订草稿继续处理。
           </DialogDescription>
         </DialogHeader>
+
+        <div className="space-y-2" data-testid="baseline-revision-stepper">
+          <div className="grid gap-2 sm:grid-cols-3">
+            {steps.map((step) => (
+              <div
+                key={step.index}
+                className={cn(
+                  'rounded-xl border px-3 py-2 text-sm font-medium transition-colors',
+                  currentStep >= step.index
+                    ? 'border-blue-200 bg-blue-50 text-blue-700'
+                    : 'border-slate-200 bg-slate-50 text-slate-500',
+                )}
+              >
+                {step.index}. {step.label}
+              </div>
+            ))}
+          </div>
+          <div className="h-1.5 overflow-hidden rounded-full bg-slate-100">
+            <div className="h-full rounded-full bg-blue-600 transition-all" style={{ width: `${(currentStep / 3) * 100}%` }} />
+          </div>
+        </div>
 
         {errorMessage ? (
           <Alert variant="destructive">
@@ -202,7 +230,7 @@ export function BaselineRevisionPoolDialog({
 
         <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">状态</span>
+            <span className="text-xs font-medium uppercase tracking-wider text-slate-500">状态</span>
             {(['all', 'open', 'deferred', 'submitted', 'accepted', 'rejected'] as const).map((status) => (
               <Button
                 key={status}
@@ -227,7 +255,7 @@ export function BaselineRevisionPoolDialog({
             ))}
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">优先级</span>
+            <span className="text-xs font-medium uppercase tracking-wider text-slate-500">优先级</span>
             {(['all', 'critical', 'high', 'medium', 'low'] as const).map((priority) => (
               <Button
                 key={priority}
@@ -243,7 +271,7 @@ export function BaselineRevisionPoolDialog({
           </div>
           <div className="grid gap-3 md:grid-cols-[1fr_1fr_1fr_auto]">
             <label className="block space-y-1">
-              <span className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">来源</span>
+              <span className="text-xs font-medium uppercase tracking-wider text-slate-500">来源</span>
               <select
                 value={sourceFilter}
                 onChange={(event) => setSourceFilter(event.target.value as typeof sourceFilter)}
@@ -256,7 +284,7 @@ export function BaselineRevisionPoolDialog({
               </select>
             </label>
             <label className="block space-y-1">
-              <span className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">观察窗口起</span>
+              <span className="text-xs font-medium uppercase tracking-wider text-slate-500">观察窗口起</span>
               <input
                 type="date"
                 value={windowStartFilter}
@@ -265,7 +293,7 @@ export function BaselineRevisionPoolDialog({
               />
             </label>
             <label className="block space-y-1">
-              <span className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">观察窗口止</span>
+              <span className="text-xs font-medium uppercase tracking-wider text-slate-500">观察窗口止</span>
               <input
                 type="date"
                 value={windowEndFilter}

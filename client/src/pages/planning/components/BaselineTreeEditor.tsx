@@ -4,6 +4,8 @@ import { PlanningTreeView, type PlanningTreeRow } from '@/components/planning/Pl
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Separator } from '@/components/ui/separator'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { ArrowDown, ArrowUp, ListChecks } from 'lucide-react'
 
 export interface BaselineTreeEditorProps {
@@ -61,7 +63,7 @@ export function BaselineTreeEditor({
 
   return (
     <Card className="border-slate-200 shadow-sm" data-testid={testId}>
-      <CardHeader className="space-y-3 border-b border-slate-100 bg-slate-50/80">
+      <CardHeader className="space-y-3 bg-slate-50/80">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="space-y-1">
             <CardTitle className="text-xl">{title}</CardTitle>
@@ -70,7 +72,14 @@ export function BaselineTreeEditor({
             <Badge variant="outline">{summaryLabel}</Badge>
             <Badge variant="outline">{stateLabel}</Badge>
             <Badge variant="secondary">{selectedCount} 已选</Badge>
-            <Badge variant="outline">锁剩余 {lockRemainingLabel}</Badge>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="inline-flex">
+                  <Badge variant="outline">锁剩余 {lockRemainingLabel}</Badge>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>其他用户正在编辑，暂时无法修改</TooltipContent>
+            </Tooltip>
           </div>
         </div>
 
@@ -103,9 +112,10 @@ export function BaselineTreeEditor({
           </Button>
         </div>
       </CardHeader>
+      <Separator />
 
       <CardContent className="p-0">
-        {readOnly ? <div className="border-b border-slate-100 bg-slate-50 px-4 py-3" /> : null}
+        {readOnly ? <Separator /> : null}
 
         <PlanningTreeView
           title={treeTitle}

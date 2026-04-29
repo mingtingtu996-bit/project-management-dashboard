@@ -88,6 +88,12 @@ export interface MaterialMonthlyTrendPoint {
   arrivalRate: number
 }
 
+export interface MaterialCategorySummary {
+  category: string
+  count: number
+  percentage: number
+}
+
 export interface MaterialReportSummary {
   overview: {
     totalExpectedCount: number
@@ -95,6 +101,7 @@ export interface MaterialReportSummary {
     arrivalRate: number
   }
   byUnit: MaterialRateByUnit[]
+  byCategory: MaterialCategorySummary[]
   monthlyTrend: MaterialMonthlyTrendPoint[]
 }
 
@@ -144,6 +151,11 @@ function buildRecentMonthKeys(count = 6) {
 function computeArrivalRate(onTimeCount: number, totalExpectedCount: number) {
   if (totalExpectedCount <= 0) return 0
   return Math.round((onTimeCount / totalExpectedCount) * 100)
+}
+
+function computePercentage(count: number, total: number) {
+  if (total <= 0) return 0
+  return Math.round((count / total) * 100)
 }
 
 function parseDate(value?: string | null) {
@@ -235,6 +247,18 @@ async function listTaskLinkRows(projectId: string) {
 function isOnTime(material: Pick<ProjectMaterialRecord, 'expected_arrival_date' | 'actual_arrival_date'>) {
   if (!material.actual_arrival_date) return false
   return material.actual_arrival_date <= material.expected_arrival_date
+}
+
+const MATERIAL_CATEGORY_LABELS = ['钢材', '混凝土', '管材', '电气', '其他'] as const
+
+function classifyMaterialCategory(material: Pick<ProjectMaterialRecord, 'material_name' | 'specialty_type'>) {
+  const token = `${material.material_name} ${material.specialty_type ?? ''}`.toLowerCase()
+
+  if (/钢|steel|型材|钢筋|钢板|钢管/.test(token)) return '钢材'
+  if (/混凝土|砼|水泥|砂浆|concrete/.test(token)) return '混凝土'
+  if (/管|pvc|ppr|管材|管件|风管/.test(token)) return '管材'
+  if (/电|线缆|电缆|桥架|配电|开关|灯具|弱电/.test(token)) return '电气'
+  return '其他'
 }
 
 function buildLinkedTaskMap(taskRows: TaskLinkRow[]) {
@@ -378,6 +402,24 @@ export async function buildMaterialReportSummary(projectId: string): Promise<Mat
       return (left.participantUnitName || '无归属单位').localeCompare(right.participantUnitName || '无归属单位', 'zh-CN')
     })
 
+  const categoryMap = new Map<string, number>(
+    MATERIAL_CATEGORY_LABELS.map((category) => [category, 0]),
+  )
+
+  for (const material of materials) {
+    const category = classifyMaterialCategory(material)
+    categoryMap.set(category, (categoryMap.get(category) ?? 0) + 1)
+  }
+
+  const byCategory = MATERIAL_CATEGORY_LABELS.map((category) => {
+    const count = categoryMap.get(category) ?? 0
+    return {
+      category,
+      count,
+      percentage: computePercentage(count, totalExpectedCount),
+    }
+  })
+
   const recentMonths = buildRecentMonthKeys(6)
   const monthlyMap = new Map<string, { totalExpectedCount: number; onTimeCount: number }>(
     recentMonths.map((month) => [month, { totalExpectedCount: 0, onTimeCount: 0 }]),
@@ -409,6 +451,7 @@ export async function buildMaterialReportSummary(projectId: string): Promise<Mat
       arrivalRate: computeArrivalRate(onTimeCount, totalExpectedCount),
     },
     byUnit,
+    byCategory,
     monthlyTrend,
   }
 }

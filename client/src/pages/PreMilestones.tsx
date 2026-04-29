@@ -14,6 +14,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useStore } from '@/hooks/useStore'
 import { usePermissions } from '@/hooks/usePermissions'
 import { useToast } from '@/hooks/use-toast'
@@ -41,6 +42,7 @@ import { FourCertificateBoard } from './PreMilestones/components/FourCertificate
 import { CertificateLedger } from './PreMilestones/components/CertificateLedger'
 import { CertificateDetailDrawer } from './PreMilestones/components/CertificateDetailDrawer'
 import { CertificateWorkItemDialog } from './PreMilestones/components/CertificateWorkItemDialog'
+import { Card } from '@/components/ui/card'
 
 const API_BASE = ''
 
@@ -123,6 +125,10 @@ function buildFormFromItem(item: CertificateWorkItem | null, selectedCertificate
 }
 
 export default function PreMilestones() {
+  useEffect(() => {
+    document.title = '前期证照 | WorkBuddy'
+  }, [])
+
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const { currentProject, projects } = useStore()
@@ -158,6 +164,7 @@ export default function PreMilestones() {
   const [hoveredWorkItemId, setHoveredWorkItemId] = useState<string | null>(null)
   const [hoveredCertificateType, setHoveredCertificateType] = useState<string | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
+  const [viewMode, setViewMode] = useState<'board' | 'ledger'>('board')
   const [detailLoading, setDetailLoading] = useState(false)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [dialogMode, setDialogMode] = useState<'create' | 'edit'>('create')
@@ -660,12 +667,10 @@ export default function PreMilestones() {
   }
 
   return (
-    <div data-testid="pre-milestones-page" className="min-h-screen bg-slate-50 p-6 page-enter">
+    <div data-testid="pre-milestones-page" className="page-shell page-enter">
       <Breadcrumb
         items={[
-          { label: '公司驾驶舱', href: '/company' },
-          ...(currentProjectName ? [{ label: currentProjectName, href: `/projects/${selectedProjectId}` }] : []),
-          { label: '专项管理' },
+          { label: currentProjectName || '项目', href: `/projects/${selectedProjectId}/dashboard` },
           { label: '前期证照' },
         ]}
         className="mb-4"
@@ -780,7 +785,10 @@ export default function PreMilestones() {
               setExpectedDateDialogOpen(true)
             }
           }}
-          onClickOverdue={() => setLedgerQuickFilter('overdue')}
+          onClickOverdue={() => {
+            setLedgerQuickFilter('overdue')
+            setViewMode('ledger')
+          }}
           />
 
           <div data-testid="pre-milestones-overview" className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -805,56 +813,72 @@ export default function PreMilestones() {
             />
           </div>
 
-          <FourCertificateBoard
-            certificates={certificates}
-            sharedItems={sharedItems}
-            selectedCertificateId={selectedCertificateId}
-            selectedWorkItemId={selectedWorkItemId}
-            hoveredWorkItemId={hoveredWorkItemId}
-            onSelectCertificate={(certificateId) => setSelectedCertificateId(certificateId)}
-            onSelectWorkItem={(workItemId) => {
-              setSelectedWorkItemId(workItemId)
-              openDetailForWorkItem(workItemId)
-            }}
-            onOpenCertificateDetail={openDetailForCertificate}
-            onHoverCertificate={(certId) => {
-              if (!certId) { setHoveredCertificateType(null); return }
-              const cert = certificates.find((c) => c.id === certId)
-              setHoveredCertificateType(cert?.certificate_type ?? null)
-            }}
-            onClickBlockedTag={() => {
-              setLedgerQuickFilter('blocked')
-              setTimeout(() => {
-                const ledger = document.querySelector('[data-testid="pre-milestones-ledger"]')
-                ledger?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-              }, 50)
-            }}
-          />
+          <Tabs value={viewMode} onValueChange={(value) => setViewMode(value as 'board' | 'ledger')} className="space-y-4">
+            <TabsList className="grid h-auto w-full max-w-md grid-cols-2 rounded-xl bg-slate-100 p-1">
+              <TabsTrigger value="board" className="rounded-lg" onClick={() => setViewMode('board')} data-testid="pre-milestones-tab-board">
+                看板({certificates.length})
+              </TabsTrigger>
+              <TabsTrigger value="ledger" className="rounded-lg" onClick={() => setViewMode('ledger')} data-testid="pre-milestones-tab-ledger">
+                台账({workItems.length})
+              </TabsTrigger>
+            </TabsList>
 
-          <CertificateLedger
-            items={workItems}
-            certificates={certificates}
-            sharedItems={sharedItems}
-            canEdit={canEdit}
-            selectedWorkItemId={selectedWorkItemId}
-            filterByWorkItemId={selectedWorkItemId}
-            quickFilter={ledgerQuickFilter}
-            onQuickFilterChange={setLedgerQuickFilter}
-            typeFilter={ledgerTypeFilter}
-            onTypeFilterChange={setLedgerTypeFilter}
-            onSelectWorkItem={(workItemId) => {
-              setSelectedWorkItemId(workItemId)
-              openDetailForWorkItem(workItemId)
-            }}
-            onOpenDetail={(certificateId, workItemId) => {
-              if (workItemId) setSelectedWorkItemId(workItemId)
-              openDetailForCertificate(certificateId)
-            }}
-            onAddItem={(prefill) => openCreateDialog(prefill)}
-            onEditItem={openEditDialog}
-            onEscalateIssue={(workItemId) => void handleEscalate('issue', workItemId)}
-            onEscalateRisk={(workItemId) => void handleEscalate('risk', workItemId)}
-          />
+            <TabsContent value="board" forceMount className="mt-0 duration-200 data-[state=active]:animate-fade-in">
+              <FourCertificateBoard
+                certificates={certificates}
+                sharedItems={sharedItems}
+                selectedCertificateId={selectedCertificateId}
+                selectedWorkItemId={selectedWorkItemId}
+                hoveredWorkItemId={hoveredWorkItemId}
+                onSelectCertificate={(certificateId) => setSelectedCertificateId(certificateId)}
+                onSelectWorkItem={(workItemId) => {
+                  setSelectedWorkItemId(workItemId)
+                  openDetailForWorkItem(workItemId)
+                }}
+                onOpenCertificateDetail={openDetailForCertificate}
+                onHoverCertificate={(certId) => {
+                  if (!certId) { setHoveredCertificateType(null); return }
+                  const cert = certificates.find((c) => c.id === certId)
+                  setHoveredCertificateType(cert?.certificate_type ?? null)
+                }}
+                onClickBlockedTag={() => {
+                  setLedgerQuickFilter('blocked')
+                  setViewMode('ledger')
+                  setTimeout(() => {
+                    const ledger = document.querySelector('[data-testid="pre-milestones-ledger"]')
+                    ledger?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                  }, 50)
+                }}
+              />
+            </TabsContent>
+
+            <TabsContent value="ledger" forceMount className="mt-0 duration-200 data-[state=active]:animate-fade-in">
+              <CertificateLedger
+                items={workItems}
+                certificates={certificates}
+                sharedItems={sharedItems}
+                canEdit={canEdit}
+                selectedWorkItemId={selectedWorkItemId}
+                filterByWorkItemId={selectedWorkItemId}
+                quickFilter={ledgerQuickFilter}
+                onQuickFilterChange={setLedgerQuickFilter}
+                typeFilter={ledgerTypeFilter}
+                onTypeFilterChange={setLedgerTypeFilter}
+                onSelectWorkItem={(workItemId) => {
+                  setSelectedWorkItemId(workItemId)
+                  openDetailForWorkItem(workItemId)
+                }}
+                onOpenDetail={(certificateId, workItemId) => {
+                  if (workItemId) setSelectedWorkItemId(workItemId)
+                  openDetailForCertificate(certificateId)
+                }}
+                onAddItem={(prefill) => openCreateDialog(prefill)}
+                onEditItem={openEditDialog}
+                onEscalateIssue={(workItemId) => void handleEscalate('issue', workItemId)}
+                onEscalateRisk={(workItemId) => void handleEscalate('risk', workItemId)}
+              />
+            </TabsContent>
+          </Tabs>
         </div>
       )}
 
@@ -900,7 +924,7 @@ export default function PreMilestones() {
       />
 
       <Dialog open={expectedDateDialogOpen} onOpenChange={setExpectedDateDialogOpen}>
-        <DialogContent className="max-w-md" data-testid="expected-date-dialog">
+        <DialogContent className="max-w-[560px]" data-testid="expected-date-dialog">
           <DialogHeader>
             <DialogTitle>预计具备开工条件日期</DialogTitle>
             <DialogDescription className="sr-only">显示证件依赖关系和预计开工时间推算依据。</DialogDescription>
@@ -924,7 +948,7 @@ export default function PreMilestones() {
               </ul>
             </div>
             {criticalItems.length > 0 ? (
-              <div className="rounded-xl border border-slate-200 bg-white p-3">
+              <Card className="rounded-xl border border-slate-200 bg-white p-3">
                 <div className="mb-2 text-xs font-medium text-slate-900">关键项</div>
                 <div className="space-y-2">
                   {criticalItems.slice(0, 6).map((item) => (
@@ -935,15 +959,15 @@ export default function PreMilestones() {
                           {mapCertificateStatusLabel(item.status)}
                         </span>
                       </div>
-                      <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-slate-500">
+                      <div className="mt-1 flex flex-wrap gap-2 text-xs text-slate-500">
                         {item.dueDate ? <span>截止：{item.dueDate}</span> : null}
                         {item.isOverdue ? <span className="text-red-600">已逾期</span> : null}
                       </div>
-                      {item.blockReason ? <div className="mt-1 text-[11px] text-amber-700">{item.blockReason}</div> : null}
+                      {item.blockReason ? <div className="mt-1 text-xs text-amber-700">{item.blockReason}</div> : null}
                     </div>
                   ))}
                 </div>
-              </div>
+              </Card>
             ) : null}
           </div>
         </DialogContent>

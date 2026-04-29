@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Separator } from '@/components/ui/separator'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { useDialogFocusRestore } from '@/hooks/useDialogFocusRestore'
 import { createEmptyConditionForm } from '../constants'
@@ -290,7 +291,7 @@ export function CertificateDetailDrawer({
     <>
       {open && (
         <div
-          className="fixed inset-0 z-40 bg-black/30 backdrop-blur-sm"
+          className="fixed inset-0 z-40 bg-black/30 backdrop-blur-[4px]"
           onClick={onClose}
           aria-hidden="true"
         />
@@ -299,33 +300,41 @@ export function CertificateDetailDrawer({
         role="dialog"
         aria-modal="true"
         data-testid="certificate-detail-drawer"
-        className={`fixed inset-y-0 right-0 z-50 flex w-[52rem] max-w-full flex-col bg-white shadow-2xl transition-transform duration-300 ${open ? 'translate-x-0' : 'translate-x-full'}`}
+        className={`fixed inset-y-0 right-0 z-50 flex w-[45rem] max-w-full flex-col bg-white shadow-[var(--el-4)] transition-transform duration-300 ${open ? 'translate-x-0' : 'translate-x-full'}`}
       >
-        <div className="flex shrink-0 items-center justify-between border-b border-slate-200 px-6 py-4">
-          <div>
-            <h2 className="text-base font-semibold text-slate-900">证照详情</h2>
+        <div className="flex shrink-0 items-center justify-between gap-4 px-6 py-4" data-testid="certificate-detail-header">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="truncate text-base font-semibold text-slate-900">{detail?.certificate.certificate_name || '证照详情'}</h2>
+              {detail ? (
+                <StatusBadge status={getCertificateStatusThemeKey(detail.certificate.status)} fallbackLabel={mapCertificateStatusLabel(detail.certificate.status)} className="px-2 py-1 text-xs">
+                  {mapCertificateStatusLabel(detail.certificate.status)}
+                </StatusBadge>
+              ) : null}
+            </div>
             <p className="mt-0.5 text-xs text-slate-500">
-              查看证照当前阶段、共享事项、依赖关系，以及关联的预警、风险和问题。
+              查看证照当前阶段、条件清单、共享事项，以及关联的预警、风险和问题。
             </p>
           </div>
-          <button
+          <Button variant="ghost"
             type="button"
             onClick={onClose}
             className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
             aria-label="关闭"
           >
             <X className="h-5 w-5" />
-          </button>
+          </Button>
         </div>
+        <Separator />
 
-        <div className="flex-1 overflow-y-auto px-6 py-4">
+        <div className="flex-1 overflow-y-auto px-6 py-4" data-testid="certificate-detail-body">
         {!detail ? (
           <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-8 text-sm text-slate-500">
             暂无详情数据。
           </div>
         ) : (
           <div className="grid gap-4">
-            <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm" data-testid="certificate-detail-basic-info">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <h3 className="text-base font-semibold text-slate-900">{detail.certificate.certificate_name}</h3>
@@ -343,9 +352,9 @@ export function CertificateDetailDrawer({
                   <div className="mt-1">更新时间：{detail.certificate.latest_record_at || '待补充'}</div>
                 </div>
               </div>
-              <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4 text-sm text-slate-600">
-                <div className="rounded-xl bg-slate-50 p-3">计划完成：{detail.certificate.planned_finish_date || '待补充'}</div>
-                <div className="rounded-xl bg-slate-50 p-3">实际完成：{detail.certificate.actual_finish_date || '待补充'}</div>
+              <div className="mt-4 grid gap-3 text-sm text-slate-600 md:grid-cols-2 xl:grid-cols-4">
+                <div className="rounded-xl bg-slate-50 p-3 tabular-nums">计划完成：{detail.certificate.planned_finish_date || '待补充'}</div>
+                <div className="rounded-xl bg-slate-50 p-3 tabular-nums">实际完成：{detail.certificate.actual_finish_date || '待补充'}</div>
                 <div className="rounded-xl bg-slate-50 p-3">下一动作：{detail.certificate.next_action || '待补充'}</div>
                 <div className="rounded-xl bg-slate-50 p-3">阻塞原因：{detail.certificate.block_reason || '无'}</div>
                 {detail.certificate.document_no && (
@@ -358,7 +367,7 @@ export function CertificateDetailDrawer({
             </section>
 
             {siblingCertificates.length > 0 ? (
-              <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+              <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <h4 className="text-sm font-semibold text-slate-900">证照切换</h4>
@@ -366,7 +375,7 @@ export function CertificateDetailDrawer({
                   </div>
                   <div className="flex flex-wrap gap-2">
                     {[detail.certificate, ...siblingCertificates].map((certificate) => (
-                      <button
+                      <Button variant="ghost"
                         key={certificate.id}
                         type="button"
                         onClick={() => onSelectCertificate(certificate.id)}
@@ -377,7 +386,7 @@ export function CertificateDetailDrawer({
                         }`}
                       >
                         {certificate.certificate_name}
-                      </button>
+                      </Button>
                     ))}
                   </div>
                 </div>
@@ -386,7 +395,7 @@ export function CertificateDetailDrawer({
 
             <section className="grid gap-4 xl:grid-cols-[1.3fr_1fr]">
               <div className="grid gap-4">
-                <div ref={workItemsSectionRef} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                <div ref={workItemsSectionRef} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm" data-testid="certificate-detail-linked-files">
                   <div className="mb-3 flex items-center justify-between gap-3">
                     <div>
                       <h4 className="text-sm font-semibold text-slate-900">共享事项与依赖</h4>
@@ -401,7 +410,7 @@ export function CertificateDetailDrawer({
                   </div>
                   <div className="grid gap-2">
                     {detail.workItems.map((item) => (
-                      <button
+                      <Button variant="ghost"
                         key={item.id}
                         type="button"
                         onClick={() => onSelectWorkItem(item.id)}
@@ -416,7 +425,7 @@ export function CertificateDetailDrawer({
                         <div className="mt-1 text-xs text-slate-500">
                           {item.next_action || '待补充下一动作'} · {item.is_shared ? '共享事项' : '单证事项'}
                         </div>
-                      </button>
+                      </Button>
                     ))}
                   </div>
                 </div>
@@ -431,7 +440,7 @@ export function CertificateDetailDrawer({
               </div>
 
               <div className="grid gap-4">
-                <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm" data-testid="certificate-detail-conditions">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <h4 className="text-sm font-semibold text-slate-900">条件清单</h4>
                     {canEdit ? (
@@ -449,7 +458,7 @@ export function CertificateDetailDrawer({
                             <StatusBadge
                               status={condition.is_satisfied ? 'completed' : condition.status === '未满足' ? 'warning' : 'pending'}
                               fallbackLabel={condition.status}
-                              className="px-2 py-0.5 text-[11px]"
+                              className="px-2 py-0.5 text-xs"
                             >
                               {condition.is_satisfied ? '已满足' : condition.status}
                             </StatusBadge>
@@ -470,7 +479,7 @@ export function CertificateDetailDrawer({
                   </div>
                 </section>
 
-                <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
                       <h4 className="text-sm font-semibold text-slate-900">升级处置</h4>
@@ -509,7 +518,7 @@ export function CertificateDetailDrawer({
                   </div>
                 </section>
 
-                <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
                   <h4 className="text-sm font-semibold text-slate-900">状态记录</h4>
                   <div className="mt-3 grid gap-2">
                     {detail.records.map((record) => (
@@ -552,7 +561,7 @@ export function CertificateDetailDrawer({
                           `任务 ${item.task_id || '未关联'}`,
                           item.is_acknowledged ? '已确认' : '未确认',
                         ])}
-                        badges={<StatusBadge status={item.warning_level} className="px-2 py-0.5 text-[11px]">{WARNING_LEVEL_LABEL[item.warning_level]}</StatusBadge>}
+                        badges={<StatusBadge status={item.warning_level} className="px-2 py-0.5 text-xs">{WARNING_LEVEL_LABEL[item.warning_level]}</StatusBadge>}
                       />
                     ))
                   ) : (
@@ -581,10 +590,10 @@ export function CertificateDetailDrawer({
                         ])}
                         badges={
                           <>
-                            <StatusBadge status={item.severity} className="px-2 py-0.5 text-[11px]">
+                            <StatusBadge status={item.severity} className="px-2 py-0.5 text-xs">
                               {ISSUE_SEVERITY_LABEL[item.severity]}
                             </StatusBadge>
-                            <StatusBadge status={item.status} className="px-2 py-0.5 text-[11px]">
+                            <StatusBadge status={item.status} className="px-2 py-0.5 text-xs">
                               {ISSUE_STATUS_LABEL[item.status]}
                             </StatusBadge>
                           </>
@@ -617,13 +626,13 @@ export function CertificateDetailDrawer({
                         ])}
                         badges={
                           <>
-                            <StatusBadge status={item.level} className="px-2 py-0.5 text-[11px]">
+                            <StatusBadge status={item.level} className="px-2 py-0.5 text-xs">
                               {RISK_LEVEL_LABEL[item.level]}
                             </StatusBadge>
                             <StatusBadge
                               status={item.status === 'closed' ? 'closed' : item.status === 'mitigating' ? 'in_progress' : 'open'}
                               fallbackLabel={RISK_STATUS_LABEL[item.status]}
-                              className="px-2 py-0.5 text-[11px]"
+                              className="px-2 py-0.5 text-xs"
                             >
                               {RISK_STATUS_LABEL[item.status]}
                             </StatusBadge>
@@ -639,6 +648,25 @@ export function CertificateDetailDrawer({
             </section>
           </div>
         )}
+        </div>
+        <Separator />
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 bg-white/95 px-6 py-4" data-testid="certificate-detail-footer">
+          <div className="text-xs text-slate-500">
+            {detail ? `当前阶段：${detail.certificate.current_stage}` : '请选择证照查看详情'}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {canEdit ? (
+              <>
+                <Button variant="outline" size="sm" onClick={handleOpenConditionsDialog} disabled={!detail}>
+                  编辑条件
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => setCertificateDependenciesOpen(true)} disabled={!detail}>
+                  状态维护
+                </Button>
+              </>
+            ) : null}
+            <Button size="sm" onClick={onClose}>关闭</Button>
+          </div>
         </div>
       </div>
       {conditionDialogOpen && conditionMilestone ? (

@@ -396,8 +396,24 @@ describe('Planning real pages', () => {
     expect(view.container.textContent).toContain('条件 / 阻碍 / 延期摘要')
     expect(view.container.textContent).toContain('回到任务管理补条件')
     expect(view.container.textContent).toContain('前往风险与问题工作台')
+    expect(view.container.textContent).toContain('更多列')
+    expect(view.container.textContent).toContain('计划变更对比')
+    expect(view.container.textContent).toContain('纳入本月计划')
+    expect(view.container.textContent).toContain('移出本月计划')
     expect(confirmSummaryItems).toHaveLength(7)
     expect(quickConfirmButton?.disabled).toBe(true)
+
+    const currentMonthButton = Array.from(view.container.querySelectorAll('button')).find(
+      (button) => button.textContent?.includes('2026年4月') && button.textContent?.includes('当前'),
+    ) as HTMLButtonElement | undefined
+    expect(currentMonthButton?.className).toContain('ring-blue-500')
+
+    await clickButtonByText(view.container, '移出本月计划')
+    await waitForSelector(document.body, '[data-testid="monthly-plan-batch-move-out-dialog"]')
+    expect(document.body.textContent).toContain('确定将 2 项任务移出本月计划？')
+    expect(document.body.textContent).toContain('移出后任务将回到基线待分配状态。')
+    await clickButtonByText(document.body, '先保留')
+    await waitForCondition(() => !document.body.querySelector('[data-testid="monthly-plan-batch-move-out-dialog"]'))
 
     await clickButtonByText(view.container, '标准确认入口')
     await waitForSelector(document.body, '[data-testid="monthly-plan-confirm-dialog"]')
@@ -601,9 +617,9 @@ describe('Planning real pages', () => {
 
     await waitForSelector(view.container, '[data-testid="monthly-plan-info-bar"]')
     await waitForCondition(() => view.container.textContent?.includes('确认查看态') ?? false)
-    await clickButtonByText(view.container, '查看与主骨架差异')
+    await clickButtonByText(view.container, '查看计划变更对比')
     await waitForSelector(document.body, '[data-testid="monthly-plan-skeleton-diff-dialog"]')
-    expect(document.body.textContent).toContain('查看与主骨架差异')
+    expect(document.body.textContent).toContain('查看计划变更对比')
   })
 
   it('falls back to the latest available month when the current month has no version', async () => {
@@ -644,7 +660,7 @@ describe('Planning real pages', () => {
     await waitForCondition(() => view.container.textContent?.includes('2099年9月') ?? false)
     await clickButtonByText(view.container, '管理动作')
     await waitForSelector(document.body, '[role="menuitem"]')
-    expect(document.body.textContent).toContain('声明开始重排')
+    expect(document.body.textContent).toContain('进入编辑模式')
     expect(view.container.textContent).toContain('2099年9月')
   })
 
@@ -692,16 +708,16 @@ describe('Planning real pages', () => {
     await waitForCondition(() => view.container.textContent?.includes('确认查看态') ?? false)
     await clickButtonByText(view.container, '管理动作')
     await waitForSelector(document.body, '[role="menuitem"]')
-    await clickMenuItemByText(document.body, '声明开始重排')
+    await clickMenuItemByText(document.body, '进入编辑模式')
 
     await waitForCondition(() =>
       mockedApiPost.mock.calls.some(([url]) => url === '/api/monthly-plans/monthly-v3/queue-realignment'),
     )
-    await waitForCondition(() => view.container.textContent?.includes('待重排查看态') ?? false)
+    await waitForCondition(() => view.container.textContent?.includes('待编辑模式查看态') ?? false)
 
     await clickButtonByText(view.container, '管理动作')
     await waitForSelector(document.body, '[role="menuitem"]')
-    await clickMenuItemByText(document.body, '结束重排')
+    await clickMenuItemByText(document.body, '结束编辑模式')
 
     await waitForCondition(() =>
       mockedApiPost.mock.calls.some(([url]) => url === '/api/monthly-plans/monthly-v3/resolve-realignment'),
@@ -871,7 +887,16 @@ describe('Planning real pages', () => {
 
     await waitForSelector(document.body, '[data-testid="monthly-plan-regenerate-dialog"]')
     expect(document.body.textContent).toContain('1 项已调整条目会被覆盖')
+    expect(document.body.textContent).toContain('Step 1 · 选择范围')
+    expect(document.body.textContent).toContain('以最新确认基线为基础重新生成')
+    expect(document.body.textContent).toContain('以上月已确认计划为基础延续')
+    expect(document.body.textContent).toContain('在当前草稿基础上刷新数据')
+
+    await clickButtonByText(document.body, '下一步：确认影响')
+    expect(document.body.textContent).toContain('Step 2 确认影响')
     expect(document.body.textContent).toContain('当前来源：项目基线')
+    await clickButtonByText(document.body, '下一步：执行')
+    expect(document.body.textContent).toContain('Step 3 执行')
 
     await clickButtonByText(document.body, '确认重新生成')
 
@@ -961,6 +986,34 @@ describe('Planning real pages', () => {
     cleanups.push(view.cleanup)
 
     await waitForSelector(view.container, '[data-testid="closeout-escalation-ladder"]')
+    await waitForSelector(view.container, '[data-testid="closeout-detail-drawer"]')
+    expect(view.container.textContent).toContain('逾期 3 天系统提醒')
+    expect(view.container.textContent).toContain('5 天通知上级')
+    expect(view.container.textContent).toContain('7 天自动关闭')
+    expect(view.container.querySelector('[data-testid="closeout-reason-breadcrumb"]')?.textContent).toContain(
+      '根',
+    )
+    expect(view.container.querySelector('[data-testid="closeout-reason-branch-system"]')?.textContent).toContain(
+      '适用于当月已完成',
+    )
+    expect(view.container.querySelector('[data-testid="closeout-reason-branch-system"]')?.textContent).toContain(
+      '2',
+    )
+    expect(view.container.querySelector('[data-testid="closeout-reason-branch-system"]')?.className).toContain(
+      'bg-blue-50',
+    )
+    expect(view.container.querySelector('[data-testid="closeout-detail-drawer-header"]')).toBeTruthy()
+    expect(view.container.querySelector('[data-testid="closeout-detail-drawer-body"]')).toBeTruthy()
+    expect(view.container.querySelector('[data-testid="closeout-detail-drawer-footer"]')).toBeTruthy()
+
+    const checkbox = view.container.querySelector('[data-testid="planning-selection-checkbox"]') as HTMLInputElement | null
+    await act(async () => {
+      checkbox?.click()
+      await flush()
+    })
+    await waitForSelector(view.container, '[data-testid="closeout-batch-bar"]')
+    expect(view.container.querySelector('[data-testid="closeout-batch-bar"]')?.className).toContain('max-w')
+
     await clickElement(view.container.querySelector('[data-testid="closeout-more-actions"]') as HTMLElement | null)
     await waitForSelector(document.body, '[data-testid="closeout-force-close-entry"]')
     await clickElement(document.body.querySelector('[data-testid="closeout-force-close-entry"]') as HTMLElement | null)
@@ -1040,6 +1093,7 @@ describe('Planning real pages', () => {
 
     await waitForSelector(view.container, '[data-testid="closeout-escalation-ladder"]')
     expect(view.container.textContent).toContain('+7 天强制关账窗口')
+    expect(view.container.textContent).toContain('逾期 3 天系统提醒')
 
     await act(async () => {
       ;(view.container.querySelector('[data-testid="closeout-grouping-processing"]') as HTMLButtonElement | null)?.click()

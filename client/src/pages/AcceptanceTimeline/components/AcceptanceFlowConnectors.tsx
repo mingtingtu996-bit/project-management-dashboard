@@ -104,7 +104,7 @@ export default function AcceptanceFlowConnectors({
             markerEnd={isSelectedEdge ? 'url(#acceptance-flow-arrow-blue)' : 'url(#acceptance-flow-arrow)'}
             data-testid={`acceptance-flow-edge-${edge.id}`}
             className={cn(
-              'fill-none stroke-[2.5] transition-opacity',
+              'fill-none stroke-[2.5] motion-safe:transition-all duration-300',
               isSelectedEdge ? 'stroke-blue-500 opacity-100' : isRelatedEdge ? 'stroke-slate-400 opacity-90' : 'stroke-slate-200 opacity-25',
               edge.parallelCount > 1 && 'stroke-dashed',
             )}

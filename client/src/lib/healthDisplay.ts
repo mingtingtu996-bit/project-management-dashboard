@@ -55,15 +55,15 @@ export function getHealthTrendDisplay(trend: HealthTrend): HealthTrendDisplay {
     case 'down':
       return { label: '下降', textClass: 'text-red-500' }
     default:
-      return { label: '持平', textClass: 'text-gray-400' }
+      return { label: '持平', textClass: 'text-slate-400' }
   }
 }
 
 export function getHealthDimensionDisplay(isBase: boolean, isPositive: boolean): HealthToneDisplay {
   if (isBase) {
     return {
-      barClass: 'bg-gray-300',
-      textClass: 'text-gray-400',
+      barClass: 'bg-slate-300',
+      textClass: 'text-slate-400',
     }
   }
 
@@ -82,7 +82,7 @@ export function getHealthProgressDisplay(progress: number): HealthToneDisplay {
 
   if (progress >= 60) {
     return {
-      barClass: 'bg-blue-500',
+      barClass: 'bg-blue-600',
       textClass: 'text-blue-600',
     }
   }

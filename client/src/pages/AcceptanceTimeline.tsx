@@ -11,7 +11,9 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { safeStorageGet, safeStorageSet } from '@/lib/browserStorage'
 import { usePermissions } from '@/hooks/usePermissions'
@@ -53,6 +55,45 @@ const ACCEPTANCE_STATUS_LABELS: Record<AcceptanceStatus, string> = {
   archived: '已归档',
 }
 const SCOPE_LEVEL_ORDER = ['project', 'building', 'unit', 'specialty'] as const
+type AcceptanceStageKey = 'foundation' | 'main' | 'completion' | 'special'
+
+const ACCEPTANCE_STAGE_DEFINITIONS: Array<{
+  key: AcceptanceStageKey
+  label: string
+  description: string
+  accentClass: string
+  progressClass: string
+}> = [
+  {
+    key: 'foundation',
+    label: '基础验收',
+    description: '地基、基础与预验收',
+    accentClass: 'border-l-green-500',
+    progressClass: 'bg-green-500',
+  },
+  {
+    key: 'main',
+    label: '主体验收',
+    description: '主体、单位工程与四方验收',
+    accentClass: 'border-l-blue-500',
+    progressClass: 'bg-blue-600',
+  },
+  {
+    key: 'completion',
+    label: '竣工验收',
+    description: '备案、归档与交付收口',
+    accentClass: 'border-l-slate-500',
+    progressClass: 'bg-slate-600',
+  },
+  {
+    key: 'special',
+    label: '专项验收',
+    description: '消防、规划、人防、电梯、防雷等',
+    accentClass: 'border-l-blue-500',
+    progressClass: 'bg-blue-600',
+  },
+]
+
 const SCOPE_LEVEL_LABELS: Record<(typeof SCOPE_LEVEL_ORDER)[number], string> = {
   project: '项目级',
   building: '楼栋级',
@@ -106,6 +147,50 @@ function getAcceptancePhaseLabel(value: string) {
   return ACCEPTANCE_PHASE_OPTIONS.find((phase) => phase.value === value)?.label || value
 }
 
+function getAcceptanceStageKey(plan: AcceptancePlan): AcceptanceStageKey {
+  const typeId = String(plan.type_id ?? '').toLowerCase()
+  const phaseCode = String(plan.phase_code ?? '').toLowerCase()
+  const category = String(plan.category ?? '').toLowerCase()
+  const name = `${plan.name ?? ''} ${plan.type_name ?? ''} ${plan.acceptance_name ?? ''} ${plan.acceptance_type ?? ''}`.toLowerCase()
+  const searchText = `${typeId} ${phaseCode} ${category} ${name}`
+
+  if (searchText.includes('completion_record') || searchText.includes('filing') || searchText.includes('archive') || searchText.includes('delivery') || searchText.includes('竣工') || searchText.includes('备案') || searchText.includes('归档') || searchText.includes('交付')) {
+    return 'completion'
+  }
+
+  if (typeId === 'pre_acceptance' || searchText.includes('foundation') || searchText.includes('基础') || searchText.includes('地基') || searchText.includes('预验收')) {
+    return 'foundation'
+  }
+
+  if (typeId === 'four_party' || searchText.includes('main') || searchText.includes('主体') || searchText.includes('单位工程') || searchText.includes('四方')) {
+    return 'main'
+  }
+
+  return 'special'
+}
+
+function buildAcceptanceStageSummaries(plans: AcceptancePlan[]) {
+  const buckets = new Map<AcceptanceStageKey, AcceptancePlan[]>()
+  ACCEPTANCE_STAGE_DEFINITIONS.forEach((stage) => buckets.set(stage.key, []))
+
+  plans.forEach((plan) => {
+    buckets.get(getAcceptanceStageKey(plan))?.push(plan)
+  })
+
+  return ACCEPTANCE_STAGE_DEFINITIONS.map((stage) => {
+    const stagePlans = buckets.get(stage.key) || []
+    const passed = stagePlans.filter((plan) => ['passed', 'archived'].includes(normalizeAcceptanceStatus(plan.status))).length
+    const total = stagePlans.length
+
+    return {
+      ...stage,
+      passed,
+      total,
+      percent: total > 0 ? Math.round((passed / total) * 100) : 0,
+    }
+  })
+}
+
 const ACCEPTANCE_TIMELINE_BUCKET_DAY_SPAN: Record<AcceptanceTimelineScale, number> = {
   month: 30,
   biweek: 14,
@@ -124,6 +209,10 @@ function shiftIsoDate(value: string, days: number) {
 }
 
 export default function AcceptanceTimeline() {
+  useEffect(() => {
+    document.title = '验收流程 | WorkBuddy'
+  }, [])
+
   const { id } = useParams<{ id: string }>()
   const location = useLocation()
   const { toast } = useToast()
@@ -241,6 +330,10 @@ export default function AcceptanceTimeline() {
   const visiblePhaseGroups = useMemo(() => groupAcceptanceByPhase(visiblePlans), [visiblePlans])
   const flowLayout = useMemo(() => buildAcceptanceFlowLayout(visiblePlans, timeScale), [timeScale, visiblePlans])
   const selectedNode = useMemo(() => flowLayout.nodes.find((node) => node.id === selectedNodeId) || null, [flowLayout.nodes, selectedNodeId])
+  const stageSummaries = useMemo(() => buildAcceptanceStageSummaries(visiblePlans), [visiblePlans])
+  const totalStageCount = useMemo(() => stageSummaries.reduce((sum, stage) => sum + stage.total, 0), [stageSummaries])
+  const totalPassedStageCount = useMemo(() => stageSummaries.reduce((sum, stage) => sum + stage.passed, 0), [stageSummaries])
+  const totalPercent = totalStageCount > 0 ? Math.round((totalPassedStageCount / totalStageCount) * 100) : 0
 
   const refreshBundle = useCallback(async (planId: string) => {
     if (!projectId) return
@@ -436,58 +529,38 @@ export default function AcceptanceTimeline() {
 
   if (loading) {
     return (
-      <div className="space-y-4 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm" data-testid="acceptance-loading-skeleton">
-        <div className="flex items-center justify-between gap-4">
-          <div className="space-y-2">
-            <Skeleton className="h-6 w-40" />
-            <Skeleton className="h-4 w-64" />
+      <div className="page-shell page-enter" data-testid="acceptance-loading-skeleton">
+        <div className="space-y-4 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="flex items-center justify-between gap-4">
+            <div className="space-y-2">
+              <Skeleton className="h-6 w-40" />
+              <Skeleton className="h-4 w-64" />
+            </div>
+            <div className="flex gap-2">
+              <Skeleton className="h-9 w-24 rounded-full" />
+              <Skeleton className="h-9 w-24 rounded-full" />
+            </div>
           </div>
-          <div className="flex gap-2">
-            <Skeleton className="h-9 w-24 rounded-full" />
-            <Skeleton className="h-9 w-24 rounded-full" />
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            {[1, 2, 3, 4].map((item) => <div key={item} className="rounded-xl border border-slate-100 bg-slate-50 p-4"><Skeleton className="h-4 w-20" /><Skeleton className="mt-3 h-8 w-16" /></div>)}
           </div>
-        </div>
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-7">
-          {[1, 2, 3, 4, 5, 6, 7].map((item) => <div key={item} className="rounded-2xl border border-slate-100 bg-slate-50 p-4"><Skeleton className="h-4 w-20" /><Skeleton className="mt-3 h-8 w-16" /></div>)}
         </div>
       </div>
     )
   }
 
   return (
-    <div className="page-enter space-y-6">
+    <div className="page-shell page-enter space-y-6">
       {currentProject && (
         <Breadcrumb
           items={[
-            { label: '公司驾驶舱', href: '/company' },
-            { label: projectName, href: `/projects/${id}` },
-            { label: '专项管理', href: `/projects/${id}/pre-milestones` },
-            { label: '验收时间轴' },
+            { label: projectName, href: `/projects/${id}/dashboard` },
+            { label: '验收流程' },
           ]}
         />
       )}
 
-      <PageHeader eyebrow="专项管理" title="验收时间轴">
-        <div className="flex items-center rounded-full border border-slate-200 bg-white p-1 shadow-sm">
-          <button
-            type="button"
-            onClick={() => setViewMode('graph')}
-            className={cn('inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm transition-colors', viewMode === 'graph' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900')}
-            data-testid="acceptance-view-graph"
-          >
-            <Network className="h-4 w-4" />
-            流程板
-          </button>
-          <button
-            type="button"
-            onClick={() => setViewMode('list')}
-            className={cn('inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm transition-colors', viewMode === 'list' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900')}
-            data-testid="acceptance-view-list"
-          >
-            <List className="h-4 w-4" />
-            台账
-          </button>
-        </div>
+      <PageHeader eyebrow="专项管理" title="验收流程">
         <Button variant="outline" size="sm" onClick={() => setTypeManagerOpen(true)} className="gap-2" disabled={!canEdit}>
           <Palette className="h-4 w-4" />
           类型管理
@@ -498,11 +571,11 @@ export default function AcceptanceTimeline() {
         </Button>
       </PageHeader>
 
-      <section data-testid="acceptance-summary-panel" className="space-y-4 rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+      <section data-testid="acceptance-summary-panel" className="card-unified space-y-4 rounded-xl p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <div className="text-sm font-semibold text-slate-900">摘要区</div>
-            <div className="text-xs text-slate-500">当前视图 {visiblePlans.length} / 全部 {plans.length}</div>
+            <div className="text-xs text-slate-500">当前视图 {visiblePlans.length} / 全部 {projectSummary.totalCount || plans.length}</div>
           </div>
           <div className="flex flex-wrap gap-2">
             <Badge variant="outline" className="rounded-full px-3 py-1">项目：{projectName}</Badge>
@@ -511,18 +584,39 @@ export default function AcceptanceTimeline() {
             <Badge variant="outline" className="rounded-full px-3 py-1">阶段：{getAcceptancePhaseLabel(phaseFilter)}</Badge>
           </div>
         </div>
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-7">
-          <StatCard label="验收总数" value={projectSummary.totalCount} tone="slate" />
-          <StatCard label="已通过" value={projectSummary.passedCount} tone="green" />
-          <StatCard label="推进中" value={projectSummary.inProgressCount} tone="blue" />
-          <StatCard label="未启动" value={projectSummary.notStartedCount} tone="amber" />
-          <StatCard label="受阻" value={projectSummary.blockedCount} tone="red" />
-          <StatCard label="近30天临期" value={projectSummary.dueSoon30dCount} tone="emerald" />
-          <StatCard label="预计完成关键节点" value={projectSummary.keyMilestoneCount} tone="violet" />
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          {stageSummaries.map((stage) => (
+            <AcceptanceStageCard key={stage.key} stage={stage} />
+          ))}
+        </div>
+        <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-5" data-testid="acceptance-progress-overview">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <span className="text-lg font-semibold text-slate-900">验收总进度</span>
+            <span className="text-2xl font-bold tabular-nums text-slate-900">{totalPercent}%</span>
+          </div>
+          <div className="h-3 w-full overflow-hidden rounded-full bg-slate-100" aria-label={`验收总进度 ${totalPercent}%`}>
+            <div className="flex h-full w-full">
+              {stageSummaries.map((stage) => (
+                <div
+                  key={stage.key}
+                  className={cn('h-full motion-safe:transition-[width] duration-700 ease-out', stage.progressClass)}
+                  style={{ width: `${totalStageCount > 0 ? (stage.passed / totalStageCount) * 100 : 0}%` }}
+                  data-testid={`acceptance-progress-segment-${stage.key}`}
+                />
+              ))}
+            </div>
+          </div>
+          <div className="mt-2 flex flex-wrap gap-4 text-xs text-slate-500">
+            {stageSummaries.map((stage) => (
+              <span key={stage.key} className="tabular-nums">
+                {stage.label} {stage.percent}% ({stage.passed}/{stage.total})
+              </span>
+            ))}
+          </div>
         </div>
       </section>
 
-      <section data-testid="acceptance-filter-panel" className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+      <section data-testid="acceptance-filter-panel" className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <div className="text-sm font-semibold text-slate-900">筛选区</div>
@@ -587,7 +681,7 @@ export default function AcceptanceTimeline() {
           </div>
           <div className="space-y-1">
             <Label className="text-xs text-slate-500">仅看阻塞</Label>
-            <button
+            <Button variant="ghost"
               type="button"
               onClick={() => setBlockedOnly((current) => !current)}
               className={cn('inline-flex w-full items-center justify-between rounded-md border px-3 py-2 text-sm transition-colors', blockedOnly ? 'border-amber-300 bg-amber-50 text-amber-800' : 'border-slate-200 bg-white text-slate-600')}
@@ -595,11 +689,11 @@ export default function AcceptanceTimeline() {
             >
               <span>只看阻塞项</span>
               <span>{blockedOnly ? '已启用' : '关闭'}</span>
-            </button>
+            </Button>
           </div>
           <div className="space-y-1">
             <Label className="text-xs text-slate-500">仅看临期</Label>
-            <button
+            <Button variant="ghost"
               type="button"
               onClick={() => setUpcomingOnly((current) => !current)}
               className={cn('inline-flex w-full items-center justify-between rounded-md border px-3 py-2 text-sm transition-colors', upcomingOnly ? 'border-blue-300 bg-blue-50 text-blue-800' : 'border-slate-200 bg-white text-slate-600')}
@@ -607,13 +701,13 @@ export default function AcceptanceTimeline() {
             >
               <span>30天内到期</span>
               <span>{upcomingOnly ? '已启用' : '关闭'}</span>
-            </button>
+            </Button>
           </div>
           <div className="space-y-1">
             <Label className="text-xs text-slate-500">时间尺度</Label>
             <div className="grid grid-cols-3 gap-2">
               {[{ value: 'month', label: '月' }, { value: 'biweek', label: '双周' }, { value: 'week', label: '周' }].map((item) => (
-                <button
+                <Button variant="ghost"
                   key={item.value}
                   type="button"
                   onClick={() => setTimeScale(item.value as AcceptanceTimelineScale)}
@@ -621,7 +715,7 @@ export default function AcceptanceTimeline() {
                   data-testid={`acceptance-time-scale-${item.value}`}
                 >
                   {item.label}
-                </button>
+                </Button>
               ))}
             </div>
           </div>
@@ -634,31 +728,57 @@ export default function AcceptanceTimeline() {
         </div>
       )}
 
-      {visiblePlans.length === 0 ? (
-        <EmptyState
-          icon={CheckCircle2}
-          title="暂无验收记录"
-          description=""
-          action={<Button className="gap-2" onClick={() => setAddPlanOpen(true)} disabled={!canEdit}><Plus className="h-4 w-4" />添加验收</Button>}
-        />
-      ) : viewMode === 'graph' ? (
-        <AcceptanceFlowBoard layout={flowLayout} plans={visiblePlans} customTypes={allTypes} selectedNodeId={selectedNode?.id} onNodeClick={handleNodeSelect} onNodeDragEnd={canEdit ? handleNodeDragEnd : undefined} />
-      ) : (
-        <AcceptanceLedger
-          plans={visiblePlans}
-          nodes={flowLayout.nodes}
-          customTypes={allTypes}
-          onNodeClick={handleNodeSelect}
-          onStatusChange={canEdit ? handleStatusChange : undefined}
-          onDateUpdate={canEdit ? handleDateUpdate : undefined}
-          onBatchStatusChange={canEdit ? handleBatchStatusChange : undefined}
-          onBatchDateUpdate={canEdit ? handleBatchDateUpdate : undefined}
-          onBatchResponsibleUnitUpdate={canEdit ? handleBatchResponsibleUnitUpdate : undefined}
-          onBatchPhaseUpdate={canEdit ? handleBatchPhaseUpdate : undefined}
-          timeScale={timeScale}
-          canEdit={canEdit}
-        />
-      )}
+      <Tabs value={viewMode} onValueChange={(value) => setViewMode(value as AcceptanceTimelineViewMode)} className="space-y-4">
+        <TabsList className="grid h-auto w-full max-w-md grid-cols-2 rounded-xl bg-slate-100 p-1">
+          <TabsTrigger value="graph" className="gap-2 rounded-lg" onClick={() => setViewMode('graph')} data-testid="acceptance-view-graph">
+            <Network className="h-4 w-4" />
+            流程图({visiblePlans.length})
+          </TabsTrigger>
+          <TabsTrigger value="list" className="gap-2 rounded-lg" onClick={() => setViewMode('list')} data-testid="acceptance-view-list">
+            <List className="h-4 w-4" />
+            台账({visiblePlans.length})
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="graph" forceMount className="mt-0">
+          {visiblePlans.length === 0 ? (
+            <EmptyState
+              icon={CheckCircle2}
+              title="暂无验收记录"
+              description=""
+              action={<Button className="gap-2" onClick={() => setAddPlanOpen(true)} disabled={!canEdit}><Plus className="h-4 w-4" />添加验收</Button>}
+            />
+          ) : (
+            <AcceptanceFlowBoard layout={flowLayout} plans={visiblePlans} customTypes={allTypes} selectedNodeId={selectedNode?.id} onNodeClick={handleNodeSelect} onNodeDragEnd={canEdit ? handleNodeDragEnd : undefined} />
+          )}
+        </TabsContent>
+
+        <TabsContent value="list" forceMount className="mt-0">
+          {visiblePlans.length === 0 ? (
+            <EmptyState
+              icon={CheckCircle2}
+              title="暂无验收记录"
+              description=""
+              action={<Button className="gap-2" onClick={() => setAddPlanOpen(true)} disabled={!canEdit}><Plus className="h-4 w-4" />添加验收</Button>}
+            />
+          ) : (
+            <AcceptanceLedger
+              plans={visiblePlans}
+              nodes={flowLayout.nodes}
+              customTypes={allTypes}
+              onNodeClick={handleNodeSelect}
+              onStatusChange={canEdit ? handleStatusChange : undefined}
+              onDateUpdate={canEdit ? handleDateUpdate : undefined}
+              onBatchStatusChange={canEdit ? handleBatchStatusChange : undefined}
+              onBatchDateUpdate={canEdit ? handleBatchDateUpdate : undefined}
+              onBatchResponsibleUnitUpdate={canEdit ? handleBatchResponsibleUnitUpdate : undefined}
+              onBatchPhaseUpdate={canEdit ? handleBatchPhaseUpdate : undefined}
+              timeScale={timeScale}
+              canEdit={canEdit}
+            />
+          )}
+        </TabsContent>
+      </Tabs>
 
       <AcceptanceDetailDrawer
         node={selectedNode}
@@ -688,17 +808,32 @@ export default function AcceptanceTimeline() {
   )
 }
 
-function StatCard({ label, value, tone }: { label: string; value: number | string; tone: 'slate' | 'green' | 'blue' | 'amber' | 'emerald' | 'red' | 'violet' }) {
-  const toneClass: Record<typeof tone, string> = {
-    slate: 'bg-slate-50 text-slate-800',
-    green: 'bg-green-50 text-green-700',
-    blue: 'bg-blue-50 text-blue-700',
-    amber: 'bg-amber-50 text-amber-700',
-    emerald: 'bg-emerald-50 text-emerald-700',
-    red: 'bg-red-50 text-red-700',
-    violet: 'bg-violet-50 text-violet-700',
-  }
-  return <Card className={cn('border-0 shadow-sm', toneClass[tone])}><CardContent className="p-5"><div className="text-2xl font-semibold">{value}</div><div className="mt-1 text-sm text-slate-500">{label}</div></CardContent></Card>
+function AcceptanceStageCard({ stage }: { stage: ReturnType<typeof buildAcceptanceStageSummaries>[number] }) {
+  return (
+    <Card className={cn('card-unified rounded-xl border-l-4 bg-white', stage.accentClass)} data-testid={`acceptance-stage-card-${stage.key}`}>
+      <CardContent className="p-5">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="text-sm font-semibold text-slate-900">{stage.label}</div>
+            <div className="mt-1 text-xs text-slate-500">{stage.description}</div>
+          </div>
+          <Badge variant="outline" className="rounded-full bg-white tabular-nums">
+            {stage.passed}/{stage.total}
+          </Badge>
+        </div>
+        <div className="mt-4 flex items-end justify-between gap-3">
+          <div className="text-3xl font-semibold tabular-nums text-slate-900">{stage.percent}%</div>
+          <div className="text-xs text-slate-500">通过率</div>
+        </div>
+        <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100">
+          <div
+            className={cn('h-full motion-safe:transition-[width] duration-700 ease-out', stage.progressClass)}
+            style={{ width: `${stage.percent}%` }}
+          />
+        </div>
+      </CardContent>
+    </Card>
+  )
 }
 
 function TypeManagerDialog({
@@ -766,7 +901,7 @@ function TypeManagerDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && handleClose()}>
-      <DialogContent className="max-h-[80vh] max-w-lg overflow-y-auto">
+      <DialogContent className="max-h-[80vh] max-w-[560px] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Palette className="h-5 w-5" />
@@ -795,16 +930,17 @@ function TypeManagerDialog({
                   <div key={type.id} className="group flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm" style={{ backgroundColor: `${type.color}20`, color: type.color }}>
                     <span>{type.icon}</span>
                     <span>{type.name}</span>
-                    <button type="button" onClick={() => onDeleteType(type.id)} disabled={!canEdit} className="ml-1 rounded-full p-0.5 opacity-0 transition-opacity group-hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-30">
+                    <Button variant="ghost" type="button" onClick={() => onDeleteType(type.id)} disabled={!canEdit} className="ml-1 rounded-full p-0.5 opacity-0 transition-opacity group-hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-30">
                       <CheckCircle2 className="h-4 w-4" />
-                    </button>
+                    </Button>
                   </div>
                 ))}
               </div>
             </div>
           )}
 
-          <div className="border-t border-slate-100 pt-4">
+          <Separator />
+          <div className="pt-4">
             <h4 className="mb-3 text-sm font-medium text-slate-700">新增类型</h4>
             <div className="space-y-3">
               <div>
@@ -859,7 +995,7 @@ function TypeManagerDialog({
                 <Label>颜色</Label>
                 <div className="mt-2 flex flex-wrap gap-2">
                   {CHART_PALETTE.map((color) => (
-                    <button key={color} type="button" onClick={() => setNewTypeColor(color)} className={cn('h-8 w-8 rounded-full transition-all', newTypeColor === color && 'ring-2 ring-slate-400 ring-offset-2')} style={{ backgroundColor: color }} />
+                    <Button variant="ghost" key={color} type="button" onClick={() => setNewTypeColor(color)} className={cn('h-8 w-8 rounded-full transition-all', newTypeColor === color && 'ring-2 ring-slate-400 ring-offset-2')} style={{ backgroundColor: color }} />
                   ))}
                 </div>
               </div>
@@ -959,7 +1095,7 @@ function AddPlanDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-[560px]">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Plus className="h-5 w-5" />
@@ -987,9 +1123,9 @@ function AddPlanDialog({
             </datalist>
             <div className="mt-2 flex flex-wrap gap-1.5">
               {PLAN_PRESETS.map((preset) => (
-                <button key={preset} type="button" onClick={() => handlePickPreset(preset)} className={cn('rounded-full border px-2 py-1 text-xs transition-colors', name === preset ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-200 bg-white text-slate-600 hover:border-blue-300')}>
+                <Button variant="ghost" key={preset} type="button" onClick={() => handlePickPreset(preset)} className={cn('rounded-full border px-2 py-1 text-xs transition-colors', name === preset ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-200 bg-white text-slate-600 hover:border-blue-300')}>
                   {preset}
-                </button>
+                </Button>
               ))}
             </div>
           </div>

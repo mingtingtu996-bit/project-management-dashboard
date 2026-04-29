@@ -8,6 +8,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { Separator } from '@/components/ui/separator'
 import { Clock3 } from 'lucide-react'
 
 export type MonthlyPlanConfirmMode = 'quick' | 'standard'
@@ -55,7 +56,10 @@ export function MonthlyPlanConfirmDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent data-testid="monthly-plan-confirm-dialog" className="max-h-[90vh] max-w-3xl overflow-y-auto">
+      <DialogContent
+        data-testid="monthly-plan-confirm-dialog"
+        className="max-h-[90vh] max-w-[720px] overflow-y-auto rounded-2xl shadow-[var(--el-4)]"
+      >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-base">
             <Clock3 className="h-4 w-4 text-cyan-500" />
@@ -126,7 +130,8 @@ export function MonthlyPlanConfirmDialog({
             </Card>
           </div>
 
-          <div className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-100 pt-2">
+          <Separator />
+          <div className="flex flex-wrap items-center justify-end gap-2 pt-2">
             {state === 'failed' ? (
               <Button type="button" variant="destructive" onClick={onRetry}>
                 重新尝试

@@ -10,6 +10,7 @@ import {
 import { ChevronDown, ChevronRight } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
+import { Separator } from '@/components/ui/separator'
 import { cn } from '@/lib/utils'
 
 import type { Task, WBSNode } from '../GanttViewTypes'
@@ -523,7 +524,7 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
           </span>
           <div className="inline-flex rounded-xl border border-slate-200 bg-white p-1">
             {(['day', 'week', 'month'] as const).map((option) => (
-              <button
+              <Button variant="ghost"
                 key={option}
                 type="button"
                 data-testid={`gantt-timeline-scale-${option}`}
@@ -534,11 +535,11 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
                 )}
               >
                 {option === 'day' ? '天' : option === 'week' ? '周' : '月'}
-              </button>
+              </Button>
             ))}
           </div>
           <div className="inline-flex rounded-xl border border-slate-200 bg-white p-1">
-            <button
+            <Button variant="ghost"
               type="button"
               data-testid="gantt-timeline-compare-plan"
               onClick={() => onCompareModeChange('plan')}
@@ -548,8 +549,8 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
               )}
             >
               计划 / 实际
-            </button>
-            <button
+            </Button>
+            <Button variant="ghost"
               type="button"
               data-testid="gantt-timeline-compare-baseline"
               onClick={() => onCompareModeChange('baseline')}
@@ -559,7 +560,7 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
               )}
             >
               基线对比
-            </button>
+            </Button>
           </div>
           {compareMode === 'baseline' ? (
             <select
@@ -594,11 +595,12 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
         <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
           <div className="grid" style={{ gridTemplateColumns: `${leftPaneWidth}px minmax(0, 1fr)` }}>
             <div className="border-r border-slate-200">
-              <div className="grid h-14 grid-cols-[minmax(0,1fr)_7rem_7rem] items-center gap-3 border-b border-slate-200 bg-slate-50 px-4 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <div className="grid h-14 grid-cols-[minmax(0,1fr)_7rem_7rem] items-center gap-3 bg-slate-50 px-4 text-xs font-semibold uppercase tracking-wide text-slate-500">
                 <span>任务名称</span>
                 <span>责任单位</span>
                 <span>责任人</span>
               </div>
+              <Separator />
               <div
                 ref={leftBodyRef}
                 className="relative overflow-y-auto overflow-x-hidden"
@@ -634,7 +636,7 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
                       >
                         <div className="flex min-w-0 items-center gap-2" style={{ paddingLeft: layout.task.depth * 14 }}>
                           {hasChildren ? (
-                            <button
+                            <Button variant="ghost"
                               type="button"
                               aria-label={collapsed.has(layout.task.id) ? '展开子任务' : '折叠子任务'}
                               className="inline-flex h-6 w-6 items-center justify-center rounded-md text-slate-500 hover:bg-slate-200"
@@ -648,7 +650,7 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
                               ) : (
                                 <ChevronDown className="h-4 w-4" />
                               )}
-                            </button>
+                            </Button>
                           ) : (
                             <span className="h-6 w-6 shrink-0" />
                           )}
@@ -656,7 +658,7 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
                             <div className="truncate text-sm font-medium text-slate-900">
                               {layout.task.title || layout.task.name || '未命名任务'}
                             </div>
-                            <div className="flex flex-wrap items-center gap-2 pt-0.5 text-[11px] text-slate-500">
+                            <div className="flex flex-wrap items-center gap-2 pt-0.5 text-xs text-slate-500">
                               {layout.task.wbs_code ? <span>WBS {layout.task.wbs_code}</span> : null}
                               {layout.task.is_milestone ? <span>里程碑</span> : null}
                               {layout.missingBaseline ? <span className="text-amber-600">未映射基线</span> : null}

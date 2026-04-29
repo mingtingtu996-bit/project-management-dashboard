@@ -227,6 +227,10 @@ function buildSlowApiSummary(reports: StoredPerformanceReport[]) {
   })
 }
 
+function isSyntheticAutomationReport(report: StoredPerformanceReport) {
+  return /HeadlessChrome|Playwright|jsdom|Vitest/i.test(report.userAgent ?? '')
+}
+
 function buildReleaseGate(params: {
   totalReports: number
   thresholdExceededCount: number
@@ -307,22 +311,24 @@ function buildRecommendations(params: {
 }
 
 export function buildPerformanceEvidenceSummary(reports: StoredPerformanceReport[] = performanceReportWindow) {
-  const slowApis = buildSlowApiSummary(reports)
+  const onlineReports = reports.filter((report) => !isSyntheticAutomationReport(report))
+  const syntheticReportsExcluded = reports.length - onlineReports.length
+  const slowApis = buildSlowApiSummary(onlineReports)
   const slowRoutes = summarizeGroups(
-    reports.filter((report) => report.source === 'route' || report.source === 'navigation'),
+    onlineReports.filter((report) => report.source === 'route' || report.source === 'navigation'),
     (report) => `${report.source}:${normalizePathLike(report.route ?? report.url)}`,
   ).slice(0, 5)
   const webVitals = summarizeGroups(
-    reports.filter((report) => report.source === 'web_vital'),
+    onlineReports.filter((report) => report.source === 'web_vital'),
     (report) => `${report.name}:${normalizePathLike(report.route ?? report.url)}`,
   ).slice(0, 5)
   const longTasks = summarizeGroups(
-    reports.filter((report) => report.source === 'long_task'),
+    onlineReports.filter((report) => report.source === 'long_task'),
     (report) => normalizePathLike(report.route ?? report.url),
   ).slice(0, 5)
-  const thresholdExceededCount = reports.filter((report) => report.thresholdExceeded).length
+  const thresholdExceededCount = onlineReports.filter((report) => report.thresholdExceeded).length
   const releaseGate = buildReleaseGate({
-    totalReports: reports.length,
+    totalReports: onlineReports.length,
     thresholdExceededCount,
     slowApis,
     slowRoutes,
@@ -333,9 +339,10 @@ export function buildPerformanceEvidenceSummary(reports: StoredPerformanceReport
   return {
     generatedAt: new Date().toISOString(),
     window: {
-      retainedReports: reports.length,
+      retainedReports: onlineReports.length,
       retentionLimit: MAX_STORED_PERFORMANCE_REPORTS,
       thresholdExceeded: thresholdExceededCount,
+      syntheticReportsExcluded,
     },
     thresholds: {
       apiMs: SLOW_API_MS,

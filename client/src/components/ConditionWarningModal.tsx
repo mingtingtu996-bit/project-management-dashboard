@@ -42,7 +42,7 @@ export function ConditionWarningModal({
 
   return (
     <Dialog open={resolvedOpen} onOpenChange={setResolvedOpen}>
-      <DialogContent className="max-w-md" data-testid="condition-warning-modal">
+      <DialogContent className="max-w-[560px]" data-testid="condition-warning-modal">
         <DialogHeader className="space-y-2">
           <DialogTitle className="flex items-center gap-2 text-lg">
             <span className="flex h-7 w-7 items-center justify-center rounded-full bg-amber-100">
@@ -53,7 +53,7 @@ export function ConditionWarningModal({
         </DialogHeader>
 
         <div className="flex flex-col items-center justify-center gap-2 py-8">
-          <AlertTriangle className="h-10 w-10 text-amber-400" />
+          <AlertTriangle className="h-8 w-8 text-amber-400" />
           <p className="text-sm font-medium text-slate-700">
             {taskTitle || (pendingConditionCount ? `${pendingConditionCount} 项开工条件` : '提醒')}
           </p>

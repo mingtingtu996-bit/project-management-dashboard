@@ -17,12 +17,13 @@ describe('performanceEvidenceReporter', () => {
     vi.unstubAllGlobals()
   })
 
-  it('reports compact client performance evidence through sendBeacon', async () => {
+  it('reports compact client performance evidence through keepalive fetch first', async () => {
     const sendBeacon = vi.fn((_url: string, _data?: BodyInit | null) => true)
     Object.defineProperty(window.navigator, 'sendBeacon', {
       configurable: true,
       value: sendBeacon,
     })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 202 })))
     configurePerformanceEvidenceReporting({ enabled: true, endpoint: '/api/performance-reports' })
 
     await expect(reportPerformanceEvidence({
@@ -36,9 +37,16 @@ describe('performanceEvidenceReporter', () => {
       },
     })).resolves.toBe(true)
 
-    expect(sendBeacon).toHaveBeenCalledWith('/api/performance-reports', expect.any(Blob))
-    const [, beaconBody] = sendBeacon.mock.calls[0] as [string, Blob]
-    const payload = JSON.parse(await beaconBody.text())
+    expect(fetch).toHaveBeenCalledWith('/api/performance-reports', expect.objectContaining({
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      keepalive: true,
+      credentials: 'include',
+    }))
+    expect(sendBeacon).not.toHaveBeenCalled()
+
+    const [, fetchOptions] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+    const payload = JSON.parse(String(fetchOptions.body))
     expect(payload).toMatchObject({
       source: 'navigation',
       name: 'page_load',
@@ -48,7 +56,7 @@ describe('performanceEvidenceReporter', () => {
     expect(payload.metadata.huge).toHaveLength(500)
   })
 
-  it('falls back to keepalive fetch when sendBeacon is unavailable', async () => {
+  it('uses keepalive fetch when sendBeacon is unavailable', async () => {
     Object.defineProperty(window.navigator, 'sendBeacon', {
       configurable: true,
       value: undefined,
@@ -70,12 +78,32 @@ describe('performanceEvidenceReporter', () => {
     }))
   })
 
+  it('falls back to sendBeacon when keepalive fetch fails', async () => {
+    const sendBeacon = vi.fn((_url: string, _data?: BodyInit | null) => true)
+    Object.defineProperty(window.navigator, 'sendBeacon', {
+      configurable: true,
+      value: sendBeacon,
+    })
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('network interrupted')))
+    configurePerformanceEvidenceReporting({ enabled: true, endpoint: '/api/performance-reports' })
+
+    await expect(reportPerformanceEvidence({
+      source: 'route',
+      name: 'route_settled',
+      value: 312,
+      unit: 'ms',
+    })).resolves.toBe(true)
+
+    expect(sendBeacon).toHaveBeenCalledWith('/api/performance-reports', expect.any(Blob))
+  })
+
   it('keeps normal api calls quiet but reports slow and failed api evidence', async () => {
     const sendBeacon = vi.fn((_url: string, _data?: BodyInit | null) => true)
     Object.defineProperty(window.navigator, 'sendBeacon', {
       configurable: true,
       value: sendBeacon,
     })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 202 })))
     configurePerformanceEvidenceReporting({ enabled: true, apiSlowThresholdMs: 1200 })
 
     await expect(reportApiPerformanceEvidence({
@@ -100,6 +128,7 @@ describe('performanceEvidenceReporter', () => {
       errorCode: 'http_error',
     })).resolves.toBe(true)
 
-    expect(sendBeacon).toHaveBeenCalledTimes(2)
+    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(sendBeacon).not.toHaveBeenCalled()
   })
 })

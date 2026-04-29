@@ -66,7 +66,7 @@ export const CONDITION_TYPES = [
   { value: 'weather',    label: '天气',     color: 'bg-sky-100 text-sky-700' },
   { value: 'design',     label: '设计变更', color: 'bg-pink-100 text-pink-700' },
   { value: 'preceding',  label: '前置工序', color: 'bg-amber-100 text-amber-700' },
-  { value: 'other',      label: '其他',     color: 'bg-gray-100 text-gray-600' },
+  { value: 'other',      label: '其他',     color: 'bg-slate-100 text-slate-600' },
 ] as const
 
 export type ConditionTypeValue = typeof CONDITION_TYPES[number]['value']
@@ -79,7 +79,7 @@ export const SPECIALTY_TYPES = [
   { value: 'decoration',   label: '装饰装修',   color: 'bg-purple-100 text-purple-700' },
   { value: 'curtain_wall', label: '幕墙工程',   color: 'bg-cyan-100 text-cyan-700' },
   { value: 'landscape',    label: '园林景观',   color: 'bg-green-100 text-green-700' },
-  { value: 'steel',        label: '钢结构',     color: 'bg-gray-100 text-gray-700' },
+  { value: 'steel',        label: '钢结构',     color: 'bg-slate-100 text-slate-700' },
   { value: 'waterproof',   label: '防水工程',   color: 'bg-sky-100 text-sky-700' },
   { value: 'other',        label: '其他专项',   color: 'bg-slate-100 text-slate-600' },
 ] as const
@@ -121,14 +121,14 @@ export interface TaskObstacle {
 export const MILESTONE_LEVEL_CONFIG: Record<number, { label: string; color: string; borderColor: string; bgColor: string }> = {
   1: { label: '一级里程碑', color: 'text-amber-600', borderColor: 'border-amber-500', bgColor: 'bg-amber-50' },
   2: { label: '二级里程碑', color: 'text-blue-600', borderColor: 'border-blue-500', bgColor: 'bg-blue-50' },
-  3: { label: '三级里程碑', color: 'text-gray-500', borderColor: 'border-gray-400', bgColor: 'bg-gray-50' },
+  3: { label: '三级里程碑', color: 'text-slate-500', borderColor: 'border-slate-400', bgColor: 'bg-slate-50' },
 }
 
 // #5: WBS层级图标配置（根节点=文件夹 / 中间节点=子文件夹 / 叶节点=任务单）
 export function getWBSNodeIcon(node: { depth: number; children: { length: number } }): { icon: string; cls: string } {
   if (node.depth === 0 && node.children.length > 0) return { icon: 'folder', cls: 'text-amber-500' }
   if (node.children.length > 0) return { icon: 'folder-open', cls: 'text-blue-400' }
-  return { icon: 'file-text', cls: 'text-gray-400' }
+  return { icon: 'file-text', cls: 'text-slate-400' }
 }
 
 // WBS 树形结构工具函数

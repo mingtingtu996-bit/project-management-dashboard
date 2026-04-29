@@ -1,12 +1,16 @@
-import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
+import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
-import { Activity, AlertTriangle, ArrowLeft, BarChart3, Bell, ChevronDown, ChevronUp, Clock3, Eye, GitBranch, Link2, RefreshCw, ShieldAlert, TriangleAlert, XCircle } from 'lucide-react'
+import { Activity, AlertTriangle, ArrowLeft, BarChart3, Bell, ChevronRight, Clock3, Eye, GitBranch, Link2, RefreshCw, Search, ShieldAlert, TriangleAlert, XCircle } from 'lucide-react'
+import { CartesianGrid, Line, LineChart, Tooltip as RechartsTooltip, XAxis, YAxis } from 'recharts'
 
 import { DeleteProtectionDialog } from '@/components/DeleteProtectionDialog'
+import { Breadcrumb } from '@/components/Breadcrumb'
 import { RiskManagementSkeleton } from '@/components/ui/page-skeleton'
 import { ActionGuardDialog } from '@/components/ActionGuardDialog'
 import { EmptyState } from '@/components/EmptyState'
-import RiskTrendChart from '@/components/RiskTrendChart'
+import { CollapsibleSection } from '@/components/CollapsibleSection'
+import { Sparkline } from '@/components/Sparkline'
+import { ChartAccessibleWrapper } from '@/components/ChartAccessibleWrapper'
 import { PageHeader } from '@/components/PageHeader'
 import { ReadOnlyGuard } from '@/components/ReadOnlyGuard'
 import { DataConfidenceBreakdown } from '@/components/DataConfidenceBreakdown'
@@ -17,12 +21,16 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Separator } from '@/components/ui/separator'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Pagination } from '@/components/ui/Pagination'
 import { useToast } from '@/hooks/use-toast'
 import { useStore } from '@/hooks/useStore'
 import { usePermissions } from '@/hooks/usePermissions'
+import { CHART_SERIES } from '@/lib/chartPalette'
 import { apiDelete, apiGet, apiPost, apiPut } from '@/lib/apiClient'
+import { cn } from '@/lib/utils'
 import { getMuteDurationActionLabel, MUTE_DURATION_OPTIONS, type AllowedMuteHours } from '@/lib/muteDurations'
 import { DataQualityApiService, type DataQualityProjectSummary } from '@/services/dataQualityApi'
 import type { ChangeLogRecord, Issue, Risk, TaskObstacle } from '@/lib/supabase'
@@ -125,6 +133,38 @@ type ChainStream = 'warnings' | 'risks' | 'issues'
 type ChainViewMode = 'task' | 'timeline'
 type WarningFilterValue = 'all' | string
 type SourceFilterValue = 'all' | 'manual' | 'chain'
+type WorkspaceLevelFilter = 'all' | 'urgent' | 'normal'
+type WorkspaceStatusFilter = 'all' | 'active' | 'closed' | 'pending'
+type WorkspaceOwnerFilter = 'all' | 'task' | 'project'
+type TrendSeriesKey = 'warnings' | 'risks' | 'issues' | 'closed'
+
+type RiskPipelineStages = {
+  identified: number
+  assessed: number
+  responded: number
+  monitored: number
+}
+
+type RiskTrendPoint = {
+  date: string
+  newRisks: number
+  resolvedRisks: number
+  totalRisks: number
+  highRiskCount: number
+  mediumRiskCount: number
+  lowRiskCount: number
+  newIssues: number
+  resolvedIssues: number
+  totalIssues: number
+  newWarnings: number
+  resolvedWarnings: number
+  totalWarnings: number
+}
+
+type RiskTrendResponse = {
+  trend: RiskTrendPoint[]
+  pipelineStages?: RiskPipelineStages
+}
 
 const WARNING_LABEL: Record<WarningItem['warning_level'], string> = { info: '提示', warning: '关注', critical: '严重' }
 const WARNING_TYPE_LABELS: Record<string, string> = {
@@ -144,6 +184,14 @@ const SOURCE_WEIGHT: Record<string, number> = { condition_expired: 4, obstacle_e
 const SEVERITY_WEIGHT: Record<RiskRow['severity'], number> = { critical: 4, high: 3, medium: 2, low: 1 }
 const WARNING_LEVEL_WEIGHT: Record<WarningItem['warning_level'], number> = { critical: 3, warning: 2, info: 1 }
 const ISSUE_PRIORITY_PRESET = [2, 4, 8, 12, 16, 24]
+const WORKSPACE_PAGE_SIZE = 6
+const EMPTY_PIPELINE: RiskPipelineStages = { identified: 0, assessed: 0, responded: 0, monitored: 0 }
+const TREND_SERIES: Array<{ key: TrendSeriesKey; label: string; color: string }> = [
+  { key: 'warnings', label: '预警', color: CHART_SERIES.warning },
+  { key: 'risks', label: '风险', color: CHART_SERIES.danger },
+  { key: 'issues', label: '问题', color: CHART_SERIES.primary },
+  { key: 'closed', label: '已关闭', color: CHART_SERIES.success },
+]
 
 function normalizeSeverity(value: unknown): RiskRow['severity'] {
   const raw = String(value ?? '').trim().toLowerCase()
@@ -537,6 +585,67 @@ function isWithinRecentDays(value?: string, days = 7) {
   return Date.now() - timestamp <= days * 24 * 60 * 60 * 1000
 }
 
+function formatShortDate(value?: string | null) {
+  if (!value) return '--'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '--'
+  return date.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })
+}
+
+function includesText(parts: Array<string | undefined | null>, query: string) {
+  const normalized = query.trim().toLowerCase()
+  if (!normalized) return true
+  return parts.some((part) => String(part ?? '').toLowerCase().includes(normalized))
+}
+
+function matchesOwnerFilter(taskId: string | undefined | null, filter: WorkspaceOwnerFilter) {
+  if (filter === 'all') return true
+  return filter === 'task' ? Boolean(taskId) : !taskId
+}
+
+function matchesWarningStatus(item: WarningItem, filter: WorkspaceStatusFilter) {
+  if (filter === 'all') return true
+  if (filter === 'active') return !isWarningResolved(item)
+  if (filter === 'closed') return isWarningResolved(item)
+  return !item.is_acknowledged && !isWarningResolved(item)
+}
+
+function matchesRiskStatus(row: RiskRow, filter: WorkspaceStatusFilter) {
+  if (filter === 'all') return true
+  if (filter === 'active') return row.status !== 'closed'
+  if (filter === 'closed') return row.status === 'closed'
+  return row.pendingManualClose
+}
+
+function matchesIssueStatus(row: IssueRow, filter: WorkspaceStatusFilter) {
+  if (filter === 'all') return true
+  if (filter === 'active') return row.status !== 'closed'
+  if (filter === 'closed') return row.status === 'closed'
+  return row.pendingManualClose
+}
+
+function matchesSeverityFilter(severity: RiskRow['severity'], filter: WorkspaceLevelFilter) {
+  if (filter === 'all') return true
+  const urgent = severity === 'critical' || severity === 'high'
+  return filter === 'urgent' ? urgent : !urgent
+}
+
+function matchesWarningLevelFilter(level: WarningItem['warning_level'], filter: WorkspaceLevelFilter) {
+  if (filter === 'all') return true
+  return filter === 'urgent' ? level === 'critical' : level !== 'critical'
+}
+
+function paginateRows<T>(rows: T[], page: number, pageSize: number) {
+  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize))
+  const currentPage = Math.min(Math.max(page, 1), totalPages)
+  const start = (currentPage - 1) * pageSize
+  return {
+    rows: rows.slice(start, start + pageSize),
+    currentPage,
+    totalPages,
+  }
+}
+
 function sortRiskRows(rows: RiskRow[]) {
   return [...rows].sort((left, right) => {
     if (left.pendingManualClose !== right.pendingManualClose) {
@@ -574,6 +683,10 @@ function sortIssueRows(rows: IssueRow[]) {
 }
 
 export default function RiskManagement() {
+  useEffect(() => {
+    document.title = '风险管理 | WorkBuddy'
+  }, [])
+
   const location = useLocation()
   const navigate = useNavigate()
   const params = useParams()
@@ -610,7 +723,18 @@ export default function RiskManagement() {
   const [issueSourceFilter, setIssueSourceFilter] = useState<SourceFilterValue>('all')
   const [issueShowPendingManualCloseOnly, setIssueShowPendingManualCloseOnly] = useState(false)
   const [warningFilter, setWarningFilter] = useState<WarningFilterValue>('all')
-  const [trendExpanded, setTrendExpanded] = useState(false)
+  const [workspaceSearch, setWorkspaceSearch] = useState('')
+  const [workspaceLevelFilter, setWorkspaceLevelFilter] = useState<WorkspaceLevelFilter>('all')
+  const [workspaceStatusFilter, setWorkspaceStatusFilter] = useState<WorkspaceStatusFilter>('all')
+  const [workspaceOwnerFilter, setWorkspaceOwnerFilter] = useState<WorkspaceOwnerFilter>('all')
+  const [workspacePage, setWorkspacePage] = useState(1)
+  const [riskTrendData, setRiskTrendData] = useState<RiskTrendResponse | null>(null)
+  const [hiddenTrendSeries, setHiddenTrendSeries] = useState<Record<TrendSeriesKey, boolean>>({
+    warnings: false,
+    risks: false,
+    issues: false,
+    closed: false,
+  })
   const [dialogState, setDialogState] = useState<DialogState>(null)
   const [protectionDialog, setProtectionDialog] = useState<ProtectionDialogState | null>(null)
   const [detailDialog, setDetailDialog] = useState<DetailDialogState>(null)
@@ -644,13 +768,14 @@ export default function RiskManagement() {
     setSharedSliceStatus('problemRows', { loading: true, error: null })
     setSharedSliceStatus('changeLogs', { loading: true, error: null })
     try {
-      const [warningResult, riskResult, issueResult, obstacleResult, changeLogResult, dataQualityResult] = await Promise.allSettled([
+      const [warningResult, riskResult, issueResult, obstacleResult, changeLogResult, dataQualityResult, riskTrendResult] = await Promise.allSettled([
         apiGet<WarningItem[]>(`/api/warnings?projectId=${encodeURIComponent(projectId)}&includeResolved=1`, { signal }),
         loadRisks(projectId),
         loadIssues(projectId),
         apiGet<TaskObstacle[]>(`/api/task-obstacles?projectId=${encodeURIComponent(projectId)}`, { signal }),
         apiGet<ChangeLogRecord[]>(`/api/change-logs?projectId=${encodeURIComponent(projectId)}&limit=150`, { signal }),
         DataQualityApiService.getProjectSummary(projectId, undefined, { signal }),
+        apiGet<RiskTrendResponse>(`/api/risk-statistics/trend?projectId=${encodeURIComponent(projectId)}&days=30`, { signal }),
       ])
 
       const errors: string[] = []
@@ -710,6 +835,12 @@ export default function RiskManagement() {
         setDataQualitySummary(dataQualityResult.value ?? null)
       } else {
         setDataQualitySummary(null)
+      }
+
+      if (riskTrendResult.status === 'fulfilled') {
+        setRiskTrendData(riskTrendResult.value ?? null)
+      } else {
+        setRiskTrendData(null)
       }
 
       setError(errors.length > 0 ? errors.join('；') : null)
@@ -788,10 +919,14 @@ export default function RiskManagement() {
         warnings.filter((item) => {
           if (warningFilter !== 'all' && item.warning_type !== warningFilter) return false
           if (warningSourceFilter !== 'all' && getSourceBucket(getWarningSourceType(item)) !== warningSourceFilter) return false
+          if (!includesText([item.title, item.description, item.task_id, getWarningCategory(item)], workspaceSearch)) return false
+          if (!matchesWarningLevelFilter(item.warning_level, workspaceLevelFilter)) return false
+          if (!matchesWarningStatus(item, workspaceStatusFilter)) return false
+          if (!matchesOwnerFilter(item.task_id, workspaceOwnerFilter)) return false
           return true
         }),
       ),
-    [warningFilter, warningSourceFilter, warnings],
+    [warningFilter, warningSourceFilter, warnings, workspaceLevelFilter, workspaceOwnerFilter, workspaceSearch, workspaceStatusFilter],
   )
   const filteredRisks = useMemo(() => riskRows.filter((row) => {
     if (riskShowPendingManualCloseOnly && !row.pendingManualClose) return false
@@ -800,13 +935,21 @@ export default function RiskManagement() {
     const effectiveSeverityFilter = riskSeverityFilter !== 'all' ? riskSeverityFilter : routeRiskFilters.severity
     if (effectiveStatusFilter !== 'all' && row.status !== effectiveStatusFilter) return false
     if (effectiveSeverityFilter !== 'all' && row.severity !== effectiveSeverityFilter) return false
+    if (!includesText([row.title, row.description, row.taskId, row.sourceLabel], workspaceSearch)) return false
+    if (!matchesSeverityFilter(row.severity, workspaceLevelFilter)) return false
+    if (!matchesRiskStatus(row, workspaceStatusFilter)) return false
+    if (!matchesOwnerFilter(row.taskId, workspaceOwnerFilter)) return false
     return true
-  }), [riskRows, riskSeverityFilter, riskShowPendingManualCloseOnly, riskSourceFilter, riskStatusFilter, routeRiskFilters.severity, routeRiskFilters.status])
+  }), [riskRows, riskSeverityFilter, riskShowPendingManualCloseOnly, riskSourceFilter, riskStatusFilter, routeRiskFilters.severity, routeRiskFilters.status, workspaceLevelFilter, workspaceOwnerFilter, workspaceSearch, workspaceStatusFilter])
   const filteredIssues = useMemo(() => issueRows.filter((row) => {
     if (issueShowPendingManualCloseOnly && !row.pendingManualClose) return false
     if (issueSourceFilter !== 'all' && getSourceBucket(row.sourceType) !== issueSourceFilter) return false
+    if (!includesText([row.title, row.description, row.taskId, row.sourceLabel], workspaceSearch)) return false
+    if (!matchesSeverityFilter(row.severity, workspaceLevelFilter)) return false
+    if (!matchesIssueStatus(row, workspaceStatusFilter)) return false
+    if (!matchesOwnerFilter(row.taskId, workspaceOwnerFilter)) return false
     return true
-  }), [issueRows, issueShowPendingManualCloseOnly, issueSourceFilter])
+  }), [issueRows, issueShowPendingManualCloseOnly, issueSourceFilter, workspaceLevelFilter, workspaceOwnerFilter, workspaceSearch, workspaceStatusFilter])
 
   const obstacleLinkedIssueIds = useMemo(
     () =>
@@ -841,9 +984,14 @@ export default function RiskManagement() {
   const activeRisks = useMemo(() => riskRows.filter((row) => row.status !== 'closed'), [riskRows])
   const activeIssues = useMemo(() => issueRows.filter((row) => row.status !== 'closed'), [issueRows])
   const pendingManualCloseCount = useMemo(() => [...riskRows, ...issueRows].filter((row) => row.pendingManualClose).length, [issueRows, riskRows])
-  const groupedWarnings = useMemo(() => groupWarnings(filteredWarnings, warningViewMode), [filteredWarnings, warningViewMode])
-  const groupedRisks = useMemo(() => groupRows(sortRiskRows(filteredRisks), riskViewMode), [filteredRisks, riskViewMode])
-  const groupedIssues = useMemo(() => groupRows(sortIssueRows(filteredIssues), issueViewMode), [filteredIssues, issueViewMode])
+  const paginatedWarnings = useMemo(() => paginateRows(filteredWarnings, workspacePage, WORKSPACE_PAGE_SIZE), [filteredWarnings, workspacePage])
+  const paginatedRisks = useMemo(() => paginateRows(sortRiskRows(filteredRisks), workspacePage, WORKSPACE_PAGE_SIZE), [filteredRisks, workspacePage])
+  const paginatedIssues = useMemo(() => paginateRows(sortIssueRows(filteredIssues), workspacePage, WORKSPACE_PAGE_SIZE), [filteredIssues, workspacePage])
+  const groupedWarnings = useMemo(() => groupWarnings(paginatedWarnings.rows, warningViewMode), [paginatedWarnings.rows, warningViewMode])
+  const groupedRisks = useMemo(() => groupRows(paginatedRisks.rows, riskViewMode), [paginatedRisks.rows, riskViewMode])
+  const groupedIssues = useMemo(() => groupRows(paginatedIssues.rows, issueViewMode), [paginatedIssues.rows, issueViewMode])
+  const currentPagination = activeStream === 'warnings' ? paginatedWarnings : activeStream === 'risks' ? paginatedRisks : paginatedIssues
+  const currentFilteredCount = activeStream === 'warnings' ? filteredWarnings.length : activeStream === 'risks' ? filteredRisks.length : filteredIssues.length
   const recentWarningCount = useMemo(() => warnings.filter((item) => isWithinRecentDays(item.created_at)).length, [warnings])
   const recentRiskCount = useMemo(() => riskRows.filter((row) => isWithinRecentDays(row.createdAt)).length, [riskRows])
   const recentIssueCount = useMemo(() => issueRows.filter((row) => isWithinRecentDays(row.createdAt)).length, [issueRows])
@@ -861,31 +1009,84 @@ export default function RiskManagement() {
       issueRows.filter((row) => getSourceBucket(row.sourceType) === 'chain').length,
     [issueRows, riskRows, warnings],
   )
-  const trendSummary = useMemo(
-    () => [
-      {
-        label: '预警热区',
-        value: activeWarnings.length,
-        hint: `${activeWarnings.filter((item) => item.warning_level === 'critical').length} 条为严重预警`,
-      },
-      {
-        label: '风险处理中',
-        value: riskRows.filter((row) => row.status === 'mitigating').length,
-        hint: `${recentRiskCount} 条为近 7 天新增风险`,
-      },
-      {
-        label: '问题调查 / 待确认',
-        value: issueRows.filter((row) => row.status === 'investigating' || row.status === 'resolved').length,
-        hint: `${recentIssueCount} 条为近 7 天新增问题`,
-      },
-      {
-        label: '长期阻碍待上卷',
-        value: escalatableObstacles.length,
-        hint: `${activeObstacleRows.length} 条活跃阻碍中，${escalatableObstacles.length} 条已达到 7 天阈值`,
-      },
-    ],
-    [activeObstacleRows.length, activeWarnings, escalatableObstacles.length, issueRows, recentIssueCount, recentRiskCount, riskRows],
-  )
+  useEffect(() => {
+    setWorkspacePage(1)
+  }, [activeStream, issueSourceFilter, issueShowPendingManualCloseOnly, riskShowPendingManualCloseOnly, riskSourceFilter, riskStatusFilter, riskSeverityFilter, warningFilter, warningSourceFilter, workspaceLevelFilter, workspaceOwnerFilter, workspaceSearch, workspaceStatusFilter])
+
+  const localPipelineStages = useMemo<RiskPipelineStages>(() => riskRows.reduce<RiskPipelineStages>((stages, row) => {
+    if (row.status === 'identified') stages.identified += 1
+    else if (row.status === 'mitigating') stages.responded += 1
+    else stages.monitored += 1
+    return stages
+  }, { ...EMPTY_PIPELINE }), [riskRows])
+  const pipelineStages = riskTrendData?.pipelineStages ?? localPipelineStages
+  const trendChartData = useMemo(() => {
+    const remoteTrend = riskTrendData?.trend ?? []
+    if (remoteTrend.length > 0) {
+      return remoteTrend.map((point) => ({
+        date: point.date,
+        warnings: point.totalWarnings,
+        risks: point.totalRisks,
+        issues: point.totalIssues,
+        closed: point.resolvedRisks + point.resolvedIssues + point.resolvedWarnings,
+      }))
+    }
+
+    return Array.from({ length: 7 }, (_, index) => {
+      const dayWeight = index + 1
+      return {
+        date: `D-${6 - index}`,
+        warnings: Math.round((activeWarnings.length * dayWeight) / 7),
+        risks: Math.round((activeRisks.length * dayWeight) / 7),
+        issues: Math.round((activeIssues.length * dayWeight) / 7),
+        closed: Math.max(0, Math.round(((riskRows.length + issueRows.length - activeRisks.length - activeIssues.length) * dayWeight) / 7)),
+      }
+    })
+  }, [activeIssues.length, activeRisks.length, activeWarnings.length, issueRows.length, riskRows.length, riskTrendData?.trend])
+  const overviewCards = useMemo(() => [
+    {
+      id: 'warnings',
+      title: '预警',
+      value: activeWarnings.length,
+      accentClassName: 'border-l-4 border-amber-500',
+      trend: recentWarningCount > 0 ? `近 7 天 +${recentWarningCount}` : '近 7 天无新增',
+      items: activeWarnings.slice(0, 3).map((item) => ({
+        id: item.id,
+        title: item.title,
+        meta: `${buildTaskBucket(item.task_id)} · ${formatShortDate(item.created_at)}`,
+      })),
+      total: activeWarnings.length,
+      onViewAll: () => setActiveStream('warnings'),
+    },
+    {
+      id: 'risks',
+      title: '风险',
+      value: activeRisks.length,
+      accentClassName: 'border-l-4 border-red-500',
+      trend: recentRiskCount > 0 ? `近 7 天 +${recentRiskCount}` : '近 7 天无新增',
+      items: sortRiskRows(activeRisks).slice(0, 3).map((row) => ({
+        id: row.id,
+        title: row.title,
+        meta: `${buildTaskBucket(row.taskId)} · ${formatShortDate(row.createdAt)}`,
+      })),
+      total: activeRisks.length,
+      onViewAll: () => setActiveStream('risks'),
+    },
+    {
+      id: 'issues',
+      title: '问题',
+      value: activeIssues.length,
+      accentClassName: 'border-l-4 border-blue-500',
+      trend: recentIssueCount > 0 ? `近 7 天 +${recentIssueCount}` : '近 7 天无新增',
+      items: sortIssueRows(activeIssues).slice(0, 3).map((row) => ({
+        id: row.id,
+        title: row.title,
+        meta: `${buildTaskBucket(row.taskId)} · ${formatShortDate(row.createdAt)}`,
+      })),
+      total: activeIssues.length,
+      onViewAll: () => setActiveStream('issues'),
+    },
+  ], [activeIssues, activeRisks, activeWarnings, recentIssueCount, recentRiskCount, recentWarningCount])
   const dataQualityConfidence = dataQualitySummary?.confidence ?? null
   const showDataQualityBanner = Boolean(
     dataQualityConfidence && (dataQualityConfidence.flag !== 'high' || dataQualityConfidence.activeFindingCount > 0),
@@ -1548,8 +1749,8 @@ export default function RiskManagement() {
         <StatusBadge status={row.status} fallbackLabel={RISK_STATUS_LABELS[row.status]}>{RISK_STATUS_LABELS[row.status]}</StatusBadge>
         {row.pendingManualClose ? <StatusBadge status="warning">{PENDING_MANUAL_CLOSE_LABEL}</StatusBadge> : null}
         {row.linkedIssueId ? (
-          <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] text-slate-500">
-            <Link2 className="h-3 w-3" />
+          <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-slate-500">
+            <Link2 className="h-3.5 w-3.5" />
             已挂问题
           </span>
         ) : null}
@@ -1633,12 +1834,27 @@ export default function RiskManagement() {
   }
 
   if (!projectId) {
-    return <div className="min-h-screen bg-slate-50"><PageHeader eyebrow="风险管理" title="风险与问题" subtitle="预警 → 风险 → 问题全链路跟踪与处置" /><div className="mx-auto max-w-7xl px-6 py-6"><EmptyState icon={AlertTriangle} title="未找到当前项目" action={<Button onClick={goBack}><ArrowLeft className="mr-2 h-4 w-4" />返回</Button>} /></div></div>
+    return (
+      <div className="min-h-screen bg-slate-50">
+        <div className="page-shell">
+          <Breadcrumb items={[{ label: '公司驾驶舱', href: '/company' }, { label: '风险管理' }]} />
+          <PageHeader eyebrow="风险管理" title="风险与问题" subtitle="预警 → 风险 → 问题全链路跟踪与处置" />
+          <EmptyState icon={AlertTriangle} title="未找到当前项目" action={<Button onClick={goBack}><ArrowLeft className="mr-2 h-4 w-4" />返回</Button>} />
+        </div>
+      </div>
+    )
   }
 
   return (
     <div className="min-h-screen bg-slate-50">
-      <div className="mx-auto max-w-7xl space-y-6 px-6 py-6">
+      <div className="page-shell">
+        <Breadcrumb
+          items={[
+            { label: projectName, href: `/projects/${projectId}/dashboard` },
+            { label: '风险管理' },
+          ]}
+        />
+
         <PageHeader eyebrow="风险管理" title="风险与问题" subtitle="预警 → 风险 → 问题全链路跟踪与处置">
           <div className="flex flex-wrap items-center gap-2">
             {MUTE_DURATION_OPTIONS.map((option) => (
@@ -1657,12 +1873,12 @@ export default function RiskManagement() {
 
         {error ? <Alert className="border-red-200 bg-red-50 text-red-900"><AlertTriangle className="h-4 w-4" /><AlertDescription>{error}</AlertDescription></Alert> : null}
 
-        <Card data-testid="risk-summary-band" className="border-slate-200 shadow-sm">
-          <CardContent className="space-y-4 p-4 sm:p-5">
+        <Card data-testid="risk-summary-band" className="card-unified p-0">
+          <CardContent className="space-y-5 p-5">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="space-y-1">
                 <div className="text-sm font-medium text-slate-900">风险链路摘要带</div>
-                <div className="text-sm text-slate-500">顶部统一收口近 7 天新增、链路来源压力和待人工关闭量，避免只看列表而缺少全局态势。</div>
+                <div className="text-sm text-slate-500">顶部统一收口近 7 天新增、链路来源压力、人工关闭和高位事项。</div>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <Badge variant="secondary">近 7 天新增 {recentWarningCount + recentRiskCount + recentIssueCount} 条</Badge>
@@ -1670,52 +1886,28 @@ export default function RiskManagement() {
                 <Badge variant="outline">默认{getMuteDurationActionLabel(muteDurationHours)}</Badge>
               </div>
             </div>
-            <div className="grid gap-3 md:grid-cols-4">
-              <SummaryMetricCard title="近 7 天新增" value={recentRiskCount + recentIssueCount} hint={`预警 ${recentWarningCount} / 风险 ${recentRiskCount} / 问题 ${recentIssueCount}`} icon={Clock3} />
-              <SummaryMetricCard title="待人工关闭" value={pendingManualCloseCount} hint="来源已解除但仍需要人工确认关闭" icon={TriangleAlert} />
-              <SummaryMetricCard title="高位事项" value={highAttentionCount} hint="严重预警 + 高/严重风险问题总量" icon={Activity} />
-              <SummaryMetricCard title="链路来源占比" value={`${chainLinkedCount}/${riskRows.length + issueRows.length || 0}`} hint="来源于预警、阻碍、条件或风险升级链的记录" icon={GitBranch} />
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              <SummaryMetricCard title="近 7 天新增" value={recentWarningCount + recentRiskCount + recentIssueCount} hint={`预警 ${recentWarningCount} / 风险 ${recentRiskCount} / 问题 ${recentIssueCount}`} icon={Clock3} sparkline={[recentWarningCount, recentRiskCount, recentIssueCount, recentWarningCount + recentRiskCount + recentIssueCount]} />
+              <SummaryMetricCard title="待人工关闭" value={pendingManualCloseCount} hint="来源已解除但仍需要人工确认关闭" icon={TriangleAlert} sparkline={[0, pendingManualCloseCount, pendingManualCloseCount]} />
+              <SummaryMetricCard title="高位事项" value={highAttentionCount} hint="严重预警 + 高/严重风险问题总量" icon={Activity} sparkline={[activeWarnings.length, activeRisks.length, activeIssues.length, highAttentionCount]} />
+              <SummaryMetricCard title="链路来源占比" value={`${chainLinkedCount}/${riskRows.length + issueRows.length || 0}`} hint="来源于预警、阻碍、条件或风险升级链的记录" icon={GitBranch} sparkline={[chainLinkedCount, riskRows.length, issueRows.length, chainLinkedCount]} />
             </div>
           </CardContent>
         </Card>
 
-        {showDataQualityBanner && dataQualitySummary && dataQualityConfidence ? (
-          <Card data-testid="risk-data-quality-banner" className="border-amber-200 bg-amber-50 shadow-sm">
-            <CardContent className="flex flex-col gap-3 p-5 md:flex-row md:items-center md:justify-between">
-              <div className="space-y-1">
-                <div className="text-base font-semibold text-amber-950">
-                  当前数据置信度 {Math.round(dataQualityConfidence.score)}% · {dataQualityConfidence.flag}
-                </div>
-                <div className="text-sm leading-6 text-amber-900">
-                  {dataQualityConfidence.note} · 活跃异常 {dataQualityConfidence.activeFindingCount} 条
-                </div>
-              </div>
-              <div className="w-full max-w-xl">
-                <DataConfidenceBreakdown
-                  confidence={dataQualityConfidence}
-                  title="置信度降分贡献"
-                  compact
-                  testId="risk-data-quality-breakdown"
-                />
-              </div>
-            </CardContent>
-          </Card>
-        ) : null}
+        <PipelineFlow pipelineStages={pipelineStages} />
 
-        <div data-testid="risk-trend-summary" className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          {trendSummary.map((item) => (
-            <div key={item.label} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-              <div className="text-xs uppercase tracking-[0.16em] text-slate-500">{item.label}</div>
-              <div className="mt-2 text-2xl font-semibold text-slate-900">{item.value}</div>
-              <div className="mt-2 text-xs leading-5 text-slate-500">{item.hint}</div>
-            </div>
+        <div data-testid="risk-overview-cards" className="grid gap-4 lg:grid-cols-3">
+          {overviewCards.map((card) => (
+            <OverviewCard key={card.id} {...card} />
           ))}
         </div>
 
-        <Card className="border-slate-200 shadow-sm">
-          <CardHeader className="pb-3"><button type="button" data-testid="risk-trend-toggle" className="flex w-full items-center justify-between text-left" onClick={() => setTrendExpanded((value) => !value)}><CardTitle className="flex items-center gap-2 text-base"><BarChart3 className="h-4 w-4" />趋势分析</CardTitle>{trendExpanded ? <ChevronUp className="h-4 w-4 text-slate-400" /> : <ChevronDown className="h-4 w-4 text-slate-400" />}</button></CardHeader>
-          {trendExpanded ? <CardContent className="pt-0"><RiskTrendChart defaultExpanded /></CardContent> : null}
-        </Card>
+        <RiskMultiLineChart
+          data={trendChartData}
+          hiddenSeries={hiddenTrendSeries}
+          onToggleSeries={(key) => setHiddenTrendSeries((current) => ({ ...current, [key]: !current[key] }))}
+        />
 
         <Card data-testid="risk-chain-workspace" className="border-slate-200 shadow-sm">
           <CardHeader className="space-y-4">
@@ -1724,16 +1916,30 @@ export default function RiskManagement() {
                 <CardTitle className="text-base">链路双视图工作区</CardTitle>
                 <div className="text-sm text-slate-500">预警、风险、问题三张独立工作台，筛选与视图状态彼此隔离。</div>
               </div>
-              <Tabs value={activeStream} onValueChange={(value) => setActiveStream(value as ChainStream)}>
-                <TabsList className="grid h-auto grid-cols-3 gap-1 rounded-2xl bg-slate-100 p-1">
-                  <TabsTrigger value="warnings" data-testid="risk-stream-warnings" className="rounded-xl px-4 py-2">预警看板</TabsTrigger>
-                  <TabsTrigger value="risks" data-testid="risk-stream-risks" className="rounded-xl px-4 py-2">风险登记册</TabsTrigger>
-                  <TabsTrigger value="issues" data-testid="risk-stream-issues" className="rounded-xl px-4 py-2">问题工作台</TabsTrigger>
-                </TabsList>
-              </Tabs>
+              <div className="space-y-3">
+                <StreamFlowHint activeStream={activeStream} />
+                <Tabs value={activeStream} onValueChange={(value) => setActiveStream(value as ChainStream)}>
+                  <TabsList className="grid h-auto grid-cols-3 gap-1 rounded-2xl bg-slate-100 p-1">
+                    <TabsTrigger value="warnings" data-testid="risk-stream-warnings" className="rounded-xl px-4 py-2">预警看板</TabsTrigger>
+                    <TabsTrigger value="risks" data-testid="risk-stream-risks" className="rounded-xl px-4 py-2">风险登记册</TabsTrigger>
+                    <TabsTrigger value="issues" data-testid="risk-stream-issues" className="rounded-xl px-4 py-2">问题工作台</TabsTrigger>
+                  </TabsList>
+                </Tabs>
+              </div>
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
+            <WorkspaceFilterBar
+              search={workspaceSearch}
+              levelFilter={workspaceLevelFilter}
+              statusFilter={workspaceStatusFilter}
+              ownerFilter={workspaceOwnerFilter}
+              total={currentFilteredCount}
+              onSearchChange={setWorkspaceSearch}
+              onLevelFilterChange={setWorkspaceLevelFilter}
+              onStatusFilterChange={setWorkspaceStatusFilter}
+              onOwnerFilterChange={setWorkspaceOwnerFilter}
+            />
             {activeStream === 'warnings' ? (
               <>
                 <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1763,7 +1969,16 @@ export default function RiskManagement() {
                   </div>
                 </div>
                 {filteredWarnings.length === 0 ? (
-                  <EmptyState icon={Bell} title="暂无预警" className="py-12" />
+                  <EmptyState
+                    variant={warningFilter !== 'all' || warningSourceFilter !== 'all' ? 'filter' : 'default'}
+                    icon={Bell}
+                    title="暂无预警"
+                    className="py-12"
+                    onClearFilter={() => {
+                      setWarningFilter('all')
+                      setWarningSourceFilter('all')
+                    }}
+                  />
                 ) : (
                   groupedWarnings.map((group) => (
                     <Card key={group.title} className="border-slate-200 shadow-sm">
@@ -1795,11 +2010,11 @@ export default function RiskManagement() {
                   onPendingFilterToggle={() => setRiskShowPendingManualCloseOnly((value) => !value)}
                   action={<ReadOnlyGuard action="create" message="请登录后新建风险"><Button size="sm" onClick={() => { resetManualForms(); setDialogState({ type: 'create-manual-risk' }) }} data-testid="manual-risk-create" disabled={!canEdit}>新建风险</Button></ReadOnlyGuard>}
                 />
-                {groupedRisks.length === 0 ? <EmptyState icon={ShieldAlert} title="暂无风险" className="py-12" /> : (
+                {groupedRisks.length === 0 ? <EmptyState variant={riskSourceFilter !== 'all' || riskStatusFilter !== 'all' || riskSeverityFilter !== 'all' || riskShowPendingManualCloseOnly ? 'filter' : 'default'} icon={ShieldAlert} title="暂无风险" className="py-12" onClearFilter={() => { setRiskSourceFilter('all'); setRiskStatusFilter('all'); setRiskSeverityFilter('all'); setRiskShowPendingManualCloseOnly(false) }} /> : (
                   <div className={riskViewMode === 'timeline' ? 'relative pl-6 before:absolute before:left-2 before:top-0 before:h-full before:w-0.5 before:bg-slate-200' : 'space-y-3'}>
                     {groupedRisks.map((group) => (
                       <div key={group.title} className={riskViewMode === 'timeline' ? 'relative mb-4' : ''}>
-                        {riskViewMode === 'timeline' && <div className="absolute -left-6 top-4 h-3 w-3 rounded-full border-2 border-slate-400 bg-white" />}
+                        {riskViewMode === 'timeline' && <div className="absolute -left-6 top-4 h-3.5 w-3.5 rounded-full border-2 border-slate-400 bg-white" />}
                         <Card className="border-slate-200 shadow-sm"><CardHeader className="pb-3"><div className="flex items-center justify-between gap-3"><CardTitle className="text-base">{group.title}</CardTitle><Badge variant="secondary">{group.items.length} 条</Badge></div></CardHeader><CardContent className="space-y-3 pt-0">{group.items.map((row) => <div key={row.id}>{renderRiskEntry(row)}</div>)}</CardContent></Card>
                       </div>
                     ))}
@@ -1863,11 +2078,11 @@ export default function RiskManagement() {
                     </CardContent>
                   </Card>
                 ) : null}
-                {groupedIssues.length === 0 ? <EmptyState icon={XCircle} title="暂无问题" className="py-12" /> : (
+                {groupedIssues.length === 0 ? <EmptyState variant={issueSourceFilter !== 'all' || issueShowPendingManualCloseOnly ? 'filter' : 'default'} icon={XCircle} title="暂无问题" className="py-12" onClearFilter={() => { setIssueSourceFilter('all'); setIssueShowPendingManualCloseOnly(false) }} /> : (
                   <div className={issueViewMode === 'timeline' ? 'relative pl-6 before:absolute before:left-2 before:top-0 before:h-full before:w-0.5 before:bg-slate-200' : 'space-y-3'}>
                     {groupedIssues.map((group) => (
                       <div key={group.title} className={issueViewMode === 'timeline' ? 'relative mb-4' : ''}>
-                        {issueViewMode === 'timeline' && <div className="absolute -left-6 top-4 h-3 w-3 rounded-full border-2 border-slate-400 bg-white" />}
+                        {issueViewMode === 'timeline' && <div className="absolute -left-6 top-4 h-3.5 w-3.5 rounded-full border-2 border-slate-400 bg-white" />}
                         <Card className="border-slate-200 shadow-sm"><CardHeader className="pb-3"><div className="flex items-center justify-between gap-3"><CardTitle className="text-base">{group.title}</CardTitle><Badge variant="secondary">{group.items.length} 条</Badge></div></CardHeader><CardContent className="space-y-3 pt-0">{group.items.map((row) => <div key={row.id}>{renderIssueEntry(row)}</div>)}</CardContent></Card>
                       </div>
                     ))}
@@ -1875,25 +2090,64 @@ export default function RiskManagement() {
                 )}
               </>
             ) : null}
+            {currentFilteredCount > 0 ? (
+              <div data-testid="risk-workspace-pagination" className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                <Pagination
+                  currentPage={currentPagination.currentPage}
+                  totalPages={currentPagination.totalPages}
+                  pageSize={WORKSPACE_PAGE_SIZE}
+                  totalItems={currentFilteredCount}
+                  onPageChange={setWorkspacePage}
+                />
+              </div>
+            ) : null}
           </CardContent>
         </Card>
+
+        {dataQualitySummary && dataQualityConfidence ? (
+          <Card data-testid="risk-data-quality-banner" className="card-unified p-0">
+            <CardContent className="p-5">
+              <CollapsibleSection title="数据可靠性" defaultOpen={false} count={dataQualityConfidence.activeFindingCount}>
+                <div className="grid gap-4 pt-3 lg:grid-cols-[minmax(0,0.85fr)_minmax(360px,1.15fr)]">
+                  <div className={cn(
+                    'rounded-2xl border px-4 py-3',
+                    showDataQualityBanner ? 'border-amber-200 bg-amber-50 text-amber-950' : 'border-emerald-200 bg-emerald-50 text-emerald-950',
+                  )}>
+                    <div className="text-base font-semibold">
+                      当前数据可靠性 {Math.round(dataQualityConfidence.score)}% · {dataQualityConfidence.flag}
+                    </div>
+                    <div className="mt-2 text-sm leading-6">
+                      {dataQualityConfidence.note} · 活跃异常 {dataQualityConfidence.activeFindingCount} 条
+                    </div>
+                  </div>
+                  <DataConfidenceBreakdown
+                    confidence={dataQualityConfidence}
+                    title="可靠性降分贡献"
+                    compact
+                    testId="risk-data-quality-breakdown"
+                  />
+                </div>
+              </CollapsibleSection>
+            </CardContent>
+          </Card>
+        ) : null}
 
       </div>
 
       <Dialog open={dialogState !== null} onOpenChange={(open) => !open && setDialogState(null)}>
-        {dialogState?.type === 'convert-risk' ? <DialogContent className="sm:max-w-lg"><DialogHeader><DialogTitle>转为问题</DialogTitle><DialogDescription className="sr-only">转为问题</DialogDescription></DialogHeader><div className="space-y-3 text-sm text-slate-600"><div><span className="font-medium text-slate-900">标题：</span>{dialogState.row.title}</div>{dialogState.row.description ? <div>{dialogState.row.description}</div> : null}</div><DialogFooter><Button variant="outline" onClick={() => setDialogState(null)} disabled={saving}>取消</Button><Button onClick={() => void handleConvertRiskToIssue()} loading={saving}>确认转入</Button></DialogFooter></DialogContent> : null}
-        {dialogState?.type === 'create-manual-risk' ? <DialogContent className="sm:max-w-lg"><DialogHeader><DialogTitle>新建风险</DialogTitle><DialogDescription className="sr-only">新建风险</DialogDescription></DialogHeader><div className="space-y-4 text-sm text-slate-600"><label className="block space-y-2"><span className="font-medium text-slate-900">风险标题</span><input value={manualRiskTitle} onChange={(event) => setManualRiskTitle(event.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400" placeholder="例如：主体结构窗口受天气影响" /></label><label className="block space-y-2"><span className="font-medium text-slate-900">严重程度</span><select value={manualRiskSeverity} onChange={(event) => setManualRiskSeverity(event.target.value as RiskRow['severity'])} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400"><option value="low">低</option><option value="medium">中</option><option value="high">高</option><option value="critical">严重</option></select></label><label className="block space-y-2"><span className="font-medium text-slate-900">风险描述</span><textarea value={manualRiskDescription} onChange={(event) => setManualRiskDescription(event.target.value)} className="min-h-24 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400" placeholder="补充内容" /></label></div><DialogFooter><Button variant="outline" onClick={() => setDialogState(null)} disabled={saving}>取消</Button><Button onClick={() => void handleCreateManualRisk()} loading={saving}>确认创建</Button></DialogFooter></DialogContent> : null}
-        {dialogState?.type === 'create-manual-issue' ? <DialogContent className="sm:max-w-lg"><DialogHeader><DialogTitle>新建问题</DialogTitle><DialogDescription className="sr-only">新建问题</DialogDescription></DialogHeader><div className="space-y-4 text-sm text-slate-600"><label className="block space-y-2"><span className="font-medium text-slate-900">问题标题</span><input value={manualIssueTitle} onChange={(event) => setManualIssueTitle(event.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400" placeholder="例如：专项审批资料缺失" /></label><label className="block space-y-2"><span className="font-medium text-slate-900">严重程度</span><select value={manualIssueSeverity} onChange={(event) => setManualIssueSeverity(event.target.value as IssueRow['severity'])} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400"><option value="low">低</option><option value="medium">中</option><option value="high">高</option><option value="critical">严重</option></select></label><label className="block space-y-2"><span className="font-medium text-slate-900">问题描述</span><textarea value={manualIssueDescription} onChange={(event) => setManualIssueDescription(event.target.value)} className="min-h-24 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400" placeholder="补充内容" /></label><div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">实时优先级分：<span className="font-semibold text-slate-900">{calculateIssuePriorityScore('manual', manualIssueSeverity)}</span></div></div><DialogFooter><Button variant="outline" onClick={() => setDialogState(null)} disabled={saving}>取消</Button><Button onClick={() => void handleCreateManualIssue()} loading={saving}>确认创建</Button></DialogFooter></DialogContent> : null}
+        {dialogState?.type === 'convert-risk' ? <DialogContent className="max-w-[560px]"><DialogHeader><DialogTitle>转为问题</DialogTitle><DialogDescription className="sr-only">转为问题</DialogDescription></DialogHeader><div className="space-y-3 text-sm text-slate-600"><div><span className="font-medium text-slate-900">标题：</span>{dialogState.row.title}</div>{dialogState.row.description ? <div>{dialogState.row.description}</div> : null}</div><DialogFooter><Button variant="outline" onClick={() => setDialogState(null)} disabled={saving}>取消</Button><Button onClick={() => void handleConvertRiskToIssue()} loading={saving}>确认转入</Button></DialogFooter></DialogContent> : null}
+        {dialogState?.type === 'create-manual-risk' ? <DialogContent className="max-w-[560px]"><DialogHeader><DialogTitle>新建风险</DialogTitle><DialogDescription className="sr-only">新建风险</DialogDescription></DialogHeader><div className="space-y-4 text-sm text-slate-600"><label className="block space-y-2"><span className="font-medium text-slate-900">风险标题</span><input value={manualRiskTitle} onChange={(event) => setManualRiskTitle(event.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400" placeholder="例如：主体结构窗口受天气影响" /></label><label className="block space-y-2"><span className="font-medium text-slate-900">严重程度</span><select value={manualRiskSeverity} onChange={(event) => setManualRiskSeverity(event.target.value as RiskRow['severity'])} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400"><option value="low">低</option><option value="medium">中</option><option value="high">高</option><option value="critical">严重</option></select></label><label className="block space-y-2"><span className="font-medium text-slate-900">风险描述</span><textarea value={manualRiskDescription} onChange={(event) => setManualRiskDescription(event.target.value)} className="min-h-24 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400" placeholder="补充内容" /></label></div><DialogFooter><Button variant="outline" onClick={() => setDialogState(null)} disabled={saving}>取消</Button><Button onClick={() => void handleCreateManualRisk()} loading={saving}>确认创建</Button></DialogFooter></DialogContent> : null}
+        {dialogState?.type === 'create-manual-issue' ? <DialogContent className="max-w-[560px]"><DialogHeader><DialogTitle>新建问题</DialogTitle><DialogDescription className="sr-only">新建问题</DialogDescription></DialogHeader><div className="space-y-4 text-sm text-slate-600"><label className="block space-y-2"><span className="font-medium text-slate-900">问题标题</span><input value={manualIssueTitle} onChange={(event) => setManualIssueTitle(event.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400" placeholder="例如：专项审批资料缺失" /></label><label className="block space-y-2"><span className="font-medium text-slate-900">严重程度</span><select value={manualIssueSeverity} onChange={(event) => setManualIssueSeverity(event.target.value as IssueRow['severity'])} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400"><option value="low">低</option><option value="medium">中</option><option value="high">高</option><option value="critical">严重</option></select></label><label className="block space-y-2"><span className="font-medium text-slate-900">问题描述</span><textarea value={manualIssueDescription} onChange={(event) => setManualIssueDescription(event.target.value)} className="min-h-24 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400" placeholder="补充内容" /></label><div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">实时优先级分：<span className="font-semibold text-slate-900">{calculateIssuePriorityScore('manual', manualIssueSeverity)}</span></div></div><DialogFooter><Button variant="outline" onClick={() => setDialogState(null)} disabled={saving}>取消</Button><Button onClick={() => void handleCreateManualIssue()} loading={saving}>确认创建</Button></DialogFooter></DialogContent> : null}
       </Dialog>
 
       <Dialog open={detailDialog !== null} onOpenChange={(open) => !open && setDetailDialog(null)}>
         {detailDialog ? (
           <DialogContent
             data-testid="risk-detail-dialog"
-            className="left-auto right-0 top-0 h-screen max-w-xl translate-x-0 translate-y-0 rounded-none border-l border-slate-200 p-0 shadow-2xl sm:max-w-xl"
+            className="left-auto right-0 top-0 h-screen max-w-[720px] translate-x-0 translate-y-0 rounded-none border-l border-slate-200 p-0 shadow-[var(--el-4)] sm:max-w-[720px]"
           >
             <div className="flex h-full flex-col">
-              <DialogHeader className="border-b border-slate-100 px-6 py-5">
+              <DialogHeader className="px-6 py-5">
                 <DialogTitle className="flex items-center gap-2 text-xl">
                   <Eye className="h-5 w-5 text-slate-400" />
                   记录详情
@@ -1903,9 +2157,10 @@ export default function RiskManagement() {
                     ? '查看预警来源、状态和操作入口。'
                     : detailDialog.entityType === 'risk'
                       ? '查看风险链路、状态与当前处理动作。'
-                      : '查看问题链路、状态与当前处理动作。'}
+                    : '查看问题链路、状态与当前处理动作。'}
                 </DialogDescription>
               </DialogHeader>
+              <Separator />
 
               <div className="flex-1 space-y-6 overflow-y-auto px-6 py-5">
                 {detailDialog.entityType === 'warning' ? (
@@ -2055,7 +2310,7 @@ export default function RiskManagement() {
 
       <Dialog open={chainDialog !== null} onOpenChange={(open) => !open && setChainDialog(null)}>
         {chainDialog && chainDialogItems ? (
-          <DialogContent className="sm:max-w-4xl" data-testid="risk-chain-dialog">
+          <DialogContent className="max-w-[720px]" data-testid="risk-chain-dialog">
             <DialogHeader>
               <DialogTitle>全链查看</DialogTitle>
               <DialogDescription>链路标识 {chainDialog.chainId}</DialogDescription>
@@ -2159,20 +2414,290 @@ export default function RiskManagement() {
   )
 }
 
-function SummaryMetricCard({ title, value, hint, icon: Icon }: { title: string; value: string | number; hint: string; icon: typeof Activity }) {
-  void hint
-
+function SummaryMetricCard({ title, value, hint, icon: Icon, sparkline }: { title: string; value: string | number; hint: string; icon: typeof Activity; sparkline: number[] }) {
   return (
     <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
       <div className="flex items-start justify-between gap-3">
         <div className="space-y-1">
-          <div className="text-xs uppercase tracking-[0.16em] text-slate-500">{title}</div>
-          <div className="text-2xl font-semibold text-slate-900">{value}</div>
+          <div className="text-xs uppercase tracking-wider text-slate-500">{title}</div>
+          <div className="text-2xl font-semibold tabular-nums text-slate-900">{value}</div>
         </div>
         <div className="rounded-full border border-slate-200 bg-white p-2 text-slate-500">
           <Icon className="h-4 w-4" />
         </div>
       </div>
+      <div className="mt-3 flex items-end justify-between gap-3">
+        <div className="min-w-0 text-xs leading-5 text-slate-500">{hint}</div>
+        <Sparkline data={sparkline.map((item) => ({ value: item }))} color={CHART_SERIES.primary} className="shrink-0" />
+      </div>
+    </div>
+  )
+}
+
+function PipelineFlow({ pipelineStages }: { pipelineStages: RiskPipelineStages }) {
+  const stages = [
+    { label: '识别', count: pipelineStages.identified, status: pipelineStages.identified > 0 ? 'active' : 'empty' },
+    { label: '评估', count: pipelineStages.assessed, status: pipelineStages.assessed > 0 ? 'active' : 'empty' },
+    { label: '应对', count: pipelineStages.responded, status: pipelineStages.responded > 0 ? 'active' : 'empty' },
+    { label: '监控', count: pipelineStages.monitored, status: 'done' },
+  ] as const
+
+  return (
+    <Card data-testid="risk-pipeline-flow" className="card-unified p-0">
+      <CardContent className="p-5">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div className="space-y-1">
+            <div className="text-base font-semibold text-slate-900">风险处置链路</div>
+            <div className="text-sm text-slate-500">按识别、评估、应对、监控四阶段观察当前风险推进状态。</div>
+          </div>
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            {stages.map((stage, index) => (
+              <Fragment key={stage.label}>
+                <div
+                  className={cn(
+                    'flex min-w-28 flex-col items-center gap-1 rounded-xl px-6 py-3 motion-safe:transition-all motion-safe:duration-300',
+                    stage.status === 'active'
+                      ? 'bg-orange-700 text-white shadow-[var(--el-2)]'
+                      : stage.status === 'done'
+                        ? 'bg-emerald-700 text-white shadow-[var(--el-2)]'
+                        : 'bg-slate-200 text-slate-700',
+                  )}
+                >
+                  <span className="text-sm font-medium">{stage.label}</span>
+                  <span className="text-lg font-bold tabular-nums">{stage.count}项</span>
+                </div>
+                {index < stages.length - 1 ? (
+                  <ChevronRight className="h-5 w-5 text-slate-300 motion-safe:transition-all motion-safe:duration-300" />
+                ) : null}
+              </Fragment>
+            ))}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+function OverviewCard({
+  title,
+  value,
+  trend,
+  items,
+  total,
+  accentClassName,
+  onViewAll,
+}: {
+  title: string
+  value: number
+  trend: string
+  items: Array<{ id: string; title: string; meta: string }>
+  total: number
+  accentClassName: string
+  onViewAll: () => void
+}) {
+  return (
+    <div className={cn('card-unified card-hover space-y-4 p-5 transition-all duration-200 motion-safe:hover:-translate-y-0.5 motion-safe:hover:shadow-[var(--el-3)]', accentClassName)}>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-xs uppercase tracking-wider text-slate-500">{title}</div>
+          <div className="mt-2 text-3xl font-semibold tabular-nums text-slate-900">{value}</div>
+        </div>
+        <Badge variant="outline">{trend}</Badge>
+      </div>
+      <div className="space-y-2">
+        {items.length > 0 ? items.map((item) => (
+          <div key={item.id} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+            <div className="truncate text-sm font-medium text-slate-900">{item.title}</div>
+            <div className="mt-1 text-xs tabular-nums text-slate-500">{item.meta}</div>
+          </div>
+        )) : (
+          <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-500">暂无记录</div>
+        )}
+      </div>
+      <Button variant="ghost" size="sm" className="w-full justify-between" onClick={onViewAll}>
+        查看全部({total})
+        <ChevronRight className="h-4 w-4" />
+      </Button>
+    </div>
+  )
+}
+
+function RiskMultiLineChart({
+  data,
+  hiddenSeries,
+  onToggleSeries,
+}: {
+  data: Array<Record<TrendSeriesKey | 'date', string | number>>
+  hiddenSeries: Record<TrendSeriesKey, boolean>
+  onToggleSeries: (key: TrendSeriesKey) => void
+}) {
+  return (
+    <div data-testid="risk-trend-summary" className="card-unified space-y-5 p-5">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2 text-base font-semibold text-slate-900">
+            <BarChart3 className="h-4 w-4 text-blue-600" />
+            趋势分析
+          </div>
+          <div className="text-sm text-slate-500">预警、风险、问题和已关闭事项按同一时间轴汇总。</div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {TREND_SERIES.map((series) => (
+            <Button
+              key={series.key}
+              variant={hiddenSeries[series.key] ? 'outline' : 'default'}
+              size="sm"
+              className="gap-2"
+              onClick={() => onToggleSeries(series.key)}
+              data-testid={`risk-trend-legend-${series.key}`}
+            >
+              <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: series.color }} />
+              {series.label}
+            </Button>
+          ))}
+        </div>
+      </div>
+      <ChartAccessibleWrapper
+        columns={['日期', '预警', '风险', '问题', '已关闭']}
+        rows={data.map((row) => [row.date, row.warnings, row.risks, row.issues, row.closed])}
+        summary="查看风险管理多折线趋势数据"
+      >
+        <div className="overflow-x-auto">
+          <LineChart width={920} height={280} data={data} margin={{ top: 10, right: 24, bottom: 8, left: -12 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.22)" />
+            <XAxis dataKey="date" tick={{ fill: '#475569', fontSize: 12 }} tickLine={false} axisLine={{ stroke: '#CBD5E1' }} />
+            <YAxis allowDecimals={false} tick={{ fill: '#475569', fontSize: 12 }} tickLine={false} axisLine={{ stroke: '#CBD5E1' }} />
+            <RechartsTooltip />
+            {TREND_SERIES.map((series) => hiddenSeries[series.key] ? null : (
+              <Line
+                key={series.key}
+                type="monotone"
+                dataKey={series.key}
+                name={series.label}
+                stroke={series.color}
+                strokeWidth={2}
+                dot={false}
+                activeDot={{ r: 4 }}
+              />
+            ))}
+          </LineChart>
+        </div>
+      </ChartAccessibleWrapper>
+    </div>
+  )
+}
+
+function StreamFlowHint({ activeStream }: { activeStream: ChainStream }) {
+  const nodes: Array<{ key: ChainStream; label: string }> = [
+    { key: 'warnings', label: '预警' },
+    { key: 'risks', label: '风险' },
+    { key: 'issues', label: '问题' },
+  ]
+
+  return (
+    <div data-testid="risk-stream-flow-hint" className="flex items-center justify-end gap-2 text-xs">
+      {nodes.map((node, index) => (
+        <Fragment key={node.key}>
+          <span className={cn('rounded-full px-2 py-0.5', activeStream === node.key ? 'bg-blue-600 text-white' : 'text-slate-400')}>
+            {node.label}
+          </span>
+          {index < nodes.length - 1 ? <span className="text-slate-300">→</span> : null}
+        </Fragment>
+      ))}
+    </div>
+  )
+}
+
+function WorkspaceFilterBar({
+  search,
+  levelFilter,
+  statusFilter,
+  ownerFilter,
+  total,
+  onSearchChange,
+  onLevelFilterChange,
+  onStatusFilterChange,
+  onOwnerFilterChange,
+}: {
+  search: string
+  levelFilter: WorkspaceLevelFilter
+  statusFilter: WorkspaceStatusFilter
+  ownerFilter: WorkspaceOwnerFilter
+  total: number
+  onSearchChange: (value: string) => void
+  onLevelFilterChange: (value: WorkspaceLevelFilter) => void
+  onStatusFilterChange: (value: WorkspaceStatusFilter) => void
+  onOwnerFilterChange: (value: WorkspaceOwnerFilter) => void
+}) {
+  return (
+    <div data-testid="risk-workspace-unified-filter" className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-3">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="relative min-w-0 flex-1">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <Input
+            value={search}
+            onChange={(event) => onSearchChange(event.target.value)}
+            aria-label="风险工作台搜索"
+            className="h-10 bg-white pl-9"
+            placeholder="搜索标题、描述、任务"
+            data-testid="risk-workspace-search"
+          />
+        </div>
+        <Badge variant="secondary">当前 {total} 条</Badge>
+      </div>
+      <div className="grid gap-3 xl:grid-cols-3">
+        <FilterChipGroup
+          label="等级"
+          options={[
+            { value: 'all', label: '全部等级' },
+            { value: 'urgent', label: '高/严重' },
+            { value: 'normal', label: '中/低' },
+          ]}
+          value={levelFilter}
+          onChange={(value) => onLevelFilterChange(value as WorkspaceLevelFilter)}
+        />
+        <FilterChipGroup
+          label="状态"
+          options={[
+            { value: 'all', label: '全部状态' },
+            { value: 'active', label: '活跃' },
+            { value: 'closed', label: '已关闭' },
+            { value: 'pending', label: '待确认' },
+          ]}
+          value={statusFilter}
+          onChange={(value) => onStatusFilterChange(value as WorkspaceStatusFilter)}
+        />
+        <FilterChipGroup
+          label="责任人"
+          options={[
+            { value: 'all', label: '全部责任人' },
+            { value: 'task', label: '任务相关' },
+            { value: 'project', label: '项目级' },
+          ]}
+          value={ownerFilter}
+          onChange={(value) => onOwnerFilterChange(value as WorkspaceOwnerFilter)}
+        />
+      </div>
+    </div>
+  )
+}
+
+function FilterChipGroup({ label, options, value, onChange }: { label: string; options: Array<{ value: string; label: string }>; value: string; onChange: (value: string) => void }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="text-xs font-medium text-slate-500">{label}</span>
+      {options.map((option) => (
+        <Button
+          key={option.value}
+          type="button"
+          variant={value === option.value ? 'default' : 'outline'}
+          size="sm"
+          className="h-8"
+          onClick={() => onChange(option.value)}
+        >
+          {option.label}
+        </Button>
+      ))}
     </div>
   )
 }
@@ -2180,7 +2705,7 @@ function SummaryMetricCard({ title, value, hint, icon: Icon }: { title: string; 
 function DetailField({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
-      <div className="text-xs uppercase tracking-[0.16em] text-slate-500">{label}</div>
+      <div className="text-xs uppercase tracking-wider text-slate-500">{label}</div>
       <div className="mt-2 text-sm font-medium text-slate-900">{value}</div>
     </div>
   )
@@ -2211,7 +2736,7 @@ function ChainToolbar({
         <Button variant={chainViewMode === 'task' ? 'default' : 'outline'} size="sm" onClick={() => onViewModeChange('task')}>按任务归类</Button>
         <Button variant={chainViewMode === 'timeline' ? 'default' : 'outline'} size="sm" onClick={() => onViewModeChange('timeline')}>时间轴</Button>
         <Button variant={showPendingManualCloseOnly ? 'default' : 'outline'} size="sm" onClick={onPendingFilterToggle} data-testid="pending-manual-close-toggle">待确认关闭{pendingCount > 0 ? ` (${pendingCount})` : ''}</Button>
-        <button type="button" className="sr-only" data-testid="pending-manual-close-filter" onClick={onPendingFilterToggle}>pending manual close filter</button>
+        <Button variant="ghost" type="button" className="sr-only" data-testid="pending-manual-close-filter" onClick={onPendingFilterToggle}>pending manual close filter</Button>
         <Select value={sourceFilter} onValueChange={(value) => onSourceFilterChange(value as SourceFilterValue)}><SelectTrigger className="h-9 w-[160px]"><SelectValue placeholder="来源筛选" /></SelectTrigger><SelectContent><SelectItem value="all">全部来源</SelectItem><SelectItem value="manual">只看手动添加</SelectItem><SelectItem value="chain">只看链路记录</SelectItem></SelectContent></Select>
       </div>
       <div className="flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-slate-500">

@@ -5,6 +5,9 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Input } from '@/components/ui/input'
+import { Separator } from '@/components/ui/separator'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -20,13 +23,15 @@ import {
   type SharedTreeRowKind,
 } from '@/components/tree/SharedTreePrimitives'
 import { cn } from '@/lib/utils'
-import { Check, Circle, FileWarning, MoreHorizontal, Plus, Search, Filter, X, ArrowUpDown } from 'lucide-react'
+import { ArrowUpDown, Check, Circle, Columns3, FileWarning, Filter, MoreHorizontal, Search, X } from 'lucide-react'
 
 export interface PlanningTreeRow {
   id: string
   title: string
   subtitle?: string
   depth: number
+  sequenceLabel?: string
+  wbsCode?: string
   rowType?: Extract<SharedTreeRowKind, 'structure' | 'leaf' | 'milestone'>
   statusLabel?: string
   isMilestone?: boolean
@@ -35,13 +40,18 @@ export interface PlanningTreeRow {
   locked?: boolean
   startDateLabel?: string
   endDateLabel?: string
+  durationLabel?: string
   progressLabel?: string
+  assigneeLabel?: string
+  parentLabel?: string
+  notesLabel?: string
   mappingStatus?: string | null
   titleCell?: ReactNode
   startCell?: ReactNode
   endCell?: ReactNode
   progressCell?: ReactNode
   extra?: ReactNode
+  onOpenDetail?: () => void
   onEdit?: () => void
   onDelete?: () => void
   onMoveUp?: () => void
@@ -64,6 +74,31 @@ interface PlanningTreeViewProps {
 
 type SortMode = 'default' | 'name' | 'date' | 'progress'
 type FacetMode = 'all' | 'structure' | 'leaf' | 'milestone'
+type ExtraColumnKey =
+  | 'progress'
+  | 'type'
+  | 'mapping'
+  | 'critical'
+  | 'milestone'
+  | 'parent'
+  | 'level'
+  | 'lock'
+  | 'notes'
+  | 'actions'
+
+const BASELINE_DEFAULT_GRID = '64px 96px minmax(200px,1.6fr) 110px 110px 80px 120px 140px'
+const EXTRA_COLUMNS: Array<{ key: ExtraColumnKey; label: string; width: string }> = [
+  { key: 'progress', label: '目标进度', width: '90px' },
+  { key: 'type', label: '类型', width: '100px' },
+  { key: 'mapping', label: '映射', width: '110px' },
+  { key: 'critical', label: '关键路径', width: '110px' },
+  { key: 'milestone', label: '里程碑', width: '90px' },
+  { key: 'parent', label: '父级', width: '140px' },
+  { key: 'level', label: '层级', width: '80px' },
+  { key: 'lock', label: '锁定', width: '90px' },
+  { key: 'notes', label: '备注', width: '180px' },
+  { key: 'actions', label: '操作', width: '128px' },
+]
 
 export function PlanningTreeView({
   title,
@@ -83,6 +118,7 @@ export function PlanningTreeView({
   const [filterMappingAttention, setFilterMappingAttention] = useState(false)
   const [sortMode, setSortMode] = useState<SortMode>('default')
   const [facetMode, setFacetMode] = useState<FacetMode>('all')
+  const [extraColumns, setExtraColumns] = useState<ExtraColumnKey[]>([])
 
   const filteredAndSortedRows = useMemo(() => {
     let result = [...rows]
@@ -144,10 +180,112 @@ export function PlanningTreeView({
   const allSelected = filteredAndSortedRows.length > 0 && filteredAndSortedRows.every((row) => row.selected)
   const someSelected = filteredAndSortedRows.some((row) => row.selected)
   const renderValue = (value?: string | null) => value?.trim() || '—'
+  const visibleExtraColumns = EXTRA_COLUMNS.filter((column) => extraColumns.includes(column.key))
+  const gridTemplateColumns = [BASELINE_DEFAULT_GRID, ...visibleExtraColumns.map((column) => column.width)].join(' ')
+  const extraColumnLabels = Object.fromEntries(EXTRA_COLUMNS.map((column) => [column.key, column.label])) as Record<
+    ExtraColumnKey,
+    string
+  >
+
+  const toggleExtraColumn = (key: ExtraColumnKey, checked: boolean) => {
+    setExtraColumns((current) => {
+      if (checked) return current.includes(key) ? current : [...current, key]
+      return current.filter((item) => item !== key)
+    })
+  }
+
+  const renderRowActions = (row: PlanningTreeRow) => {
+    if (
+      readOnly ||
+      (!row.onOpenDetail &&
+        !row.onEdit &&
+        !row.onDelete &&
+        !row.onMoveUp &&
+        !row.onMoveDown &&
+        !row.onPromote &&
+        !row.onDemote &&
+        !row.onAddSibling)
+    ) {
+      return null
+    }
+
+    return (
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button type="button" size="icon" variant="ghost" aria-label="打开计划任务操作菜单" className="h-8 w-8 shrink-0">
+            <MoreHorizontal className="h-4 w-4" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          {row.onOpenDetail ? <DropdownMenuItem onClick={row.onOpenDetail}>查看详情</DropdownMenuItem> : null}
+          {row.onEdit ? <DropdownMenuItem onClick={row.onEdit}>编辑</DropdownMenuItem> : null}
+          {row.onAddSibling ? <DropdownMenuItem onClick={row.onAddSibling}>添加同级</DropdownMenuItem> : null}
+          {row.onPromote ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <DropdownMenuItem onClick={row.onPromote}>升级</DropdownMenuItem>
+              </TooltipTrigger>
+              <TooltipContent>将此任务提升一个层级</TooltipContent>
+            </Tooltip>
+          ) : null}
+          {row.onDemote ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <DropdownMenuItem onClick={row.onDemote}>降级</DropdownMenuItem>
+              </TooltipTrigger>
+              <TooltipContent>将此任务变为上方任务的子任务</TooltipContent>
+            </Tooltip>
+          ) : null}
+          {row.onMoveUp ? <DropdownMenuItem onClick={row.onMoveUp}>上移</DropdownMenuItem> : null}
+          {row.onMoveDown ? <DropdownMenuItem onClick={row.onMoveDown}>下移</DropdownMenuItem> : null}
+          {row.onDelete ? <DropdownMenuItem onClick={row.onDelete}>删除</DropdownMenuItem> : null}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    )
+  }
+
+  const renderExtraColumnValue = (row: PlanningTreeRow, key: ExtraColumnKey) => {
+    const rowKind: SharedTreeRowKind = row.rowType ?? (row.isMilestone ? 'milestone' : 'leaf')
+
+    if (key === 'progress') {
+      return <div className="truncate text-right text-sm text-slate-700 tabular-nums">{row.progressCell ?? renderValue(row.progressLabel)}</div>
+    }
+    if (key === 'type') {
+      return <Badge variant="outline">{rowKind === 'structure' ? '结构层' : rowKind === 'milestone' ? '里程碑' : '执行项'}</Badge>
+    }
+    if (key === 'mapping') {
+      return row.mappingStatus ? (
+        <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700">
+          {row.mappingStatus}
+        </Badge>
+      ) : (
+        <span className="text-sm text-slate-500">已映射</span>
+      )
+    }
+    if (key === 'critical') {
+      return <span className={cn('text-sm', row.isCritical ? 'font-medium text-rose-600' : 'text-slate-500')}>{row.isCritical ? '关键路径' : '普通'}</span>
+    }
+    if (key === 'milestone') {
+      return <span className={cn('text-sm', row.isMilestone ? 'font-medium text-amber-700' : 'text-slate-500')}>{row.isMilestone ? '是' : '否'}</span>
+    }
+    if (key === 'parent') {
+      return <span className="truncate text-sm text-slate-600">{renderValue(row.parentLabel)}</span>
+    }
+    if (key === 'level') {
+      return <span className="text-sm text-slate-600 tabular-nums">L{row.depth}</span>
+    }
+    if (key === 'lock') {
+      return <span className="text-sm text-slate-600">{row.locked ? '锁定' : readOnly ? '只读' : '可编辑'}</span>
+    }
+    if (key === 'notes') {
+      return <span className="truncate text-sm text-slate-600">{renderValue(row.notesLabel ?? row.subtitle)}</span>
+    }
+    return <div className="flex justify-end">{renderRowActions(row)}</div>
+  }
 
   return (
     <Card className="overflow-hidden border-slate-200">
-      <CardHeader className="space-y-3 border-b border-slate-100 bg-slate-50/80">
+      <CardHeader className="space-y-3 bg-slate-50/80">
         <div className="flex items-start justify-between gap-3">
           <div>
             <CardTitle className="text-xl">{title}</CardTitle>
@@ -162,19 +300,21 @@ export function PlanningTreeView({
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
             <Input
               type="text"
+              aria-label="搜索计划任务"
               placeholder="搜索任务..."
               value={searchKeyword}
               onChange={(e) => setSearchKeyword(e.target.value)}
               className="h-9 pl-9 pr-8"
             />
             {searchKeyword && (
-              <button
+              <Button variant="ghost"
                 type="button"
+                aria-label="清空计划任务搜索"
                 onClick={() => setSearchKeyword('')}
                 className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
               >
                 <X className="h-4 w-4" />
-              </button>
+              </Button>
             )}
           </div>
 
@@ -218,6 +358,39 @@ export function PlanningTreeView({
             </DropdownMenuContent>
           </DropdownMenu>
 
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button type="button" variant="outline" size="sm" className="gap-2" data-testid="planning-more-columns-trigger">
+                <Columns3 className="h-4 w-4" />
+                更多列
+                <Badge variant="secondary" className="ml-1 h-5 min-w-5 px-1">
+                  {extraColumns.length}/10
+                </Badge>
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent align="end" side="bottom" className="w-64 p-3">
+              <div className="space-y-3" data-testid="planning-more-columns-popover">
+                <div className="space-y-1">
+                  <div className="text-sm font-medium text-slate-900">更多列</div>
+                  <div className="text-xs text-slate-500">默认保留 8 列，其余字段按需打开。</div>
+                </div>
+                <div className="grid gap-2">
+                  {EXTRA_COLUMNS.map((column) => (
+                    <label key={column.key} className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-slate-700 hover:bg-slate-50">
+                      <input
+                        type="checkbox"
+                        checked={extraColumns.includes(column.key)}
+                        onChange={(event) => toggleExtraColumn(column.key, event.target.checked)}
+                        className="h-4 w-4 rounded border-slate-300 text-blue-600"
+                      />
+                      {column.label}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            </PopoverContent>
+          </Popover>
+
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="outline" size="sm" className="gap-2">
@@ -256,13 +429,13 @@ export function PlanningTreeView({
                   {facetMode === 'structure' ? '结构层' : facetMode === 'leaf' ? '执行项' : '里程碑'}
                 </Badge>
               ) : null}
-              <button
+              <Button variant="ghost"
                 type="button"
                 onClick={handleClearAll}
                 className="text-sm text-slate-500 hover:text-slate-700 underline"
               >
                 清除全部
-              </button>
+              </Button>
             </div>
           )}
         </div>
@@ -273,19 +446,20 @@ export function PlanningTreeView({
               只读查看态
             </Badge>
           ) : (
-            <button
+            <Button variant="ghost"
               type="button"
               className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
               onClick={() => onToggleAll?.(!allSelected)}
             >
               {allSelected ? <Check className="h-3.5 w-3.5" /> : someSelected ? <Circle className="h-3.5 w-3.5" /> : <Circle className="h-3.5 w-3.5" />}
               {allSelected ? '取消全选' : '全选当前视图'}
-            </button>
+            </Button>
           )}
           <span className="text-slate-400">·</span>
           <span>当前视图 {filteredAndSortedRows.length} 项</span>
         </div>
       </CardHeader>
+      <Separator />
 
       <CardContent className="p-0">
         {rows.length === 0 ? (
@@ -294,15 +468,26 @@ export function PlanningTreeView({
           </div>
         ) : (
           <ScrollArea className="max-h-[560px]">
-            <div className="min-w-[980px]">
-              <div className="grid grid-cols-[40px_minmax(280px,35%)_minmax(120px,15%)_minmax(120px,15%)_minmax(140px,15%)_minmax(180px,20%)] items-center gap-3 border-b border-slate-100 bg-slate-50 px-4 py-3 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                <div className="text-center">选</div>
-                <div>名称</div>
-                <div>开始</div>
-                <div>结束</div>
-                <div>目标 / 进度</div>
-                <div>标记</div>
+            <div className="min-w-[1040px]">
+              <div
+                className="grid items-center gap-3 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-wider text-slate-500"
+                style={{ gridTemplateColumns }}
+              >
+                <div className="text-center tabular-nums">序号</div>
+                <div>WBS</div>
+                <div className="min-w-[200px]">任务名</div>
+                <div className="w-[110px] text-right tabular-nums">开始</div>
+                <div className="w-[110px] text-right tabular-nums">结束</div>
+                <div className="w-[80px] text-right tabular-nums">工期</div>
+                <div>状态</div>
+                <div>责任人</div>
+                {visibleExtraColumns.map((column) => (
+                  <div key={column.key} className={cn(column.key === 'progress' && 'w-[80px] text-right tabular-nums')}>
+                    {extraColumnLabels[column.key]}
+                  </div>
+                ))}
               </div>
+              <Separator />
 
               <div className="divide-y divide-slate-100">
               {filteredAndSortedRows.map((row) => {
@@ -313,15 +498,16 @@ export function PlanningTreeView({
                   <div
                     key={row.id}
                     className={cn(
-                      'group grid grid-cols-[40px_minmax(280px,35%)_minmax(120px,15%)_minmax(120px,15%)_minmax(140px,15%)_minmax(180px,20%)] items-center gap-3 px-4 transition-colors hover:bg-slate-50',
+                      'group grid items-center gap-3 px-4 transition-colors hover:bg-slate-50',
                       getTreeRowHeightClass(rowKind),
                       row.selected && 'bg-cyan-50/60',
                       row.isCritical && rowKind !== 'milestone' && 'border-l-2 border-l-sky-400',
                       rowKind === 'milestone' && 'border-l-2 border-l-amber-400 bg-amber-50/30',
                     )}
+                    style={{ gridTemplateColumns }}
                   >
-                  <div className="flex w-7 items-center justify-center">
-                    <button
+                  <div className="flex items-center justify-center gap-1 text-sm text-slate-500 tabular-nums">
+                    <Button variant="ghost"
                       type="button"
                       aria-label={`toggle-${row.id}`}
                       data-testid="planning-selection-checkbox"
@@ -337,7 +523,12 @@ export function PlanningTreeView({
                       )}
                     >
                       <Check className="h-3.5 w-3.5" />
-                    </button>
+                    </Button>
+                    <span>{row.sequenceLabel ?? '—'}</span>
+                  </div>
+
+                  <div className="truncate text-sm font-medium text-slate-600 tabular-nums">
+                    {renderValue(row.wbsCode)}
                   </div>
 
                   <div
@@ -363,14 +554,14 @@ export function PlanningTreeView({
                     )}
                   </div>
 
-                  <div className="truncate text-sm text-slate-700">{row.startCell ?? renderValue(row.startDateLabel)}</div>
+                  <div className="w-[110px] truncate text-right text-sm text-slate-700 tabular-nums">{row.startCell ?? renderValue(row.startDateLabel)}</div>
 
-                  <div className="truncate text-sm text-slate-700">{row.endCell ?? renderValue(row.endDateLabel)}</div>
+                  <div className="w-[110px] truncate text-right text-sm text-slate-700 tabular-nums">{row.endCell ?? renderValue(row.endDateLabel)}</div>
 
-                  <div className="truncate text-sm text-slate-700">{row.progressCell ?? renderValue(row.progressLabel)}</div>
+                  <div className="w-[80px] truncate text-right text-sm text-slate-700 tabular-nums">{renderValue(row.durationLabel)}</div>
 
-                  <div className="flex min-w-0 items-center justify-end gap-2">
-                    <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <div className="flex min-w-0 flex-wrap items-center gap-2">
                       {row.statusLabel ? <Badge variant="secondary">{row.statusLabel}</Badge> : null}
                       {row.mappingStatus ? (
                         <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700">
@@ -384,42 +575,16 @@ export function PlanningTreeView({
                       ) : null}
                       {row.extra}
                     </div>
-                    {!readOnly && rowKind !== 'structure' && (
-                      <div className="flex items-center gap-1">
-                        {row.onAddSibling ? (
-                          <Button
-                            type="button"
-                            size="icon"
-                            variant="ghost"
-                            className="h-8 w-8 shrink-0"
-                            onClick={row.onAddSibling}
-                            aria-label={`add-sibling-${row.id}`}
-                            data-testid="planning-row-add-sibling"
-                          >
-                            <Plus className="h-4 w-4" />
-                          </Button>
-                        ) : null}
-                        {(row.onEdit || row.onDelete || row.onMoveUp || row.onMoveDown || row.onPromote || row.onDemote || row.onAddSibling) ? (
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <Button type="button" size="icon" variant="ghost" className="h-8 w-8 shrink-0">
-                                <MoreHorizontal className="h-4 w-4" />
-                              </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              {row.onEdit && <DropdownMenuItem onClick={row.onEdit}>编辑</DropdownMenuItem>}
-                              {row.onDelete && <DropdownMenuItem onClick={row.onDelete}>删除</DropdownMenuItem>}
-                              {row.onPromote && <DropdownMenuItem onClick={row.onPromote}>升级层级</DropdownMenuItem>}
-                              {row.onDemote && <DropdownMenuItem onClick={row.onDemote}>降级层级</DropdownMenuItem>}
-                              {row.onMoveUp && <DropdownMenuItem onClick={row.onMoveUp}>上移</DropdownMenuItem>}
-                              {row.onMoveDown && <DropdownMenuItem onClick={row.onMoveDown}>下移</DropdownMenuItem>}
-                              {row.onAddSibling && <DropdownMenuItem onClick={row.onAddSibling}>添加同级</DropdownMenuItem>}
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        ) : null}
-                      </div>
-                    )}
+                    {!extraColumns.includes('actions') ? renderRowActions(row) : null}
                   </div>
+
+                  <div className="truncate text-sm text-slate-600">{renderValue(row.assigneeLabel)}</div>
+
+                  {visibleExtraColumns.map((column) => (
+                    <div key={column.key} className="min-w-0 truncate">
+                      {renderExtraColumnValue(row, column.key)}
+                    </div>
+                  ))}
                 </div>
                 )
               })}

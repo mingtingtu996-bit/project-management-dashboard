@@ -70,7 +70,7 @@ export function getProjectAbbr(name: string): string {
  * 色块背景色轮转（按索引）
  */
 const COLOR_POOL = [
-  'bg-blue-500', 'bg-purple-500', 'bg-indigo-500',
+  'bg-blue-600', 'bg-purple-500', 'bg-indigo-500',
   'bg-teal-500', 'bg-cyan-500', 'bg-violet-500',
   'bg-rose-500', 'bg-orange-500',
 ];
@@ -83,8 +83,8 @@ const COLOR_POOL = [
  * 
  * @example
  * ```typescript
- * const color = getProjectColor(0); // 'bg-blue-500'
- * const color = getProjectColor(8); // 'bg-blue-500' (循环)
+ * const color = getProjectColor(0); // 'bg-blue-600'
+ * const color = getProjectColor(8); // 'bg-blue-600' (循环)
  * ```
  */
 export function getProjectColor(idx: number): string {
@@ -168,14 +168,14 @@ export function calcProjectRemainingDays(project: Project): RemainingDaysResult 
 export const STATUS_LABELS: Record<string, { text: string; cls: string }> = {
   active: { text: '进行中', cls: 'bg-blue-50 text-blue-600' },
   completed: { text: '已完成', cls: 'bg-emerald-50 text-emerald-600' },
-  archived: { text: '已归档', cls: 'bg-gray-100 text-gray-500' },
+  archived: { text: '已归档', cls: 'bg-slate-100 text-slate-500' },
 };
 
 /**
  * 阶段标签样式
  */
 export const STAGE_STYLES: Record<ProjectStage, string> = {
-  pre: 'bg-gray-100 text-gray-500',
+  pre: 'bg-slate-100 text-slate-500',
   construction: 'bg-blue-50 text-blue-600',
   acceptance: 'bg-emerald-50 text-emerald-600',
 };

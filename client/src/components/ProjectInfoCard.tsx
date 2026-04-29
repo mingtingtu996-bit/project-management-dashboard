@@ -291,7 +291,7 @@ export default function ProjectInfoCard({
   }, [plannedEndDate])
 
   const remainingStyle = useMemo(() => {
-    if (remainingDays === null) return { text: '未设置', color: 'text-gray-400', bg: 'bg-gray-50' }
+    if (remainingDays === null) return { text: '未设置', color: 'text-slate-400', bg: 'bg-slate-50' }
     if (remainingDays < 0) return { text: `已延期 ${Math.abs(remainingDays)} 天`, color: 'text-red-600', bg: 'bg-red-50' }
     if (remainingDays === 0) return { text: '今天截止', color: 'text-amber-600', bg: 'bg-amber-50' }
     if (remainingDays <= 7) return { text: `剩余 ${remainingDays} 天`, color: 'text-amber-600', bg: 'bg-amber-50' }
@@ -387,7 +387,7 @@ export default function ProjectInfoCard({
               const section = scopeSectionMap.get(key)
               const selected = section?.selected ?? []
               return (
-                <div key={key} className="rounded-lg border border-slate-200 bg-white p-3">
+                <Card key={key} className="rounded-lg border border-slate-200 bg-white p-3">
                   <p className="text-xs text-slate-500">{section?.label || SCOPE_META[key].label}</p>
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     {selected.length > 0 ? selected.map((label) => (
@@ -398,13 +398,13 @@ export default function ProjectInfoCard({
                       <span className="text-sm text-slate-400">未配置</span>
                     )}
                   </div>
-                </div>
+                </Card>
               )
             })}
           </div>
 
           {onSaveScope && scopeExpanded && (
-            <div className="mt-4 space-y-4 rounded-xl border border-slate-200 bg-white p-4">
+            <Card className="mt-4 space-y-4 rounded-xl border border-slate-200 bg-white p-4">
               {SCOPE_KEYS.map((key) => {
                 const section = scopeSectionMap.get(key)
                 const options = unique([...(section?.options ?? []), ...(scopeDraft[key] ?? [])])
@@ -419,7 +419,7 @@ export default function ProjectInfoCard({
                       {options.length > 0 ? options.map((option) => {
                         const active = selected.includes(option)
                         return (
-                          <button
+                          <Button variant="ghost"
                             key={option}
                             type="button"
                             onClick={() => handleScopeToggle(key, option)}
@@ -430,7 +430,7 @@ export default function ProjectInfoCard({
                             }`}
                           >
                             {option}
-                          </button>
+                          </Button>
                         )
                       }) : (
                         <span className="text-sm text-slate-400">暂无可选项</span>
@@ -468,7 +468,7 @@ export default function ProjectInfoCard({
                   {scopeSaving ? '保存中' : '保存范围'}
                 </Button>
               </div>
-            </div>
+            </Card>
           )}
         </div>
       </CardHeader>
@@ -493,7 +493,7 @@ export default function ProjectInfoCard({
             </div>
 
             {basicInfoExpanded && (
-              <div className="mt-4 space-y-4 rounded-xl border border-slate-200 bg-white p-4">
+              <Card className="mt-4 space-y-4 rounded-xl border border-slate-200 bg-white p-4">
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className="space-y-2 md:col-span-2">
                     <p className="text-xs text-slate-500">项目名称</p>
@@ -622,7 +622,7 @@ export default function ProjectInfoCard({
                     {basicInfoSaving ? '保存中' : '保存基础信息'}
                   </Button>
                 </div>
-              </div>
+              </Card>
             )}
           </div>
         )}

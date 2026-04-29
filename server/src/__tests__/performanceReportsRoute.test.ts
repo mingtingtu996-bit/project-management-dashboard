@@ -170,6 +170,40 @@ describe('performance reports route', () => {
     expect(response.body.data.recommendations[0]).toContain('核心路径巡检')
   })
 
+  it('excludes synthetic HeadlessChrome verification reports from the online release gate summary', async () => {
+    const app = buildApp()
+
+    await supertest(app)
+      .post('/api/performance-reports')
+      .send({
+        source: 'api',
+        name: 'api_request',
+        value: 9000,
+        unit: 'ms',
+        url: '/api/projects/project-1/materials/summary',
+        userAgent: 'Mozilla/5.0 HeadlessChrome/126.0.0.0',
+        metadata: {
+          method: 'GET',
+          statusCode: 200,
+        },
+      })
+
+    const response = await supertest(app).get('/api/performance-reports/summary')
+
+    expect(response.status).toBe(200)
+    expect(response.body.data).toMatchObject({
+      window: {
+        retainedReports: 0,
+        thresholdExceeded: 0,
+        syntheticReportsExcluded: 1,
+      },
+      topSlowApis: [],
+      releaseGate: {
+        status: 'insufficient_data',
+      },
+    })
+  })
+
   it('rejects malformed performance evidence before logging', async () => {
     const response = await supertest(buildApp())
       .post('/api/performance-reports')

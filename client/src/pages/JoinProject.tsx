@@ -100,7 +100,7 @@ export default function JoinProject() {
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-slate-50 p-4" data-testid="join-project-page">
-      <Card className="w-full max-w-md rounded-3xl border-slate-200 shadow-lg">
+      <Card className="w-full max-w-md rounded-2xl border-slate-200 shadow-lg">
         <CardHeader className="text-center">
           <CardTitle className="flex items-center justify-center gap-2 text-xl">
             <Users className="h-6 w-6" />

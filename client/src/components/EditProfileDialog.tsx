@@ -5,6 +5,7 @@
 import { useState, useEffect, useRef, useId } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { X } from 'lucide-react';
+import { Button } from '@/components/ui/button'
 
 interface EditProfileDialogProps {
   isOpen: boolean;
@@ -16,6 +17,7 @@ export const EditProfileDialog: React.FC<EditProfileDialogProps> = ({ isOpen, on
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
   const [error, setError] = useState('');
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const titleId = useId();
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -25,6 +27,7 @@ export const EditProfileDialog: React.FC<EditProfileDialogProps> = ({ isOpen, on
       setDisplayName(user.display_name || '');
       setEmail(user.email || '');
       setError('');
+      setFieldErrors({});
     }
   }, [isOpen, user]);
 
@@ -40,9 +43,24 @@ export const EditProfileDialog: React.FC<EditProfileDialogProps> = ({ isOpen, on
 
   if (!isOpen) return null;
 
+  const validateRequired = (field: string, value: string) => {
+    if (value.trim()) {
+      setFieldErrors((current) => {
+        const next = { ...current };
+        delete next[field];
+        return next;
+      });
+      return true;
+    }
+
+    setFieldErrors((current) => ({ ...current, [field]: '此字段必填' }));
+    return false;
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    if (!validateRequired('displayName', displayName)) return;
     setLoading(true);
 
     try {
@@ -60,13 +78,13 @@ export const EditProfileDialog: React.FC<EditProfileDialogProps> = ({ isOpen, on
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => !loading && onClose()}>
-      <div role="dialog" aria-modal="true" aria-labelledby={titleId} className="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 p-6" onClick={e => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex animate-in items-center justify-center bg-black/60 px-4 py-6 backdrop-blur-[4px] duration-200 fade-in-0" onClick={() => !loading && onClose()}>
+      <div role="dialog" aria-modal="true" aria-labelledby={titleId} className="w-[90%] max-w-[560px] animate-in rounded-2xl border border-slate-200 bg-white p-6 shadow-[var(--el-4)] duration-200 ease-bounce fade-in-0 zoom-in-95" onClick={e => e.stopPropagation()}>
         <div className="flex justify-between items-center mb-4">
-          <h2 id={titleId} className="text-lg font-semibold text-gray-800">编辑个人信息</h2>
-          <button ref={closeRef} onClick={onClose} className="text-gray-400 hover:text-gray-600" disabled={loading} aria-label="关闭">
+          <h2 id={titleId} className="text-lg font-semibold text-slate-800">编辑个人信息</h2>
+          <Button variant="ghost" ref={closeRef} onClick={onClose} className="text-slate-400 hover:text-slate-600" disabled={loading} aria-label="关闭">
             <X className="h-5 w-5" />
-          </button>
+          </Button>
         </div>
 
         {error && (
@@ -75,47 +93,58 @@ export const EditProfileDialog: React.FC<EditProfileDialogProps> = ({ isOpen, on
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">用户名</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1">用户名</label>
             <input
               type="text"
               value={user?.username || ''}
-              className="w-full px-3 py-2 border border-gray-200 rounded bg-gray-50 text-gray-500 text-sm"
+              className="w-full px-3 py-2 border border-slate-200 rounded bg-slate-50 text-slate-500 text-sm"
               disabled
             />
-            <p className="text-xs text-gray-400 mt-1">用户名不可修改</p>
+            <p className="text-xs text-slate-400 mt-1">用户名不可修改</p>
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">显示名称</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1">显示名称</label>
             <input
               type="text"
               value={displayName}
-              onChange={e => setDisplayName(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+              onChange={e => {
+                setDisplayName(e.target.value);
+                if (fieldErrors.displayName) validateRequired('displayName', e.target.value);
+              }}
+              onBlur={() => validateRequired('displayName', displayName)}
+              aria-invalid={Boolean(fieldErrors.displayName)}
+              aria-describedby={fieldErrors.displayName ? 'edit-profile-display-name-error' : undefined}
+              className={`w-full px-3 py-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm ${fieldErrors.displayName ? 'border-red-500' : 'border-slate-300'}`}
               placeholder="请输入显示名称"
               disabled={loading}
             />
+            {fieldErrors.displayName ? (
+              <p id="edit-profile-display-name-error" className="text-sm text-red-600" role="alert">
+                {fieldErrors.displayName}
+              </p>
+            ) : null}
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">邮箱</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1">邮箱</label>
             <input
               type="email"
               value={email}
               onChange={e => setEmail(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+              className="w-full px-3 py-2 border border-slate-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
               placeholder="请输入邮箱（可选）"
               disabled={loading}
             />
           </div>
 
           <div className="flex gap-3 pt-2">
-            <button type="button" onClick={onClose} disabled={loading} className="flex-1 px-4 py-2 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50">
+            <Button variant="ghost" type="button" onClick={onClose} disabled={loading} className="flex-1 px-4 py-2 border border-slate-300 rounded text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50">
               取消
-            </button>
-            <button type="submit" disabled={loading} className="flex-1 px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50">
+            </Button>
+            <Button variant="ghost" type="submit" disabled={loading} className="flex-1 px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50">
               {loading ? '保存中...' : '保存'}
-            </button>
+            </Button>
           </div>
         </form>
       </div>

@@ -1,7 +1,9 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Separator } from '@/components/ui/separator'
 import type { Issue, Risk } from '@/lib/supabase'
 
 import type { ProjectRow } from '../types'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
 interface RiskBubbleMatrixProps {
   risks: Risk[]
@@ -133,7 +135,7 @@ export function RiskBubbleMatrix({ risks, issues, projectRows }: RiskBubbleMatri
   const totalSignals = signals.length
 
   return (
-    <Card className="rounded-[24px] border border-slate-100 bg-slate-50 shadow-none">
+    <Card className="rounded-2xl border border-slate-100 bg-slate-50 shadow-none">
       <CardHeader className="space-y-1 pb-3">
         <CardTitle className="flex items-center justify-between text-base font-semibold text-slate-900">
           <span>风险 / 问题 / 阻碍分布</span>
@@ -148,14 +150,14 @@ export function RiskBubbleMatrix({ risks, issues, projectRows }: RiskBubbleMatri
         <div className="mb-4 flex items-center justify-center gap-3 text-xs">
           {SIGNAL_LEVELS.map((level) => (
             <span key={level.key} className="flex items-center gap-1">
-              <span className={`h-3 w-3 rounded-full ${level.color}`} />
+              <span className={`h-3.5 w-3.5 rounded-full ${level.color}`} />
               <span className="text-slate-500">{level.label}</span>
             </span>
           ))}
         </div>
 
         <div className="relative">
-          <div className="absolute bottom-0 left-0 top-0 flex w-10 flex-col justify-around py-2 text-[10px] text-slate-400">
+          <div className="absolute bottom-0 left-0 top-0 flex w-10 flex-col justify-around py-2 text-xs text-slate-400">
             {[...SIGNAL_LEVELS].reverse().map((level) => (
               <span key={level.key} className="text-center">{level.label}</span>
             ))}
@@ -164,7 +166,7 @@ export function RiskBubbleMatrix({ risks, issues, projectRows }: RiskBubbleMatri
           <div className="ml-10">
             <div className="mb-1 grid grid-cols-4 gap-2">
               {SIGNAL_SOURCES.map((source) => (
-                <div key={source} className="py-1 text-center text-[10px] text-slate-500">
+                <div key={source} className="py-1 text-center text-xs text-slate-500">
                   {source}
                 </div>
               ))}
@@ -179,15 +181,17 @@ export function RiskBubbleMatrix({ risks, issues, projectRows }: RiskBubbleMatri
                     const weight = cell?.weight ?? 0
 
                     return (
-                      <div
+                      <Tooltip>
+  <TooltipTrigger asChild>
+    <div
                         key={`${source}-${level.key}`}
                         className="relative aspect-square rounded-xl bg-white transition-colors hover:bg-slate-100"
-                        title={count > 0 ? `${source} · ${level.label}：${count} 个信号` : `${source} · ${level.label}`}
+                        
                       >
                         <div className="flex h-full items-center justify-center">
                           {count > 0 ? (
                             <div
-                              className={`flex items-center justify-center rounded-full text-[10px] font-semibold text-white shadow-sm ${level.color}`}
+                              className={`flex items-center justify-center rounded-full text-xs font-semibold text-white shadow-sm ${level.color}`}
                               style={{
                                 width: `${calcBubbleSize(Math.max(count, weight))}px`,
                                 height: `${calcBubbleSize(Math.max(count, weight))}px`,
@@ -198,6 +202,9 @@ export function RiskBubbleMatrix({ risks, issues, projectRows }: RiskBubbleMatri
                           ) : null}
                         </div>
                       </div>
+  </TooltipTrigger>
+  <TooltipContent>{count > 0 ? `${source} · ${level.label}：${count} 个信号` : `${source} · ${level.label}`}</TooltipContent>
+</Tooltip>
                     )
                   })}
                 </div>
@@ -207,7 +214,8 @@ export function RiskBubbleMatrix({ risks, issues, projectRows }: RiskBubbleMatri
         </div>
 
         {totalSignals > 0 ? (
-          <div className="mt-4 border-t border-slate-200 pt-3">
+          <div className="mt-4 pt-3">
+            <Separator className="mb-3" />
             <div className="flex flex-wrap gap-2">
               {matrix
                 .filter((item) => item.total > 0)

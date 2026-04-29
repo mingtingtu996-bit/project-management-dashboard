@@ -142,7 +142,7 @@ describe('shared summary dashboards', () => {
           {
             id: 'issue-1',
             project_id: 'project-1',
-            title: '结构专业提资滞后',
+            title: '结构专业提资进度落后',
             severity: 'high',
             status: 'open',
           },
@@ -497,21 +497,117 @@ describe('shared summary dashboards', () => {
       await flush()
     })
 
-    await waitForText(container, ['项目总数', '平均总体进度', '平均健康度', '需关注项目数', '任务列表', '关键路径任务受阻'])
+    await waitForText(container, ['项目总数', '活跃项目', '整体健康', '良好', '完成率', '风险数', '1 个项目异常', '关键路径任务受阻'])
 
     expect(container.textContent).toContain('项目总数')
     expect(container.textContent).toContain('72%')
     expect(container.textContent).toContain('88')
-    expect(container.textContent).toContain('需关注项目数')
-    expect(container.textContent).toContain('专项进展')
-    expect(container.textContent).toContain('证照')
-    expect(container.textContent).toContain('验收')
-    expect(container.textContent).toContain('图纸')
+    expect(container.textContent).toContain('活跃项目')
+    expect(container.textContent).toContain('整体健康')
+    expect(container.textContent).toContain('良好')
+    expect(container.textContent).toContain('完成率')
+    expect(container.textContent).toContain('风险数')
     expect(container.textContent).toContain('任务列表')
     expect(container.textContent).toContain('关键路径任务受阻')
+    expect(container.querySelectorAll('[data-testid="company-hero-metric"]')).toHaveLength(3)
+    expect(container.querySelectorAll('svg[aria-label="趋势微图"]').length).toBeGreaterThanOrEqual(3)
+    expect(container.querySelector('section.bg-gradient-to-br.from-blue-50.to-slate-50')).not.toBeNull()
+    expect(container.querySelector('[data-testid="company-project-grid"]')?.className).toContain('xl:grid-cols-3')
+    expect(container.querySelector('[data-testid="company-project-card"]')?.className).toContain('border-l-4')
+    expect(container.querySelector('[data-testid="company-project-card"]')?.className).toContain('border-l-orange-500')
     expect(companySummarySpy).toHaveBeenCalled()
     expect(apiGetSpy.mock.calls.some(([url]) => url === '/api/health-score/avg-history')).toBe(false)
     expect(syncProjectCacheFromApiSpy).toHaveBeenCalled()
+  })
+
+  it('CompanyCockpit shows the normal empty insight state when no project is anomalous', async () => {
+    companySummarySpy.mockResolvedValueOnce({
+      projectCount: 1,
+      averageHealth: 90,
+      averageProgress: 90,
+      attentionProjectCount: 0,
+      lowHealthProjectCount: 0,
+      overdueMilestoneProjectCount: 0,
+      healthHistory: {
+        thisMonth: 90,
+        lastMonth: 90,
+        change: 0,
+        thisMonthPeriod: '2026-04',
+        lastMonthPeriod: '2026-03',
+        periods: [
+          { period: '2026-03', value: 90 },
+          { period: '2026-04', value: 90 },
+        ],
+      },
+      ranking: [
+        {
+          id: 'project-1',
+          name: '城市中心广场项目（二期）',
+          status: 'active',
+          statusLabel: '进行中',
+          plannedEndDate: '2026-12-31',
+          daysUntilPlannedEnd: 120,
+          totalTasks: 10,
+          leafTaskCount: 10,
+          completedTaskCount: 9,
+          inProgressTaskCount: 1,
+          delayedTaskCount: 0,
+          delayDays: 0,
+          delayCount: 0,
+          overallProgress: 90,
+          taskProgress: 90,
+          totalMilestones: 4,
+          completedMilestones: 4,
+          milestoneProgress: 100,
+          riskCount: 0,
+          activeRiskCount: 0,
+          activeIssueCount: 0,
+          pendingConditionCount: 0,
+          pendingConditionTaskCount: 0,
+          activeObstacleCount: 0,
+          activeObstacleTaskCount: 0,
+          preMilestoneCount: 0,
+          completedPreMilestoneCount: 0,
+          activePreMilestoneCount: 0,
+          overduePreMilestoneCount: 0,
+          acceptancePlanCount: 0,
+          passedAcceptancePlanCount: 0,
+          inProgressAcceptancePlanCount: 0,
+          failedAcceptancePlanCount: 0,
+          constructionDrawingCount: 0,
+          issuedConstructionDrawingCount: 0,
+          reviewingConstructionDrawingCount: 0,
+          attentionRequired: false,
+          scheduleVarianceDays: 0,
+          activeDelayRequests: 0,
+          activeObstacles: 0,
+          monthlyCloseStatus: '已完成',
+          closeoutOverdueDays: 0,
+          unreadWarningCount: 0,
+          highestWarningLevel: 'info',
+          highestWarningSummary: null,
+          shiftedMilestoneCount: 0,
+          criticalPathAffectedTasks: 0,
+          healthScore: 90,
+          healthStatus: '健康',
+          nextMilestone: null,
+        },
+      ],
+    } as never)
+
+    await act(async () => {
+      root?.render(
+        <MemoryRouter>
+          <CompanyCockpit />
+        </MemoryRouter>,
+      )
+      await flush()
+    })
+
+    await waitForText(container, ['所有项目运行正常'])
+
+    expect(container.textContent).toContain('所有项目运行正常')
+    expect(container.textContent).not.toContain('个项目异常')
   })
 
   it('CompanyCockpit does not keep frontend BI aggregation fallbacks', () => {

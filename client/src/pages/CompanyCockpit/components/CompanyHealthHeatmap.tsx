@@ -1,4 +1,5 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Separator } from '@/components/ui/separator'
 
 type HeatmapItem = {
   id: string
@@ -21,7 +22,7 @@ function getTileTone(score: number) {
 
 function getScoreBarColor(score: number) {
   if (score >= 80) return 'bg-emerald-500'
-  if (score >= 60) return 'bg-blue-500'
+  if (score >= 60) return 'bg-blue-600'
   if (score >= 40) return 'bg-amber-500'
   return 'bg-red-500'
 }
@@ -40,7 +41,7 @@ export function CompanyHealthHeatmap({ items }: CompanyHealthHeatmapProps) {
   const stableCount = items.filter((item) => item.healthScore >= 80).length
 
   return (
-    <Card className="rounded-[24px] border border-slate-100 bg-slate-50 shadow-none">
+    <Card className="rounded-2xl border border-slate-100 bg-slate-50 shadow-none">
       <CardHeader className="space-y-1 pb-3">
         <div className="flex items-center justify-between gap-3">
           <div>
@@ -77,7 +78,7 @@ export function CompanyHealthHeatmap({ items }: CompanyHealthHeatmapProps) {
                     </div>
                     <div className="text-right flex-shrink-0">
                       <div className="text-2xl font-semibold leading-none">{item.healthScore}</div>
-                      <div className="mt-1 text-[11px] opacity-75">健康度</div>
+                      <div className="mt-1 text-xs opacity-75">健康度</div>
                     </div>
                   </div>
                   <div className="mt-3 space-y-2 text-xs">
@@ -102,7 +103,8 @@ export function CompanyHealthHeatmap({ items }: CompanyHealthHeatmapProps) {
               ))}
             </div>
 
-            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-3">
+            <Separator />
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-3">
               <div className="flex flex-wrap gap-2 text-xs text-slate-500">
                 <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-emerald-700">80+ 稳定</span>
                 <span className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-blue-700">60-79 良好</span>

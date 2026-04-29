@@ -514,6 +514,14 @@ describe('Reports story coverage', () => {
         }
       }
 
+      if (url === `/api/projects/${projectId}/reports/s-curve`) {
+        return [
+          { date: '2026-04-01', planned_cumulative: 45, actual_cumulative: 42 },
+          { date: '2026-04-08', planned_cumulative: 58, actual_cumulative: 55 },
+          { date: '2026-04-15', planned_cumulative: 70, actual_cumulative: 62 },
+        ]
+      }
+
       throw new Error(`Unexpected apiGet url: ${url}`)
     })
 
@@ -625,7 +633,7 @@ describe('Reports story coverage', () => {
     expect(container.querySelector('[data-testid="reports-delay-obstacle-correlation"]')).toBeTruthy()
     expect(container.textContent).toContain('版本锁状态')
     expect(container.textContent).toContain('pm-user')
-    expect(container.textContent).toContain('变更记录分析')
+    expect(container.textContent).toContain('变更(3 本月)')
 
     const baselineTab = findButton(container, '基线偏差')
     expect(baselineTab).toBeTruthy()
@@ -771,9 +779,11 @@ describe('Reports story coverage', () => {
 
     expect(container.querySelector('[data-testid="change-log-view"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="analysis-entry-progress"]')).toBeTruthy()
-    expect(container.textContent).toContain('范围/结构相关')
-    expect(container.textContent).toContain('计划调整相关')
-    expect(container.textContent).toContain('执行/异常相关')
+    expect(container.textContent).toContain('本月变更数')
+    expect(container.textContent).toContain('审批中数量')
+    expect(container.textContent).toContain('第 1-3 条，共 3 条')
+    expect(container.textContent).toContain('已记录')
+    expect(container.textContent).toContain('审批中')
     expect(container.textContent).not.toContain('变更记录占位')
   })
 

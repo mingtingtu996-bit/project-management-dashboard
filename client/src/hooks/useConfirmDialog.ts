@@ -1,4 +1,4 @@
-// 自定义 hook：确认弹窗（替代 window.confirm）
+// 自定义 hook：确认弹窗（替代浏览器原生确认弹窗）
 // 用法：
 //   const { confirmDialog, openConfirm, closeConfirm } = useConfirmDialog()
 // 在 JSX 中渲染 ConfirmDialog 组件，openConfirm(title, message, onConfirm) 打开弹窗

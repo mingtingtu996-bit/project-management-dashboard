@@ -94,6 +94,54 @@ describe('TaskSummary page contract', () => {
                     assignee: '张三',
                     planned_end_date: '2026-04-08',
                     status_label: 'on_time',
+                    delay_total_days: 2,
+                  },
+                ],
+              },
+              {
+                id: 'group-2',
+                name: '里程碑 B',
+                status: 'completed',
+                planned_end_date: '2026-04-10',
+                tasks: [
+                  {
+                    id: 'task-2',
+                    title: '关联任务 2',
+                    assignee: '李四',
+                    planned_end_date: '2026-04-10',
+                    status_label: 'completed',
+                    delay_total_days: 0,
+                  },
+                ],
+              },
+              {
+                id: 'group-3',
+                name: '里程碑 C',
+                status: 'completed',
+                planned_end_date: '2026-04-12',
+                tasks: [
+                  {
+                    id: 'task-3',
+                    title: '关联任务 3',
+                    assignee: '王五',
+                    planned_end_date: '2026-04-12',
+                    status_label: 'completed',
+                    delay_total_days: 0,
+                  },
+                ],
+              },
+              {
+                id: 'group-4',
+                name: '里程碑 D',
+                status: 'completed',
+                planned_end_date: '2026-04-15',
+                tasks: [
+                  {
+                    id: 'task-4',
+                    title: '关联任务 4',
+                    assignee: '赵六',
+                    planned_end_date: '2026-04-15',
+                    status_label: 'completed',
                     delay_total_days: 0,
                   },
                 ],
@@ -160,7 +208,24 @@ describe('TaskSummary page contract', () => {
       }),
     )
     expect(container.textContent).toContain('结果摘要')
+    expect(container.textContent).toContain('总任务数')
+    expect(container.textContent).toContain('完成率')
     expect(container.textContent).toContain('总结列表')
+    expect(container.textContent).toContain('逾期 2 天')
+    expect(container.textContent).toContain('展开更多(1)')
+    expect(container.textContent).not.toContain('里程碑 D')
     expect(container.textContent).toContain('月度兑现')
+
+    const expandMoreButton = Array.from(container.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('展开更多(1)'),
+    ) as HTMLButtonElement | undefined
+    expect(expandMoreButton).toBeTruthy()
+
+    await act(async () => {
+      expandMoreButton?.click()
+      await flush()
+    })
+
+    expect(container.textContent).toContain('里程碑 D')
   })
 })

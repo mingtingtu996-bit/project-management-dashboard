@@ -6,6 +6,8 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { LoadingState } from '@/components/ui/loading-state'
+import { Separator } from '@/components/ui/separator'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useDialogFocusRestore } from '@/hooks/useDialogFocusRestore'
 import { useToast } from '@/hooks/use-toast'
 import { apiPost } from '@/lib/apiClient'
@@ -24,6 +26,7 @@ import type {
 import { getAcceptanceDisplayBadges, getAcceptancePredecessorIds, getAcceptanceSuccessorIds } from '@/types/acceptance'
 
 import { formatLinkedStatus, getAcceptanceStatusMeta, getIcon, getTypeById } from '../utils'
+import { Card } from '@/components/ui/card'
 
 interface AcceptanceDetailDrawerProps {
   node: AcceptanceNode | null
@@ -391,7 +394,7 @@ export default function AcceptanceDetailDrawer({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent className="max-h-[90vh] max-w-5xl overflow-y-auto" data-testid="acceptance-detail-drawer">
+      <DialogContent className="max-h-[90vh] max-w-[720px] overflow-y-auto" data-testid="acceptance-detail-drawer">
         <DialogHeader>
           <div className="flex items-start justify-between gap-4">
             <div className="space-y-2">
@@ -428,73 +431,75 @@ export default function AcceptanceDetailDrawer({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="mt-2 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-          <div className="space-y-1">
-            <div className="text-xs text-slate-500">计划日期</div>
-            <input
-              type="date"
-              defaultValue={node.planned_date || ''}
-              onBlur={(e) => {
-                const nextValue = e.target.value || ''
-                if (nextValue !== (node.planned_date || '')) {
-                  void persistPlanUpdates({ planned_date: nextValue || null })
-                }
-              }}
-              className="w-full rounded-lg border border-slate-200 px-2 py-1 text-sm text-slate-900 focus:border-blue-400 focus:outline-none"
-              data-testid="acceptance-planned-date-input"
-            />
+        <Card className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm" data-testid="acceptance-detail-info-group">
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+            <div className="space-y-1">
+              <div className="text-xs text-slate-500">计划日期</div>
+              <input
+                type="date"
+                defaultValue={node.planned_date || ''}
+                onBlur={(e) => {
+                  const nextValue = e.target.value || ''
+                  if (nextValue !== (node.planned_date || '')) {
+                    void persistPlanUpdates({ planned_date: nextValue || null })
+                  }
+                }}
+                className="w-full rounded-lg border border-slate-200 px-2 py-1 text-sm text-slate-900 focus:border-blue-400 focus:outline-none"
+                data-testid="acceptance-planned-date-input"
+              />
+            </div>
+            <div className="space-y-1">
+              <div className="text-xs text-slate-500">实际日期</div>
+              <input
+                type="date"
+                defaultValue={node.actual_date || ''}
+                onBlur={(e) => {
+                  const nextValue = e.target.value || ''
+                  if (nextValue !== (node.actual_date || '')) {
+                    void persistPlanUpdates({ actual_date: nextValue || null })
+                  }
+                }}
+                className="w-full rounded-lg border border-slate-200 px-2 py-1 text-sm text-slate-900 focus:border-blue-400 focus:outline-none"
+                data-testid="acceptance-actual-date-input"
+              />
+            </div>
+            <div className="space-y-1">
+              <div className="text-xs text-slate-500">并行组</div>
+              <input
+                type="text"
+                defaultValue={planRow?.parallel_group_id || ''}
+                onBlur={(e) => {
+                  const nextValue = e.target.value.trim()
+                  if (nextValue !== (planRow?.parallel_group_id || '')) {
+                    void persistPlanUpdates({ parallel_group_id: nextValue || null })
+                  }
+                }}
+                placeholder="填写并行组编号"
+                className="w-full rounded-lg border border-slate-200 px-2 py-1 text-sm text-slate-900 focus:border-blue-400 focus:outline-none"
+                data-testid="acceptance-parallel-group-input"
+              />
+            </div>
+            <InfoTile label="前置未完成" value={String(planRow?.upstream_unfinished_count ?? predecessorPlanIds.length)} />
+            <InfoTile label="资料准备度" value={`${planRow?.requirement_ready_percent ?? 100}%`} />
           </div>
-          <div className="space-y-1">
-            <div className="text-xs text-slate-500">实际日期</div>
-            <input
-              type="date"
-              defaultValue={node.actual_date || ''}
-              onBlur={(e) => {
-                const nextValue = e.target.value || ''
-                if (nextValue !== (node.actual_date || '')) {
-                  void persistPlanUpdates({ actual_date: nextValue || null })
-                }
-              }}
-              className="w-full rounded-lg border border-slate-200 px-2 py-1 text-sm text-slate-900 focus:border-blue-400 focus:outline-none"
-              data-testid="acceptance-actual-date-input"
+          <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <InfoTile
+              label="验收范围"
+              value={({ project: '项目级', building: '楼栋级', unit: '单位工程级', specialty: '专项级' } as Record<string, string>)[planRow?.scope_level ?? 'project'] ?? '项目级'}
             />
+            {planRow?.building_id && (
+              <InfoTile label="楼栋" value={planRow.building_id} />
+            )}
+            {planRow?.milestone_id && (
+              <InfoTile label="关联里程碑" value={planRow.milestone_id} />
+            )}
+            {planRow?.predecessor_plan_ids && planRow.predecessor_plan_ids.length > 0 && (
+              <InfoTile label="前置验收项数" value={String(planRow.predecessor_plan_ids.length)} />
+            )}
           </div>
-          <div className="space-y-1">
-            <div className="text-xs text-slate-500">并行组</div>
-            <input
-              type="text"
-              defaultValue={planRow?.parallel_group_id || ''}
-              onBlur={(e) => {
-                const nextValue = e.target.value.trim()
-                if (nextValue !== (planRow?.parallel_group_id || '')) {
-                  void persistPlanUpdates({ parallel_group_id: nextValue || null })
-                }
-              }}
-              placeholder="填写并行组编号"
-              className="w-full rounded-lg border border-slate-200 px-2 py-1 text-sm text-slate-900 focus:border-blue-400 focus:outline-none"
-              data-testid="acceptance-parallel-group-input"
-            />
-          </div>
-          <InfoTile label="前置未完成" value={String(planRow?.upstream_unfinished_count ?? predecessorPlanIds.length)} />
-          <InfoTile label="资料准备度" value={`${planRow?.requirement_ready_percent ?? 100}%`} />
-        </div>
-        <div className="mt-2 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <InfoTile
-            label="验收范围"
-            value={({ project: '项目级', building: '楼栋级', unit: '单位工程级', specialty: '专项级' } as Record<string, string>)[planRow?.scope_level ?? 'project'] ?? '项目级'}
-          />
-          {planRow?.building_id && (
-            <InfoTile label="楼栋" value={planRow.building_id} />
-          )}
-          {planRow?.milestone_id && (
-            <InfoTile label="关联里程碑" value={planRow.milestone_id} />
-          )}
-          {planRow?.predecessor_plan_ids && planRow.predecessor_plan_ids.length > 0 && (
-            <InfoTile label="前置验收项数" value={String(planRow.predecessor_plan_ids.length)} />
-          )}
-        </div>
+        </Card>
 
-        <div className="mt-4 rounded-2xl border border-blue-100 bg-blue-50/40 p-4" data-testid="acceptance-task-linkage">
+        <Card className="rounded-xl border border-blue-100 bg-blue-50/40 p-4 shadow-sm" data-testid="acceptance-task-linkage">
           <h4 className="mb-2 text-sm font-semibold text-slate-900">任务联动</h4>
           <div className="grid gap-3 md:grid-cols-3">
             <CompactMetric label="楼栋归属" value={planRow?.building_id || '项目级'} />
@@ -504,7 +509,7 @@ export default function AcceptanceDetailDrawer({
           {(detailContext?.linkedTasks ?? []).length > 0 && (
             <div className="mt-3 grid gap-2">
               {(detailContext!.linkedTasks!).map((task: AcceptanceLinkedTask) => (
-                <div key={task.task_id} className="flex items-center justify-between rounded-xl border border-blue-200 bg-white px-3 py-2 text-sm">
+                <Card key={task.task_id} className="flex items-center justify-between rounded-xl border border-blue-200 bg-white px-3 py-2 text-sm">
                   <div className="min-w-0">
                     <div className="font-medium text-slate-900 truncate">{task.task_name}</div>
                     <div className="mt-0.5 text-xs text-slate-500">
@@ -517,17 +522,17 @@ export default function AcceptanceDetailDrawer({
                   >
                     前往甘特
                   </Link>
-                </div>
+                </Card>
               ))}
             </div>
           )}
-        </div>
+        </Card>
 
         {node.description ? (
-          <div className="mt-4 rounded-2xl bg-slate-50 p-4">
+          <Card className="rounded-xl border border-slate-200 bg-slate-50 p-4 shadow-sm">
             <div className="mb-1 text-sm font-medium text-slate-700">备注</div>
             <p className="text-sm text-slate-600">{node.description}</p>
-          </div>
+          </Card>
         ) : null}
 
         <div className="mt-4 grid gap-4 xl:grid-cols-2">
@@ -642,11 +647,11 @@ export default function AcceptanceDetailDrawer({
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
                           <span className="text-xs font-semibold text-slate-800 truncate">{item.description || item.source_entity_id}</span>
-                          <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${isSatisfied ? 'bg-emerald-100 text-emerald-700' : isBlocked ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'}`}>
+                          <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-xs font-medium ${isSatisfied ? 'bg-emerald-100 text-emerald-700' : isBlocked ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'}`}>
                             {isSatisfied ? '已满足' : isBlocked ? '阻塞' : '待确认'}
                           </span>
                         </div>
-                        <div className="mt-0.5 text-[11px] text-slate-500">关联图纸 · {item.requirement_type}</div>
+                        <div className="mt-0.5 text-xs text-slate-500">关联图纸 · {item.requirement_type}</div>
                       </div>
                     </div>
                   )
@@ -663,11 +668,11 @@ export default function AcceptanceDetailDrawer({
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
                           <span className="text-xs font-semibold text-slate-800 truncate">{item.description || item.source_entity_id}</span>
-                          <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${isSatisfied ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+                          <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-xs font-medium ${isSatisfied ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
                             {isSatisfied ? '已获取' : '待取得'}
                           </span>
                         </div>
-                        <div className="mt-0.5 text-[11px] text-slate-500">关联证照 · {item.requirement_type}</div>
+                        <div className="mt-0.5 text-xs text-slate-500">关联证照 · {item.requirement_type}</div>
                       </div>
                     </div>
                   )
@@ -861,7 +866,7 @@ export default function AcceptanceDetailDrawer({
           </LinkedBundleSection>
         </div>
 
-        <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+        <Card className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4 shadow-sm" data-testid="acceptance-detail-structure-group">
           <div className="flex items-center justify-between gap-3">
             <div>
               <h4 className="text-sm font-semibold text-slate-900">结构维护</h4>
@@ -901,7 +906,7 @@ export default function AcceptanceDetailDrawer({
 
           <div className="mt-4 space-y-2">
             {upstreamDependencies.length > 0 ? upstreamDependencies.map((item) => (
-              <div
+              <Card
                 key={item.id}
                 className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2"
               >
@@ -924,11 +929,11 @@ export default function AcceptanceDetailDrawer({
                 >
                   移除
                 </Button>
-              </div>
+              </Card>
             )) : <LinkedEmptyState text="暂无前置依赖，可在此维护。" />}
           </div>
 
-          <div className="mt-4 rounded-2xl border border-indigo-100 bg-indigo-50/40 p-3" data-testid="acceptance-parallel-group-panel">
+          <Card className="mt-4 rounded-xl border border-indigo-100 bg-indigo-50/40 p-3 shadow-sm" data-testid="acceptance-parallel-group-panel">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
                 <div className="text-sm font-semibold text-slate-900">并行组</div>
@@ -952,10 +957,10 @@ export default function AcceptanceDetailDrawer({
 
             <div className="mt-3 grid gap-2">
               {currentParallelGroupMembers.length > 0 ? currentParallelGroupMembers.map((member) => (
-                <div key={member.id} className="flex items-center justify-between rounded-xl border border-indigo-100 bg-white px-3 py-2 text-sm">
+                <Card key={member.id} className="flex items-center justify-between rounded-xl border border-indigo-100 bg-white px-3 py-2 text-sm">
                   <span className="truncate font-medium text-slate-800">{member.name}</span>
                   <Badge variant="outline" className="shrink-0">{member.status}</Badge>
-                </div>
+                </Card>
               )) : (
                 <LinkedEmptyState text={currentParallelGroupId ? '当前组暂无其他节点。' : '加入或创建并行组后，将在这里展示组内其他节点。'} />
               )}
@@ -1013,10 +1018,11 @@ export default function AcceptanceDetailDrawer({
                 {mutatingParallelGroup ? '保存中...' : '创建并加入'}
               </Button>
             </div>
-          </div>
-        </div>
+          </Card>
+        </Card>
 
-        <div className="mt-4 flex flex-wrap gap-3 border-t border-slate-100 pt-4">
+        <Separator className="mt-4" />
+        <div className="sticky bottom-0 z-30 -mx-6 -mb-6 flex flex-wrap gap-3 bg-white/95 px-6 py-4 backdrop-blur" data-testid="acceptance-detail-footer">
           {['inspecting', 'rectifying'].includes(node.status) && (
             <Button className="gap-2 bg-green-600 hover:bg-green-500" disabled={!canMutate || changingStatus} onClick={() => void handleStatusChange('passed')}>
               <CheckCircle2 className="h-4 w-4" />
@@ -1037,16 +1043,20 @@ export default function AcceptanceDetailDrawer({
           )}
           {node.status === 'ready_to_submit' && (
             <div className="flex flex-col gap-1">
-              <Button
-                variant="outline"
-                className="gap-2"
-                disabled={!canMutate || !canSubmitDeclaration}
-                title={submitBlockedReason ?? undefined}
-                onClick={() => void handleStatusChange('submitted')}
-              >
-                <ArrowRight className="h-4 w-4" />
-                {changingStatus ? '提交中...' : '提交申报'}
-              </Button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="outline"
+                    className="gap-2"
+                    disabled={!canMutate || !canSubmitDeclaration}
+                    onClick={() => void handleStatusChange('submitted')}
+                  >
+                    <ArrowRight className="h-4 w-4" />
+                    {changingStatus ? '提交中...' : '提交申报'}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{submitBlockedReason ?? undefined}</TooltipContent>
+              </Tooltip>
               {!canSubmitDeclaration && submitBlockedReason && (
                 <p className="text-xs text-amber-600">{submitBlockedReason}</p>
               )}
@@ -1231,7 +1241,7 @@ function LinkedRow({
   meta?: string | null
 }) {
   return (
-    <div className="rounded-xl border border-slate-100 bg-white p-3 shadow-sm">
+    <Card className="rounded-xl border border-slate-100 bg-white p-3 shadow-sm">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 space-y-1">
           <div className="truncate text-sm font-medium text-slate-900">{title}</div>
@@ -1244,7 +1254,7 @@ function LinkedRow({
         ) : null}
       </div>
       {description ? <p className="mt-2 text-xs leading-5 text-slate-500">{description}</p> : null}
-    </div>
+    </Card>
   )
 }
 

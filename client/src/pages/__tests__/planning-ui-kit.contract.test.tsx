@@ -49,6 +49,7 @@ describe('planning-ui-kit contract', () => {
     })
 
     expect(container.querySelector('h1')?.textContent).toBe('计划编制')
+    expect(container.querySelector('[data-testid="planning-shared-shell"]')?.className).toContain('page-shell')
     expect(container.textContent).toContain('项目基线')
     expect(container.textContent).toContain('异常校核区')
   })

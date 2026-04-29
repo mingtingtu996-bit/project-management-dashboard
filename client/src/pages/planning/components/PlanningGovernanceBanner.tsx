@@ -69,7 +69,7 @@ export function PlanningGovernanceBanner({
             type="button"
             variant="outline"
             size="sm"
-            className="gap-2 border-slate-600 bg-transparent text-slate-100 hover:bg-white/10"
+            className="gap-2 border-slate-700 bg-slate-800 text-white hover:bg-slate-700"
             onClick={onOpenDetail}
             data-testid="planning-governance-open-detail"
           >

@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, FileBadge2, Plus, RefreshCw, Search } from 'lucide-react'
+import { ArrowLeft, Download, FileBadge2, Plus, RefreshCw, Search, Upload } from 'lucide-react'
 
 import { Breadcrumb } from '@/components/Breadcrumb'
+import { ConfirmActionDialog } from '@/components/ConfirmActionDialog'
 import { PageHeader } from '@/components/PageHeader'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Dialog,
   DialogContent,
@@ -17,6 +19,13 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Textarea } from '@/components/ui/textarea'
 import { usePermissions } from '@/hooks/usePermissions'
@@ -26,11 +35,17 @@ import { apiDelete, apiGet, apiPost, apiPut, getApiErrorMessage, isAbortError } 
 import { safeJsonParse, safeStorageGet, safeStorageSet } from '@/lib/browserStorage'
 import { cn } from '@/lib/utils'
 
-import { DRAWING_DISCIPLINE_OPTIONS, DRAWING_PURPOSE_OPTIONS, DRAWING_REVIEW_MODE_LABELS, DRAWING_TEMPLATES } from './constants'
+import {
+  DRAWING_DISCIPLINE_OPTIONS,
+  DRAWING_PURPOSE_OPTIONS,
+  DRAWING_REVIEW_MODE_LABELS,
+  DRAWING_STATUS_LABELS,
+  DRAWING_TEMPLATES,
+} from './constants'
 import { DrawingDetailDrawer } from './components/DrawingDetailDrawer'
 import { DrawingLedger } from './components/DrawingLedger'
 import { DrawingPackageBoard, type DrawingPackageGroup } from './components/DrawingPackageBoard'
-import { DrawingReadinessSummary } from './components/DrawingReadinessSummary'
+import { DrawingReadinessSummary, type DrawingReadinessMetrics } from './components/DrawingReadinessSummary'
 import { DrawingVersionDialog } from './components/DrawingVersionDialog'
 import type {
   DrawingBoardSummary,
@@ -47,11 +62,14 @@ import type {
 const API_BASE = ''
 
 type DrawingFocusViewMode = 'overview' | 'missing' | 'review' | 'changes' | 'taskImpact' | 'acceptanceImpact'
+type DrawingVersionFilter = 'all' | 'current' | 'history' | 'changed'
 type SavedDrawingFilters = {
   searchQuery?: string
   disciplineFilter?: string
   purposeFilter?: string
   focusView?: DrawingFocusViewMode
+  statusFilter?: string
+  versionFilter?: DrawingVersionFilter
 }
 
 type ApiFailureEnvelope = {
@@ -221,11 +239,54 @@ function getFocusViewLabel(mode: DrawingFocusViewMode) {
   return '概览'
 }
 
+const focusViewOptions: Array<{ value: DrawingFocusViewMode; label: string; description: string }> = [
+  { value: 'overview', label: '概览', description: '查看全部图纸包和台账记录。' },
+  { value: 'missing', label: '缺漏视图', description: '优先处理应有项未补齐的图纸包。' },
+  { value: 'review', label: '送审视图', description: '聚焦必审、待审和修订中的图纸。' },
+  { value: 'changes', label: '变更视图', description: '检查发生版本变更的图纸影响。' },
+  { value: 'taskImpact', label: '任务影响视图', description: '只看已经关联施工任务的图纸包。' },
+  { value: 'acceptanceImpact', label: '验收影响视图', description: '只看影响验收和归档的图纸包。' },
+]
+
+const statusFilterOptions = [
+  { value: 'all', label: '全部状态' },
+  ...Object.entries(DRAWING_STATUS_LABELS).map(([value, label]) => ({ value, label })),
+]
+
+const versionFilterOptions: Array<{ value: DrawingVersionFilter; label: string }> = [
+  { value: 'all', label: '全部版本' },
+  { value: 'current', label: '当前有效版' },
+  { value: 'history', label: '历史版本' },
+  { value: 'changed', label: '有变更' },
+]
+
+function isApprovedDrawing(row: DrawingLedgerRow) {
+  return row.drawingStatus === 'issued' || row.drawingStatus === 'completed' || row.reviewStatus.includes('通过')
+}
+
+function isOverdueDrawing(row: DrawingLedgerRow) {
+  if (isApprovedDrawing(row)) return false
+  const dateValue = row.plannedPassDate || row.plannedSubmitDate
+  if (!dateValue) return false
+  const dueTime = new Date(dateValue).getTime()
+  if (Number.isNaN(dueTime)) return false
+  return dueTime < Date.now()
+}
+
+function escapeCsvCell(value: string | number | null | undefined) {
+  const text = value === null || value === undefined ? '' : String(value)
+  return `"${text.replace(/"/g, '""')}"`
+}
+
 function isReviewFocusedPackage(pkg: DrawingPackageCard) {
   return pkg.requiresReview || pkg.reviewMode !== 'none' || pkg.status === 'reviewing'
 }
 
 export default function Drawings() {
+  useEffect(() => {
+    document.title = '施工图纸 | WorkBuddy'
+  }, [])
+
   const navigate = useNavigate()
   const { id } = useParams<{ id: string }>()
   const { currentProject, projects } = useStore()
@@ -254,6 +315,8 @@ export default function Drawings() {
   const [searchQuery, setSearchQuery] = useState<string>(savedFilters.searchQuery ?? '')
   const [disciplineFilter, setDisciplineFilter] = useState<string>(savedFilters.disciplineFilter ?? DRAWING_DISCIPLINE_OPTIONS[0] ?? '')
   const [purposeFilter, setPurposeFilter] = useState<string>(savedFilters.purposeFilter ?? DRAWING_PURPOSE_OPTIONS[0] ?? '')
+  const [statusFilter, setStatusFilter] = useState<string>(savedFilters.statusFilter ?? 'all')
+  const [versionFilter, setVersionFilter] = useState<DrawingVersionFilter>(savedFilters.versionFilter ?? 'all')
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [creatingPackage, setCreatingPackage] = useState(false)
   const [createForm, setCreateForm] = useState<CreatePackageFormState>(emptyCreateForm)
@@ -264,6 +327,7 @@ export default function Drawings() {
   const [reviewRulesSaving, setReviewRulesSaving] = useState(false)
   const [reviewRules, setReviewRules] = useState<DrawingReviewRuleRow[]>([])
   const [selectedReviewRuleId, setSelectedReviewRuleId] = useState<string | null>(null)
+  const [pendingDeleteReviewRuleId, setPendingDeleteReviewRuleId] = useState<string | null>(null)
   const [reviewRuleForm, setReviewRuleForm] = useState<DrawingReviewRuleFormState>(emptyReviewRuleForm)
   const [reviewRuleFormError, setReviewRuleFormError] = useState('')
   const boardAbortRef = useRef<AbortController | null>(null)
@@ -407,6 +471,10 @@ export default function Drawings() {
     [id],
   )
 
+  const refreshAll = useCallback(async () => {
+    await Promise.all([loadBoard(), loadLedger()])
+  }, [loadBoard, loadLedger])
+
   const loadReviewRules = useCallback(async () => {
     if (!id) return
 
@@ -491,18 +559,21 @@ export default function Drawings() {
     } finally {
       setReviewRulesSaving(false)
     }
-  }, [id, loadReviewRules, reviewRuleForm, selectedReviewRuleId, toast])
+  }, [id, loadReviewRules, refreshAll, reviewRuleForm, selectedReviewRuleId, toast])
 
-  const handleDeleteReviewRule = useCallback(async (ruleId: string) => {
-    if (!id) return
-    if (!window.confirm('确定删除这条审图规则吗？')) return
+  const handleDeleteReviewRule = useCallback((ruleId: string) => {
+    setPendingDeleteReviewRuleId(ruleId)
+  }, [])
+
+  const confirmDeleteReviewRule = useCallback(async () => {
+    if (!id || !pendingDeleteReviewRuleId || reviewRulesSaving) return
 
     setReviewRulesSaving(true)
     try {
-      await apiDelete(`${API_BASE}/api/drawing-review-rules/${ruleId}?projectId=${encodeURIComponent(id)}`, {
+      await apiDelete(`${API_BASE}/api/drawing-review-rules/${pendingDeleteReviewRuleId}?projectId=${encodeURIComponent(id)}`, {
         headers: { 'Content-Type': 'application/json' },
       })
-      if (selectedReviewRuleId === ruleId) {
+      if (selectedReviewRuleId === pendingDeleteReviewRuleId) {
         beginCreateReviewRule()
       }
       await Promise.all([loadReviewRules(), refreshAll()])
@@ -515,12 +586,9 @@ export default function Drawings() {
       })
     } finally {
       setReviewRulesSaving(false)
+      setPendingDeleteReviewRuleId(null)
     }
-  }, [beginCreateReviewRule, id, loadReviewRules, selectedReviewRuleId, toast])
-
-  const refreshAll = useCallback(async () => {
-    await Promise.all([loadBoard(), loadLedger()])
-  }, [loadBoard, loadLedger])
+  }, [beginCreateReviewRule, id, loadReviewRules, pendingDeleteReviewRuleId, refreshAll, reviewRulesSaving, selectedReviewRuleId, toast])
 
   const refreshSelectedDetail = useCallback(async () => {
     const packageId = selectedDetail?.package.packageId ?? selectedPackage?.packageId
@@ -579,10 +647,13 @@ export default function Drawings() {
         matchesText(pkg.currentVersionLabel, normalizedQuery)
       const matchesDiscipline = disciplineFilter === (DRAWING_DISCIPLINE_OPTIONS[0] ?? '') || pkg.disciplineType === disciplineFilter
       const matchesPurpose = purposeFilter === (DRAWING_PURPOSE_OPTIONS[0] ?? '') || pkg.documentPurpose === purposeFilter
+      const matchesStatus = statusFilter === 'all' || pkg.status === statusFilter
+      const matchesVersion =
+        versionFilter === 'all' || versionFilter === 'current' || versionFilter === 'history' || (versionFilter === 'changed' && pkg.hasChange)
 
-      return matchesSearch && matchesDiscipline && matchesPurpose
+      return matchesSearch && matchesDiscipline && matchesPurpose && matchesStatus && matchesVersion
     })
-  }, [board?.packages, disciplineFilter, purposeFilter, searchQuery])
+  }, [board?.packages, disciplineFilter, purposeFilter, searchQuery, statusFilter, versionFilter])
 
   const filteredLedgerRows = useMemo(() => {
     const normalizedQuery = searchQuery.trim().toLowerCase()
@@ -596,10 +667,16 @@ export default function Drawings() {
         matchesText(row.drawingCode, normalizedQuery)
       const matchesDiscipline = disciplineFilter === (DRAWING_DISCIPLINE_OPTIONS[0] ?? '') || row.disciplineType === disciplineFilter
       const matchesPurpose = purposeFilter === (DRAWING_PURPOSE_OPTIONS[0] ?? '') || row.documentPurpose === purposeFilter
+      const matchesStatus = statusFilter === 'all' || row.drawingStatus === statusFilter
+      const matchesVersion =
+        versionFilter === 'all' ||
+        (versionFilter === 'current' && row.isCurrentVersion) ||
+        (versionFilter === 'history' && !row.isCurrentVersion) ||
+        (versionFilter === 'changed' && row.hasChange)
 
-      return matchesSearch && matchesDiscipline && matchesPurpose
+      return matchesSearch && matchesDiscipline && matchesPurpose && matchesStatus && matchesVersion
     })
-  }, [disciplineFilter, ledgerRows, purposeFilter, searchQuery])
+  }, [disciplineFilter, ledgerRows, purposeFilter, searchQuery, statusFilter, versionFilter])
 
   const focusedPackages = useMemo(() => {
     if (focusView === 'missing') {
@@ -634,9 +711,85 @@ export default function Drawings() {
   }, [filteredLedgerRows, focusedPackages, focusView])
 
   const packageGroups = useMemo(() => groupPackagesByDiscipline(focusedPackages), [focusedPackages])
+  const readinessMetrics = useMemo<DrawingReadinessMetrics>(() => {
+    const packageRows = board?.packages ?? []
+    const drawingTotalFallback = packageRows.reduce((total, pkg) => total + (pkg.drawingsCount || 0), 0)
+    const totalDrawings = ledgerRows.length || drawingTotalFallback || summary.totalPackages
+    const approvedDrawings = ledgerRows.length
+      ? ledgerRows.filter(isApprovedDrawing).length
+      : packageRows.filter((pkg) => pkg.isReadyForConstruction || pkg.isReadyForAcceptance).length
+    const pendingReviewDrawings = ledgerRows.length
+      ? ledgerRows.filter((row) => row.requiresReview && !isApprovedDrawing(row)).length
+      : summary.reviewingPackages
+    const overdueDrawings = ledgerRows.length
+      ? ledgerRows.filter(isOverdueDrawing).length
+      : summary.scheduleImpactCount
+
+    const disciplineMap = new Map<string, { total: number; ready: number; overdue: number }>()
+    if (ledgerRows.length) {
+      ledgerRows.forEach((row) => {
+        const current = disciplineMap.get(row.disciplineType) ?? { total: 0, ready: 0, overdue: 0 }
+        current.total += 1
+        if (isApprovedDrawing(row)) current.ready += 1
+        if (isOverdueDrawing(row)) current.overdue += 1
+        disciplineMap.set(row.disciplineType, current)
+      })
+    } else {
+      packageRows.forEach((pkg) => {
+        const current = disciplineMap.get(pkg.disciplineType) ?? { total: 0, ready: 0, overdue: 0 }
+        current.total += pkg.drawingsCount || 1
+        if (pkg.isReadyForConstruction || pkg.isReadyForAcceptance) {
+          current.ready += pkg.drawingsCount || 1
+        }
+        if (pkg.scheduleImpactFlag) current.overdue += 1
+        disciplineMap.set(pkg.disciplineType, current)
+      })
+    }
+
+    return {
+      totalDrawings,
+      approvedDrawings,
+      pendingReviewDrawings,
+      overdueDrawings,
+      plannedSubmitThisMonthCount: summary.plannedSubmitThisMonthCount ?? 0,
+      reviewingPackages: summary.reviewingPackages,
+      scheduleImpactCount: summary.scheduleImpactCount,
+      disciplineReadiness: Array.from(disciplineMap.entries())
+        .map(([disciplineType, item]) => ({
+          disciplineType,
+          total: item.total,
+          ready: item.ready,
+          overdue: item.overdue,
+          ratio: item.total > 0 ? Math.round((item.ready / item.total) * 100) : 0,
+        }))
+        .sort((a, b) => b.total - a.total)
+        .slice(0, 8),
+    }
+  }, [board?.packages, ledgerRows, summary])
 
   const boardTitle = getFocusViewLabel(focusView)
   const boardSubtitle = ''
+
+  const handleExportLedger = useCallback(() => {
+    const header = ['图纸名称', '图纸编号', '专业', '版本', '状态', '审批人', '日期']
+    const rows = focusedLedgerRows.map((row) => [
+      row.drawingName,
+      row.drawingCode,
+      row.disciplineType,
+      row.versionNo,
+      DRAWING_STATUS_LABELS[row.drawingStatus] ?? row.drawingStatus,
+      row.designPerson || row.reviewUnit || '',
+      row.actualPassDate || row.plannedPassDate || row.actualSubmitDate || row.plannedSubmitDate || row.createdAt || '',
+    ])
+    const csv = [header, ...rows].map((row) => row.map(escapeCsvCell).join(',')).join('\n')
+    const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `drawings-ledger-${id ?? 'project'}.csv`
+    link.click()
+    URL.revokeObjectURL(url)
+  }, [focusedLedgerRows, id])
 
   const openPackageDetail = useCallback(
     async (pkg: DrawingPackageCard) => {
@@ -1054,16 +1207,13 @@ export default function Drawings() {
   )
 
   return (
-    <div className="flex h-full flex-col" data-testid="drawings-page">
-      <div className="px-6 pt-6">
-        <Breadcrumb
-          items={[
-            { label: '项目', href: `/projects/${id}` },
-            { label: '专项管理', href: `/projects/${id}/pre-milestones` },
-            { label: '施工图纸' },
-          ]}
-        />
-      </div>
+    <div className="page-shell" data-testid="drawings-page">
+      <Breadcrumb
+        items={[
+          { label: projectName, href: `/projects/${id}/dashboard` },
+          { label: '施工图纸' },
+        ]}
+      />
 
       <PageHeader
         eyebrow="专项管理"
@@ -1074,7 +1224,7 @@ export default function Drawings() {
             safeStorageSet(
               sessionStorage,
               filterStorageKey,
-              JSON.stringify({ searchQuery, disciplineFilter, purposeFilter, focusView }),
+              JSON.stringify({ searchQuery, disciplineFilter, purposeFilter, focusView, statusFilter, versionFilter }),
             )
           }
           navigate(`/projects/${id}/pre-milestones`)
@@ -1104,15 +1254,14 @@ export default function Drawings() {
         </Button>
       </PageHeader>
 
-      <div className="flex-1 overflow-auto p-6">
-        {loading ? (
-          loadingSkeleton
-        ) : (
-          <div className="space-y-6">
-            <DrawingReadinessSummary summary={summary} projectName={projectName} />
+      {loading ? (
+        loadingSkeleton
+      ) : (
+        <div className="space-y-8">
+          <DrawingReadinessSummary summary={summary} projectName={projectName} metrics={readinessMetrics} />
 
-            <Card className="border-slate-200 shadow-sm">
-              <CardContent className="grid gap-4 p-5 lg:grid-cols-[1.6fr_0.8fr_0.8fr]">
+            <Card className="card-unified">
+              <CardContent className="grid gap-4 p-5 lg:grid-cols-[minmax(260px,1.6fr)_repeat(4,minmax(160px,0.8fr))]">
                 <div className="space-y-2">
                   <Label htmlFor="drawing-search" className="text-xs text-slate-500">
                     搜索
@@ -1124,6 +1273,7 @@ export default function Drawings() {
                       data-testid="drawings-search-input"
                       value={searchQuery}
                       onChange={(event) => setSearchQuery(event.target.value)}
+                      aria-label="搜索图纸包或图纸"
                       placeholder="搜索包名、包号、图纸名、图号或版本号"
                       className="pl-9"
                     />
@@ -1134,51 +1284,116 @@ export default function Drawings() {
                   <Label htmlFor="discipline-filter" className="text-xs text-slate-500">
                     专业
                   </Label>
-                  <select
-                    id="discipline-filter"
-                    value={disciplineFilter}
-                    onChange={(event) => setDisciplineFilter(event.target.value)}
-                    className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none ring-offset-white focus:border-blue-300"
-                  >
-                    {DRAWING_DISCIPLINE_OPTIONS.map((option) => (
-                      <option key={option} value={option}>
-                        {option}
-                      </option>
-                    ))}
-                  </select>
+                  <Select value={disciplineFilter} onValueChange={setDisciplineFilter}>
+                    <SelectTrigger id="discipline-filter" data-testid="drawing-discipline-select">
+                      <SelectValue placeholder="选择专业" />
+                    </SelectTrigger>
+                    <SelectContent align="start" side="bottom">
+                      {DRAWING_DISCIPLINE_OPTIONS.map((option) => (
+                        <SelectItem key={option} value={option}>
+                          {option}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
 
                 <div className="space-y-2">
+                  <Label htmlFor="status-filter" className="text-xs text-slate-500">
+                    状态
+                  </Label>
+                  <Select value={statusFilter} onValueChange={setStatusFilter}>
+                    <SelectTrigger id="status-filter" data-testid="drawing-status-select">
+                      <SelectValue placeholder="选择状态" />
+                    </SelectTrigger>
+                    <SelectContent align="start" side="bottom">
+                      {statusFilterOptions.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="version-filter" className="text-xs text-slate-500">
+                    版本
+                  </Label>
+                  <Select value={versionFilter} onValueChange={(value) => setVersionFilter(value as DrawingVersionFilter)}>
+                    <SelectTrigger id="version-filter" data-testid="drawing-version-select">
+                      <SelectValue placeholder="选择版本" />
+                    </SelectTrigger>
+                    <SelectContent align="start" side="bottom">
+                      {versionFilterOptions.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="focus-view-filter" className="text-xs text-slate-500">
+                    Focus View
+                  </Label>
+                  <Select value={focusView} onValueChange={(value) => setFocusView(value as DrawingFocusViewMode)}>
+                    <SelectTrigger id="focus-view-filter" data-testid="drawing-focus-select">
+                      <SelectValue placeholder="选择视图" />
+                    </SelectTrigger>
+                    <SelectContent align="start" side="bottom" className="w-72">
+                      {focusViewOptions.map((option) => (
+                        <SelectItem key={option.value} value={option.value} textValue={option.label} className="py-2">
+                          <span className="flex flex-col items-start gap-0.5">
+                            <span>{option.label}</span>
+                            <span className="text-xs text-slate-400">{option.description}</span>
+                          </span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2 lg:col-span-5">
                   <Label htmlFor="purpose-filter" className="text-xs text-slate-500">
                     用途 / 属性
                   </Label>
-                  <select
-                    id="purpose-filter"
-                    value={purposeFilter}
-                    onChange={(event) => setPurposeFilter(event.target.value)}
-                    className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none ring-offset-white focus:border-blue-300"
-                  >
-                    {DRAWING_PURPOSE_OPTIONS.map((option) => (
-                      <option key={option} value={option}>
-                        {option}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="space-y-2 lg:col-span-3">
-                  <Label className="text-xs text-slate-500">视图</Label>
-                  <div className="flex flex-wrap gap-2">
-                    {(['overview', 'missing', 'review', 'changes', 'taskImpact', 'acceptanceImpact'] as DrawingFocusViewMode[]).map((mode) => (
-                      <Button
-                        key={mode}
-                        variant={focusView === mode ? 'default' : 'outline'}
-                        size="sm"
-                        onClick={() => setFocusView(mode)}
-                      >
-                        {getFocusViewLabel(mode)}
+                  <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                    <Select value={purposeFilter} onValueChange={setPurposeFilter}>
+                      <SelectTrigger id="purpose-filter" className="xl:max-w-xs" data-testid="drawing-purpose-select">
+                        <SelectValue placeholder="选择用途" />
+                      </SelectTrigger>
+                      <SelectContent align="start" side="bottom">
+                        {DRAWING_PURPOSE_OPTIONS.map((option) => (
+                          <SelectItem key={option} value={option}>
+                            {option}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <div className="flex flex-wrap gap-2">
+                      {focusViewOptions.map((option) => (
+                        <Button
+                          key={option.value}
+                          variant={focusView === option.value ? 'default' : 'outline'}
+                          size="sm"
+                          onClick={() => setFocusView(option.value)}
+                        >
+                          {option.label}
+                        </Button>
+                      ))}
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Button variant="outline" size="sm" onClick={() => setCreateDialogOpen(true)} disabled={!canEdit}>
+                        <Upload className="mr-2 h-4 w-4" />
+                        上传
                       </Button>
-                    ))}
+                      <Button variant="outline" size="sm" onClick={handleExportLedger} disabled={focusedLedgerRows.length === 0}>
+                        <Download className="mr-2 h-4 w-4" />
+                        导出
+                      </Button>
+                    </div>
                   </div>
                 </div>
               </CardContent>
@@ -1206,9 +1421,8 @@ export default function Drawings() {
               onOpenVersions={(row) => void openVersionWindowFromRow(row)}
               onSetCurrentVersion={canEdit ? (row) => void handleSetCurrentVersion(row.drawingId) : undefined}
             />
-          </div>
-        )}
-      </div>
+        </div>
+      )}
 
       <DrawingDetailDrawer
         open={drawerOpen}
@@ -1259,7 +1473,7 @@ export default function Drawings() {
           }
         }}
       >
-        <DialogContent className="max-w-6xl border-slate-200">
+        <DialogContent className="max-w-[720px] border-slate-200">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-slate-900">
               <FileBadge2 className="h-5 w-5" />
@@ -1300,7 +1514,7 @@ export default function Drawings() {
                         <div key={item} className="space-y-2 rounded-2xl border border-slate-200 bg-slate-50 p-3">
                           <Skeleton className="h-4 w-28 rounded-full" />
                           <Skeleton className="h-3 w-48 rounded-full" />
-                          <Skeleton className="h-3 w-36 rounded-full" />
+                          <Skeleton className="h-3.5 w-3.56 rounded-full" />
                         </div>
                       ))}
                     </>
@@ -1359,7 +1573,7 @@ export default function Drawings() {
                               type="button"
                               variant="outline"
                               size="sm"
-                              onClick={() => void handleDeleteReviewRule(rule.id)}
+                              onClick={() => handleDeleteReviewRule(rule.id)}
                               disabled={reviewRulesSaving}
                             >
                               删除
@@ -1433,21 +1647,24 @@ export default function Drawings() {
 
                   <div className="space-y-2">
                     <Label htmlFor="review-rule-mode">默认审图方式</Label>
-                    <select
-                      id="review-rule-mode"
+                    <Select
                       value={reviewRuleForm.defaultReviewMode}
-                      onChange={(event) => {
+                      onValueChange={(value) => {
                         setReviewRuleFormError('')
-                        setReviewRuleForm((current) => ({ ...current, defaultReviewMode: event.target.value as ReviewMode }))
+                        setReviewRuleForm((current) => ({ ...current, defaultReviewMode: value as ReviewMode }))
                       }}
-                      className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-blue-300"
                     >
-                      {reviewModeOptions.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
+                      <SelectTrigger id="review-rule-mode">
+                        <SelectValue placeholder="选择默认审图方式" />
+                      </SelectTrigger>
+                      <SelectContent align="start" side="bottom">
+                        {reviewModeOptions.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
 
                   <div className="space-y-2 md:col-span-2">
@@ -1478,12 +1695,11 @@ export default function Drawings() {
                   </div>
 
                   <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 md:col-span-2">
-                    <input
-                      type="checkbox"
+                    <Checkbox
                       checked={reviewRuleForm.isActive}
-                      onChange={(event) => {
+                      onCheckedChange={(checked) => {
                         setReviewRuleFormError('')
-                        setReviewRuleForm((current) => ({ ...current, isActive: event.target.checked }))
+                        setReviewRuleForm((current) => ({ ...current, isActive: checked === true }))
                       }}
                     />
                     启用此规则
@@ -1519,7 +1735,7 @@ export default function Drawings() {
           }
         }}
       >
-        <DialogContent className="max-w-2xl border-slate-200">
+        <DialogContent className="max-w-[560px] border-slate-200">
           <DialogHeader>
             <DialogTitle className="text-slate-900">新建图纸包</DialogTitle>
             <DialogDescription className="sr-only">新建图纸包</DialogDescription>
@@ -1528,12 +1744,11 @@ export default function Drawings() {
           <div className="grid gap-4 py-2">
             <div className="space-y-2">
               <Label htmlFor="templateCode">模板</Label>
-              <select
-                id="templateCode"
+              <Select
                 value={createForm.templateCode}
-                onChange={(event) => {
+                onValueChange={(value) => {
                   setCreateFormErrors((previous) => ({ ...previous, form: undefined }))
-                  const nextTemplate = DRAWING_TEMPLATES.find((template) => template.templateCode === event.target.value) ?? DRAWING_TEMPLATES[0]
+                  const nextTemplate = DRAWING_TEMPLATES.find((template) => template.templateCode === value) ?? DRAWING_TEMPLATES[0]
                   setCreateForm((previous) => ({
                     ...previous,
                     templateCode: nextTemplate?.templateCode ?? previous.templateCode,
@@ -1542,14 +1757,18 @@ export default function Drawings() {
                     reviewMode: nextTemplate?.defaultReviewMode ?? previous.reviewMode,
                   }))
                 }}
-                className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-blue-300"
               >
-                {DRAWING_TEMPLATES.map((template) => (
-                  <option key={template.templateCode} value={template.templateCode}>
-                    {template.templateName}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger id="templateCode">
+                  <SelectValue placeholder="选择模板" />
+                </SelectTrigger>
+                <SelectContent align="start" side="bottom">
+                  {DRAWING_TEMPLATES.map((template) => (
+                    <SelectItem key={template.templateCode} value={template.templateCode}>
+                      {template.templateName}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
 
             <div className="grid gap-4 sm:grid-cols-2">
@@ -1611,21 +1830,24 @@ export default function Drawings() {
 
             <div className="space-y-2">
               <Label htmlFor="reviewMode">送审要求</Label>
-              <select
-                id="reviewMode"
+              <Select
                 value={createForm.reviewMode}
-                onChange={(event) => {
+                onValueChange={(value) => {
                   setCreateFormErrors((previous) => ({ ...previous, form: undefined }))
-                  setCreateForm((previous) => ({ ...previous, reviewMode: event.target.value as ReviewMode }))
+                  setCreateForm((previous) => ({ ...previous, reviewMode: value as ReviewMode }))
                 }}
-                className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-blue-300"
               >
-                {reviewModeOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger id="reviewMode">
+                  <SelectValue placeholder="选择送审要求" />
+                </SelectTrigger>
+                <SelectContent align="start" side="bottom">
+                  {reviewModeOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
 
             <div className="space-y-2">
@@ -1665,6 +1887,19 @@ export default function Drawings() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <ConfirmActionDialog
+        open={Boolean(pendingDeleteReviewRuleId)}
+        onOpenChange={(open) => {
+          if (!open && !reviewRulesSaving) setPendingDeleteReviewRuleId(null)
+        }}
+        title="删除审图规则"
+        description="删除后这条审图规则将不再参与图纸包送审判定，规则列表会同步刷新。"
+        confirmLabel={reviewRulesSaving ? '删除中...' : '删除规则'}
+        cancelLabel="取消"
+        confirmTone="destructive"
+        testId="drawing-review-rule-delete-confirm"
+        onConfirm={() => void confirmDeleteReviewRule()}
+      />
     </div>
   )
 }

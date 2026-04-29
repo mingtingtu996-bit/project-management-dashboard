@@ -46,7 +46,7 @@ export function CloseoutConfirmDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent data-testid="closeout-confirm-dialog" className="max-w-2xl">
+      <DialogContent data-testid="closeout-confirm-dialog" className="max-w-[720px]">
         <DialogHeader className="text-left">
           <div className="flex flex-wrap items-center gap-2">
             <DialogTitle>{modeLabel}</DialogTitle>
@@ -62,25 +62,25 @@ export function CloseoutConfirmDialog({
         <div className="grid gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700 sm:grid-cols-2 xl:grid-cols-4">
           <Card className="border-slate-200 bg-white shadow-sm">
             <CardContent className="space-y-1 p-4">
-              <div className="text-xs uppercase tracking-[0.18em] text-slate-500">滚入数</div>
+              <div className="text-xs uppercase tracking-wider text-slate-500">滚入数</div>
               <div className="text-2xl font-semibold text-slate-900">{summary.rolledInCount}</div>
             </CardContent>
           </Card>
           <Card className="border-slate-200 bg-white shadow-sm">
             <CardContent className="space-y-1 p-4">
-              <div className="text-xs uppercase tracking-[0.18em] text-slate-500">关闭数</div>
+              <div className="text-xs uppercase tracking-wider text-slate-500">关闭数</div>
               <div className="text-2xl font-semibold text-slate-900">{summary.closedCount}</div>
             </CardContent>
           </Card>
           <Card className="border-slate-200 bg-white shadow-sm">
             <CardContent className="space-y-1 p-4">
-              <div className="text-xs uppercase tracking-[0.18em] text-slate-500">人工改判数</div>
+              <div className="text-xs uppercase tracking-wider text-slate-500">人工改判数</div>
               <div className="text-2xl font-semibold text-slate-900">{summary.manualOverrideCount}</div>
             </CardContent>
           </Card>
           <Card className="border-slate-200 bg-white shadow-sm">
             <CardContent className="space-y-1 p-4">
-              <div className="text-xs uppercase tracking-[0.18em] text-slate-500">强制处理数</div>
+              <div className="text-xs uppercase tracking-wider text-slate-500">强制处理数</div>
               <div className="text-2xl font-semibold text-slate-900">{summary.forcedCount}</div>
             </CardContent>
           </Card>

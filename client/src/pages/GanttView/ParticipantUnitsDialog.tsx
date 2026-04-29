@@ -71,7 +71,7 @@ export function ParticipantUnitsDialog({
 }: ParticipantUnitsDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl" aria-describedby={undefined}>
+      <DialogContent className="max-w-[720px] rounded-2xl shadow-[var(--el-4)]" aria-describedby={undefined}>
         <DialogHeader>
           <DialogTitle>参建单位台账</DialogTitle>
           <DialogDescription className="sr-only">参建单位台账</DialogDescription>

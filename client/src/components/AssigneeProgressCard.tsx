@@ -13,14 +13,17 @@
  * - ≥80%: 绿色 (emerald-500) - 健康
  * - 50-79%: 蓝色 (blue-500) - 正常
  * - 20-49%: 琥珀色 (amber-500) - 需关注
- * - <20%: 红色 (red-500) - 滞后
+ * - <20%: 红色 (red-500) - 进度落后
  * 
  * @module
  */
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Separator } from '@/components/ui/separator'
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { ChevronRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
 
 export interface AssigneeProgress {
   id: string
@@ -50,9 +53,9 @@ interface ProgressStatusConfig {
 
 const DEFAULT_STATUS_CONFIG: ProgressStatusConfig[] = [
   { threshold: 80, bar: 'bg-emerald-500', text: 'text-emerald-600', rank: 'text-emerald-600', bg: 'bg-emerald-50/50', status: '健康' },
-  { threshold: 50, bar: 'bg-blue-500', text: 'text-blue-600', rank: 'text-blue-600', bg: 'bg-transparent', status: '正常' },
+  { threshold: 50, bar: 'bg-blue-600', text: 'text-blue-600', rank: 'text-blue-600', bg: 'bg-transparent', status: '正常' },
   { threshold: 20, bar: 'bg-amber-500', text: 'text-amber-600', rank: 'text-amber-600', bg: 'bg-amber-50/50', status: '需关注' },
-  { threshold: 0, bar: 'bg-red-500', text: 'text-red-600', rank: 'text-red-600', bg: 'bg-red-50/50', status: '滞后' }
+  { threshold: 0, bar: 'bg-red-500', text: 'text-red-600', rank: 'text-red-600', bg: 'bg-red-50/50', status: '异常（进度落后）' }
 ]
 
 // 根据进度获取颜色配置
@@ -118,19 +121,19 @@ export function AssigneeProgressCard({
             </p>
           </div>
           {onViewAll && (
-            <button 
+            <Button variant="ghost" 
               onClick={onViewAll}
               className="text-blue-600 hover:text-blue-700 text-sm font-medium flex items-center gap-0.5 transition-colors"
             >
               查看全部
               <ChevronRight className="h-4 w-4" />
-            </button>
+            </Button>
           )}
         </div>
       </CardHeader>
       <CardContent className="pt-0">
         {/* 列表头部 */}
-        <div className="flex items-center text-xs text-gray-400 mb-2 px-2">
+        <div className="flex items-center text-xs text-slate-400 mb-2 px-2">
           <span className="w-8">排名</span>
           <span className="flex-1">责任人</span>
           <span className="w-20 text-right">完成度</span>
@@ -149,7 +152,7 @@ export function AssigneeProgressCard({
                 onClick={() => onItemClick?.(assignee)}
                 className={cn(
                   "flex items-center gap-2 p-2 rounded-lg cursor-pointer group transition-all",
-                  "hover:bg-gray-50",
+                  "hover:bg-slate-50",
                   colors.bg
                 )}
               >
@@ -159,25 +162,26 @@ export function AssigneeProgressCard({
                 </span>
 
                 {/* 头像 */}
-                <div className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center text-sm font-semibold text-gray-600 flex-shrink-0">
+                <Avatar className="h-9 w-9 flex-shrink-0 bg-slate-100">
                   {assignee.avatar ? (
-                    <img src={assignee.avatar} alt={assignee.name} className="w-full h-full rounded-full object-cover" />
-                  ) : (
-                    getInitial(assignee.name)
-                  )}
-                </div>
+                    <AvatarImage src={assignee.avatar} alt={assignee.name} className="object-cover" />
+                  ) : null}
+                  <AvatarFallback className="bg-slate-100 text-sm font-semibold text-slate-600">
+                    {getInitial(assignee.name)}
+                  </AvatarFallback>
+                </Avatar>
 
                 {/* 姓名和进度 */}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between mb-1">
-                    <span className="font-medium text-sm text-gray-900 truncate">
+                    <span className="font-medium text-sm text-slate-900 truncate">
                       {assignee.name}
                     </span>
                     <span className={cn("text-sm font-bold", colors.text)}>
                       {assignee.progress}%
                     </span>
                   </div>
-                  <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                  <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
                     <div 
                       className={cn("h-full rounded-full transition-all duration-500", colors.bar)}
                       style={{ width: `${assignee.progress}%` }}
@@ -186,42 +190,43 @@ export function AssigneeProgressCard({
                 </div>
 
                 {/* 箭头 */}
-                <ChevronRight className="w-5 h-5 text-gray-300 group-hover:text-gray-400 flex-shrink-0" />
+                <ChevronRight className="w-5 h-5 text-slate-300 group-hover:text-slate-400 flex-shrink-0" />
               </div>
             )
           })}
         </div>
 
         {/* 底部统计 */}
-        <div className="mt-4 pt-3 border-t border-gray-100 flex items-center justify-between text-xs">
+        <Separator className="mt-4" />
+        <div className="flex items-center justify-between pt-3 text-xs">
           <div className="flex items-center gap-3">
             {stats.healthy > 0 && (
               <span className="flex items-center gap-1">
                 <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-                <span className="text-gray-600">健康 <strong className="text-gray-900">{stats.healthy}</strong></span>
+                <span className="text-slate-600">健康 <strong className="text-slate-900">{stats.healthy}</strong></span>
               </span>
             )}
             {stats.normal > 0 && (
               <span className="flex items-center gap-1">
-                <span className="w-2 h-2 rounded-full bg-blue-500"></span>
-                <span className="text-gray-600">正常 <strong className="text-gray-900">{stats.normal}</strong></span>
+                <span className="w-2 h-2 rounded-full bg-blue-600"></span>
+                <span className="text-slate-600">正常 <strong className="text-slate-900">{stats.normal}</strong></span>
               </span>
             )}
             {stats.warning > 0 && (
               <span className="flex items-center gap-1">
                 <span className="w-2 h-2 rounded-full bg-amber-500"></span>
-                <span className="text-gray-600">需关注 <strong className="text-gray-900">{stats.warning}</strong></span>
+                <span className="text-slate-600">需关注 <strong className="text-slate-900">{stats.warning}</strong></span>
               </span>
             )}
             {stats.critical > 0 && (
               <span className="flex items-center gap-1">
                 <span className="w-2 h-2 rounded-full bg-red-500"></span>
-                <span className="text-gray-600">滞后 <strong className="text-gray-900">{stats.critical}</strong></span>
+                <span className="text-slate-600">进度落后 <strong className="text-slate-900">{stats.critical}</strong></span>
               </span>
             )}
           </div>
-          <span className="text-gray-500">
-            平均完成度 <strong className="text-gray-900">{stats.average}%</strong>
+          <span className="text-slate-500">
+            平均完成度 <strong className="text-slate-900">{stats.average}%</strong>
           </span>
         </div>
       </CardContent>

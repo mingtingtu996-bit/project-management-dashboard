@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 
+import { CollapsibleSection } from '@/components/CollapsibleSection'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -11,6 +12,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Card, CardContent } from '@/components/ui/card'
+import { Separator } from '@/components/ui/separator'
 import { cn } from '@/lib/utils'
 import { AlertTriangle, CheckCircle2, FileDiff, FolderGit2, RotateCcw, ShieldAlert } from 'lucide-react'
 
@@ -136,6 +138,20 @@ export function BaselineConfirmDialog({
   const criticalPathChangeCount = summary.criticalPathChangeCount ?? 0
   const mappingAffectedCount = summary.mappingAffectedCount ?? 0
   const noDiff = counts.total === 0
+  const changePercent = Math.min(100, Math.max(0, counts.total * 5))
+  const impactLabel =
+    changePercent < 5
+      ? '影响较小，可安全确认'
+      : changePercent > 20
+        ? '影响范围较大，建议仔细检查'
+        : '影响适中，建议复核关键项'
+  const impactClass =
+    changePercent < 5
+      ? 'bg-green-50 text-green-700'
+      : changePercent > 20
+        ? 'bg-orange-50 text-orange-700'
+        : 'bg-amber-50 text-amber-700'
+  const topChanges = summary.items.slice(0, 3)
   const isRealignmentFailure = state === 'failed' && failureCode === 'REQUIRES_REALIGNMENT'
   const realignmentSummary = useMemo(
     () => (isRealignmentFailure ? parseRealignmentFailureSummary(failureMessage) : null),
@@ -172,7 +188,7 @@ export function BaselineConfirmDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] max-w-4xl overflow-y-auto">
+      <DialogContent className="max-h-[90vh] max-w-[720px] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-base">
             <FileDiff className="h-4 w-4 text-cyan-500" />
@@ -234,7 +250,7 @@ export function BaselineConfirmDialog({
                       ) : null}
                       {realignmentSummary.triggeredRules.length ? (
                         <div className="space-y-2">
-                          <div className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
+                          <div className="text-xs font-medium uppercase tracking-wider text-slate-500">
                             触发规则
                           </div>
                           <div className="flex flex-wrap gap-2">
@@ -272,7 +288,7 @@ export function BaselineConfirmDialog({
                           onClick={onQueueRealignment}
                         >
                           <RotateCcw className="h-4 w-4" />
-                          声明开始重排
+                          进入编辑模式
                         </Button>
                       ) : null}
                     </div>
@@ -289,45 +305,46 @@ export function BaselineConfirmDialog({
             </Alert>
           ) : null}
 
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
-            <Card className="border-slate-200 shadow-sm">
-              <CardContent className="space-y-1 p-4">
+          <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-2xl font-bold text-slate-900 tabular-nums">{counts.total}</span>
+              <span className="text-sm text-slate-500">项变更</span>
+              <span className={cn('rounded-full px-2 py-0.5 text-xs font-medium', impactClass)}>
+                {impactLabel}
+              </span>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <div className="rounded-xl border border-white bg-white px-3 py-2">
                 <div className="text-xs text-slate-500">当前版本</div>
-                <div className="text-2xl font-semibold text-slate-900">{summary.fromVersionLabel}</div>
-              </CardContent>
-            </Card>
-            <Card className="border-slate-200 shadow-sm">
-              <CardContent className="space-y-1 p-4">
+                <div className="mt-1 text-lg font-semibold text-slate-900">{summary.fromVersionLabel}</div>
+              </div>
+              <div className="rounded-xl border border-white bg-white px-3 py-2">
                 <div className="text-xs text-slate-500">目标版本</div>
-                <div className="text-2xl font-semibold text-slate-900">{summary.toVersionLabel}</div>
-              </CardContent>
-            </Card>
-            {(['新增', '修改', '移除', '里程碑变动'] as BaselineDiffKind[]).map((kind) => (
-              <Card key={kind} className="border-slate-200 shadow-sm">
-                <CardContent className="space-y-1 p-4">
+                <div className="mt-1 text-lg font-semibold text-slate-900">{summary.toVersionLabel}</div>
+              </div>
+              {(['新增', '修改', '里程碑变动'] as BaselineDiffKind[]).map((kind) => (
+                <div key={kind} className="rounded-xl border border-white bg-white px-3 py-2">
                   <div className="text-xs text-slate-500">{kindMeta[kind].label}</div>
-                  <div className="text-2xl font-semibold text-slate-900">{counts[kind]}</div>
-                </CardContent>
-              </Card>
-            ))}
-            <Card className="border-slate-200 shadow-sm">
-              <CardContent className="space-y-1 p-4">
-                <div className="text-xs text-slate-500">影响条目</div>
-                <div className="text-2xl font-semibold text-slate-900">{modifiedItemCount}</div>
-              </CardContent>
-            </Card>
-            <Card className="border-slate-200 shadow-sm">
-              <CardContent className="space-y-1 p-4">
-                <div className="text-xs text-slate-500">关键路径</div>
-                <div className="text-2xl font-semibold text-slate-900">{criticalPathChangeCount}</div>
-              </CardContent>
-            </Card>
-            <Card className="border-slate-200 shadow-sm">
-              <CardContent className="space-y-1 p-4">
-                <div className="text-xs text-slate-500">映射影响</div>
-                <div className="text-2xl font-semibold text-slate-900">{mappingAffectedCount}</div>
-              </CardContent>
-            </Card>
+                  <div className="mt-1 text-lg font-semibold text-slate-900 tabular-nums">{counts[kind]}</div>
+                </div>
+              ))}
+            </div>
+            <div className="flex flex-wrap gap-2 text-xs text-slate-600">
+              <Badge variant="outline">影响条目 {modifiedItemCount}</Badge>
+              <Badge variant="outline">关键路径 {criticalPathChangeCount}</Badge>
+              <Badge variant="outline">映射影响 {mappingAffectedCount}</Badge>
+              <Badge variant="outline">影响占比 {changePercent}%</Badge>
+            </div>
+            {topChanges.length ? (
+              <div className="space-y-2">
+                {topChanges.map((item) => (
+                  <div key={item.id} className="rounded-xl border border-white bg-white px-3 py-2 text-sm text-slate-700">
+                    <span className="font-medium text-slate-900">{item.title}</span>
+                    <span className="ml-2 text-xs text-slate-500">{item.kind}</span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </div>
 
           {noDiff ? (
@@ -349,7 +366,7 @@ export function BaselineConfirmDialog({
             </div>
           </div>
 
-          {showDiff ? (
+          <CollapsibleSection key={showDiff ? 'open-diff' : 'closed-diff'} title="查看详情" defaultOpen={showDiff}>
             <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
               <BaselineDiffView
                 fromVersionLabel={summary.fromVersionLabel}
@@ -357,9 +374,10 @@ export function BaselineConfirmDialog({
                 items={summary.items}
               />
             </div>
-          ) : null}
+          </CollapsibleSection>
 
-          <div className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-100 pt-2">
+          <Separator />
+          <div className="flex flex-wrap items-center justify-end gap-2 pt-2">
             {state === 'failed' && !isRealignmentFailure ? (
               <Button type="button" variant="destructive" className="gap-2" onClick={onRetry}>
                 <RotateCcw className="h-4 w-4" />

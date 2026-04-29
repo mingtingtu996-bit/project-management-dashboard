@@ -163,6 +163,20 @@ describe('ResponsibilityView', () => {
     await waitForSelector(container, '[data-testid="responsibility-page"]')
     await waitForSelector(container, '[data-testid="responsibility-row"]')
 
+    expect(container.textContent).toContain('责任主体监控(1 个主体)')
+    expect(container.textContent).toContain('趋势分析(')
+    expect(container.textContent).toContain('当前延期中')
+    expect(container.textContent).toContain('风险关联度')
+    expect(container.textContent).toContain('计划完成')
+
+    const responsibilityRow = container.querySelector('[data-testid="responsibility-row"]') as HTMLElement | null
+    expect(responsibilityRow?.className).toContain('border-l-4')
+
+    const unitDimensionButton = Array.from(container.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('责任单位维度'),
+    ) as HTMLButtonElement | undefined
+    expect(unitDimensionButton?.className).toContain('bg-blue-600')
+
     const watchButton = Array.from(container.querySelectorAll('button')).find(
       (button) => button.textContent?.trim() === '加入关注',
     ) as HTMLButtonElement | undefined
@@ -208,6 +222,8 @@ describe('ResponsibilityView', () => {
 
     await waitForSelector(container, '[data-testid="responsibility-page"]')
     await waitForSelector(container, '[data-testid="responsibility-row"]')
+
+    expect(container.textContent).toContain('待确认恢复正常')
 
     const confirmButton = Array.from(container.querySelectorAll('button')).find(
       (button) => button.textContent?.trim() === '确认恢复',

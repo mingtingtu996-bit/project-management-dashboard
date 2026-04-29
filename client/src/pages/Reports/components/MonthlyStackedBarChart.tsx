@@ -1,6 +1,8 @@
 import { useMemo } from 'react'
 
+import { ChartAccessibleWrapper } from '@/components/ChartAccessibleWrapper'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
 type DeviationRowLike = {
   id: string
@@ -85,9 +87,13 @@ export function MonthlyStackedBarChart({
     { key: 'revised', label: '修订', className: 'bg-slate-500' },
     { key: 'unresolved', label: '未闭环', className: 'bg-rose-400' },
   ]
+  const chartRows = normalizedBuckets.map((bucket) => {
+    const total = bucket.onTrack + bucket.delayed + bucket.carriedOver + bucket.revised + bucket.unresolved
+    return [bucket.month, bucket.onTrack, bucket.delayed, bucket.carriedOver, bucket.revised, bucket.unresolved, total]
+  })
 
   return (
-    <Card data-testid="monthly-stacked-bar-chart" className="border-slate-200 shadow-sm">
+    <Card data-testid="monthly-stacked-bar-chart" className="card-unified p-0">
       <CardHeader className="pb-3">
         <CardTitle className="text-base">{mainlineLabel} · 月度堆叠柱</CardTitle>
       </CardHeader>
@@ -101,45 +107,56 @@ export function MonthlyStackedBarChart({
           ))}
         </div>
         {normalizedBuckets.length > 0 ? (
-          <div className="space-y-3">
-            {normalizedBuckets.map((bucket) => {
-              const total = bucket.onTrack + bucket.delayed + bucket.carriedOver + bucket.revised + bucket.unresolved
-              const safeTotal = Math.max(total, 1)
-              const segments = [
-                { label: '正常', value: bucket.onTrack, className: 'bg-emerald-400' },
-                { label: '延期', value: bucket.delayed, className: 'bg-amber-400' },
-                { label: '滚入', value: bucket.carriedOver, className: 'bg-blue-400' },
-                { label: '修订', value: bucket.revised, className: 'bg-slate-500' },
-                { label: '未闭环', value: bucket.unresolved, className: 'bg-rose-400' },
-              ].filter((segment) => segment.value > 0)
+          <ChartAccessibleWrapper
+            columns={['月份', '正常', '延期', '滚入', '修订', '未闭环', '合计']}
+            rows={chartRows}
+            summary="查看月度堆叠柱图表数据"
+          >
+            <div className="space-y-3">
+              {normalizedBuckets.map((bucket) => {
+                const total = bucket.onTrack + bucket.delayed + bucket.carriedOver + bucket.revised + bucket.unresolved
+                const safeTotal = Math.max(total, 1)
+                const segments = [
+                  { label: '正常', value: bucket.onTrack, className: 'bg-emerald-400' },
+                  { label: '延期', value: bucket.delayed, className: 'bg-amber-400' },
+                  { label: '滚入', value: bucket.carriedOver, className: 'bg-blue-400' },
+                  { label: '修订', value: bucket.revised, className: 'bg-slate-500' },
+                  { label: '未闭环', value: bucket.unresolved, className: 'bg-rose-400' },
+                ].filter((segment) => segment.value > 0)
 
-              return (
-                <div key={bucket.month} className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="text-sm font-medium text-slate-900">{bucket.month}</div>
-                    <div className="text-xs text-slate-500">{total} 条</div>
+                return (
+                  <div key={bucket.month} className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="text-sm font-medium text-slate-900">{bucket.month}</div>
+                      <div className="text-xs text-slate-500">{total} 条</div>
+                    </div>
+                    <div className="mt-3 flex h-4 overflow-hidden rounded-full bg-white">
+                      {segments.map((segment) => (
+                        <Tooltip>
+  <TooltipTrigger asChild>
+    <div
+                          key={`${bucket.month}-${segment.label}`}
+                          className={segment.className}
+                          style={{ width: `${(segment.value / safeTotal) * 100}%` }}
+                          
+                        />
+  </TooltipTrigger>
+  <TooltipContent>{`${segment.label} ${segment.value}`}</TooltipContent>
+</Tooltip>
+                      ))}
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">
+                      {segments.map((segment) => (
+                        <span key={`${bucket.month}-${segment.label}`} className="rounded-full bg-white px-2 py-0.5">
+                          {segment.label} {segment.value}
+                        </span>
+                      ))}
+                    </div>
                   </div>
-                  <div className="mt-3 flex h-4 overflow-hidden rounded-full bg-white">
-                    {segments.map((segment) => (
-                      <div
-                        key={`${bucket.month}-${segment.label}`}
-                        className={segment.className}
-                        style={{ width: `${(segment.value / safeTotal) * 100}%` }}
-                        title={`${segment.label} ${segment.value}`}
-                      />
-                    ))}
-                  </div>
-                  <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-slate-500">
-                    {segments.map((segment) => (
-                      <span key={`${bucket.month}-${segment.label}`} className="rounded-full bg-white px-2 py-0.5">
-                        {segment.label} {segment.value}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )
-            })}
-          </div>
+                )
+              })}
+            </div>
+          </ChartAccessibleWrapper>
         ) : (
           <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
             暂无月度堆叠柱数据

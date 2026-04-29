@@ -1,5 +1,8 @@
 import { useState } from 'react'
+
+import { Separator } from '@/components/ui/separator'
 import { ConflictItem, ResolutionStrategy, smartMerge, getFieldDifference } from '@/hooks/useConflictDetection'
+import { Button } from '@/components/ui/button'
 
 /**
  * 冲突解决模态框属性
@@ -59,14 +62,14 @@ export function ConflictResolutionModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
+    <div className="fixed inset-0 z-50 flex animate-in items-center justify-center px-4 py-6 duration-200 fade-in-0">
       {/* 背景遮罩 */}
-      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-[4px]" onClick={onClose} />
       
       {/* 模态框主体 */}
-      <div className="relative bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[80vh] overflow-hidden">
+      <div className="relative max-h-[80vh] w-[90%] max-w-[720px] animate-in overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[var(--el-4)] duration-200 ease-bounce fade-in-0 zoom-in-95">
         {/* 头部 */}
-        <div className="px-6 py-4 border-b border-gray-200 bg-amber-50">
+        <div className="px-6 py-4 bg-amber-50">
           <div className="flex items-center justify-between">
             <div>
               <h3 className="text-lg font-semibold text-amber-800">
@@ -76,44 +79,48 @@ export function ConflictResolutionModal({
                 检测到 {conflicts.length} 个冲突，请选择解决方案
               </p>
             </div>
-            <button
+            <Button variant="ghost"
               onClick={onClose}
-              className="text-gray-400 hover:text-gray-600"
+              className="text-slate-400 hover:text-slate-600"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
               </svg>
-            </button>
+            </Button>
           </div>
         </div>
+        <Separator />
 
         {/* 冲突列表（如果有多个） */}
         {conflicts.length > 1 && (
-          <div className="px-6 py-3 border-b border-gray-100">
-            <div className="flex flex-wrap gap-2">
-              {conflicts.map((conflict, index) => (
-                <button
-                  key={conflict.entityId}
-                  onClick={() => setSelectedEntity(conflict.entityId)}
-                  className={`px-3 py-1 text-sm rounded-full transition-colors ${
-                    (selectedEntity || conflicts[0].entityId) === conflict.entityId
-                      ? 'bg-amber-100 text-amber-800 border border-amber-300'
-                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                  }`}
-                >
-                  {entityTypeLabels[conflict.entityType]} {index + 1}
-                </button>
-              ))}
+          <>
+            <div className="px-6 py-3">
+              <div className="flex flex-wrap gap-2">
+                {conflicts.map((conflict, index) => (
+                  <Button variant="ghost"
+                    key={conflict.entityId}
+                    onClick={() => setSelectedEntity(conflict.entityId)}
+                    className={`px-3 py-1 text-sm rounded-full transition-colors ${
+                      (selectedEntity || conflicts[0].entityId) === conflict.entityId
+                        ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    {entityTypeLabels[conflict.entityType]} {index + 1}
+                  </Button>
+                ))}
+              </div>
             </div>
-          </div>
+            <Separator />
+          </>
         )}
 
         {/* 冲突详情 */}
         <div className="p-6 overflow-y-auto max-h-[40vh]">
           {currentConflict && (
             <div className="space-y-4">
-              <div className="flex items-center gap-2 text-sm text-gray-500">
-                <span className="px-2 py-0.5 bg-gray-100 rounded">
+              <div className="flex items-center gap-2 text-sm text-slate-500">
+                <span className="px-2 py-0.5 bg-slate-100 rounded">
                   {entityTypeLabels[currentConflict.entityType]}
                 </span>
                 <span>版本 {currentConflict.localVersion} → {currentConflict.serverVersion}</span>
@@ -121,7 +128,7 @@ export function ConflictResolutionModal({
 
               {/* 冲突字段列表 */}
               <div className="space-y-2">
-                <h4 className="font-medium text-gray-700">冲突字段：</h4>
+                <h4 className="font-medium text-slate-700">冲突字段：</h4>
                 {conflicts
                   .filter(c => c.entityId === currentConflict.entityId)
                   .map((conflict, idx) => (
@@ -158,28 +165,29 @@ export function ConflictResolutionModal({
         </div>
 
         {/* 操作按钮 */}
-        <div className="px-6 py-4 border-t border-gray-200 bg-gray-50">
+        <Separator />
+        <div className="px-6 py-4 bg-slate-50">
           <div className="flex flex-wrap gap-3 justify-end">
-            <button
+            <Button variant="ghost"
               onClick={() => handleResolve('keepServer')}
               className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 transition-colors"
             >
               保留服务器版本
-            </button>
-            <button
+            </Button>
+            <Button variant="ghost"
               onClick={() => handleResolve('keepLocal')}
               className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
             >
               保留本地版本
-            </button>
-            <button
+            </Button>
+            <Button variant="ghost"
               onClick={() => {
                 setShowMergePreview(!showMergePreview)
               }}
               className="px-4 py-2 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 transition-colors"
             >
               {showMergePreview ? '隐藏预览' : '智能合并预览'}
-            </button>
+            </Button>
           </div>
 
           {/* 智能合并预览 */}
@@ -189,12 +197,12 @@ export function ConflictResolutionModal({
               <pre className="text-xs text-purple-700 whitespace-pre-wrap max-h-32 overflow-y-auto">
                 {JSON.stringify(previewMerge(), null, 2)}
               </pre>
-              <button
+              <Button variant="ghost"
                 onClick={() => handleResolve('merge')}
                 className="mt-3 px-4 py-2 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 transition-colors"
               >
                 确认合并
-              </button>
+              </Button>
             </div>
           )}
         </div>

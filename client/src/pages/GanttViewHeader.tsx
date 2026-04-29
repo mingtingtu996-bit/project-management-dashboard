@@ -3,6 +3,7 @@ import { ArrowLeft, CalendarCheck, CalendarDays, FileText, GitBranch, Layers3, L
 import { Breadcrumb } from '@/components/Breadcrumb'
 import { PageHeader } from '@/components/PageHeader'
 import { Button } from '@/components/ui/button'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { PROJECT_NAVIGATION_LABELS } from '@/config/navigation'
 
 interface PlanningGovernanceSummary {
@@ -69,10 +70,10 @@ export function GanttViewHeader({
       case 'reordering':
         return {
           testId: 'gantt-governance-banner-reordering',
-          badge: '执行重排',
+          badge: '执行编辑模式',
           className: 'border-violet-200 bg-violet-50 text-violet-900',
           badgeClassName: 'bg-violet-100 text-violet-800',
-          description: '主动重排进行中，请在重排结束后再进行后续确认与关账。',
+          description: '主动编辑模式进行中，请在编辑模式结束后再进行后续确认与关账。',
         }
       case 'closeout':
         return {
@@ -92,37 +93,35 @@ export function GanttViewHeader({
       {projectName ? (
         <Breadcrumb
           items={[
-            { label: PROJECT_NAVIGATION_LABELS.company, href: '/company' },
             { label: projectName || '当前项目', href: `/projects/${projectId}/dashboard` },
-            { label: PROJECT_NAVIGATION_LABELS.tasks, href: `/projects/${projectId}/gantt` },
-            { label: PROJECT_NAVIGATION_LABELS.taskList },
+            { label: '甘特图' },
           ]}
         />
       ) : null}
 
       <PageHeader
         eyebrow={PROJECT_NAVIGATION_LABELS.tasks}
-        title={`${PROJECT_NAVIGATION_LABELS.tasks} / ${PROJECT_NAVIGATION_LABELS.taskList}`}
+        title="甘特图"
       >
         <div className="inline-flex rounded-xl border border-slate-200 bg-white p-1">
-          <button
+          <Button variant="ghost"
             type="button"
             data-testid="gantt-switch-list-view"
             onClick={() => onViewModeChange('list')}
-            className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm transition-colors ${viewMode === 'list' ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'}`}
+            className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm transition-colors ${viewMode === 'list' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100'}`}
           >
             <List className="h-4 w-4" />
             列表视图
-          </button>
-          <button
+          </Button>
+          <Button variant="ghost"
             type="button"
             data-testid="gantt-switch-timeline-view"
             onClick={() => onViewModeChange('timeline')}
-            className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm transition-colors ${viewMode === 'timeline' ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'}`}
+            className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm transition-colors ${viewMode === 'timeline' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100'}`}
           >
             <CalendarDays className="h-4 w-4" />
             横道图视图
-          </button>
+          </Button>
         </div>
         <Button variant="ghost" onClick={onBack}>
           <ArrowLeft className="mr-2 h-4 w-4" />
@@ -159,9 +158,14 @@ export function GanttViewHeader({
         >
           <div className="space-y-2">
             <div className="flex flex-wrap items-center gap-2">
-              <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ${governanceBanner.badgeClassName}`}>
-                {governanceBanner.badge}
-              </span>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className={`inline-flex cursor-help items-center rounded-full px-2.5 py-1 text-xs font-semibold ${governanceBanner.badgeClassName}`}>
+                    {governanceBanner.badge}
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent className="max-w-[260px]">{governanceBanner.description}</TooltipContent>
+              </Tooltip>
               {planningGovernance?.activeCount ? (
                 <span
                   data-testid="gantt-governance-marker"

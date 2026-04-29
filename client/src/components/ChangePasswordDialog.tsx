@@ -5,6 +5,7 @@
 import { useState, useEffect, useRef, useId } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { X, Eye, EyeOff } from 'lucide-react';
+import { Button } from '@/components/ui/button'
 
 interface ChangePasswordDialogProps {
   isOpen: boolean;
@@ -19,6 +20,7 @@ export const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({ isOp
   const [showNew, setShowNew] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [error, setError] = useState('');
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const { user } = useAuth();
   const titleId = useId();
@@ -37,9 +39,32 @@ export const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({ isOp
 
   if (!isOpen) return null;
 
+  const clearFieldError = (field: string) => {
+    setFieldErrors((current) => {
+      const next = { ...current };
+      delete next[field];
+      return next;
+    });
+  };
+
+  const validateRequired = (field: string, value: string) => {
+    if (value.trim()) {
+      clearFieldError(field);
+      return true;
+    }
+
+    setFieldErrors((current) => ({ ...current, [field]: '此字段必填' }));
+    return false;
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+
+    const oldPasswordValid = validateRequired('oldPassword', oldPassword);
+    const newPasswordValid = validateRequired('newPassword', newPassword);
+    const confirmPasswordValid = validateRequired('confirmPassword', confirmPassword);
+    if (!oldPasswordValid || !newPasswordValid || !confirmPasswordValid) return;
 
     if (newPassword.length < 6) {
       setError('新密码长度至少6位');
@@ -70,6 +95,7 @@ export const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({ isOp
         setOldPassword('');
         setNewPassword('');
         setConfirmPassword('');
+        setFieldErrors({});
       } else {
         setError(data.message || '修改失败');
       }
@@ -86,18 +112,19 @@ export const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({ isOp
       setOldPassword('');
       setNewPassword('');
       setConfirmPassword('');
+      setFieldErrors({});
       onClose();
     }
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={handleClose}>
-      <div role="dialog" aria-modal="true" aria-labelledby={titleId} className="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 p-6" onClick={e => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex animate-in items-center justify-center bg-black/60 px-4 py-6 backdrop-blur-[4px] duration-200 fade-in-0" onClick={handleClose}>
+      <div role="dialog" aria-modal="true" aria-labelledby={titleId} className="w-[90%] max-w-[560px] animate-in rounded-2xl border border-slate-200 bg-white p-6 shadow-[var(--el-4)] duration-200 ease-bounce fade-in-0 zoom-in-95" onClick={e => e.stopPropagation()}>
         <div className="flex justify-between items-center mb-4">
-          <h2 id={titleId} className="text-lg font-semibold text-gray-800">修改密码</h2>
-          <button ref={closeRef} onClick={handleClose} className="text-gray-400 hover:text-gray-600" aria-label="关闭">
+          <h2 id={titleId} className="text-lg font-semibold text-slate-800">修改密码</h2>
+          <Button variant="ghost" ref={closeRef} onClick={handleClose} className="text-slate-400 hover:text-slate-600" aria-label="关闭">
             <X className="h-5 w-5" />
-          </button>
+          </Button>
         </div>
 
         {error && (
@@ -106,64 +133,91 @@ export const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({ isOp
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">旧密码</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1">旧密码</label>
             <div className="relative">
               <input
                 type={showOld ? 'text' : 'password'}
                 value={oldPassword}
-                onChange={e => setOldPassword(e.target.value)}
-                className="w-full px-3 py-2 pr-10 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                onChange={e => {
+                  setOldPassword(e.target.value);
+                  if (fieldErrors.oldPassword) clearFieldError('oldPassword');
+                }}
+                onBlur={() => validateRequired('oldPassword', oldPassword)}
+                aria-invalid={Boolean(fieldErrors.oldPassword)}
+                aria-describedby={fieldErrors.oldPassword ? 'change-password-old-error' : undefined}
+                className={`w-full px-3 py-2 pr-10 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm ${fieldErrors.oldPassword ? 'border-red-500' : 'border-slate-300'}`}
                 required
                 disabled={loading}
               />
-              <button type="button" onClick={() => setShowOld(!showOld)} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+              <Button variant="ghost" type="button" onClick={() => setShowOld(!showOld)} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
                 {showOld ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-              </button>
+              </Button>
             </div>
+            {fieldErrors.oldPassword ? (
+              <p id="change-password-old-error" className="text-sm text-red-600" role="alert">{fieldErrors.oldPassword}</p>
+            ) : null}
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">新密码</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1">新密码</label>
             <div className="relative">
               <input
                 type={showNew ? 'text' : 'password'}
                 value={newPassword}
-                onChange={e => setNewPassword(e.target.value)}
-                className="w-full px-3 py-2 pr-10 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                onChange={e => {
+                  setNewPassword(e.target.value);
+                  if (fieldErrors.newPassword) clearFieldError('newPassword');
+                }}
+                onBlur={() => validateRequired('newPassword', newPassword)}
+                aria-invalid={Boolean(fieldErrors.newPassword)}
+                aria-describedby={fieldErrors.newPassword ? 'change-password-new-error' : undefined}
+                className={`w-full px-3 py-2 pr-10 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm ${fieldErrors.newPassword ? 'border-red-500' : 'border-slate-300'}`}
                 placeholder="至少6位"
                 required
                 disabled={loading}
               />
-              <button type="button" onClick={() => setShowNew(!showNew)} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+              <Button variant="ghost" type="button" onClick={() => setShowNew(!showNew)} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
                 {showNew ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-              </button>
+              </Button>
             </div>
+            {fieldErrors.newPassword ? (
+              <p id="change-password-new-error" className="text-sm text-red-600" role="alert">{fieldErrors.newPassword}</p>
+            ) : null}
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">确认新密码</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1">确认新密码</label>
             <div className="relative">
               <input
                 type={showConfirm ? 'text' : 'password'}
                 value={confirmPassword}
-                onChange={e => setConfirmPassword(e.target.value)}
-                className="w-full px-3 py-2 pr-10 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                onChange={e => {
+                  setConfirmPassword(e.target.value);
+                  if (fieldErrors.confirmPassword) clearFieldError('confirmPassword');
+                }}
+                onBlur={() => validateRequired('confirmPassword', confirmPassword)}
+                aria-invalid={Boolean(fieldErrors.confirmPassword)}
+                aria-describedby={fieldErrors.confirmPassword ? 'change-password-confirm-error' : undefined}
+                className={`w-full px-3 py-2 pr-10 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm ${fieldErrors.confirmPassword ? 'border-red-500' : 'border-slate-300'}`}
                 required
                 disabled={loading}
               />
-              <button type="button" onClick={() => setShowConfirm(!showConfirm)} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+              <Button variant="ghost" type="button" onClick={() => setShowConfirm(!showConfirm)} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
                 {showConfirm ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-              </button>
+              </Button>
             </div>
+            {fieldErrors.confirmPassword ? (
+              <p id="change-password-confirm-error" className="text-sm text-red-600" role="alert">{fieldErrors.confirmPassword}</p>
+            ) : null}
           </div>
 
           <div className="flex gap-3 pt-2">
-            <button type="button" onClick={handleClose} disabled={loading} className="flex-1 px-4 py-2 border border-gray-300 rounded text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50">
+            <Button variant="ghost" type="button" onClick={handleClose} disabled={loading} className="flex-1 px-4 py-2 border border-slate-300 rounded text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50">
               取消
-            </button>
-            <button type="submit" disabled={loading} className="flex-1 px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50">
+            </Button>
+            <Button variant="ghost" type="submit" disabled={loading} className="flex-1 px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50">
               {loading ? '修改中...' : '确认修改'}
-            </button>
+            </Button>
           </div>
         </form>
       </div>

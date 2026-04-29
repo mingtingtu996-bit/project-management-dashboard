@@ -4,6 +4,7 @@ import { DndContext, type DragEndEvent, PointerSensor, useSensor, useSensors } f
 import { Network, SplitSquareVertical, Route, Shuffle } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
+import { Separator } from '@/components/ui/separator'
 import { cn } from '@/lib/utils'
 import type { AcceptancePlan, AcceptanceType } from '@/types/acceptance'
 
@@ -64,7 +65,7 @@ export default function AcceptanceFlowBoard({
   return (
     <DndContext sensors={sensors} onDragEnd={handleDndEnd}>
     <div className="space-y-4" data-testid="acceptance-flow-board">
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
         <div className="space-y-1">
           <div className="text-sm font-semibold text-slate-900">流程板</div>
           <div className="text-xs text-slate-500">
@@ -79,8 +80,8 @@ export default function AcceptanceFlowBoard({
         </div>
       </div>
 
-      <div className="rounded-3xl border border-slate-200 bg-white shadow-sm">
-        <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 bg-slate-50 px-4 py-3 text-xs text-slate-500">
+      <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="flex flex-wrap items-center gap-2 bg-slate-50 px-4 py-3 text-xs text-slate-500">
           <Badge variant="outline" className="gap-1.5 rounded-full bg-white">
             <Network className="h-3.5 w-3.5" />
             依赖连线
@@ -98,6 +99,7 @@ export default function AcceptanceFlowBoard({
             时间桶真实影响布局
           </Badge>
         </div>
+        <Separator />
 
         <div className="overflow-x-auto">
           <div
@@ -129,7 +131,7 @@ export default function AcceptanceFlowBoard({
             })}
 
             <div
-              className="absolute left-0 top-0 z-20 flex h-[76px] w-full border-b border-slate-100 bg-white/95 backdrop-blur"
+              className="absolute left-0 top-0 z-20 flex h-[76px] w-full bg-white/95 backdrop-blur"
               style={{ height: FLOW_HEADER_HEIGHT }}
             >
               <div
@@ -149,11 +151,12 @@ export default function AcceptanceFlowBoard({
                   data-testid={`acceptance-flow-bucket-${bucket.key}`}
                 >
                   <span className="truncate">{bucket.label}</span>
-                  <Badge variant="outline" className="rounded-full px-2 py-0.5 text-[11px]">
+                  <Badge variant="outline" className="rounded-full px-2 py-0.5 text-xs">
                     {bucket.isUnscheduled ? '待排期' : '已排期'}
                   </Badge>
                 </div>
               ))}
+              <Separator className="absolute bottom-0 left-0 right-0 border-slate-100" />
             </div>
 
             {layout.laneLayouts.map((laneLayout) => {
@@ -174,7 +177,7 @@ export default function AcceptanceFlowBoard({
                   <div className="mt-1 text-xs text-slate-500">
                     阶段内 {lane.plans.length} 项 · {laneLayout.maxStackCount} 层
                   </div>
-                  <div className="mt-3 flex flex-wrap gap-1.5 text-[11px]">
+                  <div className="mt-3 flex flex-wrap gap-1.5 text-xs">
                     <Badge variant="outline" className="rounded-full px-2 py-0.5">
                       {lane.order}
                     </Badge>

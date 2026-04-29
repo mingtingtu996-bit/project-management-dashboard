@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import RiskManagement from '../RiskManagement'
 import { useStore } from '@/hooks/useStore'
-import { apiGet, apiPost, apiPut } from '@/lib/apiClient'
+import { apiDelete, apiGet, apiPost, apiPut } from '@/lib/apiClient'
 
 vi.mock('@/components/ReadOnlyGuard', () => ({
   ReadOnlyGuard: ({ children }: { children: ReactNode }) => <>{children}</>,
@@ -24,6 +24,7 @@ vi.mock('@/components/Breadcrumb', () => ({
 }))
 
 vi.mock('@/lib/apiClient', () => ({
+  apiDelete: vi.fn(),
   apiGet: vi.fn(),
   apiPost: vi.fn(),
   apiPut: vi.fn(),
@@ -39,6 +40,7 @@ vi.mock('react-router-dom', async () => {
   }
 })
 
+const mockedApiDelete = vi.mocked(apiDelete)
 const mockedApiGet = vi.mocked(apiGet)
 const mockedApiPost = vi.mocked(apiPost)
 const mockedApiPut = vi.mocked(apiPut)
@@ -267,6 +269,15 @@ describe('RiskManagement', () => {
     })
 
     mockedApiGet.mockImplementation(async (url: string) => {
+      if (url.includes('/api/risk-statistics/trend')) {
+        return {
+          trend: [
+            { date: '2026-04-01', newRisks: 1, resolvedRisks: 0, totalRisks: 1, highRiskCount: 0, mediumRiskCount: 1, lowRiskCount: 0, newIssues: 1, resolvedIssues: 0, totalIssues: 1, newWarnings: 2, resolvedWarnings: 0, totalWarnings: 2 },
+            { date: '2026-04-02', newRisks: 0, resolvedRisks: 1, totalRisks: 1, highRiskCount: 0, mediumRiskCount: 1, lowRiskCount: 0, newIssues: 0, resolvedIssues: 0, totalIssues: 1, newWarnings: 0, resolvedWarnings: 1, totalWarnings: 1 },
+          ],
+          pipelineStages: { identified: 1, assessed: 0, responded: 0, monitored: 0 },
+        } as never
+      }
       if (url.includes('/api/warnings')) return warningsData as never
       if (url.includes('/api/issues')) return issuesData as never
       if (url.includes('/api/risks')) return risksData as never
@@ -277,10 +288,12 @@ describe('RiskManagement', () => {
 
     mockedApiPost.mockResolvedValue({} as never)
     mockedApiPut.mockResolvedValue({} as never)
+    mockedApiDelete.mockResolvedValue({} as never)
 
   })
 
   afterEach(() => {
+    mockedApiDelete.mockReset()
     mockedApiGet.mockReset()
     mockedApiPost.mockReset()
     mockedApiPut.mockReset()
@@ -520,7 +533,7 @@ describe('RiskManagement', () => {
     expect(container.textContent).toContain('暂无问题')
   })
 
-  it('keeps the trend analysis collapsed by default and expands on demand', async () => {
+  it('renders the pipeline flow, unified filters, and multi-line trend legend', async () => {
     await act(async () => {
       root?.render(<RiskManagement />)
       await flush()
@@ -530,15 +543,26 @@ describe('RiskManagement', () => {
     await waitForCondition(
       () =>
         Boolean(container.querySelector('[data-testid="risk-summary-band"]')) &&
-        Boolean(container.querySelector('[data-testid="risk-trend-toggle"]')),
+        Boolean(container.querySelector('[data-testid="risk-pipeline-flow"]')) &&
+        Boolean(container.querySelector('[data-testid="risk-workspace-unified-filter"]')) &&
+        Boolean(container.querySelector('[data-testid="risk-trend-legend-risks"]')),
       container,
     )
 
-    expect(fetchMock).not.toHaveBeenCalled()
+    expect(container.textContent).toContain('识别')
+    expect(container.textContent).toContain('评估')
+    expect(container.textContent).toContain('应对')
+    expect(container.textContent).toContain('监控')
+    expect(container.textContent).toContain('全部等级')
+    expect(container.textContent).toContain('全部状态')
+    expect(container.textContent).toContain('全部责任人')
 
-    clickTestId(container, 'risk-trend-toggle')
+    clickTestId(container, 'risk-trend-legend-risks')
+    await act(async () => {
+      await flush()
+    })
 
-    await waitForCondition(() => fetchMock.mock.calls.length > 0, container)
+    expect(container.querySelector('[data-testid="risk-trend-legend-risks"]')?.textContent).toContain('风险')
   })
 
   it('surfaces pending manual close items with banner actions and quick filter', async () => {

@@ -1,5 +1,6 @@
 import { AlertTriangle, X, RefreshCw } from 'lucide-react'
 import { ConflictItem } from '@/hooks/useConflictDetection'
+import { Button } from '@/components/ui/button'
 
 /**
  * 冲突警告提示属性
@@ -45,12 +46,12 @@ export function ConflictAlert({ conflicts, onViewDetails, onDismiss }: ConflictA
               检测到 {conflicts.length} 个冲突
             </span>
           </div>
-          <button
+          <Button variant="ghost"
             onClick={onDismiss}
             className="text-amber-600 hover:text-amber-800"
           >
             <X className="w-4 h-4" />
-          </button>
+          </Button>
         </div>
 
         {/* 内容 */}
@@ -58,9 +59,9 @@ export function ConflictAlert({ conflicts, onViewDetails, onDismiss }: ConflictA
           <div className="space-y-2 mb-4">
             {Object.entries(groupedConflicts).map(([entityType, items]) => (
               <div key={entityType} className="flex items-center gap-2 text-sm">
-                <span className="text-gray-600">{entityTypeLabels[entityType as keyof typeof entityTypeLabels]}:</span>
-                <span className="font-medium text-gray-800">{items.length} 个</span>
-                <span className="text-gray-400">
+                <span className="text-slate-600">{entityTypeLabels[entityType as keyof typeof entityTypeLabels]}:</span>
+                <span className="font-medium text-slate-800">{items.length} 个</span>
+                <span className="text-slate-400">
                   (v{items[0].localVersion} → v{items[0].serverVersion})
                 </span>
               </div>
@@ -69,13 +70,13 @@ export function ConflictAlert({ conflicts, onViewDetails, onDismiss }: ConflictA
 
           {/* 操作按钮 */}
           <div className="flex gap-2">
-            <button
+            <Button variant="ghost"
               onClick={onViewDetails}
               className="flex-1 px-3 py-2 text-sm font-medium text-white bg-amber-600 rounded-lg hover:bg-amber-700 transition-colors flex items-center justify-center gap-2"
             >
               <RefreshCw className="w-4 h-4" />
               查看详情
-            </button>
+            </Button>
           </div>
         </div>
       </div>

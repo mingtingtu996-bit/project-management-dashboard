@@ -66,10 +66,20 @@
     "verify:browser-suite:shell-and-collab": "node scripts/run-browser-suite.mjs verify:company-cockpit verify:responsibility verify:dashboard verify:notifications verify:task-summary verify:team-members verify:join-project",
     "verify:browser-suite:project-chains": "node scripts/run-browser-suite.mjs verify:gantt verify:gantt-change-log verify:drawings verify:acceptance verify:reports verify:risk-management verify:risk-guard verify:pre-milestones verify:milestones",
     "verify:browser-suite:planning-and-tooling": "node scripts/run-browser-suite.mjs verify:planning-monthly verify:planning-baseline verify:planning-closeout verify:planning-revision verify:planning-deviation verify:planning-confirm-failure verify:planning-fine-flows verify:wbs-templates verify:monitoring",
+    "verify:uiux-visual": "npm run build --workspace=client && node scripts/verify-uiux-visual.mjs",
+    "verify:uiux-a11y": "npm run build --workspace=client && node scripts/verify-uiux-a11y.mjs",
+    "verify:uiux-performance": "node scripts/verify-uiux-performance.mjs",
+    "verify:uiux-release-smoke": "npm run build --workspace=client && node scripts/verify-uiux-release-smoke.mjs",
+    "verify:uiux-r295": "node scripts/verify-uiux-predeploy-gates.mjs r295",
+    "verify:uiux-component": "node scripts/verify-uiux-predeploy-gates.mjs component",
+    "verify:uiux-interaction": "node scripts/verify-uiux-predeploy-gates.mjs interaction",
+    "verify:uiux-token-audit": "node scripts/verify-uiux-predeploy-gates.mjs token-audit",
+    "verify:uiux-contrast": "node scripts/verify-uiux-predeploy-gates.mjs contrast",
+    "verify:uiux-predeploy-gates": "npm run build --workspace=client && node scripts/verify-uiux-predeploy-gates.mjs all",
     "acceptance:v1": "npx vitest run --root client src/pages/__tests__/sharedSummary.test.tsx src/pages/__tests__/GanttView.test.tsx src/pages/__tests__/Notifications.test.tsx && npx vitest run --root server src/__tests__/projectCreationSummaryChain.test.ts src/__tests__/taskCompletionSummaryChain.test.ts src/__tests__/riskNotificationChain.test.ts"
   },
-
   "devDependencies": {
+    "@axe-core/playwright": "^4.11.2",
     "concurrently": "^8.2.2",
     "esbuild": "^0.25.12",
     "pg": "^8.20.0"

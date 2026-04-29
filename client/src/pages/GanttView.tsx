@@ -21,8 +21,10 @@ import { useDebounce } from '@/hooks/useDebounce'
 import { usePermissions } from '@/hooks/usePermissions'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { Separator } from '@/components/ui/separator'
 import { toast } from '@/hooks/use-toast'
 import { LoadingState } from '@/components/ui/loading-state'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { zhCN } from '@/i18n/zh-CN'
 import { Calendar, Save, ChevronRight, ChevronDown, Search, SlidersHorizontal, AlertTriangle } from 'lucide-react'
 import { apiDelete, apiGet, apiPost, apiPut, getApiErrorMessage, getAuthHeaders, isAbortError } from '@/lib/apiClient'
@@ -445,6 +447,10 @@ const withRequestContext = (options: RequestInit = {}): RequestInit => ({
 })
 
 export default function GanttView() {
+  useEffect(() => {
+    document.title = '甘特图 | WorkBuddy'
+  }, [])
+
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const location = useLocation()
@@ -1273,6 +1279,7 @@ export default function GanttView() {
     } catch (error) {
       if (!isAbortError(error)) {
         console.error('加载甘特任务失败:', error)
+        toast({ title: '加载任务失败，请重试', variant: 'destructive' })
       }
     }
   }, [hydratedProjectId, id, setTasks, timelineBaselineVersionId, timelineCompareMode, viewMode])
@@ -1294,6 +1301,7 @@ export default function GanttView() {
     } catch (error) {
       if (!isAbortError(error)) {
         console.error('加载甘特开工条件失败:', error)
+        toast({ title: '加载开工条件失败，请重试', variant: 'destructive' })
       }
     }
   }, [id, setProjectConditions])
@@ -1315,6 +1323,7 @@ export default function GanttView() {
     } catch (error) {
       if (!isAbortError(error)) {
         console.error('加载甘特阻碍失败:', error)
+        toast({ title: '加载阻碍失败，请重试', variant: 'destructive' })
       }
     }
   }, [id, setProjectObstacles])
@@ -1344,6 +1353,7 @@ export default function GanttView() {
     } catch (error) {
       if (!isAbortError(error) && !options?.signal?.aborted) {
         console.error('加载甘特延期申请失败:', error)
+        toast({ title: '加载延期申请失败，请重试', variant: 'destructive' })
         setSharedSliceStatus('delayRequests', {
           loading: false,
           error: getApiErrorMessage(error, '延期申请数据加载失败'),
@@ -1366,6 +1376,7 @@ export default function GanttView() {
     } catch (error) {
       if (!isAbortError(error)) {
         console.error('加载项目摘要失败:', error)
+        toast({ title: '加载项目摘要失败，请重试', variant: 'destructive' })
         setProjectSummary(null)
       }
     }
@@ -1385,6 +1396,7 @@ export default function GanttView() {
     } catch (error) {
       if (!isAbortError(error)) {
         console.error('加载数据质量摘要失败:', error)
+        toast({ title: '加载数据质量摘要失败，请重试', variant: 'destructive' })
         setDataQualitySummary(null)
       }
     }
@@ -1410,6 +1422,7 @@ export default function GanttView() {
     } catch (error) {
       if (!isAbortError(error)) {
         console.error('加载参建单位台账失败:', error)
+        toast({ title: '加载参建单位失败，请重试', variant: 'destructive' })
       }
     } finally {
       if (!options?.signal?.aborted) {
@@ -3590,14 +3603,14 @@ export default function GanttView() {
 
   if (loading) {
     return (
-      <div className="p-6" data-testid="gantt-loading-skeleton">
+      <div className="page-shell" data-testid="gantt-loading-skeleton">
         <GanttViewSkeleton />
       </div>
     )
   }
 
   return (
-    <div className="space-y-6 page-enter">
+    <div className="page-shell page-enter pb-20">
       <GanttViewHeader
         projectId={id || ''}
         projectName={currentProject?.name}
@@ -3660,19 +3673,32 @@ export default function GanttView() {
               </span>
             </div>
             <p className="leading-6">{dataQualitySummary.prompt.summary}</p>
+            <p className="text-xs text-sky-700/80">以下数据问题可能影响分析准确性，建议尽快处理</p>
           </summary>
           <div className="mt-4 space-y-3">
-            {dataQualitySummary.prompt.items.map((item) => (
-              <div key={item.id} className="rounded-2xl border border-sky-100 bg-white px-4 py-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <div className="text-sm font-semibold text-slate-900">{item.taskTitle}</div>
-                  <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
-                    {item.severity === 'critical' ? '严重' : item.severity === 'warning' ? '警告' : '关注'}
-                  </span>
+            {dataQualitySummary.prompt.items.map((item) => {
+              const severityMeta = item.severity === 'critical'
+                ? { label: '高', tooltip: '影响关键路径计算准确性', className: 'bg-red-50 text-red-700 border-red-200' }
+                : item.severity === 'warning'
+                  ? { label: '中', tooltip: '可能导致进度统计偏差', className: 'bg-amber-50 text-amber-700 border-amber-200' }
+                  : { label: '低', tooltip: '建议修正但不影响核心功能', className: 'bg-slate-50 text-slate-700 border-slate-200' }
+              return (
+                <div key={item.id} className="rounded-2xl border border-sky-100 bg-white px-4 py-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="text-sm font-semibold text-slate-900">{item.taskTitle}</div>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className={`inline-flex cursor-help items-center rounded-full border px-2 py-0.5 text-xs font-medium ${severityMeta.className}`}>
+                          {severityMeta.label}
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent>{severityMeta.tooltip}</TooltipContent>
+                    </Tooltip>
+                  </div>
+                  <div className="mt-1 text-sm leading-6 text-slate-700">{item.summary}</div>
                 </div>
-                <div className="mt-1 text-sm leading-6 text-slate-700">{item.summary}</div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         </details>
       ) : null}
@@ -3681,7 +3707,7 @@ export default function GanttView() {
         {/* 瀹革缚鏅堕敍姝怋S娴犺濮熼崚妤勩€?*/}
         <div data-testid="task-workspace-layer-l4" className="min-w-0 transition-all duration-300">
       <Card variant="detail">
-        <CardHeader data-testid="task-workspace-layer-l3" className="flex flex-row items-center justify-between space-y-0 pb-3 border-b">
+        <CardHeader data-testid="task-workspace-layer-l3" className="flex flex-row items-center justify-between space-y-0 pb-3">
           <div className="flex items-center gap-3">
             <CardTitle className="text-base">{zhCN.gantt.structureTitle}</CardTitle>
             <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${viewMode === 'timeline' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600'}`}>
@@ -3699,15 +3725,20 @@ export default function GanttView() {
                 {zhCN.gantt.criticalPath}: {projectStats.criticalPathSummary}
               </p>
             )}
-            <button
+            <Button variant="ghost"
               onClick={() => setShowFilterBar(v => !v)}
-              className={`flex items-center gap-1 px-2.5 py-1 text-xs rounded-md border transition-colors ${showFilterBar || activeFilterCount > 0 ? 'bg-blue-50 border-blue-200 text-blue-700' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}
+              className={`flex items-center gap-1 px-2.5 py-1 text-xs rounded-md border transition-colors ${showFilterBar || activeFilterCount > 0 ? 'bg-blue-50 border-blue-200 text-blue-700' : 'border-slate-200 text-slate-500 hover:bg-slate-50'}`}
             >
-              <SlidersHorizontal className="h-3 w-3" />
+              <SlidersHorizontal className="h-3.5 w-3.5" />
               筛选{activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}
-            </button>
+            </Button>
           </div>
         </CardHeader>
+        <Separator />
+
+        {!showFilterBar && activeFilterCount === 0 ? (
+          <div className="px-4 py-2 text-xs text-slate-600">点击展开筛选</div>
+        ) : null}
 
         {showFilterBar && (
           <GanttFilterBar
@@ -3760,6 +3791,11 @@ export default function GanttView() {
         )}
         {viewMode === 'timeline' ? (
           <div className="p-4 pt-0">
+            {filteredFlatList.length > 50 ? (
+              <div className="mb-3 rounded-xl border border-blue-100 bg-blue-50 px-4 py-2 text-xs text-blue-700">
+                提示：可用鼠标滚轮缩放时间轴，拖拽平移。
+              </div>
+            ) : null}
             <TaskTimelineView
               ref={timelineViewRef}
               rows={filteredFlatList}

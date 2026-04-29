@@ -58,7 +58,7 @@ export function IconInfo({ className = 'w-4 h-4' }: { className?: string }) {
     </svg>
   )
 }
-export function IconClock({ className = 'w-3 h-3' }: { className?: string }) {
+export function IconClock({ className = 'w-3.5 h-3.5' }: { className?: string }) {
   return (
     <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -79,7 +79,7 @@ export function IconChevronDown({ className = 'w-3.5 h-3.5' }: { className?: str
     </svg>
   )
 }
-export function IconChevronRight({ className = 'w-3 h-3' }: { className?: string }) {
+export function IconChevronRight({ className = 'w-3.5 h-3.5' }: { className?: string }) {
   return (
     <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />

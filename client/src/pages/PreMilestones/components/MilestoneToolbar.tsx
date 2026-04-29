@@ -5,6 +5,8 @@ import type {
   PreMilestonesViewMode,
   ProjectOption,
 } from '../types'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { Button } from '@/components/ui/button'
 
 interface MilestoneToolbarProps {
   selectedProjectId: string
@@ -42,7 +44,7 @@ export function MilestoneToolbar({
           value={selectedProjectId}
           onChange={(event) => onProjectChange(event.target.value)}
           disabled={projectsLoading || projects.length === 0}
-          className="px-4 py-2 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
+          className="px-4 py-2 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100 disabled:cursor-not-allowed"
         >
           {projectsLoading ? (
             <option value="all">加载项目中...</option>
@@ -58,20 +60,21 @@ export function MilestoneToolbar({
         </select>
 
         <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
           <input
             type="text"
+            aria-label="搜索证照名称或类型"
             placeholder="搜索证照名称或类型..."
             value={searchQuery}
             onChange={(event) => onSearchChange(event.target.value)}
-            className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
         </div>
 
         <select
           value={statusFilter}
           onChange={(event) => onStatusFilterChange(event.target.value)}
-          className="px-3 py-2 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+          className="px-3 py-2 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
         >
           {statusOptions.map((option) => (
             <option key={option.value} value={option.value}>
@@ -80,31 +83,41 @@ export function MilestoneToolbar({
           ))}
         </select>
 
-        <div className="flex rounded-xl border border-gray-200 overflow-hidden">
-          <button
+        <div className="flex rounded-xl border border-slate-200 overflow-hidden">
+          <Tooltip>
+  <TooltipTrigger asChild>
+    <Button variant="ghost"
             onClick={() => onViewModeChange('list')}
-            className={`px-3 py-2 text-sm transition-colors ${viewMode === 'list' ? 'bg-blue-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50 hover:text-gray-700'}`}
-            title="列表视图"
+            className={`px-3 py-2 text-sm transition-colors ${viewMode === 'list' ? 'bg-blue-600 text-white' : 'bg-white text-slate-500 hover:bg-slate-50 hover:text-slate-700'}`}
+            
           >
             <FileText className="w-4 h-4" />
-          </button>
-          <button
+          </Button>
+  </TooltipTrigger>
+  <TooltipContent>列表视图</TooltipContent>
+</Tooltip>
+          <Tooltip>
+  <TooltipTrigger asChild>
+    <Button variant="ghost"
             onClick={() => onViewModeChange('timeline')}
-            className={`px-3 py-2 text-sm transition-colors ${viewMode === 'timeline' ? 'bg-blue-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50 hover:text-gray-700'}`}
-            title="时间轴视图"
+            className={`px-3 py-2 text-sm transition-colors ${viewMode === 'timeline' ? 'bg-blue-600 text-white' : 'bg-white text-slate-500 hover:bg-slate-50 hover:text-slate-700'}`}
+            
           >
             <Link2 className="w-4 h-4" />
-          </button>
+          </Button>
+  </TooltipTrigger>
+  <TooltipContent>时间轴视图</TooltipContent>
+</Tooltip>
         </div>
 
         <ReadOnlyGuard action="create">
-          <button
+          <Button variant="ghost"
             onClick={onCreate}
             className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-colors whitespace-nowrap"
           >
             <Plus className="w-5 h-5" />
             <span>新建证照</span>
-          </button>
+          </Button>
         </ReadOnlyGuard>
       </div>
     </div>

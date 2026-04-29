@@ -3,7 +3,9 @@ import { AlertTriangle, BarChart3, Bug, Clock, Zap } from 'lucide-react'
 
 import { PageHeader } from '@/components/PageHeader'
 import { Badge } from '@/components/ui/badge'
+import { Separator } from '@/components/ui/separator'
 import { localMonitor } from '@/lib/monitoring'
+import { Button } from '@/components/ui/button'
 
 type MonitoringTab = 'api' | 'performance' | 'errors'
 
@@ -63,10 +65,10 @@ export default function MonitoringDashboard() {
       </div>
 
       <section className="shell-surface overflow-hidden" data-testid="monitoring-dashboard-panel">
-        <div className="border-b border-slate-100 px-6 pt-5">
+        <div className="px-6 pt-5">
           <nav className="flex flex-wrap gap-2">
             {tabs.map((tab) => (
-              <button
+              <Button variant="ghost"
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
                 data-testid={`monitoring-tab-${tab.id}`}
@@ -78,10 +80,11 @@ export default function MonitoringDashboard() {
               >
                 <tab.icon className="h-4 w-4" />
                 {tab.label}
-              </button>
+              </Button>
             ))}
           </nav>
         </div>
+        <Separator />
 
         <div className="p-6 md:p-7">
           {activeTab === 'api' && (
@@ -146,9 +149,10 @@ function PerformanceMetrics() {
   return (
     <div className="space-y-4">
       <div className="shell-surface overflow-hidden" data-testid="monitoring-tabpanel-performance">
-        <div className="border-b border-slate-100 px-4 py-3">
+        <div className="px-4 py-3">
           <span className="text-sm font-medium text-slate-700">性能记录</span>
         </div>
+        <Separator />
         <div className="divide-y divide-slate-100">
           {metrics.slice(-20).map((m) => (
             <div key={`${m.name}-${m.timestamp}`} className="flex items-center justify-between px-4 py-3">
@@ -185,10 +189,11 @@ function ErrorTracker() {
   return (
     <div className="space-y-4">
       <div className="shell-surface overflow-hidden" data-testid="monitoring-tabpanel-errors">
-        <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+        <div className="flex items-center justify-between px-4 py-3">
           <span className="text-sm font-medium text-slate-700">错误记录</span>
           <span className="text-sm text-red-500">{errorMetrics.length} 条</span>
         </div>
+        <Separator />
         <div className="divide-y divide-slate-100">
           {errorMetrics.slice(-20).map((m, i) => (
             <div key={i} className="px-4 py-3">

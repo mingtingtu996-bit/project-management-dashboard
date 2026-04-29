@@ -23,6 +23,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { LoadingState } from '@/components/ui/loading-state'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { usePlanningStore, type PlanningValidationIssue } from '@/hooks/usePlanningStore'
 import { usePermissions } from '@/hooks/usePermissions'
 import { useStore } from '@/hooks/useStore'
@@ -85,8 +86,10 @@ type MonthlyAction =
   | 'batch_notes'
   | null
 type MonthlySourceMode = 'baseline' | 'schedule'
+type MonthlyRegenerationSource = 'current' | 'baseline' | 'previous'
 type MonthlyEditableField = 'title' | 'start' | 'end' | 'progress'
 type MonthlyEditorSnapshot = { items: MonthlyPlanDetail['items']; selectedIds: string[] }
+type MonthlyPlanPayloadItem = ReturnType<typeof mapTasksToMonthlyItems>[number]
 
 const MONTHLY_EDITABLE_FIELDS: MonthlyEditableField[] = ['title', 'start', 'end', 'progress']
 
@@ -341,14 +344,44 @@ function buildMonthlyStatusNotice(status: MonthlyPlanVersion['status'], month: s
     case 'closed':
       return `${monthLabel} 已完成关账，仅保留查看与追溯。`
     case 'revising':
-      return `${monthLabel} 正在修订中，可继续整理差异并决定是否进入主动重排。`
+      return `${monthLabel} 正在修订中，可继续整理差异并决定是否进入编辑模式。`
     case 'pending_realign':
-      return `${monthLabel} 已进入待重排态，处理完成后请执行“结束重排”。`
+      return `${monthLabel} 已进入待编辑模式，处理完成后请执行“结束编辑模式”。`
     case 'archived':
       return `${monthLabel} 已归档，仅用于历史对比。`
     default:
       return `${monthLabel} 状态已更新。`
   }
+}
+
+function getMonthlyPlanStatusTooltip(status?: MonthlyPlanVersion['status']) {
+  if (status === 'confirmed') return '本月计划已锁定'
+  if (status === 'draft') return '本月计划尚未提交'
+  if (status === 'revising') return '本月计划正在修订'
+  if (status === 'pending_realign') return '已提交，等待审批'
+  if (status === 'closed') return '本月计划已完成关账'
+  if (status === 'archived') return '历史归档版本，仅用于追溯'
+  return '本月尚未生成计划'
+}
+
+function clonePreviousMonthlyPlanItems(plan: MonthlyPlanDetail): MonthlyPlanPayloadItem[] {
+  return [...plan.items]
+    .sort((left, right) => left.sort_order - right.sort_order)
+    .map((item, index) => ({
+      baseline_item_id: item.baseline_item_id ?? null,
+      carryover_from_item_id: item.id,
+      source_task_id: item.source_task_id ?? null,
+      title: item.title,
+      planned_start_date: item.planned_start_date ?? null,
+      planned_end_date: item.planned_end_date ?? null,
+      target_progress: item.target_progress ?? null,
+      current_progress: item.current_progress ?? null,
+      sort_order: Number.isFinite(item.sort_order) ? item.sort_order : index,
+      is_milestone: Boolean(item.is_milestone),
+      is_critical: Boolean(item.is_critical),
+      commitment_status: 'carried_over',
+      notes: item.notes ?? null,
+    }))
 }
 
 function buildMonthlyConfirmSummary(plan: MonthlyPlanDetail | null, tasks: Task[], conditions: TaskCondition[] = [], obstacles: TaskObstacle[] = []) {
@@ -452,6 +485,10 @@ function buildMonthlyChangeSummary(plan: MonthlyPlanDetail | null, tasks: Task[]
 }
 
 export default function MonthlyPlanPage() {
+  useEffect(() => {
+    document.title = '月度计划 | WorkBuddy'
+  }, [])
+
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const location = useLocation()
@@ -496,6 +533,9 @@ export default function MonthlyPlanPage() {
   const [skeletonDiffOpen, setSkeletonDiffOpen] = useState(false)
   const [resumeInitialized, setResumeInitialized] = useState(false)
   const [regenConfirmOpen, setRegenConfirmOpen] = useState(false)
+  const [regenStep, setRegenStep] = useState<1 | 2 | 3>(1)
+  const [regenSource, setRegenSource] = useState<MonthlyRegenerationSource>('current')
+  const [batchMoveOutConfirmOpen, setBatchMoveOutConfirmOpen] = useState(false)
   const [inputDrafts, setInputDrafts] = useState<Record<string, string>>({})
   const historyRef = useRef<MonthlyEditorSnapshot[]>([])
   const historyCursorRef = useRef(-1)
@@ -515,6 +555,16 @@ export default function MonthlyPlanPage() {
       ) ?? null,
     [baselineVersions],
   )
+  const previousConfirmedMonthlyVersion = useMemo(() => {
+    const previousMonth = shiftMonth(selectedMonth, -1)
+    return (
+      sortMonthlyPlanVersions(planVersions).find(
+        (version) =>
+          version.month === previousMonth &&
+          (version.status === 'confirmed' || version.status === 'closed'),
+      ) ?? null
+    )
+  }, [planVersions, selectedMonth])
   const readOnly = !canEdit || !activePlan || activePlan.status !== 'draft' || draftStatus === 'locked'
   const lockRemainingLabel = formatCountdown(lockSecondsLeft)
   const noBaselineIntercept = !pageLoading && !activePlan && !latestConfirmedBaseline
@@ -626,8 +676,8 @@ export default function MonthlyPlanPage() {
     if (activePlan?.status === 'pending_realign') {
       return {
         tone: 'amber' as const,
-        title: '当前月计划处于待重排态',
-        detail: '请先完成本轮主动重排，再执行“结束重排”恢复确认状态。',
+        title: '当前月计划处于待编辑模式',
+        detail: '请先完成本轮编辑模式，再执行“结束编辑模式”恢复确认状态。',
       }
     }
     if (activePlan?.status === 'archived') {
@@ -648,7 +698,7 @@ export default function MonthlyPlanPage() {
       return {
         tone: 'emerald' as const,
         title: '当前月计划已确认',
-        detail: '可以继续查看差异、发起主动重排，或进入月末关账流程。',
+        detail: '可以继续查看差异、进入编辑模式，或进入月末关账流程。',
       }
     }
     if (draftStatus === 'locked') {
@@ -1226,7 +1276,7 @@ export default function MonthlyPlanPage() {
               onKeyDown={(event) => handleInputKeyDown(event, item.id, 'start')}
               disabled={readOnly}
               data-monthly-editor-cell={`${item.id}:start`}
-              className="h-9 border-slate-200 bg-white text-sm"
+              className="h-9 border-slate-200 bg-white text-right text-sm tabular-nums"
             />
           ),
           endCell: (
@@ -1238,7 +1288,7 @@ export default function MonthlyPlanPage() {
               onKeyDown={(event) => handleInputKeyDown(event, item.id, 'end')}
               disabled={readOnly}
               data-monthly-editor-cell={`${item.id}:end`}
-              className="h-9 border-slate-200 bg-white text-sm"
+              className="h-9 border-slate-200 bg-white text-right text-sm tabular-nums"
             />
           ),
           progressCell: (
@@ -1252,7 +1302,7 @@ export default function MonthlyPlanPage() {
               onKeyDown={(event) => handleInputKeyDown(event, item.id, 'progress')}
               disabled={readOnly}
               data-monthly-editor-cell={`${item.id}:progress`}
-              className="h-9 border-slate-200 bg-white text-sm"
+              className="h-9 border-slate-200 bg-white text-right text-sm tabular-nums"
             />
           ),
         }
@@ -1260,17 +1310,31 @@ export default function MonthlyPlanPage() {
     [baseRows, commitFieldEdit, handleDraftChange, handleInputKeyDown, inputDrafts, monthlyItemMap, readOnly],
   )
 
-  const handleGenerateDraft = async () => {
+  const handleGenerateDraft = async (options?: { regenerationSource?: MonthlyRegenerationSource }) => {
     if (!projectId) return
 
+    const regenerationSource = options?.regenerationSource ?? 'current'
+    const effectiveSourceMode: MonthlySourceMode =
+      regenerationSource === 'baseline' ? 'baseline' : regenerationSource === 'current' ? sourceMode : 'schedule'
     setActionLoading('generate')
     try {
-      let items = [] as ReturnType<typeof mapTasksToMonthlyItems>
+      let items = [] as MonthlyPlanPayloadItem[]
       let baselineVersionId: string | null = null
       let sourceVersionId: string | null = null
       let sourceVersionLabel: string | null = null
 
-      if (sourceMode === 'baseline') {
+      if (regenerationSource === 'previous') {
+        if (!previousConfirmedMonthlyVersion) {
+          throw new Error('当前没有可用的上月已确认计划，无法以上月计划延续生成。')
+        }
+        const previousDetail = await apiGet<MonthlyPlanDetail>(
+          `/api/monthly-plans/${previousConfirmedMonthlyVersion.id}?project_id=${encodeURIComponent(projectId)}`,
+        )
+        items = clonePreviousMonthlyPlanItems(previousDetail)
+        baselineVersionId = previousDetail.baseline_version_id ?? null
+        sourceVersionId = previousDetail.id
+        sourceVersionLabel = `上月计划 v${previousDetail.version}`
+      } else if (effectiveSourceMode === 'baseline') {
         if (!latestConfirmedBaseline) {
           throw new Error('当前项目还没有可用的确认基线，请先建立项目基线。')
         }
@@ -1288,6 +1352,7 @@ export default function MonthlyPlanPage() {
         items = mapTasksToMonthlyItems(tasks)
         sourceVersionLabel = '当前任务列表'
       }
+      setSourceMode(effectiveSourceMode)
 
       const created = await apiPost<MonthlyPlanDetail>('/api/monthly-plans', {
         project_id: projectId,
@@ -1402,7 +1467,7 @@ export default function MonthlyPlanPage() {
       })
       setSelectedItemIds([])
       toast({
-        title: action === 'move_in' ? '已批量移入' : '已批量移出',
+        title: action === 'move_in' ? '已纳入本月计划' : '已移出本月计划',
         description: `已处理 ${normalizedSelectedItemIds.length} 个选中条目。`,
       })
       await loadMonthlyContext({ preferredMonth: activePlan.month, preferredId: activePlan.id, preserveNotice: true })
@@ -1599,13 +1664,13 @@ export default function MonthlyPlanPage() {
       })
       setStatusNotice(buildMonthlyStatusNotice(updated.status, updated.month))
       toast({
-        title: '已进入待重排态',
-        description: `${formatMonthLabel(updated.month)} 当前等待重排完成。`,
+        title: '已进入待编辑模式',
+        description: `${formatMonthLabel(updated.month)} 当前等待编辑模式完成。`,
       })
       await loadMonthlyContext({ preferredMonth: updated.month, preferredId: updated.id, preserveNotice: true })
     } catch (error) {
       toast({
-        title: '开始重排失败',
+        title: '进入编辑模式失败',
         description: getApiErrorMessage(error, '请稍后再试。'),
         variant: 'destructive',
       })
@@ -1624,13 +1689,13 @@ export default function MonthlyPlanPage() {
       })
       setStatusNotice(buildMonthlyStatusNotice(updated.status, updated.month))
       toast({
-        title: '重排已结束',
+        title: '编辑模式已结束',
         description: `${formatMonthLabel(updated.month)} 已恢复为确认状态。`,
       })
       await loadMonthlyContext({ preferredMonth: updated.month, preferredId: updated.id, preserveNotice: true })
     } catch (error) {
       toast({
-        title: '结束重排失败',
+        title: '结束编辑模式失败',
         description: getApiErrorMessage(error, '请稍后再试。'),
         variant: 'destructive',
       })
@@ -1764,25 +1829,32 @@ export default function MonthlyPlanPage() {
                           ? 'bg-slate-100 text-slate-700'
                           : version?.status
                             ? 'bg-amber-100 text-amber-700'
-                            : 'bg-slate-100 text-slate-500'
+                            : 'bg-slate-100 text-slate-700'
                   return (
-                    <button
+                    <Button variant="ghost"
                       key={month}
                       type="button"
                       onClick={() => void handleMonthSwitch(month)}
-                      className={`h-14 w-full rounded-2xl border px-4 py-3 text-left transition ${
-                        active ? 'border-cyan-300 bg-cyan-50 shadow-sm' : 'border-slate-200 bg-white hover:border-slate-300'
-                      } ${isFutureMonth && !active ? 'bg-slate-50 text-slate-400' : ''}`}
+                      className={`h-auto min-h-14 w-full whitespace-normal rounded-2xl border px-4 py-3 text-left transition ${
+                        active
+                          ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-500 shadow-sm'
+                          : 'border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-white'
+                      } ${isFutureMonth && !active ? 'border-slate-300 bg-white text-slate-700' : ''}`}
                     >
-                      <div className="flex items-center justify-between gap-2">
-                        <div className={`truncate text-xs font-semibold ${isFutureMonth && !active ? 'text-slate-400' : 'text-slate-600'}`}>
+                      <div className="flex w-full min-w-0 items-center justify-between gap-2">
+                        <div className={`truncate text-xs font-semibold ${isFutureMonth && !active ? 'text-slate-700' : 'text-slate-600'}`}>
                           {formatMonthLabel(month)}
                         </div>
-                        <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${statusTone}`}>
-                          {version ? getMonthlyPlanStatusLabel(version.status) : '未生成'}
-                        </span>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <span className={`inline-flex shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${statusTone}`}>
+                              {version ? getMonthlyPlanStatusLabel(version.status) : '未生成'}
+                            </span>
+                          </TooltipTrigger>
+                          <TooltipContent>{getMonthlyPlanStatusTooltip(version?.status)}</TooltipContent>
+                        </Tooltip>
                       </div>
-                      <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+                      <div className="mt-2 flex w-full flex-wrap items-center gap-2 text-xs text-slate-700">
                         <span>{version ? `v${version.version}` : '等待草稿'}</span>
                         {version ? (
                           <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700">
@@ -1792,7 +1864,7 @@ export default function MonthlyPlanPage() {
                         {monthState === 0 ? <Badge variant="outline">当前</Badge> : null}
                         {isFutureMonth ? <Badge variant="outline">未来</Badge> : null}
                       </div>
-                    </button>
+                    </Button>
                   )
                 })}
               </div>
@@ -1831,7 +1903,7 @@ export default function MonthlyPlanPage() {
             {activePlan?.status !== 'draft' ? (
               <div className="flex items-end justify-end rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
                 <Button type="button" variant="outline" size="sm" onClick={() => setSkeletonDiffOpen(true)}>
-                  查看与主骨架差异
+                  查看计划变更对比
                 </Button>
               </div>
             ) : null}
@@ -1857,9 +1929,9 @@ export default function MonthlyPlanPage() {
                       当前月计划存在 {changeSummary.totalChangeCount} 项可见变化
                     </div>
                   </div>
-                  <Button type="button" variant="outline" size="sm" onClick={() => setSkeletonDiffOpen(true)}>
-                    查看与主骨架差异
-                  </Button>
+                  <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700">
+                    从工具栏打开计划变更对比
+                  </Badge>
                 </div>
 
                 <div className="grid gap-3 md:grid-cols-5">
@@ -1921,7 +1993,7 @@ export default function MonthlyPlanPage() {
                 onClick={() => void handleQueueRealignment()}
                 loading={actionLoading === 'queue_realign'}
               >
-                声明开始重排
+                进入编辑模式
               </Button>
             ) : null}
             {canResolveRealignment ? (
@@ -1933,7 +2005,7 @@ export default function MonthlyPlanPage() {
                 onClick={() => void handleResolveRealignment()}
                 loading={actionLoading === 'resolve_realign'}
               >
-                结束重排
+                结束编辑模式
               </Button>
             ) : null}
             {activePlan?.status === 'draft' ? (
@@ -1943,7 +2015,11 @@ export default function MonthlyPlanPage() {
                 size="sm"
                 className="gap-2"
                 data-testid="monthly-plan-regenerate-draft"
-                onClick={() => setRegenConfirmOpen(true)}
+                onClick={() => {
+                  setRegenSource('current')
+                  setRegenStep(1)
+                  setRegenConfirmOpen(true)
+                }}
                 disabled={readOnly || actionLoading === 'generate'}
               >
                 <RefreshCw className="h-4 w-4" />
@@ -1962,27 +2038,31 @@ export default function MonthlyPlanPage() {
             const active = sourceMode === option.key
             const disabled = option.key === 'baseline' && !latestConfirmedBaseline
             return (
-              <button
+              <Button
                 key={option.key}
                 type="button"
+                variant="ghost"
                 onClick={() => setSourceMode(option.key)}
                 disabled={disabled || readOnly}
-                className={`rounded-2xl border px-4 py-4 text-left transition ${
-                  active ? 'ring-2 ring-blue-500 bg-white shadow-sm' : 'border-slate-200 bg-white hover:border-slate-300'
+                className={`h-auto w-full rounded-2xl border px-4 py-4 text-left transition-colors duration-200 [&>span]:block [&>span]:w-full ${
+                  active
+                    ? 'border-blue-500 bg-blue-50 font-semibold text-slate-900 shadow-sm'
+                    : 'border-slate-200 bg-slate-50 text-slate-500 hover:border-slate-300 hover:bg-white'
                 } ${disabled ? 'cursor-not-allowed opacity-60' : ''}`}
               >
                 <div className="flex items-center justify-between gap-3">
-                  <div className="font-medium text-slate-900">{option.title}</div>
+                  <div className="text-sm">{option.title}</div>
                   {active ? <Badge variant="secondary">当前选择</Badge> : null}
                 </div>
-                <div className="mt-2 text-xs text-slate-500">
+                <div className="mt-2 text-xs leading-5 text-slate-500">{option.description}</div>
+                <div className="mt-1 text-xs text-slate-500">
                   {option.key === 'baseline'
                     ? latestConfirmedBaseline
                       ? `当前可用基线：v${latestConfirmedBaseline.version}`
                       : '当前还没有可用基线'
                     : `当前任务数：${tasks.length}`}
                 </div>
-              </button>
+              </Button>
             )
           })}
         </div>
@@ -2017,7 +2097,7 @@ export default function MonthlyPlanPage() {
             <div className="space-y-1">
               <div className="text-sm font-medium text-emerald-900">
                 {activePlan.status === 'pending_realign'
-                  ? '待重排查看态'
+                  ? '待编辑模式查看态'
                   : activePlan.status === 'archived'
                     ? '归档查看态'
                     : activePlan.status === 'closed'
@@ -2034,7 +2114,7 @@ export default function MonthlyPlanPage() {
                   onClick={() => void handleResolveRealignment()}
                   loading={actionLoading === 'resolve_realign'}
                 >
-                  结束重排
+                  结束编辑模式
                 </Button>
               ) : null}
             </div>
@@ -2053,11 +2133,36 @@ export default function MonthlyPlanPage() {
                 <div className="text-sm font-medium text-slate-900">编制范围与确认条</div>
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                <Button type="button" variant="outline" size="sm" onClick={handleUndo} disabled={!canUndo || readOnly}>
-                  撤销
-                </Button>
-                <Button type="button" variant="outline" size="sm" onClick={handleRedo} disabled={!canRedo || readOnly}>
-                  重做
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="inline-flex">
+                      <Button type="button" variant="outline" size="sm" onClick={handleUndo} disabled={!canUndo || readOnly}>
+                        撤销
+                      </Button>
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent>Ctrl+Z</TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="inline-flex">
+                      <Button type="button" variant="outline" size="sm" onClick={handleRedo} disabled={!canRedo || readOnly}>
+                        重做
+                      </Button>
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent>Ctrl+Y</TooltipContent>
+                </Tooltip>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="gap-2 rounded-lg border-amber-200 bg-amber-50 text-amber-900 hover:bg-amber-100"
+                  data-testid="monthly-plan-change-compare-toolbar-inline"
+                  onClick={() => setSkeletonDiffOpen(true)}
+                >
+                  <FileDiff className="h-4 w-4" />
+                  计划变更对比
                 </Button>
               </div>
             </div>
@@ -2080,26 +2185,40 @@ export default function MonthlyPlanPage() {
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={() => void handleBatchScope('move_in')}
-                disabled={readOnly || normalizedSelectedItemIds.length === 0}
-                loading={actionLoading === 'batch_scope'}
-              >
-                批量移入
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={() => void handleBatchScope('move_out')}
-                disabled={readOnly || normalizedSelectedItemIds.length === 0}
-                loading={actionLoading === 'batch_scope'}
-              >
-                批量移出
-              </Button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="inline-flex">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void handleBatchScope('move_in')}
+                      disabled={readOnly || normalizedSelectedItemIds.length === 0}
+                      loading={actionLoading === 'batch_scope'}
+                    >
+                      纳入本月计划
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>将选中任务添加到当前月度计划</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="inline-flex">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setBatchMoveOutConfirmOpen(true)}
+                      disabled={readOnly || normalizedSelectedItemIds.length === 0}
+                      loading={actionLoading === 'batch_scope'}
+                    >
+                      移出本月计划
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>将选中任务移出当前月度计划</TooltipContent>
+              </Tooltip>
               <Button
                 type="button"
                 size="sm"
@@ -2247,28 +2366,28 @@ export default function MonthlyPlanPage() {
                 <Button
                   type="button"
                   variant="outline"
-                  className="justify-between"
+                  className="min-w-0 justify-between gap-2"
                   data-testid="monthly-plan-open-change-log"
                   onClick={() => navigateWithGuard(`/projects/${projectId}/reports?view=change_log`)}
                 >
-                  <span className="flex items-center gap-2">
+                  <span className="flex min-w-0 items-center gap-2">
                     <FileDiff className="h-4 w-4" />
-                    查看变更记录分析
+                    <span className="min-w-0 truncate">查看变更记录分析</span>
                   </span>
-                  <Badge variant="outline">Reports</Badge>
+                  <Badge variant="outline" className="shrink-0">Reports</Badge>
                 </Button>
                 <Button
                   type="button"
                   variant="outline"
-                  className="justify-between"
+                  className="min-w-0 justify-between gap-2"
                   data-testid="monthly-plan-open-progress-report"
                   onClick={() => navigateWithGuard(`/projects/${projectId}/reports?view=progress`)}
                 >
-                  <span className="flex items-center gap-2">
+                  <span className="flex min-w-0 items-center gap-2">
                     <Layers3 className="h-4 w-4" />
-                    查看偏差分析
+                    <span className="min-w-0 truncate">查看偏差分析</span>
                   </span>
-                  <Badge variant="outline">Progress</Badge>
+                  <Badge variant="outline" className="shrink-0">Progress</Badge>
                 </Button>
               </div>
             </CardContent>
@@ -2317,12 +2436,46 @@ export default function MonthlyPlanPage() {
         </div>
       )
 
+  const regenerationOptions: Array<{
+    key: MonthlyRegenerationSource
+    label: string
+    description: string
+    detail: string
+    disabled?: boolean
+  }> = [
+    {
+      key: 'baseline',
+      label: '基线',
+      description: '以最新确认基线为基础重新生成',
+      detail: latestConfirmedBaseline ? `可用基线 v${latestConfirmedBaseline.version}` : '当前没有可用确认基线',
+      disabled: !latestConfirmedBaseline,
+    },
+    {
+      key: 'previous',
+      label: '上月',
+      description: '以上月已确认计划为基础延续',
+      detail: previousConfirmedMonthlyVersion
+        ? `${formatMonthLabel(previousConfirmedMonthlyVersion.month)} v${previousConfirmedMonthlyVersion.version}`
+        : '当前没有可延续的上月确认计划',
+      disabled: !previousConfirmedMonthlyVersion,
+    },
+    {
+      key: 'current',
+      label: '当前',
+      description: '在当前草稿基础上刷新数据',
+      detail: sourceMode === 'baseline' ? '沿用当前基线来源' : '沿用当前排期来源',
+    },
+  ]
+  const selectedRegenerationOption = regenerationOptions.find((option) => option.key === regenSource) ?? regenerationOptions[2]
+  const canRunRegeneration = !selectedRegenerationOption.disabled
+
   return (
     <PlanningPageShell
       projectName={currentProject.name ?? '未命名项目'}
       title="计划编制 / 月度计划"
       description=""
       tabs={tabs}
+      className="pb-20"
       actions={
         <>
           {activePlan?.status === 'draft' ? (
@@ -2360,7 +2513,7 @@ export default function MonthlyPlanPage() {
                 type="button"
                 variant="outline"
                 size="sm"
-                className="gap-2 border-slate-600 bg-transparent text-white hover:bg-white/10"
+                className="gap-2 border-slate-700 bg-slate-800 text-white hover:bg-slate-700"
               >
                 <MoreHorizontal className="h-4 w-4" />
                 管理动作
@@ -2369,12 +2522,12 @@ export default function MonthlyPlanPage() {
             <DropdownMenuContent align="end" className="w-52">
               {canQueueRealignment ? (
                 <DropdownMenuItem onClick={() => void handleQueueRealignment()}>
-                  声明开始重排
+                  进入编辑模式
                 </DropdownMenuItem>
               ) : null}
               {canResolveRealignment ? (
                 <DropdownMenuItem onClick={() => void handleResolveRealignment()}>
-                  结束重排
+                  结束编辑模式
                 </DropdownMenuItem>
               ) : null}
               <DropdownMenuItem onClick={() => navigateWithGuard(`/projects/${projectId}/tasks/closeout`)}>
@@ -2396,8 +2549,17 @@ export default function MonthlyPlanPage() {
           quickAvailable={quickAvailable}
           canSaveDraft={!readOnly}
           canStandardConfirm={canOpenStandardConfirm}
+          selectedCount={normalizedSelectedItemIds.length}
+          isDirty={Boolean(isDirty)}
+          lockRemainingLabel={lockRemainingLabel}
+          canUndo={canUndo}
+          canRedo={canRedo}
+          blockingIssueCount={confirmSummary.blockingIssueCount}
           onSaveDraft={() => void handleSaveDraft()}
           readOnly={readOnly}
+          onUndo={handleUndo}
+          onRedo={handleRedo}
+          onOpenChangeCompare={() => setSkeletonDiffOpen(true)}
           onQuickConfirmEntry={() => {
             setConfirmMode('quick')
             setConfirmState('ready')
@@ -2421,55 +2583,128 @@ export default function MonthlyPlanPage() {
         onConfirm={() => void handleConfirmPlan()}
         onRetry={() => void handleConfirmPlan()}
       />
-      <AlertDialog open={regenConfirmOpen} onOpenChange={setRegenConfirmOpen}>
-        <AlertDialogContent data-testid="monthly-plan-regenerate-dialog">
+      <AlertDialog
+        open={regenConfirmOpen}
+        onOpenChange={(open) => {
+          setRegenConfirmOpen(open)
+          if (open) setRegenStep(1)
+        }}
+      >
+        <AlertDialogContent data-testid="monthly-plan-regenerate-dialog" className="max-w-[720px] rounded-2xl shadow-[var(--el-4)]">
           <AlertDialogHeader>
             <AlertDialogTitle>重新生成本月草稿？</AlertDialogTitle>
-            <AlertDialogDescription>
+            <AlertDialogDescription className="not-sr-only leading-6 text-slate-600">
               系统会按当前选择的来源重新生成 {formatMonthLabel(selectedMonth)} 草稿。
               {editedEntryCount > 0
                 ? ` 当前有 ${editedEntryCount} 项已调整条目会被覆盖。`
                 : ' 当前还没有本地调整，适合直接重建。'}
             </AlertDialogDescription>
           </AlertDialogHeader>
+          <div className="grid gap-2 md:grid-cols-3" data-testid="monthly-plan-regenerate-steps">
+            {[
+              { step: 1 as const, label: '选择范围' },
+              { step: 2 as const, label: '确认影响' },
+              { step: 3 as const, label: '执行' },
+            ].map((item) => (
+              <div
+                key={item.step}
+                className={`rounded-xl border px-3 py-2 text-sm ${
+                  regenStep === item.step
+                    ? 'border-blue-500 bg-blue-50 font-semibold text-blue-900'
+                    : regenStep > item.step
+                      ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                      : 'border-slate-200 bg-slate-50 text-slate-500'
+                }`}
+              >
+                Step {item.step} · {item.label}
+              </div>
+            ))}
+          </div>
           <div className="space-y-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">
-            <div className="font-medium">请选择重新生成来源</div>
-            <div className="grid gap-2 md:grid-cols-3">
-              {[
-                { key: 'current', label: '按当前方式', value: sourceMode },
-                { key: 'baseline', label: '改用项目基线', value: 'baseline' as MonthlySourceMode },
-                { key: 'schedule', label: '改用当前排期', value: 'schedule' as MonthlySourceMode },
-              ].map((option) => {
-                const active = option.value === sourceMode && (option.key !== 'current' || sourceMode === option.value)
-                return (
-                  <button
-                    key={option.key}
-                    type="button"
-                    className={`rounded-xl border px-3 py-2 text-left transition ${
-                      active ? 'border-amber-400 bg-white' : 'border-amber-200 bg-transparent'
-                    }`}
-                    onClick={() => setSourceMode(option.value)}
-                  >
-                    <div className="text-sm font-medium">{option.label}</div>
-                    <div className="text-xs opacity-80">
-                      {option.value === 'baseline' ? '基于项目基线重新编制' : '基于当前排期重新编制'}
-                    </div>
-                  </button>
-                )
-              })}
-            </div>
-            <div>当前来源：{sourceMode === 'baseline' ? '项目基线' : '当前排期'}。重生成后会重新拉起新的月计划草稿版本。</div>
+            {regenStep === 1 ? (
+              <>
+                <div className="font-medium">Step 1 选择重新生成范围</div>
+                <div className="grid gap-2 md:grid-cols-3">
+                  {regenerationOptions.map((option) => {
+                    const active = regenSource === option.key
+                    return (
+                      <Button
+                        key={option.key}
+                        type="button"
+                        variant="ghost"
+                        className={`h-auto w-full rounded-xl border px-3 py-2 text-left transition-colors duration-200 [&>span]:block [&>span]:w-full ${
+                          active ? 'border-blue-500 bg-blue-50 font-semibold text-blue-900' : 'border-amber-200 bg-white text-amber-900'
+                        } ${option.disabled ? 'cursor-not-allowed opacity-60' : ''}`}
+                        onClick={() => {
+                          if (!option.disabled) setRegenSource(option.key)
+                        }}
+                        disabled={option.disabled}
+                      >
+                        <div className="text-sm font-medium">{option.label}</div>
+                        <div className="mt-1 text-xs text-slate-400">{option.description}</div>
+                        <div className="mt-1 text-xs opacity-80">{option.detail}</div>
+                      </Button>
+                    )
+                  })}
+                </div>
+              </>
+            ) : regenStep === 2 ? (
+              <>
+                <div className="font-medium">Step 2 确认影响</div>
+                <div className="grid gap-2 md:grid-cols-3">
+                  <div className="rounded-xl border border-amber-200 bg-white px-3 py-2">
+                    <div className="text-xs text-slate-500">覆盖条目</div>
+                    <div className="mt-1 font-semibold tabular-nums">{editedEntryCount}</div>
+                  </div>
+                  <div className="rounded-xl border border-amber-200 bg-white px-3 py-2">
+                    <div className="text-xs text-slate-500">当前范围</div>
+                    <div className="mt-1 font-semibold tabular-nums">{activePlan?.items.length ?? 0}</div>
+                  </div>
+                  <div className="rounded-xl border border-amber-200 bg-white px-3 py-2">
+                    <div className="text-xs text-slate-500">目标月份</div>
+                    <div className="mt-1 font-semibold">{formatMonthLabel(selectedMonth)}</div>
+                  </div>
+                </div>
+                <div>
+                  当前来源：{sourceMode === 'baseline' ? '项目基线' : '当前排期'}。本次将使用“{selectedRegenerationOption.label}”来源，
+                  重生成后会重新拉起新的月计划草稿版本。
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="font-medium">Step 3 执行</div>
+                <div>
+                  已选择“{selectedRegenerationOption.label}”：{selectedRegenerationOption.description}。点击确认后开始生成，生成完成后自动回到新草稿版本。
+                </div>
+              </>
+            )}
           </div>
           <AlertDialogFooter>
             <AlertDialogCancel>先不重生成</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                setRegenConfirmOpen(false)
-                void handleGenerateDraft()
-              }}
-            >
-              确认重新生成
-            </AlertDialogAction>
+            {regenStep > 1 ? (
+              <Button type="button" variant="outline" onClick={() => setRegenStep((step): 1 | 2 | 3 => (step === 3 ? 2 : 1))}>
+                上一步
+              </Button>
+            ) : null}
+            {regenStep < 3 ? (
+              <Button
+                type="button"
+                onClick={() => setRegenStep((step): 1 | 2 | 3 => (step === 1 ? 2 : 3))}
+                disabled={!canRunRegeneration}
+              >
+                {regenStep === 1 ? '下一步：确认影响' : '下一步：执行'}
+              </Button>
+            ) : (
+              <AlertDialogAction
+                disabled={!canRunRegeneration}
+                onClick={() => {
+                  setRegenConfirmOpen(false)
+                  void handleGenerateDraft({ regenerationSource: regenSource })
+                }}
+              >
+                确认重新生成
+              </AlertDialogAction>
+            )}
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -2486,6 +2721,20 @@ export default function MonthlyPlanPage() {
         snapshot={resumeSnapshot}
         onContinue={handleContinueDraftWorkspace}
         onDiscard={handleDiscardDraftWorkspace}
+      />
+      <ConfirmActionDialog
+        open={batchMoveOutConfirmOpen}
+        onOpenChange={setBatchMoveOutConfirmOpen}
+        title={`确定将 ${normalizedSelectedItemIds.length} 项任务移出本月计划？`}
+        description="移出后任务将回到基线待分配状态。"
+        confirmLabel="移出本月计划"
+        cancelLabel="先保留"
+        confirmTone="destructive"
+        testId="monthly-plan-batch-move-out-dialog"
+        onConfirm={() => {
+          setBatchMoveOutConfirmOpen(false)
+          void handleBatchScope('move_out')
+        }}
       />
       <ConfirmActionDialog
         {...unsavedChangesGuard.confirmDialog}

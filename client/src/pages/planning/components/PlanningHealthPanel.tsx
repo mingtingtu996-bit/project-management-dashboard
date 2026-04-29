@@ -1,6 +1,7 @@
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Separator } from '@/components/ui/separator'
 
 interface PlanningHealthPanelProps {
   status: 'loading' | 'ready' | 'error'
@@ -33,7 +34,7 @@ export function PlanningHealthPanel({
 
   return (
     <Card data-testid="planning-health-panel" className="border-slate-200 shadow-sm">
-      <CardHeader className="space-y-3 border-b border-slate-100 bg-slate-50/80">
+      <CardHeader className="space-y-3 bg-slate-50/80">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <CardTitle className="text-base">健康评分</CardTitle>
@@ -42,6 +43,7 @@ export function PlanningHealthPanel({
         </div>
         <div className="text-3xl font-semibold text-slate-900">{status === 'loading' || status === 'error' ? '--' : score}</div>
       </CardHeader>
+      <Separator />
       <CardContent className="space-y-3 p-4">
         {status === 'loading' ? (
           <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-4" />
@@ -53,7 +55,7 @@ export function PlanningHealthPanel({
           <div className="grid gap-2 sm:grid-cols-2">
             {breakdown.map((item) => (
               <div key={item.label} className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
-                <div className="text-xs uppercase tracking-[0.16em] text-slate-500">{item.label}</div>
+                <div className="text-xs uppercase tracking-wider text-slate-500">{item.label}</div>
                 <div className="mt-1 text-sm font-medium text-slate-900">{item.value}</div>
               </div>
             ))}

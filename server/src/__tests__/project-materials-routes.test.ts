@@ -79,6 +79,13 @@ const state = vi.hoisted(() => {
           arrivalRate: 50,
         },
       ],
+      byCategory: [
+        { category: '钢材', count: 1, percentage: 50 },
+        { category: '混凝土', count: 0, percentage: 0 },
+        { category: '管材', count: 0, percentage: 0 },
+        { category: '电气', count: 1, percentage: 50 },
+        { category: '其他', count: 0, percentage: 0 },
+      ],
       monthlyTrend: [
         { month: '2026-04', totalExpectedCount: 2, onTimeCount: 1, arrivalRate: 50 },
       ],

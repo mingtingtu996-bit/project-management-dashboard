@@ -155,18 +155,18 @@ export function TemplateQualityPanel({
                 已完成项目反馈摘要
               </div>
               <div className="mt-3 grid gap-3 sm:grid-cols-3">
-                <div className="rounded-xl border border-white bg-white p-3">
+                <Card className="rounded-xl border border-white bg-white p-3">
                   <div className="text-xs text-slate-500">已完成项目</div>
                   <div className="mt-1 text-lg font-semibold text-slate-900">{formatNumber(quality.completed_project_count)}</div>
-                </div>
-                <div className="rounded-xl border border-white bg-white p-3">
+                </Card>
+                <Card className="rounded-xl border border-white bg-white p-3">
                   <div className="text-xs text-slate-500">样本任务</div>
                   <div className="mt-1 text-lg font-semibold text-slate-900">{formatNumber(quality.sample_task_count)}</div>
-                </div>
-                <div className="rounded-xl border border-white bg-white p-3">
+                </Card>
+                <Card className="rounded-xl border border-white bg-white p-3">
                   <div className="text-xs text-slate-500">模板节点</div>
                   <div className="mt-1 text-lg font-semibold text-slate-900">{formatNumber(quality.node_count)}</div>
-                </div>
+                </Card>
               </div>
             </div>
 
@@ -179,22 +179,22 @@ export function TemplateQualityPanel({
                       <span data-testid="wbs-template-selected-suggestion-count">
                         已选 {selectedSuggestionCount} / {suggestionCount}
                       </span>
-                      <button
+                      <Button variant="ghost"
                         type="button"
                         data-testid="wbs-template-select-all-suggestions"
                         className="font-medium text-slate-700 underline-offset-2 hover:text-slate-900 hover:underline"
                         onClick={() => onSelectAllSuggestions?.()}
                       >
                         全选
-                      </button>
-                      <button
+                      </Button>
+                      <Button variant="ghost"
                         type="button"
                         data-testid="wbs-template-clear-suggestions"
                         className="font-medium text-slate-700 underline-offset-2 hover:text-slate-900 hover:underline"
                         onClick={() => onClearSuggestionSelection?.()}
                       >
                         清空
-                      </button>
+                      </Button>
                     </div>
                   ) : null}
                 </div>

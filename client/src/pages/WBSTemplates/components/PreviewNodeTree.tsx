@@ -1,5 +1,7 @@
 import type { PreviewNode, WbsNode } from '../types'
 import { IconChevronDown, IconChevronRight } from './WbsIcons'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { Button } from '@/components/ui/button'
 
 interface PreviewNodeTreeProps {
   nodes: WbsNode[]
@@ -47,12 +49,12 @@ export function PreviewNodeTree({
         return (
           <div key={id}>
             <div
-              className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg cursor-pointer transition-colors text-sm group ${isSelected ? 'bg-blue-50 text-blue-700' : 'hover:bg-gray-50 text-gray-700'}`}
+              className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg cursor-pointer transition-colors text-sm group ${isSelected ? 'bg-blue-50 text-blue-700' : 'hover:bg-slate-50 text-slate-700'}`}
               style={{ paddingLeft: `${8 + level * 20}px` }}
               onClick={() => onSelect(previewNode)}
             >
-              <button
-                className={`flex-shrink-0 w-4 h-4 flex items-center justify-center transition-colors ${hasChildren ? 'text-gray-400 hover:text-gray-600' : 'invisible'}`}
+              <Button variant="ghost"
+                className={`flex-shrink-0 w-4 h-4 flex items-center justify-center transition-colors ${hasChildren ? 'text-slate-400 hover:text-slate-600' : 'invisible'}`}
                 onClick={(event) => {
                   event.stopPropagation()
                   if (hasChildren) {
@@ -60,14 +62,19 @@ export function PreviewNodeTree({
                   }
                 }}
               >
-                {expanded ? <IconChevronDown className="w-3 h-3" /> : <IconChevronRight className="w-3 h-3" />}
-              </button>
+                {expanded ? <IconChevronDown className="w-3.5 h-3.5" /> : <IconChevronRight className="w-3.5 h-3.5" />}
+              </Button>
               {node.is_milestone && (
-                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 flex-shrink-0" title="里程碑" />
+                <Tooltip>
+  <TooltipTrigger asChild>
+    <span className="w-1.5 h-1.5 rounded-full bg-amber-500 flex-shrink-0"  />
+  </TooltipTrigger>
+  <TooltipContent>里程碑</TooltipContent>
+</Tooltip>
               )}
               <span className={`flex-1 truncate ${level === 0 ? 'font-medium' : ''}`}>{nodeName}</span>
               {node.reference_days && (
-                <span className={`text-xs flex-shrink-0 ml-1 ${isSelected ? 'text-blue-500' : 'text-gray-400'}`}>
+                <span className={`text-xs flex-shrink-0 ml-1 ${isSelected ? 'text-blue-500' : 'text-slate-400'}`}>
                   {node.reference_days}天
                 </span>
               )}

@@ -2,6 +2,7 @@ import { Link2, AlertTriangle, ChevronRight } from 'lucide-react'
 import { StatusBadge } from '@/components/ui/status-badge'
 import type { CertificateSharedRibbonItem } from '../types'
 import { getCertificateStatusThemeKey, mapCertificateStatusLabel } from '../constants'
+import { Button } from '@/components/ui/button'
 
 interface CertificateSharedRibbonProps {
   items: CertificateSharedRibbonItem[]
@@ -45,7 +46,7 @@ export function CertificateSharedRibbon({
             && !item.certificate_types.includes(hoveredCertificateId)
           )
           return (
-            <button
+            <Button variant="ghost"
               key={item.work_item_id}
               type="button"
               onClick={() => onSelectWorkItem(item.work_item_id)}
@@ -65,13 +66,13 @@ export function CertificateSharedRibbon({
                   <div className="flex items-center gap-2">
                     <span className="truncate text-sm font-semibold text-slate-900">{item.item_name}</span>
                     {item.is_shared && (
-                      <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[11px] font-medium text-blue-700">
+                      <span className="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700">
                         共享
                       </span>
                     )}
                     {item.block_reason && (
-                      <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-700">
-                        <AlertTriangle className="h-3 w-3" />
+                      <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">
+                        <AlertTriangle className="h-3.5 w-3.5" />
                         阻塞
                       </span>
                     )}
@@ -93,12 +94,12 @@ export function CertificateSharedRibbon({
               </div>
               <div className="mt-3 flex flex-wrap gap-2">
                 {item.certificate_names.map((name) => (
-                  <span key={name} className="rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 border border-slate-200">
+                  <span key={name} className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-slate-600 border border-slate-200">
                     {name}
                   </span>
                 ))}
               </div>
-            </button>
+            </Button>
           )
         })}
       </div>

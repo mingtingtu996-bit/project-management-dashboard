@@ -2,6 +2,7 @@ import { ChevronRight, Home } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
 import { cn } from '@/lib/utils'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
 const MAX_LABEL_LEN = 12
 
@@ -49,27 +50,36 @@ export function Breadcrumb({ items, className, showHome = false }: BreadcrumbPro
         return (
           <span key={`${item.label}-${index}`} className="flex min-w-0 items-center gap-1">
             {isLast || !item.href ? (
-              <span
+              <Tooltip>
+  <TooltipTrigger asChild>
+    <span
                 className={cn(
                   'max-w-[120px] truncate md:max-w-[180px]',
                   isLast ? 'font-medium text-slate-900' : 'text-slate-500',
                   needsTruncate && 'cursor-default',
                 )}
-                title={needsTruncate ? item.label : undefined}
+                
               >
                 {displayLabel}
               </span>
+  </TooltipTrigger>
+  <TooltipContent>{needsTruncate ? item.label : undefined}</TooltipContent>
+</Tooltip>
             ) : (
-              <Link
-                to={item.href}
-                title={needsTruncate ? item.label : undefined}
-                className={cn(
-                  'max-w-[120px] truncate text-blue-600 underline-offset-2 transition-colors hover:text-blue-700 hover:underline md:max-w-[180px]',
-                  needsTruncate && 'cursor-pointer',
-                )}
-              >
-                {displayLabel}
-              </Link>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Link
+                    to={item.href}
+                    className={cn(
+                      'max-w-[120px] truncate text-blue-600 underline-offset-2 transition-colors hover:text-blue-700 hover:underline md:max-w-[180px]',
+                      needsTruncate && 'cursor-pointer',
+                    )}
+                  >
+                    {displayLabel}
+                  </Link>
+                </TooltipTrigger>
+                <TooltipContent>{needsTruncate ? item.label : undefined}</TooltipContent>
+              </Tooltip>
             )}
 
             {!isLast && <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 text-slate-300" />}

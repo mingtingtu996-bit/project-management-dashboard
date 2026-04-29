@@ -21,7 +21,72 @@ import {
   type CompanySummaryResponse,
 } from '../services/companySummaryService.js'
 
-const router = Router()
+const router = Router({ mergeParams: true })
+
+type TodayLiveItem = {
+  type: 'warning' | 'due_task' | 'change' | 'new_risk'
+  priority: number
+  title: string
+  detail: string
+  created_at: string
+}
+
+type AnyRow = Record<string, any>
+
+function getTodayRange() {
+  const now = new Date()
+  const start = new Date(now)
+  start.setHours(0, 0, 0, 0)
+  const end = new Date(start)
+  end.setDate(end.getDate() + 1)
+  return {
+    dateKey: start.toISOString().slice(0, 10),
+    start,
+    end,
+  }
+}
+
+function isWithinRange(value: unknown, start: Date, end: Date) {
+  if (!value) return false
+  const date = new Date(String(value))
+  return Number.isFinite(date.getTime()) && date >= start && date < end
+}
+
+function isSameDate(value: unknown, dateKey: string) {
+  if (!value) return false
+  return String(value).slice(0, 10) === dateKey
+}
+
+function firstText(row: AnyRow, fields: string[], fallback = '') {
+  for (const field of fields) {
+    const value = row[field]
+    if (typeof value === 'string' && value.trim()) return value.trim()
+    if (value !== null && value !== undefined && typeof value !== 'object') return String(value)
+  }
+  return fallback
+}
+
+function isClosedStatus(value: unknown) {
+  const status = String(value ?? '').trim().toLowerCase()
+  return ['closed', 'resolved', 'completed', 'done', '已关闭', '已解决', '已完成'].includes(status)
+}
+
+function isTruthy(value: unknown) {
+  return value === true || value === 1 || value === '1'
+}
+
+async function queryProjectRows(table: string, projectId: string) {
+  const { data, error } = await supabase
+    .from(table)
+    .select('*')
+    .eq('project_id', projectId)
+
+  if (error) {
+    throw new Error(`${table} query failed: ${error.message}`)
+  }
+
+  return Array.isArray(data) ? data as AnyRow[] : []
+}
 
 // 所有路由都需要认证
 router.use(authenticate)
@@ -107,6 +172,113 @@ router.get('/company-summary', asyncHandler(async (req, res) => {
   }
   res.json(response)
 }))
+
+// GET /api/projects/:projectId/dashboard/today-live
+// Also supports /api/dashboard/today-live?projectId= for dashboard-router compatibility.
+router.get(
+  '/today-live',
+  requireProjectMember(req => (req.params.projectId as string | undefined) ?? (req.query.projectId as string | undefined)),
+  asyncHandler(async (req, res) => {
+    const projectId = String(req.params.projectId ?? req.query.projectId ?? '').trim()
+
+    if (!projectId) {
+      const response: ApiResponse = {
+        success: false,
+        error: { code: 'MISSING_PROJECT_ID', message: '项目ID不能为空' },
+        timestamp: new Date().toISOString(),
+      }
+      return res.status(400).json(response)
+    }
+
+    const { dateKey, start, end } = getTodayRange()
+    logger.info('Fetching dashboard today live items', { projectId, dateKey })
+
+    const [tasks, risks, conditions, obstacles, changeLogs] = await Promise.all([
+      queryProjectRows('tasks', projectId),
+      queryProjectRows('risks', projectId),
+      queryProjectRows('task_conditions', projectId),
+      queryProjectRows('task_obstacles', projectId),
+      queryProjectRows('change_logs', projectId),
+    ])
+
+    const dueTasks = tasks
+      .filter((task) => isSameDate(task.planned_end_date ?? task.end_date ?? task.due_date, dateKey))
+      .filter((task) => !isClosedStatus(task.status))
+      .map<TodayLiveItem>((task) => ({
+        type: 'due_task',
+        priority: 2,
+        title: `今日到期：${firstText(task, ['title', 'name'], '未命名任务')}`,
+        detail: firstText(task, ['assignee_name', 'responsible_unit', 'status'], '请确认任务进展并完成必要更新'),
+        created_at: String(task.planned_end_date ?? task.end_date ?? task.updated_at ?? new Date().toISOString()),
+      }))
+
+    const newRisks = risks
+      .filter((risk) => isWithinRange(risk.created_at, start, end) || isWithinRange(risk.updated_at, start, end))
+      .filter((risk) => !isClosedStatus(risk.status))
+      .map<TodayLiveItem>((risk) => ({
+        type: 'new_risk',
+        priority: 4,
+        title: `风险新增/升级：${firstText(risk, ['title', 'name'], '未命名风险')}`,
+        detail: firstText(risk, ['description', 'level', 'severity', 'status'], '请评估风险等级与处置责任'),
+        created_at: String(risk.updated_at ?? risk.created_at ?? new Date().toISOString()),
+      }))
+
+    const conditionWarnings = conditions
+      .filter((condition) => !isTruthy(condition.is_satisfied))
+      .filter((condition) => isWithinRange(condition.created_at, start, end) || isWithinRange(condition.updated_at, start, end))
+      .map<TodayLiveItem>((condition) => ({
+        type: 'warning',
+        priority: 1,
+        title: `开工条件预警：${firstText(condition, ['condition_name', 'name', 'title'], '未命名条件')}`,
+        detail: firstText(condition, ['description', 'condition_type', 'status'], '开工条件仍未满足'),
+        created_at: String(condition.updated_at ?? condition.created_at ?? new Date().toISOString()),
+      }))
+
+    const obstacleWarnings = obstacles
+      .filter((obstacle) => !isTruthy(obstacle.is_resolved) && !isClosedStatus(obstacle.status))
+      .filter((obstacle) =>
+        isWithinRange(obstacle.created_at, start, end)
+        || isWithinRange(obstacle.updated_at, start, end)
+        || isWithinRange(obstacle.severity_escalated_at, start, end)
+        || isSameDate(obstacle.expected_resolution_date ?? obstacle.estimated_resolve_date, dateKey)
+      )
+      .map<TodayLiveItem>((obstacle) => ({
+        type: 'warning',
+        priority: 1,
+        title: `阻碍预警：${firstText(obstacle, ['title', 'description', 'obstacle_type'], '未命名阻碍')}`,
+        detail: firstText(obstacle, ['description', 'severity', 'status'], '阻碍事项需要跟进'),
+        created_at: String(obstacle.updated_at ?? obstacle.created_at ?? new Date().toISOString()),
+      }))
+
+    const changes = changeLogs
+      .filter((change) => isWithinRange(change.changed_at ?? change.created_at, start, end))
+      .map<TodayLiveItem>((change) => ({
+        type: 'change',
+        priority: 3,
+        title: `今日变更：${firstText(change, ['entity_title', 'title', 'entity_type'], '项目变更')}`,
+        detail: firstText(change, ['description', 'action', 'change_type'], '查看变更记录确认影响范围'),
+        created_at: String(change.changed_at ?? change.created_at ?? new Date().toISOString()),
+      }))
+
+    const items = [
+      ...conditionWarnings,
+      ...obstacleWarnings,
+      ...dueTasks,
+      ...changes,
+      ...newRisks,
+    ].sort((left, right) => {
+      if (left.priority !== right.priority) return left.priority - right.priority
+      return new Date(right.created_at).getTime() - new Date(left.created_at).getTime()
+    })
+
+    const response: ApiResponse<TodayLiveItem[]> = {
+      success: true,
+      data: items,
+      timestamp: new Date().toISOString(),
+    }
+    res.json(response)
+  })
+)
 
 // 计算整体进度
 function calculateOverallProgress(tasks: any[]) {

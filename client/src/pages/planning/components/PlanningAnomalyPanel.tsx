@@ -1,6 +1,7 @@
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Separator } from '@/components/ui/separator'
 import { AlertCircle } from 'lucide-react'
 
 interface PlanningAnomalyPanelProps {
@@ -27,7 +28,7 @@ export function PlanningAnomalyPanel({
 
   return (
     <Card data-testid="planning-anomaly-panel" className="border-slate-200 shadow-sm">
-      <CardHeader className="space-y-3 border-b border-slate-100 bg-slate-50/80">
+      <CardHeader className="space-y-3 bg-slate-50/80">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <CardTitle className="text-base">异常治理</CardTitle>
@@ -35,6 +36,7 @@ export function PlanningAnomalyPanel({
           <Badge variant={status === 'error' ? 'destructive' : empty ? 'outline' : 'secondary'}>{statusLabel}</Badge>
         </div>
       </CardHeader>
+      <Separator />
       <CardContent className="space-y-3 p-4">
         {status === 'loading' ? (
           <div className="flex items-center gap-3 rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">

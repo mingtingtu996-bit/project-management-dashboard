@@ -1,4 +1,5 @@
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
 import { ArrowRightCircle, Layers3, X } from 'lucide-react'
 
@@ -23,15 +24,17 @@ export function CloseoutBatchBar({
     <div
       data-testid="planning-shared-batch-bar"
       className={cn(
-        'fixed bottom-4 left-0 right-0 z-40 px-4 transition-all duration-300',
+        'fixed bottom-4 left-1/2 z-40 w-[calc(100%-2rem)] max-w-[1440px] -translate-x-1/2 px-0 transition-all duration-300',
         visible ? 'translate-y-0' : 'translate-y-[140%]',
         drawerOpen ? 'pointer-events-auto opacity-95' : 'opacity-100'
       )}
       aria-live="polite"
     >
-      <div
+      <Card
+        data-testid="closeout-batch-bar"
         className={cn(
-          'mx-auto flex max-w-[1440px] items-center justify-between gap-4 rounded-2xl border border-slate-700/70 bg-slate-950 px-4 py-3 text-white shadow-2xl shadow-slate-950/30 transition-all',
+          'flex items-center justify-between gap-4 border-slate-700/70 bg-slate-950 px-4 py-3 text-white shadow-2xl shadow-slate-950/30 transition-all',
+          'w-full max-w-[1440px]',
           drawerOpen ? 'h-14 opacity-90' : 'h-auto'
         )}
       >
@@ -40,7 +43,7 @@ export function CloseoutBatchBar({
             {selectedCount}
           </span>
           <span className="text-sm font-medium">已选择 {selectedCount} 项</span>
-          <button
+          <Button variant="ghost"
             type="button"
             onClick={onClearSelection}
             disabled={readOnly}
@@ -48,7 +51,7 @@ export function CloseoutBatchBar({
             aria-label="清空选择"
           >
             <X className="h-4 w-4" />
-          </button>
+          </Button>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -57,7 +60,7 @@ export function CloseoutBatchBar({
             size="sm"
             variant="outline"
             onClick={onOpenBatchLayer}
-            className="gap-2 rounded-full border-slate-600 bg-transparent text-slate-100 hover:bg-white/10"
+            className="gap-2 rounded-full border-slate-700 bg-slate-800 text-white hover:bg-slate-700"
             data-testid="closeout-batch-close-entry"
             disabled={readOnly}
           >
@@ -77,7 +80,7 @@ export function CloseoutBatchBar({
             逐条处理
           </Button>
         </div>
-      </div>
+      </Card>
     </div>
   )
 }

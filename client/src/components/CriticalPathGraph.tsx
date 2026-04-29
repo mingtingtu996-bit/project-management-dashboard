@@ -15,6 +15,7 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Separator } from '@/components/ui/separator'
 import { Textarea } from '@/components/ui/textarea'
 import type { CriticalPathOverrideInput, CriticalPathOverrideRecord, CriticalPathSnapshot } from '@/lib/criticalPath'
 import {
@@ -28,6 +29,7 @@ import { formatCriticalPathCount, USER_FACING_TERMS } from '@/lib/userFacingTerm
 import { formatDateTime } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import type { Task } from '@/pages/GanttViewTypes'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
 interface CriticalPathGraphProps {
   projectName?: string
@@ -364,6 +366,8 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
   const selectedOutgoingEdges = selectedTaskId
     ? snapshotEdges.filter((edge) => edge.fromTaskId === selectedTaskId)
     : []
+  const hoveredSnapshotTask = hoveredTaskId ? snapshotTaskMap.get(hoveredTaskId) ?? null : null
+  const hoveredTask = hoveredTaskId ? taskMap.get(hoveredTaskId) ?? null : null
   const selectedFocusGraph = useMemo(
     () => buildFocusGraph(snapshotEdges, selectedTaskId),
     [selectedTaskId, snapshotEdges],
@@ -540,15 +544,16 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
     const taskTitle = props.onNodeNavigate ? `跳转到任务：${getTaskLabel(task, taskId)}` : `选中任务：${getTaskLabel(task, taskId)}`
 
     return (
-      <button
-        key={taskId}
+      <Tooltip key={taskId}>
+  <TooltipTrigger asChild>
+    <Button variant="ghost"
         type="button"
         onClick={() => handleSelectTask(taskId)}
         onMouseEnter={() => setHoveredTaskId(taskId)}
         onMouseLeave={() => setHoveredTaskId((current) => (current === taskId ? null : current))}
         onFocus={() => setHoveredTaskId(taskId)}
         onBlur={() => setHoveredTaskId((current) => (current === taskId ? null : current))}
-        title={taskTitle}
+        
         className={cn(
           'group flex min-w-[180px] flex-1 items-center justify-between gap-2 rounded-2xl border px-3 py-2 text-left shadow-sm transition-all hover:-translate-y-[1px] hover:shadow-md',
           getSnapshotTaskClass(snapshotTask),
@@ -559,7 +564,7 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             {typeof index === 'number' && (
-              <span className="rounded-full bg-white/70 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-slate-500">
+              <span className="rounded-full bg-white/70 px-2 py-0.5 text-xs font-semibold tracking-wide text-slate-500">
                 {index + 1}
               </span>
             )}
@@ -585,13 +590,16 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
           </div>
         </div>
         <ArrowRight className="h-4 w-4 flex-shrink-0 text-slate-300" />
-      </button>
+      </Button>
+  </TooltipTrigger>
+  <TooltipContent>{taskTitle}</TooltipContent>
+</Tooltip>
     )
   }
 
   return (
     <div data-testid="critical-path-graph" className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-3xl border border-slate-200 bg-slate-50/80 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
         <div className="space-y-2">
           <div className="flex items-center gap-2">
             <GitBranch className="h-4 w-4 text-blue-600" />
@@ -652,12 +660,13 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
       <div className="grid gap-4 lg:grid-cols-[1.35fr_0.95fr]">
         <div className="space-y-4">
           <Card variant="detail">
-            <CardHeader className="space-y-2 border-b border-slate-100 pb-4">
+            <CardHeader className="space-y-2 pb-4">
               <div className="flex items-center justify-between gap-3">
                 <CardTitle className="text-sm">DAG 图谱</CardTitle>
                 {primaryChain && <Badge variant="outline">{primaryChain.displayLabel}</Badge>}
               </div>
             </CardHeader>
+            <Separator />
             <CardContent className="space-y-4 p-4">
               {layout.nodes.length ? (
                 <>
@@ -684,6 +693,7 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
                         data-testid="critical-path-zoom-out"
                       >
                         <Minus className="h-4 w-4" />
+                        <span className="ml-1 text-xs">缩小</span>
                       </Button>
                       <Badge variant="outline" data-testid="critical-path-zoom-level">{Math.round(zoom * 100)}%</Badge>
                       <Button
@@ -695,6 +705,7 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
                         data-testid="critical-path-zoom-in"
                       >
                         <Plus className="h-4 w-4" />
+                        <span className="ml-1 text-xs">放大</span>
                       </Button>
                       <Button
                         type="button"
@@ -704,7 +715,7 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
                         disabled={!selectedTaskId}
                         data-testid="critical-path-center-selected"
                       >
-                        居中当前任务
+                        <span className="text-xs">适应屏幕</span>
                       </Button>
                       <Button
                         type="button"
@@ -731,7 +742,7 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
                   <div
                     ref={graphViewportRef}
                     data-testid="critical-path-svg-viewport"
-                    className="max-h-[680px] overflow-auto rounded-3xl border border-slate-200 bg-slate-950/[0.02] p-3"
+                    className="relative max-h-[680px] overflow-auto rounded-2xl border border-slate-200 bg-slate-950/[0.02] p-3"
                   >
                     <div
                       style={{
@@ -890,6 +901,8 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
                         const selected = node.taskId === selectedTaskId
                         const emphasized = !hasActiveFocus || activeFocusGraph.taskIds.has(node.taskId)
                         const nodeTitle = props.onNodeNavigate ? `跳转到任务：${node.title}` : `选中任务：${node.title}`
+                        const snapshotTask = snapshotTaskMap.get(node.taskId)
+                        const nodeTooltip = `${node.title}｜工期 ${snapshotTask?.durationDays ?? 0} 天｜浮动时间 ${snapshotTask?.floatDays ?? 0} 天`
                         return (
                           <g
                             key={node.taskId}
@@ -910,7 +923,7 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
                             aria-label={nodeTitle}
                             style={{ cursor: 'pointer', opacity: emphasized ? 1 : 0.26 }}
                           >
-                            <title>{nodeTitle}</title>
+                            <title>{nodeTooltip}</title>
                             <rect
                               x={node.x}
                               y={node.y}
@@ -967,6 +980,22 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
                       })}
                     </svg>
                     </div>
+                    {hoveredTaskId && (
+                      <div className="pointer-events-none sticky bottom-3 left-3 w-fit max-w-[320px] rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 shadow-[var(--el-2)]">
+                        <div className="font-semibold text-slate-900">{getTaskLabel(hoveredTask, hoveredTaskId)}</div>
+                        <div className="mt-1 flex flex-wrap gap-2">
+                          <span>工期 {hoveredSnapshotTask?.durationDays ?? 0} 天</span>
+                          <span>浮动时间 {hoveredSnapshotTask?.floatDays ?? 0} 天</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap gap-4 text-xs text-slate-600" data-testid="critical-path-explicit-legend">
+                    <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm bg-red-500" />红=关键</span>
+                    <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm bg-amber-400" />琥珀=关注</span>
+                    <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm bg-orange-500" />橙=手动</span>
+                    <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm bg-slate-300" />灰=非关键</span>
                   </div>
 
                   {primaryChain ? (
@@ -987,12 +1016,13 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
           </Card>
 
           <Card variant="detail">
-            <CardHeader className="space-y-2 border-b border-slate-100 pb-4">
+            <CardHeader className="space-y-2 pb-4">
               <div className="flex items-center justify-between gap-3">
                 <CardTitle className="text-sm">关系边</CardTitle>
                 <Badge variant="outline">{snapshotEdges.length} 条</Badge>
               </div>
             </CardHeader>
+            <Separator />
             <CardContent className="space-y-3 p-4" data-testid="critical-path-edge-list">
               {snapshotEdges.length ? (
                 <div className="grid gap-2 md:grid-cols-2">
@@ -1026,9 +1056,10 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
 
           <div className="grid gap-4 md:grid-cols-2">
             <Card variant="detail">
-              <CardHeader className="border-b border-slate-100 pb-4">
+              <CardHeader className="pb-4">
                 <CardTitle className="text-sm">备选链</CardTitle>
               </CardHeader>
+              <Separator />
               <CardContent className="space-y-3 p-4">
                 {props.snapshot?.alternateChains.length ? (
                   props.snapshot.alternateChains.map((chain) => (
@@ -1038,7 +1069,7 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
                       data-testid={`critical-path-alternate-chain-${chain.id}`}
                     >
                       <div className="flex items-center justify-between gap-2">
-                        <button
+                        <Button variant="ghost"
                           type="button"
                           className="flex min-w-0 items-center gap-2 text-left"
                           onClick={() =>
@@ -1062,7 +1093,7 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
                               默认折叠 · {formatCriticalPathCount(chain.taskIds.length)} · 工期 {chain.totalDurationDays} 天
                             </div>
                           </div>
-                        </button>
+                        </Button>
                         <Badge variant="secondary">{chain.source}</Badge>
                       </div>
                       {expandedAlternateChainIds.includes(chain.id) ? (
@@ -1088,9 +1119,10 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
             </Card>
 
             <Card variant="detail">
-              <CardHeader className="border-b border-slate-100 pb-4">
+              <CardHeader className="pb-4">
                 <CardTitle className="text-sm">手动关注</CardTitle>
               </CardHeader>
+              <Separator />
               <CardContent className="space-y-3 p-4">
                 {props.snapshot?.manualAttentionTaskIds.length ? (
                   <div className="flex flex-wrap gap-2" data-testid="critical-path-manual-attention">
@@ -1106,9 +1138,10 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
           </div>
 
           <Card variant="detail">
-            <CardHeader className="border-b border-slate-100 pb-4">
+            <CardHeader className="pb-4">
               <CardTitle className="text-sm">覆盖记录</CardTitle>
             </CardHeader>
+            <Separator />
             <CardContent className="space-y-3 p-4" data-testid="critical-path-override-list">
               {props.overrides.length ? (
                 props.overrides.map((override) => (
@@ -1147,12 +1180,13 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
 
         <div className="space-y-4">
           <Card variant="detail">
-            <CardHeader className="border-b border-slate-100 pb-4">
+            <CardHeader className="pb-4">
               <div className="flex items-center justify-between gap-3">
                 <CardTitle className="text-sm">操作区</CardTitle>
                 <Badge variant="outline">{selectedTask ? '已选中任务' : '待选择'}</Badge>
               </div>
             </CardHeader>
+            <Separator />
             <CardContent className="space-y-4 p-4" data-testid="critical-path-action-panel">
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
                 <div className="text-xs font-medium uppercase tracking-wide text-slate-500">当前任务</div>

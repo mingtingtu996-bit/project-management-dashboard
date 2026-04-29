@@ -114,7 +114,7 @@ vi.mock('../services/dbService.js', () => ({
   supabase: state.supabase,
 }))
 
-const { listProjectMaterials } = await import('../services/materialReportsService.js')
+const { buildMaterialReportSummary, listProjectMaterials } = await import('../services/materialReportsService.js')
 
 describe('materialReportsService', () => {
   beforeEach(() => {
@@ -174,5 +174,39 @@ describe('materialReportsService', () => {
     expect(state.taskSelects).toHaveLength(2)
     expect(state.taskSelects[0]).toContain('name')
     expect(state.taskSelects[1]).not.toContain('name')
+  })
+
+  it('returns category distribution for the materials summary pie chart', async () => {
+    const baseRow = {
+      project_id: 'project-1',
+      participant_unit_id: null,
+      requires_sample_confirmation: false,
+      sample_confirmed: false,
+      expected_arrival_date: '2026-04-25',
+      actual_arrival_date: null,
+      requires_inspection: false,
+      inspection_done: false,
+      version: 1,
+      created_at: '2026-04-20T00:00:00.000Z',
+      updated_at: '2026-04-20T00:00:00.000Z',
+    }
+
+    state.projectMaterials.push(
+      { ...baseRow, id: 'material-steel', material_name: '钢筋', specialty_type: '主体结构' },
+      { ...baseRow, id: 'material-concrete', material_name: 'C30混凝土', specialty_type: '主体结构' },
+      { ...baseRow, id: 'material-pipe', material_name: 'PVC排水管', specialty_type: '给排水' },
+      { ...baseRow, id: 'material-electric', material_name: '电缆桥架', specialty_type: '电气' },
+      { ...baseRow, id: 'material-other', material_name: '成品木门', specialty_type: '装饰' },
+    )
+
+    const summary = await buildMaterialReportSummary('project-1')
+
+    expect(summary.byCategory).toEqual([
+      { category: '钢材', count: 1, percentage: 20 },
+      { category: '混凝土', count: 1, percentage: 20 },
+      { category: '管材', count: 1, percentage: 20 },
+      { category: '电气', count: 1, percentage: 20 },
+      { category: '其他', count: 1, percentage: 20 },
+    ])
   })
 })

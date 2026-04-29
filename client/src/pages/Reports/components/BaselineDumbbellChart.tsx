@@ -1,6 +1,8 @@
 import { useMemo } from 'react'
 
+import { ChartAccessibleWrapper } from '@/components/ChartAccessibleWrapper'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
 type DeviationRowLike = {
   id: string
@@ -59,65 +61,89 @@ export function BaselineDumbbellChart({
     return { min: min - padding, max: max + padding }
   }, [points])
   const domainSpan = Math.max(dateDomain.max - dateDomain.min, 1)
+  const chartRows = points.map((row) => [
+    row.title,
+    formatDateLabel(row.planned_date ?? row.actual_date),
+    formatDateLabel(row.actual_date ?? row.planned_date),
+    row.deviation_days,
+    row.deviation_rate,
+    row.status || 'unknown',
+  ])
 
   return (
-    <Card data-testid="baseline-dumbbell-chart" className="border-slate-200 shadow-sm">
+    <Card data-testid="baseline-dumbbell-chart" className="card-unified p-0">
       <CardHeader className="pb-3">
         <CardTitle className="text-base">{mainlineLabel} · 哑铃图</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         {points.length > 0 ? (
-          <div className="space-y-3">
-            <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
-              <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-blue-500" />计划日期</span>
-              <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-rose-500" />实际日期</span>
-              <span className="flex items-center gap-1"><span className="h-2 w-6 border-b-2 border-slate-200" />连接线</span>
-            </div>
-            {points.map((row) => {
-              const plannedValue = toDateValue(row.planned_date) ?? toDateValue(row.actual_date) ?? dateDomain.min
-              const actualValue = toDateValue(row.actual_date) ?? plannedValue
-              const left = clamp(((Math.min(plannedValue, actualValue) - dateDomain.min) / domainSpan) * 100, 0, 100)
-              const width = Math.max((Math.abs(actualValue - plannedValue) / domainSpan) * 100, 1)
-              const deltaClass = actualValue >= plannedValue ? 'bg-amber-400' : 'bg-emerald-400'
-              const plannedLabel = formatDateLabel(row.planned_date ?? row.actual_date)
-              const actualLabel = formatDateLabel(row.actual_date ?? row.planned_date)
+          <ChartAccessibleWrapper
+            columns={['任务', '计划日期', '实际日期', '偏差天数', '偏差率(%)', '状态']}
+            rows={chartRows}
+            summary="查看基线哑铃图数据"
+          >
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
+                <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-blue-600" />计划日期</span>
+                <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-rose-500" />实际日期</span>
+                <span className="flex items-center gap-1"><span className="h-2 w-6 border-b-2 border-slate-200" />连接线</span>
+              </div>
+              {points.map((row) => {
+                const plannedValue = toDateValue(row.planned_date) ?? toDateValue(row.actual_date) ?? dateDomain.min
+                const actualValue = toDateValue(row.actual_date) ?? plannedValue
+                const left = clamp(((Math.min(plannedValue, actualValue) - dateDomain.min) / domainSpan) * 100, 0, 100)
+                const width = Math.max((Math.abs(actualValue - plannedValue) / domainSpan) * 100, 1)
+                const deltaClass = actualValue >= plannedValue ? 'bg-amber-400' : 'bg-emerald-400'
+                const plannedLabel = formatDateLabel(row.planned_date ?? row.actual_date)
+                const actualLabel = formatDateLabel(row.actual_date ?? row.planned_date)
 
-              return (
-                <div key={row.id} className="grid gap-2 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="text-sm font-medium text-slate-900">{row.title}</div>
-                      <div className="mt-1 text-xs text-slate-500">
-                        偏差 {row.deviation_days} 天 · {row.deviation_rate}% · 计划 {plannedLabel} · 实际 {actualLabel}
+                return (
+                  <div key={row.id} className="grid gap-2 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-medium text-slate-900">{row.title}</div>
+                        <div className="mt-1 text-xs text-slate-500">
+                          偏差 {row.deviation_days} 天 · {row.deviation_rate}% · 计划 {plannedLabel} · 实际 {actualLabel}
+                        </div>
                       </div>
+                      <div className="text-xs text-slate-500">{row.status || 'unknown'}</div>
                     </div>
-                    <div className="text-xs text-slate-500">{row.status || 'unknown'}</div>
+                    <div className="relative h-8 rounded-full bg-white px-2 py-3">
+                      <div className="absolute left-2 right-2 top-1/2 h-px -translate-y-1/2 bg-slate-200" />
+                      <div
+                        className={`absolute top-1/2 h-1 -translate-y-1/2 rounded-full ${deltaClass}`}
+                        style={{ left: `${left}%`, width: `${width}%` }}
+                      />
+                      <Tooltip>
+  <TooltipTrigger asChild>
+    <span
+                        className="absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-blue-600 shadow"
+                        style={{ left: `${clamp(((plannedValue - dateDomain.min) / domainSpan) * 100, 0, 100)}%` }}
+                        
+                      />
+  </TooltipTrigger>
+  <TooltipContent>{`计划 ${plannedLabel}`}</TooltipContent>
+</Tooltip>
+                      <Tooltip>
+  <TooltipTrigger asChild>
+    <span
+                        className="absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-rose-500 shadow"
+                        style={{ left: `${clamp(((actualValue - dateDomain.min) / domainSpan) * 100, 0, 100)}%` }}
+                        
+                      />
+  </TooltipTrigger>
+  <TooltipContent>{`实际 ${actualLabel}`}</TooltipContent>
+</Tooltip>
+                    </div>
+                    <div className="flex justify-between text-xs text-slate-500">
+                      <span>计划 {plannedLabel}</span>
+                      <span>实际 {actualLabel}</span>
+                    </div>
                   </div>
-                  <div className="relative h-8 rounded-full bg-white px-2 py-3">
-                    <div className="absolute left-2 right-2 top-1/2 h-px -translate-y-1/2 bg-slate-200" />
-                    <div
-                      className={`absolute top-1/2 h-1 -translate-y-1/2 rounded-full ${deltaClass}`}
-                      style={{ left: `${left}%`, width: `${width}%` }}
-                    />
-                    <span
-                      className="absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-blue-500 shadow"
-                      style={{ left: `${clamp(((plannedValue - dateDomain.min) / domainSpan) * 100, 0, 100)}%` }}
-                      title={`计划 ${plannedLabel}`}
-                    />
-                    <span
-                      className="absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-rose-500 shadow"
-                      style={{ left: `${clamp(((actualValue - dateDomain.min) / domainSpan) * 100, 0, 100)}%` }}
-                      title={`实际 ${actualLabel}`}
-                    />
-                  </div>
-                  <div className="flex justify-between text-[11px] text-slate-500">
-                    <span>计划 {plannedLabel}</span>
-                    <span>实际 {actualLabel}</span>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
+                )
+              })}
+            </div>
+          </ChartAccessibleWrapper>
         ) : (
           <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
             暂无基线哑铃图数据

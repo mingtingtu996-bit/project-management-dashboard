@@ -4,6 +4,7 @@ import { ChevronDown, ChevronUp, TrendingUp, TrendingDown, Minus } from 'lucide-
 import { useState, useEffect, useMemo } from 'react';
 import { useCountUp } from '@/hooks/useCountUp';
 import { getHealthCardDisplay, getHealthDimensionDisplay, getHealthProgressDisplay, getHealthTrendDisplay, type HealthTrend } from '@/lib/healthDisplay';
+import { Button } from '@/components/ui/button'
 
 // 进度详情数据类型
 interface ProgressDetails {
@@ -109,17 +110,18 @@ export default function DashboardHealthCard({
       <CardContent className="p-5">
         {/* 头部：标题 + 展开箭头 */}
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-base font-semibold text-gray-900">项目健康度</h3>
-          <button 
+          <h3 className="text-base font-semibold text-slate-900">项目健康度</h3>
+          <Button variant="ghost" 
             onClick={() => setExpanded(!expanded)}
-            className="p-1 hover:bg-gray-100 rounded-full transition-colors"
+            aria-label={expanded ? '收起项目健康度详情' : '展开项目健康度详情'}
+            className="p-1 hover:bg-slate-100 rounded-full transition-colors"
           >
             {expanded ? (
-              <ChevronUp className="h-5 w-5 text-gray-400" />
+              <ChevronUp className="h-5 w-5 text-slate-400" />
             ) : (
-              <ChevronDown className="h-5 w-5 text-gray-400" />
+              <ChevronDown className="h-5 w-5 text-slate-400" />
             )}
-          </button>
+          </Button>
         </div>
 
         {/* 大数字 + 状态标签 + 趋势 */}
@@ -159,7 +161,7 @@ export default function DashboardHealthCard({
               return (
                 <div key={idx} className="flex items-center gap-3">
                   <span className={`w-20 text-sm flex-shrink-0 ${tone.textClass}`}>{dim.name}</span>
-                  <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
+                  <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden">
                     <div
                       className={`h-full rounded-full transition-all duration-700 ${tone.barClass}`}
                       style={{ width: `${getProgressWidth(dim.score)}%` }}
@@ -167,7 +169,7 @@ export default function DashboardHealthCard({
                   </div>
                   <span className={`w-14 text-right font-semibold text-sm ${tone.textClass}`}>
                     {dim.isBase ? dim.score : (dim.score > 0 ? `+${dim.score}` : dim.score)}
-                    {dim.isBase && <span className="text-[10px] font-normal ml-0.5">固定</span>}
+                    {dim.isBase && <span className="text-xs font-normal ml-0.5">固定</span>}
                   </span>
                 </div>
               )
@@ -191,15 +193,15 @@ export default function DashboardHealthCard({
                   <h4 className="text-emerald-700 font-semibold mb-3">整体进度</h4>
                   <div className="space-y-2">
                     <div className="flex justify-between text-sm">
-                      <span className="text-gray-600">当前进度</span>
-                      <span className="font-medium text-gray-900">{progressDetails.overall.currentProgress}%</span>
+                      <span className="text-slate-600">当前进度</span>
+                      <span className="font-medium text-slate-900">{progressDetails.overall.currentProgress}%</span>
                     </div>
                     <div className="flex justify-between text-sm">
-                      <span className="text-gray-600">目标进度</span>
-                      <span className="font-medium text-gray-900">{progressDetails.overall.targetProgress}%</span>
+                      <span className="text-slate-600">目标进度</span>
+                      <span className="font-medium text-slate-900">{progressDetails.overall.targetProgress}%</span>
                     </div>
                     <div className="flex justify-between text-sm">
-                      <span className="text-gray-600">进度偏差</span>
+                      <span className="text-slate-600">进度偏差</span>
                       <span className={`font-medium ${progressDetails.overall.progressDeviation >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
                         {progressDetails.overall.progressDeviation >= 0 ? '+' : ''}{progressDetails.overall.progressDeviation}%
                       </span>
@@ -207,10 +209,10 @@ export default function DashboardHealthCard({
                   </div>
                 </div>
 
-                {/* 数据置信度 - 蓝色背景 */}
+                {/* 数据可靠性 - 蓝色背景 */}
                 <div className="bg-blue-50 rounded-xl p-4">
                   <div className="flex items-center justify-between mb-3">
-                    <h4 className="text-blue-700 font-semibold">数据置信度</h4>
+                    <h4 className="text-blue-700 font-semibold">数据可靠性</h4>
                     <span className="text-xs px-2 py-0.5 bg-blue-100 text-blue-600 rounded-full">
                       {progressDetails.entityType === 'tasks' && '任务'}
                       {progressDetails.entityType === 'risks' && '风险'}
@@ -220,13 +222,13 @@ export default function DashboardHealthCard({
                   </div>
                   <div className="space-y-2">
                     <div className="flex justify-between text-sm">
-                      <span className="text-gray-600">填报完整度</span>
-                      <span className="font-medium text-gray-900">{progressDetails.dataConfidence.completionRate}%</span>
+                      <span className="text-slate-600">填报完整度</span>
+                      <span className="font-medium text-slate-900">{progressDetails.dataConfidence.completionRate}%</span>
                     </div>
                     <div className="flex justify-between text-sm">
-                      <span className="text-gray-600">更新及时性</span>
-                      <span className="font-medium text-gray-900">{progressDetails.dataConfidence.updateTimeliness}%</span>
-                      <span className="text-xs text-gray-400 ml-1">({progressDetails.dataConfidence.timelinessDays}天内)</span>
+                      <span className="text-slate-600">更新及时性</span>
+                      <span className="font-medium text-slate-900">{progressDetails.dataConfidence.updateTimeliness}%</span>
+                      <span className="text-xs text-slate-400 ml-1">({progressDetails.dataConfidence.timelinessDays}天内)</span>
                     </div>
                   </div>
                 </div>
@@ -241,8 +243,8 @@ export default function DashboardHealthCard({
 
                         return (
                           <div key={building.id} className="flex items-center gap-3">
-                            <span className="w-20 text-sm text-gray-600 flex-shrink-0">{building.name}</span>
-                            <div className="flex-1 h-2 bg-gray-200 rounded-full overflow-hidden">
+                            <span className="w-20 text-sm text-slate-600 flex-shrink-0">{building.name}</span>
+                            <div className="flex-1 h-2 bg-slate-200 rounded-full overflow-hidden">
                               <div
                                 className={`h-full rounded-full ${tone.barClass}`}
                                 style={{ width: `${building.progress}%` }}
@@ -256,14 +258,14 @@ export default function DashboardHealthCard({
                       })}
                     </div>
                   ) : (
-                    <div className="text-sm text-gray-500 py-2">
+                    <div className="text-sm text-slate-500 py-2">
                       暂无分项进度数据
                     </div>
                   )}
                 </div>
               </>
             ) : (
-              <div className="text-center py-4 text-gray-500">
+              <div className="text-center py-4 text-slate-500">
                 暂无详细数据
               </div>
             )}

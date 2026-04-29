@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { LoadingState } from '@/components/ui/loading-state'
+import { Separator } from '@/components/ui/separator'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ToastAction } from '@/components/ui/toast'
 import { ConfirmActionDialog } from '@/components/ConfirmActionDialog'
@@ -426,10 +427,10 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
 
   return (
     <div className="space-y-6" data-testid="team-management-panel">
-      <div className="rounded-3xl border border-slate-200 bg-gradient-to-br from-white via-slate-50 to-blue-50 p-5">
+      <div className="rounded-2xl border border-slate-200 bg-gradient-to-br from-white via-slate-50 to-blue-50 p-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="space-y-2">
-            <div className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-400">团队管理</div>
+            <div className="text-xs font-semibold uppercase tracking-wider text-slate-400">团队管理</div>
             <div className="text-2xl font-semibold tracking-tight text-slate-900">{projectName || '当前项目'} 的成员与权限</div>
             <div className="flex flex-wrap gap-2">
               <Badge variant={access?.globalRole === 'company_admin' ? 'default' : 'secondary'}>{getGlobalRoleLabel(access?.globalRole)}</Badge>
@@ -464,10 +465,11 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
         </TabsList>
 
         <TabsContent value="members" className="mt-0">
-          <Card className="rounded-3xl border-slate-200 shadow-none">
-            <CardHeader className="border-b border-slate-100 pb-4">
+          <Card className="rounded-2xl border-slate-200 shadow-none">
+            <CardHeader className="pb-4">
               <CardTitle className="text-base text-slate-900">成员列表</CardTitle>
             </CardHeader>
+            <Separator />
             <CardContent className="space-y-3 pt-6">
               {members.length === 0 ? (
                 <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-10 text-center text-sm text-slate-500">暂无项目成员</div>
@@ -536,10 +538,11 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
         </TabsContent>
 
         <TabsContent value="pending-links" className="mt-0">
-          <Card className="rounded-3xl border-slate-200 shadow-none">
-            <CardHeader className="border-b border-slate-100 pb-4">
+          <Card className="rounded-2xl border-slate-200 shadow-none">
+            <CardHeader className="pb-4">
               <CardTitle className="text-base text-slate-900">待关联责任人</CardTitle>
             </CardHeader>
+            <Separator />
             <CardContent className="space-y-3 pt-6">
               {unlinkedAssignees.length === 0 ? (
                 <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-8 text-sm text-emerald-800">
@@ -602,10 +605,11 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
 
         <TabsContent value="invitations" className="mt-0">
           {canManageTeam ? (
-            <Card className="rounded-3xl border-slate-200 shadow-none">
-              <CardHeader className="border-b border-slate-100 pb-4">
+            <Card className="rounded-2xl border-slate-200 shadow-none">
+              <CardHeader className="pb-4">
                 <CardTitle className="text-base text-slate-900">邀请码管理</CardTitle>
               </CardHeader>
+              <Separator />
               <CardContent className="space-y-3 pt-6">
                 {invitations.length === 0 ? (
                   <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-10 text-center text-sm text-slate-500">暂无邀请码，创建后即可通过链接邀请成员加入项目。</div>
@@ -723,7 +727,7 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
             <div className="text-sm text-slate-500">目标账号</div>
             <div className="mt-1 text-sm font-medium text-slate-900">{passwordReveal?.username}</div>
             <div className="mt-4 text-sm text-slate-500">临时密码</div>
-            <div className="mt-1 font-mono text-lg font-semibold tracking-[0.24em] text-slate-900">{passwordReveal?.temporaryPassword}</div>
+            <div className="mt-1 font-mono text-lg font-semibold tracking-wider text-slate-900">{passwordReveal?.temporaryPassword}</div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setPasswordReveal(null)}>关闭</Button>

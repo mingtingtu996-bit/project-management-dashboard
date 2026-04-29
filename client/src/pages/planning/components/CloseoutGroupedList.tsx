@@ -1,6 +1,7 @@
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
 
 export type CloseoutItemStatus = 'normal' | 'concurrency' | 'stale' | 'overdue'
 
@@ -110,7 +111,7 @@ export function CloseoutGroupedList({
                           className="mt-1 h-4 w-4 rounded border-slate-300 text-cyan-600 focus:ring-cyan-500"
                         />
 
-                        <button
+                        <Button variant="ghost"
                           type="button"
                           onClick={() => onOpenItem(item.id)}
                           data-testid={`closeout-item-open-${item.id}`}
@@ -126,19 +127,19 @@ export function CloseoutGroupedList({
                             {isProcessed ? <Badge variant="secondary">已处理</Badge> : null}
                           </div>
                           <p className="mt-1 text-xs leading-5 text-slate-500">{item.summary}</p>
-                          <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+                          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
                             {item.sourceHierarchyLabel ? <span>来源层级：{item.sourceHierarchyLabel}</span> : null}
                             {item.sourceEntityLabel ? <span>来源类型：{item.sourceEntityLabel}</span> : null}
                             {item.closeReasonLabel ? <span>关闭口径：{item.closeReasonLabel}</span> : null}
                           </div>
                           {item.taskTitle || item.planProgressLabel || item.taskProgressLabel ? (
-                            <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+                            <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
                               {item.taskTitle ? <span>当前排期：{item.taskTitle}</span> : null}
                               {item.planProgressLabel ? <span>月计划进度：{item.planProgressLabel}</span> : null}
                               {item.taskProgressLabel ? <span>当前进度：{item.taskProgressLabel}</span> : null}
                             </div>
                           ) : null}
-                        </button>
+                        </Button>
                       </div>
 
                       <div className="flex flex-col items-end gap-1 text-right text-xs text-slate-500">

@@ -734,7 +734,7 @@ export default function WBSTemplates() {
 
             <div className="grid gap-3 md:grid-cols-3">
               {guide.quickActions.map((action) => (
-                <button
+                <Button variant="ghost"
                   key={action.path}
                   type="button"
                   onClick={() => void handleBootstrap(action.path)}
@@ -744,7 +744,7 @@ export default function WBSTemplates() {
                     <WandSparkles className="h-4 w-4 text-slate-500" />
                     {action.label}
                   </div>
-                </button>
+                </Button>
               ))}
             </div>
 
@@ -766,10 +766,10 @@ export default function WBSTemplates() {
             <CardTitle className="text-base">当前项目状态</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            <div className="rounded-xl border border-slate-200 bg-white p-4">
+            <Card className="rounded-xl border border-slate-200 bg-white p-4">
               <div className="text-sm font-medium text-slate-900">{projectName}</div>
               <div className="mt-1 text-sm text-slate-600">状态：{projectStatusLabel}</div>
-            </div>
+            </Card>
           </CardContent>
         </Card>
       </div>

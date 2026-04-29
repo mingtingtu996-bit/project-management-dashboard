@@ -242,6 +242,10 @@ function buildCloseoutGroups(items: CloseoutItem[], mode: CloseoutGroupingMode):
 }
 
 export default function CloseoutPage() {
+  useEffect(() => {
+    document.title = '关闭管理 | WorkBuddy'
+  }, [])
+
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { toast } = useToast()
@@ -567,37 +571,46 @@ export default function CloseoutPage() {
 
         <div
           data-testid="closeout-escalation-ladder"
-          className="grid gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-3 lg:grid-cols-3"
+          className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-3"
         >
-          {[
-            {
-              day: 3,
-              title: '+3 天提醒',
-            },
-            {
-              day: 5,
-              title: '+5 天升级',
-            },
-            {
-              day: 7,
-              title: '+7 天强制关账窗口',
-            },
-          ].map((step) => {
-            const active = overdueDays >= step.day
-            return (
-              <div
-                key={step.day}
-                className={`rounded-2xl border px-4 py-3 ${
-                  active ? 'border-amber-200 bg-amber-50 text-amber-900' : 'border-white/80 bg-white text-slate-600'
-                }`}
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <div className="text-sm font-semibold">{step.title}</div>
-                  <Badge variant={active ? 'secondary' : 'outline'}>{active ? '当前已触发' : '未触发'}</Badge>
+          <div className="grid gap-3 lg:grid-cols-3">
+            {[
+              {
+                day: 3,
+                title: '+3 天提醒',
+              },
+              {
+                day: 5,
+                title: '+5 天升级',
+              },
+              {
+                day: 7,
+                title: '+7 天强制关账窗口',
+              },
+            ].map((step) => {
+              const active = overdueDays >= step.day
+              return (
+                <div
+                  key={step.day}
+                  className={`rounded-2xl border px-4 py-3 ${
+                    active ? 'border-amber-200 bg-amber-50 text-amber-900' : 'border-white/80 bg-white text-slate-600'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-sm font-semibold">{step.title}</div>
+                    <Badge variant={active ? 'secondary' : 'outline'}>{active ? '当前已触发' : '未触发'}</Badge>
+                  </div>
                 </div>
-              </div>
-            )
-          })}
+              )
+            })}
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
+            <span>逾期 3 天系统提醒</span>
+            <span>→</span>
+            <span>5 天通知上级</span>
+            <span>→</span>
+            <span>7 天自动关闭</span>
+          </div>
         </div>
 
         <div className="grid gap-3 md:grid-cols-5">
@@ -633,9 +646,9 @@ export default function CloseoutPage() {
           >
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="space-y-1">
-                <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">数据质量留痕</div>
+                <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">数据质量留痕</div>
                 <div className="text-lg font-semibold text-slate-900">
-                  当前月份数据置信度 {Math.round(dataQualitySummary.confidence.score)}%
+                  当前月份数据可靠性 {Math.round(dataQualitySummary.confidence.score)}%
                 </div>
               </div>
               {activePlan?.data_confidence_score ? (
@@ -650,7 +663,7 @@ export default function CloseoutPage() {
             <div className="mt-4">
               <DataConfidenceBreakdown
                 confidence={dataQualitySummary.confidence}
-                title="本月置信度降分贡献"
+                title="本月可靠性降分贡献"
                 compact
                 testId="closeout-data-quality-breakdown"
               />
@@ -662,12 +675,13 @@ export default function CloseoutPage() {
           className="grid gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-3 lg:grid-cols-[minmax(0,1fr)_auto]"
         >
           <div className="space-y-2">
-            <div className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">筛选与搜索</div>
+            <div className="text-xs font-medium uppercase tracking-wider text-slate-500">筛选与搜索</div>
             <div className="flex items-center gap-2 rounded-2xl border border-white/80 bg-white px-3 py-2">
               <Search className="h-4 w-4 text-slate-400" />
               <Input
                 value={searchQuery}
                 onChange={(event) => setSearchQuery(event.target.value)}
+                aria-label="搜索关账条目"
                 placeholder="搜索关账条目、摘要或系统建议"
                 className="border-0 px-0 shadow-none focus-visible:ring-0"
                 data-testid="closeout-search-input"
@@ -845,16 +859,17 @@ export default function CloseoutPage() {
   return (
     <PlanningPageShell
       projectName={currentProject.name ?? '未命名项目'}
-      title="任务列表 / 月末关账"
+      title="计划编制 / 关闭管理"
       description="收口当月待处理事项，并把结果带回月度计划。"
       tabs={tabs}
+      className="pb-20"
       actions={
         <>
           <Button
             type="button"
             variant="outline"
             size="sm"
-            className="gap-2 border-slate-600 bg-transparent text-white hover:bg-white/10"
+            className="gap-2 border-slate-700 bg-slate-800 text-white hover:bg-slate-700"
             data-testid="closeout-refresh-entry"
             onClick={() => {
               setActionLoading('refresh')
@@ -878,7 +893,7 @@ export default function CloseoutPage() {
                   type="button"
                   variant="outline"
                   size="sm"
-                  className="gap-2 border-slate-600 bg-transparent text-white hover:bg-white/10"
+                  className="gap-2 border-slate-700 bg-slate-800 text-white hover:bg-slate-700"
                   data-testid="closeout-more-actions"
                 >
                   <MoreHorizontal className="h-4 w-4" />

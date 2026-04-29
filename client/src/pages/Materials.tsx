@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 
 import { Breadcrumb } from '@/components/Breadcrumb'
+import { ConfirmActionDialog } from '@/components/ConfirmActionDialog'
 import { EmptyState } from '@/components/EmptyState'
 import { PageHeader } from '@/components/PageHeader'
 import { Button } from '@/components/ui/button'
@@ -25,6 +26,14 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { LoadingState } from '@/components/ui/loading-state'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 import { usePermissions } from '@/hooks/usePermissions'
 import { toast } from '@/hooks/use-toast'
 import { useCurrentProject } from '@/hooks/useStore'
@@ -41,10 +50,12 @@ import {
   getMaterialStatusTone,
   isMaterialArrivedThisWeek,
   matchesMaterialStatusFilter,
+  type MaterialPrimaryStatus,
   type MaterialStatusFilter,
 } from '@/lib/materialStatus'
 import {
   MaterialsApiService,
+  type MaterialCategorySummary,
   type MaterialChangeLogRecord,
   type MaterialReportSummary,
   type MaterialMutationPayload,
@@ -179,6 +190,170 @@ function getReminderTone(reminder: Pick<MaterialReminderRecord, 'severity' | 'ty
     return 'border-red-200 bg-red-50 text-red-800'
   }
   return 'border-amber-200 bg-amber-50 text-amber-800'
+}
+
+const MATERIAL_CATEGORY_COLORS: Record<string, string> = {
+  钢材: '#2563eb',
+  混凝土: '#64748b',
+  管材: '#0f766e',
+  电气: '#f59e0b',
+  其他: '#94a3b8',
+}
+
+function getMaterialStatusDotTone(status: MaterialPrimaryStatus) {
+  switch (status) {
+    case 'pending_sample':
+      return 'bg-amber-500'
+    case 'pending_arrival':
+      return 'bg-slate-400'
+    case 'overdue_arrival':
+      return 'bg-red-500'
+    case 'pending_inspection':
+      return 'bg-sky-500'
+    case 'completed':
+      return 'bg-emerald-500'
+    default:
+      return 'bg-slate-400'
+  }
+}
+
+function MaterialStatusPill({ material }: { material: ProjectMaterialRecord }) {
+  const status = getMaterialPrimaryStatus(material)
+
+  return (
+    <span
+      data-testid={`material-status-chip-${material.id}`}
+      className={`inline-flex items-center gap-2 rounded-full px-2.5 py-1 text-xs font-medium ${getMaterialStatusTone(status)}`}
+    >
+      <span className={`h-2 w-2 rounded-full ${getMaterialStatusDotTone(status)}`} />
+      {getMaterialStatusLabel(status)}
+    </span>
+  )
+}
+
+function MaterialMetricCard({
+  label,
+  value,
+  trend,
+  icon: Icon,
+}: {
+  label: string
+  value: string | number
+  trend: string
+  icon: typeof Boxes
+}) {
+  return (
+    <Card className="card-unified p-0" data-testid={`materials-metric-${label}`}>
+      <CardContent className="flex items-start justify-between gap-4 p-5">
+        <div className="min-w-0">
+          <p className="text-sm text-muted-foreground">{label}</p>
+          <div className="mt-2 text-2xl font-bold text-slate-900">{value}</div>
+          <div className="mt-2 text-xs leading-5 text-slate-500">{trend}</div>
+        </div>
+        <div className="shrink-0 rounded-lg bg-blue-50 p-2 text-blue-700">
+          <Icon className="h-5 w-5" />
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+function MiniMetric({ label, value, tone = 'slate' }: { label: string; value: string | number; tone?: 'slate' | 'amber' | 'red' | 'sky' }) {
+  const toneClass = {
+    slate: 'bg-slate-50 text-slate-900 ring-slate-200',
+    amber: 'bg-amber-50 text-amber-800 ring-amber-200',
+    red: 'bg-red-50 text-red-800 ring-red-200',
+    sky: 'bg-sky-50 text-sky-800 ring-sky-200',
+  }[tone]
+
+  return (
+    <div className={`rounded-lg px-3 py-3 ring-1 ${toneClass}`}>
+      <div className="text-xs font-medium text-slate-700">{label}</div>
+      <div className="mt-1 text-xl font-semibold tabular-nums">{value}</div>
+    </div>
+  )
+}
+
+function buildCategoryPieGradient(categories: MaterialCategorySummary[]) {
+  const visible = categories.filter((item) => item.count > 0 && item.percentage > 0)
+  if (visible.length === 0) return '#e2e8f0 0 100%'
+
+  let cursor = 0
+  return visible
+    .map((item) => {
+      const start = cursor
+      cursor += item.percentage
+      return `${MATERIAL_CATEGORY_COLORS[item.category] ?? MATERIAL_CATEGORY_COLORS.其他} ${start}% ${Math.min(cursor, 100)}%`
+    })
+    .join(', ')
+}
+
+function MaterialCategoryPie({ categories }: { categories: MaterialCategorySummary[] }) {
+  const total = categories.reduce((sum, item) => sum + item.count, 0)
+
+  return (
+    <Card className="border-slate-200 shadow-sm" data-testid="materials-category-pie-card">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base text-slate-900">分类饼图</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex items-center gap-4">
+          <div
+            className="h-32 w-32 shrink-0 rounded-full ring-1 ring-slate-200"
+            data-testid="materials-category-pie"
+            style={{ background: `conic-gradient(${buildCategoryPieGradient(categories)})` }}
+          />
+          <div className="min-w-0 flex-1 space-y-2">
+            {categories.map((item) => (
+              <div key={item.category} className="flex items-center justify-between gap-3 text-sm">
+                <span className="inline-flex items-center gap-2 text-slate-600">
+                  <span
+                    className="h-2.5 w-2.5 rounded-full"
+                    style={{ backgroundColor: MATERIAL_CATEGORY_COLORS[item.category] ?? MATERIAL_CATEGORY_COLORS.其他 }}
+                  />
+                  {item.category}
+                </span>
+                <span className="font-medium tabular-nums text-slate-900">
+                  {item.count} · {item.percentage}%
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">共 {total} 条材料纳入分类统计</div>
+      </CardContent>
+    </Card>
+  )
+}
+
+function RecentArrivalsList({ materials }: { materials: ProjectMaterialRecord[] }) {
+  return (
+    <Card className="border-slate-200 shadow-sm" data-testid="materials-recent-arrivals">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base text-slate-900">近期到场</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {materials.length > 0 ? (
+          materials.map((material) => (
+            <div key={material.id} className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0 truncate text-sm font-medium text-slate-900">{material.material_name}</div>
+                <div className="text-xs tabular-nums text-slate-500">{material.expected_arrival_date}</div>
+              </div>
+              <div className="mt-2 flex items-center justify-between gap-3 text-xs text-slate-500">
+                <span className="truncate">{material.participant_unit_name || '无归属单位'}</span>
+                <span>{getMaterialStatusLabel(getMaterialPrimaryStatus(material))}</span>
+              </div>
+            </div>
+          ))
+        ) : (
+          <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+            暂无近期到场材料
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
 }
 
 function normalizeConfidenceLevel(value?: number | string | null) {
@@ -355,7 +530,7 @@ function MaterialDetailDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl border-slate-200" data-testid="material-detail-dialog">
+      <DialogContent className="max-w-[720px] border-slate-200" data-testid="material-detail-dialog">
         <DialogHeader>
           <DialogTitle>{readOnly ? '材料详情' : '编辑材料详情'}</DialogTitle>
         </DialogHeader>
@@ -644,6 +819,10 @@ function MaterialDetailDialog({
 }
 
 export default function Materials() {
+  useEffect(() => {
+    document.title = '材料管理 | WorkBuddy'
+  }, [])
+
   const { id: projectId = '' } = useParams<{ id: string }>()
   const [searchParams, setSearchParams] = useSearchParams()
   const currentProject = useCurrentProject()
@@ -669,6 +848,7 @@ export default function Materials() {
   const [delayRiskInsight, setDelayRiskInsight] = useState<MaterialTaskDelayRisk | null>(null)
   const [changeLogs, setChangeLogs] = useState<MaterialChangeLogRecord[]>([])
   const [changeLogLoading, setChangeLogLoading] = useState(false)
+  const [pendingDeleteMaterial, setPendingDeleteMaterial] = useState<ProjectMaterialRecord | null>(null)
 
   const [createMode, setCreateMode] = useState<CreateMode>('single')
   const [singleForm, setSingleForm] = useState<MaterialFormState>(EMPTY_FORM)
@@ -731,6 +911,12 @@ export default function Materials() {
   }, [searchParams])
 
   const summary = useMemo(() => buildMaterialSummaryCounts(materials), [materials])
+  const arrivedCount = useMemo(() => materials.filter((material) => Boolean(material.actual_arrival_date)).length, [materials])
+  const arrivalRate = materials.length > 0 ? Math.round((arrivedCount / materials.length) * 100) : 0
+  const requiredSampleCount = useMemo(() => materials.filter((material) => material.requires_sample_confirmation).length, [materials])
+  const sampleConfirmedCount = useMemo(() => materials.filter((material) => material.requires_sample_confirmation && material.sample_confirmed).length, [materials])
+  const requiredInspectionCount = useMemo(() => materials.filter((material) => material.requires_inspection).length, [materials])
+  const inspectionDoneCount = useMemo(() => materials.filter((material) => material.requires_inspection && material.inspection_done).length, [materials])
   const weeklySummary = useMemo(() => {
     const overview = materialSummary?.overview ?? null
     const onTimeCount = overview?.onTimeCount ?? 0
@@ -767,6 +953,26 @@ export default function Materials() {
     [materials, normalizedSearchKeyword, specialtyFilter, statusFilter, unitFilter],
   )
   const groupedMaterials = useMemo(() => groupMaterialsByUnit(filteredMaterials), [filteredMaterials])
+  const materialCategories = useMemo<MaterialCategorySummary[]>(
+    () => materialSummary?.byCategory ?? [
+      { category: '钢材', count: 0, percentage: 0 },
+      { category: '混凝土', count: 0, percentage: 0 },
+      { category: '管材', count: 0, percentage: 0 },
+      { category: '电气', count: 0, percentage: 0 },
+      { category: '其他', count: 0, percentage: 0 },
+    ],
+    [materialSummary?.byCategory],
+  )
+  const recentArrivals = useMemo(
+    () => [...materials]
+      .sort((left, right) => left.expected_arrival_date.localeCompare(right.expected_arrival_date))
+      .slice(0, 5),
+    [materials],
+  )
+  const hasActiveMaterialFilters = Boolean(normalizedSearchKeyword)
+    || statusFilter !== 'all'
+    || unitFilter !== 'all'
+    || specialtyFilter !== 'all'
   const selectedTemplateGroup = useMemo<MaterialTemplateGroup | null>(
     () => MATERIAL_TEMPLATE_GROUPS.find((group) => group.specialtyType === templateSpecialty) ?? null,
     [templateSpecialty],
@@ -831,6 +1037,19 @@ export default function Materials() {
     } else {
       next.set(key, value)
     }
+    setSearchParams(next, { replace: true })
+  }, [searchParams, setSearchParams])
+
+  const clearMaterialFilters = useCallback(() => {
+    setSearchKeyword('')
+    setStatusFilter('all')
+    setUnitFilter('all')
+    setSpecialtyFilter('all')
+
+    const next = new URLSearchParams(searchParams)
+    next.delete('q')
+    next.delete('unit')
+    next.delete('specialty')
     setSearchParams(next, { replace: true })
   }, [searchParams, setSearchParams])
 
@@ -1062,6 +1281,13 @@ export default function Materials() {
     }
   }, [detailMaterialId, isReadOnly, projectId])
 
+  const handleConfirmDeleteMaterial = useCallback(() => {
+    if (!pendingDeleteMaterial) return
+    const materialId = pendingDeleteMaterial.id
+    setPendingDeleteMaterial(null)
+    void handleDeleteMaterial(materialId)
+  }, [handleDeleteMaterial, pendingDeleteMaterial])
+
   if (loading) {
     return (
       <LoadingState
@@ -1073,25 +1299,24 @@ export default function Materials() {
 
   if (error) {
     return (
-      <div className="space-y-6 p-6">
+      <div className="page-shell">
         <EmptyState
-          icon={Boxes}
+          variant="error"
           title={canReadAllMaterials ? '材料清单暂时不可用' : '暂时无法进入材料管控'}
           description={error}
-          action={<Button onClick={() => void loadPage(undefined, true)}>重新加载</Button>}
+          onRetry={() => void loadPage(undefined, true)}
         />
       </div>
     )
   }
 
   return (
-    <div className="space-y-6 p-6" data-testid="materials-page">
+    <div className="page-shell" data-testid="materials-page">
       <Breadcrumb
         items={[
-          { label: PROJECT_NAVIGATION_LABELS.special, href: `/projects/${projectId}/pre-milestones` },
+          { label: currentProject?.name || '项目', href: `/projects/${projectId}/dashboard` },
           { label: PROJECT_NAVIGATION_LABELS.materials },
         ]}
-        showHome
       />
 
       <PageHeader
@@ -1111,102 +1336,38 @@ export default function Materials() {
         </Button>
       </PageHeader>
 
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
-        {[
-          { label: '待定样', value: summary.pendingSample, icon: ClipboardList },
-          { label: '待到场', value: summary.pendingArrival, icon: PackageSearch },
-          { label: '逾期未到', value: summary.overdueArrival, icon: Wrench },
-          { label: '本周到场', value: summary.arrivedThisWeek, icon: PackageCheck },
-          { label: '待送检', value: summary.pendingInspection, icon: Boxes },
-          { label: '已完成', value: summary.completed, icon: PackageCheck },
-        ].map((item) => (
-          <Card key={item.label} className="border-slate-200 shadow-sm">
-            <CardContent className="flex items-center justify-between p-5">
-              <div>
-                <div className="text-xs uppercase tracking-[0.18em] text-slate-400">{item.label}</div>
-                <div className="mt-2 text-2xl font-semibold text-slate-900">{item.value}</div>
-              </div>
-              <item.icon className="h-5 w-5 text-slate-400" />
-            </CardContent>
-          </Card>
-        ))}
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <MaterialMetricCard
+          label="到场率"
+          value={`${arrivalRate}%`}
+          trend={`已到场 ${arrivedCount}/${materials.length || 0}`}
+          icon={PackageCheck}
+        />
+        <MaterialMetricCard
+          label="定样推进"
+          value={`${sampleConfirmedCount}/${requiredSampleCount}`}
+          trend={`待定样 ${summary.pendingSample} 项`}
+          icon={ClipboardList}
+        />
+        <MaterialMetricCard
+          label="验收情况"
+          value={`${inspectionDoneCount}/${requiredInspectionCount}`}
+          trend={`待送检 ${summary.pendingInspection} · 不合格 0`}
+          icon={Boxes}
+        />
+        <MaterialMetricCard
+          label="风险提醒"
+          value={summary.overdueArrival}
+          trend={`待到场 ${summary.pendingArrival} · 本周到场 ${summary.arrivedThisWeek}`}
+          icon={Wrench}
+        />
       </section>
 
-      <section className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
-        <Card className="border-slate-200 shadow-sm" data-testid="materials-weekly-summary">
-          <CardHeader className="pb-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <CardTitle className="text-base text-slate-900">周报摘要</CardTitle>
-                <div className="mt-1 text-sm text-slate-500">
-                  周窗口 {formatWeekLabel(latestDigest?.week_start)} · 最近生成 {formatDateTimeLabel(latestDigest?.generated_at)}
-                </div>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-              <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
-                <div className="text-xs uppercase tracking-[0.16em] text-slate-400">应到总数</div>
-                <div className="mt-2 text-2xl font-semibold text-slate-900">{weeklySummary.totalExpectedCount}</div>
-              </div>
-              <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
-                <div className="text-xs uppercase tracking-[0.16em] text-slate-400">准时到场</div>
-                <div className="mt-2 text-2xl font-semibold text-slate-900">{weeklySummary.onTimeCount}</div>
-              </div>
-              <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
-                <div className="text-xs uppercase tracking-[0.16em] text-slate-400">本周到场</div>
-                <div className="mt-2 text-2xl font-semibold text-slate-900">{weeklySummary.arrivedThisWeek}</div>
-              </div>
-              <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
-                <div className="text-xs uppercase tracking-[0.16em] text-slate-400">逾期 / 待送检</div>
-                <div className="mt-2 text-2xl font-semibold text-slate-900">
-                  {weeklySummary.overdueArrival} / {weeklySummary.pendingInspection}
-                </div>
-              </div>
-            </div>
-            <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-900">
-              当前材料准时到场率 {weeklySummary.arrivalRate}%。
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="border-slate-200 shadow-sm" data-testid="materials-reminder-feed">
-          <CardHeader className="pb-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <CardTitle className="text-base text-slate-900">提醒列表</CardTitle>
-              </div>
-              <Button asChild variant="outline" size="sm">
-                <Link to={`/notifications?scope=current-project&projectId=${encodeURIComponent(projectId)}`}>查看全部提醒</Link>
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {reminders.length > 0 ? (
-              reminders.slice(0, 4).map((reminder) => (
-                <div
-                  key={reminder.id}
-                  data-testid={`materials-reminder-item-${reminder.id}`}
-                  className={`rounded-2xl border px-4 py-3 ${getReminderTone(reminder)}`}
-                >
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="text-sm font-medium">{reminder.title}</div>
-                    <div className="text-xs opacity-80">{formatDateTimeLabel(reminder.created_at)}</div>
-                  </div>
-                  <div className="mt-2 text-sm leading-6 opacity-90">{reminder.content || '系统已生成材料提醒。'}</div>
-                </div>
-              ))
-            ) : (
-              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6" />
-            )}
-          </CardContent>
-        </Card>
-      </section>
-
-      <Card className="border-slate-200 shadow-sm">
+      <section className="grid gap-6 xl:grid-cols-[minmax(0,7fr)_minmax(280px,3fr)]">
+        <div className="space-y-4">
+          <Card className="border-slate-200 shadow-sm" data-testid="materials-toolbar-card">
         <CardHeader className="pb-4">
-          <CardTitle className="text-base text-slate-900">筛选与录入</CardTitle>
+          <CardTitle className="text-base text-slate-900">材料列表工具栏</CardTitle>
         </CardHeader>
         <CardContent className="space-y-5">
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
@@ -1456,22 +1617,26 @@ export default function Materials() {
               {createMode === 'batch' && (
                 <div className="space-y-4">
                   <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
-                    <table className="min-w-full text-sm">
-                      <thead className="bg-slate-50 text-left text-slate-500">
-                        <tr>
-                          <th className="px-3 py-2 font-medium">材料名称</th>
-                          <th className="px-3 py-2 font-medium">专项</th>
-                          <th className="px-3 py-2 font-medium">参建单位</th>
-                          <th className="px-3 py-2 font-medium">预计到场</th>
-                          <th className="px-3 py-2 font-medium">定样</th>
-                          <th className="px-3 py-2 font-medium">送检</th>
-                          <th className="px-3 py-2 font-medium">操作</th>
-                        </tr>
-                      </thead>
-                      <tbody>
+                    <Table className="min-w-full text-sm">
+                      <TableHeader className="sticky top-0 z-10 bg-white text-left text-slate-500">
+                        <TableRow className="py-3">
+                          <TableHead className="px-3 py-2 font-medium">材料名称</TableHead>
+                          <TableHead className="px-3 py-2 font-medium">专项</TableHead>
+                          <TableHead className="px-3 py-2 font-medium">参建单位</TableHead>
+                          <TableHead className="px-3 py-2 text-right font-medium tabular-nums">预计到场</TableHead>
+                          <TableHead className="px-3 py-2 font-medium">定样</TableHead>
+                          <TableHead className="px-3 py-2 font-medium">送检</TableHead>
+                          <TableHead className="px-3 py-2 font-medium">操作</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
                         {batchRows.map((row) => (
-                          <tr key={row.id} className="border-t border-slate-100" data-testid={`materials-batch-row-${row.id}`}>
-                            <td className="px-3 py-2">
+                          <TableRow
+                            key={row.id}
+                            className="group py-3 even:bg-slate-50/50 hover:bg-slate-100/60"
+                            data-testid={`materials-batch-row-${row.id}`}
+                          >
+                            <TableCell className="px-3 py-2 text-right tabular-nums">
                               <input
                                 data-testid={`materials-batch-name-${row.id}`}
                                 value={row.material_name}
@@ -1482,10 +1647,10 @@ export default function Materials() {
                                     ),
                                   )
                                 }
-                                className="w-full rounded-lg border border-slate-200 px-2 py-1.5"
+                                className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-right tabular-nums"
                               />
-                            </td>
-                            <td className="px-3 py-2">
+                            </TableCell>
+                            <TableCell className="px-3 py-2">
                               <input
                                 data-testid={`materials-batch-specialty-${row.id}`}
                                 value={row.specialty_type}
@@ -1498,8 +1663,8 @@ export default function Materials() {
                                 }
                                 className="w-full rounded-lg border border-slate-200 px-2 py-1.5"
                               />
-                            </td>
-                            <td className="px-3 py-2">
+                            </TableCell>
+                            <TableCell className="px-3 py-2">
                               <select
                                 data-testid={`materials-batch-unit-${row.id}`}
                                 value={row.participant_unit_id}
@@ -1519,8 +1684,8 @@ export default function Materials() {
                                   </option>
                                 ))}
                               </select>
-                            </td>
-                            <td className="px-3 py-2">
+                            </TableCell>
+                            <TableCell className="px-3 py-2">
                               <input
                                 data-testid={`materials-batch-date-${row.id}`}
                                 type="date"
@@ -1534,8 +1699,8 @@ export default function Materials() {
                                 }
                                 className="w-full rounded-lg border border-slate-200 px-2 py-1.5"
                               />
-                            </td>
-                            <td className="px-3 py-2 text-center">
+                            </TableCell>
+                            <TableCell className="px-3 py-2 text-center">
                               <input
                                 data-testid={`materials-batch-sample-${row.id}`}
                                 type="checkbox"
@@ -1548,8 +1713,8 @@ export default function Materials() {
                                   )
                                 }
                               />
-                            </td>
-                            <td className="px-3 py-2 text-center">
+                            </TableCell>
+                            <TableCell className="px-3 py-2 text-center">
                               <input
                                 data-testid={`materials-batch-inspection-${row.id}`}
                                 type="checkbox"
@@ -1562,23 +1727,24 @@ export default function Materials() {
                                   )
                                 }
                               />
-                            </td>
-                            <td className="px-3 py-2">
+                            </TableCell>
+                            <TableCell className="px-3 py-2">
                               <Button
                                 variant="ghost"
                                 size="sm"
                                 data-testid={`materials-batch-delete-${row.id}`}
+                                className="opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100"
                                 onClick={() =>
                                   setBatchRows((current) => (current.length === 1 ? current : current.filter((item) => item.id !== row.id)))
                                 }
                               >
                                 删除
                               </Button>
-                            </td>
-                          </tr>
+                            </TableCell>
+                          </TableRow>
                         ))}
-                      </tbody>
-                    </table>
+                      </TableBody>
+                    </Table>
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <Button
@@ -1606,176 +1772,245 @@ export default function Materials() {
         </CardContent>
       </Card>
 
-      {groupedMaterials.length === 0 ? (
-        <EmptyState
-          icon={Boxes}
-          title="当前没有符合筛选条件的材料"
-        />
-      ) : (
-        <div className="space-y-4">
-          {groupedMaterials.map((group) => (
-            <Card key={group.participantUnitId ?? '__unassigned__'} className="border-slate-200 shadow-sm">
-              <CardHeader className="pb-3">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <CardTitle className="text-base text-slate-900">{group.participantUnitName}</CardTitle>
-                    <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">
-                      <span>{group.materials.length} 条材料</span>
-                      {group.specialtyTypes.map((type) => (
-                        <span key={type} className="rounded-full bg-slate-100 px-2 py-1">
-                          {type}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                {group.participantUnitId === null && (
-                  <div
-                    className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"
-                    data-testid="materials-unassigned-banner"
-                  >
-                    以下材料所属分包商已删除，请重新关联
-                  </div>
-                )}
-
-                {group.materials.map((material) => {
-                  const status = getMaterialPrimaryStatus(material)
-
-                  return (
-                    <div key={material.id} className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div className="space-y-2">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <div className="text-sm font-medium text-slate-900">{material.material_name}</div>
-                            <span
-                              data-testid={`material-status-chip-${material.id}`}
-                              className={`rounded-full px-2 py-1 text-xs font-medium ${getMaterialStatusTone(status)}`}
-                            >
-                              {getMaterialStatusLabel(status)}
+          {groupedMaterials.length === 0 ? (
+            <EmptyState
+              variant={hasActiveMaterialFilters ? 'filter' : 'default'}
+              icon={Boxes}
+              title={hasActiveMaterialFilters ? '当前没有符合筛选条件的材料' : '暂无材料记录'}
+              description={hasActiveMaterialFilters ? '尝试调整筛选条件' : '添加材料后可跟踪到场、验收和联动任务。'}
+              onClearFilter={clearMaterialFilters}
+            />
+          ) : (
+            <div className="space-y-4">
+              {groupedMaterials.map((group) => (
+                <Card key={group.participantUnitId ?? '__unassigned__'} className="border-slate-200 shadow-sm">
+                  <CardHeader className="pb-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <CardTitle className="text-base text-slate-900">{group.participantUnitName}</CardTitle>
+                        <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">
+                          <span>{group.materials.length} 条材料</span>
+                          {group.specialtyTypes.map((type) => (
+                            <span key={type} className="rounded-full bg-slate-100 px-2 py-1">
+                              {type}
                             </span>
-                            {isMaterialArrivedThisWeek(material) && (
-                              <span className="rounded-full bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 ring-1 ring-blue-200">
-                                本周到场
-                              </span>
-                            )}
-                            {material.specialty_type && (
-                              <span className="rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-600">
-                                {material.specialty_type}
-                              </span>
-                            )}
-                          </div>
-                          <div className="text-sm text-slate-500">
-                            预计到场：{material.expected_arrival_date}
-                            {material.actual_arrival_date ? ` · 实际到场：${material.actual_arrival_date}` : ''}
-                          </div>
-                          <div className="text-xs text-slate-500" data-testid={`material-linked-task-${material.id}`}>
-                            {material.linked_task_id ? (
-                              <>
-                                关联任务：{material.linked_task_title || '未命名任务'} · 计划开工 {material.linked_task_start_date || '--'} · 到货缓冲{' '}
-                                {material.linked_task_buffer_days == null ? '--' : `${material.linked_task_buffer_days} 天`}
-                              </>
-                            ) : (
-                              '当前未匹配到在施任务，暂按材料真值独立跟踪'
-                            )}
-                          </div>
+                          ))}
                         </div>
-
-                        <div className="flex flex-wrap items-center gap-2">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => openDetailDialog(material)}
-                            data-testid={`material-detail-trigger-${material.id}`}
-                          >
-                            <PencilLine className="mr-1 h-4 w-4" />
-                            {isReadOnly ? '查看详情' : '详情编辑'}
-                          </Button>
-                          {!isReadOnly && (
-                            <Button variant="ghost" size="sm" onClick={() => void handleDeleteMaterial(material.id)}>
-                              <Trash2 className="mr-1 h-4 w-4" />
-                              删除
-                            </Button>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                        <label className="space-y-1 text-xs text-slate-500">
-                          <span>参建单位</span>
-                          <select
-                            value={material.participant_unit_id ?? ''}
-                            onChange={(event) => void handleInlineUpdate(material.id, { participant_unit_id: event.target.value || null })}
-                            disabled={isReadOnly}
-                            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 disabled:bg-slate-50"
-                          >
-                            <option value="">暂不关联</option>
-                            {participantUnits.map((unit) => (
-                              <option key={unit.id} value={unit.id}>
-                                {unit.unit_name}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        <label className="space-y-1 text-xs text-slate-500">
-                          <span>实际到场日期</span>
-                          <input
-                            data-testid={`material-inline-actual-arrival-${material.id}`}
-                            type="date"
-                            value={material.actual_arrival_date ?? ''}
-                            onChange={(event) => void handleInlineUpdate(material.id, { actual_arrival_date: event.target.value || null })}
-                            disabled={isReadOnly}
-                            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 disabled:bg-slate-50"
-                          />
-                        </label>
-                        {material.requires_sample_confirmation ? (
-                          <label className="flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-700">
-                            <input
-                              data-testid={`material-inline-sample-confirmed-${material.id}`}
-                              type="checkbox"
-                              checked={material.sample_confirmed}
-                              disabled={isReadOnly}
-                              onChange={(event) => void handleInlineUpdate(material.id, { sample_confirmed: event.target.checked })}
-                            />
-                            定样已完成
-                          </label>
-                        ) : (
-                          <div
-                            data-testid={`material-inline-sample-placeholder-${material.id}`}
-                            className="flex items-center rounded-xl border border-dashed border-slate-200 px-3 py-2 text-sm text-slate-400"
-                          >
-                            无需定样
-                          </div>
-                        )}
-                        {material.requires_inspection ? (
-                          <label className="flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-700">
-                            <input
-                              data-testid={`material-inline-inspection-done-${material.id}`}
-                              type="checkbox"
-                              checked={material.inspection_done}
-                              disabled={isReadOnly}
-                              onChange={(event) => void handleInlineUpdate(material.id, { inspection_done: event.target.checked })}
-                            />
-                            送检已完成
-                          </label>
-                        ) : (
-                          <div
-                            data-testid={`material-inline-inspection-placeholder-${material.id}`}
-                            className="flex items-center rounded-xl border border-dashed border-slate-200 px-3 py-2 text-sm text-slate-400"
-                          >
-                            无需送检
-                          </div>
-                        )}
                       </div>
                     </div>
-                  )
-                })}
-              </CardContent>
-            </Card>
-          ))}
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    {group.participantUnitId === null && (
+                      <div
+                        className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"
+                        data-testid="materials-unassigned-banner"
+                      >
+                        以下材料所属分包商已删除，请重新关联
+                      </div>
+                    )}
+
+                    <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+                      <Table className="min-w-[980px] w-full text-left text-sm" data-testid="materials-table">
+                        <TableHeader className="sticky top-0 z-10 bg-white text-xs text-slate-500">
+                          <TableRow className="py-3">
+                            <TableHead className="px-3 py-2 font-medium">材料名</TableHead>
+                            <TableHead className="px-3 py-2 font-medium">定样</TableHead>
+                            <TableHead className="px-3 py-2 text-right font-medium tabular-nums">预计到场</TableHead>
+                            <TableHead className="px-3 py-2 text-right font-medium tabular-nums">实际到场</TableHead>
+                            <TableHead className="px-3 py-2 font-medium">送检</TableHead>
+                            <TableHead className="px-3 py-2 font-medium">状态</TableHead>
+                            <TableHead className="px-3 py-2 text-right font-medium">操作</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {group.materials.map((material) => (
+                            <TableRow
+                              key={material.id}
+                              className="group py-3 even:bg-slate-50/50 hover:bg-slate-100/60"
+                              data-testid={`materials-table-row-${material.id}`}
+                            >
+                              <TableCell className="px-3 py-3 align-top">
+                                <div className="font-medium text-slate-900">{material.material_name}</div>
+                                <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                                  {material.specialty_type ? <span>{material.specialty_type}</span> : null}
+                                  {isMaterialArrivedThisWeek(material) ? (
+                                    <span className="rounded-full bg-blue-50 px-2 py-0.5 font-medium text-blue-700 ring-1 ring-blue-200">
+                                      本周到场
+                                    </span>
+                                  ) : null}
+                                </div>
+                                <div className="mt-2 max-w-[320px] text-xs leading-5 text-slate-500" data-testid={`material-linked-task-${material.id}`}>
+                                  {material.linked_task_id ? (
+                                    <>
+                                      关联任务：{material.linked_task_title || '未命名任务'} · 计划开工 {material.linked_task_start_date || '--'} · 到货缓冲{' '}
+                                      {material.linked_task_buffer_days == null ? '--' : `${material.linked_task_buffer_days} 天`}
+                                    </>
+                                  ) : (
+                                    '当前未匹配到在施任务，暂按材料真值独立跟踪'
+                                  )}
+                                </div>
+                              </TableCell>
+                              <TableCell className="px-3 py-3 align-top">
+                                {material.requires_sample_confirmation ? (
+                                  <label className="inline-flex items-center gap-2 text-sm text-slate-700">
+                                    <input
+                                      data-testid={`material-inline-sample-confirmed-${material.id}`}
+                                      type="checkbox"
+                                      checked={material.sample_confirmed}
+                                      disabled={isReadOnly}
+                                      onChange={(event) => void handleInlineUpdate(material.id, { sample_confirmed: event.target.checked })}
+                                    />
+                                    已定样
+                                  </label>
+                                ) : (
+                                  <span
+                                    data-testid={`material-inline-sample-placeholder-${material.id}`}
+                                    className="text-sm text-slate-400"
+                                  >
+                                    无需定样
+                                  </span>
+                                )}
+                              </TableCell>
+                              <TableCell className="px-3 py-3 text-right align-top tabular-nums text-slate-700">
+                                {material.expected_arrival_date}
+                              </TableCell>
+                              <TableCell className="px-3 py-3 align-top">
+                                <input
+                                  data-testid={`material-inline-actual-arrival-${material.id}`}
+                                  type="date"
+                                  aria-label={`填写${material.material_name}实际到场日期`}
+                                  value={material.actual_arrival_date ?? ''}
+                                  onChange={(event) => void handleInlineUpdate(material.id, { actual_arrival_date: event.target.value || null })}
+                                  disabled={isReadOnly}
+                                  className="w-full min-w-[140px] rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-right text-sm tabular-nums text-slate-900 disabled:bg-slate-50"
+                                />
+                              </TableCell>
+                              <TableCell className="px-3 py-3 align-top">
+                                {material.requires_inspection ? (
+                                  <label className="inline-flex items-center gap-2 text-sm text-slate-700">
+                                    <input
+                                      data-testid={`material-inline-inspection-done-${material.id}`}
+                                      type="checkbox"
+                                      checked={material.inspection_done}
+                                      disabled={isReadOnly}
+                                      onChange={(event) => void handleInlineUpdate(material.id, { inspection_done: event.target.checked })}
+                                    />
+                                    已送检
+                                  </label>
+                                ) : (
+                                  <span
+                                    data-testid={`material-inline-inspection-placeholder-${material.id}`}
+                                    className="text-sm text-slate-400"
+                                  >
+                                    无需送检
+                                  </span>
+                                )}
+                              </TableCell>
+                              <TableCell className="px-3 py-3 align-top">
+                                <MaterialStatusPill material={material} />
+                              </TableCell>
+                              <TableCell className="px-3 py-3 align-top">
+                                <div className="flex justify-end gap-2 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => openDetailDialog(material)}
+                                    data-testid={`material-detail-trigger-${material.id}`}
+                                  >
+                                    <PencilLine className="mr-1 h-4 w-4" />
+                                    {isReadOnly ? '查看' : '编辑'}
+                                  </Button>
+                                  {!isReadOnly && (
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => setPendingDeleteMaterial(material)}
+                                      data-testid={`material-delete-trigger-${material.id}`}
+                                    >
+                                      <Trash2 className="mr-1 h-4 w-4" />
+                                      删除
+                                    </Button>
+                                  )}
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
         </div>
-      )}
+
+        <aside className="space-y-4" data-testid="materials-side-panel">
+          <Card className="border-slate-200 shadow-sm" data-testid="materials-quick-stats">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base text-slate-900">快速统计</CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-3">
+              <MiniMetric label="待定样" value={summary.pendingSample} tone="amber" />
+              <MiniMetric label="逾期未到" value={summary.overdueArrival} tone="red" />
+              <MiniMetric label="待送检" value={summary.pendingInspection} tone="sky" />
+            </CardContent>
+          </Card>
+
+          <MaterialCategoryPie categories={materialCategories} />
+          <RecentArrivalsList materials={recentArrivals} />
+
+          <Card className="border-slate-200 shadow-sm" data-testid="materials-weekly-summary">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base text-slate-900">周报摘要</CardTitle>
+              <div className="mt-1 text-sm text-slate-500">
+                周窗口 {formatWeekLabel(latestDigest?.week_start)} · 最近生成 {formatDateTimeLabel(latestDigest?.generated_at)}
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <MiniMetric label="应到总数" value={weeklySummary.totalExpectedCount} />
+                <MiniMetric label="准时到场" value={weeklySummary.onTimeCount} />
+              </div>
+              <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-sm text-blue-900">
+                准时到场率 {weeklySummary.arrivalRate}%
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="border-slate-200 shadow-sm" data-testid="materials-reminder-feed">
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between gap-3">
+                <CardTitle className="text-base text-slate-900">提醒列表</CardTitle>
+                <Button asChild variant="outline" size="sm">
+                  <Link to={`/notifications?scope=current-project&projectId=${encodeURIComponent(projectId)}`}>全部</Link>
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {reminders.length > 0 ? (
+                reminders.slice(0, 3).map((reminder) => (
+                  <div
+                    key={reminder.id}
+                    data-testid={`materials-reminder-item-${reminder.id}`}
+                    className={`rounded-lg border px-3 py-3 ${getReminderTone(reminder)}`}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="truncate text-sm font-medium">{reminder.title}</div>
+                      <div className="shrink-0 text-xs opacity-80">{formatDateTimeLabel(reminder.created_at)}</div>
+                    </div>
+                    <div className="mt-2 text-sm leading-6 opacity-90">{reminder.content || '系统已生成材料提醒。'}</div>
+                  </div>
+                ))
+              ) : (
+                <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+                  暂无材料提醒
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </aside>
+      </section>
 
       <MaterialDetailDialog
         open={Boolean(detailMaterial)}
@@ -1803,6 +2038,18 @@ export default function Materials() {
         onLoadAiInsight={() => void handleLoadAiInsight()}
         onApplyAiSuggestion={() => void handleApplyAiSuggestion()}
         onRefreshChangeLogs={() => void (detailMaterial ? loadMaterialChangeLogs(detailMaterial.id) : Promise.resolve())}
+      />
+      <ConfirmActionDialog
+        open={Boolean(pendingDeleteMaterial)}
+        onOpenChange={(open) => {
+          if (!open) setPendingDeleteMaterial(null)
+        }}
+        title="删除材料"
+        description={`确认删除“${pendingDeleteMaterial?.material_name ?? '该材料'}”？删除后将从材料清单移除，并写入变更日志。`}
+        confirmLabel="删除"
+        confirmTone="destructive"
+        testId="materials-delete-confirm-dialog"
+        onConfirm={handleConfirmDeleteMaterial}
       />
     </div>
   )

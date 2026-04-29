@@ -1,7 +1,8 @@
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import { Sparkline } from '@/components/Sparkline'
+import { cn } from '@/lib/utils'
 import {
   AlertTriangle,
   Plus,
@@ -11,6 +12,20 @@ import type { HealthHistory, HeroStatItem } from '../types'
 import {
   formatDelta,
 } from '../utils'
+
+function healthPillClass(value: string) {
+  const score = Number(value)
+  if (score >= 80) return 'bg-green-50 text-green-700'
+  if (score >= 60) return 'bg-amber-50 text-amber-700'
+  return 'bg-red-50 text-red-700'
+}
+
+function healthPillLabel(value: string) {
+  const score = Number(value)
+  if (score >= 80) return '良好'
+  if (score >= 60) return '一般'
+  return '预警'
+}
 
 interface CompanyHeroProps {
   search: string
@@ -40,7 +55,7 @@ export function CompanyHero({
   stats,
 }: CompanyHeroProps) {
   return (
-    <section className="shell-surface px-6 py-6">
+    <section className="rounded-xl bg-gradient-to-br from-blue-50 to-slate-50 p-6 shadow-[var(--el-1)]">
       <div className="flex flex-col gap-6">
         <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
           <div className="space-y-3">
@@ -51,6 +66,7 @@ export function CompanyHero({
             <Input
               value={search}
               onChange={(event) => onSearchChange(event.target.value)}
+              aria-label="搜索项目"
               placeholder="搜索项目"
               className="h-11 w-full rounded-2xl border-slate-200 bg-white sm:w-72"
             />
@@ -76,24 +92,38 @@ export function CompanyHero({
           </Alert>
         ) : null}
 
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-6 xl:grid-cols-3">
           {heroStats.map((item) => (
-            <Card key={item.label} className="card-l2 border-slate-100">
-              <CardContent className="p-6">
+            <div key={item.label} className="card-unified p-6" data-testid="company-hero-metric">
                 <div className="flex items-center justify-between gap-4">
-                  <div className="text-sm text-slate-500">{item.label}</div>
+                  <div className="text-xs uppercase tracking-wider text-slate-400">{item.label}</div>
                   <div className={`rounded-2xl p-2.5 ${item.tone}`}>
                     <item.icon className="h-5 w-5" />
                   </div>
                 </div>
-                <div className="mt-3 text-4xl font-semibold tracking-tight text-slate-900">{item.value}</div>
-              </CardContent>
-            </Card>
+                <div className="mt-3 flex items-end justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-3xl font-bold tabular-nums text-slate-900">{item.value}</span>
+                      {item.pill ? (
+                        <span className={cn('rounded-full px-2 py-0.5 text-xs font-medium', healthPillClass(item.value))}>
+                          {healthPillLabel(item.value)}
+                        </span>
+                      ) : null}
+                    </div>
+                    <div className="mt-2 text-xs text-slate-500">{item.hint}</div>
+                  </div>
+                  <Sparkline
+                    data={item.sparklineData?.length ? item.sparklineData : [{ value: Number(item.value.replace('%', '')) || 0 }]}
+                    color={item.pill ? '#F59E0B' : '#2563EB'}
+                  />
+                </div>
+            </div>
           ))}
         </div>
 
         {/* 趋势总览 */}
-        <div className="rounded-[24px] border border-slate-100 bg-slate-50 px-5 py-5">
+        <div className="rounded-2xl border border-slate-100 bg-slate-50 px-5 py-5">
           <div className="flex items-center justify-between gap-3">
             <div className="text-sm font-medium text-slate-900">趋势总览</div>
             <div className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-slate-500">

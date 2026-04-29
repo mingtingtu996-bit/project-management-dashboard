@@ -8,6 +8,10 @@ import {
   getCertificateStatusThemeKey,
   mapCertificateStatusLabel,
 } from '../constants'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
+import { cn } from '@/lib/utils'
 
 interface FourCertificateBoardProps {
   certificates: CertificateBoardItem[]
@@ -29,6 +33,14 @@ const certificateIcons = {
   construction_permit: FileBadge2,
 } as const
 
+function resolveBoardStage(certificate?: CertificateBoardItem | null) {
+  if (!certificate) return CERTIFICATE_STAGE_SEQUENCE[0]
+  if (certificate.status === 'issued') return CERTIFICATE_STAGE_SEQUENCE[CERTIFICATE_STAGE_SEQUENCE.length - 1]
+  return CERTIFICATE_STAGE_SEQUENCE.includes(certificate.current_stage as typeof CERTIFICATE_STAGE_SEQUENCE[number])
+    ? certificate.current_stage as typeof CERTIFICATE_STAGE_SEQUENCE[number]
+    : CERTIFICATE_STAGE_SEQUENCE[0]
+}
+
 export function FourCertificateBoard({
   certificates,
   sharedItems,
@@ -41,61 +53,76 @@ export function FourCertificateBoard({
   onHoverCertificate,
   onClickBlockedTag,
 }: FourCertificateBoardProps) {
+  const boardItems = CERTIFICATE_ORDER.map((entry) => ({
+    entry,
+    certificate: certificates.find((item) => item.certificate_type === entry.id) || null,
+  }))
+  const stageColumns = CERTIFICATE_STAGE_SEQUENCE.map((stage) => ({
+    stage,
+    items: boardItems.filter((item) => resolveBoardStage(item.certificate) === stage),
+  }))
+
   return (
-    <div data-testid="pre-milestones-board" className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+    <div data-testid="pre-milestones-board" className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
       <div className="flex items-center justify-between gap-3 mb-4">
         <div>
           <h3 className="text-sm font-semibold text-slate-900">四证推进看板</h3>
         </div>
       </div>
 
-      <div className="grid gap-3">
-        {CERTIFICATE_ORDER.map((entry, index) => {
-          const certificate = certificates.find((item) => item.certificate_type === entry.id)
-          const Icon = certificateIcons[entry.id]
-          const relatedSharedItems = sharedItems.filter((item) =>
-            certificate?.shared_work_item_ids.includes(item.work_item_id) ||
-            item.certificate_types.includes(entry.id)
-          )
-          const active = selectedCertificateId === certificate?.id
-          const hasBlockedSharedItem = relatedSharedItems.some((item) => item.block_reason)
-          // #2: highlight this card when hovered work item belongs to it
-          const hoveredWorkItemBelongsHere = hoveredWorkItemId
-            ? relatedSharedItems.some((item) => item.work_item_id === hoveredWorkItemId)
-            : false
-          // dim this card when another card owns the hovered work item
-          const dimmedByHover = Boolean(hoveredWorkItemId && !hoveredWorkItemBelongsHere && !active)
+      <div className="grid gap-4 xl:grid-cols-4">
+        {stageColumns.map((column) => (
+          <section key={column.stage} className="rounded-xl border border-slate-200 bg-slate-50/70 p-3" data-testid={`pre-milestones-board-stage-${column.stage}`}>
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div className="text-sm font-semibold text-slate-900">{column.stage}</div>
+              <span className="rounded-full bg-white px-2.5 py-1 text-xs font-medium tabular-nums text-slate-600">{column.items.length}</span>
+            </div>
+            <div className="grid gap-3">
+              {column.items.map(({ entry, certificate }) => {
+                const Icon = certificateIcons[entry.id]
+                const relatedSharedItems = sharedItems.filter((item) =>
+                  certificate?.shared_work_item_ids.includes(item.work_item_id) ||
+                  item.certificate_types.includes(entry.id)
+                )
+                const active = selectedCertificateId === certificate?.id
+                const hasBlockedSharedItem = relatedSharedItems.some((item) => item.block_reason)
+                const hoveredWorkItemBelongsHere = hoveredWorkItemId
+                  ? relatedSharedItems.some((item) => item.work_item_id === hoveredWorkItemId)
+                  : false
+                const dimmedByHover = Boolean(hoveredWorkItemId && !hoveredWorkItemBelongsHere && !active)
+                const dueDate = certificate?.planned_finish_date || certificate?.next_action_due_date || '待补充'
 
-          return (
-            <div
-              key={entry.id}
-              data-testid={certificate ? `pre-milestones-certificate-${certificate.id}` : `pre-milestones-certificate-${entry.id}`}
-              role="button"
-              tabIndex={0}
-              onMouseEnter={() => certificate && onHoverCertificate?.(certificate.id)}
-              onMouseLeave={() => onHoverCertificate?.(null)}
-              onClick={() => {
-                if (certificate) {
-                  onSelectCertificate(certificate.id)
-                  onOpenCertificateDetail(certificate.id)
-                }
-              }}
-              onKeyDown={(event) => {
-                if ((event.key === 'Enter' || event.key === ' ') && certificate) {
-                  event.preventDefault()
-                  onSelectCertificate(certificate.id)
-                  onOpenCertificateDetail(certificate.id)
-                }
-              }}
-              style={dimmedByHover ? { opacity: 0.4 } : undefined}
-              className={`w-full rounded-2xl border p-4 text-left transition-all ${
-                active
-                  ? 'border-blue-300 bg-blue-50 shadow-md'
-                  : hoveredWorkItemBelongsHere
-                    ? 'border-indigo-300 bg-indigo-50 shadow-md'
-                    : 'border-slate-200 bg-white hover:border-slate-300 hover:shadow-sm'
-              }`}
-            >
+                return (
+                  <Card
+                    key={entry.id}
+                    data-testid={certificate ? `pre-milestones-certificate-${certificate.id}` : `pre-milestones-certificate-${entry.id}`}
+                    role="button"
+                    tabIndex={0}
+                    onMouseEnter={() => certificate && onHoverCertificate?.(certificate.id)}
+                    onMouseLeave={() => onHoverCertificate?.(null)}
+                    onClick={() => {
+                      if (certificate) {
+                        onSelectCertificate(certificate.id)
+                        onOpenCertificateDetail(certificate.id)
+                      }
+                    }}
+                    onKeyDown={(event) => {
+                      if ((event.key === 'Enter' || event.key === ' ') && certificate) {
+                        event.preventDefault()
+                        onSelectCertificate(certificate.id)
+                        onOpenCertificateDetail(certificate.id)
+                      }
+                    }}
+                    style={dimmedByHover ? { opacity: 0.4 } : undefined}
+                    className={cn(
+                      'card-unified card-hover w-full rounded-xl p-4 text-left',
+                      active
+                        ? 'border-blue-300 bg-blue-50 shadow-md'
+                        : hoveredWorkItemBelongsHere
+                          ? 'border-indigo-300 bg-indigo-50 shadow-md'
+                          : 'border-slate-200 bg-white',
+                    )}
+                  >
               <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                 <div className="flex min-w-0 items-start gap-3">
                   <div className={`mt-0.5 flex h-10 w-10 items-center justify-center rounded-xl ${certificateStageBadge(certificate?.current_stage || '资料准备')}`}>
@@ -103,32 +130,42 @@ export function FourCertificateBoard({
                   </div>
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
-                      <h4 className="truncate text-sm font-semibold text-slate-900">{entry.label}</h4>
-                      <StatusBadge status={getCertificateStatusThemeKey(certificate?.status || 'pending')} fallbackLabel={mapCertificateStatusLabel(certificate?.status)} className="px-2 py-0.5 text-[11px]">
+                      <h4 className="truncate text-base font-medium text-slate-900">{entry.label}</h4>
+                      <StatusBadge status={getCertificateStatusThemeKey(certificate?.status || 'pending')} fallbackLabel={mapCertificateStatusLabel(certificate?.status)} className="px-2 py-0.5 text-xs">
                         {mapCertificateStatusLabel(certificate?.status)}
                       </StatusBadge>
                       {certificate?.is_blocked && (
-                        <button
+                        <Tooltip>
+  <TooltipTrigger asChild>
+    <Button variant="ghost"
                           type="button"
                           onClick={(e) => { e.stopPropagation(); onClickBlockedTag?.() }}
-                          className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-700 hover:bg-amber-200"
-                          title="台账阻塞项"
+                          className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 hover:bg-amber-200"
+                          
                           data-testid="certificate-blocked-tag"
                         >
-                          <BadgeAlert className="h-3 w-3" />
+                          <BadgeAlert className="h-3.5 w-3.5" />
                           阻塞
-                        </button>
+                        </Button>
+  </TooltipTrigger>
+  <TooltipContent>台账阻塞项</TooltipContent>
+</Tooltip>
                       )}
                       {hasBlockedSharedItem && (
-                        <button
+                        <Tooltip>
+  <TooltipTrigger asChild>
+    <Button variant="ghost"
                           type="button"
                           onClick={(e) => { e.stopPropagation(); onClickBlockedTag?.() }}
-                          className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-0.5 text-[11px] font-medium text-rose-700 hover:bg-rose-200"
-                          title="台账阻塞项"
+                          className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-0.5 text-xs font-medium text-rose-700 hover:bg-rose-200"
+                          
                         >
-                          <AlertTriangle className="h-3 w-3" />
+                          <AlertTriangle className="h-3.5 w-3.5" />
                           共享事项阻塞
-                        </button>
+                        </Button>
+  </TooltipTrigger>
+  <TooltipContent>台账阻塞项</TooltipContent>
+</Tooltip>
                       )}
                     </div>
                     <div className="mt-1 text-xs text-slate-500">
@@ -150,16 +187,27 @@ export function FourCertificateBoard({
                     return (
                       <span
                         key={stage}
-                        className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium ${
+                        className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium ${
                           activeStage ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-500'
                         }`}
                       >
-                        {activeStage ? <CheckCircle2 className="h-3 w-3" /> : <Clock3 className="h-3 w-3" />}
+                        {activeStage ? <CheckCircle2 className="h-3.5 w-3.5" /> : <Clock3 className="h-3.5 w-3.5" />}
                         {stage}
                       </span>
                     )
                   })}
                   </div>
+                </div>
+              </div>
+
+              <div className="mt-4 grid gap-2 text-xs text-slate-500">
+                <div className="flex items-center justify-between gap-3">
+                  <span>到期日</span>
+                  <span className="font-medium tabular-nums text-slate-700">{dueDate}</span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span>责任人</span>
+                  <span className="font-medium text-slate-700">{certificate?.approving_authority || '待补充'}</span>
                 </div>
               </div>
 
@@ -196,7 +244,7 @@ export function FourCertificateBoard({
                     const isActive = selectedWorkItemId === item.work_item_id
                     const isHovered = hoveredWorkItemId === item.work_item_id
                     return (
-                      <button
+                      <Button variant="ghost"
                         key={item.work_item_id}
                         type="button"
                         onClick={(event) => {
@@ -212,7 +260,7 @@ export function FourCertificateBoard({
                         }`}
                       >
                         {item.item_name}
-                      </button>
+                      </Button>
                     )
                   })
                 ) : (
@@ -227,9 +275,12 @@ export function FourCertificateBoard({
                   <ArrowRight className="h-3.5 w-3.5" />
                 </span>
               </div>
+                  </Card>
+                )
+              })}
             </div>
-          )
-        })}
+          </section>
+        ))}
       </div>
     </div>
   )

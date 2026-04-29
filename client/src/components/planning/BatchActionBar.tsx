@@ -57,14 +57,14 @@ export function BatchActionBar({
               {unsavedLabel}
             </Badge>
           ) : null}
-          <button
+          <Button variant="ghost"
             type="button"
             onClick={onClear}
             className="rounded-full p-1 text-slate-300 transition hover:bg-white/10 hover:text-white"
             aria-label="清空选择"
           >
             <X className="h-4 w-4" />
-          </button>
+          </Button>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -80,7 +80,7 @@ export function BatchActionBar({
                 action.variant === 'destructive'
                   ? 'border-rose-500 bg-rose-600 text-white hover:bg-rose-500'
                   : action.variant === 'outline'
-                    ? 'border-slate-600 bg-transparent text-slate-100 hover:bg-white/10'
+                    ? 'border-slate-700 bg-slate-800 text-white hover:bg-slate-700'
                     : '',
               )}
             >

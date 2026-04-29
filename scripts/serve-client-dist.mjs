@@ -13,6 +13,7 @@ const indexFile = join(distRoot, 'index.html')
 const port = Number(process.env.PORT || 4173)
 const apiTargetHost = process.env.API_HOST || '127.0.0.1'
 const apiTargetPort = Number(process.env.API_PORT || 3001)
+const shouldDisableOnboarding = process.env.BROWSER_VERIFY_DISABLE_ONBOARDING !== 'false'
 
 const contentTypeMap = new Map([
   ['.html', 'text/html; charset=utf-8'],
@@ -41,12 +42,33 @@ function resolveStaticPath(urlPath) {
   return filePath
 }
 
-function sendFile(res, filePath) {
+function injectBrowserVerifyState(html) {
+  if (!shouldDisableOnboarding) return html
+  const script = [
+    '<script>',
+    'try {',
+    'localStorage.setItem("onboarding_completed", "true");',
+    'localStorage.setItem("onboarding_daily_workflow_dismissed", "true");',
+    '} catch (_) {}',
+    '</script>',
+  ].join('')
+
+  return html.replace('</head>', `${script}</head>`)
+}
+
+async function sendFile(res, filePath) {
   const contentType = contentTypeMap.get(extname(filePath).toLowerCase()) || 'application/octet-stream'
   res.writeHead(200, {
     'Content-Type': contentType,
     'Cache-Control': filePath === indexFile ? 'no-cache' : 'public, max-age=31536000, immutable',
   })
+
+  if (filePath === indexFile) {
+    const html = await readFile(filePath, 'utf8')
+    res.end(injectBrowserVerifyState(html))
+    return
+  }
+
   createReadStream(filePath).pipe(res)
 }
 
@@ -121,17 +143,17 @@ const server = http.createServer(async (req, res) => {
   const staticPath = resolveStaticPath(requestUrl.pathname)
 
   if (staticPath) {
-    sendFile(res, staticPath)
+    await sendFile(res, staticPath)
     return
   }
 
   try {
-    const html = await readFile(indexFile)
+    const html = await readFile(indexFile, 'utf8')
     res.writeHead(200, {
       'Content-Type': 'text/html; charset=utf-8',
       'Cache-Control': 'no-cache',
     })
-    res.end(html)
+    res.end(injectBrowserVerifyState(html))
   } catch (error) {
     res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' })
     res.end(`Failed to read index.html: ${error instanceof Error ? error.message : String(error)}`)

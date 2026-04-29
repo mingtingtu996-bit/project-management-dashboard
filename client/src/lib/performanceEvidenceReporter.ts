@@ -117,28 +117,32 @@ export async function reportPerformanceEvidence(report: PerformanceEvidenceRepor
   const body = JSON.stringify(buildPayload(report))
 
   try {
-    if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
-      const accepted = navigator.sendBeacon(
-        runtimeConfig.endpoint,
-        new Blob([body], { type: 'application/json' }),
-      )
-      if (accepted) return true
-    }
-
-    await fetch(runtimeConfig.endpoint, {
+    const response = await fetch(runtimeConfig.endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body,
       credentials: 'include',
       keepalive: true,
     })
-    return true
+    if (response.ok) return true
+  } catch {
+    // Fall back to sendBeacon below when keepalive fetch is unavailable or interrupted.
+  }
+
+  try {
+    if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
+      return navigator.sendBeacon(
+        runtimeConfig.endpoint,
+        new Blob([body], { type: 'application/json' }),
+      )
+    }
   } catch (error) {
     if (import.meta.env.DEV) {
       console.warn('[performance-evidence] failed to report metric', error)
     }
-    return false
   }
+
+  return false
 }
 
 export function shouldReportApiPerformanceEvidence(input: ApiPerformanceEvidenceInput): boolean {
@@ -341,4 +345,3 @@ export function resetPerformanceEvidenceReportingForTests(): void {
   installed = false
   longTaskReportCount = 0
 }
-

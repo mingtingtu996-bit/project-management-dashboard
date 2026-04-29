@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { WifiOff } from 'lucide-react'
+import { Separator } from '@/components/ui/separator'
 
 export function OfflineBanner() {
   const [isOffline, setIsOffline] = useState(() => !navigator.onLine)
@@ -20,16 +21,18 @@ export function OfflineBanner() {
   if (!isOffline) return null
 
   return (
-    <div
-      className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900"
-      role="status"
-      aria-live="polite"
-    >
-      <div className="mx-auto flex max-w-[1680px] items-center gap-2">
-        <WifiOff className="h-4 w-4" />
-        <span>离线模式中，当前无法保存或提交内容，请恢复网络后再继续操作。</span>
+    <>
+      <div
+        className="bg-amber-50 px-4 py-2 text-sm text-amber-900"
+        role="status"
+        aria-live="polite"
+      >
+        <div className="mx-auto flex max-w-[1680px] items-center gap-2">
+          <WifiOff className="h-4 w-4" />
+          <span>离线模式中，当前无法保存或提交内容，请恢复网络后再继续操作。</span>
+        </div>
       </div>
-    </div>
+      <Separator className="border-amber-200" />
+    </>
   )
 }
-

@@ -114,12 +114,12 @@ export default function ProjectLayout() {
             项目 ID <code>{projectId}</code> 在数据库中找不到。
             <br />
             <br />
-            <button
+            <Button variant="ghost"
               onClick={() => navigate('/company')}
               className="text-white underline"
             >
               返回公司驾驶舱
-            </button>
+            </Button>
           </AlertDescription>
         </Alert>
       </div>
@@ -138,18 +138,18 @@ export default function ProjectLayout() {
             <br />
             <br />
             <div className="flex flex-wrap gap-3">
-              <button
+              <Button variant="ghost"
                 onClick={retry}
                 className="text-white underline"
               >
                 重新加载
-              </button>
-              <button
+              </Button>
+              <Button variant="ghost"
                 onClick={() => navigate('/company')}
                 className="text-white underline"
               >
                 返回公司驾驶舱
-              </button>
+              </Button>
             </div>
           </AlertDescription>
         </Alert>

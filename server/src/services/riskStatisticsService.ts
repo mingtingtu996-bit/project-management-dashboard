@@ -57,6 +57,13 @@ export interface RiskTrendData {
   totalWarnings: number;
 }
 
+export interface RiskPipelineStages {
+  identified: number;
+  assessed: number;
+  responded: number;
+  monitored: number;
+}
+
 export interface RiskTrendSummary {
   trend: RiskTrendData[];
   summary: {
@@ -72,6 +79,7 @@ export interface RiskTrendSummary {
     sourceType: string;
     count: number;
   }>;
+  pipelineStages: RiskPipelineStages;
 }
 
 function normalizeText(value: unknown) {
@@ -96,6 +104,49 @@ function createDateRange(startDateStr: string, endDateStr: string) {
   }
 
   return dates
+}
+
+export function buildRiskPipelineStages(rows: Array<{ status?: string | null }>): RiskPipelineStages {
+  return rows.reduce<RiskPipelineStages>((stages, row) => {
+    const status = normalizeText(row.status)
+    if (status === 'identified' || status === '已识别' || status === '识别') {
+      stages.identified += 1
+      return stages
+    }
+
+    if (status === 'assessed' || status === 'assessment' || status === '已评估' || status === '评估') {
+      stages.assessed += 1
+      return stages
+    }
+
+    if (
+      status === 'responded'
+      || status === 'responding'
+      || status === 'mitigating'
+      || status === '应对'
+      || status === '已应对'
+      || status === '处理中'
+    ) {
+      stages.responded += 1
+      return stages
+    }
+
+    if (
+      status === 'monitored'
+      || status === 'monitoring'
+      || status === 'closed'
+      || status === 'resolved'
+      || status === '监控中'
+      || status === '已关闭'
+      || status === '已解决'
+    ) {
+      stages.monitored += 1
+      return stages
+    }
+
+    stages.identified += 1
+    return stages
+  }, { identified: 0, assessed: 0, responded: 0, monitored: 0 })
 }
 
 class RiskStatisticsService {
@@ -402,6 +453,7 @@ class RiskStatisticsService {
 
       const currentRiskRows = (currentRisksResult.data ?? []) as Array<{ level?: string | null; status?: string | null; source_type?: string | null; title?: string | null }>
       const activeRiskRows = currentRiskRows.filter((risk) => isActiveRisk(risk))
+      const pipelineStages = buildRiskPipelineStages(currentRiskRows)
       const currentCriticalRisks = activeRiskRows.filter((risk) => normalizeText(risk.level) === 'critical').length
       const sourceTypeBreakdown = Array.from(
         activeRiskRows.reduce((map, risk) => {
@@ -439,7 +491,7 @@ class RiskStatisticsService {
         riskChangeRate: this.calculateChangeRate(trend),
       };
 
-      return { trend, summary, sourceTypeBreakdown };
+      return { trend, summary, sourceTypeBreakdown, pipelineStages };
     } catch (error) {
       console.error('获取风险趋势失败:', error);
       return {
@@ -454,6 +506,7 @@ class RiskStatisticsService {
           riskChangeRate: 0,
         },
         sourceTypeBreakdown: [],
+        pipelineStages: { identified: 0, assessed: 0, responded: 0, monitored: 0 },
       };
     }
   }

@@ -69,7 +69,7 @@ export function healthBadgeClass(score: number) {
 
 export function progressBarClass(progress: number) {
   if (progress >= 80) return 'bg-emerald-500'
-  if (progress >= 40) return 'bg-blue-500'
+  if (progress >= 40) return 'bg-blue-600'
   if (progress > 0) return 'bg-amber-500'
   return 'bg-slate-300'
 }

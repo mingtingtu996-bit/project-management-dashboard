@@ -36,7 +36,7 @@ export function DeviationTabs({
               aria-pressed={active}
               onClick={() => onValueChange(tab.value)}
             >
-              <span className="text-xs font-medium uppercase tracking-[0.12em] opacity-70">{tab.helper}</span>
+              <span className="text-xs font-medium uppercase tracking-wider opacity-70">{tab.helper}</span>
               <span className="text-sm font-semibold">{tab.label}</span>
             </Button>
           )

@@ -29,7 +29,7 @@ export const DEFAULT_ACCEPTANCE_TYPES: AcceptanceType[] = [
     id: 'four_party',
     name: '单位工程竣工验收',
     shortName: '四方验收',
-    color: 'bg-blue-500',
+    color: 'bg-blue-600',
     icon: 'Users',
     isSystem: true,
     description: '建设单位组织的四方验收',
@@ -140,10 +140,10 @@ export const ACCEPTANCE_STATUS_CONFIG: Record<
 > = {
   draft: {
     icon: 'Circle',
-    color: 'text-gray-500',
-    bg: 'bg-gray-100',
-    borderColor: 'border-gray-300',
-    textColor: 'text-gray-600',
+    color: 'text-slate-500',
+    bg: 'bg-slate-100',
+    borderColor: 'border-slate-300',
+    textColor: 'text-slate-600',
   },
   preparing: {
     icon: 'Loader2',
@@ -539,7 +539,7 @@ export function getDefaultAcceptanceType(typeId: string): AcceptanceType | undef
 
 export function getAcceptanceTypeColor(typeId: string, customTypes?: AcceptanceType[]): string {
   const allTypes = [...DEFAULT_ACCEPTANCE_TYPES, ...(customTypes || [])]
-  return allTypes.find((type) => type.id === typeId)?.color || 'bg-gray-500'
+  return allTypes.find((type) => type.id === typeId)?.color || 'bg-slate-500'
 }
 
 export function getAcceptanceTypeName(typeId: string, customTypes?: AcceptanceType[]): string {

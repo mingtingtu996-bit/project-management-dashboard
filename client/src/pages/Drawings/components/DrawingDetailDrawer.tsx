@@ -3,6 +3,7 @@ import { AlertTriangle, Layers3, ListChecks, Plus, RefreshCw, ShieldCheck, Trian
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import { Separator } from '@/components/ui/separator'
 import { useDialogFocusRestore } from '@/hooks/useDialogFocusRestore'
 import {
   Dialog,
@@ -62,11 +63,11 @@ export function DrawingDetailDrawer({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="left-auto right-0 top-0 h-full max-h-none w-full max-w-5xl translate-x-0 translate-y-0 rounded-none border-l border-slate-200 bg-white p-0 shadow-2xl data-[state=open]:slide-in-from-right-0"
+        className="left-auto right-0 top-0 h-full max-h-none w-full max-w-[720px] translate-x-0 translate-y-0 rounded-none border-l border-slate-200 bg-white p-0 shadow-[var(--el-4)] data-[state=open]:slide-in-from-right-0"
         data-testid="drawing-detail-drawer"
       >
         <div className="flex h-full flex-col">
-          <DialogHeader className="border-b border-slate-100 px-6 py-5 text-left">
+          <DialogHeader className="px-6 py-5 text-left">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <DialogTitle className="text-xl text-slate-900">
@@ -86,6 +87,7 @@ export function DrawingDetailDrawer({
               ) : null}
             </div>
           </DialogHeader>
+          <Separator />
 
           {!detail ? (
             <div className="flex flex-1 items-center justify-center p-8" />
@@ -367,7 +369,7 @@ function LinkedTaskList({ tasks }: { tasks: DrawingLinkedTaskView[] }) {
           </div>
           <div className="mt-2 flex flex-wrap gap-2">
             {task.conditions.map((condition) => (
-              <Badge key={condition.id} variant={condition.isSatisfied ? 'secondary' : 'destructive'} className="rounded-full px-2 py-1 text-[11px]">
+              <Badge key={condition.id} variant={condition.isSatisfied ? 'secondary' : 'destructive'} className="rounded-full px-2 py-1 text-xs">
                 {condition.name}
               </Badge>
             ))}
@@ -399,7 +401,7 @@ function LinkedAcceptanceList({ acceptance }: { acceptance: DrawingLinkedAccepta
           </div>
           <div className="mt-2 flex flex-wrap gap-2">
             {plan.requirements.map((requirement) => (
-              <Badge key={requirement.id} variant={requirement.status === 'met' ? 'secondary' : 'outline'} className="rounded-full px-2 py-1 text-[11px]">
+              <Badge key={requirement.id} variant={requirement.status === 'met' ? 'secondary' : 'outline'} className="rounded-full px-2 py-1 text-xs">
                 {requirement.requirementType}
               </Badge>
             ))}
@@ -449,17 +451,17 @@ function SignalList({
           <div className="mt-2 flex flex-wrap gap-2">
             <Badge
               variant={signal.severity === 'critical' ? 'destructive' : signal.severity === 'high' ? 'default' : 'secondary'}
-              className="rounded-full px-2 py-1 text-[11px]"
+              className="rounded-full px-2 py-1 text-xs"
             >
               {signal.severity}
             </Badge>
             {signal.evidence.map((evidence) => (
-              <Badge key={evidence} variant="outline" className="rounded-full px-2 py-1 text-[11px]">
+              <Badge key={evidence} variant="outline" className="rounded-full px-2 py-1 text-xs">
                 {evidence}
               </Badge>
             ))}
             {signal.escalatedEntityId ? (
-              <Badge className="rounded-full border-emerald-200 bg-emerald-50 px-2 py-1 text-[11px] text-emerald-700">
+              <Badge className="rounded-full border-emerald-200 bg-emerald-50 px-2 py-1 text-xs text-emerald-700">
                 {escalationLabel(signal)}
               </Badge>
             ) : null}

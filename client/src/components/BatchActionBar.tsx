@@ -62,21 +62,21 @@ export function BatchActionBar({ selectedCount, onClear, actions, className }: B
           sidebarOpen ? 'lg:pl-72' : 'lg:pl-20',
         )}
       >
-        <div className="flex items-center justify-between gap-4 rounded-xl bg-gray-900 px-4 py-3 shadow-xl text-white">
+        <div className="flex items-center justify-between gap-4 rounded-xl bg-slate-900 px-4 py-3 shadow-xl text-white">
           {/* 左侧：已选中数量 */}
           <div className="flex items-center gap-3">
-            <span className="flex h-6 min-w-[1.5rem] items-center justify-center rounded-full bg-blue-500 px-1.5 text-xs font-bold">
+            <span className="flex h-6 min-w-[1.5rem] items-center justify-center rounded-full bg-blue-600 px-1.5 text-xs font-bold">
               {selectedCount}
             </span>
             <span className="text-sm font-medium">条已选中</span>
-            <button
+            <Button variant="ghost"
               onClick={onClear}
-              className="ml-1 rounded-md p-1 hover:bg-gray-700 transition-colors"
+              className="ml-1 rounded-md p-1 hover:bg-slate-700 transition-colors"
               aria-label="清空选择"
               data-testid="batch-action-bar-clear"
             >
-              <X className="h-4 w-4 text-gray-400" />
-            </button>
+              <X className="h-4 w-4 text-slate-400" />
+            </Button>
           </div>
 
           {/* 右侧：操作按钮组 */}
@@ -94,7 +94,7 @@ export function BatchActionBar({ selectedCount, onClear, actions, className }: B
                   action.variant === 'destructive'
                     ? 'bg-red-600 hover:bg-red-700 text-white border-red-600'
                     : action.variant === 'outline'
-                    ? 'border-gray-600 text-gray-200 hover:bg-gray-700 hover:text-white'
+                    ? 'border-slate-600 text-slate-200 hover:bg-slate-700 hover:text-white'
                     : ''
                 )}
               >

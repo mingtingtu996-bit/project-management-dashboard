@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { Chart, registerables } from 'chart.js'
 
+import { ChartAccessibleWrapper } from '@/components/ChartAccessibleWrapper'
 import { CHART_AXIS_COLORS, getProgressThresholdColor } from '@/lib/chartPalette'
 
 Chart.register(...registerables)
@@ -158,7 +159,7 @@ export function MilestoneAchievementChart({ projects }: { projects: MilestoneCha
 
   if (projects.length === 0) {
     return (
-      <div className="flex h-64 items-center justify-center rounded-[24px] border border-dashed border-slate-200 bg-slate-50 text-sm text-slate-500">
+      <div className="flex h-64 items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-slate-50 text-sm text-slate-500">
         当前暂无可展示的里程碑趋势
       </div>
     )
@@ -166,15 +167,21 @@ export function MilestoneAchievementChart({ projects }: { projects: MilestoneCha
 
   if (!hasMilestoneSignal) {
     return (
-      <div className="flex h-64 flex-col items-center justify-center rounded-[24px] border border-dashed border-slate-200 bg-slate-50 px-6 text-center">
+      <div className="flex h-64 flex-col items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-6 text-center">
         <div className="text-base font-semibold text-slate-900">暂无里程碑趋势</div>
       </div>
     )
   }
 
   return (
-    <div className="relative h-72 rounded-[24px] border border-slate-100 bg-white p-4">
-      <canvas ref={canvasRef} />
-    </div>
+    <ChartAccessibleWrapper
+      columns={['项目', '里程碑达成率(%)', '已偏移里程碑数']}
+      rows={projects.map((project) => [project.name, project.milestoneProgress, project.shiftedMilestoneCount])}
+      summary="查看里程碑达成图表数据"
+    >
+      <div className="relative h-72 rounded-2xl border border-slate-100 bg-white p-4">
+        <canvas ref={canvasRef} />
+      </div>
+    </ChartAccessibleWrapper>
   )
 }

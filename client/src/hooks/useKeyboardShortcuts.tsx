@@ -91,7 +91,7 @@ export function ShortcutsHelp({ open, onOpenChange }: ShortcutsHelpProps) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="max-w-[440px]">
         <DialogHeader>
           <DialogTitle>键盘快捷键</DialogTitle>
           <DialogDescription>查看当前应用支持的常用快捷键与导航组合。</DialogDescription>

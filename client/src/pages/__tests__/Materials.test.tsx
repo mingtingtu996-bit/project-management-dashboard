@@ -188,6 +188,13 @@ describe('Materials page', () => {
         arrivalRate: 33,
       },
       byUnit: [],
+      byCategory: [
+        { category: '钢材', count: 1, percentage: 33 },
+        { category: '混凝土', count: 0, percentage: 0 },
+        { category: '管材', count: 1, percentage: 33 },
+        { category: '电气', count: 1, percentage: 33 },
+        { category: '其他', count: 0, percentage: 0 },
+      ],
       monthlyTrend: [],
     })
     materialsApiMock.estimateLinkedTaskDuration.mockResolvedValue({
@@ -290,6 +297,16 @@ describe('Materials page', () => {
     await renderPage(root, '/projects/project-1/materials')
 
     expect(container.textContent).toContain('材料管控')
+    expect(container.querySelector('[data-testid="materials-page"]')?.className).toContain('page-shell')
+    expect(container.textContent).toContain('到场率')
+    expect(container.textContent).toContain('验收情况')
+    expect(container.querySelectorAll('[data-testid^="materials-metric-"]')).toHaveLength(4)
+    expect(container.querySelector('[data-testid="materials-side-panel"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="materials-category-pie"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="materials-recent-arrivals"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="materials-table-row-material-1"]')?.className).toContain('even:bg-slate-50/50')
+    expect(container.querySelector('[data-testid="materials-table-row-material-1"]')?.className).toContain('hover:bg-slate-100/60')
+    expect(container.querySelector('[data-testid="material-status-chip-material-1"]')?.textContent).toContain('待定样')
     expect(container.textContent).toContain('周报摘要')
     expect(container.textContent).toContain('提醒列表')
     expect(container.textContent).toContain('幕墙单位材料到场提醒')
@@ -337,6 +354,35 @@ describe('Materials page', () => {
     expect(container.textContent).not.toContain('单条新增')
     expect(container.textContent).not.toContain('模板预填')
     expect(container.textContent).not.toContain('批量录入')
+  })
+
+  it('confirms deletion before removing a material', async () => {
+    await renderPage(root, '/projects/project-1/materials')
+
+    const deleteButton = container.querySelector('[data-testid="material-delete-trigger-material-1"]') as HTMLButtonElement | null
+    expect(deleteButton).not.toBeNull()
+
+    await act(async () => {
+      deleteButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await flush()
+    })
+
+    const confirmDialog = document.body.querySelector('[data-testid="materials-delete-confirm-dialog"]')
+    expect(confirmDialog).not.toBeNull()
+    expect(confirmDialog?.textContent).toContain('铝型材')
+    expect(materialsApiMock.remove).not.toHaveBeenCalled()
+
+    const confirmButton = [...(confirmDialog?.querySelectorAll('button') ?? [])]
+      .find((button) => button.textContent?.includes('删除')) as HTMLButtonElement | undefined
+    expect(confirmButton).toBeTruthy()
+
+    await act(async () => {
+      confirmButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await flush()
+      await flush()
+    })
+
+    expect(materialsApiMock.remove).toHaveBeenCalledWith('project-1', 'material-1')
   })
 
   it('opens the detail dialog and saves changes', async () => {

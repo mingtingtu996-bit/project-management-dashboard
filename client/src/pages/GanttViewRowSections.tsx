@@ -5,6 +5,10 @@ import {
   ChevronDown,
   ChevronRight,
   Flag,
+  FileText,
+  MoreHorizontal,
+  Pencil,
+  Play,
   Plus,
   ShieldCheck,
   Trash2,
@@ -21,6 +25,16 @@ import { getTaskLagLevel } from '@/lib/taskBusinessStatus'
 import { cn } from '@/lib/utils'
 
 import { MILESTONE_LEVEL_CONFIG, SPECIALTY_TYPES, getWBSNodeIcon, type Task, type TaskCondition, type WBSNode } from './GanttViewTypes'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 
 export type BusinessStatusView = {
   label: string
@@ -88,6 +102,7 @@ export function TaskRowIdentityCell({
 }) {
   const iconInfo = getWBSNodeIcon(node)
   const lagLevel = getTaskLagLevel(task)
+  const taskTitle = task.title || task.name || '未命名任务'
 
   return (
     <div className={cn('flex h-full min-w-0 shrink-0 items-center', SHARED_TREE_LAYOUT.firstColumnClass)}>
@@ -95,7 +110,8 @@ export function TaskRowIdentityCell({
         <div className="flex-shrink-0 w-6">
         <input
           type="checkbox"
-          className="w-4 h-4 rounded border-gray-300"
+          aria-label={`选择任务 ${taskTitle}`}
+          className="w-4 h-4 rounded border-slate-300"
           checked={selected}
           onChange={() => onToggleSelect(task.id)}
           data-testid={`gantt-task-checkbox-${task.id}`}
@@ -104,28 +120,39 @@ export function TaskRowIdentityCell({
 
         <div className="flex-shrink-0 w-5 mr-1">
         {hasChildren ? (
-          <button onClick={() => onToggleCollapse(task.id)} className="text-gray-400 hover:text-gray-600 transition-colors">
+          <Button
+            variant="ghost"
+            aria-label={`${isCollapsed ? '展开' : '收起'}任务 ${taskTitle}`}
+            onClick={() => onToggleCollapse(task.id)}
+            className="text-slate-500 hover:text-slate-700 transition-colors"
+          >
             {isCollapsed ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-          </button>
+          </Button>
         ) : (
           <span className="inline-block w-3.5" />
         )}
         </div>
 
-        <button
-        title={task.is_milestone ? `${MILESTONE_LEVEL_CONFIG[task.milestone_level ?? 1]?.label}\uFF08\u70B9\u51FB\u4FEE\u6539\uFF09` : '\u8BBE\u4E3A\u91CC\u7A0B\u7891'}
+        <Tooltip>
+  <TooltipTrigger asChild>
+    <Button variant="ghost"
+        
         onClick={(event) => {
           event.stopPropagation()
           onOpenMilestoneDialog(task)
         }}
+        aria-label={task.is_milestone ? `修改任务 ${taskTitle} 的里程碑设置` : `将任务 ${taskTitle} 设为里程碑`}
         className={`flex-shrink-0 p-0.5 rounded transition-colors hover:bg-accent mr-1.5 ${
           task.is_milestone
             ? MILESTONE_LEVEL_CONFIG[task.milestone_level ?? 1]?.color
-            : 'text-gray-300 hover:text-gray-500'
+            : 'text-slate-500 hover:text-slate-700'
         }`}
       >
         <Flag className="h-3.5 w-3.5" fill={task.is_milestone ? 'currentColor' : 'none'} />
-        </button>
+        </Button>
+  </TooltipTrigger>
+  <TooltipContent>{task.is_milestone ? `${MILESTONE_LEVEL_CONFIG[task.milestone_level ?? 1]?.label}\uFF08\u70B9\u51FB\u4FEE\u6539\uFF09` : '\u8BBE\u4E3A\u91CC\u7A0B\u7891'}</TooltipContent>
+</Tooltip>
 
         <div
           className="flex min-w-0 flex-1 items-center gap-1.5 mr-3 cursor-pointer"
@@ -147,7 +174,7 @@ export function TaskRowIdentityCell({
             <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
           </svg>
         )}
-        {task.wbs_code && <span className="flex-shrink-0 text-[10px] tabular-nums text-gray-400 font-mono min-w-[24px]">{task.wbs_code}</span>}
+        {task.wbs_code && <span className="flex-shrink-0 text-xs tabular-nums text-slate-400 font-mono min-w-[24px]">{task.wbs_code}</span>}
         {inlineTitleTaskId === task.id ? (
           <input
             type="text"
@@ -159,11 +186,13 @@ export function TaskRowIdentityCell({
               if (event.key === 'Escape') onCancelInlineTitleEdit()
             }}
             autoFocus
-            className="text-sm font-medium w-40 border-b border-blue-400 bg-transparent outline-none px-0.5 py-0 text-gray-800"
+            className="text-sm font-medium w-40 border-b border-blue-400 bg-transparent outline-none px-0.5 py-0 text-slate-800"
             onClick={(event) => event.stopPropagation()}
           />
         ) : (
-          <button
+          <Tooltip>
+  <TooltipTrigger asChild>
+    <Button variant="ghost"
             type="button"
             onClick={(event) => {
               event.stopPropagation()
@@ -173,7 +202,7 @@ export function TaskRowIdentityCell({
               event.stopPropagation()
               onStartInlineTitleEdit(task)
             }}
-            className={`text-sm font-medium truncate max-w-[200px] text-left hover:text-blue-600 transition-colors ${
+            className={`min-w-0 max-w-[200px] justify-start overflow-hidden px-1.5 text-left text-sm font-medium hover:text-blue-600 transition-colors ${
               isOverdue
                 ? 'text-red-600'
                 : lagLevel === 'severe'
@@ -183,15 +212,19 @@ export function TaskRowIdentityCell({
                     : lagLevel === 'mild'
                       ? 'text-yellow-700'
                   : task.status === 'completed'
-                    ? 'text-gray-400 line-through'
+                    ? 'text-slate-600 line-through'
                     : task.status === 'in_progress'
                       ? 'text-blue-700'
-                      : 'text-gray-800'
-            }`}
-            title="单击查看详情，双击快速改名"
+                      : 'text-slate-800'
+            } group/title inline-flex items-center gap-1`}
+            
           >
-            {task.title || task.name}
-          </button>
+            <span className="min-w-0 truncate">{task.title || task.name}</span>
+            <Pencil className="h-3.5 w-3.5 shrink-0 text-slate-400 opacity-0 transition-opacity group-hover/title:opacity-60" />
+          </Button>
+  </TooltipTrigger>
+  <TooltipContent>单击查看详情，双击快速改名</TooltipContent>
+</Tooltip>
         )}
         <TaskRowMetaChips
           taskId={task.id}
@@ -252,61 +285,86 @@ export function TaskRowMetaChips({
       {overdueDays > 0 && !bizStatus.badge && <span className="flex-shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700 border border-red-200">逾期{overdueDays}天</span>}
 
       {conditionSummary && conditionSummary.total > 0 && (
-        <button
+        <Tooltip>
+  <TooltipTrigger asChild>
+    <Button variant="ghost"
           onClick={(event) => onToggleInlineConditions(taskId, event)}
-          className={`flex-shrink-0 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium border transition-colors ${
+          className={`flex-shrink-0 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-xs font-medium border transition-colors ${
             expandedConditionTaskId === taskId
               ? 'bg-emerald-100 text-emerald-700 border-emerald-300'
               : conditionSummary.satisfied >= conditionSummary.total
                 ? 'bg-emerald-50 text-emerald-600 border-emerald-200 hover:bg-emerald-100'
                 : 'bg-orange-50 text-orange-600 border-orange-200 hover:bg-orange-100'
           }`}
-          title={'开工条件 ' + conditionSummary.satisfied + '/' + conditionSummary.total}
+          
         >
           <ShieldCheck className="h-2.5 w-2.5" />
           {conditionSummary.satisfied}/{conditionSummary.total}
           {expandedConditionTaskId === taskId ? <ChevronDown className="h-2.5 w-2.5" /> : <ChevronRight className="h-2.5 w-2.5" />}
-        </button>
+        </Button>
+  </TooltipTrigger>
+  <TooltipContent>{'开工条件 ' + conditionSummary.satisfied + '/' + conditionSummary.total}</TooltipContent>
+</Tooltip>
       )}
 
       {obstacleCount > 0 && (
-        <span
-          className="flex-shrink-0 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-50 text-amber-700 border border-amber-200"
-          title={`${obstacleCount} 个未解决阻碍`}
+        <Tooltip>
+  <TooltipTrigger asChild>
+    <span
+          className="flex-shrink-0 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200"
+          
         >
           <AlertOctagon className="h-2.5 w-2.5" />
           阻碍{obstacleCount}
         </span>
+  </TooltipTrigger>
+  <TooltipContent>{`${obstacleCount} 个未解决阻碍`}</TooltipContent>
+</Tooltip>
       )}
 
       {criticalTask && (
         <>
           {criticalTask.isAutoCritical && (
-            <span
+            <Tooltip>
+  <TooltipTrigger asChild>
+    <span
               data-testid={'gantt-critical-badge-' + taskId}
               className="flex-shrink-0 px-1.5 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700 border border-red-200 cursor-help"
-              title={'关键任务 浮动时间: ' + criticalTask.floatDays + '天'}
+              
               >
                 关键 +{criticalTask.floatDays}天
               </span>
+  </TooltipTrigger>
+  <TooltipContent>{'关键任务 浮动时间: ' + criticalTask.floatDays + '天'}</TooltipContent>
+</Tooltip>
           )}
           {criticalTask.isManualAttention && (
-            <span
+            <Tooltip>
+  <TooltipTrigger asChild>
+    <span
               data-testid={'gantt-critical-attention-badge-' + taskId}
               className="flex-shrink-0 px-1.5 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700 border border-amber-200"
-              title="手动关注任务"
+              
             >
               关注
             </span>
+  </TooltipTrigger>
+  <TooltipContent>手动关注任务</TooltipContent>
+</Tooltip>
           )}
           {criticalTask.isManualInserted && (
-            <span
+            <Tooltip>
+  <TooltipTrigger asChild>
+    <span
               data-testid={'gantt-critical-insert-badge-' + taskId}
               className="flex-shrink-0 px-1.5 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-700 border border-orange-200"
-              title="手动插链任务"
+              
             >
               插链
             </span>
+  </TooltipTrigger>
+  <TooltipContent>手动插链任务</TooltipContent>
+</Tooltip>
           )}
         </>
       )}
@@ -324,6 +382,7 @@ export function TaskRowDetailCells({
   criticalTask,
   onOpenEditDialog,
   onDeleteTask,
+  onSelectTask,
   onViewTaskSummary,
   onStatusChange,
 }: {
@@ -336,6 +395,7 @@ export function TaskRowDetailCells({
   criticalTask: CriticalTaskSnapshot | null
   onOpenEditDialog: (task?: Task, parentId?: string) => void
   onDeleteTask: (taskId: string) => void
+  onSelectTask: (task: Task) => void
   onViewTaskSummary: (taskId: string) => void
   onStatusChange?: (taskId: string, status: string) => void
 }) {
@@ -348,7 +408,7 @@ export function TaskRowDetailCells({
         ? 'bg-amber-400'
         : criticalTask.isAutoCritical
           ? 'bg-red-500'
-          : 'bg-gray-300'
+          : 'bg-slate-300'
     : task.status === 'completed'
       ? 'bg-emerald-500'
       : isOverdue
@@ -360,8 +420,8 @@ export function TaskRowDetailCells({
             : lagLevel === 'mild'
               ? 'bg-yellow-400'
               : task.status === 'in_progress'
-                ? 'bg-blue-500'
-                : 'bg-gray-300'
+                ? 'bg-blue-600'
+                : 'bg-slate-300'
   const milestoneProgressLabel =
     task.status === 'completed'
       ? '已完成'
@@ -377,7 +437,7 @@ export function TaskRowDetailCells({
           className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${bizStatus.cls}`}
         >
           {bizStatus.label}
-          {bizStatus.badge && <span className="opacity-80">· {bizStatus.badge.text}</span>}
+          {bizStatus.badge && <span>· {bizStatus.badge.text}</span>}
         </span>
       </div>
 
@@ -388,89 +448,143 @@ export function TaskRowDetailCells({
             <span className="tabular-nums">{milestoneProgressLabel}</span>
           </div>
         ) : (
-          <div
+          <Tooltip>
+  <TooltipTrigger asChild>
+    <div
             className="flex items-center gap-1.5"
-            title={
-              hasChildren
-                ? '实际进度 ' + actualProgress + '% / 子任务汇总 ' + rolledProgress + '%（已收口到右侧详情抽屉录进展）'
-                : '实际进度 ' + actualProgress + '%（已收口到右侧详情抽屉录进展）'
-            }
+            
             data-testid={`gantt-task-progress-display-${task.id}`}
           >
-            <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
+            <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden">
               <div className={'h-full rounded-full transition-all ' + criticalProgressClass} style={{ width: actualProgress + '%' }} />
             </div>
-            <span className="text-xs font-medium w-7 text-right tabular-nums text-gray-600">
+            <span className="text-xs font-medium w-7 text-right tabular-nums text-slate-600">
               {actualProgress}%
             </span>
             {hasChildren && (
-              <span className="text-[10px] text-purple-500 whitespace-nowrap" title={'子任务汇总进度 ' + rolledProgress + '%'}>
-                汇总{rolledProgress}%
-              </span>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="text-xs text-purple-500 whitespace-nowrap">
+                    汇总{rolledProgress}%
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>{'子任务汇总进度 ' + rolledProgress + '%'}</TooltipContent>
+              </Tooltip>
             )}
           </div>
+  </TooltipTrigger>
+  <TooltipContent>{
+              hasChildren
+                ? '实际进度 ' + actualProgress + '% / 子任务汇总 ' + rolledProgress + '%（已收口到右侧详情抽屉录进展）'
+                : '实际进度 ' + actualProgress + '%（已收口到右侧详情抽屉录进展）'
+            }</TooltipContent>
+</Tooltip>
         )}
       </div>
 
-      <div className="flex-shrink-0 w-20 text-xs text-gray-600 truncate" title={task.assignee_name || ''}>
+      <Tooltip>
+  <TooltipTrigger asChild>
+    <div className="flex-shrink-0 w-20 text-xs text-slate-600 truncate" >
         {task.assignee_name || <span className="text-muted-foreground/40">—</span>}
       </div>
+  </TooltipTrigger>
+  <TooltipContent>{task.assignee_name || ''}</TooltipContent>
+</Tooltip>
 
-      <div className="flex-shrink-0 w-28 text-xs text-gray-500 tabular-nums">
-        <span className="text-muted-foreground/40 italic" title="工期信息已收口到右侧详情抽屉">
+      <div className="flex-shrink-0 w-28 text-xs text-slate-500 tabular-nums">
+        <Tooltip>
+  <TooltipTrigger asChild>
+    <span className="text-muted-foreground/40 italic" >
           —
         </span>
+  </TooltipTrigger>
+  <TooltipContent>工期信息已收口到右侧详情抽屉</TooltipContent>
+</Tooltip>
       </div>
 
-      <div className="flex-shrink-0 w-24 text-center text-xs text-muted-foreground/40" title="工期信息已收口到右侧详情抽屉">
+      <Tooltip>
+  <TooltipTrigger asChild>
+    <div className="flex-shrink-0 w-24 text-center text-xs text-muted-foreground/40" >
         —
       </div>
+  </TooltipTrigger>
+  <TooltipContent>工期信息已收口到右侧详情抽屉</TooltipContent>
+</Tooltip>
 
       {!hasChildren ? (
-        <div className="flex-shrink-0 w-16 text-center text-[10px] text-muted-foreground/40" title="关键路径信息已收口到左侧颜色与右侧抽屉">
+        <Tooltip>
+  <TooltipTrigger asChild>
+    <div className="flex-shrink-0 w-16 text-center text-xs text-muted-foreground/40" >
           —
         </div>
+  </TooltipTrigger>
+  <TooltipContent>关键路径信息已收口到左侧颜色与右侧抽屉</TooltipContent>
+</Tooltip>
       ) : (
         <div className="flex-shrink-0 w-16" />
       )}
 
       <div className="flex-shrink-0 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity ml-2">
-        {onStatusChange && task.status !== 'in_progress' && task.status !== 'completed' && (
-          <button
-            title="开始执行"
-            onClick={() => onStatusChange(task.id, 'in_progress')}
-            className="p-1.5 hover:bg-blue-50 rounded text-gray-300 hover:text-blue-600 transition-colors"
-            data-testid={`row-start-task-${task.id}`}
-          >
-            <svg className="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 20 20"><path d="M6.3 2.841A1.5 1.5 0 004 4.11v11.78a1.5 1.5 0 002.3 1.269l9.344-5.89a1.5 1.5 0 000-2.538L6.3 2.84z" /></svg>
-          </button>
-        )}
-        {onStatusChange && task.status === 'in_progress' && (
-          <button
-            title="标记完成"
-            onClick={() => onStatusChange(task.id, 'completed')}
-            className="p-1.5 hover:bg-emerald-50 rounded text-gray-300 hover:text-emerald-600 transition-colors"
-            data-testid={`row-complete-task-${task.id}`}
-          >
-            <CheckCircle2 className="h-3.5 w-3.5" />
-          </button>
-        )}
-        <button title="添加子任务" onClick={() => onOpenEditDialog(undefined, task.id)} className="p-1.5 hover:bg-blue-50 rounded text-blue-400 hover:text-blue-600 transition-colors">
-          <Plus className="h-3.5 w-3.5" />
-        </button>
-        <button title="编辑任务" onClick={() => onOpenEditDialog(task)} className="p-1.5 hover:bg-gray-100 rounded text-gray-400 hover:text-gray-600 transition-colors">
+        <Tooltip>
+  <TooltipTrigger asChild>
+    <Button variant="ghost" aria-label={`展开任务 ${task.title || task.name || '未命名任务'} 详情`} onClick={() => onSelectTask(task)} className="p-1.5 hover:bg-blue-50 rounded text-blue-600 hover:text-blue-700 transition-colors">
+          <ChevronRight className="h-3.5 w-3.5" />
+        </Button>
+  </TooltipTrigger>
+  <TooltipContent>展开详情</TooltipContent>
+</Tooltip>
+        <Tooltip>
+  <TooltipTrigger asChild>
+    <Button variant="ghost" aria-label={`编辑任务 ${task.title || task.name || '未命名任务'}`} onClick={() => onOpenEditDialog(task)} className="p-1.5 hover:bg-slate-100 rounded text-slate-500 hover:text-slate-700 transition-colors">
           <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
           </svg>
-        </button>
-        <button title="删除任务" onClick={() => onDeleteTask(task.id)} className="p-1.5 hover:bg-red-50 rounded text-gray-300 hover:text-red-500 transition-colors">
-          <Trash2 className="h-3.5 w-3.5" />
-        </button>
-        {task.status === 'completed' && (
-          <button title="查看任务完成总结" onClick={() => onViewTaskSummary(task.id)} className="p-1.5 hover:bg-orange-50 rounded text-gray-300 hover:text-orange-500 transition-colors">
-            <CheckCircle2 className="h-3.5 w-3.5" />
-          </button>
-        )}
+        </Button>
+  </TooltipTrigger>
+  <TooltipContent>编辑任务</TooltipContent>
+</Tooltip>
+        <DropdownMenu>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" className="p-1.5 hover:bg-slate-100 rounded text-slate-500 hover:text-slate-700 transition-colors" aria-label="更多任务操作">
+                  <MoreHorizontal className="h-3.5 w-3.5" />
+                </Button>
+              </DropdownMenuTrigger>
+            </TooltipTrigger>
+            <TooltipContent>更多操作</TooltipContent>
+          </Tooltip>
+          <DropdownMenuContent align="end" className="w-48 rounded-2xl border-slate-200 p-1.5 shadow-[var(--el-3)]">
+            <DropdownMenuLabel className="px-2 py-1 text-xs text-slate-500">任务操作</DropdownMenuLabel>
+            {onStatusChange && task.status !== 'in_progress' && task.status !== 'completed' ? (
+              <DropdownMenuItem data-testid={`row-start-task-${task.id}`} onSelect={() => onStatusChange(task.id, 'in_progress')} className="gap-2">
+                <Play className="h-3.5 w-3.5 text-blue-500" />
+                开始执行
+              </DropdownMenuItem>
+            ) : null}
+            {onStatusChange && task.status === 'in_progress' ? (
+              <DropdownMenuItem data-testid={`row-complete-task-${task.id}`} onSelect={() => onStatusChange(task.id, 'completed')} className="gap-2">
+                <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
+                标记完成
+              </DropdownMenuItem>
+            ) : null}
+            <DropdownMenuItem onSelect={() => onOpenEditDialog(undefined, task.id)} className="gap-2">
+              <Plus className="h-3.5 w-3.5 text-blue-500" />
+              添加子任务
+            </DropdownMenuItem>
+            {task.status === 'completed' ? (
+              <DropdownMenuItem onSelect={() => onViewTaskSummary(task.id)} className="gap-2">
+                <FileText className="h-3.5 w-3.5 text-orange-500" />
+                查看任务总结
+              </DropdownMenuItem>
+            ) : null}
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => onDeleteTask(task.id)} className="gap-2 text-red-600 focus:text-red-600">
+              <Trash2 className="h-3.5 w-3.5" />
+              删除任务
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </>
   )
@@ -499,10 +613,10 @@ export function TaskRowConditionPanel({
     <div className="mx-4 mb-2 rounded-xl border border-green-100 bg-green-50/60 p-3" style={{ marginLeft: (indentPx + 16) + 'px' }} onClick={(event) => event.stopPropagation()}>
       <div className="flex items-center justify-between mb-2">
         <span className="text-xs font-medium text-green-700 flex items-center gap-1">
-          <ShieldCheck className="h-3 w-3" />
+          <ShieldCheck className="h-3.5 w-3.5" />
           开工条件
         </span>
-        <button onClick={(event) => onToggleInlineConditions(taskId, event)} className="text-xs text-gray-400 hover:text-gray-600">收起</button>
+        <Button variant="ghost" onClick={(event) => onToggleInlineConditions(taskId, event)} className="text-xs text-slate-400 hover:text-slate-600">收起</Button>
       </div>
       {!inlineConditions ? (
         <LoadingState
@@ -510,29 +624,34 @@ export function TaskRowConditionPanel({
           className="min-h-0 border-0 bg-transparent px-0 py-1 shadow-none"
         />
       ) : inlineConditions.length === 0 ? (
-        <div className="text-xs text-gray-400 py-1">暂无条件记录</div>
+        <div className="text-xs text-slate-400 py-1">暂无条件记录</div>
       ) : (
         <div className="space-y-1.5">
           {inlineConditions.map((condition) => (
             <div key={condition.id} className="flex items-center gap-1.5 text-xs">
               {condition.is_satisfied
-                ? <CheckCircle2 className="h-3 w-3 text-emerald-500 flex-shrink-0" />
-                : <XCircle className="h-3 w-3 text-orange-400 flex-shrink-0" />}
-              <span className={condition.is_satisfied ? 'text-gray-400 line-through' : 'text-gray-700'}>{condition.name}</span>
-              {condition.condition_type && <span className="px-1 py-0.5 rounded text-[10px] bg-slate-100 text-slate-600">{condition.condition_type}</span>}
+                ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 flex-shrink-0" />
+                : <XCircle className="h-3.5 w-3.5 text-orange-400 flex-shrink-0" />}
+              <span className={condition.is_satisfied ? 'text-slate-400 line-through' : 'text-slate-700'}>{condition.name}</span>
+              {condition.condition_type && <span className="px-1 py-0.5 rounded text-xs bg-slate-100 text-slate-600">{condition.condition_type}</span>}
               {condition.is_satisfied && condition.satisfied_reason === 'admin_force' && (
-                <span className="px-1 py-0.5 rounded text-[10px] bg-violet-100 text-violet-700 border border-violet-200" title={condition.satisfied_reason_note || '管理员强制满足'}>强制</span>
+                <Tooltip>
+  <TooltipTrigger asChild>
+    <span className="px-1 py-0.5 rounded text-xs bg-violet-100 text-violet-700 border border-violet-200" >强制</span>
+  </TooltipTrigger>
+  <TooltipContent>{condition.satisfied_reason_note || '管理员强制满足'}</TooltipContent>
+</Tooltip>
               )}
-              {condition.target_date && <span className="text-gray-400">{condition.target_date}</span>}
+              {condition.target_date && <span className="text-slate-400">{condition.target_date}</span>}
               {onToggleCondition && !condition.is_satisfied && (
-                <button
+                <Button variant="ghost"
                   type="button"
                   onClick={(e) => { e.stopPropagation(); onToggleCondition(condition) }}
-                  className="ml-auto rounded border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 hover:bg-emerald-100"
+                  className="ml-auto rounded border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
                   data-testid={`condition-mark-satisfied-${condition.id}`}
                 >
                   标记满足
-                </button>
+                </Button>
               )}
             </div>
           ))}

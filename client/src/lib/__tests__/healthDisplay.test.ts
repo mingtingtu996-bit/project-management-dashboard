@@ -34,13 +34,13 @@ describe('healthDisplay', () => {
   it('maps trend labels and tones', () => {
     expect(getHealthTrendDisplay('up')).toEqual({ label: '上升', textClass: 'text-emerald-600' })
     expect(getHealthTrendDisplay('down')).toEqual({ label: '下降', textClass: 'text-red-500' })
-    expect(getHealthTrendDisplay('stable')).toEqual({ label: '持平', textClass: 'text-gray-400' })
+    expect(getHealthTrendDisplay('stable')).toEqual({ label: '持平', textClass: 'text-slate-400' })
   })
 
   it('maps dimension and progress tones', () => {
     expect(getHealthDimensionDisplay(true, true)).toEqual({
-      barClass: 'bg-gray-300',
-      textClass: 'text-gray-400',
+      barClass: 'bg-slate-300',
+      textClass: 'text-slate-400',
     })
     expect(getHealthDimensionDisplay(false, true)).toEqual({
       barClass: 'bg-emerald-500',

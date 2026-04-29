@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Separator } from '@/components/ui/separator'
 import type { PreviewNode, WbsTemplate } from '../types'
 import {
   collectExpandedPreviewNodeIds,
@@ -15,6 +16,8 @@ import {
   IconX,
 } from './WbsIcons'
 import { TemplateIcon } from './TemplateIcon'
+import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 
 interface PreviewModalProps {
   template: WbsTemplate
@@ -61,22 +64,21 @@ export function PreviewModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center"
-      style={{ background: 'rgba(15,23,42,0.5)' }}
+      className="fixed inset-0 z-50 flex animate-in items-center justify-center bg-slate-950/50 px-4 py-6 backdrop-blur-[4px] duration-200 fade-in-0"
       onClick={onClose}
     >
       <div
-        className="bg-white rounded-xl shadow-2xl w-[960px] max-h-[88vh] flex flex-col overflow-hidden"
+        className="flex max-h-[88vh] w-[90%] max-w-[720px] animate-in flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[var(--el-4)] duration-200 ease-bounce fade-in-0 zoom-in-95"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
+        <div className="flex flex-shrink-0 items-center justify-between px-6 py-4">
           <div className="flex items-center gap-3">
             <div className={`w-8 h-8 rounded-lg ${color.bg} flex items-center justify-center`}>
               <TemplateIcon type={template.template_type} className="w-4 h-4" />
             </div>
             <div>
-              <h2 className="font-semibold text-gray-800">{template.name}</h2>
-              <p className="text-xs text-gray-400">
+              <h2 className="font-semibold text-slate-800">{template.name}</h2>
+              <p className="text-xs text-slate-400">
                 {nodeCount ? `${nodeCount} 个任务节点 · ` : ''}
                 {refDays ? `参考工期 ${refDays} 天 · ` : ''}
                 {template.template_type || ''}
@@ -84,40 +86,41 @@ export function PreviewModal({
               </p>
             </div>
           </div>
-          <button
+          <Button variant="ghost"
             onClick={onClose}
-            className="w-8 h-8 rounded-lg hover:bg-gray-100 flex items-center justify-center text-gray-400 hover:text-gray-600 transition-colors"
+            className="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-400 hover:text-slate-600 transition-colors"
           >
             <IconX />
-          </button>
+          </Button>
         </div>
+        <Separator />
 
         <div className="flex flex-1 overflow-hidden">
-          <div className="flex-1 overflow-y-auto p-4 border-r border-gray-100">
+          <div className="flex-1 overflow-y-auto p-4 border-r border-slate-100">
             <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-semibold text-gray-700">任务结构</h3>
-              <div className="flex items-center gap-2 text-xs text-gray-400">
+              <h3 className="text-sm font-semibold text-slate-700">任务结构</h3>
+              <div className="flex items-center gap-2 text-xs text-slate-400">
                 <span className="flex items-center gap-1">
                   <span className="w-1.5 h-1.5 rounded-full bg-amber-500 inline-block" />
                   里程碑
                 </span>
-                <button
+                <Button variant="ghost"
                   className="text-blue-500 hover:text-blue-700 transition-colors"
                   onClick={() => setExpandedIds(collectExpandedPreviewNodeIds(wbsNodes))}
                 >
                   全部展开
-                </button>
-                <span className="text-gray-300">|</span>
-                <button
+                </Button>
+                <span className="text-slate-300">|</span>
+                <Button variant="ghost"
                   className="text-blue-500 hover:text-blue-700 transition-colors"
                   onClick={() => setExpandedIds(new Set())}
                 >
                   全部折叠
-                </button>
+                </Button>
               </div>
             </div>
             {wbsNodes.length === 0 ? (
-              <div className="text-sm text-gray-400 py-6 text-center">暂无节点数据</div>
+              <div className="text-sm text-slate-400 py-6 text-center">暂无节点数据</div>
             ) : (
               <PreviewNodeTree
                 nodes={wbsNodes}
@@ -129,30 +132,30 @@ export function PreviewModal({
             )}
           </div>
 
-          <div className="w-56 flex-shrink-0 border-r border-gray-100 p-4 overflow-y-auto bg-gray-50/30">
+          <div className="w-56 flex-shrink-0 border-r border-slate-100 p-4 overflow-y-auto bg-slate-50/30">
             {selectedNode ? (
               <>
-                <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">节点详情</h4>
+                <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">节点详情</h4>
                 <div className="space-y-3">
                   <div>
-                    <p className="text-xs text-gray-400 mb-1">节点名称</p>
-                    <p className="text-sm font-medium text-gray-800 leading-relaxed">{selectedNode.name}</p>
+                    <p className="text-xs text-slate-400 mb-1">节点名称</p>
+                    <p className="text-sm font-medium text-slate-800 leading-relaxed">{selectedNode.name}</p>
                   </div>
                   {selectedNode.path && (
                     <div>
-                      <p className="text-xs text-gray-400 mb-1">层级路径</p>
-                      <p className="text-xs text-gray-500 leading-relaxed break-words">{selectedNode.path}</p>
+                      <p className="text-xs text-slate-400 mb-1">层级路径</p>
+                      <p className="text-xs text-slate-500 leading-relaxed break-words">{selectedNode.path}</p>
                     </div>
                   )}
                   <div className="grid grid-cols-2 gap-2">
-                    <div className="bg-white rounded-xl p-2 border border-gray-100 text-center">
+                    <Card className="bg-white rounded-xl p-2 border border-slate-100 text-center">
                       <p className="text-lg font-bold text-emerald-600">{selectedNode.reference_days ?? '—'}</p>
-                      <p className="text-xs text-gray-400 mt-0.5">参考工期(天)</p>
-                    </div>
-                    <div className="bg-white rounded-xl p-2 border border-gray-100 text-center">
-                      <p className="text-lg font-bold text-gray-700">{selectedNode.level + 1}</p>
-                      <p className="text-xs text-gray-400 mt-0.5">层级</p>
-                    </div>
+                      <p className="text-xs text-slate-400 mt-0.5">参考工期(天)</p>
+                    </Card>
+                    <Card className="bg-white rounded-xl p-2 border border-slate-100 text-center">
+                      <p className="text-lg font-bold text-slate-700">{selectedNode.level + 1}</p>
+                      <p className="text-xs text-slate-400 mt-0.5">层级</p>
+                    </Card>
                   </div>
                   {selectedNode.is_milestone && (
                     <div className="flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-100 rounded-lg">
@@ -162,24 +165,24 @@ export function PreviewModal({
                   )}
                   {selectedNode.description && (
                     <div>
-                      <p className="text-xs text-gray-600 leading-relaxed">{selectedNode.description}</p>
+                      <p className="text-xs text-slate-600 leading-relaxed">{selectedNode.description}</p>
                     </div>
                   )}
                   {Array.isArray(selectedNode.children) && selectedNode.children.length > 0 && (
                     <div>
-                      <p className="text-xs text-gray-400 mb-1">直接子节点</p>
+                      <p className="text-xs text-slate-400 mb-1">直接子节点</p>
                       <div className="space-y-1">
                         {selectedNode.children.slice(0, 5).map((child, index) => (
-                          <div
+                          <Card
                             key={`${selectedNode.id}-${index}`}
-                            className="text-xs text-gray-600 bg-white border border-gray-100 rounded-xl px-2 py-1.5 flex items-center gap-1.5"
+                            className="text-xs text-slate-600 bg-white border border-slate-100 rounded-xl px-2 py-1.5 flex items-center gap-1.5"
                           >
-                            <span className="w-1 h-1 rounded-full bg-gray-400 flex-shrink-0" />
+                            <span className="w-1 h-1 rounded-full bg-slate-400 flex-shrink-0" />
                             <span className="truncate">{child.name || '未命名'}</span>
-                          </div>
+                          </Card>
                         ))}
                         {selectedNode.children.length > 5 && (
-                          <p className="text-xs text-gray-400 pl-1">
+                          <p className="text-xs text-slate-400 pl-1">
                             还有 {selectedNode.children.length - 5} 个子节点
                           </p>
                         )}
@@ -190,16 +193,16 @@ export function PreviewModal({
               </>
             ) : (
               <div className="flex flex-col items-center justify-center h-full py-8 text-center">
-                <svg className="w-10 h-10 text-gray-200 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="w-8 h-8 text-slate-200 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
                 </svg>
               </div>
             )}
           </div>
 
-          <div className="w-64 flex-shrink-0 p-5 flex flex-col gap-5 bg-gray-50/50">
+          <div className="w-64 flex-shrink-0 p-5 flex flex-col gap-5 bg-slate-50/50">
             <div>
-              <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">模板信息</h4>
+              <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">模板信息</h4>
               <div className="space-y-2">
                 {[
                   { label: '适用类型', value: template.template_type || '—' },
@@ -209,8 +212,8 @@ export function PreviewModal({
                   { label: '使用次数', value: `${template.usage_count ?? 0} 次` },
                 ].map(({ label, value, highlight }) => (
                   <div key={label} className="flex justify-between text-sm">
-                    <span className="text-gray-400">{label}</span>
-                    <span className={`font-medium ${highlight ? 'text-emerald-600 font-bold' : 'text-gray-700'}`}>
+                    <span className="text-slate-400">{label}</span>
+                    <span className={`font-medium ${highlight ? 'text-emerald-600 font-bold' : 'text-slate-700'}`}>
                       {value}
                     </span>
                   </div>
@@ -219,58 +222,58 @@ export function PreviewModal({
             </div>
 
             <div>
-              <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">使用记录</h4>
+              <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">使用记录</h4>
               {usageHistory.length > 0 ? (
                 <div className="space-y-1.5">
                   {usageHistory.slice(0, 3).map((history, index) => (
                     <div
                       key={`${history.name}-${history.date}-${index}`}
-                      className="flex items-center gap-2 text-xs text-gray-500 py-1 hover:bg-gray-100 px-2 rounded-lg"
+                      className="flex items-center gap-2 text-xs text-slate-500 py-1 hover:bg-slate-100 px-2 rounded-lg"
                     >
                       <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 flex-shrink-0" />
                       <span className="flex-1 truncate">{history.name}</span>
-                      <span className="text-gray-400">{history.date}</span>
+                      <span className="text-slate-400">{history.date}</span>
                     </div>
                   ))}
                 </div>
               ) : (
-                <p className="text-xs text-gray-400 px-2">暂无使用记录</p>
+                <p className="text-xs text-slate-400 px-2">暂无使用记录</p>
               )}
             </div>
 
             <div className="mt-auto space-y-2">
               {isDisabled ? (
-                <div className="w-full bg-gray-50 border border-gray-200 rounded-xl py-2.5 text-center text-sm text-gray-400">
+                <div className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 text-center text-sm text-slate-400">
                   已停用，无法应用到项目
                 </div>
               ) : (
-                <button
+                <Button variant="ghost"
                   onClick={() => onApply(template)}
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-xl text-sm font-medium flex items-center justify-center gap-2 transition-colors shadow-sm shadow-blue-200"
+                  className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-xl text-sm font-medium flex items-center justify-center gap-2 transition-colors shadow-sm"
                 >
                   <IconUpload />
                   应用到项目
-                </button>
+                </Button>
               )}
-              <button
+              <Button variant="ghost"
                 onClick={() => {
                   onClone(template)
                   onClose()
                 }}
-                className="w-full bg-white border border-gray-200 hover:bg-gray-50 text-gray-600 py-2 rounded-xl text-sm flex items-center justify-center gap-2 transition-colors"
+                className="w-full bg-white border border-slate-200 hover:bg-slate-50 text-slate-600 py-2 rounded-xl text-sm flex items-center justify-center gap-2 transition-colors"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
                 </svg>
                 克隆此模板
-              </button>
-              <button
+              </Button>
+              <Button variant="ghost"
                 onClick={() => onEdit(template)}
-                className="w-full bg-white border border-gray-200 hover:bg-gray-50 text-gray-600 py-2 rounded-xl text-sm flex items-center justify-center gap-2 transition-colors"
+                className="w-full bg-white border border-slate-200 hover:bg-slate-50 text-slate-600 py-2 rounded-xl text-sm flex items-center justify-center gap-2 transition-colors"
               >
                 <IconEdit />
                 编辑模板
-              </button>
+              </Button>
             </div>
           </div>
         </div>

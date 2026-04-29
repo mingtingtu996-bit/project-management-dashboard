@@ -21,12 +21,14 @@ import {
 import { Breadcrumb } from '@/components/Breadcrumb'
 import { EmptyState } from '@/components/EmptyState'
 import { PageHeader } from '@/components/PageHeader'
+import { Sparkline } from '@/components/Sparkline'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { LoadingState } from '@/components/ui/loading-state'
+import { Separator } from '@/components/ui/separator'
 import {
   Select,
   SelectContent,
@@ -38,11 +40,13 @@ import { usePermissions } from '@/hooks/usePermissions'
 import { useCurrentProject } from '@/hooks/useStore'
 import { useToast } from '@/hooks/use-toast'
 import { apiDelete, apiGet, apiPost, apiPut, getApiErrorMessage, isAbortError } from '@/lib/apiClient'
+import { cn } from '@/lib/utils'
 import {
   ParticipantUnitsDialog,
   type ParticipantUnitDraft,
   type ParticipantUnitRecord,
 } from '@/pages/GanttView/ParticipantUnitsDialog'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
 type ResponsibilityDimension = 'person' | 'unit'
 type ResponsibilityStateLevel = 'healthy' | 'abnormal' | 'recovered'
@@ -217,7 +221,7 @@ function stateLabel(state: ResponsibilityStateLevel) {
 
 function watchLabel(status: ResponsibilityWatchStatus) {
   if (status === 'active') return '关注中'
-  if (status === 'suggested_to_clear') return '待确认恢复'
+  if (status === 'suggested_to_clear') return '待确认恢复正常'
   if (status === 'cleared') return '已清理'
   return '未关注'
 }
@@ -259,13 +263,18 @@ function MetricCard({
   value,
   hint,
   icon,
+  sparklineData,
+  sparklineColor = '#2563EB',
 }: {
   title: string
   value: string | number
   hint?: string
   icon: React.ReactNode
+  sparklineData?: number[]
+  sparklineColor?: string
 }) {
-  void hint
+  const normalizedSparkline = (sparklineData && sparklineData.length > 0 ? sparklineData : [0, Number(value) || 0])
+    .map((item) => ({ value: item }))
 
   return (
     <Card variant="metric">
@@ -274,7 +283,11 @@ function MetricCard({
           <span className="text-sm font-medium text-slate-500">{title}</span>
           <span className="text-slate-400">{icon}</span>
         </div>
-        <div className="text-3xl font-semibold text-slate-900">{value}</div>
+        <div className="flex items-end justify-between gap-4">
+          <div className="text-3xl font-semibold text-slate-900">{value}</div>
+          <Sparkline data={normalizedSparkline} color={sparklineColor} />
+        </div>
+        {hint ? <div className="text-xs text-slate-500">{hint}</div> : null}
       </CardContent>
     </Card>
   )
@@ -311,20 +324,30 @@ function TrendSeriesCard({
         <div className="flex h-16 items-end gap-1">
           {sparkPoints.map((point) => (
             <div key={point.date} className="flex flex-1 items-end justify-center gap-0.5">
-              <div
-                className="w-1 rounded-t bg-blue-500/80"
+              <Tooltip>
+  <TooltipTrigger asChild>
+    <div
+                className="w-1 rounded-t bg-blue-600/80"
                 style={{ height: `${Math.max(6, point.completion_rate * 0.55)}px` }}
-                title={`${point.date} 按时率 ${point.completion_rate}%`}
+                
               />
-              <div
+  </TooltipTrigger>
+  <TooltipContent>{`${point.date} 按时率 ${point.completion_rate}%`}</TooltipContent>
+</Tooltip>
+              <Tooltip>
+  <TooltipTrigger asChild>
+    <div
                 className="w-1 rounded-t bg-emerald-500/80"
                 style={{ height: `${Math.max(6, point.delay_rate * 0.55)}px` }}
-                title={`${point.date} 逾期率 ${point.delay_rate}%`}
+                
               />
+  </TooltipTrigger>
+  <TooltipContent>{`${point.date} 逾期率 ${point.delay_rate}%`}</TooltipContent>
+</Tooltip>
             </div>
           ))}
         </div>
-        <div className="mt-2 flex items-center justify-between text-[11px] text-slate-400">
+        <div className="mt-2 flex items-center justify-between text-xs text-slate-400">
           <span>{sparkPoints[0]?.date?.slice(5) || '--'}</span>
           <span>{sparkPoints[sparkPoints.length - 1]?.date?.slice(5) || '--'}</span>
         </div>
@@ -355,6 +378,10 @@ function TrendSeriesCard({
 }
 
 export default function ResponsibilityView() {
+  useEffect(() => {
+    document.title = '责任主体 | WorkBuddy'
+  }, [])
+
   const { id: projectId } = useParams<{ id: string }>()
   const currentProject = useCurrentProject()
   const navigate = useNavigate()
@@ -724,7 +751,7 @@ export default function ResponsibilityView() {
 
   if (!projectId) {
     return (
-      <div className="mx-auto max-w-7xl px-4 py-8">
+      <div className="page-shell">
         <EmptyState
           icon={Users}
           title="未找到当前项目"
@@ -734,12 +761,10 @@ export default function ResponsibilityView() {
   }
 
   return (
-    <div data-testid="responsibility-page" className="container mx-auto space-y-6 px-4 py-8 page-enter">
+    <div data-testid="responsibility-page" className="page-shell">
       <Breadcrumb
         items={[
-          { label: '公司驾驶舱', href: '/company' },
           { label: currentProject?.name || '项目', href: `/projects/${projectId}/dashboard` },
-          { label: '任务管理', href: `/projects/${projectId}/gantt` },
           { label: '责任主体' },
         ]}
       />
@@ -756,20 +781,38 @@ export default function ResponsibilityView() {
           返回任务总结
         </Button>
         <div className="flex flex-wrap items-center gap-2">
-          <Button
-            variant={dimension === 'person' ? 'default' : 'outline'}
-            size="sm"
-            onClick={() => handleDimensionChange('person')}
-          >
-            责任人维度
-          </Button>
-          <Button
-            variant={dimension === 'unit' ? 'default' : 'outline'}
-            size="sm"
-            onClick={() => handleDimensionChange('unit')}
-          >
-            责任单位维度
-          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => handleDimensionChange('person')}
+                className={cn(
+                  'transition-colors duration-200',
+                  dimension === 'person' ? 'bg-blue-600 text-white hover:bg-blue-600 hover:text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200',
+                )}
+              >
+                责任人维度
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>按个人查看</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => handleDimensionChange('unit')}
+                className={cn(
+                  'transition-colors duration-200',
+                  dimension === 'unit' ? 'bg-blue-600 text-white hover:bg-blue-600 hover:text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200',
+                )}
+              >
+                责任单位维度
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>按参建单位查看</TooltipContent>
+          </Tooltip>
         </div>
         <Button
           variant="outline"
@@ -799,7 +842,7 @@ export default function ResponsibilityView() {
             document.getElementById('monitoring-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
           }}
         >
-          监控区
+          {`责任主体监控(${summary.total} 个主体)`}
         </Button>
         <Button
           size="sm"
@@ -809,7 +852,7 @@ export default function ResponsibilityView() {
             document.getElementById('analysis-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
           }}
         >
-          分析区
+          {`趋势分析(${trendSummary.seriesCount})`}
         </Button>
       </div>
 
@@ -827,27 +870,39 @@ export default function ResponsibilityView() {
       )}
 
       <section id="monitoring-panel" className="space-y-4 scroll-mt-28">
+        <div className="flex flex-col gap-2">
+          <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">监控区</div>
+          <h2 className="text-2xl font-semibold tracking-tight text-slate-900">责任主体监控</h2>
+        </div>
+
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <MetricCard
             title={dimension === 'person' ? '责任人对象数' : '责任单位对象数'}
             value={summary.total}
             icon={dimension === 'person' ? <Users className="h-5 w-5" /> : <Building2 className="h-5 w-5" />}
+            sparklineData={[Math.max(summary.total - summary.abnormal, 0), summary.total]}
           />
           <MetricCard
             title="异常主体"
             value={summary.abnormal}
             icon={<AlertTriangle className="h-5 w-5" />}
+            sparklineData={[0, summary.abnormal]}
+            sparklineColor="#DC2626"
           />
           <MetricCard
             title="关注名单"
             value={summary.watched}
             hint={`${data?.watchlist.filter((item) => item.status === 'active').length ?? 0} 条`}
             icon={<ShieldAlert className="h-5 w-5" />}
+            sparklineData={[0, summary.watched]}
+            sparklineColor="#F97316"
           />
           <MetricCard
-            title="待确认恢复"
+            title="待确认恢复正常"
             value={summary.recoveryPending}
             icon={<CheckCheck className="h-5 w-5" />}
+            sparklineData={[0, summary.recoveryPending]}
+            sparklineColor="#10B981"
           />
         </div>
 
@@ -880,26 +935,25 @@ export default function ResponsibilityView() {
           <LoadingState label="责任主体分析加载中" />
         ) : filteredRows.length === 0 ? (
           <EmptyState
+            variant="filter"
             icon={Users}
             title="暂无匹配的责任主体"
-            action={
-              <Button
-                variant="outline"
-                onClick={() => {
-                  setQuery('')
-                  setLinkedFilter('all')
-                }}
-              >
-                清空筛选
-              </Button>
-            }
+            onClearFilter={() => {
+              setQuery('')
+              setLinkedFilter('all')
+            }}
           />
         ) : (
           <div className="space-y-4">
             {filteredRows.map((row) => {
               const rowActionKey = `${row.dimension}:${row.key}`
               return (
-                <Card key={rowActionKey} variant="detail" data-testid="responsibility-row">
+                <Card
+                  key={rowActionKey}
+                  variant="detail"
+                  data-testid="responsibility-row"
+                  className={cn(row.state_level === 'abnormal' ? 'border-l-4 border-red-500' : 'border border-slate-200')}
+                >
                   <CardHeader className="gap-4">
                     <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                       <div className="space-y-2">
@@ -913,7 +967,19 @@ export default function ResponsibilityView() {
                         <p className="text-sm leading-6 text-slate-500">
                           {dimension === 'person'
                             ? `主责单位：${row.primary_unit_label ?? '未识别'}`
-                            : `风险压力 ${row.risk_pressure} · 重点承诺缺口 ${row.key_commitment_gap_count}`}
+                            : (
+                              <>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <span className="inline-flex cursor-help items-center underline decoration-dotted underline-offset-4">
+                                      风险关联度 {row.risk_pressure}
+                                    </span>
+                                  </TooltipTrigger>
+                                  <TooltipContent>该主体关联的活跃风险数量</TooltipContent>
+                                </Tooltip>
+                                {` · 重点承诺缺口 ${row.key_commitment_gap_count}`}
+                              </>
+                            )}
                         </p>
                         {row.alert_reasons.length > 0 && (
                           <div className="flex flex-wrap gap-2">
@@ -953,7 +1019,7 @@ export default function ResponsibilityView() {
                   </CardHeader>
 
                   <CardContent className="space-y-4">
-                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+                    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
                       <div className="rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3">
                         <div className="text-xs text-slate-500">总任务</div>
                         <div className="mt-1 text-xl font-semibold text-slate-900">{row.total_tasks}</div>
@@ -967,7 +1033,7 @@ export default function ResponsibilityView() {
                         <div className="mt-1 text-xl font-semibold text-slate-900">{row.current_in_hand_count}</div>
                       </div>
                       <div className="rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3">
-                        <div className="text-xs text-slate-500">活跃延期</div>
+                        <div className="text-xs text-slate-500">当前延期中</div>
                         <div className="mt-1 text-xl font-semibold text-slate-900">{row.active_delayed_count}</div>
                       </div>
                       <div className="rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3">
@@ -989,15 +1055,20 @@ export default function ResponsibilityView() {
                     </div>
 
                     <div className="rounded-2xl border border-slate-200 bg-white">
-                      <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+                      <div className="flex items-center justify-between px-4 py-3">
                         <div className="text-sm font-medium text-slate-900">关联任务</div>
                       </div>
+                      <Separator />
                       <div className="divide-y divide-slate-100">
-                        {row.tasks.slice(0, 6).map((task) => (
-                          <button
+                        {row.tasks.slice(0, 6).map((task, taskIndex) => (
+                          <Button
+                            variant="ghost"
                             key={task.id}
                             type="button"
-                            className="flex w-full items-center justify-between gap-4 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+                            className={cn(
+                              'flex w-full items-center justify-between gap-4 px-4 py-3 text-left transition-colors hover:bg-blue-50/60',
+                              taskIndex % 2 === 0 ? 'bg-slate-50' : 'bg-white',
+                            )}
                             onClick={() => navigate(`/projects/${projectId}/gantt?highlight=${encodeURIComponent(task.id)}`)}
                           >
                             <div className="min-w-0 space-y-1">
@@ -1006,17 +1077,22 @@ export default function ResponsibilityView() {
                                 <span>{task.assignee}</span>
                                 <span>{task.unit}</span>
                                 <span>{task.status_label}</span>
-                                <span>计划完成 {formatDate(task.planned_end_date)}</span>
+                                <span>
+                                  计划完成 <span className="tabular-nums">{formatDate(task.planned_end_date)}</span>
+                                </span>
                               </div>
                             </div>
                             <ArrowRight className="h-4 w-4 flex-shrink-0 text-slate-300" />
-                          </button>
+                          </Button>
                         ))}
                       </div>
                       {row.tasks.length > 6 && (
-                        <div className="border-t border-slate-200 px-4 py-3 text-xs text-slate-500">
-                          还有 {row.tasks.length - 6} 项任务未展开，可进入任务台账继续查看。
-                        </div>
+                        <>
+                          <Separator />
+                          <div className="px-4 py-3 text-xs text-slate-500">
+                            还有 {row.tasks.length - 6} 项任务未展开，可进入任务台账继续查看。
+                          </div>
+                        </>
                       )}
                     </div>
                   </CardContent>
@@ -1029,8 +1105,8 @@ export default function ResponsibilityView() {
 
       <section id="analysis-panel" className="space-y-4 scroll-mt-28">
         <div className="flex flex-col gap-2">
-          <div className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">分析区</div>
-          <h2 className="text-[26px] font-semibold tracking-tight text-slate-900">责任趋势洞察</h2>
+          <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">分析区</div>
+          <h2 className="text-2xl font-semibold tracking-tight text-slate-900">趋势分析</h2>
         </div>
 
         {trendError && (
@@ -1051,9 +1127,26 @@ export default function ResponsibilityView() {
         ) : (
           <div className="space-y-4">
             <div className="grid gap-4 md:grid-cols-3">
-              <MetricCard title="趋势对象数" value={trendSummary.seriesCount} icon={<BarChart3 className="h-5 w-5" />} />
-              <MetricCard title="平均按时率" value={`${trendSummary.avgCompletionRate}%`} icon={<CheckCheck className="h-5 w-5" />} />
-              <MetricCard title="平均逾期率" value={`${trendSummary.avgDelayRate}%`} icon={<AlertTriangle className="h-5 w-5" />} />
+              <MetricCard
+                title="趋势对象数"
+                value={trendSummary.seriesCount}
+                icon={<BarChart3 className="h-5 w-5" />}
+                sparklineData={[0, trendSummary.seriesCount]}
+              />
+              <MetricCard
+                title="平均按时率"
+                value={`${trendSummary.avgCompletionRate}%`}
+                icon={<CheckCheck className="h-5 w-5" />}
+                sparklineData={[0, trendSummary.avgCompletionRate]}
+                sparklineColor="#10B981"
+              />
+              <MetricCard
+                title="平均逾期率"
+                value={`${trendSummary.avgDelayRate}%`}
+                icon={<AlertTriangle className="h-5 w-5" />}
+                sparklineData={[0, trendSummary.avgDelayRate]}
+                sparklineColor="#DC2626"
+              />
             </div>
 
             <div className="rounded-2xl border border-slate-100 bg-slate-50/70 px-4 py-3 text-xs text-slate-500">

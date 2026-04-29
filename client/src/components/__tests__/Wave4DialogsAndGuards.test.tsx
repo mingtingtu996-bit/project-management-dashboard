@@ -6,6 +6,7 @@ import { ActionGuardDialog } from '../ActionGuardDialog'
 import { DeleteProtectionDialog } from '../DeleteProtectionDialog'
 import { LoginDialog } from '../LoginDialog'
 import { PermissionGuard } from '../PermissionGuard'
+import { Button } from '@/components/ui/button'
 import { useAuth } from '@/hooks/useAuth'
 import { usePermissions } from '@/hooks/usePermissions'
 
@@ -25,9 +26,9 @@ function LoginDialogHarness() {
 
   return (
     <>
-      <button type="button" data-testid="login-trigger" onClick={() => setOpen(true)}>
+      <Button type="button" data-testid="login-trigger" onClick={() => setOpen(true)}>
         open
-      </button>
+      </Button>
       <LoginDialog isOpen={open} onClose={() => setOpen(false)} />
     </>
   )

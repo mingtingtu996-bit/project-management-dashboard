@@ -232,7 +232,7 @@ export function getPlanningStatusLabel(status: PlanningStatus) {
   if (status === 'confirmed') return '已确认'
   if (status === 'closed') return '已关闭'
   if (status === 'revising') return '修订中'
-  if (status === 'pending_realign') return '待重排'
+  if (status === 'pending_realign') return '待编辑模式'
   if (status === 'archived') return '已归档'
   return '待重新校核'
 }

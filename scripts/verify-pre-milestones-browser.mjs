@@ -523,7 +523,9 @@ async function main() {
     await page.goto(targetUrl, { waitUntil: 'domcontentloaded' })
     await page.getByTestId('pre-milestones-page').waitFor({ state: 'visible', timeout: 20000 })
 
-    await page.getByTestId('pre-milestones-certificate-cert-land-use').click()
+    const landUseCertificate = page.getByTestId('pre-milestones-certificate-cert-land-use')
+    await landUseCertificate.focus()
+    await page.keyboard.press('Enter')
     await page.getByTestId('certificate-detail-drawer').waitFor({ state: 'visible', timeout: 10000 })
     await page.getByTestId('linked-warnings').waitFor({ state: 'visible', timeout: 10000 })
     await page.getByTestId('linked-issues').waitFor({ state: 'visible', timeout: 10000 })

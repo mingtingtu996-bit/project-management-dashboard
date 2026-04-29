@@ -29,7 +29,7 @@ export function CertificateWorkItemDialog({
 }: CertificateWorkItemDialogProps) {
   return (
     <Dialog open={open} onOpenChange={(value) => !value && onClose()}>
-      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-h-[90vh] max-w-[720px] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{mode === 'create' ? '新增办理事项' : '编辑办理事项'}</DialogTitle>
         </DialogHeader>
@@ -164,7 +164,7 @@ export function CertificateWorkItemDialog({
                 const active = certificateId ? formData.certificate_ids.includes(certificateId) : false
                 const disabled = !certificateId
                 return (
-                  <button
+                  <Button variant="ghost"
                     key={entry.id}
                     type="button"
                     onClick={() => certificateId && onToggleCertificate(certificateId)}
@@ -178,7 +178,7 @@ export function CertificateWorkItemDialog({
                     }`}
                   >
                     {entry.label}
-                  </button>
+                  </Button>
                 )
               })}
             </div>

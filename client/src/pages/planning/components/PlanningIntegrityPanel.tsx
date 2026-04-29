@@ -1,6 +1,7 @@
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Separator } from '@/components/ui/separator'
 
 interface PlanningIntegrityPanelProps {
   status: 'loading' | 'ready' | 'error'
@@ -30,7 +31,7 @@ export function PlanningIntegrityPanel({
 
   return (
     <Card data-testid="planning-integrity-panel" className="border-slate-200 shadow-sm">
-      <CardHeader className="space-y-3 border-b border-slate-100 bg-slate-50/80">
+      <CardHeader className="space-y-3 bg-slate-50/80">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <CardTitle className="text-base">完整性校核</CardTitle>
@@ -38,6 +39,7 @@ export function PlanningIntegrityPanel({
           <Badge variant={status === 'error' ? 'destructive' : 'outline'}>{statusLabel}</Badge>
         </div>
       </CardHeader>
+      <Separator />
       <CardContent className="space-y-3 p-4">
         {status === 'loading' ? (
           <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-4" />
@@ -48,19 +50,19 @@ export function PlanningIntegrityPanel({
         ) : (
           <div className="grid gap-2 sm:grid-cols-2">
             <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
-              <div className="text-xs uppercase tracking-[0.16em] text-slate-500">Data integrity</div>
+              <div className="text-xs uppercase tracking-wider text-slate-500">Data integrity</div>
               <div className="mt-1 text-sm font-medium text-slate-900">{summary.dataIssues} 项</div>
             </div>
             <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
-              <div className="text-xs uppercase tracking-[0.16em] text-slate-500">Mapping integrity</div>
+              <div className="text-xs uppercase tracking-wider text-slate-500">Mapping integrity</div>
               <div className="mt-1 text-sm font-medium text-slate-900">{summary.mappingIssues} 项</div>
             </div>
             <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
-              <div className="text-xs uppercase tracking-[0.16em] text-slate-500">System consistency</div>
+              <div className="text-xs uppercase tracking-wider text-slate-500">System consistency</div>
               <div className="mt-1 text-sm font-medium text-slate-900">{summary.systemIssues} 项</div>
             </div>
             <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
-              <div className="text-xs uppercase tracking-[0.16em] text-slate-500">M1-M9</div>
+              <div className="text-xs uppercase tracking-wider text-slate-500">M1-M9</div>
               <div className="mt-1 text-sm font-medium text-slate-900">{summary.milestoneIssues} 项</div>
             </div>
           </div>

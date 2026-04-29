@@ -736,7 +736,7 @@ async function main() {
     await page.screenshot({ path: join(outputDir, 'reports-page-risk.png'), fullPage: true })
 
     await page.getByTestId('analysis-entry-progress_deviation').click()
-    await page.waitForFunction(() => window.location.hash.includes('/reports?view=execution'))
+    await page.waitForFunction(() => window.location.hash.includes('/reports?view=progress_deviation'))
     await page.getByTestId('deviation-filter-chips').waitFor({ state: 'visible', timeout: 10000 })
     const deviationUrl = page.url()
     await page.screenshot({ path: join(outputDir, 'reports-page-progress-deviation.png'), fullPage: true })

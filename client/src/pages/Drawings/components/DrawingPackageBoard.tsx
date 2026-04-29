@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Separator } from '@/components/ui/separator'
 
 import { DRAWING_REVIEW_MODE_LABELS, DRAWING_STATUS_LABELS } from '../constants'
 import type { DrawingPackageCard } from '../types'
@@ -66,7 +67,7 @@ export function DrawingPackageBoard({
       {groups.length === 0 ? (
         <Card className="border-dashed border-slate-200 shadow-sm">
           <CardContent className="flex flex-col items-center justify-center gap-3 py-14 text-center">
-            <FileWarning className="h-10 w-10 text-slate-300" />
+            <FileWarning className="h-8 w-8 text-slate-300" />
             <div className="text-base font-medium text-slate-900">{emptyTitle}</div>
           </CardContent>
         </Card>
@@ -76,21 +77,21 @@ export function DrawingPackageBoard({
             const isCollapsed = collapsedGroups.has(group.disciplineType)
             return (
             <section key={group.disciplineType} className="space-y-3">
-              <button
+              <Button variant="ghost"
                 type="button"
                 onClick={() => toggleGroup(group.disciplineType)}
                 className="flex items-center gap-2 w-full text-left"
               >
                 {isCollapsed ? <ChevronRight className="h-4 w-4 text-slate-400" /> : <ChevronDown className="h-4 w-4 text-slate-400" />}
-                <div className="h-2.5 w-2.5 rounded-full bg-blue-500" />
+                <div className="h-2.5 w-2.5 rounded-full bg-blue-600" />
                 <h3 className="text-sm font-semibold text-slate-700">{group.disciplineType}</h3>
                 <span className="text-xs text-slate-400">{group.packages.length} 个包</span>
-              </button>
+              </Button>
 
               {!isCollapsed && <div className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-3">
                 {group.packages.map((pkg) => (
                   <Card key={pkg.packageId} className="overflow-hidden border-slate-200 shadow-sm" data-testid={`drawing-package-card-${pkg.packageId}`}>
-                    <CardHeader className="space-y-3 border-b border-slate-100 bg-slate-50/70 p-5">
+                    <CardHeader className="space-y-3 bg-slate-50/70 p-5">
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
                           <CardTitle className="truncate text-lg text-slate-900">{pkg.packageName}</CardTitle>
@@ -121,6 +122,7 @@ export function DrawingPackageBoard({
                         )}
                       </div>
                     </CardHeader>
+                    <Separator />
 
                     <CardContent className="space-y-4 p-5">
                       <div className="space-y-2">
@@ -201,23 +203,26 @@ export function DrawingPackageBoard({
                         )}
                       </div>
                       {((pkg.linkedTaskCount ?? 0) > 0 || (pkg.linkedAcceptanceCount ?? 0) > 0 || (pkg.linkedCertificateCount ?? 0) > 0) && (
-                        <div className="flex flex-wrap gap-1.5 pt-1 border-t border-slate-100" data-testid={`drawing-package-impact-tags-${pkg.packageId}`}>
-                          {(pkg.linkedTaskCount ?? 0) > 0 && (
-                            <span className="inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700">
-                              影响任务 {pkg.linkedTaskCount} 项
-                            </span>
-                          )}
-                          {(pkg.linkedAcceptanceCount ?? 0) > 0 && (
-                            <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
-                              影响验收 {pkg.linkedAcceptanceCount} 项
-                            </span>
-                          )}
-                          {(pkg.linkedCertificateCount ?? 0) > 0 && (
-                            <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700">
-                              影响证照 {pkg.linkedCertificateCount} 项
-                            </span>
-                          )}
-                        </div>
+                        <>
+                          <Separator />
+                          <div className="flex flex-wrap gap-1.5 pt-1" data-testid={`drawing-package-impact-tags-${pkg.packageId}`}>
+                            {(pkg.linkedTaskCount ?? 0) > 0 && (
+                              <span className="inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700">
+                                影响任务 {pkg.linkedTaskCount} 项
+                              </span>
+                            )}
+                            {(pkg.linkedAcceptanceCount ?? 0) > 0 && (
+                              <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
+                                影响验收 {pkg.linkedAcceptanceCount} 项
+                              </span>
+                            )}
+                            {(pkg.linkedCertificateCount ?? 0) > 0 && (
+                              <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700">
+                                影响证照 {pkg.linkedCertificateCount} 项
+                              </span>
+                            )}
+                          </div>
+                        </>
                       )}
                     </CardContent>
                   </Card>

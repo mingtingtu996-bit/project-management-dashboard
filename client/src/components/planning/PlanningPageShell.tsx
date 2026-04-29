@@ -1,8 +1,10 @@
 import type { ReactNode } from 'react'
 
+import { Breadcrumb } from '@/components/Breadcrumb'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import { Separator } from '@/components/ui/separator'
 import { cn } from '@/lib/utils'
 
 export interface PlanningPageTab {
@@ -31,14 +33,23 @@ export function PlanningPageShell({
   children,
   className,
 }: PlanningPageShellProps) {
+  const titleParts = title.split('/').map((item) => item.trim()).filter(Boolean)
+
   return (
-    <div data-testid="planning-shared-shell" className={cn('space-y-4 px-4 py-5 sm:px-6 lg:px-8', className)}>
+    <div data-testid="planning-shared-shell" className={cn('page-shell', className)}>
+      <Breadcrumb
+        items={[
+          { label: projectName },
+          ...titleParts.map((item) => ({ label: item })),
+        ]}
+      />
+
       <Card variant="detail" className="overflow-hidden">
         <div className="h-1 bg-gradient-to-r from-cyan-500 via-sky-500 to-indigo-500" />
         <CardContent className="space-y-5 p-0">
           <div
             data-testid="planning-layer-l1"
-            className="border-b border-slate-100 bg-white px-5 py-5 sm:px-6"
+            className="bg-white px-5 py-5 sm:px-6"
           >
             <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
               <div className="space-y-2">
@@ -46,7 +57,7 @@ export function PlanningPageShell({
                   <Badge variant="secondary">
                     {projectName}
                   </Badge>
-                  <span className="text-xs uppercase tracking-[0.24em] text-slate-500">planning workspace</span>
+                  <span className="text-xs uppercase tracking-wider text-slate-500">planning workspace</span>
                 </div>
                 <div className="space-y-1">
                   <h1 className="text-2xl font-semibold tracking-tight text-slate-900 sm:text-3xl">{title}</h1>
@@ -56,6 +67,7 @@ export function PlanningPageShell({
               <div className="flex flex-wrap items-center gap-2">{actions}</div>
             </div>
           </div>
+          <Separator />
 
           <div className="px-5 pb-5 pt-4 sm:px-6">
             <div data-testid="planning-page-tabs" className="flex flex-wrap gap-2">

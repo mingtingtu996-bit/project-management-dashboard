@@ -6,8 +6,11 @@
 import { useState } from 'react'
 import { MessageSquare, Send, X, CheckCircle } from 'lucide-react'
 import { z } from 'zod'
+import { Separator } from '@/components/ui/separator'
 import { getBrowserStorage, safeJsonParse, safeStorageGet, safeStorageSet } from '@/lib/browserStorage'
 import { cn } from '@/lib/utils'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { Button } from '@/components/ui/button'
 
 interface FeedbackData {
   type: 'bug' | 'feature' | 'improvement' | 'other'
@@ -86,28 +89,29 @@ export default function FeedbackModal({ isOpen, onClose, onSubmit }: FeedbackMod
   if (!isOpen) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
+    <div className="fixed inset-0 z-50 flex animate-in items-center justify-center px-4 py-6 duration-200 fade-in-0">
       {/* 背景遮罩 */}
       <div 
-        className="absolute inset-0 bg-black/50" 
+        className="absolute inset-0 bg-black/50 backdrop-blur-[4px]" 
         onClick={onClose}
       />
       
       {/* 模态框 */}
-      <div className="relative bg-background border rounded-xl shadow-lg w-full max-w-md mx-4">
+      <div className="relative w-[90%] max-w-[560px] animate-in rounded-2xl border bg-background shadow-[var(--el-4)] duration-200 ease-bounce fade-in-0 zoom-in-95">
         {/* 头部 */}
-        <div className="flex items-center justify-between px-4 py-3 border-b">
+        <div className="flex items-center justify-between px-4 py-3">
           <div className="flex items-center gap-2">
             <MessageSquare className="h-5 w-5 text-primary" />
             <span className="font-medium">提交反馈</span>
           </div>
-          <button
+          <Button variant="ghost"
             onClick={onClose}
             className="p-1 hover:bg-accent rounded-md"
           >
             <X className="h-4 w-4" />
-          </button>
+          </Button>
         </div>
+        <Separator />
 
         {/* 内容 */}
         <form onSubmit={handleSubmit} className="p-4 space-y-4">
@@ -123,7 +127,7 @@ export default function FeedbackModal({ isOpen, onClose, onSubmit }: FeedbackMod
                 <label className="block text-sm font-medium mb-1">反馈类型</label>
                 <div className="grid grid-cols-2 gap-2">
                   {(['bug', 'feature', 'improvement', 'other'] as const).map((t) => (
-                    <button
+                    <Button variant="ghost"
                       key={t}
                       type="button"
                       onClick={() => setType(t)}
@@ -138,7 +142,7 @@ export default function FeedbackModal({ isOpen, onClose, onSubmit }: FeedbackMod
                       {t === 'feature' && '✨ 新功能'}
                       {t === 'improvement' && '💡 改进建议'}
                       {t === 'other' && '💬 其他'}
-                    </button>
+                    </Button>
                   ))}
                 </div>
               </div>
@@ -182,13 +186,13 @@ export default function FeedbackModal({ isOpen, onClose, onSubmit }: FeedbackMod
               </div>
 
               {/* 提交按钮 */}
-              <button
+              <Button variant="ghost"
                 type="submit"
                 className="w-full flex items-center justify-center gap-2 bg-primary text-primary-foreground py-2 rounded-md hover:bg-primary/90 transition-colors"
               >
                 <Send className="h-4 w-4" />
                 提交反馈
-              </button>
+              </Button>
             </>
           )}
         </form>
@@ -203,13 +207,19 @@ export function FeedbackButton() {
 
   return (
     <>
-      <button
+      <Tooltip>
+  <TooltipTrigger asChild>
+    <Button variant="ghost"
         onClick={() => setIsOpen(true)}
+        aria-label="打开反馈"
         className="fixed bottom-4 right-4 z-40 bg-primary text-primary-foreground p-3 rounded-full shadow-lg hover:bg-primary/90 transition-all hover:scale-110"
-        title="反馈"
+        
       >
         <MessageSquare className="h-5 w-5" />
-      </button>
+      </Button>
+  </TooltipTrigger>
+  <TooltipContent>反馈</TooltipContent>
+</Tooltip>
       <FeedbackModal 
         isOpen={isOpen} 
         onClose={() => setIsOpen(false)} 

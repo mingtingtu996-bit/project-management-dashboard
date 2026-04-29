@@ -218,7 +218,8 @@ describe('GanttView source contracts', () => {
   it('keeps task title single-click focused on details instead of opening edit dialog', () => {
     const source = readGanttRowSectionsSource()
 
-    expect(source.includes('title="单击查看详情，双击快速改名"')).toBe(true)
+    expect(source.includes('单击查看详情，双击快速改名')).toBe(true)
+    expect(source.includes('title="单击查看详情，双击快速改名"')).toBe(false)
     expect(source.includes('title="单击打开编辑，双击快速改名"')).toBe(false)
     expect(source.includes('onSelectTask(task)')).toBe(true)
   })

@@ -3,7 +3,7 @@ import { Skeleton } from './skeleton'
 
 function ShellSkeletonHeader() {
   return (
-    <div className="flex flex-col gap-4 rounded-[28px] border border-slate-100 bg-white/90 p-6 shadow-sm md:flex-row md:items-end md:justify-between">
+    <div className="flex flex-col gap-4 rounded-2xl border border-slate-100 bg-white/90 p-6 shadow-sm md:flex-row md:items-end md:justify-between">
       <div className="space-y-3">
         <Skeleton className="h-5 w-24 rounded-full" />
         <Skeleton className="h-9 w-56 rounded-2xl" />
@@ -243,7 +243,7 @@ export function ReportsSkeleton() {
             <Skeleton className="h-6 w-32 rounded-full" />
           </CardHeader>
           <CardContent>
-            <Skeleton className="h-64 w-full rounded-[24px]" />
+            <Skeleton className="h-64 w-full rounded-2xl" />
           </CardContent>
         </Card>
         <Card className="card-l2">
@@ -251,7 +251,7 @@ export function ReportsSkeleton() {
             <Skeleton className="h-6 w-32 rounded-full" />
           </CardHeader>
           <CardContent>
-            <Skeleton className="h-64 w-full rounded-[24px]" />
+            <Skeleton className="h-64 w-full rounded-2xl" />
           </CardContent>
         </Card>
       </div>
@@ -276,7 +276,7 @@ export function TeamMembersSkeleton() {
                   <Skeleton className="h-10 w-10 rounded-full" />
                   <div className="space-y-2">
                     <Skeleton className="h-4 w-24 rounded-full" />
-                    <Skeleton className="h-3 w-32 rounded-full" />
+                    <Skeleton className="h-3.5 w-3.52 rounded-full" />
                   </div>
                 </div>
                 <Skeleton className="h-6 w-16 rounded-full" />

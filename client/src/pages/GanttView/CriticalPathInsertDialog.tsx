@@ -94,7 +94,7 @@ export function CriticalPathInsertDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl" data-testid="critical-path-insert-dialog">
+      <DialogContent className="max-w-[720px] rounded-2xl shadow-[var(--el-4)]" data-testid="critical-path-insert-dialog">
         <DialogHeader>
           <DialogTitle>选择要插入主链的任务</DialogTitle>
           <DialogDescription className="sr-only">
@@ -110,6 +110,7 @@ export function CriticalPathInsertDialog({
             <Input
               value={searchText}
               onChange={(event) => setSearchText(event.target.value)}
+              aria-label="搜索要插入关键路径的任务"
               placeholder="搜索要插入的任务名、责任人或编号"
               data-testid="critical-path-insert-search"
             />
@@ -127,7 +128,7 @@ export function CriticalPathInsertDialog({
               filteredTasks.map((task) => {
                 const active = selectedTaskId === task.id
                 return (
-                  <button
+                  <Button variant="ghost"
                     key={task.id}
                     type="button"
                     onClick={() => setSelectedTaskId(task.id)}
@@ -147,7 +148,7 @@ export function CriticalPathInsertDialog({
                         {task.status ? `状态：${task.status}` : '未设置状态'}
                       </span>
                     </div>
-                  </button>
+                  </Button>
                 )
               })
             )}

@@ -14,6 +14,7 @@ export type HealthHistory = {
   lastMonth: number | null
   change: number | null
   lastMonthPeriod?: string | null
+  periods?: Array<{ period: string; value: number | null }>
 }
 
 export type ProjectFormStatus = '未开始' | '进行中' | '已完成' | '已暂停'
@@ -38,6 +39,8 @@ export type HeroStatItem = {
   hint: string
   icon: LucideIcon
   tone: string
+  pill?: boolean
+  sparklineData?: Array<{ value: number }>
 }
 
 /**

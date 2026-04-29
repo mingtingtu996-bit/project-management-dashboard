@@ -223,9 +223,9 @@ const isCli = process.argv[1] && fileURLToPath(import.meta.url) === process.argv
 
 if (isCli) {
   run().then((exitCode) => {
-    process.exit(exitCode)
+    process.exitCode = exitCode
   }).catch((error) => {
     console.error(error instanceof Error ? error.message : String(error))
-    process.exit(1)
+    process.exitCode = 1
   })
 }

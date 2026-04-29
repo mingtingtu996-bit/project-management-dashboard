@@ -46,18 +46,18 @@ export function DeleteProtectionDialog({
 }: DeleteProtectionDialogProps) {
   const confirmClassName =
     confirmTone === 'destructive'
-      ? 'bg-rose-600 text-white hover:bg-rose-500 focus:ring-rose-500'
+      ? 'bg-red-600 text-white hover:bg-red-500 focus:ring-red-500'
       : 'bg-slate-900 text-white hover:bg-slate-800 focus:ring-slate-500'
 
   return (
     <AlertDialog open={open} onOpenChange={(nextOpen) => !loading && onOpenChange(nextOpen)}>
-      <AlertDialogContent data-testid={testId} className="max-w-md">
+      <AlertDialogContent data-testid={testId} className="max-w-[440px]">
         <AlertDialogHeader className="space-y-3">
           <div className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-rose-50 text-rose-600">
             <Trash2 className="h-5 w-5" />
           </div>
           <AlertDialogTitle>{title}</AlertDialogTitle>
-          <AlertDialogDescription className="leading-6 text-slate-600">
+          <AlertDialogDescription className="not-sr-only leading-6 text-slate-600">
             {description}
           </AlertDialogDescription>
         </AlertDialogHeader>

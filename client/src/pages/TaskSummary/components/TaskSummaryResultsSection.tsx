@@ -11,6 +11,7 @@ type SummaryStats = {
 
 interface TaskSummaryResultsSectionProps {
   stats: SummaryStats | null
+  totalTasks: number
 }
 
 function MetricCard({
@@ -24,42 +25,33 @@ function MetricCard({
   hint: string
   tone: string
 }) {
-  void hint
-
   return (
-    <div className={`rounded-2xl border px-4 py-4 ${tone}`}>
-      <div className="text-xs font-medium uppercase tracking-[0.18em] opacity-70">{label}</div>
-      <div className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">{value}</div>
-    </div>
+    <Card className={`border px-0 shadow-sm ${tone}`}>
+      <CardContent className="space-y-2 p-5">
+        <div className="text-xs font-medium uppercase tracking-wider opacity-70">{label}</div>
+        <div className="text-3xl font-semibold tracking-tight text-slate-900">{value}</div>
+        <div className="text-xs text-slate-500">{hint}</div>
+      </CardContent>
+    </Card>
   )
 }
 
-export function TaskSummaryResultsSection({ stats }: TaskSummaryResultsSectionProps) {
+export function TaskSummaryResultsSection({ stats, totalTasks }: TaskSummaryResultsSectionProps) {
+  const completedTasks = stats?.total_completed ?? 0
+  const completionRate = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0
   const cards = stats
     ? [
         {
-          label: '已完成任务',
-          value: String(stats.total_completed),
-          hint: '结果摘要数据来自任务总结接口',
+          label: '总任务数',
+          value: String(totalTasks),
+          hint: `已完成 ${completedTasks} 个任务`,
           tone: 'bg-blue-50 border-blue-100',
         },
         {
-          label: '按时完成',
-          value: String(stats.on_time_count),
-          hint: '用于观察兑现质量',
+          label: '完成率',
+          value: `${completionRate}%`,
+          hint: `按时 ${stats.on_time_count} · 延期 ${stats.delayed_count}`,
           tone: 'bg-emerald-50 border-emerald-100',
-        },
-        {
-          label: '延期完成',
-          value: String(stats.delayed_count),
-          hint: '用于识别偏差积累',
-          tone: 'bg-amber-50 border-amber-100',
-        },
-        {
-          label: '完成里程碑',
-          value: String(stats.completed_milestone_count),
-          hint: '保持关键路径结果可读',
-          tone: 'bg-violet-50 border-violet-100',
         },
       ]
     : []
@@ -68,14 +60,14 @@ export function TaskSummaryResultsSection({ stats }: TaskSummaryResultsSectionPr
     <section data-testid="task-summary-results-section" className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <div className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">结果摘要区</div>
-          <h2 className="mt-2 text-[26px] font-semibold tracking-tight text-slate-900">结果摘要</h2>
+          <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">结果摘要区</div>
+          <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">结果摘要</h2>
         </div>
         <Badge variant="secondary">已收口</Badge>
       </div>
 
       {cards.length > 0 ? (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
           {cards.map((card) => (
             <MetricCard key={card.label} {...card} />
           ))}

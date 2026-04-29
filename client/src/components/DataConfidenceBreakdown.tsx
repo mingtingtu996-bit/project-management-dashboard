@@ -63,7 +63,7 @@ function getDimensions(confidence: ConfidenceShape): DataQualityConfidenceDimens
 
 export function DataConfidenceBreakdown({
   confidence,
-  title = '置信度维度分解',
+  title = '数据可靠性维度分解',
   compact = false,
   testId,
 }: {
@@ -81,7 +81,7 @@ export function DataConfidenceBreakdown({
     <div data-testid={testId} className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">{title}</div>
+          <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">{title}</div>
           <div className="mt-1 text-sm text-slate-700">
             {totalLoss > 0
               ? `当前总降幅 ${totalLoss} 分，影响最大的是 ${leadingDimension?.label ?? '暂无' }。`

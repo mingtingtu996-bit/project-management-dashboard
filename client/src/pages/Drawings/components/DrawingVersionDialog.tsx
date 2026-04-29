@@ -143,7 +143,7 @@ export function DrawingVersionDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl border-slate-200">
+      <DialogContent className="max-w-[720px] border-slate-200">
         <DialogHeader>
           <DialogTitle className="text-slate-900">
             {packageCard?.packageName ? `${packageCard.packageName} 版本窗口` : '版本变更窗口'}
@@ -178,7 +178,7 @@ export function DrawingVersionDialog({
                     data-testid={`drawing-version-row-${version.versionId}`}
                     className={`flex w-full items-start justify-between gap-3 rounded-2xl border px-4 py-3 text-left transition-colors ${selectedVersionId === version.versionId ? 'border-blue-300 bg-blue-50' : 'border-slate-100 bg-slate-50 hover:bg-slate-100'}`}
                   >
-                    <button
+                    <Button variant="ghost"
                       type="button"
                       onClick={() => toggleSelectedVersion(version.versionId)}
                       className="flex min-w-0 flex-1 items-start text-left"
@@ -198,7 +198,7 @@ export function DrawingVersionDialog({
                           {version.createdAt ? ` · ${version.createdAt}` : ''}
                         </div>
                       </div>
-                    </button>
+                    </Button>
 
                     {!version.isCurrentVersion && canEdit ? (
                       <Button size="sm" variant="outline" onClick={() => onSetCurrentVersion(version.versionId)}>
@@ -298,7 +298,7 @@ export function DrawingVersionDialog({
                           const Icon = cfg.icon
                           const canNavigate = Boolean(projectId)
                           return (
-                            <button
+                            <Button variant="ghost"
                               key={item.id}
                               type="button"
                               disabled={!canNavigate}
@@ -317,8 +317,8 @@ export function DrawingVersionDialog({
                               {item.status && (
                                 <span className="ml-auto shrink-0 opacity-70">{item.status}</span>
                               )}
-                              {canNavigate && <ExternalLink className="ml-auto h-3 w-3 shrink-0 opacity-50" />}
-                            </button>
+                              {canNavigate && <ExternalLink className="ml-auto h-3.5 w-3.5 shrink-0 opacity-50" />}
+                            </Button>
                           )
                         })}
                       </div>

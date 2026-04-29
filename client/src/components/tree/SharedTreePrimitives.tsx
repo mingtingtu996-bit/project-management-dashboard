@@ -29,7 +29,7 @@ export function TreeDiamondIcon({ className }: { className?: string }) {
     <span
       aria-hidden="true"
       className={cn(
-        'inline-block h-4 w-4 shrink-0 rotate-45 rounded-[2px] border border-current bg-transparent',
+        'inline-block h-4 w-4 shrink-0 rotate-45 rounded-sm border border-current bg-transparent',
         className,
       )}
     />

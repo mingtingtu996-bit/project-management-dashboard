@@ -2,9 +2,17 @@ import { useRef } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
-import { RotateCcw, RotateCw, Save } from 'lucide-react'
+import { Download, History, MoreHorizontal, RotateCcw, RotateCw, Save } from 'lucide-react'
 
 interface BaselineBottomBarProps {
   isDirty: boolean
@@ -60,16 +68,16 @@ export function BaselineBottomBar({
     (Boolean(onBatchDelete) || Boolean(onBatchShift) || Boolean(onBatchSetProgress))
 
   return (
-    <div className="fixed bottom-4 left-0 right-0 z-40 px-4">
+    <div className="fixed bottom-4 left-1/2 z-40 w-[calc(100%-2rem)] max-w-[1440px] -translate-x-1/2 px-0">
       <Card
         data-testid="baseline-bottom-bar"
         className={cn(
-          'mx-auto max-w-[1440px] border-slate-700/70 bg-slate-950 px-4 py-3 text-white shadow-2xl shadow-slate-950/30',
+          'border-slate-700/70 bg-slate-950 px-4 py-3 text-white shadow-2xl shadow-slate-950/30',
         )}
       >
         <div className="flex flex-col gap-3">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div className="flex flex-wrap items-center gap-3">
+          <div className="grid items-center gap-3 lg:grid-cols-[minmax(260px,1fr)_auto_minmax(260px,1fr)]">
+            <div className="flex flex-wrap items-center gap-2">
               <span
                 className={cn(
                   'flex h-7 min-w-7 items-center justify-center rounded-full px-2 text-xs font-bold',
@@ -78,17 +86,11 @@ export function BaselineBottomBar({
               >
                 {isDirty ? '未保存' : '已保存'}
               </span>
-              <span className="text-sm font-medium">基线草稿收口</span>
-              <span className="text-xs text-slate-300">锁剩余 {lockRemainingLabel}</span>
-              <span className="text-xs text-slate-300">最近暂存 {lastSavedLabel}</span>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
               <Button
                 type="button"
                 size="sm"
                 variant="outline"
-                className="gap-2 rounded-full border-slate-600 bg-transparent text-slate-100 hover:bg-white/10"
+                className="gap-2 rounded-full border-slate-700 bg-slate-800 text-white hover:bg-slate-700"
                 onClick={onUndo}
                 disabled={readOnly || !canUndo}
               >
@@ -99,13 +101,72 @@ export function BaselineBottomBar({
                 type="button"
                 size="sm"
                 variant="outline"
-                className="gap-2 rounded-full border-slate-600 bg-transparent text-slate-100 hover:bg-white/10"
+                className="gap-2 rounded-full border-slate-700 bg-slate-800 text-white hover:bg-slate-700"
                 onClick={onRedo}
                 disabled={readOnly || !canRedo}
               >
                 <RotateCw className="h-4 w-4" />
                 重做
               </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="gap-2 rounded-full border-slate-700 bg-slate-800 text-white hover:bg-slate-700"
+                disabled
+              >
+                <Download className="h-4 w-4" />
+                导出
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="gap-2 rounded-full border-slate-700 bg-slate-800 text-white hover:bg-slate-700"
+                disabled
+              >
+                <History className="h-4 w-4" />
+                历史
+              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="gap-2 rounded-full border-slate-700 bg-slate-800 text-white hover:bg-slate-700"
+                  >
+                    <MoreHorizontal className="h-4 w-4" />
+                    更多操作
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-48">
+                  <DropdownMenuLabel>批量辅助</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={onBatchDelete} disabled={selectedCount === 0 || !onBatchDelete}>
+                    批量删除
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() => onBatchShift?.(batchShiftInputRef.current?.value ?? batchShiftDays)}
+                    disabled={selectedCount === 0 || !onBatchShift}
+                  >
+                    平移日期
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() => onBatchSetProgress?.(batchProgressInputRef.current?.value ?? batchProgressValue)}
+                    disabled={selectedCount === 0 || !onBatchSetProgress}
+                  >
+                    设目标进度
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+
+            <div className="justify-self-center rounded-full border border-slate-700 bg-slate-900 px-4 py-2 text-sm font-medium text-slate-100">
+              已选 {selectedCount} 项
+            </div>
+
+            <div className="flex flex-wrap items-center justify-end gap-2">
               <Button
                 type="button"
                 size="sm"
@@ -120,7 +181,7 @@ export function BaselineBottomBar({
                 <Button
                   type="button"
                   size="sm"
-                  className="gap-2 rounded-full bg-emerald-500 text-white hover:bg-emerald-400"
+                  className="gap-2 rounded-full bg-emerald-700 text-white hover:bg-emerald-600"
                   onClick={onOpenConfirm}
                   disabled={readOnly || confirmDisabled}
                 >
@@ -128,6 +189,12 @@ export function BaselineBottomBar({
                 </Button>
               ) : null}
             </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3 text-xs text-slate-300">
+            <span>基线草稿收口</span>
+            <span>锁剩余 {lockRemainingLabel}</span>
+            <span>最近暂存 {lastSavedLabel}</span>
           </div>
 
           {hasBatchActions ? (
@@ -140,7 +207,7 @@ export function BaselineBottomBar({
                 type="button"
                 size="sm"
                 variant="outline"
-                className="rounded-full border-slate-600 bg-transparent text-slate-100 hover:bg-white/10"
+                className="rounded-full border-slate-700 bg-slate-800 text-white hover:bg-slate-700"
                 onClick={onBatchDelete}
                 disabled={selectedCount === 0}
               >
@@ -151,6 +218,7 @@ export function BaselineBottomBar({
                   ref={batchShiftInputRef}
                   value={batchShiftDays}
                   onChange={(event) => onBatchShiftDaysChange?.(event.target.value)}
+                  aria-label="批量平移天数"
                   className="h-8 w-20 border-slate-700 bg-slate-950 text-white"
                   inputMode="numeric"
                 />
@@ -158,7 +226,7 @@ export function BaselineBottomBar({
                   type="button"
                   size="sm"
                   variant="outline"
-                  className="rounded-full border-slate-600 bg-transparent text-slate-100 hover:bg-white/10"
+                  className="rounded-full border-slate-700 bg-slate-800 text-white hover:bg-slate-700"
                   onClick={() => onBatchShift?.(batchShiftInputRef.current?.value ?? batchShiftDays)}
                   disabled={selectedCount === 0}
                 >
@@ -170,6 +238,7 @@ export function BaselineBottomBar({
                   ref={batchProgressInputRef}
                   value={batchProgressValue}
                   onChange={(event) => onBatchProgressValueChange?.(event.target.value)}
+                  aria-label="批量目标进度"
                   className="h-8 w-24 border-slate-700 bg-slate-950 text-white"
                   inputMode="numeric"
                   placeholder="0-100"
@@ -178,7 +247,7 @@ export function BaselineBottomBar({
                   type="button"
                   size="sm"
                   variant="outline"
-                  className="rounded-full border-slate-600 bg-transparent text-slate-100 hover:bg-white/10"
+                  className="rounded-full border-slate-700 bg-slate-800 text-white hover:bg-slate-700"
                   onClick={() =>
                     onBatchSetProgress?.(batchProgressInputRef.current?.value ?? batchProgressValue)
                   }

@@ -1125,13 +1125,21 @@ describe('BaselinePage planning workflow', () => {
     const endInput = container.querySelector(
       '[data-baseline-editor-cell="baseline-v7-l3:end"]',
     ) as HTMLInputElement | null
-    const progressInput = container.querySelector(
-      '[data-baseline-editor-cell="baseline-v7-l3:progress"]',
-    ) as HTMLInputElement | null
 
     expect(titleInput).toBeTruthy()
     expect(startInput).toBeTruthy()
     expect(endInput).toBeTruthy()
+
+    await clickButtonByText(container, '更多列')
+    const progressColumnToggle = Array.from(document.body.querySelectorAll('label')).find((label) =>
+      label.textContent?.includes('目标进度')
+    )
+    expect(progressColumnToggle).toBeTruthy()
+    await setCheckboxChecked(progressColumnToggle?.querySelector('input') as HTMLInputElement, true)
+
+    const progressInput = container.querySelector(
+      '[data-baseline-editor-cell="baseline-v7-l3:progress"]',
+    ) as HTMLInputElement | null
     expect(progressInput).toBeTruthy()
 
     await setInputValue(titleInput as HTMLInputElement, '结构施工 L3 调整')
@@ -1287,7 +1295,7 @@ describe('BaselinePage planning workflow', () => {
             error: {
               code: 'REQUIRES_REALIGNMENT',
               message:
-                '当前基线有效性已触发待重整阈值：任务偏差率 100%，里程碑偏移 0 个、平均 0 天，总工期偏差 360%。触发规则：任务偏差率超过 40%、总工期偏差超过 10%。请先发起重排或修订后再确认。',
+                '当前基线有效性已触发待重整阈值：任务偏差率 100%，里程碑偏移 0 个、平均 0 天，总工期偏差 360%。触发规则：任务偏差率超过 40%、总工期偏差超过 10%。请先进入编辑模式或修订后再确认。',
             },
           }),
         })
@@ -1379,13 +1387,13 @@ describe('BaselinePage planning workflow', () => {
       </MemoryRouter>,
     )
 
-    await waitForText(container, ['声明开始重排', '已确认'])
-    await clickButtonByText(container, '声明开始重排')
+    await waitForText(container, ['进入编辑模式', '已确认'])
+    await clickButtonByText(container, '进入编辑模式')
 
     await waitForCondition(() =>
       mockedApiPost.mock.calls.some(([url]) => url === '/api/task-baselines/baseline-v7/queue-realignment'),
     )
-    await waitForText(container, ['待重排', '当前版本已进入待重排态'])
+    await waitForText(container, ['待编辑模式', '当前版本已进入待编辑模式'])
     expect(container.querySelector('[data-testid="baseline-resolve-realignment"]')).toBeTruthy()
 
     cleanup()

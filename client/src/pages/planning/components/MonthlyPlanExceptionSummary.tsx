@@ -98,23 +98,23 @@ export function MonthlyPlanExceptionSummary({
                   </div>
                 </div>
 
-                <div className="rounded-xl border border-white/80 bg-white/70 px-3 py-2">
+                <Card className="rounded-xl border border-white/80 bg-white/70 px-3 py-2">
                   <div className="text-xs font-medium text-slate-700">{topIssue ? topIssue.title : card.emptyLabel}</div>
                   {topIssue?.detail ? (
                     <p className="mt-1 text-xs leading-5 text-slate-500">{topIssue.detail}</p>
                   ) : null}
-                </div>
+                </Card>
 
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
-                  className="w-full justify-between rounded-xl bg-white/80"
+                  className="h-auto min-h-9 w-full justify-between gap-2 whitespace-normal rounded-xl bg-white/80 px-3 py-2"
                   onClick={card.onAction}
                   data-testid={`monthly-plan-exception-action-${card.key}`}
                 >
-                  {card.actionLabel}
-                  <ArrowRight className="h-4 w-4" />
+                  <span className="min-w-0 flex-1 text-left leading-4">{card.actionLabel}</span>
+                  <ArrowRight className="h-4 w-4 shrink-0" />
                 </Button>
               </CardContent>
             </Card>

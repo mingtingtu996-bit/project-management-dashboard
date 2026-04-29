@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useLocation, useNavigate, useParams } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { apiGet, getApiErrorMessage } from '@/lib/apiClient'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import { CollapsibleSection } from '@/components/CollapsibleSection'
 import { PlanningPageShell } from '@/components/planning/PlanningPageShell'
 import { PlanningTreeView, type PlanningTreeRow } from '@/components/planning/PlanningTreeView'
 import { BatchActionBar } from '@/components/planning/BatchActionBar'
@@ -21,7 +22,8 @@ import {
   type PlanningValidationIssue,
   type PlanningWorkspaceTab,
 } from '@/hooks/usePlanningStore'
-import { AlertTriangle, CheckCircle2, FileDiff, GitBranch, RotateCcw, RotateCw, Sparkles } from 'lucide-react'
+import type { BaselineVersion } from '@/types/planning'
+import { AlertTriangle, ArrowRight, CheckCircle2, FileDiff, GitBranch, RotateCcw, RotateCw, Sparkles } from 'lucide-react'
 import {
   MonthlyPlanConfirmDialog,
   type MonthlyPlanConfirmMode,
@@ -95,11 +97,11 @@ const REVISION_CANDIDATES: BaselineRevisionCandidate[] = [
     source_type: 'manual',
     status: 'open',
     severity: 'medium',
-    title: '里程碑依赖重排',
+    title: '里程碑依赖编辑模式',
     reason: '建议把关键里程碑依赖前置到同一修订篮中统一查看。',
     summary: '建议把关键里程碑依赖前置到同一修订篮中统一查看。',
     source: '来自基线对比',
-    tag: '依赖重排',
+    tag: '依赖编辑模式',
   },
   {
     id: 'revision-candidate-3',
@@ -324,6 +326,10 @@ function getFriendlyGovernanceErrorMessage(error: unknown): string {
 }
 
 function PlanningWorkspaceInner() {
+  useEffect(() => {
+    document.title = '计划编制 | WorkBuddy'
+  }, [])
+
   const params = useParams<{ id: string }>()
   const navigate = useNavigate()
   const location = useLocation()
@@ -367,6 +373,7 @@ function PlanningWorkspaceInner() {
   const [governanceErrorMessage, setGovernanceErrorMessage] = useState<string | null>(null)
   const [governanceSnoozed, setGovernanceSnoozed] = useState(false)
   const [governanceRecheckCount, setGovernanceRecheckCount] = useState(0)
+  const [hasConfirmedBaseline, setHasConfirmedBaseline] = useState<boolean | null>(null)
 
   const activeTabFromPath = getTabFromPath(location.pathname)
   const planningSurface = getPlanningSurface(location.pathname)
@@ -431,6 +438,35 @@ function PlanningWorkspaceInner() {
   }, [governanceRecheckCount, params.id])
 
   useEffect(() => {
+    const controller = new AbortController()
+
+    const loadBaselinePresence = async () => {
+      if (!params.id) {
+        setHasConfirmedBaseline(null)
+        return
+      }
+
+      try {
+        const baselineVersions = await apiGet<BaselineVersion[]>(
+          `/api/task-baselines?project_id=${encodeURIComponent(params.id)}`,
+          { signal: controller.signal, runtimeCache: 'off' },
+        )
+
+        setHasConfirmedBaseline(baselineVersions.some((version) => version.status === 'confirmed'))
+      } catch (error) {
+        if (controller.signal.aborted) return
+        setHasConfirmedBaseline(null)
+      }
+    }
+
+    void loadBaselinePresence()
+
+    return () => {
+      controller.abort()
+    }
+  }, [params.id])
+
+  useEffect(() => {
     pushSnapshot({
       projectId: params.id,
       activeWorkspace,
@@ -486,11 +522,12 @@ function PlanningWorkspaceInner() {
   const governanceAlerts = useMemo(() => governanceSnapshot?.alerts ?? [], [governanceSnapshot?.alerts])
   const governanceHealthScore = governanceHealthReport?.score ?? 0
   const governanceHealthLabel = governanceHealthReport?.label ?? (governanceStatus === 'error' ? '暂不可用' : '同步中')
+  const governanceSummaryTitle = `治理健康度 ${governanceHealthScore} 分 · ${governanceHealthScore >= 80 ? '良好' : '一般'}`
   const governanceAnomalies = governanceAnomalyReport?.windows
     .filter((window) => window.triggered)
     .map((window) => ({
       id: `${governanceAnomalyReport.project_id}:${window.window_days}`,
-      title: `${window.window_days} 日被动重排窗口`,
+      title: `${window.window_days} 日被动编辑模式窗口`,
       detail: `${window.event_count} 次变更 · ${window.key_task_count ?? 0} 个关键任务 · 平均偏移 ${window.average_offset_days ?? 0} 天`,
     })) ?? []
   const governanceIntegritySummary = governanceIntegrityReport
@@ -522,7 +559,7 @@ function PlanningWorkspaceInner() {
         { label: '映射完整性', value: `${governanceHealthReport.breakdown.mapping_integrity_score} 分` },
         { label: '系统一致性', value: `${governanceHealthReport.breakdown.system_consistency_score} 分` },
         { label: 'M1-M9', value: `${governanceHealthReport.breakdown.m1_m9_score} 分` },
-        { label: '被动重排惩罚', value: `${governanceHealthReport.breakdown.passive_reorder_penalty} 分` },
+        { label: '被动编辑模式惩罚', value: `${governanceHealthReport.breakdown.passive_reorder_penalty} 分` },
       ]
     : []
   const revisionCandidates = useMemo<BaselineRevisionCandidate[]>(
@@ -834,7 +871,7 @@ function PlanningWorkspaceInner() {
         type="button"
         variant="outline"
         size="sm"
-        className="gap-2 border-slate-600 bg-transparent text-white hover:bg-white/10"
+        className="gap-2 border-slate-700 bg-slate-800 text-white hover:bg-slate-700"
       >
         <Sparkles className="h-4 w-4" />
         工作台总览
@@ -863,7 +900,7 @@ function PlanningWorkspaceInner() {
         type="button"
         variant="outline"
         size="sm"
-        className="gap-2 border-slate-600 bg-transparent text-white hover:bg-white/10"
+        className="gap-2 border-slate-700 bg-slate-800 text-white hover:bg-slate-700"
         onClick={() => planningKeyboard.setOpen(true)}
       >
         <Sparkles className="h-4 w-4" />
@@ -882,7 +919,7 @@ function PlanningWorkspaceInner() {
         type="button"
         variant="outline"
         size="sm"
-        className="gap-2 border-slate-600 bg-transparent text-white hover:bg-white/10"
+        className="gap-2 border-slate-700 bg-slate-800 text-white hover:bg-slate-700"
         onClick={() => setRevisionPoolOpen(true)}
       >
         <Sparkles className="h-4 w-4" />
@@ -901,7 +938,7 @@ function PlanningWorkspaceInner() {
         type="button"
         variant="outline"
         size="sm"
-        className="gap-2 border-slate-600 bg-transparent text-white hover:bg-white/10"
+        className="gap-2 border-slate-700 bg-slate-800 text-white hover:bg-slate-700"
         onClick={() => setCloseoutBatchLayerOpen(true)}
       >
         <Sparkles className="h-4 w-4" />
@@ -1021,7 +1058,7 @@ function PlanningWorkspaceInner() {
   )
 
   const monthlyWorkspaceContent = (
-    <div className="space-y-4 pb-24">
+    <div className="space-y-4 pb-20 pb-24">
       {closeoutCompleted ? (
         <Card data-testid="closeout-complete-banner" className="border-emerald-200 bg-emerald-50">
           <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4">
@@ -1054,6 +1091,9 @@ function PlanningWorkspaceInner() {
         quickAvailable={monthlyQuickConfirmAvailable}
         canSaveDraft={false}
         canStandardConfirm={draftStatus !== 'locked'}
+        selectedCount={selectedCount}
+        isDirty={draftStatus === 'dirty'}
+        blockingIssueCount={monthlyQuickConfirmAvailable ? 0 : validationIssues.filter((issue) => issue.level === 'error').length}
         onSaveDraft={() => void 0}
         onQuickConfirmEntry={handleQuickMonthlyConfirmEntry}
         onStandardConfirmEntry={handleStandardMonthlyConfirmEntry}
@@ -1102,30 +1142,30 @@ function PlanningWorkspaceInner() {
             </div>
             <div className="grid gap-3 text-sm text-slate-700 sm:grid-cols-2">
               <div>
-                <div className="text-xs uppercase tracking-[0.18em] text-slate-500">候选</div>
+                <div className="text-xs uppercase tracking-wider text-slate-500">候选</div>
                 <div className="mt-1 font-medium text-slate-900">{revisionDraftContext.candidateTitle}</div>
               </div>
               <div>
-                <div className="text-xs uppercase tracking-[0.18em] text-slate-500">来源</div>
+                <div className="text-xs uppercase tracking-wider text-slate-500">来源</div>
                 <div className="mt-1 font-medium text-slate-900">{revisionDraftContext.source}</div>
               </div>
               <div>
-                <div className="text-xs uppercase tracking-[0.18em] text-slate-500">修订篮</div>
+                <div className="text-xs uppercase tracking-wider text-slate-500">修订篮</div>
                 <div className="mt-1 font-medium text-slate-900">
                   {revisionDraftContext.basketIds.length ? revisionDraftContext.basketIds.join('、') : '无'}
                 </div>
               </div>
               <div>
-                <div className="text-xs uppercase tracking-[0.18em] text-slate-500">暂不处理</div>
+                <div className="text-xs uppercase tracking-wider text-slate-500">暂不处理</div>
                 <div className="mt-1 font-medium text-slate-900">
                   {revisionDraftContext.deferredIds.length ? revisionDraftContext.deferredIds.join('、') : '无'}
                 </div>
               </div>
             </div>
             {revisionDraftContext.deferredReason ? (
-              <div className="rounded-xl border border-white/80 bg-white px-3 py-2 text-sm text-slate-600">
+              <Card className="rounded-xl border border-white/80 bg-white px-3 py-2 text-sm text-slate-600">
                 暂不处理原因：{revisionDraftContext.deferredReason}
-              </div>
+              </Card>
             ) : null}
           </CardContent>
         </Card>
@@ -1180,33 +1220,47 @@ function PlanningWorkspaceInner() {
         onSnooze={handleGovernanceSnooze}
       />
 
-      <div className="grid gap-4 xl:grid-cols-3">
-        <PlanningHealthPanel
-          status={governanceStatus}
-          score={governanceHealthScore}
-          label={governanceHealthLabel}
-          summary="按后端治理扫描结果汇总健康评分。"
-          breakdown={governanceHealthBreakdown}
-          errorMessage={governanceErrorMessage}
-          onOpenDetail={handleGovernanceOpenDetail}
-          onGoProcess={handleGovernanceOpenDetail}
-        />
-        <PlanningIntegrityPanel
-          status={governanceStatus}
-          summary={governanceIntegritySummary}
-          detail=""
-          errorMessage={governanceErrorMessage}
-          onOpenDetail={handleGovernanceOpenDetail}
-          onGoProcess={handleGovernanceOpenDetail}
-        />
-        <PlanningAnomalyPanel
-          status={governanceStatus}
-          anomalies={governanceAnomalies}
-          errorMessage={governanceErrorMessage}
-          onOpenDetail={handleGovernanceOpenDetail}
-          onGoProcess={handleGovernanceOpenDetail}
-        />
-      </div>
+      {hasConfirmedBaseline === false ? (
+        <div data-testid="planning-no-baseline-banner" className="rounded-xl border border-blue-200 bg-blue-50 p-4">
+          <p className="text-sm text-blue-800">当前项目尚未建立基线，请先在「项目基线」页面创建并确认基线。</p>
+          <Link
+            to={`/projects/${params.id}/planning/baseline`}
+            className="mt-2 inline-flex items-center text-sm font-medium text-blue-600 hover:underline"
+          >
+            前往项目基线 <ArrowRight className="ml-1 h-4 w-4" />
+          </Link>
+        </div>
+      ) : null}
+
+      <CollapsibleSection title={governanceSummaryTitle} defaultOpen={false}>
+        <div className="grid gap-4 xl:grid-cols-3">
+          <PlanningHealthPanel
+            status={governanceStatus}
+            score={governanceHealthScore}
+            label={governanceHealthLabel}
+            summary="按后端治理扫描结果汇总健康评分。"
+            breakdown={governanceHealthBreakdown}
+            errorMessage={governanceErrorMessage}
+            onOpenDetail={handleGovernanceOpenDetail}
+            onGoProcess={handleGovernanceOpenDetail}
+          />
+          <PlanningIntegrityPanel
+            status={governanceStatus}
+            summary={governanceIntegritySummary}
+            detail=""
+            errorMessage={governanceErrorMessage}
+            onOpenDetail={handleGovernanceOpenDetail}
+            onGoProcess={handleGovernanceOpenDetail}
+          />
+          <PlanningAnomalyPanel
+            status={governanceStatus}
+            anomalies={governanceAnomalies}
+            errorMessage={governanceErrorMessage}
+            onOpenDetail={handleGovernanceOpenDetail}
+            onGoProcess={handleGovernanceOpenDetail}
+          />
+        </div>
+      </CollapsibleSection>
 
       <Card data-testid="planning-governance-quick-links" className="border-slate-200">
         <CardContent className="space-y-4 p-4">
@@ -1277,7 +1331,7 @@ function PlanningWorkspaceInner() {
   )
 
   const closeoutWorkspaceContent = (
-    <div className="space-y-4 pb-24">
+    <div className="space-y-4 pb-20 pb-24">
       <Card className="overflow-hidden border-slate-200">
         <CardContent className="space-y-4 p-4">
           <div
@@ -1301,21 +1355,21 @@ function PlanningWorkspaceInner() {
               <Badge variant="outline">当前月份：2026-04</Badge>
               <Badge variant="outline">来源月份：2026-03</Badge>
               <Badge variant="outline">阻断原因：{closeoutSelectedItems.length ? '待逐条确认' : '无未处理选择'}</Badge>
-              <Badge variant="outline">执行重排：已收口</Badge>
+              <Badge variant="outline">编辑模式：已收口</Badge>
             </div>
           </div>
 
           <div className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 sm:grid-cols-3">
             <div className="space-y-1">
-              <div className="text-xs uppercase tracking-[0.18em] text-slate-500">系统建议采纳率</div>
+              <div className="text-xs uppercase tracking-wider text-slate-500">系统建议采纳率</div>
               <div className="text-sm font-medium text-slate-900">{closeoutItems.length ? `${closeoutProcessedCount}/${closeoutItems.length}` : '暂无'}</div>
             </div>
             <div className="space-y-1">
-              <div className="text-xs uppercase tracking-[0.18em] text-slate-500">人工工作量预期</div>
+              <div className="text-xs uppercase tracking-wider text-slate-500">人工工作量预期</div>
               <div className="text-sm font-medium text-slate-900">{closeoutSelectedItems.length} 项</div>
             </div>
             <div className="space-y-1">
-              <div className="text-xs uppercase tracking-[0.18em] text-slate-500">处理节奏</div>
+              <div className="text-xs uppercase tracking-wider text-slate-500">处理节奏</div>
               <div className="text-sm font-medium text-slate-900">{closeoutProcessedCount} 已处理</div>
             </div>
           </div>

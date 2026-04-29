@@ -34,15 +34,18 @@ export function ConfirmActionDialog({
 }: ConfirmActionDialogProps) {
   const confirmClassName =
     confirmTone === 'destructive'
-      ? 'bg-rose-600 text-white hover:bg-rose-500 focus:ring-rose-500'
+      ? 'bg-red-600 text-white hover:bg-red-500 focus:ring-red-500'
       : 'bg-slate-900 text-white hover:bg-slate-800 focus:ring-slate-500'
 
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent data-testid={testId} className="max-w-md">
+      <AlertDialogContent
+        data-testid={testId}
+        className="w-[90%] max-w-[440px] rounded-2xl border-slate-200 bg-white shadow-[var(--el-4)] sm:rounded-2xl"
+      >
         <AlertDialogHeader className="space-y-3">
           <AlertDialogTitle>{title}</AlertDialogTitle>
-          <AlertDialogDescription className="leading-6 text-slate-600">
+          <AlertDialogDescription className="not-sr-only leading-6 text-slate-600">
             {description}
           </AlertDialogDescription>
         </AlertDialogHeader>

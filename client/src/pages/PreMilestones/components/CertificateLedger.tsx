@@ -1,15 +1,24 @@
-import { useMemo, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Edit3, Eye, Plus, AlertTriangle, Search } from 'lucide-react'
-import { StatusBadge } from '@/components/ui/status-badge'
 import type { CertificateBoardItem, CertificateSharedRibbonItem, CertificateWorkItem } from '../types'
 import {
-  CERTIFICATE_ORDER,
+  CERTIFICATE_STAGE_SEQUENCE,
   certificateStageBadge,
   createEmptyWorkItemForm,
-  getCertificateStatusThemeKey,
   mapCertificateStatusLabel,
 } from '../constants'
+import { Button } from '@/components/ui/button'
+import {
+  Table,
+  TableBody,
+  TableCaption,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import { cn } from '@/lib/utils'
 
 interface CertificateLedgerProps {
   items: CertificateWorkItem[]
@@ -44,6 +53,15 @@ function resolveCertificateNames(
   if (shared) return shared.certificate_names
 
   return ['待关联证件']
+}
+
+function getLedgerStatusTone(status?: string | null) {
+  const normalized = String(status ?? 'pending')
+  if (['issued', 'approved', 'completed'].includes(normalized)) return { dot: 'bg-green-500', text: 'text-green-700' }
+  if (['preparing_documents', 'internal_review', 'external_submission', 'in_progress', 'submitted'].includes(normalized)) return { dot: 'bg-blue-600', text: 'text-blue-700' }
+  if (['supplement_required', 'blocked', 'expired'].includes(normalized)) return { dot: 'bg-amber-500', text: 'text-amber-700' }
+  if (['voided', 'cancelled'].includes(normalized)) return { dot: 'bg-slate-400', text: 'text-slate-600' }
+  return { dot: 'bg-slate-300', text: 'text-slate-600' }
 }
 
 export function CertificateLedger({
@@ -105,8 +123,25 @@ export function CertificateLedger({
     }
     return result
   }, [items, searchQuery, stageFilter, typeFilter, quickFilter, filterByWorkItemId, certificates, sharedItems])
+  const groupedItems = useMemo(() => {
+    const stageMap = new Map<string, CertificateWorkItem[]>()
+    filteredItems.forEach((item) => {
+      const stage = item.item_stage || '未分组'
+      stageMap.set(stage, [...(stageMap.get(stage) ?? []), item])
+    })
+
+    const orderedStages = [
+      ...CERTIFICATE_STAGE_SEQUENCE,
+      ...Array.from(stageMap.keys()).filter((stage) => !CERTIFICATE_STAGE_SEQUENCE.includes(stage as typeof CERTIFICATE_STAGE_SEQUENCE[number])).sort((a, b) => a.localeCompare(b, 'zh-CN')),
+    ]
+
+    return orderedStages
+      .map((stage) => ({ stage, items: stageMap.get(stage) ?? [] }))
+      .filter((group) => group.items.length > 0)
+  }, [filteredItems])
+
   return (
-    <div data-testid="pre-milestones-ledger" className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+    <div data-testid="pre-milestones-ledger" className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between mb-4">
         <div>
           <h3 className="text-sm font-semibold text-slate-900">办理台账</h3>
@@ -115,27 +150,27 @@ export function CertificateLedger({
           </p>
         </div>
         {canEdit ? (
-          <button
+          <Button variant="ghost"
             type="button"
             onClick={() => onAddItem(createEmptyWorkItemForm())}
             className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-slate-800"
           >
             <Plus className="h-4 w-4" />
             新增办理事项
-          </button>
+          </Button>
         ) : null}
       </div>
 
       <div className="mb-3 flex flex-wrap gap-2">
         {(['all', 'blocked', 'overdue', 'supplement'] as const).map((f) => (
-          <button
+          <Button variant="ghost"
             key={f}
             type="button"
             onClick={() => setQuickFilter(f)}
             className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${quickFilter === f ? 'bg-slate-900 text-white' : 'border border-slate-200 bg-slate-50 text-slate-600 hover:border-slate-300'}`}
           >
             {f === 'all' ? '全部' : f === 'blocked' ? '仅看阻塞' : f === 'overdue' ? '仅看逾期' : '仅看待补正'}
-          </button>
+          </Button>
         ))}
       </div>
 
@@ -144,6 +179,7 @@ export function CertificateLedger({
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
           <input
             type="text"
+            aria-label="搜索证照事项"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="搜索事项名称、证书名称..."
@@ -155,6 +191,7 @@ export function CertificateLedger({
           <select
             value={stageFilter}
             onChange={(e) => setStageFilter(e.target.value)}
+            aria-label="证照阶段筛选"
             className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-blue-400 focus:outline-none"
             data-testid="certificate-ledger-stage-filter"
           >
@@ -189,40 +226,50 @@ export function CertificateLedger({
         </div>
       ) : (
         <div className="overflow-x-auto">
-          <table className="min-w-full border-separate border-spacing-y-2">
-            <caption className="sr-only">前期证照办理台账</caption>
-            <thead>
-              <tr className="text-left text-xs uppercase tracking-wide text-slate-500">
-                <th scope="col" className="px-3 py-2 font-medium">办理事项</th>
-                <th scope="col" className="px-3 py-2 font-medium">所属证件</th>
-                <th scope="col" className="px-3 py-2 font-medium">当前阶段</th>
-                <th scope="col" className="px-3 py-2 font-medium">当前状态</th>
-                <th scope="col" className="px-3 py-2 font-medium">计划完成日期</th>
-                <th scope="col" className="px-3 py-2 font-medium">实际完成日期</th>
-                <th scope="col" className="px-3 py-2 font-medium">审批部门</th>
-                <th scope="col" className="px-3 py-2 font-medium">是否补正</th>
-                <th scope="col" className="px-3 py-2 font-medium">是否阻塞</th>
-                <th scope="col" className="px-3 py-2 font-medium">操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredItems.map((item) => {
-                const isActive = selectedWorkItemId === item.id
-                const certificateNames = resolveCertificateNames(item, certificates, sharedItems)
-                const shared = (item.certificate_ids ?? []).length > 1 || sharedItems.some((entry) => entry.work_item_id === item.id)
-                const linkedIssueId = item.linked_issue_id?.trim() || null
-                const linkedRiskId = item.linked_risk_id?.trim() || null
+          <Table className="min-w-full border-collapse">
+            <TableCaption className="sr-only">前期证照办理台账</TableCaption>
+            <TableHeader className="sticky top-0 z-10 bg-white text-left text-xs uppercase tracking-wide text-slate-500">
+              <TableRow className="py-3">
+                <TableHead scope="col" className="px-3 py-2 font-medium">办理事项</TableHead>
+                <TableHead scope="col" className="px-3 py-2 font-medium">所属证件</TableHead>
+                <TableHead scope="col" className="px-3 py-2 font-medium">当前阶段</TableHead>
+                <TableHead scope="col" className="px-3 py-2 font-medium">当前状态</TableHead>
+                <TableHead scope="col" className="px-3 py-2 font-medium">计划完成日期</TableHead>
+                <TableHead scope="col" className="px-3 py-2 font-medium">实际完成日期</TableHead>
+                <TableHead scope="col" className="px-3 py-2 font-medium">审批部门</TableHead>
+                <TableHead scope="col" className="px-3 py-2 font-medium">是否补正</TableHead>
+                <TableHead scope="col" className="px-3 py-2 font-medium">是否阻塞</TableHead>
+                <TableHead scope="col" className="px-3 py-2 font-medium">操作</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {groupedItems.map((group) => (
+                <Fragment key={group.stage}>
+                  <TableRow className="bg-slate-100/80">
+                    <TableCell colSpan={10} className="px-3 py-2 text-xs font-semibold text-slate-700">
+                      {group.stage} <span className="ml-2 font-normal tabular-nums text-slate-500">{group.items.length} 项</span>
+                    </TableCell>
+                  </TableRow>
+                  {group.items.map((item, index) => {
+                    const isActive = selectedWorkItemId === item.id
+                    const certificateNames = resolveCertificateNames(item, certificates, sharedItems)
+                    const shared = (item.certificate_ids ?? []).length > 1 || sharedItems.some((entry) => entry.work_item_id === item.id)
+                    const linkedIssueId = item.linked_issue_id?.trim() || null
+                    const linkedRiskId = item.linked_risk_id?.trim() || null
+                    const statusTone = getLedgerStatusTone(item.status)
 
-                return (
-                  <tr
-                    key={item.id}
-                    data-testid={`pre-milestones-ledger-row-${item.id}`}
-                    className={`rounded-2xl border shadow-sm transition-colors ${
-                      isActive ? 'border-blue-300 bg-blue-50/70' : 'border-slate-200 bg-white'
-                    }`}
-                  >
-                    <td className="px-3 py-4">
-                      <button
+                    return (
+                      <TableRow
+                        key={item.id}
+                        data-testid={`pre-milestones-ledger-row-${item.id}`}
+                        className={cn(
+                          'group py-3 transition-colors hover:bg-slate-100/60',
+                          index % 2 === 0 ? 'bg-white' : 'bg-slate-50/50',
+                          isActive && 'bg-blue-50/70 hover:bg-blue-50',
+                        )}
+                      >
+                    <TableCell className="px-3 py-4">
+                      <Button variant="ghost"
                         type="button"
                         onClick={() => onSelectWorkItem(item.id)}
                         className="text-left"
@@ -230,38 +277,39 @@ export function CertificateLedger({
                         <div className="flex items-center gap-2">
                           <span className="font-medium text-slate-900">{item.item_name}</span>
                           {shared && (
-                            <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[11px] font-medium text-blue-700">共享</span>
+                            <span className="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700">共享</span>
                           )}
                           {item.is_blocked && (
-                            <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-700">
-                              <AlertTriangle className="h-3 w-3" />
+                            <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">
+                              <AlertTriangle className="h-3.5 w-3.5" />
                               阻塞
                             </span>
                           )}
                         </div>
                         <div className="mt-1 text-xs text-slate-500">{item.next_action || '待补充下一动作'}</div>
-                      </button>
-                    </td>
-                    <td className="px-3 py-4">
+                      </Button>
+                    </TableCell>
+                    <TableCell className="px-3 py-4">
                       <div className="flex flex-wrap gap-1.5">
                         {certificateNames.map((name) => (
-                          <span key={name} className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] text-slate-600">
+                          <span key={name} className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs text-slate-600">
                             {name}
                           </span>
                         ))}
                       </div>
-                    </td>
-                    <td className="px-3 py-4">
-                      <span className={`inline-flex rounded-full px-2 py-1 text-[11px] font-medium ${certificateStageBadge(item.item_stage)}`}>
+                    </TableCell>
+                    <TableCell className="px-3 py-4">
+                      <span className={`inline-flex rounded-full px-2 py-1 text-xs font-medium ${certificateStageBadge(item.item_stage)}`}>
                         {item.item_stage}
                       </span>
-                    </td>
-                    <td className="px-3 py-4">
+                    </TableCell>
+                    <TableCell className="px-3 py-4">
                       <div className="space-y-2">
-                        <StatusBadge status={getCertificateStatusThemeKey(item.status)} fallbackLabel={mapCertificateStatusLabel(item.status)} className="text-[11px]">
+                        <span className={cn('inline-flex items-center gap-2 text-xs font-medium', statusTone.text)}>
+                          <span className={cn('h-2 w-2 rounded-full', statusTone.dot)} />
                           {mapCertificateStatusLabel(item.status)}
-                        </StatusBadge>
-                        <div className="flex flex-wrap gap-1.5 text-[11px]">
+                        </span>
+                        <div className="flex flex-wrap gap-1.5 text-xs">
                           {linkedIssueId ? (
                             <span className="rounded-full bg-amber-50 px-2 py-0.5 font-medium text-amber-700">已关联问题</span>
                           ) : null}
@@ -270,16 +318,16 @@ export function CertificateLedger({
                           ) : null}
                         </div>
                       </div>
-                    </td>
-                    <td className="px-3 py-4 text-sm text-slate-600">{item.planned_finish_date || '待补充'}</td>
-                    <td className="px-3 py-4 text-sm text-slate-600">{item.actual_finish_date || '—'}</td>
-                    <td className="px-3 py-4 text-sm text-slate-600">{item.approving_authority || '待补充'}</td>
-                    <td className="px-3 py-4 text-sm text-slate-600">{item.status === 'supplement_required' ? '是' : '否'}</td>
-                    <td className="px-3 py-4 text-sm text-slate-600">{item.is_blocked ? '是' : '否'}</td>
-                    <td className="px-3 py-4">
-                      <div className="flex flex-wrap items-center gap-2">
+                    </TableCell>
+                    <TableCell className="px-3 py-4 text-sm tabular-nums text-slate-600">{item.planned_finish_date || '待补充'}</TableCell>
+                    <TableCell className="px-3 py-4 text-sm tabular-nums text-slate-600">{item.actual_finish_date || '—'}</TableCell>
+                    <TableCell className="px-3 py-4 text-sm text-slate-600">{item.approving_authority || '待补充'}</TableCell>
+                    <TableCell className="px-3 py-4 text-sm text-slate-600">{item.status === 'supplement_required' ? '是' : '否'}</TableCell>
+                    <TableCell className="px-3 py-4 text-sm text-slate-600">{item.is_blocked ? '是' : '否'}</TableCell>
+                    <TableCell className="px-3 py-4">
+                      <div className={cn('flex flex-wrap items-center gap-2 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100', isActive && 'opacity-100')}>
                         {certificateNames.length > 0 && certificateNames[0] !== '待关联证件' && (
-                          <button
+                          <Button variant="ghost"
                             type="button"
                             onClick={() => {
                               const certificate = certificates.find((entry) => entry.certificate_name === certificateNames[0])
@@ -289,63 +337,65 @@ export function CertificateLedger({
                           >
                             <Eye className="h-3.5 w-3.5" />
                             查看详情
-                          </button>
+                          </Button>
                         )}
                         {canEdit ? (
-                          <button
+                          <Button variant="ghost"
                             type="button"
                             onClick={() => onEditItem(item)}
                             className="inline-flex items-center gap-1 rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100"
                           >
                             <Edit3 className="h-3.5 w-3.5" />
                             编辑
-                          </button>
+                          </Button>
                         ) : null}
                         {linkedIssueId ? (
-                          <button
+                          <Button variant="ghost"
                             type="button"
                             onClick={() => navigate(`/projects/${item.project_id}/risks?stream=issues&issueId=${encodeURIComponent(linkedIssueId)}`)}
                             className="inline-flex items-center gap-1 rounded-lg border border-amber-200 bg-white px-2.5 py-1 text-xs font-medium text-amber-700 hover:bg-amber-50"
                           >
                             <Eye className="h-3.5 w-3.5" />
                             查看关联问题
-                          </button>
+                          </Button>
                         ) : canEdit && onEscalateIssue ? (
-                          <button
+                          <Button variant="ghost"
                             type="button"
                             onClick={() => onEscalateIssue(item.id)}
                             className="inline-flex items-center gap-1 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700 hover:bg-amber-100"
                           >
                             <AlertTriangle className="h-3.5 w-3.5" />
                             升级为问题
-                          </button>
+                          </Button>
                         ) : null}
                         {linkedRiskId ? (
-                          <button
+                          <Button variant="ghost"
                             type="button"
                             onClick={() => navigate(`/projects/${item.project_id}/risks?stream=risks&riskId=${encodeURIComponent(linkedRiskId)}`)}
                             className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-white px-2.5 py-1 text-xs font-medium text-red-700 hover:bg-red-50"
                           >
                             <Eye className="h-3.5 w-3.5" />
                             查看关联风险
-                          </button>
+                          </Button>
                         ) : canEdit && onEscalateRisk ? (
-                          <button
+                          <Button variant="ghost"
                             type="button"
                             onClick={() => onEscalateRisk(item.id)}
                             className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-2.5 py-1 text-xs font-medium text-red-700 hover:bg-red-100"
                           >
                             <AlertTriangle className="h-3.5 w-3.5" />
                             升级为风险
-                          </button>
+                          </Button>
                         ) : null}
                       </div>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+                    </TableCell>
+                      </TableRow>
+                    )
+                  })}
+                </Fragment>
+              ))}
+            </TableBody>
+          </Table>
         </div>
       )}
     </div>

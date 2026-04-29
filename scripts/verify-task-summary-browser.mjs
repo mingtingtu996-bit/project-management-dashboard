@@ -268,7 +268,10 @@ async function main() {
 
     const resultsText = await page.getByTestId('task-summary-results-section').innerText()
     assert(resultsText.includes('结果摘要'), 'TaskSummary results section did not render expected heading')
-    assert(resultsText.includes('已完成任务'), 'TaskSummary results section did not render metric cards')
+    assert(
+      resultsText.includes('总任务数') && resultsText.includes('完成率'),
+      'TaskSummary results section did not render metric cards',
+    )
 
     await page.screenshot({ path: join(outputDir, 'task-summary-page.png'), fullPage: true })
 

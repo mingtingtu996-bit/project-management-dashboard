@@ -1,6 +1,8 @@
-import { AlertOctagon, CheckCircle2, GitBranch, Plus, ShieldCheck, Trash2 } from 'lucide-react'
+import { AlertOctagon, CheckCircle2, GitBranch, Pencil, Plus, ShieldCheck, Trash2 } from 'lucide-react'
 
+import { Separator } from '@/components/ui/separator'
 import type { Task } from './GanttViewTypes'
+import { Button } from '@/components/ui/button'
 
 export type TaskContextMenuState = {
   x: number
@@ -41,6 +43,16 @@ export function TaskContextMenu({
 }) {
   const hasManualAttentionOverride = Boolean(contextMenu.hasManualAttentionOverride)
   const hasManualInsertOverride = Boolean(contextMenu.hasManualInsertOverride)
+  const menuWidth = 280
+  const menuMaxHeight = 520
+  const viewportWidth = typeof window === 'undefined' ? 1440 : window.innerWidth
+  const viewportHeight = typeof window === 'undefined' ? 900 : window.innerHeight
+  const left = Math.min(Math.max(contextMenu.x, 8), Math.max(8, viewportWidth - menuWidth - 8))
+  const top = Math.min(Math.max(contextMenu.y, 8), Math.max(8, viewportHeight - menuMaxHeight - 8))
+  const itemClass = 'h-auto w-full justify-start rounded-lg px-3 py-2 text-left transition-colors duration-150 hover:bg-slate-50'
+  const itemBodyClass = 'flex min-w-0 flex-col items-start leading-5'
+  const iconClass = 'mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400'
+  const groupLabelClass = 'px-3 pb-1 pt-2 text-xs font-semibold text-slate-400'
 
   return (
     <>
@@ -54,178 +66,196 @@ export function TaskContextMenu({
         }}
       />
       <div
-        className="fixed z-50 bg-white rounded-xl shadow-lg border border-gray-200 py-1 min-w-[160px] text-sm"
+        className="fixed z-50 max-h-[520px] w-[280px] overflow-y-auto rounded-2xl border border-slate-200 bg-white p-2 text-sm shadow-[var(--el-3)]"
         data-testid="gantt-task-context-menu"
         role="menu"
-        style={{ left: contextMenu.x, top: contextMenu.y }}
+        style={{ left, top }}
       >
-        <button
-          className="w-full text-left px-3 py-1.5 hover:bg-gray-50 text-gray-700 flex items-center gap-2"
+        <div className={groupLabelClass}>编辑操作</div>
+        <Button variant="ghost"
+          className={`${itemClass} text-slate-700 flex items-start gap-2`}
           data-testid="gantt-task-context-menu-edit"
           onClick={() => {
             onOpenEditDialog(contextMenu.task)
             onClose()
           }}
         >
-          <svg className="h-3.5 w-3.5 text-gray-400" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487zm0 0L19.5 7.125" />
-          </svg>
-          编辑任务
-        </button>
-        <button
-          className="w-full text-left px-3 py-1.5 hover:bg-green-50 text-green-700 flex items-center gap-2"
+          <Pencil className={iconClass} />
+          <span className={itemBodyClass}>编辑任务</span>
+        </Button>
+        <Button variant="ghost"
+          className={`${itemClass} text-slate-700 flex items-start gap-2`}
           data-testid="gantt-task-context-menu-conditions"
           onClick={() => {
             onOpenConditionDialog(contextMenu.task)
             onClose()
           }}
         >
-          <ShieldCheck className="h-3.5 w-3.5" />
-          开工条件
-        </button>
-        <button
-          className="w-full text-left px-3 py-1.5 hover:bg-amber-50 text-amber-700 flex items-center gap-2"
+          <ShieldCheck className={iconClass} />
+          <span className={itemBodyClass}>开工条件</span>
+        </Button>
+        <Button variant="ghost"
+          className={`${itemClass} text-slate-700 flex items-start gap-2`}
           data-testid="gantt-task-context-menu-obstacles"
           onClick={() => {
             onOpenObstacleDialog(contextMenu.task)
             onClose()
           }}
         >
-          <AlertOctagon className="h-3.5 w-3.5" />
-          进行中阻碍
-        </button>
-        <div className="my-1 border-t border-gray-100" />
-        <button
-          className="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-blue-700 flex items-center gap-2"
+          <AlertOctagon className={iconClass} />
+          <span className={itemBodyClass}>进行中阻碍</span>
+        </Button>
+        <Separator className="my-1" />
+        <div className={groupLabelClass}>层级操作</div>
+        <Button variant="ghost"
+          className={`${itemClass} text-slate-700 flex items-start gap-2`}
           data-testid="gantt-task-context-menu-add-child"
           onClick={() => {
             onOpenEditChild(contextMenu.task.id)
             onClose()
           }}
         >
-          <Plus className="h-3.5 w-3.5" />
-          添加子任务
-        </button>
-        <button
-          className="w-full text-left px-3 py-1.5 hover:bg-gray-50 text-gray-700 flex items-center gap-2"
+          <Plus className={iconClass} />
+          <span className={itemBodyClass}>添加子任务</span>
+        </Button>
+        <Button variant="ghost"
+          className={`${itemClass} text-slate-700 flex items-start gap-2`}
           data-testid="gantt-task-context-menu-rename"
           onClick={() => {
             onStartInlineTitleEdit(contextMenu.task)
             onClose()
           }}
         >
-          <svg className="h-3.5 w-3.5 text-gray-400" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487zm0 0L19.5 7.125" />
-          </svg>
-          快速改名
-        </button>
-        <div className="my-1 border-t border-gray-100" />
+          <Pencil className={iconClass} />
+          <span className={itemBodyClass}>快速改名</span>
+        </Button>
         {contextMenu.task.status !== 'completed' && (
-          <button
-            className="w-full text-left px-3 py-1.5 hover:bg-emerald-50 text-emerald-700 flex items-center gap-2"
+          <Button variant="ghost"
+            className={`${itemClass} text-slate-700 flex items-start gap-2`}
             data-testid="gantt-task-context-menu-mark-completed"
             onClick={() => {
               onStatusChange(contextMenu.task.id, 'completed')
               onClose()
             }}
           >
-            <CheckCircle2 className="h-3.5 w-3.5" />
-            标记完成
-          </button>
+            <CheckCircle2 className={iconClass} />
+            <span className={itemBodyClass}>标记完成</span>
+          </Button>
         )}
-        <div className="my-1 border-t border-gray-100" />
+        <Separator className="my-1" />
+        <div className={groupLabelClass}>关键路径操作</div>
         {onMarkCriticalPathAttention && (
-          <button
-            className="w-full text-left px-3 py-1.5 hover:bg-violet-50 text-violet-700 flex items-center gap-2"
+          <Button variant="ghost"
+            className={`${itemClass} text-slate-700 flex items-start gap-2`}
             data-testid="gantt-task-context-menu-mark-critical"
             onClick={() => {
               onMarkCriticalPathAttention(contextMenu.task.id)
               onClose()
             }}
           >
-            <GitBranch className="h-3.5 w-3.5" />
-            标记关键路径关注
-          </button>
-        )}
-        {(onInsertBeforeChain || onInsertAfterChain || onRemoveCriticalPathOverride) && (
-          <div className="my-1 border-t border-gray-100" />
+            <GitBranch className={iconClass} />
+            <span className={itemBodyClass}>
+              <span>标记关键路径关注</span>
+              <span className="text-xs text-slate-400">纳入重点跟踪，不改变依赖关系</span>
+            </span>
+          </Button>
         )}
         {onInsertBeforeChain && (
-          <button
-            className="w-full text-left px-3 py-1.5 hover:bg-indigo-50 text-indigo-700 flex items-center gap-2"
+          <Button variant="ghost"
+            className={`${itemClass} text-slate-700 flex items-start gap-2`}
             data-testid="gantt-task-context-menu-insert-before"
             onClick={() => {
               onInsertBeforeChain(contextMenu.task.id)
               onClose()
             }}
           >
-            <GitBranch className="h-3.5 w-3.5" />
-            插到主链前面
-          </button>
+            <GitBranch className={iconClass} />
+            <span className={itemBodyClass}>
+              <span>插到主链前面</span>
+              <span className="text-xs text-slate-400">以当前任务作为前置插链候选</span>
+            </span>
+          </Button>
         )}
         {onInsertAfterChain && (
-          <button
-            className="w-full text-left px-3 py-1.5 hover:bg-indigo-50 text-indigo-700 flex items-center gap-2"
+          <Button variant="ghost"
+            className={`${itemClass} text-slate-700 flex items-start gap-2`}
             data-testid="gantt-task-context-menu-insert-after"
             onClick={() => {
               onInsertAfterChain(contextMenu.task.id)
               onClose()
             }}
           >
-            <GitBranch className="h-3.5 w-3.5" />
-            插到主链后面
-          </button>
+            <GitBranch className={iconClass} />
+            <span className={itemBodyClass}>
+              <span>插到主链后面</span>
+              <span className="text-xs text-slate-400">以当前任务作为后续插链候选</span>
+            </span>
+          </Button>
         )}
         {onRemoveCriticalPathOverride && !hasManualAttentionOverride && !hasManualInsertOverride && (
-          <button
-            className="w-full text-left px-3 py-1.5 hover:bg-slate-50 text-slate-600 flex items-center gap-2"
+          <Button variant="ghost"
+            className={`${itemClass} text-slate-700 flex items-start gap-2`}
             data-testid="gantt-task-context-menu-remove-critical"
             onClick={() => {
               onRemoveCriticalPathOverride(contextMenu.task.id)
               onClose()
             }}
           >
-            <GitBranch className="h-3.5 w-3.5" />
-            取消手动标记
-          </button>
+            <GitBranch className={iconClass} />
+            <span className={itemBodyClass}>
+              <span>取消手动标记</span>
+              <span className="text-xs text-slate-400">移除该任务的关键路径人工覆盖</span>
+            </span>
+          </Button>
         )}
         {onRemoveCriticalPathOverride && hasManualAttentionOverride && (
-          <button
-            className="w-full text-left px-3 py-1.5 hover:bg-slate-50 text-slate-600 flex items-center gap-2"
+          <Button variant="ghost"
+            className={`${itemClass} text-slate-700 flex items-start gap-2`}
             data-testid="gantt-task-context-menu-remove-critical-attention"
             onClick={() => {
               onRemoveCriticalPathOverride(contextMenu.task.id, 'manual_attention')
               onClose()
             }}
           >
-            <GitBranch className="h-3.5 w-3.5" />
-            取消关注
-          </button>
+            <GitBranch className={iconClass} />
+            <span className={itemBodyClass}>
+              <span>取消关注</span>
+              <span className="text-xs text-slate-400">保留自动计算结果，仅撤销关注</span>
+            </span>
+          </Button>
         )}
         {onRemoveCriticalPathOverride && hasManualInsertOverride && (
-          <button
-            className="w-full text-left px-3 py-1.5 hover:bg-slate-50 text-slate-600 flex items-center gap-2"
+          <Button variant="ghost"
+            className={`${itemClass} text-slate-700 flex items-start gap-2`}
             data-testid="gantt-task-context-menu-remove-critical-insert"
             onClick={() => {
               onRemoveCriticalPathOverride(contextMenu.task.id, 'manual_insert')
               onClose()
             }}
           >
-            <GitBranch className="h-3.5 w-3.5" />
-            取消插链
-          </button>
+            <GitBranch className={iconClass} />
+            <span className={itemBodyClass}>
+              <span>取消插链</span>
+              <span className="text-xs text-slate-400">移除人工插链关系并恢复自动链路</span>
+            </span>
+          </Button>
         )}
-        <button
-          className="w-full text-left px-3 py-1.5 hover:bg-red-50 text-red-600 flex items-center gap-2"
+        <Separator className="my-1" />
+        <div className={groupLabelClass}>危险操作</div>
+        <Button variant="ghost"
+          className={`${itemClass} text-red-600 flex items-start gap-2 hover:bg-red-50`}
           data-testid="gantt-task-context-menu-delete"
           onClick={() => {
             onDeleteTaskFromContextMenu(contextMenu.task)
             onClose()
           }}
         >
-          <Trash2 className="h-3.5 w-3.5" />
-          删除任务
-        </button>
+          <Trash2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span className={itemBodyClass}>
+            <span>删除任务</span>
+            <span className="text-xs text-red-400">将进入删除确认与保护校验</span>
+          </span>
+        </Button>
       </div>
     </>
   )

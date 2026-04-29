@@ -5,6 +5,7 @@
 
 import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Separator } from '@/components/ui/separator'
 
 interface PaginationProps {
   /** 当前页码 (1-based) */
@@ -76,7 +77,9 @@ export function Pagination({
   }
 
   return (
-    <div className="flex items-center justify-between px-4 py-3 border-t bg-muted/20">
+    <>
+    <Separator />
+    <div className="flex items-center justify-between bg-muted/20 px-4 py-3">
       <div className="flex items-center gap-4">
         {/* 每页条数选择 */}
         {onPageSizeChange && (
@@ -161,6 +164,7 @@ export function Pagination({
         </Button>
       </div>
     </div>
+    </>
   )
 }
 

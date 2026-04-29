@@ -1,8 +1,12 @@
 import { Link } from 'react-router-dom'
 
 import { Button } from '@/components/ui/button'
+import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Separator } from '@/components/ui/separator'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import type { Project } from '@/lib/localDb'
+import { cn } from '@/lib/utils'
 import {
   AlertTriangle,
   Archive,
@@ -19,8 +23,6 @@ import {
 import type { CockpitTab, ProjectRow } from '../types'
 import {
   formatTimelineLabel,
-  healthBadgeClass,
-  monthlyCloseStatusClass,
   progressBarClass,
   projectAvatarLabel,
   statusBadgeClass,
@@ -45,8 +47,14 @@ function isArchivedProject(project: Project) {
 
 function buildProjectCardClass(attentionRequired: boolean) {
   return attentionRequired
-    ? 'rounded-[28px] border border-red-100 bg-red-50/30 p-6 shadow-[0_12px_32px_rgba(239,68,68,0.08)]'
-    : 'rounded-[28px] border border-slate-100 bg-white p-6 shadow-[0_12px_32px_rgba(15,23,42,0.06)]'
+    ? 'card-hover rounded-xl border border-orange-200 border-l-4 border-l-orange-500 bg-orange-50/40 p-6 shadow-[var(--el-2)]'
+    : 'card-hover rounded-xl border border-slate-200 bg-white p-6 shadow-[var(--el-1)]'
+}
+
+function healthDotClass(score: number) {
+  if (score >= 80) return 'bg-green-500'
+  if (score >= 60) return 'bg-amber-500'
+  return 'bg-red-500'
 }
 
 export function ProjectOverviewSection({
@@ -60,6 +68,12 @@ export function ProjectOverviewSection({
   onToggleArchive,
   onDelete,
 }: ProjectOverviewSectionProps) {
+  const sortedRows = [...projectRows].sort((left, right) => {
+    const leftAttention = left.summary?.attentionRequired ? 1 : 0
+    const rightAttention = right.summary?.attentionRequired ? 1 : 0
+    return rightAttention - leftAttention
+  })
+
   return (
     <Card className="card-l2 border-slate-100" data-testid="company-project-overview">
       <CardHeader className="space-y-4 pb-0">
@@ -74,10 +88,10 @@ export function ProjectOverviewSection({
           </div>
         </div>
 
-        <div className="flex flex-col gap-4 border-b border-slate-100 pb-4 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex flex-col gap-4 pb-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex flex-wrap items-center gap-2">
             {tabItems.map((tab) => (
-              <button
+              <Button variant="ghost"
                 key={tab.key}
                 onClick={() => onTabChange(tab.key)}
                 className={`inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium transition-colors ${
@@ -94,17 +108,18 @@ export function ProjectOverviewSection({
                 >
                   {tab.count}
                 </span>
-              </button>
+              </Button>
             ))}
           </div>
 
           <div className="text-xs text-slate-500" />
         </div>
+        <Separator />
       </CardHeader>
 
       <CardContent className="pt-6">
         {projectRows.length === 0 ? (
-          <div className="rounded-[28px] border border-slate-100 bg-white px-8 py-20 text-center">
+          <div className="rounded-2xl border border-slate-100 bg-white px-8 py-20 text-center">
             <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-slate-100">
               <FolderKanban className="h-6 w-6 text-slate-500" />
             </div>
@@ -115,12 +130,12 @@ export function ProjectOverviewSection({
             </Button>
           </div>
         ) : (
-          <div className="grid gap-5 xl:grid-cols-2">
-            {projectRows.map((row) => {
+          <div className="grid gap-6 xl:grid-cols-3" data-testid="company-project-grid">
+            {sortedRows.map((row) => {
               const { project, summary, summaryStatus } = row
               const attentionRequired = Boolean(summary?.attentionRequired)
-              const scheduleVarianceDays = summary?.scheduleVarianceDays ?? summary?.delayDays ?? 0
-              const activeObstacles = summary?.activeObstacles ?? summary?.activeObstacleCount ?? 0
+              const overallProgress = summary?.overallProgress ?? 0
+              const activeRiskCount = summary?.activeRiskCount ?? summary?.riskCount ?? 0
               const highestWarningSummary = summary?.highestWarningSummary || '当前暂无高优先级预警'
               const archived = isArchivedProject(project)
 
@@ -129,14 +144,19 @@ export function ProjectOverviewSection({
                   <div className="flex flex-col gap-5">
                     <div className="flex items-start justify-between gap-4">
                       <div className="flex min-w-0 gap-4">
-                        <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-2xl bg-slate-950 text-sm font-semibold text-white">
-                          {projectAvatarLabel(project.name)}
-                        </div>
+                        <Avatar className="h-12 w-12 flex-shrink-0">
+                          <AvatarFallback className="bg-slate-950 text-sm font-semibold text-white">
+                            {projectAvatarLabel(project.name)}
+                          </AvatarFallback>
+                        </Avatar>
                         <div className="min-w-0">
                           <div className="flex flex-wrap items-center gap-2">
-                            <h3 className="truncate text-lg font-semibold text-slate-900">{project.name}</h3>
+                            <h3 className="truncate text-base font-medium text-slate-900">{project.name}</h3>
+                            <span
+                              className={cn('h-2.5 w-2.5 rounded-full', healthDotClass(row.healthScore))}
+                              aria-label={`健康度 ${row.healthScore}`}
+                            />
                             <span className={`badge-base ${statusBadgeClass(summaryStatus)}`}>{summaryStatus}</span>
-                            <span className={`badge-base ${healthBadgeClass(row.healthScore)}`}>健康 {row.healthScore}</span>
                             {attentionRequired ? (
                               <span className="badge-base bg-red-50 text-red-700">需关注</span>
                             ) : null}
@@ -149,110 +169,91 @@ export function ProjectOverviewSection({
 
                       <div className="flex flex-shrink-0 items-center gap-1">
                         {!archived ? (
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => onEdit(project)}
-                            title="编辑项目"
-                          >
-                            <Pencil className="h-4 w-4" />
-                          </Button>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                aria-label="编辑项目"
+                                onClick={() => onEdit(project)}
+                              >
+                                <Pencil className="h-4 w-4" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>编辑项目</TooltipContent>
+                          </Tooltip>
                         ) : null}
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => onToggleArchive(project)}
-                          title={archived ? '激活项目' : '归档项目'}
-                        >
-                          {archived ? <RotateCcw className="h-4 w-4" /> : <Archive className="h-4 w-4" />}
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="flex-shrink-0"
-                          onClick={() => onDelete(project)}
-                          title="删除项目"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              aria-label={archived ? '激活项目' : '归档项目'}
+                              onClick={() => onToggleArchive(project)}
+                            >
+                              {archived ? <RotateCcw className="h-4 w-4" /> : <Archive className="h-4 w-4" />}
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>{archived ? '激活项目' : '归档项目'}</TooltipContent>
+                        </Tooltip>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="flex-shrink-0"
+                              aria-label="删除项目"
+                              onClick={() => onDelete(project)}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>删除项目</TooltipContent>
+                        </Tooltip>
                       </div>
                     </div>
 
-                    <div className="grid gap-3 md:grid-cols-3">
-                      <div className="rounded-2xl bg-slate-50 px-4 py-4">
-                        <div className="text-xs text-slate-500">总体进度</div>
-                        <div className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">
-                          {summary?.overallProgress ?? 0}%
+                    <div className="space-y-4 rounded-xl bg-slate-50 px-4 py-4">
+                      <div>
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="text-xs text-slate-500">总体进度</div>
+                          <div className="text-2xl font-semibold tabular-nums text-slate-900">
+                            {overallProgress}%
+                          </div>
                         </div>
                         <div className="mt-3 h-2 rounded-full bg-slate-200">
                           <div
-                            className={`h-full rounded-full ${progressBarClass(summary?.overallProgress ?? 0)}`}
-                            style={{ width: `${summary?.overallProgress ?? 0}%` }}
+                            className={`h-full rounded-full ${progressBarClass(overallProgress)}`}
+                            style={{ width: `${overallProgress}%` }}
                           />
                         </div>
-                        <p className="mt-3 text-xs text-slate-500">
-                          延期任务 {summary?.delayedTaskCount ?? 0} · 关键路径受影响 {summary?.criticalPathAffectedTasks ?? 0}
-                        </p>
                       </div>
 
-                      <div className="rounded-2xl bg-slate-50 px-4 py-4">
-                        <div className="text-xs text-slate-500">专项进展与执行信号</div>
-                        <div className="mt-2 space-y-2 text-xs text-slate-500">
-                          <div className="flex items-center justify-between rounded-xl bg-white px-3 py-2">
-                            <span>证照</span>
-                            <span className="font-semibold text-slate-900">
-                              {summary?.completedPreMilestoneCount ?? 0}/{summary?.preMilestoneCount ?? 0}
-                            </span>
-                          </div>
-                          <div className="flex items-center justify-between rounded-xl bg-white px-3 py-2">
-                            <span>验收</span>
-                            <span className="font-semibold text-slate-900">
-                              {summary?.passedAcceptancePlanCount ?? 0}/{summary?.acceptancePlanCount ?? 0}
-                            </span>
-                          </div>
-                          <div className="flex items-center justify-between rounded-xl bg-white px-3 py-2">
-                            <span>图纸</span>
-                            <span className="font-semibold text-slate-900">
-                              {summary?.issuedConstructionDrawingCount ?? 0}/{summary?.constructionDrawingCount ?? 0}
-                            </span>
-                          </div>
-                          <div className="flex items-center justify-between rounded-xl bg-white px-3 py-2">
-                            <span>总工期偏差</span>
-                            <span className={`font-semibold ${scheduleVarianceDays > 0 ? 'text-red-600' : 'text-slate-900'}`}>
-                              {scheduleVarianceDays} 天
-                            </span>
-                          </div>
-                          <div className="flex items-center justify-between rounded-xl bg-white px-3 py-2">
-                            <span>延期审批</span>
-                            <span className="font-semibold text-slate-900">{summary?.activeDelayRequests ?? 0}</span>
-                          </div>
-                          <div className="flex items-center justify-between rounded-xl bg-white px-3 py-2">
-                            <span>活跃阻碍</span>
-                            <span className="font-semibold text-slate-900">{activeObstacles}</span>
-                          </div>
-                          <div className="flex items-center justify-between rounded-xl bg-white px-3 py-2">
-                            <span>本月关账</span>
-                            <span className={`rounded-full px-2 py-1 font-medium ${monthlyCloseStatusClass(summary?.monthlyCloseStatus)}`}>
-                              {summary?.monthlyCloseStatus ?? '未开始'}
-                            </span>
-                          </div>
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="rounded-xl border border-white bg-white px-4 py-3">
+                          <div className="text-xs text-slate-500">完成率</div>
+                          <div className="mt-1 text-xl font-semibold tabular-nums text-slate-900">{overallProgress}%</div>
+                        </div>
+                        <div className="rounded-xl border border-white bg-white px-4 py-3">
+                          <div className="text-xs text-slate-500">风险数</div>
+                          <div className="mt-1 text-xl font-semibold tabular-nums text-slate-900">{activeRiskCount}</div>
                         </div>
                       </div>
+                    </div>
 
-                      <div className="rounded-2xl bg-slate-50 px-4 py-4">
-                        <div className="text-xs text-slate-500">下一个关键节点</div>
-                        <div className="mt-2 text-sm font-semibold text-slate-900">{row.milestoneName}</div>
-                        <p className="mt-3 text-xs text-slate-500">
-                          {row.milestoneDate
-                            ? `计划 ${row.milestoneDate} · ${formatTimelineLabel(row.milestoneDaysRemaining)}`
-                            : '当前没有已识别的下一关键节点。'}
-                        </p>
-                        <div className="mt-4 rounded-xl border border-white bg-white px-3 py-3">
-                          <div className="text-[11px] text-slate-500">最高级别预警</div>
-                          <p className="mt-2 line-clamp-3 text-xs leading-5 text-slate-700">{highestWarningSummary}</p>
-                          <div className="mt-3 text-[11px] text-slate-500">
-                            未读预警 {summary?.unreadWarningCount ?? 0} · 偏移里程碑 {summary?.shiftedMilestoneCount ?? 0}
-                          </div>
+                    <div className="rounded-xl border border-slate-100 bg-white px-4 py-4">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                        <div>
+                          <div className="text-xs text-slate-500">下一个关键节点</div>
+                          <div className="mt-2 text-sm font-semibold text-slate-900">{row.milestoneName}</div>
+                          <p className="mt-2 text-xs text-slate-500">
+                            {row.milestoneDate
+                              ? `计划 ${row.milestoneDate} · ${formatTimelineLabel(row.milestoneDaysRemaining)}`
+                              : '当前没有已识别的下一关键节点。'}
+                          </p>
+                        </div>
+                        <div className="max-w-[280px] text-xs leading-5 text-slate-600">
+                          {highestWarningSummary}
                         </div>
                       </div>
                     </div>

@@ -124,7 +124,7 @@ export function BaselineRevisionActions({
               </Button>
             </div>
             <div className="space-y-2">
-              <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.16em] text-slate-500">
+              <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-slate-500">
                 <CalendarDays className="h-3.5 w-3.5" />
                 下次复核时点
               </div>
@@ -153,7 +153,7 @@ export function BaselineRevisionActions({
             </div>
             {reviewPreset === 'custom' ? (
               <label className="block space-y-1">
-                <span className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.16em] text-slate-500">
+                <span className="flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-slate-500">
                   <CalendarDays className="h-3.5 w-3.5" />
                   自定义日期
                 </span>
@@ -166,9 +166,9 @@ export function BaselineRevisionActions({
                 />
               </label>
             ) : (
-              <div className="rounded-xl border border-amber-200 bg-white px-3 py-2 text-xs text-amber-900">
+              <Card className="rounded-xl border border-amber-200 bg-white px-3 py-2 text-xs text-amber-900">
                 已自动计算为 {deferredReviewDueAt || '未设置'}，可切换为自定义日期继续调整。
-              </div>
+              </Card>
             )}
             <textarea
               data-testid="baseline-revision-deferred-reason"

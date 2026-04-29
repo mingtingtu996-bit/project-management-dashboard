@@ -170,7 +170,9 @@ describe('§7.3 XSS protection', () => {
 
     expect(containsXss('<script>alert(1)</script>')).toBe(true)
     expect(containsXss('<img src=x onerror=alert(1)>')).toBe(true)
+    expect(containsXss('onclick=alert(1)')).toBe(true)
     expect(containsXss('hello world')).toBe(false)
+    expect(containsXss('/api/progress-deviation/lock?baseline_version_id=c0f577f0-b235-473e-890a-170e8ecac2c7')).toBe(false)
     expect(containsXss('javascript:alert(1)')).toBe(true)
   })
 

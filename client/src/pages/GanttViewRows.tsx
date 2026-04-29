@@ -4,6 +4,7 @@ import { memo, startTransition, useEffect } from 'react'
 import { EmptyState } from '@/components/EmptyState'
 import { Button } from '@/components/ui/button'
 import { CardContent } from '@/components/ui/card'
+import { Separator } from '@/components/ui/separator'
 import { getTreeIndentPx, getTreeRowHeightClass } from '@/components/tree/SharedTreePrimitives'
 import type { CriticalTaskSnapshot } from '@/lib/criticalPath'
 import type { ProjectTaskProgressSnapshot } from '@/lib/taskBusinessStatus'
@@ -179,6 +180,7 @@ const TaskRow = memo(function TaskRow(
           criticalTask={criticalTask}
           onOpenEditDialog={props.onOpenEditDialog}
           onDeleteTask={props.onDeleteTask}
+          onSelectTask={props.onSelectTask}
           onViewTaskSummary={props.onViewTaskSummary}
           onStatusChange={props.onStatusChange}
         />
@@ -260,14 +262,11 @@ export const GanttTaskRows = memo(function GanttTaskRows(props: GanttTaskRowsPro
           />
         ) : props.filteredFlatList.length === 0 ? (
           <EmptyState
+            variant="filter"
             icon={Search}
             title="没有匹配的任务"
             className="max-w-none rounded-none border-0 bg-transparent py-10 shadow-none"
-            action={
-              <Button variant="outline" onClick={props.onClearFilters}>
-                清空筛选条件
-              </Button>
-            }
+            onClearFilter={props.onClearFilters}
           />
         ) : (
           <div className="overflow-x-auto">
@@ -292,12 +291,15 @@ export const GanttTaskRows = memo(function GanttTaskRows(props: GanttTaskRowsPro
             ))}
             </div>
             {hiddenRowCount > 0 ? (
-              <div
-                data-testid="gantt-progressive-render-hint"
-                className="border-t border-slate-100 px-4 py-2 text-xs text-slate-500"
-              >
-                正在继续加载剩余 {hiddenRowCount} 行任务...
-              </div>
+              <>
+                <Separator />
+                <div
+                  data-testid="gantt-progressive-render-hint"
+                  className="px-4 py-2 text-xs text-slate-500"
+                >
+                  正在继续加载剩余 {hiddenRowCount} 行任务...
+                </div>
+              </>
             ) : null}
           </div>
         )}

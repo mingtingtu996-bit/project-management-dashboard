@@ -621,7 +621,7 @@ async function main() {
     await page.getByTestId('dashboard-data-quality-detail-trigger').click()
     await page.getByTestId('dashboard-data-quality-detail-dialog').waitFor({ state: 'visible', timeout: 10000 })
     const dialogText = await page.getByTestId('dashboard-data-quality-detail-dialog').innerText()
-    assert(dialogText.includes('数据置信度维度分解'), 'Dashboard data quality dialog did not render expected title')
+    assert(dialogText.includes('数据可靠性维度分解'), 'Dashboard data quality dialog did not render expected title')
     await page.screenshot({ path: join(outputDir, 'dashboard-page-quality-dialog.png'), fullPage: true })
     await page.keyboard.press('Escape')
 

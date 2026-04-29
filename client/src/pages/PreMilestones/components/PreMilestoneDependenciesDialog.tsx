@@ -178,7 +178,7 @@ export function PreMilestoneDependenciesDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent className="max-h-[88vh] max-w-4xl overflow-y-auto">
+      <DialogContent className="max-h-[88vh] max-w-[720px] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Link2 className="h-5 w-5" />
@@ -288,14 +288,14 @@ export function PreMilestoneDependenciesDialog({
                       <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${entry.dependencyKind === 'soft' ? 'bg-sky-100 text-sky-700' : 'bg-amber-100 text-amber-700'}`}>
                         {entry.dependencyKind === 'soft' ? '软依赖' : '强依赖'}
                       </span>
-                      <button
+                      <Button variant="ghost"
                         type="button"
                         onClick={() => void handleDelete(entry.id)}
                         className="rounded-lg p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600"
                         aria-label="删除前置依赖"
                       >
                         <Trash2 className="h-4 w-4" />
-                      </button>
+                      </Button>
                     </div>
                   </div>
                 </div>

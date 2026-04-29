@@ -4,7 +4,11 @@ import { HashRouter, Routes, Route, Navigate, useLocation, useNavigate, useParam
 import { ConditionWarningModal } from '@/components/ConditionWarningModal'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { LoginDialog } from '@/components/LoginDialog'
+import { NotFoundPage } from '@/components/NotFoundPage'
 import { OfflineBanner } from '@/components/OfflineBanner'
+import { OnboardingGuide } from '@/components/OnboardingGuide'
+import { PageSkeleton } from '@/components/PageSkeleton'
+import { PageErrorBoundary } from '@/components/PageErrorBoundary'
 import { SkipLink } from '@/components/accessibility/SkipLink'
 import Sidebar from '@/components/layout/Sidebar'
 import Header from '@/components/layout/Header'
@@ -13,6 +17,7 @@ import { FeedbackButton } from '@/components/monitoring/FeedbackModal'
 import { ShortcutsHelp, useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts'
 import { AuthDialogProvider, useAuthDialog } from '@/hooks/useAuthDialog'
 import { useRealtimeConnection } from '@/hooks/useRealtimeConnection'
+import { useScrollRestoration } from '@/hooks/useScrollRestoration'
 import { useSetCurrentUser, useSetProjects } from '@/hooks/useStore'
 import { getCachedProjects, syncProjectCacheFromApi } from '@/lib/projectPersistence'
 import { getAuthToken } from '@/lib/apiClient'
@@ -23,7 +28,7 @@ import { AuthProvider } from '@/context/AuthContext'
 import { useAuth } from '@/hooks/useAuth'
 import { PROJECT_NAVIGATION_LABELS } from '@/config/navigation'
 import { LoadingState } from '@/components/ui/loading-state'
-import { Skeleton } from '@/components/ui/skeleton'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { Toaster } from '@/components/ui/toaster'
 
 const initialHash = typeof window !== 'undefined' ? window.location.hash : ''
@@ -93,31 +98,10 @@ function getPendingAuthRedirect() {
   }
 }
 
-function PageLoader() {
-  return (
-    <div className="space-y-4 p-2">
-      <div className="flex items-center justify-between">
-        <Skeleton className="h-8 w-48 rounded-card" />
-        <Skeleton className="h-8 w-24 rounded-card" />
-      </div>
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-        {(['sk-card-1', 'sk-card-2', 'sk-card-3', 'sk-card-4'] as const).map((key) => (
-          <Skeleton key={key} className="h-28 rounded-card" />
-        ))}
-      </div>
-      <div className="space-y-3">
-        {(['sk-row-1', 'sk-row-2', 'sk-row-3', 'sk-row-4', 'sk-row-5'] as const).map((key) => (
-          <Skeleton key={key} className="h-14 rounded-card" />
-        ))}
-      </div>
-    </div>
-  )
-}
-
 function withRouteBoundary(element: ReactElement) {
   return (
     <ErrorBoundary>
-      <Suspense fallback={<PageLoader />}>{element}</Suspense>
+      <Suspense fallback={<PageSkeleton />}>{element}</Suspense>
     </ErrorBoundary>
   )
 }
@@ -132,6 +116,8 @@ function PlanningCloseoutRedirect() {
 }
 
 function AppContent() {
+  useScrollRestoration()
+
   const setCurrentUser = useSetCurrentUser()
   const setProjects = useSetProjects()
   const [loading, setLoading] = useState(() => !Boolean(getAuthToken()))
@@ -322,60 +308,64 @@ function AppContent() {
 
   return (
     <div className="flex h-screen overflow-hidden bg-slate-50 text-slate-900">
-      <SkipLink targetId="app-main" />
+      <SkipLink targetId="main-content" />
       <Sidebar />
       <div className="flex flex-1 flex-col overflow-hidden">
         <Header />
         <OfflineBanner />
         <main
-          id="app-main"
+          id="main-content"
           role="main"
           aria-label="主要内容"
           tabIndex={-1}
           className="flex-1 overflow-y-auto bg-slate-50/80 focus:outline-none"
         >
           <div className="w-full">
-            <Routes>
-              <Route path="/" element={<Navigate to="/company" replace />} />
-              <Route path="/company" element={withRouteBoundary(<CompanyCockpit />)} />
-              <Route path="/projects" element={<Navigate to="/company" replace />} />
-              <Route
-                path="/projects/:id"
-                element={
-                  <ErrorBoundary>
-                    <ProjectLayout />
-                  </ErrorBoundary>
-                }
-              >
-                <Route index element={<Navigate to="dashboard" replace />} />
-                <Route path="dashboard" element={withRouteBoundary(<Dashboard />)} />
-                <Route path="gantt" element={withRouteBoundary(<GanttView />)} />
-                <Route path="risks" element={withRouteBoundary(<RiskManagement />)} />
-                <Route path="milestones" element={withRouteBoundary(<Milestones />)} />
-                <Route path="acceptance" element={withRouteBoundary(<AcceptanceTimeline />)} />
-                <Route path="pre-milestones" element={withRouteBoundary(<PreMilestones />)} />
-                <Route path="reports" element={withRouteBoundary(<Reports />)} />
-                <Route path="task-summary" element={withRouteBoundary(<TaskSummary />)} />
-                <Route path="responsibility" element={withRouteBoundary(<ResponsibilityView />)} />
-                <Route path="planning/wbs-templates" element={withRouteBoundary(<WBSTemplates />)} />
-                <Route path="wbs-templates" element={<Navigate to="planning/wbs-templates" replace />} />
-                <Route path="planning/baseline" element={withRouteBoundary(<BaselinePage />)} />
-                <Route path="planning/monthly" element={withRouteBoundary(<MonthlyPlanPage />)} />
-                <Route path="tasks/closeout" element={withRouteBoundary(<CloseoutPage />)} />
-                <Route path="planning/closeout" element={<PlanningCloseoutRedirect />} />
-                <Route path="planning/*" element={withRouteBoundary(<PlanningWorkspace />)} />
-                <Route path="drawings" element={withRouteBoundary(<Drawings />)} />
-                <Route path="materials" element={withRouteBoundary(<Materials />)} />
-              </Route>
-              <Route path="/dashboard" element={<Navigate to="/company" replace />} />
-              <Route path="/notifications" element={withRouteBoundary(<Notifications />)} />
-              <Route path="/monitoring" element={withRouteBoundary(<MonitoringDashboard />)} />
-              <Route path="/join/:code" element={withRouteBoundary(<JoinProject />)} />
-            </Routes>
+            <PageErrorBoundary>
+              <Routes>
+                <Route path="/" element={<Navigate to="/company" replace />} />
+                <Route path="/company" element={withRouteBoundary(<CompanyCockpit />)} />
+                <Route path="/projects" element={<Navigate to="/company" replace />} />
+                <Route
+                  path="/projects/:id"
+                  element={
+                    <ErrorBoundary>
+                      <ProjectLayout />
+                    </ErrorBoundary>
+                  }
+                >
+                  <Route index element={<Navigate to="dashboard" replace />} />
+                  <Route path="dashboard" element={withRouteBoundary(<Dashboard />)} />
+                  <Route path="gantt" element={withRouteBoundary(<GanttView />)} />
+                  <Route path="risks" element={withRouteBoundary(<RiskManagement />)} />
+                  <Route path="milestones" element={withRouteBoundary(<Milestones />)} />
+                  <Route path="acceptance" element={withRouteBoundary(<AcceptanceTimeline />)} />
+                  <Route path="pre-milestones" element={withRouteBoundary(<PreMilestones />)} />
+                  <Route path="reports" element={withRouteBoundary(<Reports />)} />
+                  <Route path="task-summary" element={withRouteBoundary(<TaskSummary />)} />
+                  <Route path="responsibility" element={withRouteBoundary(<ResponsibilityView />)} />
+                  <Route path="planning/wbs-templates" element={withRouteBoundary(<WBSTemplates />)} />
+                  <Route path="wbs-templates" element={<Navigate to="planning/wbs-templates" replace />} />
+                  <Route path="planning/baseline" element={withRouteBoundary(<BaselinePage />)} />
+                  <Route path="planning/monthly" element={withRouteBoundary(<MonthlyPlanPage />)} />
+                  <Route path="tasks/closeout" element={withRouteBoundary(<CloseoutPage />)} />
+                  <Route path="planning/closeout" element={<PlanningCloseoutRedirect />} />
+                  <Route path="planning/*" element={withRouteBoundary(<PlanningWorkspace />)} />
+                  <Route path="drawings" element={withRouteBoundary(<Drawings />)} />
+                  <Route path="materials" element={withRouteBoundary(<Materials />)} />
+                </Route>
+                <Route path="/dashboard" element={<Navigate to="/company" replace />} />
+                <Route path="/notifications" element={withRouteBoundary(<Notifications />)} />
+                <Route path="/monitoring" element={withRouteBoundary(<MonitoringDashboard />)} />
+                <Route path="/join/:code" element={withRouteBoundary(<JoinProject />)} />
+                <Route path="*" element={<NotFoundPage />} />
+              </Routes>
+            </PageErrorBoundary>
           </div>
         </main>
       </div>
       <Toaster />
+      <OnboardingGuide />
       <ShortcutsHelp open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
       <FeedbackButton />
       <LoginDialog isOpen={showLoginDialog} onClose={closeLoginDialog} />
@@ -388,9 +378,11 @@ export default function App() {
   return (
     <AuthProvider>
       <AuthDialogProvider>
-        <HashRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-          <AppContent />
-        </HashRouter>
+        <TooltipProvider delayDuration={300}>
+          <HashRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+            <AppContent />
+          </HashRouter>
+        </TooltipProvider>
       </AuthDialogProvider>
     </AuthProvider>
   )

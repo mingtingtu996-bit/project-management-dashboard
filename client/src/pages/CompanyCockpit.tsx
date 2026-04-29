@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 
+import { Breadcrumb } from '@/components/Breadcrumb'
 import { Card, CardContent } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useAuth } from '@/hooks/useAuth'
@@ -12,7 +13,7 @@ import { syncProjectCacheFromApi, toPersistedProject } from '@/lib/projectPersis
 import { normalizeGlobalRole } from '@/lib/roleLabels'
 import type { Issue, Risk } from '@/lib/supabase'
 import { DashboardApiService, type CompanySummaryResponse, type ProjectSummary } from '@/services/dashboardApi'
-import { Activity, FolderKanban, ShieldAlert, Target } from 'lucide-react'
+import { Activity, FolderKanban, Target } from 'lucide-react'
 
 import {
   CompanyCockpitDialogs,
@@ -58,6 +59,13 @@ const EMPTY_HEALTH_HISTORY: HealthHistory = {
   lastMonthPeriod: null,
 }
 
+function buildHeroSparkline(value: number, previous?: number | null) {
+  const start = typeof previous === 'number' ? previous : value
+  return Array.from({ length: 7 }, (_, index) => ({
+    value: Math.round(start + ((value - start) * index) / 6),
+  }))
+}
+
 function CompanyCockpitSkeleton() {
   return (
     <div className="space-y-6">
@@ -99,7 +107,7 @@ function CompanyCockpitSkeleton() {
             <Skeleton className="h-4 w-full rounded-full bg-slate-800" />
             <div className="grid gap-3">
               {[1, 2, 3].map((item) => (
-                <Skeleton key={item} className="h-20 rounded-3xl bg-slate-800" />
+                <Skeleton key={item} className="h-20 rounded-2xl bg-slate-800" />
               ))}
             </div>
           </div>
@@ -114,7 +122,7 @@ function CompanyCockpitSkeleton() {
           </div>
           <div className="grid gap-4 lg:grid-cols-2">
             {[1, 2, 3, 4].map((item) => (
-              <div key={item} className="rounded-[24px] border border-slate-100 bg-slate-50 p-5">
+              <div key={item} className="rounded-2xl border border-slate-100 bg-slate-50 p-5">
                 <Skeleton className="h-4 w-28 rounded-full" />
                 <Skeleton className="mt-4 h-9 w-16 rounded-full" />
                 <Skeleton className="mt-3 h-2 rounded-full" />
@@ -132,8 +140,8 @@ function CompanyCockpitSkeleton() {
               <Skeleton key={item} className="h-10 w-24 rounded-full" />
             ))}
           </div>
-          <Skeleton className="h-56 w-full rounded-[28px]" />
-          <Skeleton className="h-56 w-full rounded-[28px]" />
+          <Skeleton className="h-56 w-full rounded-2xl" />
+          <Skeleton className="h-56 w-full rounded-2xl" />
         </CardContent>
       </Card>
     </div>
@@ -141,6 +149,10 @@ function CompanyCockpitSkeleton() {
 }
 
 export default function CompanyCockpit() {
+  useEffect(() => {
+    document.title = '公司驾驶舱 | WorkBuddy'
+  }, [])
+
   const navigate = useNavigate()
   const location = useLocation()
   const { user } = useAuth()
@@ -313,39 +325,32 @@ export default function CompanyCockpit() {
         hint: `进行中 ${stats.inProgress} · 已完成 ${stats.completed}`,
         icon: FolderKanban,
         tone: 'bg-blue-50 text-blue-600',
+        sparklineData: buildHeroSparkline(stats.total),
       },
       {
-        label: '平均总体进度',
-        value: `${stats.averageProgress}%`,
+        label: '活跃项目',
+        value: String(stats.inProgress),
         hint: projectRows.length === stats.total ? '公司层共享摘要平均值' : `当前筛出 ${projectRows.length} / ${stats.total} 个项目`,
         icon: Target,
         tone: 'bg-emerald-50 text-emerald-600',
+        sparklineData: buildHeroSparkline(stats.inProgress),
       },
       {
-        label: '平均健康度',
+        label: '整体健康',
         value: String(stats.averageHealth),
         hint: formatDelta(healthHistory.change),
         icon: Activity,
         tone: 'bg-amber-50 text-amber-600',
-      },
-      {
-        label: '需关注项目数',
-        value: String(stats.attentionProjectCount),
-        hint: `逾期里程碑 ${stats.overdueMilestoneProjectCount} · 健康低于 60 分 ${stats.lowHealthProjectCount}`,
-        icon: ShieldAlert,
-        tone: 'bg-red-50 text-red-600',
+        pill: true,
+        sparklineData: buildHeroSparkline(stats.averageHealth, healthHistory.lastMonth),
       },
     ],
     [
       healthHistory.change,
       projectRows.length,
-      stats.attentionProjectCount,
       stats.averageHealth,
-      stats.averageProgress,
       stats.completed,
       stats.inProgress,
-      stats.lowHealthProjectCount,
-      stats.overdueMilestoneProjectCount,
       stats.total,
     ],
   )
@@ -485,8 +490,8 @@ export default function CompanyCockpit() {
 
   if (loading) {
     return (
-      <div className="space-y-6 p-6">
-        <nav className="text-sm text-slate-500">公司驾驶舱</nav>
+      <div className="page-shell">
+        <Breadcrumb items={[{ label: '公司驾驶舱' }]} />
         <CompanyCockpitSkeleton />
       </div>
     )
@@ -494,9 +499,9 @@ export default function CompanyCockpit() {
 
   if (!isCompanyAdmin) {
     return (
-      <div className="page-enter bg-slate-50/70 p-6" data-testid="company-cockpit-page">
-        <div className="mx-auto max-w-4xl space-y-6">
-          <nav className="text-sm text-slate-500">公司驾驶舱</nav>
+      <div className="page-shell" data-testid="company-cockpit-page">
+        <div className="space-y-6">
+          <Breadcrumb items={[{ label: '公司驾驶舱' }]} />
           <Card data-testid="company-cockpit-access-denied" className="border border-amber-100 bg-amber-50/70 shadow-none">
             <CardContent className="space-y-3 p-8">
               <p className="text-lg font-semibold text-slate-900">公司驾驶舱仅公司管理员可见</p>
@@ -508,9 +513,9 @@ export default function CompanyCockpit() {
   }
 
   return (
-    <div className="page-enter bg-slate-50/70 p-6" data-testid="company-cockpit-page">
-      <div className="mx-auto max-w-[1680px] space-y-6">
-        <nav className="text-sm text-slate-500">公司驾驶舱</nav>
+    <div className="page-shell" data-testid="company-cockpit-page">
+      <div className="space-y-6">
+        <Breadcrumb items={[{ label: '公司驾驶舱' }]} />
 
         <CompanyHero
           search={search}

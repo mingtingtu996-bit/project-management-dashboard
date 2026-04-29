@@ -218,8 +218,16 @@ describe('Milestones page story coverage', () => {
     })
 
     await waitForText(container, ['关键节点偏差与兑现页', '节点偏差表', PROJECT_NAVIGATION_LABELS.dashboard, '任务管理'])
+    expect(container.querySelector('.page-shell')).toBeTruthy()
+    expect(container.querySelector('[data-testid="milestones-summary-grid"]')?.className).toContain('xl:grid-cols-4')
+    expect(container.querySelectorAll('[data-testid^="milestone-summary-card-"]')).toHaveLength(4)
     expect(container.querySelector('[data-testid="milestone-health-summary"]')).toBeTruthy()
+    expect(container.querySelector('[data-testid="milestone-health-top3"]')?.textContent).toContain('更多(4)')
     expect(container.querySelector('[data-testid="milestone-child-group"]')).toBeTruthy()
+    expect(container.querySelector('[data-testid="milestone-card-m1"]')?.className).toContain('border-l-4')
+    expect(container.querySelector('[data-testid="milestone-card-m1"]')?.className).toContain('border-green-500')
+    expect(container.querySelector('[data-testid="milestone-card-m2"]')?.className).toContain('border-blue-500')
+    expect(container.querySelector('[data-testid="milestone-progress-m1"]')?.innerHTML).toContain('duration-700')
 
     const milestoneButton = findButton(container, '地下室施工')
     expect(milestoneButton).toBeTruthy()

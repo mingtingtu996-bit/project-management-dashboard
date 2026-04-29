@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import * as Collapsible from '@radix-ui/react-collapsible'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 
 import { Breadcrumb } from '@/components/Breadcrumb'
@@ -12,8 +13,8 @@ import { PROJECT_NAVIGATION_LABELS } from '@/config/navigation'
 import { useCurrentProject } from '@/hooks/useStore'
 import { toast } from '@/hooks/use-toast'
 import { apiGet, getApiErrorMessage, isAbortError } from '@/lib/apiClient'
-import { formatDate } from '@/lib/utils'
-import { CheckSquare, Download, RefreshCw } from 'lucide-react'
+import { cn, formatDate } from '@/lib/utils'
+import { ArrowRight, CheckSquare, ChevronDown, Download, RefreshCw } from 'lucide-react'
 
 import TaskSummaryResultsSection from './TaskSummary/components/TaskSummaryResultsSection'
 
@@ -67,6 +68,18 @@ function escapeCsvCell(value: string | number | boolean | null | undefined) {
   return `"${normalized.replace(/"/g, '""')}"`
 }
 
+function getTaskStatusTone(task: TaskSummaryTaskRow) {
+  const delayDays = Number(task.delay_total_days ?? 0)
+  const statusToken = String(task.status_label ?? '').toLowerCase()
+  if (delayDays > 0 || /(delay|overdue|延期|逾期)/.test(statusToken)) {
+    return 'bg-red-500'
+  }
+  if (/(done|complete|on_time|完成|按时)/.test(statusToken)) {
+    return 'bg-emerald-500'
+  }
+  return 'bg-slate-400'
+}
+
 function TaskSummaryGroupsSection({
   groups,
   projectId,
@@ -75,13 +88,16 @@ function TaskSummaryGroupsSection({
   projectId?: string
 }) {
   const hasGroups = groups.length > 0
+  const [showAllGroups, setShowAllGroups] = useState(false)
+  const visibleGroups = showAllGroups ? groups : groups.slice(0, 3)
+  const hiddenGroupCount = Math.max(groups.length - visibleGroups.length, 0)
 
   return (
     <section data-testid="task-summary-summary-list-section" className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <div className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">总结列表区</div>
-          <h2 className="mt-2 text-[22px] font-semibold tracking-tight text-slate-900">总结列表</h2>
+          <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">总结列表区</div>
+          <h2 className="mt-2 text-lg font-semibold tracking-tight text-slate-900">总结列表</h2>
         </div>
         <Button
           asChild
@@ -97,55 +113,94 @@ function TaskSummaryGroupsSection({
 
       {hasGroups ? (
         <div className="grid gap-4">
-          {groups.map((group) => (
-            <Card key={group.id} className="border-slate-200 shadow-sm">
-              <CardContent className="space-y-4 p-5">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <div className="text-sm font-semibold text-slate-900">{group.name}</div>
-                    <div className="mt-1 text-xs text-slate-500">
-                      {group.status ? `状态 ${group.status}` : '状态待补充'}
-                      {group.planned_end_date ? ` · 计划完成 ${formatDate(group.planned_end_date)}` : ''}
-                    </div>
-                  </div>
-                  <Badge variant={group.status === 'completed' ? 'default' : 'secondary'}>
-                    {group.tasks.length} 个任务
-                  </Badge>
-                </div>
+          {visibleGroups.map((group, groupIndex) => {
+            const defaultOpen = groupIndex < 3
 
-                {group.tasks.length > 0 ? (
-                  <div className="space-y-2">
-                    {group.tasks.slice(0, 4).map((task) => (
-                      <div key={task.id} className="rounded-2xl bg-slate-50 px-4 py-3">
-                        <div className="flex flex-wrap items-center justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="truncate text-sm font-medium text-slate-900">{task.title}</div>
-                            <div className="mt-1 text-xs text-slate-500">
-                              {task.assignee || '未分配'}
-                              {task.planned_end_date ? ` · 计划完成 ${formatDate(task.planned_end_date)}` : ''}
-                            </div>
+            return (
+              <Collapsible.Root key={group.id} defaultOpen={defaultOpen}>
+                <Card className="border-slate-200 shadow-sm">
+                  <CardContent className="space-y-4 p-5">
+                    <Collapsible.Trigger asChild>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        className="group h-auto w-full justify-between rounded-none p-0 text-left hover:bg-transparent [&>span]:w-full [&>span]:justify-between"
+                      >
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h3 className="text-lg font-semibold text-slate-900">{group.name}</h3>
+                            <Badge variant={group.status === 'completed' ? 'default' : 'secondary'}>
+                              {group.tasks.length} 个任务
+                            </Badge>
                           </div>
-                          <div className="text-right text-xs text-slate-500">
-                            <div>{task.status_label || '状态待补充'}</div>
-                            {task.delay_total_days && task.delay_total_days > 0 ? (
-                              <div className="mt-1 text-red-600">延期 {task.delay_total_days} 天</div>
-                            ) : null}
+                          <div className="mt-1 text-xs text-slate-500">
+                            {group.status ? `状态 ${group.status}` : '状态待补充'}
+                            {group.planned_end_date ? ` · 计划完成 ${formatDate(group.planned_end_date)}` : ''}
                           </div>
                         </div>
-                      </div>
-                    ))}
-                    {group.tasks.length > 4 && (
-                      <div className="text-xs text-slate-500">还有 {group.tasks.length - 4} 个任务未展示</div>
-                    )}
-                  </div>
-                ) : (
-                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-400">
-                    暂无任务明细
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          ))}
+                        <ChevronDown className="h-4 w-4 shrink-0 text-slate-400 transition-transform duration-300 group-data-[state=open]:rotate-180" />
+                      </Button>
+                    </Collapsible.Trigger>
+
+                    <Collapsible.Content className="overflow-hidden duration-300 data-[state=open]:animate-expand-down">
+                      {group.tasks.length > 0 ? (
+                        <div className="space-y-2">
+                          {group.tasks.map((task, taskIndex) => {
+                            const delayDays = Number(task.delay_total_days ?? 0)
+                            const isDelayed = delayDays > 0
+
+                            return (
+                              <div
+                                key={task.id}
+                                className={cn(
+                                  'grid gap-3 rounded-xl px-4 py-3 transition-colors hover:bg-blue-50/60 md:grid-cols-[minmax(0,1fr)_140px_140px_96px]',
+                                  taskIndex % 2 === 0 ? 'bg-slate-50' : 'bg-white',
+                                )}
+                              >
+                                <div className="min-w-0">
+                                  <div className="flex min-w-0 items-center gap-2">
+                                    <span className={cn('h-2.5 w-2.5 shrink-0 rounded-full', getTaskStatusTone(task))} />
+                                    <div className="truncate text-sm font-medium text-slate-900">{task.title}</div>
+                                  </div>
+                                  <div className="mt-1 text-xs text-slate-500">{task.status_label || '状态待补充'}</div>
+                                </div>
+                                <div className="text-xs text-slate-500">
+                                  <div className="font-medium text-slate-700">责任人</div>
+                                  <div className="mt-1">{task.assignee || '未分配'}</div>
+                                </div>
+                                <div className={cn('text-xs tabular-nums', isDelayed ? 'text-red-600' : 'text-slate-500')}>
+                                  <div className="font-medium text-slate-700">截止日期</div>
+                                  <div className="mt-1">{task.planned_end_date ? formatDate(task.planned_end_date) : '未设置'}</div>
+                                  {isDelayed ? <div className="mt-1">逾期 {delayDays} 天</div> : null}
+                                </div>
+                                <div className="flex items-center justify-start md:justify-end">
+                                  <Button asChild variant="ghost" size="sm" disabled={!projectId}>
+                                    <Link to={`/projects/${projectId}/gantt?taskId=${task.id}`}>
+                                      查看
+                                      <ArrowRight className="ml-1.5 h-4 w-4" />
+                                    </Link>
+                                  </Button>
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      ) : (
+                        <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-400">
+                          暂无任务明细
+                        </div>
+                      )}
+                    </Collapsible.Content>
+                  </CardContent>
+                </Card>
+              </Collapsible.Root>
+            )
+          })}
+          {hiddenGroupCount > 0 ? (
+            <Button type="button" variant="outline" className="justify-center" onClick={() => setShowAllGroups(true)}>
+              {`展开更多(${hiddenGroupCount})`}
+            </Button>
+          ) : null}
         </div>
       ) : (
         <Card className="border-slate-200 shadow-sm">
@@ -169,8 +224,8 @@ function TaskSummaryFulfillmentSection({
   return (
     <section data-testid="task-summary-monthly-fulfillment-section" className="space-y-4">
       <div>
-        <div className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">月度兑现区</div>
-        <h2 className="mt-2 text-[22px] font-semibold tracking-tight text-slate-900">月度兑现</h2>
+        <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">月度兑现区</div>
+        <h2 className="mt-2 text-lg font-semibold tracking-tight text-slate-900">月度兑现</h2>
       </div>
 
       {hasData ? (
@@ -191,7 +246,7 @@ function TaskSummaryFulfillmentSection({
                 </div>
                 <div className="h-2 overflow-hidden rounded-full bg-slate-100">
                   <div
-                    className="h-full rounded-full bg-blue-500"
+                    className="h-full rounded-full bg-blue-600"
                     style={{ width: `${Math.max(0, Math.min(100, item.rate))}%` }}
                   />
                 </div>
@@ -212,6 +267,10 @@ function TaskSummaryFulfillmentSection({
 }
 
 export default function TaskSummary() {
+  useEffect(() => {
+    document.title = '任务汇总 | WorkBuddy'
+  }, [])
+
   const { id: projectId } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const currentProject = useCurrentProject()
@@ -221,6 +280,8 @@ export default function TaskSummary() {
   const [monthlyFulfillment, setMonthlyFulfillment] = useState<MonthlyFulfillmentItem[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const groupedTaskCount = groups.reduce((sum, group) => sum + group.tasks.length, 0)
+  const totalTasks = Math.max(groupedTaskCount, stats?.total_completed ?? 0)
 
   const loadData = useCallback(async (signal?: AbortSignal) => {
     if (!projectId) return
@@ -304,7 +365,7 @@ export default function TaskSummary() {
 
   if (!loading && !projectId) {
     return (
-      <div className="container mx-auto px-4 py-8">
+      <div className="page-shell">
         <Card className="border-slate-200 shadow-sm">
           <CardContent className="flex flex-col items-center justify-center gap-3 py-16 text-center">
             <CheckSquare className="h-12 w-12 text-slate-300" />
@@ -319,7 +380,7 @@ export default function TaskSummary() {
 
   if (loading) {
     return (
-      <div className="container mx-auto px-4 py-8">
+      <div className="page-shell">
         <LoadingState
           label="任务总结加载中"
           className="min-h-[320px]"
@@ -329,13 +390,11 @@ export default function TaskSummary() {
   }
 
   return (
-    <div data-testid="task-summary-page" className="container mx-auto space-y-6 px-4 py-8 page-enter">
+    <div data-testid="task-summary-page" className="page-shell">
       <Breadcrumb
         items={[
-          { label: '公司驾驶舱', href: '/company' },
           { label: currentProject?.name || '项目', href: `/projects/${projectId}/dashboard` },
-          { label: '任务管理', href: `/projects/${projectId}/gantt` },
-          { label: '任务总结' },
+          { label: '任务汇总' },
         ]}
       />
 
@@ -374,7 +433,7 @@ export default function TaskSummary() {
         </Alert>
       )}
 
-      <TaskSummaryResultsSection stats={stats} />
+      <TaskSummaryResultsSection stats={stats} totalTasks={totalTasks} />
       <TaskSummaryGroupsSection groups={groups} projectId={projectId} />
 
       <TaskSummaryFulfillmentSection monthlyFulfillment={monthlyFulfillment} />

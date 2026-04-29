@@ -1,5 +1,5 @@
 /* Google Fonts — display=swap 防止 FOUT 字体闪烁 (L16) */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -15,7 +15,7 @@
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
+    --background: #F8FAFC;
     --foreground: 222.2 84% 4.4%;
     --card: 0 0% 100%;
     --card-foreground: 222.2 84% 4.4%;
@@ -27,9 +27,13 @@
     --secondary-foreground: 222.2 47.4% 11.2%;
     --muted: 210 40% 96.1%;
     --muted-foreground: 215.4 16.3% 46.9%;
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
-    --destructive: 0 84.2% 60.2%;
+    --accent: #F97316;
+    --accent-foreground: #FFFFFF;
+    --el-1: 0 1px 3px rgba(0,0,0,0.04);
+    --el-2: 0 4px 12px rgba(0,0,0,0.06);
+    --el-3: 0 8px 24px rgba(0,0,0,0.08);
+    --el-4: 0 20px 40px rgba(0,0,0,0.12);
+    --destructive: 0 72.2% 50.6%;
     --destructive-foreground: 210 40% 98%;
     --border: 214.3 31.8% 91.4%;
     --input: 214.3 31.8% 91.4%;
@@ -39,7 +43,7 @@
 
     /* ── 企业品牌色 CSS 变量 (L15) ───────────────────────── */
     /* 使用原生 CSS 变量，方便全站统一替换硬编码蓝色 */
-    --brand-primary:   #3B82F6;   /* blue-500 */
+    --brand-primary:   #2563EB;   /* blue-600 */
     --brand-primary-light: #DBEAFE; /* blue-100 */
     --brand-primary-dark:  #1D4ED8; /* blue-700 */
     --brand-primary-hover: #2563EB; /* blue-600 */
@@ -53,21 +57,21 @@
   }
   body {
     @apply bg-background text-foreground antialiased;
-    /* V4 页面背景 gray-50 */
-    background-color: #f6f8fc;
+    /* v1.3 页面背景 slate-50 */
+    background-color: #F8FAFC;
     color: #0f172a;
   }
 
-  /* ── heading 全局基础样式（L18/L19） ─────────────────────── */
+  /* heading 全局基础样式（L18/L19） */
   /* 避免浏览器默认 h1~h2 大小不一，统一字重与色彩 */
   h1 {
-    @apply text-2xl font-bold text-gray-900 leading-tight;
+    @apply text-2xl font-bold text-slate-900 leading-tight;
   }
   h2 {
-    @apply text-xl font-semibold text-gray-800 leading-snug;
+    @apply text-xl font-semibold text-slate-800 leading-snug;
   }
   h3 {
-    @apply text-base font-semibold text-gray-700;
+    @apply text-base font-semibold text-slate-700;
   }
 }
 
@@ -77,41 +81,50 @@
    ============================================================================= */
 
 @layer components {
+  .page-shell {
+    @apply max-w-[1440px] mx-auto px-4 md:px-6 lg:px-8 py-6 lg:py-8 space-y-8;
+  }
+
+  .card-unified {
+    @apply rounded-xl bg-white p-5 border border-slate-200/60;
+    box-shadow: var(--el-1);
+  }
+
+  .card-hover {
+    @apply cursor-pointer;
+  }
 
   /* ── 卡片阴影分层（L10） ─────────────────────────────────── */
   /* card-l1：基础卡片，大量使用 */
   .card-l1 {
-    @apply bg-white rounded-card border border-slate-100 shadow-sm
-           transition-all duration-200
-           hover:ring-1 hover:ring-blue-100;
+    @apply bg-white rounded-xl border border-slate-100 hover:ring-1 hover:ring-blue-100;
+    box-shadow: var(--el-1);
   }
   /* card-l2：重要信息卡片（如统计指标） */
   .card-l2 {
-    @apply bg-white rounded-card border border-slate-100 shadow
-           transition-all duration-200
-           hover:shadow-md hover:ring-1 hover:ring-blue-100;
+    @apply bg-white rounded-xl border border-slate-100 hover:ring-1 hover:ring-blue-100;
+    box-shadow: var(--el-2);
   }
   /* card-l3：强调卡片（如弹窗内容区、高亮数据） */
   .card-l3 {
-    @apply bg-white rounded-card border border-slate-100 shadow-md
-           transition-all duration-200
-           hover:shadow-lg hover:ring-1 hover:ring-blue-100;
+    @apply bg-white rounded-xl border border-slate-100 hover:ring-1 hover:ring-blue-100;
+    box-shadow: var(--el-3);
   }
 
-  /* ── 辅助文本对比度提升（L14）gray-400 → gray-500 ──────── */
-  /* 全站辅助说明文字使用 .text-helper 代替 text-gray-400 */
+  /* 辅助文本对比度提升（L14）slate-400 → slate-500 */
+  /* 全站辅助说明文字使用 .text-helper 代替 text-slate-400 */
   .text-helper {
-    @apply text-gray-500 text-xs;
+    @apply text-slate-500 text-xs;
   }
 
   /* 骨架屏占位块 */
   .skeleton-block {
-    @apply rounded-lg bg-gray-200 animate-skeleton;
+    @apply rounded-lg bg-slate-200 animate-skeleton;
     background-image: linear-gradient(
       90deg,
-      #e5e7eb 25%,
-      #f3f4f6 50%,
-      #e5e7eb 75%
+      #e2e8f0 25%,
+      #f1f5f9 50%,
+      #e2e8f0 75%
     );
     background-size: 400px 100%;
   }
@@ -126,7 +139,7 @@
   }
 
   .shell-section-title {
-    @apply text-[28px] font-bold tracking-tight text-slate-900;
+    @apply text-3xl font-bold tracking-tight text-slate-900;
   }
 
   .shell-subtitle {
@@ -135,7 +148,7 @@
 
   /* 进度条容器 */
   .progress-bar {
-    @apply flex-1 h-2.5 bg-gray-100 rounded-full overflow-hidden;
+    @apply flex-1 h-2.5 bg-slate-100 rounded-full overflow-hidden;
   }
 
   /* 里程碑层级左边框 */
@@ -146,7 +159,7 @@
     border-left: 3px solid #3B82F6; /* blue-500 */
   }
   .ms-lv3 {
-    border-left: 2px solid #9CA3AF; /* gray-400 */
+    border-left: 2px solid #94A3B8; /* slate-400 */
   }
 
   /* 风险等级卡片 */
@@ -166,7 +179,7 @@
     @apply bg-emerald-500;
   }
   .progress-fill-blue {
-    @apply bg-blue-500;
+    @apply bg-blue-600;
   }
   .progress-fill-amber {
     @apply bg-amber-500;
@@ -178,19 +191,19 @@
   /* ── 排版规格统一（L18）─────────────────────────────────── */
   /* h1：页面主标题 */
   .heading-1 {
-    @apply text-2xl font-bold text-gray-900;
+    @apply text-2xl font-bold text-slate-900;
   }
   /* h3：卡片/区块子标题 */
   .heading-3 {
-    @apply text-lg font-semibold text-gray-900;
+    @apply text-lg font-semibold text-slate-900;
   }
   /* 正文 */
   .body-text {
-    @apply text-sm text-gray-700;
+    @apply text-sm text-slate-700;
   }
-  /* 辅助/说明文字（WCAG AA 4.5:1，gray-500 替代 gray-400）*/
+  /* 辅助/说明文字（WCAG AA 4.5:1，slate-500 替代 slate-400）*/
   .helper-text {
-    @apply text-xs text-gray-500;
+    @apply text-xs text-slate-500;
   }
 
   /* ── 响应式网格断点统一（L19）─────────────────────────────── */
@@ -209,8 +222,8 @@
            flex items-center gap-1.5;
   }
   .tab-inactive {
-    @apply py-3 text-sm font-medium text-gray-500
-           flex items-center gap-1.5 hover:text-gray-700;
+    @apply py-3 text-sm font-medium text-slate-500
+           flex items-center gap-1.5 hover:text-slate-700;
   }
 
   /* 页面淡入 */
@@ -219,7 +232,30 @@
   }
 }
 
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes expand-down {
+  from { height: 0; opacity: 0; overflow: hidden; }
+  to { height: var(--radix-collapsible-content-height); opacity: 1; }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .page-shell { animation: fade-in 300ms ease-out; }
+  .card-hover { transition: all 200ms ease-out; }
+  .card-hover:hover {
+    box-shadow: var(--el-2);
+    transform: translateY(-2px);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .page-shell { animation: none !important; }
+  .card-hover { transition: none !important; }
+  .card-hover:hover { transform: none !important; }
+
   html:focus-within {
     scroll-behavior: auto;
   }

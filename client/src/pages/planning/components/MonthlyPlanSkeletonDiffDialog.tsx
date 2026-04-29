@@ -9,6 +9,8 @@ import {
 import type { Task } from '@/pages/GanttViewTypes'
 import type { MonthlyPlanItem } from '@/types/planning'
 import { formatDate, type MonthlyPlanChangeSummary } from '../planningShared'
+import { Card } from '@/components/ui/card'
+import { cn } from '@/lib/utils'
 
 interface MonthlyPlanSkeletonDiffDialogProps {
   open: boolean
@@ -151,12 +153,39 @@ export function MonthlyPlanSkeletonDiffDialog({
     threshold: 0,
     isLargeScale: false,
   }
+  const getBeforeCardClass = (kind: DiffRow['kind']) =>
+    cn(
+      'rounded-xl border px-3 py-2',
+      kind === 'removed'
+        ? 'border-red-200 bg-red-50'
+        : kind === 'date' || kind === 'progress'
+          ? 'border-red-100 bg-red-50/70'
+          : 'border-slate-100 bg-white',
+    )
+  const getAfterCardClass = (kind: DiffRow['kind']) =>
+    cn(
+      'rounded-xl border px-3 py-2',
+      kind === 'added'
+        ? 'border-green-200 bg-green-50'
+        : kind === 'removed'
+          ? 'border-red-200 bg-red-100'
+          : kind === 'date' || kind === 'progress'
+            ? 'border-green-200 bg-green-50'
+            : 'border-cyan-100 bg-cyan-50',
+    )
+  const getAfterLabelClass = (kind: DiffRow['kind']) =>
+    kind === 'removed' ? 'text-red-700' : kind === 'added' || kind === 'date' || kind === 'progress' ? 'text-green-700' : 'text-cyan-700'
+  const getAfterValueClass = (kind: DiffRow['kind']) =>
+    kind === 'removed' ? 'text-red-900' : kind === 'added' || kind === 'date' || kind === 'progress' ? 'text-green-900' : 'text-cyan-900'
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent data-testid="monthly-plan-skeleton-diff-dialog" className="max-h-[90vh] max-w-3xl overflow-y-auto">
+      <DialogContent
+        data-testid="monthly-plan-skeleton-diff-dialog"
+        className="max-h-[90vh] max-w-[720px] overflow-y-auto rounded-2xl shadow-[var(--el-4)]"
+      >
         <DialogHeader>
-          <DialogTitle>查看与主骨架差异</DialogTitle>
+          <DialogTitle>查看计划变更对比</DialogTitle>
           <DialogDescription>
             对比当前月计划与主任务骨架的时间、标题和目标进度差异，方便在查看态快速确认偏移范围。
           </DialogDescription>
@@ -196,13 +225,13 @@ export function MonthlyPlanSkeletonDiffDialog({
                       <div key={row.id} className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
                         <div className="text-sm font-medium text-slate-900">{row.title}</div>
                         <div className="mt-3 grid gap-3 lg:grid-cols-2">
-                          <div className="rounded-xl border border-slate-100 bg-white px-3 py-2">
-                            <div className="text-xs text-slate-500">主骨架</div>
+                          <Card className={getBeforeCardClass(row.kind)}>
+                            <div className={cn('text-xs', row.kind === 'removed' ? 'text-red-700' : 'text-slate-500')}>主骨架</div>
                             <div className="mt-1 text-sm leading-6 text-slate-700">{row.before}</div>
-                          </div>
-                          <div className="rounded-xl border border-cyan-100 bg-cyan-50 px-3 py-2">
-                            <div className="text-xs text-cyan-700">当前月计划</div>
-                            <div className="mt-1 text-sm leading-6 text-cyan-900">{row.after}</div>
+                          </Card>
+                          <div className={getAfterCardClass(row.kind)}>
+                            <div className={cn('text-xs', getAfterLabelClass(row.kind))}>当前月计划</div>
+                            <div className={cn('mt-1 text-sm leading-6', getAfterValueClass(row.kind))}>{row.after}</div>
                           </div>
                         </div>
                       </div>

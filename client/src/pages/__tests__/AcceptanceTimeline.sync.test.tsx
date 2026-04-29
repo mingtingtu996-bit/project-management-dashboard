@@ -96,7 +96,7 @@ const state = vi.hoisted(() => {
         milestone_id: 'milestone-target',
         type_id: 'four_party',
         type_name: 'Four Party',
-        type_color: 'bg-blue-500',
+        type_color: 'bg-blue-600',
         name: 'Plan Beta',
         description: 'Target plan',
         planned_date: '2026-04-02',

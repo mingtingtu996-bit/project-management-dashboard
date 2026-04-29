@@ -1,9 +1,30 @@
-import type { ElementType } from 'react'
-import { ArrowUpRight, AlertTriangle, CircleCheckBig, Layers3, RefreshCw, ShieldCheck } from 'lucide-react'
+import { useMemo, useState, type ElementType } from 'react'
+import { ArrowUpRight, AlertTriangle, ChevronDown, CircleCheckBig, Clock3, Layers3, ShieldCheck } from 'lucide-react'
 
+import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import { cn } from '@/lib/utils'
 
 import type { DrawingBoardSummary } from '../types'
+
+export interface DrawingDisciplineReadiness {
+  disciplineType: string
+  total: number
+  ready: number
+  overdue: number
+  ratio: number
+}
+
+export interface DrawingReadinessMetrics {
+  totalDrawings: number
+  approvedDrawings: number
+  pendingReviewDrawings: number
+  overdueDrawings: number
+  plannedSubmitThisMonthCount: number
+  reviewingPackages: number
+  scheduleImpactCount: number
+  disciplineReadiness: DrawingDisciplineReadiness[]
+}
 
 function SummaryTile({
   label,
@@ -18,8 +39,6 @@ function SummaryTile({
   tone: 'blue' | 'amber' | 'red' | 'emerald' | 'slate'
   icon: ElementType
 }) {
-  void hint
-
   const toneClasses = {
     blue: 'border-blue-200 bg-blue-50 text-blue-700',
     amber: 'border-amber-200 bg-amber-50 text-amber-700',
@@ -37,7 +56,7 @@ function SummaryTile({
   } as const
 
   return (
-    <Card className="border-slate-200 shadow-sm">
+    <Card className="card-unified">
       <CardContent className="space-y-3 p-5">
         <div className="flex items-center justify-between gap-3">
           <div className="text-sm font-medium text-slate-500">{label}</div>
@@ -45,20 +64,62 @@ function SummaryTile({
             <Icon className="h-3.5 w-3.5" />
           </div>
         </div>
-        <div className={`text-3xl font-semibold tracking-tight ${valueClasses[tone]}`}>{value}</div>
+        <div className={`text-3xl font-semibold tabular-nums ${valueClasses[tone]}`}>{value}</div>
+        <p className="text-xs leading-5 text-slate-400">{hint}</p>
       </CardContent>
     </Card>
+  )
+}
+
+function ProgressBar({ value, tone = 'blue' }: { value: number; tone?: 'blue' | 'emerald' | 'amber' | 'red' }) {
+  const toneClasses = {
+    blue: 'bg-blue-600',
+    emerald: 'bg-emerald-500',
+    amber: 'bg-amber-500',
+    red: 'bg-red-500',
+  } as const
+
+  return (
+    <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+      <div
+        className={cn('h-full rounded-full motion-safe:transition-[width] motion-safe:duration-700 motion-safe:ease-out', toneClasses[tone])}
+        style={{ width: `${Math.max(0, Math.min(100, value))}%` }}
+      />
+    </div>
   )
 }
 
 export function DrawingReadinessSummary({
   summary,
   projectName,
+  metrics,
 }: {
   summary: DrawingBoardSummary
   projectName?: string
+  metrics?: DrawingReadinessMetrics
 }) {
   void projectName
+  const [showDetails, setShowDetails] = useState(false)
+
+  const fallbackMetrics = useMemo<DrawingReadinessMetrics>(
+    () => ({
+      totalDrawings: summary.totalPackages,
+      approvedDrawings: summary.readyForConstructionCount,
+      pendingReviewDrawings: summary.reviewingPackages,
+      overdueDrawings: summary.scheduleImpactCount,
+      plannedSubmitThisMonthCount: summary.plannedSubmitThisMonthCount ?? 0,
+      reviewingPackages: summary.reviewingPackages,
+      scheduleImpactCount: summary.scheduleImpactCount,
+      disciplineReadiness: [],
+    }),
+    [summary],
+  )
+
+  const displayMetrics = metrics ?? fallbackMetrics
+  const readinessRatio =
+    displayMetrics.totalDrawings > 0
+      ? Math.round((displayMetrics.approvedDrawings / displayMetrics.totalDrawings) * 100)
+      : 0
 
   return (
     <section className="space-y-4">
@@ -70,99 +131,109 @@ export function DrawingReadinessSummary({
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <SummaryTile
-          label="图纸包总数"
-          value={summary.totalPackages}
-          hint="页面主对象按包统计，不再平铺所有单图。"
+          label="总图纸数"
+          value={displayMetrics.totalDrawings}
+          hint="按台账中单张图纸记录统计。"
           tone="blue"
           icon={Layers3}
         />
         <SummaryTile
-          label="缺漏图纸包"
-          value={summary.missingPackages}
-          hint="应有项未补齐的图纸包。"
-          tone="red"
-          icon={AlertTriangle}
+          label="已审批"
+          value={displayMetrics.approvedDrawings}
+          hint="已通过审图或已出图可用。"
+          tone="emerald"
+          icon={CircleCheckBig}
         />
         <SummaryTile
-          label="必审图纸包"
-          value={summary.mandatoryReviewPackages}
-          hint="默认需要送审或法定送审的包。"
+          label="待审批"
+          value={displayMetrics.pendingReviewDrawings}
+          hint="仍需审图确认的图纸。"
           tone="amber"
           icon={ShieldCheck}
         />
         <SummaryTile
-          label="可施工 / 可验收"
-          value={`${summary.readyForConstructionCount}/${summary.readyForAcceptanceCount}`}
-          hint="前者是施工可用，后者是竣工归档可验收。"
-          tone="emerald"
-          icon={CircleCheckBig}
+          label="逾期"
+          value={displayMetrics.overdueDrawings}
+          hint="计划通过或送审日期已超期。"
+          tone="red"
+          icon={Clock3}
         />
       </div>
 
-      <div className="grid gap-4 md:grid-cols-3">
-        <Card className="border-slate-200 shadow-sm">
-          <CardContent className="flex items-center justify-between gap-3 p-5">
+      <Card className="card-unified" data-testid="drawing-readiness-progress">
+        <CardContent className="space-y-5 p-5">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <div className="text-sm text-slate-500">本月计划送审</div>
-              <div className="mt-1 text-2xl font-semibold text-slate-900">{summary.plannedSubmitThisMonthCount ?? 0}</div>
-            </div>
-            <div className="rounded-full border border-blue-200 bg-blue-50 p-2 text-blue-700">
-              <ArrowUpRight className="h-4 w-4" />
-            </div>
-          </CardContent>
-        </Card>
-        <Card className="border-slate-200 shadow-sm">
-          <CardContent className="flex items-center justify-between gap-3 p-5">
-            <div>
-              <div className="text-sm text-slate-500">送审 / 处理中</div>
-              <div className="mt-1 text-2xl font-semibold text-slate-900">{summary.reviewingPackages}</div>
-            </div>
-            <div className="rounded-full border border-amber-200 bg-amber-50 p-2 text-amber-700">
-              <ArrowUpRight className="h-4 w-4" />
-            </div>
-          </CardContent>
-        </Card>
-        <Card className="border-slate-200 shadow-sm">
-          <CardContent className="flex items-center justify-between gap-3 p-5">
-            <div>
-              <div className="text-sm text-slate-500">工期影响包</div>
-              <div className="mt-1 text-2xl font-semibold text-slate-900">{summary.scheduleImpactCount}</div>
-            </div>
-            <div className="rounded-full border border-red-200 bg-red-50 p-2 text-red-700">
-              <AlertTriangle className="h-4 w-4" />
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      <div className="grid gap-4 md:grid-cols-2">
-        <Card className="border-slate-200 shadow-sm">
-          <CardContent className="flex items-center justify-between gap-3 p-5">
-            <div>
-              <div className="text-sm text-slate-500">当前工作判断</div>
-              <div className="mt-1 text-sm font-medium text-slate-900">
-                {summary.missingPackages > 0 ? '先补齐缺漏，再看送审' : '基础齐套，进入版本与送审窗口'}
+              <div className="text-sm font-semibold text-slate-900">整体就绪度</div>
+              <div className="text-xs text-slate-400">
+                {readinessRatio}% 就绪，已审批 {displayMetrics.approvedDrawings} / {displayMetrics.totalDrawings}
               </div>
             </div>
-            <div className="rounded-full border border-blue-200 bg-blue-50 p-2 text-blue-700">
-              <RefreshCw className="h-4 w-4" />
-            </div>
-          </CardContent>
-        </Card>
-        {summary.criticalBlockingDiscipline ? (
-          <Card className="border-amber-200 shadow-sm">
-            <CardContent className="flex items-center justify-between gap-3 p-5">
-              <div>
-                <div className="text-sm text-slate-500">当前关键卡点专业</div>
-                <div className="mt-1 text-sm font-medium text-amber-700" data-testid="drawing-critical-blocking-discipline">
-                  {summary.criticalBlockingDiscipline}
+            <div className="text-2xl font-semibold tabular-nums text-slate-900">{readinessRatio}%</div>
+          </div>
+          <ProgressBar value={readinessRatio} tone={readinessRatio >= 80 ? 'emerald' : readinessRatio >= 60 ? 'blue' : 'amber'} />
+          {displayMetrics.disciplineReadiness.length > 0 ? (
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              {displayMetrics.disciplineReadiness.map((item) => (
+                <div key={item.disciplineType} className="rounded-xl border border-slate-100 bg-slate-50/70 p-3">
+                  <div className="flex items-center justify-between gap-2 text-xs">
+                    <span className="font-medium text-slate-700">{item.disciplineType}</span>
+                    <span className="tabular-nums text-slate-500">{item.ratio}%</span>
+                  </div>
+                  <div className="mt-2">
+                    <ProgressBar value={item.ratio} tone={item.overdue > 0 ? 'red' : item.ratio >= 80 ? 'emerald' : 'blue'} />
+                  </div>
+                  <div className="mt-2 text-xs text-slate-400">
+                    {item.ready}/{item.total} 已就绪{item.overdue > 0 ? ` · ${item.overdue} 逾期` : ''}
+                  </div>
                 </div>
-              </div>
-              <div className="rounded-full border border-amber-200 bg-amber-50 p-2 text-amber-700">
-                <AlertTriangle className="h-4 w-4" />
-              </div>
-            </CardContent>
-          </Card>
+              ))}
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
+
+      <div className="space-y-3">
+        <Button
+          type="button"
+          variant="ghost"
+          className="gap-2 px-0 text-sm text-blue-600 hover:bg-transparent hover:text-blue-500"
+          aria-expanded={showDetails}
+          data-testid="drawing-detailed-stats-toggle"
+          onClick={() => setShowDetails((value) => !value)}
+        >
+          详细统计
+          <ChevronDown className={cn('h-4 w-4 transition-transform duration-200', showDetails ? 'rotate-180' : '')} />
+        </Button>
+        {showDetails ? (
+          <div className="grid gap-4 motion-safe:animate-expand-down md:grid-cols-3" data-testid="drawing-detailed-stats">
+            <SummaryTile
+              label="本月计划送审"
+              value={displayMetrics.plannedSubmitThisMonthCount}
+              hint="本月需要提交审查的图纸包。"
+              tone="blue"
+              icon={ArrowUpRight}
+            />
+            <SummaryTile
+              label="送审 / 处理中"
+              value={displayMetrics.reviewingPackages}
+              hint="当前仍处在审查或修订链路。"
+              tone="amber"
+              icon={ShieldCheck}
+            />
+            <SummaryTile
+              label="工期影响包"
+              value={displayMetrics.scheduleImpactCount}
+              hint="图纸状态已经影响任务推进。"
+              tone="red"
+              icon={AlertTriangle}
+            />
+          </div>
+        ) : null}
+        {summary.criticalBlockingDiscipline ? (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800" data-testid="drawing-critical-blocking-discipline">
+            当前关键卡点专业：{summary.criticalBlockingDiscipline}
+          </div>
         ) : null}
       </div>
     </section>

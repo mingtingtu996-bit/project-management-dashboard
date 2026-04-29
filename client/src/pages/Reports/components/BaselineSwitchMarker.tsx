@@ -38,7 +38,7 @@ export function BaselineSwitchMarker({
               <div className="font-medium">
                 {selectedEvent.switch_date} {selectedEvent.from_version} → {selectedEvent.to_version}
               </div>
-              <div className="rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-blue-700">
+              <div className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-blue-700">
                 当前基线 {baselineLabel}
               </div>
             </div>
@@ -53,7 +53,7 @@ export function BaselineSwitchMarker({
         <div className="space-y-2">
           {events.length > 0 ? (
             events.map((event) => (
-              <button
+              <Button variant="ghost"
                 key={`${event.switch_date}-${event.from_version}-${event.to_version}`}
                 type="button"
                 onClick={() => setSelectedEventKey(`${event.switch_date}-${event.from_version}-${event.to_version}`)}
@@ -67,7 +67,7 @@ export function BaselineSwitchMarker({
                   {event.switch_date}：{event.from_version} → {event.to_version}
                 </div>
                 <div className="mt-1 leading-6 text-slate-600">{event.explanation}</div>
-              </button>
+              </Button>
             ))
           ) : (
             <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">

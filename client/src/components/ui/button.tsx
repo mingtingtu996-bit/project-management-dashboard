@@ -6,11 +6,11 @@ import { Loader2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center whitespace-nowrap rounded-2xl text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50",
+  "inline-flex items-center justify-center whitespace-nowrap rounded-2xl text-sm font-medium ring-offset-background transition-colors active:scale-[0.98] transition-transform duration-75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50",
   {
     variants: {
       variant: {
-        default: "bg-blue-600 text-white shadow-sm hover:bg-blue-500",
+        default: "bg-blue-600 text-white shadow-sm hover:bg-[var(--brand-primary-hover)]",
         destructive:
           "bg-rose-600 text-white shadow-sm hover:bg-rose-500",
         outline:
@@ -122,7 +122,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         style={style}
         {...rest}
       >
-        <span className="inline-flex items-center justify-center gap-2">{content}</span>
+        <span className="inline-flex min-w-0 items-center justify-center gap-2">{content}</span>
       </Comp>
     )
   }

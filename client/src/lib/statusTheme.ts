@@ -6,7 +6,7 @@ export type StatusTheme = {
 const STATUS_THEME: Record<string, StatusTheme> = {
   active: {
     label: '进行中',
-    className: 'bg-blue-500 text-white',
+    className: 'bg-blue-600 text-white',
   },
   archived: {
     label: '已归档',
@@ -26,7 +26,7 @@ const STATUS_THEME: Record<string, StatusTheme> = {
   },
   completed: {
     label: '已完成',
-    className: 'bg-emerald-500 text-white',
+    className: 'bg-emerald-700 text-white',
   },
   critical: {
     label: '严重',
@@ -78,7 +78,7 @@ const STATUS_THEME: Record<string, StatusTheme> = {
   },
   pending: {
     label: '未开始',
-    className: 'bg-amber-500 text-white',
+    className: 'bg-amber-700 text-white',
   },
   processing: {
     label: '进行中',

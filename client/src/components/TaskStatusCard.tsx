@@ -12,7 +12,9 @@
 
 import { useState, useEffect, useMemo } from 'react'
 import { Link } from 'react-router-dom'
+import { ChartAccessibleWrapper } from '@/components/ChartAccessibleWrapper'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Separator } from '@/components/ui/separator'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { apiGet } from '@/lib/apiClient'
 import { CheckCircle2, Clock, ListTodo, AlertTriangle, ChevronRight, TrendingUp, User } from 'lucide-react'
@@ -119,7 +121,7 @@ export function TaskStatusCard({
       label: '进行中',
       value: animInProgress,
       icon: <Clock className="h-3.5 w-3.5 text-blue-500" />,
-      bgColor: 'bg-blue-500',
+      bgColor: 'bg-blue-600',
       textColor: 'text-blue-600',
       hoverBg: 'hover:bg-blue-50',
     },
@@ -149,9 +151,9 @@ export function TaskStatusCard({
     <Card variant="metric">
       <CardHeader className="pb-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <CardTitle className="text-base font-semibold text-gray-800">任务执行概况</CardTitle>
+          <CardTitle className="text-base font-semibold text-slate-800">任务执行概况</CardTitle>
           <div className="flex items-center gap-3">
-            <span className="text-sm text-gray-400">共 {total} 个任务</span>
+            <span className="text-sm text-slate-400">共 {total} 个任务</span>
             <Link
               data-testid="dashboard-task-reports-link"
               to={reportsHref}
@@ -166,74 +168,85 @@ export function TaskStatusCard({
 
       <CardContent className="pt-0 space-y-4">
         {/* ── 上半：状态分布 ── */}
-        <div className="flex items-center gap-5">
-          {/* 左侧统计列表 */}
-          <div className="space-y-1.5 flex-1">
-            {stats.map((stat) => (
-              <div
-                key={stat.label}
-                className={`flex items-center justify-between px-2 py-1.5 rounded-lg ${stat.hoverBg} transition-colors cursor-default group`}
-              >
-                <div className="flex items-center gap-2">
-                  {stat.icon}
-                  <span className={`text-gray-700 text-sm font-medium`}>{stat.label}</span>
+        <ChartAccessibleWrapper
+          columns={['状态', '数量']}
+          rows={[
+            ['已完成', completed],
+            ['进行中', inProgress],
+            ['未开始', notStarted],
+            ['已延期', delayed],
+          ]}
+          summary="查看任务状态分布数据"
+        >
+          <div className="flex items-center gap-5">
+            {/* 左侧统计列表 */}
+            <div className="space-y-1.5 flex-1">
+              {stats.map((stat) => (
+                <div
+                  key={stat.label}
+                  className={`flex items-center justify-between px-2 py-1.5 rounded-lg ${stat.hoverBg} transition-colors cursor-default group`}
+                >
+                  <div className="flex items-center gap-2">
+                    {stat.icon}
+                    <span className={`text-slate-700 text-sm font-medium`}>{stat.label}</span>
+                  </div>
+                  <span className={`${stat.textColor} font-bold tabular-nums`}>{stat.value}</span>
                 </div>
-                <span className={`${stat.textColor} font-bold tabular-nums`}>{stat.value}</span>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
 
-          {/* 右侧环形图 */}
-          <div className="w-28 h-28 relative flex-shrink-0">
-            <svg viewBox="0 0 100 100" className="w-full h-full -rotate-90">
-              <circle cx="50" cy="50" r={radius} fill="none" stroke={CHART_AXIS_COLORS.neutralStroke} strokeWidth="10" />
-              {completed > 0 && (
-                <circle
-                  cx="50" cy="50" r={radius} fill="none" stroke={TASK_STAGE_COLORS.completed} strokeWidth="10"
-                  strokeDasharray={circumference} strokeDashoffset={completedOffset}
-                  strokeLinecap="round" className="transition-all duration-1000 ease-out"
-                />
-              )}
-              {inProgress > 0 && (
-                <circle
-                  cx="50" cy="50" r={radius} fill="none" stroke={TASK_STAGE_COLORS.inProgress} strokeWidth="10"
-                  strokeDasharray={circumference} strokeDashoffset={inProgressOffset}
-                  strokeLinecap="round" className="transition-all duration-1000 ease-out"
-                  style={{ transform: `rotate(${(completed / total) * 360}deg)`, transformOrigin: 'center' }}
-                />
-              )}
-              {notStarted > 0 && (
-                <circle
-                  cx="50" cy="50" r={radius} fill="none" stroke={TASK_STAGE_COLORS.notStarted} strokeWidth="10"
-                  strokeDasharray={circumference} strokeDashoffset={notStartedOffset}
-                  strokeLinecap="round" className="transition-all duration-1000 ease-out"
-                  style={{ transform: `rotate(${((completed + inProgress) / total) * 360}deg)`, transformOrigin: 'center' }}
-                />
-              )}
-              {delayed > 0 && (
-                <circle
-                  cx="50" cy="50" r={radius} fill="none" stroke={TASK_STAGE_COLORS.delayed} strokeWidth="10"
-                  strokeDasharray={circumference} strokeDashoffset={0}
-                  strokeLinecap="round" className="transition-all duration-1000 ease-out"
-                  style={{ transform: `rotate(${((completed + inProgress + notStarted) / total) * 360}deg)`, transformOrigin: 'center' }}
-                />
-              )}
-            </svg>
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <div className="text-center">
-                <div className="text-lg font-bold text-gray-800 tabular-nums">{completedRate}%</div>
-                <div className="text-xs text-gray-400">已完成</div>
+            {/* 右侧环形图 */}
+            <div className="w-28 h-28 relative flex-shrink-0">
+              <svg viewBox="0 0 100 100" className="w-full h-full -rotate-90">
+                <circle cx="50" cy="50" r={radius} fill="none" stroke={CHART_AXIS_COLORS.neutralStroke} strokeWidth="10" />
+                {completed > 0 && (
+                  <circle
+                    cx="50" cy="50" r={radius} fill="none" stroke={TASK_STAGE_COLORS.completed} strokeWidth="10"
+                    strokeDasharray={circumference} strokeDashoffset={completedOffset}
+                    strokeLinecap="round" className="transition-all duration-1000 ease-out"
+                  />
+                )}
+                {inProgress > 0 && (
+                  <circle
+                    cx="50" cy="50" r={radius} fill="none" stroke={TASK_STAGE_COLORS.inProgress} strokeWidth="10"
+                    strokeDasharray={circumference} strokeDashoffset={inProgressOffset}
+                    strokeLinecap="round" className="transition-all duration-1000 ease-out"
+                    style={{ transform: `rotate(${(completed / total) * 360}deg)`, transformOrigin: 'center' }}
+                  />
+                )}
+                {notStarted > 0 && (
+                  <circle
+                    cx="50" cy="50" r={radius} fill="none" stroke={TASK_STAGE_COLORS.notStarted} strokeWidth="10"
+                    strokeDasharray={circumference} strokeDashoffset={notStartedOffset}
+                    strokeLinecap="round" className="transition-all duration-1000 ease-out"
+                    style={{ transform: `rotate(${((completed + inProgress) / total) * 360}deg)`, transformOrigin: 'center' }}
+                  />
+                )}
+                {delayed > 0 && (
+                  <circle
+                    cx="50" cy="50" r={radius} fill="none" stroke={TASK_STAGE_COLORS.delayed} strokeWidth="10"
+                    strokeDasharray={circumference} strokeDashoffset={0}
+                    strokeLinecap="round" className="transition-all duration-1000 ease-out"
+                    style={{ transform: `rotate(${((completed + inProgress + notStarted) / total) * 360}deg)`, transformOrigin: 'center' }}
+                  />
+                )}
+              </svg>
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                <div className="text-center">
+                  <div className="text-lg font-bold text-slate-800 tabular-nums">{completedRate}%</div>
+                  <div className="text-xs text-slate-400">已完成</div>
+                </div>
               </div>
             </div>
           </div>
-        </div>
+        </ChartAccessibleWrapper>
 
         {/* ── 分割线 ── */}
-        <div className="border-t border-gray-100" />
+        <Separator />
 
         {/* ── 下半：完成质量摘要 ── */}
         <div className="space-y-3">
-          <div className="flex items-center gap-1.5 text-sm font-medium text-gray-700">
+          <div className="flex items-center gap-1.5 text-sm font-medium text-slate-700">
             <TrendingUp className="h-4 w-4 text-blue-500" />
             完成质量
           </div>
@@ -254,10 +267,10 @@ export function TaskStatusCard({
 
               {/* 按时率 */}
               {onTimeRate !== null && quality.total_completed > 0 && (
-                <div className="flex items-center justify-between text-xs text-gray-500">
+                <div className="flex items-center justify-between text-xs text-slate-500">
                   <span>按时完成率</span>
                   <div className="flex items-center gap-2">
-                    <div className="w-24 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                    <div className="w-24 h-1.5 bg-slate-100 rounded-full overflow-hidden">
                       <div
                         className="h-full bg-emerald-500 rounded-full transition-all duration-1000"
                         style={{ width: `${onTimeRate}%` }}
@@ -270,13 +283,13 @@ export function TaskStatusCard({
 
               {/* 最近一条完成记录 */}
               {quality.last_completed_title && (
-                <div className="flex items-start gap-2 bg-gray-50 rounded-lg px-3 py-2 text-xs text-gray-600">
-                  <User className="h-3.5 w-3.5 mt-0.5 flex-shrink-0 text-gray-400" />
+                <div className="flex items-start gap-2 bg-slate-50 rounded-lg px-3 py-2 text-xs text-slate-600">
+                  <User className="h-3.5 w-3.5 mt-0.5 flex-shrink-0 text-slate-400" />
                   <div className="min-w-0">
-                    <p className="truncate font-medium text-gray-700">{quality.last_completed_title}</p>
+                    <p className="truncate font-medium text-slate-700">{quality.last_completed_title}</p>
                     <div className="flex items-center gap-1.5 mt-0.5">
                       {quality.last_completed_at && (
-                        <span className="text-gray-400">
+                        <span className="text-slate-400">
                           {new Date(quality.last_completed_at).toLocaleDateString('zh-CN')}
                         </span>
                       )}
@@ -284,7 +297,7 @@ export function TaskStatusCard({
                         <StatusBadge
                           status={quality.last_completed_status}
                           fallbackLabel={quality.last_completed_status === 'on_time' ? '按时完成' : '延期完成'}
-                          className="px-1.5 py-0.5 text-[10px] font-medium"
+                          className="px-1.5 py-0.5 text-xs font-medium"
                         />
                       )}
                     </div>
@@ -294,7 +307,7 @@ export function TaskStatusCard({
             </>
           ) : (
             // 暂无完成数据
-            <div className="text-center py-3 text-xs text-gray-400">
+            <div className="text-center py-3 text-xs text-slate-400">
               暂无已完成任务
             </div>
           )}
@@ -311,7 +324,7 @@ export function TaskStatusCard({
           </Link>
           <Link
             to={summaryHref}
-            className="w-full flex items-center justify-center gap-1 text-xs text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 rounded-lg py-2 transition-colors border border-emerald-100"
+            className="w-full flex items-center justify-center gap-1 text-xs text-emerald-700 hover:text-emerald-800 hover:bg-emerald-50 rounded-lg py-2 transition-colors border border-emerald-100"
           >
             查看完成总结
             <ChevronRight className="h-3.5 w-3.5" />

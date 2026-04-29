@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent, type ReactNode } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 
 import { ConfirmActionDialog } from '@/components/ConfirmActionDialog'
@@ -11,7 +11,9 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { LoadingState } from '@/components/ui/loading-state'
+import { Separator } from '@/components/ui/separator'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { usePlanningStore } from '@/hooks/usePlanningStore'
 import { usePermissions } from '@/hooks/usePermissions'
 import { useStore } from '@/hooks/useStore'
@@ -25,7 +27,7 @@ import type {
   PlanningDraftLockRecord,
   RevisionPoolCandidate,
 } from '@/types/planning'
-import { AlertTriangle, FileDiff, FileSpreadsheet, FolderGit2, History, LockKeyhole, FilePlus2, Calendar } from 'lucide-react'
+import { AlertTriangle, Calendar, FileDiff, FilePlus2, FileSpreadsheet, FolderGit2, History, LockKeyhole, Pencil, X } from 'lucide-react'
 
 import { BaselineBottomBar } from './components/BaselineBottomBar'
 import { BaselineConfirmDialog, type BaselineConfirmState } from './components/BaselineConfirmDialog'
@@ -81,6 +83,139 @@ const TABS = [
   { key: 'baseline', label: '项目基线' },
   { key: 'monthly', label: '月度计划' },
 ] as const
+
+function getBaselineDurationLabel(start?: string | null, end?: string | null) {
+  if (!start || !end) return '—'
+  const startDate = new Date(`${start}T00:00:00`)
+  const endDate = new Date(`${end}T00:00:00`)
+  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) return '—'
+  const days = Math.max(1, Math.round((endDate.getTime() - startDate.getTime()) / 86_400_000) + 1)
+  return `${days}天`
+}
+
+function buildBaselineWbsCodes(items: BaselineItem[]) {
+  const codes = new Map<string, string>()
+  const childCounterByParent = new Map<string, number>()
+
+  items.forEach((item, index) => {
+    const parentKey = item.parent_item_id ?? 'root'
+    const nextCounter = (childCounterByParent.get(parentKey) ?? 0) + 1
+    childCounterByParent.set(parentKey, nextCounter)
+    const parentCode = item.parent_item_id ? codes.get(item.parent_item_id) : ''
+    codes.set(item.id, parentCode ? `${parentCode}.${nextCounter}` : `${nextCounter || index + 1}`)
+  })
+
+  return codes
+}
+
+function focusBaselineEditorCell(cellKey: string) {
+  document.querySelector<HTMLInputElement>(`[data-baseline-editor-cell="${cellKey}"]`)?.focus()
+}
+
+function BaselineEditableCellFrame({
+  cellKey,
+  label,
+  readOnly,
+  children,
+}: {
+  cellKey: string
+  label: string
+  readOnly: boolean
+  children: ReactNode
+}) {
+  return (
+    <div
+      className="group/baseline-cell space-y-1"
+      onDoubleClick={() => {
+        if (!readOnly) focusBaselineEditorCell(cellKey)
+      }}
+    >
+      <div className="flex min-w-0 items-center gap-1 text-xs text-slate-500">
+        <span className="truncate">{label}</span>
+        {!readOnly ? (
+          <Pencil className="h-3.5 w-3.5 text-slate-400 opacity-0 transition-opacity group-hover/baseline-cell:opacity-70" />
+        ) : null}
+      </div>
+      {children}
+      {!readOnly ? (
+        <div className="hidden text-xs text-slate-400 group-focus-within/baseline-cell:block">
+          Tab 下一格 · Enter 确认 · Esc 取消
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function BaselineItemDetailDrawer({
+  item,
+  readOnly,
+  onClose,
+}: {
+  item: BaselineItem | null
+  readOnly: boolean
+  onClose: () => void
+}) {
+  if (!item) return null
+
+  return (
+    <div data-testid="baseline-detail-drawer" className="fixed inset-y-0 right-0 z-50 flex w-full max-w-md flex-col border-l border-slate-200 bg-white shadow-[var(--el-4)]">
+      <div className="flex items-start justify-between gap-3 px-5 py-4">
+        <div className="min-w-0 space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant={item.is_milestone ? 'secondary' : 'outline'}>
+              {item.is_milestone ? '里程碑' : item.is_critical ? '关键路径' : '基线条目'}
+            </Badge>
+            <Badge variant={readOnly ? 'outline' : 'secondary'}>{readOnly ? '只读' : '可编辑'}</Badge>
+          </div>
+          <div className="truncate text-base font-semibold text-slate-900">{item.title}</div>
+        </div>
+        <Button type="button" variant="ghost" size="icon" onClick={onClose} aria-label="关闭详情抽屉">
+          <X className="h-4 w-4" />
+        </Button>
+      </div>
+      <Separator />
+      <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="space-y-1">
+            <div className="text-xs uppercase tracking-wider text-slate-500">计划开始</div>
+            <div className="text-sm font-medium text-slate-900 tabular-nums">{item.planned_start_date ?? '—'}</div>
+          </div>
+          <div className="space-y-1">
+            <div className="text-xs uppercase tracking-wider text-slate-500">计划结束</div>
+            <div className="text-sm font-medium text-slate-900 tabular-nums">{item.planned_end_date ?? '—'}</div>
+          </div>
+          <div className="space-y-1">
+            <div className="text-xs uppercase tracking-wider text-slate-500">工期</div>
+            <div className="text-sm font-medium text-slate-900 tabular-nums">
+              {getBaselineDurationLabel(item.planned_start_date, item.planned_end_date)}
+            </div>
+          </div>
+          <div className="space-y-1">
+            <div className="text-xs uppercase tracking-wider text-slate-500">目标进度</div>
+            <div className="text-sm font-medium text-slate-900 tabular-nums">
+              {item.target_progress == null ? '—' : `${item.target_progress}%`}
+            </div>
+          </div>
+        </div>
+        <Separator />
+        <div className="space-y-2">
+          <div className="text-xs uppercase tracking-wider text-slate-500">映射与备注</div>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm leading-6 text-slate-700">
+            关联状态：{item.mapping_status ?? '未设置'}
+            <br />
+            备注：{item.notes?.trim() || '暂无备注'}
+          </div>
+        </div>
+      </div>
+      <Separator />
+      <div className="flex items-center justify-end gap-2 px-5 py-4">
+        <Button type="button" variant="outline" onClick={onClose}>
+          关闭
+        </Button>
+      </div>
+    </div>
+  )
+}
 
 const BASELINE_IMPORT_FIELD_CONFIG: Array<{
   key: BaselineImportFieldKey
@@ -357,9 +492,9 @@ function buildBaselineStatusNotice(status: BaselineVersion['status'], compareLab
     case 'confirmed':
       return '当前展示的是已确认版本。'
     case 'revising':
-      return '当前版本处于修订中，可继续整理差异并决定是否进入主动重排。'
+      return '当前版本处于修订中，可继续整理差异并决定是否进入编辑模式。'
     case 'pending_realign':
-      return '当前版本已进入待重排态，处理完成后请执行“结束重排”恢复确认状态。'
+      return '当前版本已进入待编辑模式，处理完成后请执行“结束编辑模式”恢复确认状态。'
     case 'archived':
       return '当前版本已归档，仅用于回溯对比和历史留痕。'
     case 'closed':
@@ -515,6 +650,10 @@ function buildSavePayload(
 }
 
 export default function BaselinePage() {
+  useEffect(() => {
+    document.title = '项目基线 | WorkBuddy'
+  }, [])
+
   const { id } = useParams<{ id: string }>()
   const location = useLocation()
   const navigate = useNavigate()
@@ -564,6 +703,7 @@ export default function BaselinePage() {
   const [batchShiftDays, setBatchShiftDays] = useState('1')
   const [batchProgressValue, setBatchProgressValue] = useState('')
   const [revisionDeferredReviewDueAt, setRevisionDeferredReviewDueAt] = useState('')
+  const [activeDetailItemId, setActiveDetailItemId] = useState<string | null>(null)
   const [revisionPoolData, setRevisionPoolData] = useState<ObservationPoolReadResponse | null>(null)
   const [revisionPoolError, setRevisionPoolError] = useState<string | null>(null)
   const [, forceHistoryRender] = useState(0)
@@ -591,7 +731,7 @@ export default function BaselinePage() {
   const validityLabel = activeBaseline?.status === 'pending_realign' ? '待重定' : '有效'
   const validityHint =
     activeBaseline?.status === 'pending_realign'
-      ? '已触发待重定阈值，请先整理修订候选或完成重排。'
+      ? '已触发待重定阈值，请先整理修订候选或完成编辑模式。'
       : '当前未触发待重定阈值，可继续沿当前口径维护基线。'
   const confirmState = confirmFailure ? 'failed' : getConfirmState(location.search)
   const confirmDisabledReason = validationIssues.some((issue) => issue.level === 'error')
@@ -1133,14 +1273,14 @@ export default function BaselinePage() {
       setConfirmFailure(null)
       setConfirmOpen(false)
       await loadBaselineContext({ preferredId: activeBaseline.id })
-      setStatusNotice('已声明开始重排，当前版本进入待重排态。')
+      setStatusNotice('已进入编辑模式，当前版本进入待编辑模式。')
       toast({
-        title: '已进入待重排态',
-        description: `${currentLabel} 已标记为待重排，可继续在完成后结束重排。`,
+        title: '已进入待编辑模式',
+        description: `${currentLabel} 已标记为待编辑模式，可继续在完成后结束编辑模式。`,
       })
     } catch (realignmentError) {
       toast({
-        title: '开始重排失败',
+        title: '进入编辑模式失败',
         description: getApiErrorMessage(realignmentError, '请稍后重试。'),
         variant: 'destructive',
       })
@@ -1176,14 +1316,14 @@ export default function BaselinePage() {
         version: activeBaseline.version,
       })
       await loadBaselineContext({ preferredId: activeBaseline.id })
-      setStatusNotice('已结束重排，当前版本恢复为已确认状态。')
+      setStatusNotice('已结束编辑模式，当前版本恢复为已确认状态。')
       toast({
-        title: '重排已结束',
+        title: '编辑模式已结束',
         description: `${currentLabel} 已恢复到确认状态。`,
       })
     } catch (realignmentError) {
       toast({
-        title: '结束重排失败',
+        title: '结束编辑模式失败',
         description: getApiErrorMessage(realignmentError, '请稍后重试。'),
         variant: 'destructive',
       })
@@ -1293,9 +1433,12 @@ export default function BaselinePage() {
 
   const rows = useMemo(() => {
     const depthMap = buildDepthMap(editorItems)
-    return [...editorItems]
-      .sort((left, right) => left.sort_order - right.sort_order)
-      .map((item) => {
+    const sortedItems = [...editorItems].sort((left, right) => left.sort_order - right.sort_order)
+    const wbsCodes = buildBaselineWbsCodes(sortedItems)
+    const titleById = new Map(editorItems.map((entry) => [entry.id, entry.title]))
+
+    return sortedItems
+      .map((item, index) => {
         const depth = depthMap.get(item.id) ?? 1
         const titleKey = `${item.id}:title`
         const startKey = `${item.id}:start`
@@ -1307,6 +1450,8 @@ export default function BaselinePage() {
           title: item.title,
           subtitle: item.is_milestone ? '关键节点' : item.mapping_status === 'pending' ? '映射待确认' : '基线条目',
           depth,
+          sequenceLabel: String(index + 1),
+          wbsCode: wbsCodes.get(item.id),
           rowType: item.is_milestone ? 'milestone' : depth === 1 ? 'structure' : 'leaf',
           isMilestone: Boolean(item.is_milestone),
           isCritical: Boolean(item.is_critical),
@@ -1314,9 +1459,15 @@ export default function BaselinePage() {
           locked: false,
           startDateLabel: item.planned_start_date ?? '—',
           endDateLabel: item.planned_end_date ?? '—',
+          durationLabel: getBaselineDurationLabel(item.planned_start_date, item.planned_end_date),
           progressLabel: item.target_progress == null ? '—' : `${item.target_progress}%`,
+          assigneeLabel: '未分配',
+          parentLabel: item.parent_item_id ? titleById.get(item.parent_item_id) ?? '上级任务' : '根级',
+          notesLabel: item.notes ?? '',
           mappingStatus: item.mapping_status === 'pending' ? '映射待确认' : null,
           statusLabel: item.is_milestone ? '里程碑' : undefined,
+          onOpenDetail: () => setActiveDetailItemId(item.id),
+          onEdit: readOnly ? undefined : () => focusBaselineEditorCell(titleKey),
           onAddSibling: readOnly
             ? undefined
             : () => {
@@ -1342,10 +1493,33 @@ export default function BaselinePage() {
                 commitSnapshot(normalizedNextItems, [...normalizedSelectedItemIds, nextItem.id])
                 setStatusNotice(`已在“${target.title}”后新增一个同级条目。`)
               },
+          onPromote:
+            readOnly || !item.parent_item_id
+              ? undefined
+              : () => {
+                  const parent = editorItems.find((entry) => entry.id === item.parent_item_id)
+                  const nextItems = editorItems.map((entry) =>
+                    entry.id === item.id ? { ...entry, parent_item_id: parent?.parent_item_id ?? null } : entry,
+                  )
+                  commitSnapshot(nextItems, normalizedSelectedItemIds)
+                  setStatusNotice(`已将“${item.title}”升级。`)
+                },
+          onDemote:
+            readOnly || index === 0
+              ? undefined
+              : () => {
+                  const previousItem = sortedItems[index - 1]
+                  if (!previousItem) return
+                  const nextItems = editorItems.map((entry) =>
+                    entry.id === item.id ? { ...entry, parent_item_id: previousItem.id } : entry,
+                  )
+                  commitSnapshot(nextItems, normalizedSelectedItemIds)
+                  setStatusNotice(`已将“${item.title}”降级为“${previousItem.title}”的子任务。`)
+                },
           titleCell: (
-            <div className="space-y-1">
-              <div className="truncate text-xs text-slate-500">{inputDrafts[titleKey] ?? item.title}</div>
+            <BaselineEditableCellFrame cellKey={titleKey} label={inputDrafts[titleKey] ?? item.title} readOnly={readOnly}>
               <Input
+                aria-label={`编辑基线条目标题：${item.title}`}
                 value={inputDrafts[titleKey] ?? item.title}
                 onChange={(event) => handleDraftChange(item.id, 'title', event.target.value)}
                 onBlur={() => commitFieldEdit(item.id, 'title')}
@@ -1354,45 +1528,54 @@ export default function BaselinePage() {
                 data-baseline-editor-cell={`${item.id}:title`}
                 className="h-9 border-slate-200 bg-white text-sm"
               />
-            </div>
+            </BaselineEditableCellFrame>
           ),
           startCell: (
-            <Input
-              type="date"
-              value={inputDrafts[startKey] ?? item.planned_start_date ?? ''}
-              onChange={(event) => handleDraftChange(item.id, 'start', event.target.value)}
-              onBlur={() => commitFieldEdit(item.id, 'start')}
-              onKeyDown={(event) => handleInputKeyDown(event, item.id, 'start')}
-              disabled={readOnly}
-              data-baseline-editor-cell={`${item.id}:start`}
-              className="h-9 border-slate-200 bg-white text-sm"
-            />
+            <BaselineEditableCellFrame cellKey={startKey} label={item.planned_start_date ?? '未设开始'} readOnly={readOnly}>
+              <Input
+                type="date"
+                aria-label={`编辑基线条目开始日期：${item.title}`}
+                value={inputDrafts[startKey] ?? item.planned_start_date ?? ''}
+                onChange={(event) => handleDraftChange(item.id, 'start', event.target.value)}
+                onBlur={() => commitFieldEdit(item.id, 'start')}
+                onKeyDown={(event) => handleInputKeyDown(event, item.id, 'start')}
+                disabled={readOnly}
+                data-baseline-editor-cell={`${item.id}:start`}
+                className="h-9 border-slate-200 bg-white text-right text-sm tabular-nums"
+              />
+            </BaselineEditableCellFrame>
           ),
           endCell: (
-            <Input
-              type="date"
-              value={inputDrafts[endKey] ?? item.planned_end_date ?? ''}
-              onChange={(event) => handleDraftChange(item.id, 'end', event.target.value)}
-              onBlur={() => commitFieldEdit(item.id, 'end')}
-              onKeyDown={(event) => handleInputKeyDown(event, item.id, 'end')}
-              disabled={readOnly}
-              data-baseline-editor-cell={`${item.id}:end`}
-              className="h-9 border-slate-200 bg-white text-sm"
-            />
+            <BaselineEditableCellFrame cellKey={endKey} label={item.planned_end_date ?? '未设结束'} readOnly={readOnly}>
+              <Input
+                type="date"
+                aria-label={`编辑基线条目结束日期：${item.title}`}
+                value={inputDrafts[endKey] ?? item.planned_end_date ?? ''}
+                onChange={(event) => handleDraftChange(item.id, 'end', event.target.value)}
+                onBlur={() => commitFieldEdit(item.id, 'end')}
+                onKeyDown={(event) => handleInputKeyDown(event, item.id, 'end')}
+                disabled={readOnly}
+                data-baseline-editor-cell={`${item.id}:end`}
+                className="h-9 border-slate-200 bg-white text-right text-sm tabular-nums"
+              />
+            </BaselineEditableCellFrame>
           ),
           progressCell: (
-            <Input
-              type="number"
-              min={0}
-              max={100}
-              value={inputDrafts[progressKey] ?? (item.target_progress == null ? '' : String(item.target_progress))}
-              onChange={(event) => handleDraftChange(item.id, 'progress', event.target.value)}
-              onBlur={() => commitFieldEdit(item.id, 'progress')}
-              onKeyDown={(event) => handleInputKeyDown(event, item.id, 'progress')}
-              disabled={readOnly}
-              data-baseline-editor-cell={`${item.id}:progress`}
-              className="h-9 border-slate-200 bg-white text-sm"
-            />
+            <BaselineEditableCellFrame cellKey={progressKey} label={item.target_progress == null ? '未设进度' : `${item.target_progress}%`} readOnly={readOnly}>
+              <Input
+                type="number"
+                aria-label={`编辑基线条目目标进度：${item.title}`}
+                min={0}
+                max={100}
+                value={inputDrafts[progressKey] ?? (item.target_progress == null ? '' : String(item.target_progress))}
+                onChange={(event) => handleDraftChange(item.id, 'progress', event.target.value)}
+                onBlur={() => commitFieldEdit(item.id, 'progress')}
+                onKeyDown={(event) => handleInputKeyDown(event, item.id, 'progress')}
+                disabled={readOnly}
+                data-baseline-editor-cell={`${item.id}:progress`}
+                className="h-9 border-slate-200 bg-white text-right text-sm tabular-nums"
+              />
+            </BaselineEditableCellFrame>
           ),
         } satisfies PlanningTreeRow
       })
@@ -1407,6 +1590,11 @@ export default function BaselinePage() {
     readOnly,
     setStatusNotice,
   ])
+
+  const activeDetailItem = useMemo(
+    () => editorItems.find((item) => item.id === activeDetailItemId) ?? null,
+    [activeDetailItemId, editorItems],
+  )
 
   rowsRef.current = rows
 
@@ -1718,32 +1906,32 @@ export default function BaselinePage() {
               <CardTitle className="text-base">首版基线创建入口</CardTitle>
             </CardHeader>
             <CardContent className="grid gap-3 md:grid-cols-3">
-              <button
+              <Button variant="ghost"
                 type="button"
                 data-testid="baseline-entry-blank"
                 onClick={() => void handleCreateBlankBaseline()}
                 disabled={creationDisabled}
-                className="group flex min-h-[172px] flex-col justify-between rounded-3xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60"
+                className="group flex min-h-[172px] flex-col justify-between rounded-2xl border border-blue-600 bg-blue-600 p-5 text-left text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-blue-700 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <div className="flex items-start justify-between gap-3">
-                  <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-100 text-slate-700 transition group-hover:bg-slate-900 group-hover:text-white">
+                  <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white/15 text-white transition group-hover:bg-white/25">
                     <FilePlus2 className="h-5 w-5" />
                   </div>
-                  <Badge variant="outline">空白基线</Badge>
+                  <Badge variant="secondary" className="bg-white text-blue-700">推荐</Badge>
                 </div>
                 <div className="space-y-2">
-                  <div className="text-base font-semibold text-slate-900">新建空白基线</div>
-                  <p className="text-sm leading-6 text-slate-500">
+                  <div className="text-base font-semibold text-white">新建空白基线</div>
+                  <p className="text-sm leading-6 text-blue-50">
                     从零开始搭建项目基线骨架，适合先手工整理再校核。
                   </p>
                 </div>
-              </button>
-              <button
+              </Button>
+              <Button variant="ghost"
                 type="button"
                 data-testid="baseline-entry-schedule"
                 onClick={() => void handleBootstrapFromSchedule()}
                 disabled={creationDisabled}
-                className="group flex min-h-[172px] flex-col justify-between rounded-3xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60"
+                className="group flex min-h-[172px] flex-col justify-between rounded-2xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-cyan-100 text-cyan-700 transition group-hover:bg-cyan-600 group-hover:text-white">
@@ -1756,14 +1944,15 @@ export default function BaselinePage() {
                   <p className="text-sm leading-6 text-slate-500">
                     直接把当前排期整理成初始化基线，保留待确认映射再继续校核。
                   </p>
+                  <p className="text-xs leading-5 text-slate-400">适合已有任务排期、需要快速生成首版基线的项目。</p>
                 </div>
-              </button>
-              <button
+              </Button>
+              <Button variant="ghost"
                 type="button"
                 data-testid="baseline-entry-import"
                 onClick={() => importInputRef.current?.click()}
                 disabled={creationDisabled}
-                className="group flex min-h-[172px] flex-col justify-between rounded-3xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60"
+                className="group flex min-h-[172px] flex-col justify-between rounded-2xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-amber-100 text-amber-700 transition group-hover:bg-amber-600 group-hover:text-white">
@@ -1776,8 +1965,9 @@ export default function BaselinePage() {
                   <p className="text-sm leading-6 text-slate-500">
                     按表头映射导入计划文件，先预览 10 行再生成导入基线草稿。
                   </p>
+                  <p className="text-xs leading-5 text-slate-400">适合从 Excel / CSV 迁移外部计划，导入后再逐项校核。</p>
                 </div>
-              </button>
+              </Button>
             </CardContent>
           </Card>
           <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-600">
@@ -1936,6 +2126,7 @@ export default function BaselinePage() {
       title="计划编制 / 项目基线"
       description="继续对比、修订和确认当前项目基线。"
       tabs={tabs}
+      className="pb-20"
       actions={
         <div className="flex flex-wrap items-center gap-2">
           {canQueueRealignment ? (
@@ -1948,7 +2139,7 @@ export default function BaselinePage() {
               loading={actionLoading === 'queue_realign'}
               disabled={actionLoading === 'queue_realign'}
             >
-              声明开始重排
+              进入编辑模式
             </Button>
           ) : null}
           {canResolveRealignment ? (
@@ -1960,7 +2151,7 @@ export default function BaselinePage() {
               loading={actionLoading === 'resolve_realign'}
               disabled={actionLoading === 'resolve_realign'}
             >
-              结束重排
+              结束编辑模式
             </Button>
           ) : null}
           {canForceUnlock ? (
@@ -1988,7 +2179,7 @@ export default function BaselinePage() {
         summary={
           <div
             data-testid="baseline-info-bar"
-            className="rounded-3xl border border-slate-200 bg-white px-5 py-4 shadow-sm"
+            className="rounded-2xl border border-slate-200 bg-white px-5 py-4 shadow-sm"
           >
             <div className="grid gap-4 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1fr)]">
               <div className="space-y-2">
@@ -1999,7 +2190,14 @@ export default function BaselinePage() {
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge variant={readOnly ? 'outline' : 'secondary'}>{readOnly ? '只读查看态' : '可编辑态'}</Badge>
                   <Badge variant="outline">{formatStatusLabel(activeBaseline.status)}</Badge>
-                  <Badge variant="outline">{lockRemainingLabel}</Badge>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="inline-flex">
+                        <Badge variant="outline">{lockRemainingLabel}</Badge>
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent>其他用户正在编辑，暂时无法修改</TooltipContent>
+                  </Tooltip>
                   <Badge
                     data-testid="baseline-validity-badge"
                     variant="outline"
@@ -2019,7 +2217,7 @@ export default function BaselinePage() {
                     data-testid="baseline-realignment-hint"
                     className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800"
                   >
-                    该版本正在主动重排窗口中，完成调整后请结束重排，让版本重新回到已确认态。
+                    该版本正在编辑模式窗口中，完成调整后请结束编辑模式，让版本重新回到已确认态。
                   </div>
                 ) : null}
                 {activeBaseline.status === 'archived' ? (
@@ -2208,7 +2406,7 @@ export default function BaselinePage() {
                         key={version.id}
                         value={version.id}
                         data-testid={`baseline-version-chip-${version.id}`}
-                        className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-600 data-[state=active]:border-slate-900 data-[state=active]:bg-slate-900 data-[state=active]:text-white"
+                        className="rounded-lg border border-transparent bg-slate-100 px-3 py-1.5 text-sm text-slate-600 data-[state=active]:bg-blue-600 data-[state=active]:text-white"
                         disabled={actionLoading !== null && activeBaseline.id === version.id}
                       >
                         v{version.version} · {formatStatusLabel(version.status)}
@@ -2217,7 +2415,7 @@ export default function BaselinePage() {
                   </TabsList>
                 </Tabs>
                 <label className="block space-y-2">
-                  <span className="text-xs font-medium uppercase tracking-[0.16em] text-slate-500">对比版本</span>
+                  <span className="text-xs font-medium uppercase tracking-wider text-slate-500">对比版本</span>
                   <select
                     value={compareVersionId ?? ''}
                     onChange={(event) => void handleCompareVersionChange(event.target.value)}
@@ -2277,7 +2475,7 @@ export default function BaselinePage() {
                   {baselineChangeLogs.length ? (
                     <div className="mt-3 space-y-2">
                       {baselineChangeLogs.map((record) => (
-                        <div key={record.id} className="rounded-xl border border-white/80 bg-white px-3 py-2 text-xs text-slate-600">
+                        <Card key={record.id} className="rounded-xl border border-white/80 bg-white px-3 py-2 text-xs text-slate-600">
                           <div className="font-medium text-slate-900">
                             {record.field_name}
                             {record.change_reason ? ` · ${record.change_reason}` : ''}
@@ -2285,7 +2483,7 @@ export default function BaselinePage() {
                           <div className="mt-1">
                             {record.old_value ?? '空'} → {record.new_value ?? '空'}
                           </div>
-                        </div>
+                        </Card>
                       ))}
                     </div>
                   ) : (
@@ -2369,6 +2567,11 @@ export default function BaselinePage() {
         onRemoveFromBasket={(candidateId) => {
           setRevisionBasketIds((current) => current.filter((id) => id !== candidateId))
         }}
+      />
+      <BaselineItemDetailDrawer
+        item={activeDetailItem}
+        readOnly={readOnly}
+        onClose={() => setActiveDetailItemId(null)}
       />
       <PlanningDraftResumeDialog
         open={resumeDialogOpen}

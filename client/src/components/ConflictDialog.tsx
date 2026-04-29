@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { AlertCircle, RefreshCw, ArrowRight, User } from 'lucide-react'
 import type { Task, Project, Risk, Milestone } from '@/types'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
 type ConflictItem = Task | Project | Risk | Milestone
 
@@ -67,7 +68,7 @@ export function ConflictDialog({
   
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="max-w-[720px]">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <AlertCircle className="h-5 w-5 text-amber-500" />
@@ -101,9 +102,14 @@ export function ConflictDialog({
                 {differences.slice(0, 5).map((field) => (
                   <div key={field} className="flex justify-between">
                     <span className="text-muted-foreground">{field}:</span>
-                    <span className="font-medium truncate ml-2" title={formatValue((localVersion as Record<string, unknown>)[field])}>
+                    <Tooltip>
+  <TooltipTrigger asChild>
+    <span className="font-medium truncate ml-2" >
                       {formatValue((localVersion as Record<string, unknown>)[field])}
                     </span>
+  </TooltipTrigger>
+  <TooltipContent>{formatValue((localVersion as Record<string, unknown>)[field])}</TooltipContent>
+</Tooltip>
                   </div>
                 ))}
                 {differences.length > 5 && (
@@ -129,9 +135,14 @@ export function ConflictDialog({
                 {differences.slice(0, 5).map((field) => (
                   <div key={field} className="flex justify-between">
                     <span className="text-muted-foreground">{field}:</span>
-                    <span className="font-medium truncate ml-2" title={formatValue((serverVersion as Record<string, unknown>)[field])}>
+                    <Tooltip>
+  <TooltipTrigger asChild>
+    <span className="font-medium truncate ml-2" >
                       {formatValue((serverVersion as Record<string, unknown>)[field])}
                     </span>
+  </TooltipTrigger>
+  <TooltipContent>{formatValue((serverVersion as Record<string, unknown>)[field])}</TooltipContent>
+</Tooltip>
                   </div>
                 ))}
                 {differences.length > 5 && (

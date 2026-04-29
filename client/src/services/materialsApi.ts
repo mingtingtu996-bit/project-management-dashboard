@@ -39,6 +39,12 @@ export interface MaterialMonthlyTrendPoint {
   arrivalRate: number
 }
 
+export interface MaterialCategorySummary {
+  category: string
+  count: number
+  percentage: number
+}
+
 export interface MaterialReportSummary {
   overview: {
     totalExpectedCount: number
@@ -46,6 +52,7 @@ export interface MaterialReportSummary {
     arrivalRate: number
   }
   byUnit: MaterialRateByUnit[]
+  byCategory: MaterialCategorySummary[]
   monthlyTrend: MaterialMonthlyTrendPoint[]
 }
 

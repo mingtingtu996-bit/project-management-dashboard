@@ -10,9 +10,11 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { Separator } from '@/components/ui/separator'
 import { apiDelete, apiGet, apiPost, apiPut, getApiErrorMessage, isAbortError } from '@/lib/apiClient'
 import { cn } from '@/lib/utils'
 import { Loader2, Plus, RefreshCw, Save, Trash2, X } from 'lucide-react'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
 type ScopeDimensionKey = 'building' | 'specialty' | 'phase' | 'region'
 
@@ -277,7 +279,7 @@ export function ScopeDimensionsDialog({ projectId, open, onOpenChange }: ScopeDi
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl overflow-hidden" data-testid="gantt-scope-dimensions-dialog">
+      <DialogContent className="max-w-[720px] overflow-hidden rounded-2xl shadow-[var(--el-4)]" data-testid="gantt-scope-dimensions-dialog">
         <DialogHeader>
           <DialogTitle>范围维度</DialogTitle>
           <DialogDescription className="sr-only">维护项目的范围维度绑定</DialogDescription>
@@ -313,16 +315,21 @@ export function ScopeDimensionsDialog({ projectId, open, onOpenChange }: ScopeDi
                     <div className="flex flex-wrap gap-2">
                       {selected.length > 0 ? (
                         selected.map((value) => (
-                          <button
+                          <Tooltip>
+  <TooltipTrigger asChild>
+    <Button variant="ghost"
                             key={`${key}-${value}`}
                             type="button"
                             onClick={() => handleRemove(key, value)}
                             className="group inline-flex items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs text-blue-700 transition-colors hover:border-blue-300 hover:bg-blue-100"
-                            title="点击移除"
+                            
                           >
                             <span>{value}</span>
-                            <X className="h-3 w-3 opacity-60 transition-opacity group-hover:opacity-100" />
-                          </button>
+                            <X className="h-3.5 w-3.5 opacity-60 transition-opacity group-hover:opacity-100" />
+                          </Button>
+  </TooltipTrigger>
+  <TooltipContent>点击移除</TooltipContent>
+</Tooltip>
                         ))
                       ) : (
                         <span className="text-sm text-slate-400">未配置</span>
@@ -436,11 +443,12 @@ export function ScopeDimensionsDialog({ projectId, open, onOpenChange }: ScopeDi
                       </div>
                     </div>
 
-                    <div className="flex flex-wrap gap-2 border-t border-slate-200 pt-3">
+                    <Separator />
+                    <div className="flex flex-wrap gap-2">
                       {options.length > 0 ? options.map((value) => {
                         const active = selected.includes(value)
                         return (
-                          <button
+                          <Button variant="ghost"
                             key={`${key}-${value}-option`}
                             type="button"
                             onClick={() => handleToggle(key, value)}
@@ -452,7 +460,7 @@ export function ScopeDimensionsDialog({ projectId, open, onOpenChange }: ScopeDi
                             )}
                           >
                             {active ? '已选' : '可选'} {value}
-                          </button>
+                          </Button>
                         )
                       }) : (
                         <span className="text-xs text-slate-400">暂无可选项</span>

@@ -13,6 +13,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { LoadingState } from '@/components/ui/loading-state'
+import { Separator } from '@/components/ui/separator'
 import { apiGet, isAbortError } from '@/lib/apiClient'
 
 type CompareGranularity = 'day' | 'week' | 'month'
@@ -257,23 +258,23 @@ function DailyProgressSection({ projectId }: { projectId?: string }) {
           </div>
           <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
             <div className="rounded-lg bg-white px-3 py-2">
-              <div className="text-[11px] text-slate-500">条件新增</div>
+              <div className="text-xs text-slate-500">条件新增</div>
               <div className="mt-1 text-lg font-semibold text-slate-900">{data.snapshot_summary.conditions_added}</div>
             </div>
             <div className="rounded-lg bg-white px-3 py-2">
-              <div className="text-[11px] text-slate-500">条件关闭</div>
+              <div className="text-xs text-slate-500">条件关闭</div>
               <div className="mt-1 text-lg font-semibold text-slate-900">{data.snapshot_summary.conditions_closed}</div>
             </div>
             <div className="rounded-lg bg-white px-3 py-2">
-              <div className="text-[11px] text-slate-500">阻碍新增</div>
+              <div className="text-xs text-slate-500">阻碍新增</div>
               <div className="mt-1 text-lg font-semibold text-slate-900">{data.snapshot_summary.obstacles_added}</div>
             </div>
             <div className="rounded-lg bg-white px-3 py-2">
-              <div className="text-[11px] text-slate-500">阻碍关闭</div>
+              <div className="text-xs text-slate-500">阻碍关闭</div>
               <div className="mt-1 text-lg font-semibold text-slate-900">{data.snapshot_summary.obstacles_closed}</div>
             </div>
             <div className="rounded-lg bg-white px-3 py-2">
-              <div className="text-[11px] text-slate-500">延期任务</div>
+              <div className="text-xs text-slate-500">延期任务</div>
               <div className="mt-1 text-lg font-semibold text-slate-900">{data.snapshot_summary.delayed_tasks}</div>
             </div>
           </div>
@@ -281,14 +282,15 @@ function DailyProgressSection({ projectId }: { projectId?: string }) {
       )}
 
       {data.details.length > 0 && (
-        <div className="border-t border-slate-100 pt-3">
-          <button
+        <div className="pt-3">
+          <Separator className="mb-3" />
+          <Button variant="ghost"
             className="flex items-center gap-1 text-sm text-blue-600 hover:text-blue-700"
             onClick={() => setExpanded((value) => !value)}
           >
             {expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
             {expanded ? '收起详情' : `查看 ${data.details.length} 个任务详情`}
-          </button>
+          </Button>
 
           {expanded && (
             <div className="mt-3 space-y-2">
@@ -348,7 +350,7 @@ function ComparePeriodCard({
           <div className="text-lg font-semibold">
             {progressChange > 0 ? '+' : ''}{progressChange.toFixed(1)}%
           </div>
-          <div className="text-[11px]">进度变化</div>
+          <div className="text-xs">进度变化</div>
         </div>
       </div>
 
@@ -372,14 +374,15 @@ function ComparePeriodCard({
       </div>
 
       {showTaskDetails && result.task_details.length > 0 && (
-        <div className="mt-4 border-t border-slate-100 pt-3">
-          <button
+        <div className="mt-4 pt-3">
+          <Separator className="mb-3" />
+          <Button variant="ghost"
             className="flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700"
             onClick={onToggle}
           >
             {expanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
             {expanded ? '收起任务明细' : `展开 ${result.task_details.length} 条任务明细`}
-          </button>
+          </Button>
 
           {expanded && (
             <div className="mt-3 space-y-2">
@@ -493,7 +496,7 @@ export default function DashboardCompareCard({ projectId }: DashboardCompareCard
         <div className="space-y-3 rounded-2xl border border-slate-100 bg-slate-50/80 p-4">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">当日进度</div>
+              <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">当日进度</div>
               <div className="mt-1 text-sm text-slate-600">今日进度与状态变化指标</div>
             </div>
           </div>
@@ -502,8 +505,8 @@ export default function DashboardCompareCard({ projectId }: DashboardCompareCard
 
         <div className="space-y-4">
           <div>
-            <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">固定对比</div>
-            <h3 className="mt-2 text-[22px] font-semibold tracking-tight text-slate-900">日 / 周 / 月对比</h3>
+            <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">固定对比</div>
+            <h3 className="mt-2 text-lg font-semibold tracking-tight text-slate-900">日 / 周 / 月对比</h3>
           </div>
 
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
@@ -520,7 +523,7 @@ export default function DashboardCompareCard({ projectId }: DashboardCompareCard
                         </CardTitle>
                         <div className="mt-1 text-xs text-slate-500">{block.subtitle}</div>
                       </div>
-                      <div className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] text-slate-500">
+                      <div className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-slate-500">
                         固定
                       </div>
                     </div>

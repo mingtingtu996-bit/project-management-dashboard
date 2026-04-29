@@ -183,7 +183,20 @@ const validationIssues: PlanningValidationIssue[] = [
 ]
 
 describe('PlanningWorkspace monthly skeleton', () => {
+  let baselineVersions: Array<{ id: string; project_id: string; version: number; status: string; title: string; source_type: string }>
+
   beforeEach(() => {
+    baselineVersions = [
+      {
+        id: 'baseline-1',
+        project_id: 'project-1',
+        version: 1,
+        status: 'confirmed',
+        title: '项目基线 V1',
+        source_type: 'manual',
+      },
+    ]
+
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: string | URL | Request) => {
@@ -195,6 +208,15 @@ describe('PlanningWorkspace monthly skeleton', () => {
             status: 200,
             json: async () => ({ success: true, data: governanceSnapshot, timestamp: new Date().toISOString() }),
             text: async () => JSON.stringify({ success: true, data: governanceSnapshot }),
+          } as Response
+        }
+
+        if (url.includes('/api/task-baselines')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ success: true, data: baselineVersions, timestamp: new Date().toISOString() }),
+            text: async () => JSON.stringify({ success: true, data: baselineVersions }),
           } as Response
         }
 
@@ -281,9 +303,17 @@ describe('PlanningWorkspace monthly skeleton', () => {
     )
 
     await waitForSelector(container, '[data-testid="planning-governance-banner"]')
-    await waitForText(container, ['76', '3 日被动重排窗口'])
+    await waitForText(container, ['76', '治理健康度 76 分 · 一般'])
 
     expect(container.querySelector('[data-testid="planning-governance-banner"]')).toBeTruthy()
+    expect(container.querySelector('[data-testid="planning-health-panel"]')).toBeFalsy()
+
+    const governanceToggle = Array.from(container.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('治理健康度 76 分 · 一般')
+    ) as HTMLButtonElement | undefined
+    await clickAndFlush(governanceToggle)
+    await waitForText(container, ['3 日被动编辑模式窗口'])
+
     expect(container.querySelector('[data-testid="planning-health-panel"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="planning-integrity-panel"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="planning-anomaly-panel"]')).toBeTruthy()
@@ -294,6 +324,38 @@ describe('PlanningWorkspace monthly skeleton', () => {
     expect(container.querySelector('[data-testid="planning-health-panel"]')?.textContent).toContain('76')
     expect(container.querySelector('[data-testid="planning-integrity-panel"]')?.textContent).toContain('Data integrity')
     expect(container.querySelector('[data-testid="planning-anomaly-panel"]')?.textContent).toContain('10 次变更')
+
+    cleanup()
+  })
+
+  it('shows a baseline guide when the project has no confirmed baseline', async () => {
+    baselineVersions = [
+      {
+        id: 'baseline-draft-1',
+        project_id: 'project-1',
+        version: 1,
+        status: 'draft',
+        title: '项目基线草稿',
+        source_type: 'manual',
+      },
+    ]
+
+    const { container, cleanup } = mount(
+      <MemoryRouter initialEntries={['/projects/project-1/planning/monthly']}>
+        <Routes>
+          <Route path="/projects/:id/:surface/*" element={<PlanningWorkspace />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    await waitForSelector(container, '[data-testid="planning-no-baseline-banner"]')
+
+    expect(container.querySelector('[data-testid="planning-no-baseline-banner"]')?.textContent).toContain(
+      '当前项目尚未建立基线'
+    )
+    expect(container.querySelector('a[href="/projects/project-1/planning/baseline"]')?.textContent).toContain(
+      '前往项目基线'
+    )
 
     cleanup()
   })
