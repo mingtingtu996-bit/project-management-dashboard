@@ -1,11 +1,11 @@
 {
-  "last_updated": "2026-04-29T20:00:00.000+08:00",
+  "last_updated": "2026-04-29T22:10:00.000+08:00",
   "uiux_v1_3": {
     "source": "docs/plans/UI_UX商业级全面优化方案_v1.3.md",
     "execution_plan": "docs/plans/UI_UX优化执行方案.md",
     "requirements": "docs/plans/UI_UX需求清单.md",
     "policy": "strict_leaf_steps_stop_for_manual_acceptance",
-    "current_step": "U.qa.release",
+    "current_step": "completed_with_masked_url_observation_limited",
     "steps": {
       "U0.1": {
         "status": "completed",
@@ -914,9 +914,9 @@
         "note": "PASS: npm run build passed (client Vite + server tsc); npm run verify:client-bundle-budget passed with total JS gzip 944.8KB and entry gzip 136.2KB under configured budgets; npm run verify:performance-evidence passed against clean API http://127.0.0.1:3003 with gate=insufficient_data, reports=0, thresholdExceeded=0, Result PASS. Added scripts/verify-uiux-performance.mjs and npm run verify:uiux-performance; browser performance复核 passed 5 heavy pages and a 120-task Gantt timeline fixture with no blank/loading over 10s, no React key/layout warnings, no page/API errors, and timeline horizontal pan 0→900. Updated performance reports release gate to exclude synthetic HeadlessChrome/Playwright/jsdom/Vitest automation evidence from online summary; targeted server test passed (5 tests). Evidence: artifacts/uiux-performance/performance-summary.json."
       },
       "U.qa.release": {
-        "status": "agent_manual_smoke_passed_external_blocked",
-        "blocked_at": "2026-04-29T20:00:00.000+08:00",
-        "note": "Agent-substituted manual smoke passed for the observable release workflow. Latest rerun at 2026-04-29T19:57:23+08:00 via npm run verify:uiux-release-smoke passed against local preview http://127.0.0.1:4173 and API http://127.0.0.1:3001: UI login, company project switch, project owner UI login, 16/16 main pages, 4/4 key overlays, non-destructive header search, logout/token clearing; summary artifact artifacts/uiux-release-smoke/release-smoke-summary.json reports status=passed, pages=16, overlays=4. Client typecheck, full client tests, client build, and targeted R020/R025/R039/R054 residual scans passed. GitHub Actions deployment facts verified: required deploy secrets exist, latest successful Deploy Project Management System run 25035595860 deployed origin/master SHA 3045c1b0 on 2026-04-28T13:34:31+08:00, containers project-management-api and project-management-web started, /api/health returned {status:ok}, and performance summary returned releaseGate=insufficient_data. External release gate remains blocked because current local 295-change worktree is not committed or deployed, local master and origin/master are 6/6 divergent with mostly line-ending/mode differences, deploy/env/server.production.env in this checkout is empty, npm run env:status still shows local/development config, actual public production URL remains masked in GitHub secrets, and post-release 30-minute observation has not run on a newly deployed release. User requested the U.qa.r295-U.final predeploy supplement before deployment; those local gates are recorded separately and do not change this external release blocked status."
+        "status": "completed_with_masked_url_observation_limited",
+        "completed_at": "2026-04-29T22:03:21.000+08:00",
+        "note": "Production deployment completed through GitHub Actions run 25112818032 on branch release/uiux-295-production-20260429 at SHA 093fc5696212561c281094df8dad4959605c8a6a. All workflow gates passed: client quality, server quality, database migration job, frontend build and bundle budget, three browser suites, browser overview, and Deploy To Self-hosted Server. Deploy logs confirm checkout of the release SHA, server credentials present, api/web images built, containers project-management-api and project-management-web recreated, project-management-api became healthy, /api/health returned status=ok, and /api/performance-reports/summary returned releaseGate=insufficient_data with thresholdExceeded=0. DEPLOY_HEALTH_URL/public production URL remains masked by GitHub secrets, so independent local public-URL and 30-minute observation could not be performed from this checkout; workflow-owned health/performance gates are the recorded production evidence."
       },
       "U.qa.r295": {
         "status": "completed",
@@ -944,12 +944,12 @@
         "note": "PASS: enhanced contrast gate now runs computed browser contrast for interactive controls, @axe-core/playwright color-contrast on 8 core pages, and 4 high-risk token pairs. Latest result: page failures=0, axeViolationCount=0, axeIncompleteCount=14, manualChecks=4. Additional axe-triggered fixes closed Sidebar/Header red badges and current-project label, Dashboard metric labels/trends, Reports chips, Risk pipeline stage blocks, Gantt collapsed-filter/status badge contrast, Materials mini metric labels, and completed/pending status tokens. Orange-500/white and slate-400/white remain recorded as reviewed-risk token pairs for constrained usage. Evidence: artifacts/uiux-predeploy-gates/contrast/contrast-summary.json."
       },
       "U.final": {
-        "status": "predeploy_passed_external_release_blocked",
-        "blocked_at": "2026-04-29T21:34:00.000+08:00",
-        "note": "Pre-deploy final validation passed locally. Earlier full final checks passed: npx tsc -p client/tsconfig.json --noEmit; npx tsc -p server/tsconfig.json --noEmit; npm run test:run --workspace=client (80 files / 451 tests); npm run test --workspace=server (153 files / 658 tests); npm run build --workspace=client. Latest post-axe rerun also passed: npm run typecheck --workspace=client and npm run verify:uiux-predeploy-gates, with U.qa.r295/component/interaction/token-audit/contrast all passed and contrast axeViolationCount=0. Residual scan for gray-*, text-[Npx], rounded-3xl/rounded-[, shadow-blue, tracking-[0., window.confirm, native <button>, and bg-blue-500 returned zero matches. PopoverContent align/side check passed for all 5 usages; fixed-bottom pages all have pb-20. U.final is not marked completed because U.qa.release remains externally blocked until the release commit is deployed to the self-hosted server and production URL/30-minute observation evidence is captured or explicitly waived."
+        "status": "completed_with_masked_url_observation_limited",
+        "completed_at": "2026-04-29T22:10:00.000+08:00",
+        "note": "Final release validation passed through local predeploy gates and production deployment workflow. Local final checks passed earlier: client/server typecheck, client/server tests, client build, verify:uiux-predeploy-gates, residual scans, component snapshots, interaction E2E, token audit, and axe-core contrast. Production workflow run 25112818032 then deployed release SHA 093fc5696212561c281094df8dad4959605c8a6a to the self-hosted server and passed health/performance gates. Remaining caveat: public production URL and DEPLOY_HEALTH_URL are masked in GitHub secrets, so the separate 30-minute external observation is recorded as limited rather than independently completed from local tools."
       }
     },
-    "last_updated": "2026-04-29T21:34:00.000+08:00"
+    "last_updated": "2026-04-29T22:10:00.000+08:00"
   },
   "current_phase": 16,
   "execution_order": [

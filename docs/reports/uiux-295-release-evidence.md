@@ -105,7 +105,10 @@ Closed issues during U.qa.performance: fixed the performance evidence CLI Window
 | 代理人工冒烟构建 | `npm run verify:uiux-release-smoke` | PASS | 2026-04-29 19:57 复跑：Vite production build completed in 6.00s; preview server `http://127.0.0.1:4173`. |
 | 代理人工冒烟 | `npm run verify:uiux-release-smoke` | PASS | UI 登录 PASS；公司页切项目 PASS；项目 owner UI 登录复核 PASS；16/16 主页面 PASS；4/4 关键弹层 PASS；非破坏性搜索操作 PASS；退出登录清 token + 回到登录弹层 PASS。 |
 | 代理人工冒烟产物 | `artifacts/uiux-release-smoke/release-smoke-summary.json` | PASS | 2026-04-29T11:57:23.394Z generated; `status=passed`, `pages=16`, `overlays=4`, `nonDestructiveOperation=passed`, `logout=passed`；截图产物保存在 `artifacts/uiux-release-smoke/*.png`。 |
-| GitHub 部署链路取证 | `gh run view 25035595860`; deploy job `73326811395` | PASS_CURRENT_REMOTE | 最新成功部署 run `25035595860`，远端 `origin/master` SHA `3045c1b0`，Deploy To Self-hosted Server 成功；容器 `project-management-api` healthy、`project-management-web` started；`/api/health` 返回 `status=ok`；performance summary 返回 `releaseGate=insufficient_data`。 |
+| GitHub 部署链路取证（历史基线） | `gh run view 25035595860`; deploy job `73326811395` | PASS_BASELINE | 历史成功部署 run `25035595860`，远端 `origin/master` SHA `3045c1b0`，Deploy To Self-hosted Server 成功；容器 `project-management-api` healthy、`project-management-web` started；`/api/health` 返回 `status=ok`；performance summary 返回 `releaseGate=insufficient_data`。 |
+| GitHub 真实生产部署 | `gh workflow run deploy.yml --ref release/uiux-295-production-20260429 -f environment=production`; `gh run view 25112818032` | PASS | Run `25112818032` completed success; deployed branch `release/uiux-295-production-20260429`, SHA `093fc5696212561c281094df8dad4959605c8a6a`; client/server quality, DB migration job, frontend build/bundle budget, 3 browser suites, browser overview, and self-hosted deployment all passed. |
+| 自有服务器健康检查 | deploy job `73592266340`; step `Deploy to self-hosted server` | PASS | Deploy log confirms api/web images built; `project-management-api` and `project-management-web` recreated; API container became healthy; `/api/health` returned `{"status":"ok","version":"1.0.0"}`. |
+| 线上性能发布门禁 | deploy job `73592266340`; `/api/performance-reports/summary` | PASS | Performance summary returned `releaseGate.status=insufficient_data`, `thresholdExceeded=0`, no slow API/route/web-vital/long-task entries; recommendation is to wait for real usage or run a巡检 before targeted performance治理. |
 | GitHub 部署密钥存在性 | `gh secret list --app actions -R mingtingtu996-bit/project-management-dashboard` | PASS_MASKED | `DEPLOY_HOST`/`DEPLOY_USER`/`DEPLOY_PATH`/`DEPLOY_PORT`/`DEPLOY_HEALTH_URL`/`DEPLOY_SSH_PRIVATE_KEY`/`DEPLOY_KNOWN_HOSTS` 均存在；值被 GitHub secret 机制屏蔽，不能从本地取出公网 URL。 |
 | 生产环境配置状态 | `npm run env:status` | BLOCKED | 当前为本地/开发配置：`VITE_API_BASE_URL=/api`, `VITE_APP_ENV=development`, `VITE_DEBUG_MODE=true`, `NODE_ENV=development`, `CORS_ORIGIN=http://localhost:5173,http://127.0.0.1:5173`；未确认生产 API base URL、Sentry、Supabase、权限配置。 |
 | 配置键存在性复核 | masked env key scan | BLOCKED | Supabase/JWT/CORS 相关键存在；未发现 Sentry 相关配置键；当前 `.env.local` 仍为 debug=true/development，不能作为生产配置通过证据。 |
@@ -115,7 +118,7 @@ Closed issues during U.qa.performance: fixed the performance evidence CLI Window
 | 回滚预案 | 执行方案要求：版本、迁移可逆性、静态资源回滚、负责人 | BLOCKED | 迁移计划显示本次待执行 0，可逆性风险低；前端静态资源回滚方式和负责人仍需发布负责人确认。 |
 | 上线后 30 分钟观察 | 执行方案要求：错误率、接口 5xx、前端控制台/Sentry、核心页面可用性 | BLOCKED | 该项必须在实际上线后观察窗口完成；当前未执行，需人工验收。 |
 
-状态：AGENT_MANUAL_SMOKE_PASSED / BLOCKED_EXTERNAL_RELEASE_GATE。可由代理完成的人工操作验收已经通过；当前真实服务器健康的是远端 `3045c1b0...`，不是本地未提交的 295 项修正。下一步必须先固化 release commit，基于 `origin/master` 整理分叉后推送触发 GitHub Actions 部署，再用真实生产 URL 完成健康检查与 30 分钟观察。后续 `U.qa.r295` 不应越过该外部门禁，除非明确将真实生产/上线观察改为发布后追踪项。
+状态：PRODUCTION_DEPLOYED / HEALTH_AND_PERFORMANCE_GATE_PASSED / MASKED_URL_OBSERVATION_LIMITED。295 项 release commit 已固化为 `093fc5696212561c281094df8dad4959605c8a6a` 并通过 GitHub Actions 部署到自有服务器；workflow 级健康检查和性能 summary 已通过。限制项：`DEPLOY_HEALTH_URL` 与公网生产 URL 由 GitHub secrets 屏蔽，本地无法直接取出 URL 做独立 30 分钟外部观察；该观察限制已转为上线后人工/运维可见项。
 
 ## U.qa.r295 / U.qa.component / U.qa.interaction / U.qa.token-audit / U.qa.contrast Predeploy Evidence
 
@@ -153,7 +156,7 @@ Closed issues during predeploy supplemental gates:
 | Fixed bottom compensation | `rg "pb-20|pb-\[80px\]" Gantt/Baseline/Monthly/Closeout` | PASS | GanttView, BaselinePage, MonthlyPlanPage, CloseoutPage all have `pb-20`. |
 | Table migration residual | `rg "<table|<thead|<tbody|<tr|<th|<td" client/src/pages --glob "*.tsx"` | PASS | No native table tags in page TSX files. |
 
-状态：PREDEPLOY_FINAL_PASSED / EXTERNAL_RELEASE_GATE_BLOCKED。175 的本地终审门禁已经通过；但 `U.final` 不能标记为 fully completed，因为 `U.qa.release` 仍缺真实自有服务器上的新 release commit 部署证据、生产 URL 健康检查、负责人/静态资源回滚确认，以及上线后 30 分钟观察。
+状态：FINAL_RELEASE_DEPLOYED / MASKED_URL_OBSERVATION_LIMITED。175 的本地终审门禁已经通过，随后 release SHA `093fc5696212561c281094df8dad4959605c8a6a` 已经由 run `25112818032` 部署到自有服务器并通过 workflow 健康/性能门禁。限制项仍是独立公网 URL 与 30 分钟观察无法由本地工具完成，因为生产 URL 存放在 GitHub secrets 中并被屏蔽。
 
 ## Requirement Matrix
 
