@@ -122,7 +122,7 @@ export const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({ isOp
       <div role="dialog" aria-modal="true" aria-labelledby={titleId} className="w-[90%] max-w-[560px] animate-in rounded-2xl border border-slate-200 bg-white p-6 shadow-[var(--el-4)] duration-200 ease-bounce fade-in-0 zoom-in-95" onClick={e => e.stopPropagation()}>
         <div className="flex justify-between items-center mb-4">
           <h2 id={titleId} className="text-lg font-semibold text-slate-800">修改密码</h2>
-          <Button variant="ghost" ref={closeRef} onClick={handleClose} className="text-slate-400 hover:text-slate-600" aria-label="关闭">
+          <Button variant="ghost" ref={closeRef} onClick={handleClose} className="text-slate-500 hover:text-slate-600" aria-label="关闭">
             <X className="h-5 w-5" />
           </Button>
         </div>
@@ -133,9 +133,10 @@ export const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({ isOp
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">旧密码</label>
+            <label htmlFor="change-pwd-old" className="block text-sm font-medium text-slate-700 mb-1">旧密码</label>
             <div className="relative">
               <input
+                id="change-pwd-old"
                 type={showOld ? 'text' : 'password'}
                 value={oldPassword}
                 onChange={e => {
@@ -149,7 +150,7 @@ export const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({ isOp
                 required
                 disabled={loading}
               />
-              <Button variant="ghost" type="button" onClick={() => setShowOld(!showOld)} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+              <Button variant="ghost" type="button" onClick={() => setShowOld(!showOld)} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-600">
                 {showOld ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
               </Button>
             </div>
@@ -159,9 +160,10 @@ export const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({ isOp
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">新密码</label>
+            <label htmlFor="change-pwd-new" className="block text-sm font-medium text-slate-700 mb-1">新密码</label>
             <div className="relative">
               <input
+                id="change-pwd-new"
                 type={showNew ? 'text' : 'password'}
                 value={newPassword}
                 onChange={e => {
@@ -176,7 +178,7 @@ export const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({ isOp
                 required
                 disabled={loading}
               />
-              <Button variant="ghost" type="button" onClick={() => setShowNew(!showNew)} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+              <Button variant="ghost" type="button" onClick={() => setShowNew(!showNew)} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-600">
                 {showNew ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
               </Button>
             </div>
@@ -186,9 +188,10 @@ export const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({ isOp
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">确认新密码</label>
+            <label htmlFor="change-pwd-confirm" className="block text-sm font-medium text-slate-700 mb-1">确认新密码</label>
             <div className="relative">
               <input
+                id="change-pwd-confirm"
                 type={showConfirm ? 'text' : 'password'}
                 value={confirmPassword}
                 onChange={e => {
@@ -202,7 +205,7 @@ export const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({ isOp
                 required
                 disabled={loading}
               />
-              <Button variant="ghost" type="button" onClick={() => setShowConfirm(!showConfirm)} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+              <Button variant="ghost" type="button" onClick={() => setShowConfirm(!showConfirm)} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-600">
                 {showConfirm ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
               </Button>
             </div>

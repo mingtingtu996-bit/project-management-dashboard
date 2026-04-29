@@ -57,7 +57,7 @@ export const GanttStatsCards = memo(function GanttStatsCards({ projectStats }: G
     {
       label: '异常',
       value: exceptionCount,
-      tone: exceptionCount > 0 ? 'text-amber-600' : 'text-slate-400',
+      tone: exceptionCount > 0 ? 'text-amber-600' : 'text-slate-500',
       helper: exceptionCount > 0 ? `逾期 ${projectStats.overdueTask} / 进度落后 ${projectStats.laggedTaskCount}` : '暂无',
       tooltip: `逾期：已超过计划完成日期。异常（进度落后）：进度落后但未超期的任务。条件未满足：${projectStats.pendingStartTasks} 项。`,
     },
@@ -341,7 +341,7 @@ export const GanttBatchBar = memo(function GanttBatchBar({
                       placeholder="例如 3 或 -2"
                       className="h-10"
                     />
-                    <div className="text-xs text-slate-400">按选中任务统一平移开始/结束日期</div>
+                    <div className="text-xs text-slate-500">按选中任务统一平移开始/结束日期</div>
                   </div>
                   <Button
                     type="button"
@@ -425,7 +425,7 @@ export const GanttFilterBar = memo(function GanttFilterBar({
 
         <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-5">
           <div className="relative xl:col-span-2">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
             <input
               type="text"
               aria-label="搜索任务名或责任人"
@@ -438,7 +438,7 @@ export const GanttFilterBar = memo(function GanttFilterBar({
               <Button variant="ghost"
                 type="button"
                 onClick={() => onSearchChange('')}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-full p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-full p-1 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-600"
                 aria-label="清空搜索"
               >
                 <X className="h-4 w-4" />
@@ -492,7 +492,7 @@ export const GanttFilterBar = memo(function GanttFilterBar({
               safeStorageSet(localStorage, `gantt_filter_specialty_${projectId}`, value)
             }}
           >
-            <SelectTrigger className={`${controlClass} px-3 ${filterSpecialty !== 'all' ? 'border-purple-300 bg-purple-50 text-purple-700' : 'border-slate-200 text-slate-600'}`}>
+            <SelectTrigger className={`${controlClass} px-3 ${filterSpecialty !== 'all' ? 'border-blue-300 bg-blue-50 text-blue-700' : 'border-slate-200 text-slate-600'}`}>
               <SelectValue placeholder="全部专项" />
             </SelectTrigger>
             <SelectContent>

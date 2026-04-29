@@ -81,7 +81,7 @@ export function ConflictResolutionModal({
             </div>
             <Button variant="ghost"
               onClick={onClose}
-              className="text-slate-400 hover:text-slate-600"
+              className="text-slate-500 hover:text-slate-600"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -153,9 +153,9 @@ export function ConflictResolutionModal({
                     {JSON.stringify(currentConflict.localData, null, 2)}
                   </pre>
                 </div>
-                <div className="p-3 bg-green-50 border border-green-100 rounded-xl">
-                  <h4 className="font-medium text-green-800 mb-2">服务器版本</h4>
-                  <pre className="text-xs text-green-700 whitespace-pre-wrap">
+                <div className="p-3 bg-emerald-50 border border-emerald-100 rounded-xl">
+                  <h4 className="font-medium text-emerald-800 mb-2">服务器版本</h4>
+                  <pre className="text-xs text-emerald-700 whitespace-pre-wrap">
                     {JSON.stringify(currentConflict.serverData, null, 2)}
                   </pre>
                 </div>
@@ -170,7 +170,7 @@ export function ConflictResolutionModal({
           <div className="flex flex-wrap gap-3 justify-end">
             <Button variant="ghost"
               onClick={() => handleResolve('keepServer')}
-              className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 transition-colors"
+              className="px-4 py-2 text-sm font-medium text-white bg-emerald-600 rounded-lg hover:bg-emerald-700 transition-colors"
             >
               保留服务器版本
             </Button>
@@ -184,7 +184,7 @@ export function ConflictResolutionModal({
               onClick={() => {
                 setShowMergePreview(!showMergePreview)
               }}
-              className="px-4 py-2 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 transition-colors"
+              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
             >
               {showMergePreview ? '隐藏预览' : '智能合并预览'}
             </Button>
@@ -192,14 +192,14 @@ export function ConflictResolutionModal({
 
           {/* 智能合并预览 */}
           {showMergePreview && currentConflict && (
-            <div className="mt-4 p-3 bg-purple-50 border border-purple-100 rounded-xl">
-              <h4 className="font-medium text-purple-800 mb-2">智能合并预览</h4>
-              <pre className="text-xs text-purple-700 whitespace-pre-wrap max-h-32 overflow-y-auto">
+            <div className="mt-4 p-3 bg-blue-50 border border-blue-100 rounded-xl">
+              <h4 className="font-medium text-blue-800 mb-2">智能合并预览</h4>
+              <pre className="text-xs text-blue-700 whitespace-pre-wrap max-h-32 overflow-y-auto">
                 {JSON.stringify(previewMerge(), null, 2)}
               </pre>
               <Button variant="ghost"
                 onClick={() => handleResolve('merge')}
-                className="mt-3 px-4 py-2 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 transition-colors"
+                className="mt-3 px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
               >
                 确认合并
               </Button>

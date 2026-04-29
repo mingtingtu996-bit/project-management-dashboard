@@ -20,12 +20,12 @@ export function CollapsibleSection({ title, defaultOpen = true, children, count 
         <h3 className="text-lg font-semibold text-slate-900">
           {title}
           {count != null && (
-            <span className="ml-2 text-sm font-normal text-slate-400">({count})</span>
+            <span className="ml-2 text-sm font-normal text-slate-500">({count})</span>
           )}
         </h3>
         <ChevronDown
           className={cn(
-            'h-5 w-5 text-slate-400 transition-transform duration-200',
+            'h-5 w-5 text-slate-500 transition-transform duration-200',
             open && 'rotate-180',
           )}
         />

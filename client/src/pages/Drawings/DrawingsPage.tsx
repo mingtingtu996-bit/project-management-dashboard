@@ -357,6 +357,7 @@ export default function Drawings() {
       if (!isAbortError(error)) {
         console.error('Failed to load drawings board', error)
         setBoard(null)
+        toast({ variant: 'destructive', title: '加载图纸数据失败' })
       }
     } finally {
       if (boardAbortRef.current === controller) {
@@ -387,6 +388,7 @@ export default function Drawings() {
       if (!isAbortError(error)) {
         console.error('Failed to load drawings ledger', error)
         setLedgerRows([])
+        toast({ variant: 'destructive', title: '加载图纸数据失败' })
       }
     } finally {
       if (ledgerAbortRef.current === controller) {
@@ -415,6 +417,7 @@ export default function Drawings() {
       } catch (error) {
         if (!isAbortError(error)) {
           console.error('Failed to load drawing package detail', error)
+          toast({ variant: 'destructive', title: '加载图纸数据失败' })
         }
         return null
       } finally {
@@ -460,6 +463,7 @@ export default function Drawings() {
       } catch (error) {
         if (!isAbortError(error)) {
           console.error('Failed to load version rows', error)
+          toast({ variant: 'destructive', title: '加载图纸数据失败' })
         }
         return { packageCard: null, versions: [] }
       } finally {
@@ -1267,7 +1271,7 @@ export default function Drawings() {
                     搜索
                   </Label>
                   <div className="relative">
-                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
                     <Input
                       id="drawing-search"
                       data-testid="drawings-search-input"
@@ -1347,7 +1351,7 @@ export default function Drawings() {
                         <SelectItem key={option.value} value={option.value} textValue={option.label} className="py-2">
                           <span className="flex flex-col items-start gap-0.5">
                             <span>{option.label}</span>
-                            <span className="text-xs text-slate-400">{option.description}</span>
+                            <span className="text-xs text-slate-500">{option.description}</span>
                           </span>
                         </SelectItem>
                       ))}

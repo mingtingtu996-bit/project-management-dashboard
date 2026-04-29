@@ -54,7 +54,7 @@ export function PreviewNodeTree({
               onClick={() => onSelect(previewNode)}
             >
               <Button variant="ghost"
-                className={`flex-shrink-0 w-4 h-4 flex items-center justify-center transition-colors ${hasChildren ? 'text-slate-400 hover:text-slate-600' : 'invisible'}`}
+                className={`flex-shrink-0 w-4 h-4 flex items-center justify-center transition-colors ${hasChildren ? 'text-slate-500 hover:text-slate-600' : 'invisible'}`}
                 onClick={(event) => {
                   event.stopPropagation()
                   if (hasChildren) {
@@ -74,7 +74,7 @@ export function PreviewNodeTree({
               )}
               <span className={`flex-1 truncate ${level === 0 ? 'font-medium' : ''}`}>{nodeName}</span>
               {node.reference_days && (
-                <span className={`text-xs flex-shrink-0 ml-1 ${isSelected ? 'text-blue-500' : 'text-slate-400'}`}>
+                <span className={`text-xs flex-shrink-0 ml-1 ${isSelected ? 'text-blue-500' : 'text-slate-500'}`}>
                   {node.reference_days}天
                 </span>
               )}

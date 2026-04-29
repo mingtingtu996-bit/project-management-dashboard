@@ -21,7 +21,7 @@ export function ChartAccessibleWrapper({
     <div className={className}>
       {children}
       <details className="mt-2">
-        <summary className="cursor-pointer text-xs text-slate-400 hover:text-slate-600">
+        <summary className="cursor-pointer text-xs text-slate-500 hover:text-slate-600">
           {summary}
         </summary>
         <div className="mt-2 overflow-x-auto rounded-lg border border-slate-200">

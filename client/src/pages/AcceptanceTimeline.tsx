@@ -3,6 +3,7 @@ import { useLocation, useParams } from 'react-router-dom'
 import { CheckCircle2, List, Network, Palette, Plus } from 'lucide-react'
 
 import { Breadcrumb } from '@/components/Breadcrumb'
+import { CollapsibleSection } from '@/components/CollapsibleSection'
 import { EmptyState } from '@/components/EmptyState'
 import { PageHeader } from '@/components/PageHeader'
 import { Badge } from '@/components/ui/badge'
@@ -68,8 +69,8 @@ const ACCEPTANCE_STAGE_DEFINITIONS: Array<{
     key: 'foundation',
     label: '基础验收',
     description: '地基、基础与预验收',
-    accentClass: 'border-l-green-500',
-    progressClass: 'bg-green-500',
+    accentClass: 'border-l-emerald-500',
+    progressClass: 'bg-emerald-500',
   },
   {
     key: 'main',
@@ -626,7 +627,7 @@ export default function AcceptanceTimeline() {
             <Badge variant="outline" className="rounded-full px-3 py-1">楼栋：{getBuildingLabel(buildingFilter === 'all' ? null : buildingFilter)}</Badge>
           </div>
         </div>
-        <div className="mt-4 grid gap-3 lg:grid-cols-2 2xl:grid-cols-6">
+        <div className="mt-4 grid gap-3 lg:grid-cols-2 2xl:grid-cols-4">
           <div className="space-y-1">
             <Label htmlFor="acceptance-scope-select" className="text-xs text-slate-500">范围</Label>
             <select
@@ -679,46 +680,52 @@ export default function AcceptanceTimeline() {
               {ACCEPTANCE_STATUS_OPTIONS.map((status) => <option key={status} value={status}>{ACCEPTANCE_STATUS_LABELS[status]}</option>)}
             </select>
           </div>
-          <div className="space-y-1">
-            <Label className="text-xs text-slate-500">仅看阻塞</Label>
-            <Button variant="ghost"
-              type="button"
-              onClick={() => setBlockedOnly((current) => !current)}
-              className={cn('inline-flex w-full items-center justify-between rounded-md border px-3 py-2 text-sm transition-colors', blockedOnly ? 'border-amber-300 bg-amber-50 text-amber-800' : 'border-slate-200 bg-white text-slate-600')}
-              data-testid="acceptance-blocked-toggle"
-            >
-              <span>只看阻塞项</span>
-              <span>{blockedOnly ? '已启用' : '关闭'}</span>
-            </Button>
-          </div>
-          <div className="space-y-1">
-            <Label className="text-xs text-slate-500">仅看临期</Label>
-            <Button variant="ghost"
-              type="button"
-              onClick={() => setUpcomingOnly((current) => !current)}
-              className={cn('inline-flex w-full items-center justify-between rounded-md border px-3 py-2 text-sm transition-colors', upcomingOnly ? 'border-blue-300 bg-blue-50 text-blue-800' : 'border-slate-200 bg-white text-slate-600')}
-              data-testid="acceptance-upcoming-toggle"
-            >
-              <span>30天内到期</span>
-              <span>{upcomingOnly ? '已启用' : '关闭'}</span>
-            </Button>
-          </div>
-          <div className="space-y-1">
-            <Label className="text-xs text-slate-500">时间尺度</Label>
-            <div className="grid grid-cols-3 gap-2">
-              {[{ value: 'month', label: '月' }, { value: 'biweek', label: '双周' }, { value: 'week', label: '周' }].map((item) => (
+        </div>
+        <div className="mt-3">
+          <CollapsibleSection title="更多筛选" count={3} defaultOpen={false}>
+            <div className="grid gap-3 pt-2 lg:grid-cols-3">
+              <div className="space-y-1">
+                <Label className="text-xs text-slate-500">仅看阻塞</Label>
                 <Button variant="ghost"
-                  key={item.value}
                   type="button"
-                  onClick={() => setTimeScale(item.value as AcceptanceTimelineScale)}
-                  className={cn('rounded-md border px-3 py-2 text-sm transition-colors', timeScale === item.value ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-200 bg-white text-slate-600')}
-                  data-testid={`acceptance-time-scale-${item.value}`}
+                  onClick={() => setBlockedOnly((current) => !current)}
+                  className={cn('inline-flex w-full items-center justify-between rounded-md border px-3 py-2 text-sm transition-colors', blockedOnly ? 'border-amber-300 bg-amber-50 text-amber-800' : 'border-slate-200 bg-white text-slate-600')}
+                  data-testid="acceptance-blocked-toggle"
                 >
-                  {item.label}
+                  <span>只看阻塞项</span>
+                  <span>{blockedOnly ? '已启用' : '关闭'}</span>
                 </Button>
-              ))}
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs text-slate-500">仅看临期</Label>
+                <Button variant="ghost"
+                  type="button"
+                  onClick={() => setUpcomingOnly((current) => !current)}
+                  className={cn('inline-flex w-full items-center justify-between rounded-md border px-3 py-2 text-sm transition-colors', upcomingOnly ? 'border-blue-300 bg-blue-50 text-blue-800' : 'border-slate-200 bg-white text-slate-600')}
+                  data-testid="acceptance-upcoming-toggle"
+                >
+                  <span>30天内到期</span>
+                  <span>{upcomingOnly ? '已启用' : '关闭'}</span>
+                </Button>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs text-slate-500">时间尺度</Label>
+                <div className="grid grid-cols-3 gap-2">
+                  {[{ value: 'month', label: '月' }, { value: 'biweek', label: '双周' }, { value: 'week', label: '周' }].map((item) => (
+                    <Button variant="ghost"
+                      key={item.value}
+                      type="button"
+                      onClick={() => setTimeScale(item.value as AcceptanceTimelineScale)}
+                      className={cn('rounded-md border px-3 py-2 text-sm transition-colors', timeScale === item.value ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-200 bg-white text-slate-600')}
+                      data-testid={`acceptance-time-scale-${item.value}`}
+                    >
+                      {item.label}
+                    </Button>
+                  ))}
+                </div>
+              </div>
             </div>
-          </div>
+          </CollapsibleSection>
         </div>
       </section>
 

@@ -696,6 +696,7 @@ export default function Notifications() {
       void loadNotifications({ silent: true })
     } catch (error) {
       console.error('Failed to acknowledge notification:', error)
+      toast({ variant: 'destructive', title: '确认通知失败，请重试' })
     }
   }
 
@@ -711,6 +712,7 @@ export default function Notifications() {
       void loadNotifications({ silent: true })
     } catch (error) {
       console.error('Failed to mute notification:', error)
+      toast({ variant: 'destructive', title: '静音通知失败，请重试' })
     }
   }
 
@@ -722,6 +724,7 @@ export default function Notifications() {
       void loadNotifications({ silent: true })
     } catch (error) {
       console.error('Failed to acknowledge notifications:', error)
+      toast({ variant: 'destructive', title: '批量确认失败，请重试' })
     }
   }
 
@@ -738,6 +741,7 @@ export default function Notifications() {
       void loadNotifications({ silent: true })
     } catch (error) {
       console.error('Failed to mute notifications:', error)
+      toast({ variant: 'destructive', title: '批量静音失败，请重试' })
     }
   }
 
@@ -752,6 +756,7 @@ export default function Notifications() {
       void loadNotifications({ silent: true })
     } catch (error) {
       console.error('Failed to mark all as read:', error)
+      toast({ variant: 'destructive', title: '全部标记已读失败，请重试' })
     }
   }
 
@@ -1072,7 +1077,7 @@ export default function Notifications() {
         subtitle=""
       >
         <div className="relative w-full min-w-[220px] lg:w-72">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
           <Input
             value={searchQuery}
             onChange={(event) => setSearchQuery(event.target.value)}
@@ -1157,7 +1162,7 @@ export default function Notifications() {
           <PopoverContent align="end" side="bottom" className="w-[340px] rounded-xl border-slate-200 bg-white p-4 shadow-[var(--el-3)]">
               <div className="space-y-4">
                 <div>
-                  <div className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                  <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">
                     {'\u63d0\u9192\u8303\u56f4'}
                   </div>
                   <div className="mt-2 flex flex-wrap gap-2">
@@ -1181,7 +1186,7 @@ export default function Notifications() {
 
                 <Separator />
                 <div className="pt-4">
-                  <div className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                  <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">
                     {'\u540c\u6b65\u6a21\u5f0f'}
                   </div>
                   <div className="mt-2 flex flex-wrap gap-2">
@@ -1206,7 +1211,7 @@ export default function Notifications() {
 
                 <Separator />
                 <div className="pt-4">
-                  <div className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                  <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">
                     {'\u9759\u97f3\u65f6\u957f'}
                   </div>
                   <div className="mt-2 flex flex-wrap gap-2">
@@ -1225,7 +1230,7 @@ export default function Notifications() {
 
                 <Separator />
                 <div className="pt-4">
-                  <div className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                  <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">
                     \u63d0\u9192\u89c4\u5219
                   </div>
                   <div className="mt-3 space-y-3">

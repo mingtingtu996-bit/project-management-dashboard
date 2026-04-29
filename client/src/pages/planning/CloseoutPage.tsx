@@ -604,7 +604,7 @@ export default function CloseoutPage() {
               )
             })}
           </div>
-          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
+          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
             <span>逾期 3 天系统提醒</span>
             <span>→</span>
             <span>5 天通知上级</span>
@@ -630,9 +630,9 @@ export default function CloseoutPage() {
             <div className="text-xs text-amber-700">剩余未处理</div>
             <div className="mt-1 text-lg font-semibold text-amber-900">{remainingCount}</div>
           </div>
-          <div className="rounded-2xl border border-cyan-200 bg-cyan-50 px-4 py-3">
-            <div className="text-xs text-cyan-700">建议可一键采纳数</div>
-            <div className="mt-1 text-lg font-semibold text-cyan-900">{autoAdoptableCount}</div>
+          <div className="rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3">
+            <div className="text-xs text-blue-700">建议可一键采纳数</div>
+            <div className="mt-1 text-lg font-semibold text-blue-900">{autoAdoptableCount}</div>
           </div>
         </div>
         {dataQualitySummary ? (
@@ -677,7 +677,7 @@ export default function CloseoutPage() {
           <div className="space-y-2">
             <div className="text-xs font-medium uppercase tracking-wider text-slate-500">筛选与搜索</div>
             <div className="flex items-center gap-2 rounded-2xl border border-white/80 bg-white px-3 py-2">
-              <Search className="h-4 w-4 text-slate-400" />
+              <Search className="h-4 w-4 text-slate-500" />
               <Input
                 value={searchQuery}
                 onChange={(event) => setSearchQuery(event.target.value)}

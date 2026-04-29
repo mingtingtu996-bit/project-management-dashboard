@@ -213,7 +213,7 @@ export function DrawingDetailDrawer({
                 <Card className="border-slate-200 shadow-sm" data-testid="drawing-submission-status">
                   <CardContent className="space-y-3 p-5">
                     <div className="flex items-center gap-2 text-sm font-medium text-slate-900">
-                      <Layers3 className="h-4 w-4 text-violet-600" />
+                      <Layers3 className="h-4 w-4 text-indigo-600" />
                       送审状态
                     </div>
                     {detail.drawings.length === 0 ? (

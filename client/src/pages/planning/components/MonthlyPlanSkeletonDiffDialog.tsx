@@ -166,17 +166,17 @@ export function MonthlyPlanSkeletonDiffDialog({
     cn(
       'rounded-xl border px-3 py-2',
       kind === 'added'
-        ? 'border-green-200 bg-green-50'
+        ? 'border-emerald-200 bg-emerald-50'
         : kind === 'removed'
           ? 'border-red-200 bg-red-100'
           : kind === 'date' || kind === 'progress'
-            ? 'border-green-200 bg-green-50'
-            : 'border-cyan-100 bg-cyan-50',
+            ? 'border-emerald-200 bg-emerald-50'
+            : 'border-blue-100 bg-blue-50',
     )
   const getAfterLabelClass = (kind: DiffRow['kind']) =>
-    kind === 'removed' ? 'text-red-700' : kind === 'added' || kind === 'date' || kind === 'progress' ? 'text-green-700' : 'text-cyan-700'
+    kind === 'removed' ? 'text-red-700' : kind === 'added' || kind === 'date' || kind === 'progress' ? 'text-emerald-700' : 'text-blue-700'
   const getAfterValueClass = (kind: DiffRow['kind']) =>
-    kind === 'removed' ? 'text-red-900' : kind === 'added' || kind === 'date' || kind === 'progress' ? 'text-green-900' : 'text-cyan-900'
+    kind === 'removed' ? 'text-red-900' : kind === 'added' || kind === 'date' || kind === 'progress' ? 'text-emerald-900' : 'text-blue-900'
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

@@ -197,7 +197,7 @@ function getLinkedTaskBadgeVariant(status?: string | null) {
 }
 
 function getMilestoneListAccent(milestone: MilestoneItem) {
-  if (milestone.status === 'completed') return 'border-l-4 border-green-500'
+  if (milestone.status === 'completed') return 'border-l-4 border-emerald-500'
   if (milestone.status === 'overdue') return 'border-l-4 border-red-500'
   return 'border-l-4 border-blue-500'
 }
@@ -272,7 +272,7 @@ function LinkedTasksCard({
       <div className="text-sm font-medium text-slate-900">关联执行</div>
       <div className="mt-3 space-y-3">
         {loading ? (
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-white px-4 py-5 text-sm text-slate-400">
+          <div className="rounded-2xl border border-dashed border-slate-200 bg-white px-4 py-5 text-sm text-slate-500">
             关联执行加载中...
           </div>
         ) : tasks.length > 0 ? (
@@ -304,7 +304,7 @@ function LinkedTasksCard({
             </div>
           ))
         ) : (
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-white px-4 py-5 text-sm text-slate-400">
+          <div className="rounded-2xl border border-dashed border-slate-200 bg-white px-4 py-5 text-sm text-slate-500">
             暂无关联执行任务
           </div>
         )}
@@ -394,15 +394,15 @@ function MilestoneNodeCard({
           )}
           <div data-testid="milestones-three-time" className="grid gap-2 pt-2 text-xs text-slate-500 sm:grid-cols-3">
             <div className="rounded-lg bg-slate-50 px-2 py-1.5">
-              <div className="text-xs uppercase tracking-wide text-slate-400">基线</div>
+              <div className="text-xs uppercase tracking-wide text-slate-500">基线</div>
               <div className="mt-0.5 font-medium tabular-nums text-slate-700">{formatMilestoneDate(baselineDate)}</div>
             </div>
             <div className="rounded-lg bg-slate-50 px-2 py-1.5">
-              <div className="text-xs uppercase tracking-wide text-slate-400">当前计划</div>
+              <div className="text-xs uppercase tracking-wide text-slate-500">当前计划</div>
               <div className="mt-0.5 font-medium tabular-nums text-slate-700">{formatMilestoneDate(currentPlanDate)}</div>
             </div>
             <div className="rounded-lg bg-slate-50 px-2 py-1.5">
-              <div className="text-xs uppercase tracking-wide text-slate-400">实际</div>
+              <div className="text-xs uppercase tracking-wide text-slate-500">实际</div>
               <div className="mt-0.5 font-medium tabular-nums text-slate-700">{formatMilestoneDate(actualDate)}</div>
             </div>
           </div>

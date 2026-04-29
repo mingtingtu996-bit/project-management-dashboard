@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 
 import { Breadcrumb } from '@/components/Breadcrumb'
+import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useAuth } from '@/hooks/useAuth'
@@ -202,6 +203,7 @@ export default function CompanyCockpit() {
       setCompanyIssues(issues)
     } catch (err) {
       console.error('Failed to load company cockpit data:', err)
+      toast({ variant: 'destructive', title: '加载公司数据失败' })
       setError(
         isBackendUnavailableError(err)
           ? '公司驾驶舱依赖后端汇总接口，请先确认本地后端已启动（默认 3001），再刷新重试。'
@@ -517,27 +519,49 @@ export default function CompanyCockpit() {
       <div className="space-y-6">
         <Breadcrumb items={[{ label: '公司驾驶舱' }]} />
 
-        <CompanyHero
-          search={search}
-          onSearchChange={setSearch}
-          onRefresh={() => void refreshData({ allowEmptyReplace: true })}
-          onCreate={() => {
-            setDialogMode('create')
-            setEditTarget(null)
-            setForm(DEFAULT_FORM)
-            setDialogOpen(true)
-          }}
-          error={error}
-          heroStats={heroStats}
-          healthHistory={healthHistory}
-          stats={{
-            inProgress: stats.inProgress,
-            completed: stats.completed,
-            paused: stats.paused,
-          }}
-          focusProjects={[] as never}
-          onNavigate={navigate}
-        />
+        {projects.length === 0 ? (
+          <Card className="border-dashed border-slate-200 bg-white shadow-[var(--el-1)]">
+            <CardContent className="flex flex-col items-center justify-center px-6 py-12 text-center">
+              <FolderKanban className="h-12 w-12 text-slate-300" />
+              <h2 className="mt-4 text-lg font-semibold text-slate-900">暂无项目</h2>
+              <p className="mt-2 text-sm text-slate-500">创建第一个项目开始使用 WorkBuddy</p>
+              <Button
+                type="button"
+                className="mt-5"
+                onClick={() => {
+                  setDialogMode('create')
+                  setEditTarget(null)
+                  setForm(DEFAULT_FORM)
+                  setDialogOpen(true)
+                }}
+              >
+                创建项目
+              </Button>
+            </CardContent>
+          </Card>
+        ) : (
+          <CompanyHero
+            search={search}
+            onSearchChange={setSearch}
+            onRefresh={() => void refreshData({ allowEmptyReplace: true })}
+            onCreate={() => {
+              setDialogMode('create')
+              setEditTarget(null)
+              setForm(DEFAULT_FORM)
+              setDialogOpen(true)
+            }}
+            error={error}
+            heroStats={heroStats}
+            healthHistory={healthHistory}
+            stats={{
+              inProgress: stats.inProgress,
+              completed: stats.completed,
+              paused: stats.paused,
+            }}
+            focusProjects={[] as never}
+            onNavigate={navigate}
+          />
+        )}
 
         <CompanyInsightSection
           projectRows={projectRows}

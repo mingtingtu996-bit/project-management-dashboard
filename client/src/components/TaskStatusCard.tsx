@@ -153,7 +153,7 @@ export function TaskStatusCard({
         <div className="flex flex-wrap items-center justify-between gap-3">
           <CardTitle className="text-base font-semibold text-slate-800">任务执行概况</CardTitle>
           <div className="flex items-center gap-3">
-            <span className="text-sm text-slate-400">共 {total} 个任务</span>
+            <span className="text-sm text-slate-500">共 {total} 个任务</span>
             <Link
               data-testid="dashboard-task-reports-link"
               to={reportsHref}
@@ -234,7 +234,7 @@ export function TaskStatusCard({
               <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                 <div className="text-center">
                   <div className="text-lg font-bold text-slate-800 tabular-nums">{completedRate}%</div>
-                  <div className="text-xs text-slate-400">已完成</div>
+                  <div className="text-xs text-slate-500">已完成</div>
                 </div>
               </div>
             </div>
@@ -284,12 +284,12 @@ export function TaskStatusCard({
               {/* 最近一条完成记录 */}
               {quality.last_completed_title && (
                 <div className="flex items-start gap-2 bg-slate-50 rounded-lg px-3 py-2 text-xs text-slate-600">
-                  <User className="h-3.5 w-3.5 mt-0.5 flex-shrink-0 text-slate-400" />
+                  <User className="h-3.5 w-3.5 mt-0.5 flex-shrink-0 text-slate-500" />
                   <div className="min-w-0">
                     <p className="truncate font-medium text-slate-700">{quality.last_completed_title}</p>
                     <div className="flex items-center gap-1.5 mt-0.5">
                       {quality.last_completed_at && (
-                        <span className="text-slate-400">
+                        <span className="text-slate-500">
                           {new Date(quality.last_completed_at).toLocaleDateString('zh-CN')}
                         </span>
                       )}
@@ -307,7 +307,7 @@ export function TaskStatusCard({
             </>
           ) : (
             // 暂无完成数据
-            <div className="text-center py-3 text-xs text-slate-400">
+            <div className="text-center py-3 text-xs text-slate-500">
               暂无已完成任务
             </div>
           )}

@@ -97,7 +97,7 @@ export function CloseoutGroupedList({
                       className={cn(
                         'flex w-full items-start justify-between gap-3 rounded-2xl border px-4 py-3 transition',
                         isActive
-                          ? 'border-cyan-300 bg-cyan-50/70 shadow-sm'
+                          ? 'border-blue-300 bg-blue-50/70 shadow-sm'
                           : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50'
                       )}
                     >
@@ -108,7 +108,7 @@ export function CloseoutGroupedList({
                           aria-label={`选择 ${item.title}`}
                           onChange={() => onToggleItem(item.id)}
                           data-testid="planning-selection-checkbox"
-                          className="mt-1 h-4 w-4 rounded border-slate-300 text-cyan-600 focus:ring-cyan-500"
+                          className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
                         />
 
                         <Button variant="ghost"

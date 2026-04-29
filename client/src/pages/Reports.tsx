@@ -368,7 +368,7 @@ function AnalysisEntryCard({
         <div className="space-y-3">
           <div className="inline-flex rounded-xl bg-blue-50 p-2 text-blue-600">{icon}</div>
           <div>
-            <div className="text-xs font-medium uppercase tracking-wider text-slate-400">{moduleLabel}</div>
+            <div className="text-xs font-medium uppercase tracking-wider text-slate-500">{moduleLabel}</div>
             <div className="text-base font-semibold text-slate-900">{title}</div>
           </div>
         </div>
@@ -496,7 +496,7 @@ function toRiskMatrixBucket(value?: number | null, fallback = 3) {
 }
 
 function getRiskMatrixCellClass(count: number, impact: number, probability: number) {
-  if (count === 0) return 'border-slate-100 bg-slate-50 text-slate-400'
+  if (count === 0) return 'border-slate-100 bg-slate-50 text-slate-500'
   const score = impact * probability
   if (score >= 16) return 'border-red-200 bg-red-50 text-red-700'
   if (score >= 9) return 'border-amber-200 bg-amber-50 text-amber-700'
@@ -1986,15 +1986,15 @@ export default function Reports() {
                 </div>
                 <div className="mt-3 grid gap-2 text-xs text-slate-500 sm:grid-cols-3" data-testid="reports-milestone-three-time">
                   <div className="rounded-lg bg-white px-2 py-1.5">
-                    <div className="text-xs uppercase tracking-wide text-slate-400">计划</div>
+                    <div className="text-xs uppercase tracking-wide text-slate-500">计划</div>
                     <div className="mt-0.5 font-medium text-slate-700">{formatDateLabel(milestone.plannedDate)}</div>
                   </div>
                   <div className="rounded-lg bg-white px-2 py-1.5">
-                    <div className="text-xs uppercase tracking-wide text-slate-400">当前</div>
+                    <div className="text-xs uppercase tracking-wide text-slate-500">当前</div>
                     <div className="mt-0.5 font-medium text-slate-700">{formatDateLabel(milestone.currentPlannedDate)}</div>
                   </div>
                   <div className="rounded-lg bg-white px-2 py-1.5">
-                    <div className="text-xs uppercase tracking-wide text-slate-400">实际</div>
+                    <div className="text-xs uppercase tracking-wide text-slate-500">实际</div>
                     <div className="mt-0.5 font-medium text-slate-700">{formatDateLabel(milestone.actualDate)}</div>
                   </div>
                 </div>
@@ -2469,19 +2469,19 @@ export default function Reports() {
 
                     <div className="grid gap-3 rounded-2xl border border-slate-100 bg-slate-50 p-4 text-sm text-slate-700 sm:grid-cols-2">
                       <div>
-                        <div className="text-xs font-medium uppercase tracking-wider text-slate-400">状态</div>
+                        <div className="text-xs font-medium uppercase tracking-wider text-slate-500">状态</div>
                         <div className="mt-1 text-slate-900">{selectedDeviationRow.status}</div>
                       </div>
                       <div>
-                        <div className="text-xs font-medium uppercase tracking-wider text-slate-400">关联状态</div>
+                        <div className="text-xs font-medium uppercase tracking-wider text-slate-500">关联状态</div>
                         <div className="mt-1 text-slate-900">{selectedDeviationRow.mapping_status || 'mapped'}</div>
                       </div>
                       <div>
-                        <div className="text-xs font-medium uppercase tracking-wider text-slate-400">实际日期</div>
+                        <div className="text-xs font-medium uppercase tracking-wider text-slate-500">实际日期</div>
                         <div className="mt-1 text-slate-900">{formatDateLabel(selectedDeviationRow.actual_date || null)}</div>
                       </div>
                       <div>
-                        <div className="text-xs font-medium uppercase tracking-wider text-slate-400">原因</div>
+                        <div className="text-xs font-medium uppercase tracking-wider text-slate-500">原因</div>
                         <div className="mt-1 text-slate-900">{selectedDeviationRow.reason || '暂无偏差原因'}</div>
                       </div>
                     </div>

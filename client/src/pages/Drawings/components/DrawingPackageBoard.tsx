@@ -82,10 +82,10 @@ export function DrawingPackageBoard({
                 onClick={() => toggleGroup(group.disciplineType)}
                 className="flex items-center gap-2 w-full text-left"
               >
-                {isCollapsed ? <ChevronRight className="h-4 w-4 text-slate-400" /> : <ChevronDown className="h-4 w-4 text-slate-400" />}
+                {isCollapsed ? <ChevronRight className="h-4 w-4 text-slate-500" /> : <ChevronDown className="h-4 w-4 text-slate-500" />}
                 <div className="h-2.5 w-2.5 rounded-full bg-blue-600" />
                 <h3 className="text-sm font-semibold text-slate-700">{group.disciplineType}</h3>
-                <span className="text-xs text-slate-400">{group.packages.length} 个包</span>
+                <span className="text-xs text-slate-500">{group.packages.length} 个包</span>
               </Button>
 
               {!isCollapsed && <div className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-3">
@@ -149,21 +149,21 @@ export function DrawingPackageBoard({
                       <div className="space-y-2 text-sm text-slate-600">
                         <div className="flex items-center justify-between gap-3">
                           <span className="inline-flex items-center gap-2">
-                            <FileText className="h-4 w-4 text-slate-400" />
+                            <FileText className="h-4 w-4 text-slate-500" />
                             当前审图
                           </span>
                           <span className="font-medium text-slate-900">{pkg.currentReviewStatus}</span>
                         </div>
                         <div className="flex items-center justify-between gap-3">
                           <span className="inline-flex items-center gap-2">
-                            <ShieldCheck className="h-4 w-4 text-slate-400" />
+                            <ShieldCheck className="h-4 w-4 text-slate-500" />
                             送审要求
                           </span>
                           <span className="font-medium text-slate-900">{pkg.reviewModeLabel}</span>
                         </div>
                         <div className="flex items-center justify-between gap-3">
                           <span className="inline-flex items-center gap-2">
-                            <RefreshCw className="h-4 w-4 text-slate-400" />
+                            <RefreshCw className="h-4 w-4 text-slate-500" />
                             变更 / 风险
                           </span>
                           <span className="font-medium text-slate-900">

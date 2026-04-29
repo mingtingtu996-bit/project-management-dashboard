@@ -12,7 +12,7 @@ export function SectionHeader({ title, action, count }: Props) {
       <h3 className="text-lg font-semibold text-slate-900">
         {title}
         {count != null && (
-          <span className="ml-2 text-sm font-normal text-slate-400">({count})</span>
+          <span className="ml-2 text-sm font-normal text-slate-500">({count})</span>
         )}
       </h3>
       {action}

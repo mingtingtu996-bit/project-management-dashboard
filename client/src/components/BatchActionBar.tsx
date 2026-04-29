@@ -75,7 +75,7 @@ export function BatchActionBar({ selectedCount, onClear, actions, className }: B
               aria-label="清空选择"
               data-testid="batch-action-bar-clear"
             >
-              <X className="h-4 w-4 text-slate-400" />
+              <X className="h-4 w-4 text-slate-500" />
             </Button>
           </div>
 

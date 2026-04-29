@@ -36,7 +36,7 @@ export function SortableTaskRowWrapper({ id, children }: { id: string; children:
         aria-label="拖拽排序"
         data-testid={`gantt-task-drag-handle-${id}`}
       >
-        <svg className="h-3.5 w-3.5 text-slate-400" fill="currentColor" viewBox="0 0 20 20">
+        <svg className="h-3.5 w-3.5 text-slate-500" fill="currentColor" viewBox="0 0 20 20">
           <path d="M7 2a2 2 0 1 1 0 4 2 2 0 0 1 0-4zm6 0a2 2 0 1 1 0 4 2 2 0 0 1 0-4zM7 8a2 2 0 1 1 0 4 2 2 0 0 1 0-4zm6 0a2 2 0 1 1 0 4 2 2 0 0 1 0-4zM7 14a2 2 0 1 1 0 4 2 2 0 0 1 0-4zm6 0a2 2 0 1 1 0 4 2 2 0 0 1 0-4z" />
         </svg>
       </span>

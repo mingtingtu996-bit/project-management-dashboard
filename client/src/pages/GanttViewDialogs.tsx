@@ -712,7 +712,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
         <DialogContent className="max-w-[560px] rounded-2xl shadow-[var(--el-4)]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <ShieldCheck className="h-4 w-4 text-green-600" />
+              <ShieldCheck className="h-4 w-4 text-emerald-600" />
               开工条件管理
             </DialogTitle>
             <DialogDescription className="sr-only">管理当前任务的开工条件列表</DialogDescription>
@@ -749,7 +749,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
               />
               <div className="flex gap-2 items-center">
                 <div className="flex items-center gap-1.5 flex-1">
-                  <Calendar className="h-3.5 w-3.5 text-slate-400" />
+                  <Calendar className="h-3.5 w-3.5 text-slate-500" />
                   <label className="text-xs text-slate-500">目标日期</label>
                   <Input
                     type="date"
@@ -774,7 +774,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
                       >
                         <GitBranch className="h-3.5 w-3.5 text-amber-500 flex-shrink-0" />
                         {props.newConditionPrecedingTaskIds.length === 0 ? (
-                          <span className="text-slate-400">选择前置任务（可多选）</span>
+                          <span className="text-slate-500">选择前置任务（可多选）</span>
                         ) : (
                           <span className="text-amber-700 font-medium truncate">已选 {props.newConditionPrecedingTaskIds.length} 个前置任务</span>
                         )}
@@ -843,7 +843,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
                     <div
                       key={condition.id}
                       className={`flex items-start gap-2 p-2.5 rounded-xl border transition-colors ${
-                        condition.is_satisfied ? 'bg-green-50 border-green-200' : isOverdue ? 'bg-red-50 border-red-300' : 'bg-slate-50 border-slate-200'
+                        condition.is_satisfied ? 'bg-emerald-50 border-emerald-200' : isOverdue ? 'bg-red-50 border-red-300' : 'bg-slate-50 border-slate-200'
                       }`}
                     >
                       <Button variant="ghost"
@@ -855,11 +855,11 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
                         {condition.is_satisfied && <CheckCircle2 className="h-3.5 w-3.5" />}
                       </Button>
                       <div className="flex-1 min-w-0">
-                        <p className={`text-sm ${condition.is_satisfied ? 'line-through text-slate-400' : 'text-slate-700'}`}>{condition.name}</p>
+                        <p className={`text-sm ${condition.is_satisfied ? 'line-through text-slate-500' : 'text-slate-700'}`}>{condition.name}</p>
                         <div className="flex items-center gap-1.5 mt-1 flex-wrap">
                           {typeConfig && <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${typeConfig.color}`}>{typeConfig.label}</span>}
                           {condition.target_date && (
-                            <span className={`text-xs flex items-center gap-0.5 ${isOverdue ? 'text-red-600 font-medium' : 'text-slate-400'}`}>
+                            <span className={`text-xs flex items-center gap-0.5 ${isOverdue ? 'text-red-600 font-medium' : 'text-slate-500'}`}>
                               <Calendar className="h-2.5 w-2.5" />
                               {isOverdue ? '已超期: ' : ''}{condition.target_date}
                             </span>
@@ -870,7 +870,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
     <span
                               key={precedingTask.task_id}
                               className={`text-xs px-1.5 py-0.5 rounded flex items-center gap-0.5 ${
-                                precedingTask.status === '已完成' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
+                                precedingTask.status === '已完成' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
                               }`}
                               
                             >
@@ -915,7 +915,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
               <p className="text-xs text-muted-foreground">
                 已满足 {props.taskConditions.filter((condition) => condition.is_satisfied).length}/{props.taskConditions.length} 个条件
                 {props.taskConditions.every((condition) => condition.is_satisfied) && (
-                  <span className="ml-1.5 text-green-600 font-medium">全部满足，可以开工</span>
+                  <span className="ml-1.5 text-emerald-600 font-medium">全部满足，可以开工</span>
                 )}
               </p>
             )}
@@ -1126,7 +1126,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
                               </div>
                             </div>
                           ) : (
-                            <p className={`text-sm ${obstacle.is_resolved ? 'line-through text-slate-400' : 'text-slate-800'}`}>{obstacle.title}</p>
+                            <p className={`text-sm ${obstacle.is_resolved ? 'line-through text-slate-500' : 'text-slate-800'}`}>{obstacle.title}</p>
                           )}
                           {!isEditing && (
                             <div className="flex items-center gap-1.5 mt-1 flex-wrap">
@@ -1141,7 +1141,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
                                 </span>
                               )}
                               {obstacle.severity_escalated_at && (
-                                <span className="rounded border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-xs text-violet-700">
+                                <span className="rounded border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 text-xs text-indigo-700">
                                   已升级 · {new Date(obstacle.severity_escalated_at).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })}
                                 </span>
                               )}
@@ -1158,7 +1158,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
                               {isLongTerm && !isCritical && (
                                 <span className={`rounded px-1.5 py-0.5 text-xs font-medium ${getStatusTheme('warning').className}`}>超时·{daysSince}天</span>
                               )}
-                              {!isLongTerm && !obstacle.is_resolved && <span className="text-xs text-slate-400">{daysSince}天前</span>}
+                              {!isLongTerm && !obstacle.is_resolved && <span className="text-xs text-slate-500">{daysSince}天前</span>}
                             </div>
                           )}
                           {obstacle.description && !isEditing && <p className="text-xs text-muted-foreground mt-0.5">{obstacle.description}</p>}
@@ -1222,7 +1222,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
                                   props.setEditingObstacleExpectedResolutionDate(obstacle.expected_resolution_date || '')
                                   props.setEditingObstacleResolutionNotes(obstacle.resolution_notes || '')
                                 }}
-                                className="p-1 rounded hover:bg-blue-50 text-slate-400 hover:text-blue-600 transition-colors"
+                                className="p-1 rounded hover:bg-blue-50 text-slate-500 hover:text-blue-600 transition-colors"
                                 
                               >
                                 <Save className="h-3.5 w-3.5" />
@@ -1236,7 +1236,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
   <TooltipTrigger asChild>
     <Button variant="ghost"
                                 onClick={() => props.handleResolveObstacle(obstacle)}
-                                className="p-1 rounded hover:bg-green-50 text-slate-400 hover:text-green-600 transition-colors"
+                                className="p-1 rounded hover:bg-emerald-50 text-slate-500 hover:text-emerald-600 transition-colors"
                                 
                               >
                                 <CheckCircle2 className="h-3.5 w-3.5" />
@@ -1250,7 +1250,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
   <TooltipTrigger asChild>
     <Button variant="ghost"
                                 onClick={() => props.handleDeleteObstacle(obstacle.id)}
-                                className="p-1 rounded hover:bg-red-50 text-slate-400 hover:text-red-500 transition-colors"
+                                className="p-1 rounded hover:bg-red-50 text-slate-500 hover:text-red-500 transition-colors"
                                 
                               >
                                 <Trash2 className="h-3.5 w-3.5" />
@@ -1297,7 +1297,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
         <DialogContent className="max-w-[440px] rounded-2xl shadow-[var(--el-4)]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <ShieldCheck className="h-4 w-4 text-green-600" />
+              <ShieldCheck className="h-4 w-4 text-emerald-600" />
               需要设置开工条件吗？
             </DialogTitle>
             <DialogDescription className="sr-only">新任务创建后选择是否添加开工条件</DialogDescription>

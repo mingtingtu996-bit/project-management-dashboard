@@ -62,7 +62,7 @@ export function MonthlyPlanConfirmDialog({
       >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-base">
-            <Clock3 className="h-4 w-4 text-cyan-500" />
+            <Clock3 className="h-4 w-4 text-blue-500" />
             月度计划确认
           </DialogTitle>
           <DialogDescription className="sr-only">月度计划确认</DialogDescription>

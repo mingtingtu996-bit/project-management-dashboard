@@ -73,11 +73,11 @@ export function LifecycleSummaryCards({ summary, onClickBlockingCertificate, onC
     {
       label: '本周推进',
       value: summary.weeklyActionCount,
-      icon: <BarChart3 className="w-5 h-5 text-violet-600" />,
-      bg: 'bg-violet-50',
-      border: 'border-violet-100',
-      textColor: 'text-violet-700',
-      numColor: 'text-violet-600',
+      icon: <BarChart3 className="w-5 h-5 text-indigo-600" />,
+      bg: 'bg-indigo-50',
+      border: 'border-indigo-100',
+      textColor: 'text-indigo-700',
+      numColor: 'text-indigo-600',
     },
   ]
 

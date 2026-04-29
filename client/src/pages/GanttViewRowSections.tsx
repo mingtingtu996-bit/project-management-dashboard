@@ -174,7 +174,7 @@ export function TaskRowIdentityCell({
             <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
           </svg>
         )}
-        {task.wbs_code && <span className="flex-shrink-0 text-xs tabular-nums text-slate-400 font-mono min-w-[24px]">{task.wbs_code}</span>}
+        {task.wbs_code && <span className="flex-shrink-0 text-xs tabular-nums text-slate-500 font-mono min-w-[24px]">{task.wbs_code}</span>}
         {inlineTitleTaskId === task.id ? (
           <input
             type="text"
@@ -220,7 +220,7 @@ export function TaskRowIdentityCell({
             
           >
             <span className="min-w-0 truncate">{task.title || task.name}</span>
-            <Pencil className="h-3.5 w-3.5 shrink-0 text-slate-400 opacity-0 transition-opacity group-hover/title:opacity-60" />
+            <Pencil className="h-3.5 w-3.5 shrink-0 text-slate-500 opacity-0 transition-opacity group-hover/title:opacity-60" />
           </Button>
   </TooltipTrigger>
   <TooltipContent>单击查看详情，双击快速改名</TooltipContent>
@@ -464,7 +464,7 @@ export function TaskRowDetailCells({
             {hasChildren && (
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <span className="text-xs text-purple-500 whitespace-nowrap">
+                  <span className="text-xs text-blue-500 whitespace-nowrap">
                     汇总{rolledProgress}%
                   </span>
                 </TooltipTrigger>
@@ -610,13 +610,13 @@ export function TaskRowConditionPanel({
   if (expandedConditionTaskId !== taskId) return null
 
   return (
-    <div className="mx-4 mb-2 rounded-xl border border-green-100 bg-green-50/60 p-3" style={{ marginLeft: (indentPx + 16) + 'px' }} onClick={(event) => event.stopPropagation()}>
+    <div className="mx-4 mb-2 rounded-xl border border-emerald-100 bg-emerald-50/60 p-3" style={{ marginLeft: (indentPx + 16) + 'px' }} onClick={(event) => event.stopPropagation()}>
       <div className="flex items-center justify-between mb-2">
-        <span className="text-xs font-medium text-green-700 flex items-center gap-1">
+        <span className="text-xs font-medium text-emerald-700 flex items-center gap-1">
           <ShieldCheck className="h-3.5 w-3.5" />
           开工条件
         </span>
-        <Button variant="ghost" onClick={(event) => onToggleInlineConditions(taskId, event)} className="text-xs text-slate-400 hover:text-slate-600">收起</Button>
+        <Button variant="ghost" onClick={(event) => onToggleInlineConditions(taskId, event)} className="text-xs text-slate-500 hover:text-slate-600">收起</Button>
       </div>
       {!inlineConditions ? (
         <LoadingState
@@ -624,7 +624,7 @@ export function TaskRowConditionPanel({
           className="min-h-0 border-0 bg-transparent px-0 py-1 shadow-none"
         />
       ) : inlineConditions.length === 0 ? (
-        <div className="text-xs text-slate-400 py-1">暂无条件记录</div>
+        <div className="text-xs text-slate-500 py-1">暂无条件记录</div>
       ) : (
         <div className="space-y-1.5">
           {inlineConditions.map((condition) => (
@@ -632,17 +632,17 @@ export function TaskRowConditionPanel({
               {condition.is_satisfied
                 ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 flex-shrink-0" />
                 : <XCircle className="h-3.5 w-3.5 text-orange-400 flex-shrink-0" />}
-              <span className={condition.is_satisfied ? 'text-slate-400 line-through' : 'text-slate-700'}>{condition.name}</span>
+              <span className={condition.is_satisfied ? 'text-slate-500 line-through' : 'text-slate-700'}>{condition.name}</span>
               {condition.condition_type && <span className="px-1 py-0.5 rounded text-xs bg-slate-100 text-slate-600">{condition.condition_type}</span>}
               {condition.is_satisfied && condition.satisfied_reason === 'admin_force' && (
                 <Tooltip>
   <TooltipTrigger asChild>
-    <span className="px-1 py-0.5 rounded text-xs bg-violet-100 text-violet-700 border border-violet-200" >强制</span>
+    <span className="px-1 py-0.5 rounded text-xs bg-indigo-100 text-indigo-700 border border-indigo-200" >强制</span>
   </TooltipTrigger>
   <TooltipContent>{condition.satisfied_reason_note || '管理员强制满足'}</TooltipContent>
 </Tooltip>
               )}
-              {condition.target_date && <span className="text-slate-400">{condition.target_date}</span>}
+              {condition.target_date && <span className="text-slate-500">{condition.target_date}</span>}
               {onToggleCondition && !condition.is_satisfied && (
                 <Button variant="ghost"
                   type="button"

@@ -160,7 +160,7 @@ export function BaselineRevisionActions({
                 <input
                   data-testid="baseline-revision-deferred-review-due-at"
                   type="date"
-                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none ring-0 focus:border-cyan-400"
+                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none ring-0 focus:border-blue-400"
                   value={deferredReviewDueAt}
                   onChange={(event) => onDeferredReviewDueAtChange(event.target.value)}
                 />
@@ -172,7 +172,7 @@ export function BaselineRevisionActions({
             )}
             <textarea
               data-testid="baseline-revision-deferred-reason"
-              className="min-h-[96px] w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none ring-0 focus:border-cyan-400"
+              className="min-h-[96px] w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none ring-0 focus:border-blue-400"
               value={deferredReason}
               onChange={(event) => onDeferredReasonChange(event.target.value)}
               placeholder="填写暂不处理原因"

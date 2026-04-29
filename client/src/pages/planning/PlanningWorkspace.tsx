@@ -1132,7 +1132,7 @@ function PlanningWorkspaceInner() {
       </Card>
 
       {revisionDraftContext ? (
-        <Card data-testid="baseline-revision-deeplink-context" className="border-cyan-200 bg-cyan-50/60">
+        <Card data-testid="baseline-revision-deeplink-context" className="border-blue-200 bg-blue-50/60">
           <CardContent className="space-y-2 p-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
@@ -1268,7 +1268,7 @@ function PlanningWorkspaceInner() {
             <div className="space-y-1">
               <div className="text-sm font-medium text-slate-900">异常与留痕快链</div>
             </div>
-            <Badge variant="outline">Planning shared links</Badge>
+            <Badge variant="outline">快捷链接</Badge>
           </div>
 
           <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
@@ -1283,7 +1283,7 @@ function PlanningWorkspaceInner() {
                 <GitBranch className="h-4 w-4" />
                 查看任务链
               </span>
-              <Badge variant="outline">Gantt</Badge>
+              <Badge variant="outline">甘特图</Badge>
             </Button>
             <Button
               type="button"
@@ -1296,7 +1296,7 @@ function PlanningWorkspaceInner() {
                 <AlertTriangle className="h-4 w-4" />
                 查看风险与问题
               </span>
-              <Badge variant="outline">Risk</Badge>
+              <Badge variant="outline">风险</Badge>
             </Button>
             <Button
               type="button"
@@ -1309,7 +1309,7 @@ function PlanningWorkspaceInner() {
                 <FileDiff className="h-4 w-4" />
                 查看变更记录
               </span>
-              <Badge variant="outline">Reports</Badge>
+              <Badge variant="outline">报表</Badge>
             </Button>
             <Button
               type="button"
@@ -1322,7 +1322,7 @@ function PlanningWorkspaceInner() {
                 <CheckCircle2 className="h-4 w-4" />
                 打开月末关账
               </span>
-              <Badge variant="outline">Closeout</Badge>
+              <Badge variant="outline">关账</Badge>
             </Button>
           </div>
         </CardContent>

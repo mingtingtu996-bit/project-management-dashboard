@@ -184,7 +184,7 @@ export function CreateModal({ onClose, onSuccess }: { onClose: () => void; onSuc
         {/* 头部 */}
         <div className="flex items-center justify-between px-6 py-4">
           <h2 className="font-semibold text-slate-800">新建 WBS 模板</h2>
-          <Button variant="ghost" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-400 hover:text-slate-600 transition-colors">
+          <Button variant="ghost" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-500 hover:text-slate-600 transition-colors">
             <IconX />
           </Button>
         </div>
@@ -194,13 +194,13 @@ export function CreateModal({ onClose, onSuccess }: { onClose: () => void; onSuc
           {/* 步骤指示器 */}
           <div className="flex items-center gap-0 mb-8">
             <div className="flex items-center gap-2">
-              <div className={`w-7 h-7 rounded-full flex items-center justify-center text-sm font-semibold transition-colors ${step >= 1 ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-400'}`}>1</div>
-              <span className={`text-sm font-medium transition-colors ${step >= 1 ? 'text-blue-600' : 'text-slate-400'}`}>选择创建方式</span>
+              <div className={`w-7 h-7 rounded-full flex items-center justify-center text-sm font-semibold transition-colors ${step >= 1 ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-500'}`}>1</div>
+              <span className={`text-sm font-medium transition-colors ${step >= 1 ? 'text-blue-600' : 'text-slate-500'}`}>选择创建方式</span>
             </div>
             <div className="flex-1 h-px bg-slate-200 mx-3" />
             <div className="flex items-center gap-2">
-              <div className={`w-7 h-7 rounded-full flex items-center justify-center text-sm font-semibold transition-colors ${step >= 2 ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-400'}`}>2</div>
-              <span className={`text-sm font-medium transition-colors ${step >= 2 ? 'text-blue-600' : 'text-slate-400'}`}>基本信息</span>
+              <div className={`w-7 h-7 rounded-full flex items-center justify-center text-sm font-semibold transition-colors ${step >= 2 ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-500'}`}>2</div>
+              <span className={`text-sm font-medium transition-colors ${step >= 2 ? 'text-blue-600' : 'text-slate-500'}`}>基本信息</span>
             </div>
           </div>
 
@@ -245,7 +245,7 @@ export function CreateModal({ onClose, onSuccess }: { onClose: () => void; onSuc
               {createType === 'excel' && (
                 <div className="mt-4 p-4 bg-slate-50 rounded-xl border border-dashed border-slate-300">
                   <label htmlFor="wbs-template-excel-file" className="flex flex-col items-center gap-2 cursor-pointer">
-                    <IconUpload className="w-6 h-6 text-slate-400" />
+                    <IconUpload className="w-6 h-6 text-slate-500" />
                     <span className="text-sm text-slate-500">
                       {excelFile ? (
                         <span className="text-emerald-600 font-medium">✓ {excelFile.name}</span>

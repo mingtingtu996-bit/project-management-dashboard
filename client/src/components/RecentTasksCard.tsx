@@ -203,7 +203,7 @@ function FilterButton({
     >
       {label}
       {count > 0 ? (
-        <span className={`ml-1 ${activeFilter ? 'text-blue-100' : 'text-slate-400'}`}>{count}</span>
+        <span className={`ml-1 ${activeFilter ? 'text-blue-100' : 'text-slate-500'}`}>{count}</span>
       ) : null}
     </Button>
   )
@@ -315,7 +315,7 @@ export default function RecentTasksCard({ projectId, tasks: sourceTasks, onViewA
               <CheckCircle2 className="h-8 w-8 text-emerald-500" />
             </div>
             <p className="text-sm font-medium text-slate-700">太棒了</p>
-            <p className="mt-1 text-xs text-slate-400">当前没有待完成任务</p>
+            <p className="mt-1 text-xs text-slate-500">当前没有待完成任务</p>
           </div>
         </CardContent>
       </Card>
@@ -337,7 +337,7 @@ export default function RecentTasksCard({ projectId, tasks: sourceTasks, onViewA
           </Link>
         </div>
         <div className="mt-2 flex flex-wrap items-center gap-2">
-          <Filter className="h-3.5 w-3.5 text-slate-400" />
+          <Filter className="h-3.5 w-3.5 text-slate-500" />
           <FilterButton activeFilter={activeFilter === 'all'} count={stats.total} label="全部" onClick={() => setActiveFilter('all')} />
           <FilterButton activeFilter={activeFilter === '7days'} count={stats.overdue + stats.urgent} label="7天内" onClick={() => setActiveFilter('7days')} />
           <FilterButton activeFilter={activeFilter === 'overdue'} count={stats.overdue} label="已延期" onClick={() => setActiveFilter('overdue')} />
@@ -373,7 +373,7 @@ export default function RecentTasksCard({ projectId, tasks: sourceTasks, onViewA
                 </span>
               ) : null}
             </div>
-            <span className="text-slate-400">共 {filteredTasks.length} 个</span>
+            <span className="text-slate-500">共 {filteredTasks.length} 个</span>
           </div>
 
           <div className="max-h-[320px] space-y-2 overflow-y-auto pr-1">
@@ -398,7 +398,7 @@ export default function RecentTasksCard({ projectId, tasks: sourceTasks, onViewA
             ) : null}
 
             {!loading && !error && filteredTasks.length === 0 ? (
-              <div className="py-6 text-center text-slate-400">
+              <div className="py-6 text-center text-slate-500">
                 <Filter className="mx-auto mb-2 h-8 w-8 opacity-50" />
                 <p className="text-xs">该筛选条件下没有任务</p>
               </div>
@@ -414,7 +414,7 @@ export default function RecentTasksCard({ projectId, tasks: sourceTasks, onViewA
                     <div className="flex items-start justify-between">
                       <div className="min-w-0 flex-1">
                         <h4 className="truncate text-sm font-medium text-slate-900">{task.title}</h4>
-                        <div className="mt-1 flex items-center text-xs text-slate-400">
+                        <div className="mt-1 flex items-center text-xs text-slate-500">
                           {task.assignee ? (
                             <span className="mr-3 flex items-center">
                               <User className="mr-1 h-3.5 w-3.5" />
@@ -430,7 +430,7 @@ export default function RecentTasksCard({ projectId, tasks: sourceTasks, onViewA
                         </div>
                         <div className="mt-2">
                           <div className="mb-1 flex items-center justify-between text-xs">
-                            <span className="text-slate-400">进度</span>
+                            <span className="text-slate-500">进度</span>
                             <span className="font-medium text-slate-700">{task.progress}%</span>
                           </div>
                           <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
@@ -456,7 +456,7 @@ export default function RecentTasksCard({ projectId, tasks: sourceTasks, onViewA
           {!loading && !error ? (
             <>
               <Separator />
-              <div className="pt-2 text-xs text-slate-400">
+              <div className="pt-2 text-xs text-slate-500">
                 {stats.overdue > 0 ? (
                   <p className="flex items-center text-red-600">
                     <AlertCircle className="mr-1 h-3.5 w-3.5" />

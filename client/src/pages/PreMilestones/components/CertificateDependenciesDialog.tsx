@@ -267,7 +267,7 @@ export function CertificateDependenciesDialog({
                       <div className="min-w-0">
                         <div className="font-medium text-slate-900">
                           {predecessorLabel}
-                          <span className="mx-2 text-slate-400">→</span>
+                          <span className="mx-2 text-slate-500">→</span>
                           {successorLabel}
                         </div>
                         <div className="mt-1 text-xs text-slate-500">
@@ -282,7 +282,7 @@ export function CertificateDependenciesDialog({
                         <Button variant="ghost"
                           type="button"
                           onClick={() => void onDeleteDependency(dependency.id)}
-                          className="rounded-lg p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600"
+                          className="rounded-lg p-1.5 text-slate-500 hover:bg-red-50 hover:text-red-600"
                           aria-label="删除依赖"
                         >
                           <Trash2 className="h-4 w-4" />

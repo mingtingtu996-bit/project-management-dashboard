@@ -104,10 +104,10 @@ export function ApplyModal({
             </div>
               <div>
               <h2 className="font-semibold text-slate-800">生成项目基线草稿</h2>
-              <p className="text-xs text-slate-400 mt-0.5">{template.name}</p>
+              <p className="text-xs text-slate-500 mt-0.5">{template.name}</p>
             </div>
           </div>
-          <Button variant="ghost" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-400 hover:text-slate-600 transition-colors">
+          <Button variant="ghost" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-500 hover:text-slate-600 transition-colors">
             <IconX />
           </Button>
         </div>
@@ -118,12 +118,12 @@ export function ApplyModal({
           <div className="flex items-center gap-4 py-3 px-4 bg-slate-50 rounded-xl">
             <div className="text-center">
               <p className="text-lg font-bold text-slate-700">{template.node_count ?? '—'}</p>
-              <p className="text-xs text-slate-400">任务节点</p>
+              <p className="text-xs text-slate-500">任务节点</p>
             </div>
             <div className="w-px h-8 bg-slate-200" />
             <div className="text-center">
               <p className="text-lg font-bold text-emerald-600">{template.reference_days ?? '—'}</p>
-              <p className="text-xs text-slate-400">参考工期(天)</p>
+              <p className="text-xs text-slate-500">参考工期(天)</p>
             </div>
             <div className="w-px h-8 bg-slate-200" />
             <div className="flex-1 text-xs text-slate-500 leading-relaxed">
@@ -140,7 +140,7 @@ export function ApplyModal({
                 className="min-h-28"
               />
             ) : projects.length === 0 ? (
-              <div className="text-sm text-slate-400 py-3 text-center">暂无可用项目</div>
+              <div className="text-sm text-slate-500 py-3 text-center">暂无可用项目</div>
             ) : (
               <div className="space-y-2 max-h-48 overflow-y-auto" role="radiogroup" aria-labelledby="apply-project-label">
                 {projects.map(proj => {
@@ -174,7 +174,7 @@ export function ApplyModal({
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-slate-800 truncate">{proj.name}</p>
                       {proj.status && (
-                        <p className="text-xs text-slate-400 mt-0.5">{proj.status}</p>
+                        <p className="text-xs text-slate-500 mt-0.5">{proj.status}</p>
                       )}
                     </div>
                   </label>

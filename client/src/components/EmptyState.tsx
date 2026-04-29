@@ -24,7 +24,7 @@ const emptyStateConfig = {
   },
   filter: {
     icon: SearchX,
-    iconClassName: 'h-8 w-8 text-slate-400',
+    iconClassName: 'h-8 w-8 text-slate-500',
     defaultTitle: '未找到匹配项',
     defaultDescription: '尝试调整筛选条件',
   },

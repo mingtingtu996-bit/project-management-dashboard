@@ -82,7 +82,7 @@ export const EditProfileDialog: React.FC<EditProfileDialogProps> = ({ isOpen, on
       <div role="dialog" aria-modal="true" aria-labelledby={titleId} className="w-[90%] max-w-[560px] animate-in rounded-2xl border border-slate-200 bg-white p-6 shadow-[var(--el-4)] duration-200 ease-bounce fade-in-0 zoom-in-95" onClick={e => e.stopPropagation()}>
         <div className="flex justify-between items-center mb-4">
           <h2 id={titleId} className="text-lg font-semibold text-slate-800">编辑个人信息</h2>
-          <Button variant="ghost" ref={closeRef} onClick={onClose} className="text-slate-400 hover:text-slate-600" disabled={loading} aria-label="关闭">
+          <Button variant="ghost" ref={closeRef} onClick={onClose} className="text-slate-500 hover:text-slate-600" disabled={loading} aria-label="关闭">
             <X className="h-5 w-5" />
           </Button>
         </div>
@@ -93,19 +93,21 @@ export const EditProfileDialog: React.FC<EditProfileDialogProps> = ({ isOpen, on
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">用户名</label>
+            <label htmlFor="edit-profile-username" className="block text-sm font-medium text-slate-700 mb-1">用户名</label>
             <input
+              id="edit-profile-username"
               type="text"
               value={user?.username || ''}
               className="w-full px-3 py-2 border border-slate-200 rounded bg-slate-50 text-slate-500 text-sm"
               disabled
             />
-            <p className="text-xs text-slate-400 mt-1">用户名不可修改</p>
+            <p className="text-xs text-slate-500 mt-1">用户名不可修改</p>
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">显示名称</label>
+            <label htmlFor="edit-profile-displayname" className="block text-sm font-medium text-slate-700 mb-1">显示名称</label>
             <input
+              id="edit-profile-displayname"
               type="text"
               value={displayName}
               onChange={e => {
@@ -127,8 +129,9 @@ export const EditProfileDialog: React.FC<EditProfileDialogProps> = ({ isOpen, on
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">邮箱</label>
+            <label htmlFor="edit-profile-email" className="block text-sm font-medium text-slate-700 mb-1">邮箱</label>
             <input
+              id="edit-profile-email"
               type="email"
               value={email}
               onChange={e => setEmail(e.target.value)}

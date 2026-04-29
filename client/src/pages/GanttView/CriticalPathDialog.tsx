@@ -109,7 +109,7 @@ export function CriticalPathDialog(props: CriticalPathDialogProps) {
               <DialogHeader className="space-y-1 text-left">
                 <div className="flex flex-wrap items-center gap-2">
                   <DialogTitle>关键路径图谱</DialogTitle>
-                  <span className="text-xs text-slate-400">红色链路为影响工期的关键路径</span>
+                  <span className="text-xs text-slate-500">红色链路为影响工期的关键路径</span>
                 </div>
                 <DialogDescription className="sr-only">查看项目关键路径网络图和覆盖规则</DialogDescription>
                 <div className="text-xs text-muted-foreground">

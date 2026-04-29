@@ -234,19 +234,19 @@ function DailyProgressSection({ projectId }: { projectId?: string }) {
             {data.progress_change > 0 ? '+' : ''}{data.progress_change.toFixed(1)}%
           </p>
         </div>
-        <div className="rounded-2xl border border-emerald-100 bg-gradient-to-br from-emerald-50 to-teal-50 p-3">
+        <div className="rounded-2xl border border-emerald-100 bg-gradient-to-br from-emerald-50 to-emerald-50 p-3">
           <div className="mb-1 flex items-center gap-2">
             <TrendingUp className="h-4 w-4 text-emerald-500" />
             <span className="text-xs text-slate-500">更新任务</span>
           </div>
           <p className="text-2xl font-bold text-emerald-600">{data.tasks_updated}</p>
         </div>
-        <div className="rounded-2xl border border-violet-100 bg-gradient-to-br from-violet-50 to-purple-50 p-3">
+        <div className="rounded-2xl border border-indigo-100 bg-gradient-to-br from-indigo-50 to-blue-50 p-3">
           <div className="mb-1 flex items-center gap-2">
-            <BarChart3 className="h-4 w-4 text-violet-500" />
+            <BarChart3 className="h-4 w-4 text-indigo-500" />
             <span className="text-xs text-slate-500">完成任务</span>
           </div>
-          <p className="text-2xl font-bold text-violet-600">{data.tasks_completed}</p>
+          <p className="text-2xl font-bold text-indigo-600">{data.tasks_completed}</p>
         </div>
       </div>
 
@@ -298,10 +298,10 @@ function DailyProgressSection({ projectId }: { projectId?: string }) {
                 <div key={item.task_id} className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2 text-sm">
                   <div className="min-w-0 flex-1 truncate">
                     <span className="font-medium text-slate-700">{item.task_title}</span>
-                    <span className="ml-2 text-xs text-slate-400">{item.assignee}</span>
+                    <span className="ml-2 text-xs text-slate-500">{item.assignee}</span>
                   </div>
                   <div className="flex items-center gap-2">
-                    <span className="text-xs text-slate-400">
+                    <span className="text-xs text-slate-500">
                       {item.progress_before}% → {item.progress_after}%
                     </span>
                     <span className={`font-bold ${item.progress_delta > 0 ? 'text-emerald-600' : 'text-red-500'}`}>
@@ -390,7 +390,7 @@ function ComparePeriodCard({
                 <div key={task.id} className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2 text-xs">
                   <div className="min-w-0 flex-1 truncate">
                     <span className="font-medium text-slate-700">{task.title}</span>
-                    <span className="ml-2 text-slate-400">{task.assignee}</span>
+                    <span className="ml-2 text-slate-500">{task.assignee}</span>
                   </div>
                   <span className={task.progress_delta > 0 ? 'text-emerald-600' : 'text-red-500'}>
                     {task.progress_delta > 0 ? '+' : ''}{task.progress_delta}%
@@ -518,7 +518,7 @@ export default function DashboardCompareCard({ projectId }: DashboardCompareCard
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <CardTitle className="flex items-center gap-2 text-base font-semibold text-slate-900">
-                          <CalendarDays className="h-4 w-4 text-slate-400" />
+                          <CalendarDays className="h-4 w-4 text-slate-500" />
                           {block.title}
                         </CardTitle>
                         <div className="mt-1 text-xs text-slate-500">{block.subtitle}</div>

@@ -82,8 +82,8 @@ const getUnitIconConfig = (type: UnitType) => {
     case 'design':
       return {
         icon: Palette,
-        bgColor: 'bg-purple-50',
-        iconColor: 'text-purple-600'
+        bgColor: 'bg-blue-50',
+        iconColor: 'text-blue-600'
       }
     case 'supervision':
       return {
@@ -94,8 +94,8 @@ const getUnitIconConfig = (type: UnitType) => {
     case 'survey':
       return {
         icon: Compass,
-        bgColor: 'bg-green-50',
-        iconColor: 'text-green-600'
+        bgColor: 'bg-emerald-50',
+        iconColor: 'text-emerald-600'
       }
     case 'subcontract':
       return {
@@ -169,7 +169,7 @@ export function UnitProgressCard({
       </CardHeader>
       <CardContent className="pt-0">
         {/* 列表头部 */}
-        <div className="flex items-center text-xs text-slate-400 mb-2 px-2">
+        <div className="flex items-center text-xs text-slate-500 mb-2 px-2">
           <span className="w-8">排名</span>
           <span className="flex-1">责任单位</span>
           <span className="w-20 text-right">完成度</span>
@@ -226,7 +226,7 @@ export function UnitProgressCard({
                 </div>
 
                 {/* 箭头 */}
-                <ChevronRight className="w-5 h-5 text-slate-300 group-hover:text-slate-400 flex-shrink-0" />
+                <ChevronRight className="w-5 h-5 text-slate-300 group-hover:text-slate-500 flex-shrink-0" />
               </div>
             )
           })}

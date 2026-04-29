@@ -78,7 +78,7 @@ export default function Header() {
     connectionMode === 'polling'
       ? { icon: WifiOff, iconClassName: 'text-yellow-500', label: '轮询模式' }
       : realtimeConnectionState === 'connected'
-        ? { icon: Wifi, iconClassName: 'text-green-500', label: '实时同步' }
+        ? { icon: Wifi, iconClassName: 'text-emerald-500', label: '实时同步' }
         : realtimeConnectionState === 'connecting' || realtimeConnectionState === 'reconnecting'
           ? { icon: Wifi, iconClassName: 'text-amber-500', label: '实时重连中' }
           : { icon: WifiOff, iconClassName: 'text-rose-500', label: '实时已断开' }
@@ -124,11 +124,11 @@ export default function Header() {
 
       <div className="flex flex-1 items-center justify-end gap-3 lg:gap-5">
         <div className="relative hidden lg:block">
-          <Search className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <Search className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
           <Input
             aria-label="搜索项目、任务或提醒"
             placeholder="搜索项目、任务或提醒..."
-            className="h-11 w-[360px] rounded-2xl border-slate-200 bg-slate-50 pl-11 text-sm shadow-none placeholder:text-slate-400 focus-visible:ring-2 focus-visible:ring-blue-100"
+            className="h-11 w-[360px] rounded-2xl border-slate-200 bg-slate-50 pl-11 text-sm shadow-none placeholder:text-slate-500 focus-visible:ring-2 focus-visible:ring-blue-100"
           />
         </div>
 
@@ -141,8 +141,8 @@ export default function Header() {
           <Button variant="outline" size="sm" onClick={copyInvitationCode} className="hidden h-10 rounded-2xl border-slate-200 bg-white px-3 text-slate-600 shadow-none hover:bg-slate-50 lg:inline-flex">
             {copied ? (
               <>
-                <Check className="mr-1 h-4 w-4 text-green-500" />
-                <span className="text-green-600">已复制</span>
+                <Check className="mr-1 h-4 w-4 text-emerald-500" />
+                <span className="text-emerald-600">已复制</span>
               </>
             ) : (
               <>

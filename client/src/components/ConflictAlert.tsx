@@ -61,7 +61,7 @@ export function ConflictAlert({ conflicts, onViewDetails, onDismiss }: ConflictA
               <div key={entityType} className="flex items-center gap-2 text-sm">
                 <span className="text-slate-600">{entityTypeLabels[entityType as keyof typeof entityTypeLabels]}:</span>
                 <span className="font-medium text-slate-800">{items.length} 个</span>
-                <span className="text-slate-400">
+                <span className="text-slate-500">
                   (v{items[0].localVersion} → v{items[0].serverVersion})
                 </span>
               </div>

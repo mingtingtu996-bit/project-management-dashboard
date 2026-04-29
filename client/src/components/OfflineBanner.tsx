@@ -27,7 +27,7 @@ export function OfflineBanner() {
         role="status"
         aria-live="polite"
       >
-        <div className="mx-auto flex max-w-[1680px] items-center gap-2">
+        <div className="mx-auto flex max-w-[1440px] items-center gap-2">
           <WifiOff className="h-4 w-4" />
           <span>离线模式中，当前无法保存或提交内容，请恢复网络后再继续操作。</span>
         </div>

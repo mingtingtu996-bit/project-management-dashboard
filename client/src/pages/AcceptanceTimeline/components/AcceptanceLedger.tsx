@@ -249,7 +249,7 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
   return (
     <div className="space-y-4">
       <div className="relative">
-        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
         <input
           type="text"
           aria-label="搜索验收节点"
@@ -344,9 +344,9 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
               <div className="flex items-center gap-2">
                 <Badge variant="outline">{group.plans.length}</Badge>
                 {collapsedGroups.has(group.id) ? (
-                  <ChevronRight className="h-4 w-4 text-slate-400" />
+                  <ChevronRight className="h-4 w-4 text-slate-500" />
                 ) : (
-                  <ChevronDown className="h-4 w-4 text-slate-400" />
+                  <ChevronDown className="h-4 w-4 text-slate-500" />
                 )}
               </div>
             </Button>
@@ -397,7 +397,7 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
                       type="button"
                       onClick={(e) => togglePlanSelection(plan.id, e)}
                       aria-label={`${selectedPlanIds.has(plan.id) ? '取消选择' : '选择'}验收节点 ${plan.name}`}
-                      className="mr-1 flex-shrink-0 text-slate-400 hover:text-blue-600"
+                      className="mr-1 flex-shrink-0 text-slate-500 hover:text-blue-600"
                       
                       data-testid={`acceptance-select-${plan.id}`}
                     >
@@ -436,7 +436,7 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
 
                     <div className="flex items-center gap-4">
                       <div className="w-20 flex-shrink-0 text-center">
-                        <div className="text-xs text-slate-400">责任单位</div>
+                        <div className="text-xs text-slate-500">责任单位</div>
                         <Tooltip>
   <TooltipTrigger asChild>
     <div className="mt-0.5 truncate text-xs font-medium text-slate-700 tabular-nums" >
@@ -447,7 +447,7 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
 </Tooltip>
                       </div>
                       <div className="w-20 flex-shrink-0 text-center">
-                        <div className="text-xs text-slate-400">并行组</div>
+                        <div className="text-xs text-slate-500">并行组</div>
                         <div className="mt-0.5 text-xs font-medium text-slate-700 tabular-nums">
                           {plan.parallel_group_id ? (
                             <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-indigo-700">{plan.parallel_group_id.slice(-4)}</span>
@@ -455,12 +455,12 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
                         </div>
                       </div>
                       <div className="w-16 flex-shrink-0 text-center">
-                        <div className="text-xs text-slate-400">阻塞数</div>
+                        <div className="text-xs text-slate-500">阻塞数</div>
                         <div className="mt-0.5 text-xs font-medium tabular-nums">
                           {plan.is_blocked ? (
                             <span className="rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-red-700">{plan.predecessor_plan_ids?.length || 1}</span>
                           ) : (
-                            <span className="text-slate-400">0</span>
+                            <span className="text-slate-500">0</span>
                           )}
                         </div>
                       </div>
@@ -477,7 +477,7 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
                       </Badge>
                       <Badge
                         variant="outline"
-                        className={cn('rounded-full px-3 py-1', plan.is_custom ? 'border-violet-200 bg-violet-50 text-violet-700' : 'border-slate-200 bg-slate-50 text-slate-500')}
+                        className={cn('rounded-full px-3 py-1', plan.is_custom ? 'border-indigo-200 bg-indigo-50 text-indigo-700' : 'border-slate-200 bg-slate-50 text-slate-500')}
                       >
                         {plan.is_custom ? '自定义项' : '系统项'}
                       </Badge>

@@ -1024,7 +1024,7 @@ export default function AcceptanceDetailDrawer({
         <Separator className="mt-4" />
         <div className="sticky bottom-0 z-30 -mx-6 -mb-6 flex flex-wrap gap-3 bg-white/95 px-6 py-4 backdrop-blur" data-testid="acceptance-detail-footer">
           {['inspecting', 'rectifying'].includes(node.status) && (
-            <Button className="gap-2 bg-green-600 hover:bg-green-500" disabled={!canMutate || changingStatus} onClick={() => void handleStatusChange('passed')}>
+            <Button className="gap-2 bg-emerald-600 hover:bg-emerald-500" disabled={!canMutate || changingStatus} onClick={() => void handleStatusChange('passed')}>
               <CheckCircle2 className="h-4 w-4" />
               {changingStatus ? '提交中...' : '标记通过'}
             </Button>

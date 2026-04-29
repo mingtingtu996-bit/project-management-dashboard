@@ -1083,7 +1083,7 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
                         >
                           <ChevronRight
                             className={cn(
-                              'h-4 w-4 flex-shrink-0 text-slate-400 transition-transform',
+                              'h-4 w-4 flex-shrink-0 text-slate-500 transition-transform',
                               expandedAlternateChainIds.includes(chain.id) && 'rotate-90',
                             )}
                           />

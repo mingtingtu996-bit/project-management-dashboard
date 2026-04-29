@@ -157,7 +157,7 @@ export function RiskBubbleMatrix({ risks, issues, projectRows }: RiskBubbleMatri
         </div>
 
         <div className="relative">
-          <div className="absolute bottom-0 left-0 top-0 flex w-10 flex-col justify-around py-2 text-xs text-slate-400">
+          <div className="absolute bottom-0 left-0 top-0 flex w-10 flex-col justify-around py-2 text-xs text-slate-500">
             {[...SIGNAL_LEVELS].reverse().map((level) => (
               <span key={level.key} className="text-center">{level.label}</span>
             ))}
@@ -231,7 +231,7 @@ export function RiskBubbleMatrix({ risks, issues, projectRows }: RiskBubbleMatri
             </div>
           </div>
         ) : (
-          <div className="py-8 text-center text-sm text-slate-400">暂无活跃风险信号</div>
+          <div className="py-8 text-center text-sm text-slate-500">暂无活跃风险信号</div>
         )}
       </CardContent>
     </Card>

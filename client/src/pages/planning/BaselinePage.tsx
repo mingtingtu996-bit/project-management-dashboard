@@ -133,12 +133,12 @@ function BaselineEditableCellFrame({
       <div className="flex min-w-0 items-center gap-1 text-xs text-slate-500">
         <span className="truncate">{label}</span>
         {!readOnly ? (
-          <Pencil className="h-3.5 w-3.5 text-slate-400 opacity-0 transition-opacity group-hover/baseline-cell:opacity-70" />
+          <Pencil className="h-3.5 w-3.5 text-slate-500 opacity-0 transition-opacity group-hover/baseline-cell:opacity-70" />
         ) : null}
       </div>
       {children}
       {!readOnly ? (
-        <div className="hidden text-xs text-slate-400 group-focus-within/baseline-cell:block">
+        <div className="hidden text-xs text-slate-500 group-focus-within/baseline-cell:block">
           Tab 下一格 · Enter 确认 · Esc 取消
         </div>
       ) : null}
@@ -1934,7 +1934,7 @@ export default function BaselinePage() {
                 className="group flex min-h-[172px] flex-col justify-between rounded-2xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <div className="flex items-start justify-between gap-3">
-                  <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-cyan-100 text-cyan-700 transition group-hover:bg-cyan-600 group-hover:text-white">
+                  <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-100 text-blue-700 transition group-hover:bg-blue-600 group-hover:text-white">
                     <Calendar className="h-5 w-5" />
                   </div>
                   <Badge variant="outline">当前排期</Badge>
@@ -1944,7 +1944,7 @@ export default function BaselinePage() {
                   <p className="text-sm leading-6 text-slate-500">
                     直接把当前排期整理成初始化基线，保留待确认映射再继续校核。
                   </p>
-                  <p className="text-xs leading-5 text-slate-400">适合已有任务排期、需要快速生成首版基线的项目。</p>
+                  <p className="text-xs leading-5 text-slate-500">适合已有任务排期、需要快速生成首版基线的项目。</p>
                 </div>
               </Button>
               <Button variant="ghost"
@@ -1965,7 +1965,7 @@ export default function BaselinePage() {
                   <p className="text-sm leading-6 text-slate-500">
                     按表头映射导入计划文件，先预览 10 行再生成导入基线草稿。
                   </p>
-                  <p className="text-xs leading-5 text-slate-400">适合从 Excel / CSV 迁移外部计划，导入后再逐项校核。</p>
+                  <p className="text-xs leading-5 text-slate-500">适合从 Excel / CSV 迁移外部计划，导入后再逐项校核。</p>
                 </div>
               </Button>
             </CardContent>
@@ -2071,7 +2071,7 @@ export default function BaselinePage() {
                   type="checkbox"
                   checked={importMappingConfirmed}
                   onChange={(event) => setImportMappingConfirmed(event.target.checked)}
-                  className="mt-1 h-4 w-4 rounded border-slate-300 text-cyan-600"
+                  className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600"
                 />
                 <span className="text-sm leading-6 text-slate-700">
                   已确认列映射与字段对应关系，再生成导入基线草稿

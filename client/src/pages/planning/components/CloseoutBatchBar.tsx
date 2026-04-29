@@ -39,7 +39,7 @@ export function CloseoutBatchBar({
         )}
       >
         <div className="flex items-center gap-3">
-          <span className="flex h-7 min-w-7 items-center justify-center rounded-full bg-cyan-500 px-2 text-xs font-bold text-slate-950">
+          <span className="flex h-7 min-w-7 items-center justify-center rounded-full bg-blue-500 px-2 text-xs font-bold text-slate-950">
             {selectedCount}
           </span>
           <span className="text-sm font-medium">已选择 {selectedCount} 项</span>

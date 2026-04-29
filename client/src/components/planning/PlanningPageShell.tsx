@@ -45,7 +45,7 @@ export function PlanningPageShell({
       />
 
       <Card variant="detail" className="overflow-hidden">
-        <div className="h-1 bg-gradient-to-r from-cyan-500 via-sky-500 to-indigo-500" />
+        <div className="h-1 bg-gradient-to-r from-blue-500 via-sky-500 to-indigo-500" />
         <CardContent className="space-y-5 p-0">
           <div
             data-testid="planning-layer-l1"
@@ -80,7 +80,7 @@ export function PlanningPageShell({
                   onClick={tab.onClick}
                   className={cn(
                     'rounded-full px-4',
-                    tab.active ? 'shadow-md shadow-cyan-500/20' : 'bg-white'
+                    tab.active ? 'shadow-md shadow-blue-500/20' : 'bg-white'
                   )}
                 >
                   {tab.label}

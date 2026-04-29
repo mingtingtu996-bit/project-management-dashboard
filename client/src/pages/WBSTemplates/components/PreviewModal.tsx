@@ -78,7 +78,7 @@ export function PreviewModal({
             </div>
             <div>
               <h2 className="font-semibold text-slate-800">{template.name}</h2>
-              <p className="text-xs text-slate-400">
+              <p className="text-xs text-slate-500">
                 {nodeCount ? `${nodeCount} 个任务节点 · ` : ''}
                 {refDays ? `参考工期 ${refDays} 天 · ` : ''}
                 {template.template_type || ''}
@@ -88,7 +88,7 @@ export function PreviewModal({
           </div>
           <Button variant="ghost"
             onClick={onClose}
-            className="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-400 hover:text-slate-600 transition-colors"
+            className="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-500 hover:text-slate-600 transition-colors"
           >
             <IconX />
           </Button>
@@ -99,7 +99,7 @@ export function PreviewModal({
           <div className="flex-1 overflow-y-auto p-4 border-r border-slate-100">
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-sm font-semibold text-slate-700">任务结构</h3>
-              <div className="flex items-center gap-2 text-xs text-slate-400">
+              <div className="flex items-center gap-2 text-xs text-slate-500">
                 <span className="flex items-center gap-1">
                   <span className="w-1.5 h-1.5 rounded-full bg-amber-500 inline-block" />
                   里程碑
@@ -120,7 +120,7 @@ export function PreviewModal({
               </div>
             </div>
             {wbsNodes.length === 0 ? (
-              <div className="text-sm text-slate-400 py-6 text-center">暂无节点数据</div>
+              <div className="text-sm text-slate-500 py-6 text-center">暂无节点数据</div>
             ) : (
               <PreviewNodeTree
                 nodes={wbsNodes}
@@ -138,23 +138,23 @@ export function PreviewModal({
                 <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">节点详情</h4>
                 <div className="space-y-3">
                   <div>
-                    <p className="text-xs text-slate-400 mb-1">节点名称</p>
+                    <p className="text-xs text-slate-500 mb-1">节点名称</p>
                     <p className="text-sm font-medium text-slate-800 leading-relaxed">{selectedNode.name}</p>
                   </div>
                   {selectedNode.path && (
                     <div>
-                      <p className="text-xs text-slate-400 mb-1">层级路径</p>
+                      <p className="text-xs text-slate-500 mb-1">层级路径</p>
                       <p className="text-xs text-slate-500 leading-relaxed break-words">{selectedNode.path}</p>
                     </div>
                   )}
                   <div className="grid grid-cols-2 gap-2">
                     <Card className="bg-white rounded-xl p-2 border border-slate-100 text-center">
                       <p className="text-lg font-bold text-emerald-600">{selectedNode.reference_days ?? '—'}</p>
-                      <p className="text-xs text-slate-400 mt-0.5">参考工期(天)</p>
+                      <p className="text-xs text-slate-500 mt-0.5">参考工期(天)</p>
                     </Card>
                     <Card className="bg-white rounded-xl p-2 border border-slate-100 text-center">
                       <p className="text-lg font-bold text-slate-700">{selectedNode.level + 1}</p>
-                      <p className="text-xs text-slate-400 mt-0.5">层级</p>
+                      <p className="text-xs text-slate-500 mt-0.5">层级</p>
                     </Card>
                   </div>
                   {selectedNode.is_milestone && (
@@ -170,7 +170,7 @@ export function PreviewModal({
                   )}
                   {Array.isArray(selectedNode.children) && selectedNode.children.length > 0 && (
                     <div>
-                      <p className="text-xs text-slate-400 mb-1">直接子节点</p>
+                      <p className="text-xs text-slate-500 mb-1">直接子节点</p>
                       <div className="space-y-1">
                         {selectedNode.children.slice(0, 5).map((child, index) => (
                           <Card
@@ -182,7 +182,7 @@ export function PreviewModal({
                           </Card>
                         ))}
                         {selectedNode.children.length > 5 && (
-                          <p className="text-xs text-slate-400 pl-1">
+                          <p className="text-xs text-slate-500 pl-1">
                             还有 {selectedNode.children.length - 5} 个子节点
                           </p>
                         )}
@@ -212,7 +212,7 @@ export function PreviewModal({
                   { label: '使用次数', value: `${template.usage_count ?? 0} 次` },
                 ].map(({ label, value, highlight }) => (
                   <div key={label} className="flex justify-between text-sm">
-                    <span className="text-slate-400">{label}</span>
+                    <span className="text-slate-500">{label}</span>
                     <span className={`font-medium ${highlight ? 'text-emerald-600 font-bold' : 'text-slate-700'}`}>
                       {value}
                     </span>
@@ -232,18 +232,18 @@ export function PreviewModal({
                     >
                       <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 flex-shrink-0" />
                       <span className="flex-1 truncate">{history.name}</span>
-                      <span className="text-slate-400">{history.date}</span>
+                      <span className="text-slate-500">{history.date}</span>
                     </div>
                   ))}
                 </div>
               ) : (
-                <p className="text-xs text-slate-400 px-2">暂无使用记录</p>
+                <p className="text-xs text-slate-500 px-2">暂无使用记录</p>
               )}
             </div>
 
             <div className="mt-auto space-y-2">
               {isDisabled ? (
-                <div className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 text-center text-sm text-slate-400">
+                <div className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 text-center text-sm text-slate-500">
                   已停用，无法应用到项目
                 </div>
               ) : (

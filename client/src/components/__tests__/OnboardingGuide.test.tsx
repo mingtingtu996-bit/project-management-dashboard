@@ -1,5 +1,8 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+import { useStore } from '@/hooks/useStore'
 
 import { OnboardingGuide } from '../OnboardingGuide'
 
@@ -12,6 +15,7 @@ describe('OnboardingGuide', () => {
     vi.mocked(window.localStorage.getItem).mockReset()
     vi.mocked(window.localStorage.setItem).mockReset()
     vi.mocked(window.localStorage.getItem).mockReturnValue(null)
+    useStore.setState({ currentProject: null })
   })
 
   it('starts the five-step guide for first-time users and can complete it', async () => {
@@ -22,7 +26,9 @@ describe('OnboardingGuide', () => {
         <a data-onboarding-target="planning-nav" />
         <a data-onboarding-target="gantt-nav" />
         <a data-onboarding-target="reports-nav" />
-        <OnboardingGuide />
+        <MemoryRouter>
+          <OnboardingGuide />
+        </MemoryRouter>
       </div>,
     )
 
@@ -51,12 +57,34 @@ describe('OnboardingGuide', () => {
       return null
     })
 
-    render(<OnboardingGuide />)
+    render(
+      <MemoryRouter>
+        <OnboardingGuide />
+      </MemoryRouter>,
+    )
 
     expect(await screen.findByTestId('onboarding-daily-workflow')).toHaveTextContent('Dashboard 查看概况')
     expect(screen.queryByTestId('onboarding-guide')).not.toBeInTheDocument()
 
     fireEvent.click(firstButton('关闭每日工作流'))
     expect(window.localStorage.setItem).toHaveBeenCalledWith('onboarding_daily_workflow_dismissed', 'true')
+  })
+
+  it('links daily workflow steps when a project is selected', async () => {
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => {
+      if (key === 'onboarding_completed') return 'true'
+      return null
+    })
+    useStore.setState({ currentProject: { id: 'project-1', name: '示例项目' } as never })
+
+    render(
+      <MemoryRouter>
+        <OnboardingGuide />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('link', { name: 'Dashboard 查看概况' })).toHaveAttribute('href', '/projects/project-1/dashboard')
+    expect(screen.getByRole('link', { name: '进甘特图调整任务' })).toHaveAttribute('href', '/projects/project-1/gantt')
+    expect(screen.getByRole('link', { name: '查看报表' })).toHaveAttribute('href', '/projects/project-1/reports')
   })
 })

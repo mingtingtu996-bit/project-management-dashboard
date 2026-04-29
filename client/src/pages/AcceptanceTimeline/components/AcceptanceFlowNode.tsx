@@ -250,8 +250,8 @@ function getFlowNodeState(status: string) {
 
   if (normalizedStatus === 'passed' || normalizedStatus === 'archived') {
     return {
-      barClass: 'bg-green-500',
-      surfaceClass: 'border-green-200 bg-green-50/90',
+      barClass: 'bg-emerald-500',
+      surfaceClass: 'border-emerald-200 bg-emerald-50/90',
     }
   }
 

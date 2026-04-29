@@ -54,7 +54,7 @@ function formatDate(dateStr: string) {
 function getTrendIcon(rate: number) {
   if (rate > 0) return <TrendingUp className="h-4 w-4 text-red-500" />
   if (rate < 0) return <TrendingDown className="h-4 w-4 text-emerald-500" />
-  return <Minus className="h-4 w-4 text-slate-400" />
+  return <Minus className="h-4 w-4 text-slate-500" />
 }
 
 function getTrendColor(rate: number) {
@@ -131,7 +131,7 @@ export default function RiskTrendChart({ defaultExpanded = true }: RiskTrendChar
                 <span className={getTrendColor(data.summary.riskChangeRate)}>
                   {data.summary.riskChangeRate > 0 ? '+' : ''}{data.summary.riskChangeRate}%
                 </span>
-                <span className="text-xs text-slate-400">({days}天)</span>
+                <span className="text-xs text-slate-500">({days}天)</span>
               </div>
             ) : null}
           </div>
@@ -172,7 +172,7 @@ export default function RiskTrendChart({ defaultExpanded = true }: RiskTrendChar
           ) : !trend.length ? (
             <div className="py-8 text-center text-slate-500">
               <p>暂无趋势数据</p>
-              <p className="mt-1 text-sm text-slate-400">系统将自动收集每日风险、问题和预警统计数据</p>
+              <p className="mt-1 text-sm text-slate-500">系统将自动收集每日风险、问题和预警统计数据</p>
             </div>
           ) : (
             <div className="space-y-6">
@@ -197,8 +197,8 @@ export default function RiskTrendChart({ defaultExpanded = true }: RiskTrendChar
                   <div className="text-2xl font-bold text-amber-600">{data?.summary.currentIssueCount ?? 0}</div>
                   <div className="mt-1 text-xs text-slate-500">活跃问题</div>
                 </div>
-                <div className="rounded-xl bg-cyan-50 p-3 text-center">
-                  <div className="text-2xl font-bold text-cyan-600">{data?.summary.currentWarningCount ?? 0}</div>
+                <div className="rounded-xl bg-blue-50 p-3 text-center">
+                  <div className="text-2xl font-bold text-blue-600">{data?.summary.currentWarningCount ?? 0}</div>
                   <div className="mt-1 text-xs text-slate-500">活跃预警</div>
                 </div>
               </div>
@@ -208,7 +208,7 @@ export default function RiskTrendChart({ defaultExpanded = true }: RiskTrendChar
                   <div>
                     <div className="mb-2 flex items-center justify-between">
                       <span className="text-sm font-medium text-slate-700">风险存量趋势</span>
-                      <span className="text-xs text-slate-400">单位: 个</span>
+                      <span className="text-xs text-slate-500">单位: 个</span>
                     </div>
                     <ChartAccessibleWrapper
                       columns={['日期', '风险总数', '新增风险', '已解决风险', '高风险', '中风险', '低风险']}
@@ -224,7 +224,7 @@ export default function RiskTrendChart({ defaultExpanded = true }: RiskTrendChar
                       summary="查看风险存量趋势数据"
                     >
                       <div className="relative h-44 rounded-2xl bg-slate-50 p-4">
-                        <div className="absolute left-2 top-4 bottom-8 flex flex-col justify-between text-xs text-slate-400">
+                        <div className="absolute left-2 top-4 bottom-8 flex flex-col justify-between text-xs text-slate-500">
                           <span>{maxRiskTotal}</span>
                           <span>{Math.round(maxRiskTotal / 2)}</span>
                           <span>0</span>
@@ -246,7 +246,7 @@ export default function RiskTrendChart({ defaultExpanded = true }: RiskTrendChar
   <TooltipContent>{`${item.date}: ${item.totalRisks} 个风险`}</TooltipContent>
 </Tooltip>
                                 {index % Math.max(Math.ceil(trend.length / 8), 1) === 0 ? (
-                                  <span className="mt-1 text-xs text-slate-400">{formatDate(item.date)}</span>
+                                  <span className="mt-1 text-xs text-slate-500">{formatDate(item.date)}</span>
                                 ) : (
                                   <span className="mt-1 text-xs text-transparent">.</span>
                                 )}
@@ -318,7 +318,7 @@ export default function RiskTrendChart({ defaultExpanded = true }: RiskTrendChar
 </Tooltip>
                                 </div>
                                 {index % Math.max(Math.ceil(trend.length / 8), 1) === 0 ? (
-                                  <span className="mt-1 text-xs text-slate-400">{formatDate(item.date)}</span>
+                                  <span className="mt-1 text-xs text-slate-500">{formatDate(item.date)}</span>
                                 ) : (
                                   <span className="mt-1 text-xs text-transparent">.</span>
                                 )}
@@ -333,7 +333,7 @@ export default function RiskTrendChart({ defaultExpanded = true }: RiskTrendChar
                   <div>
                     <div className="mb-2 flex items-center justify-between">
                       <span className="text-sm font-medium text-slate-700">风险等级结构</span>
-                      <span className="text-xs text-slate-400">当前存量</span>
+                      <span className="text-xs text-slate-500">当前存量</span>
                     </div>
                     <ChartAccessibleWrapper
                       columns={['风险等级', '数量']}

@@ -264,7 +264,7 @@ export function FourCertificateBoard({
                     )
                   })
                 ) : (
-                  <span className="text-xs text-slate-400">暂无共享事项</span>
+                  <span className="text-xs text-slate-500">暂无共享事项</span>
                 )}
               </div>
 

@@ -39,6 +39,18 @@ describe('Button', () => {
     expect(onClick).not.toHaveBeenCalled()
   })
 
+  it('uses the v1.3.1 default radius and focus-visible contract', () => {
+    act(() => {
+      root?.render(<Button>保存</Button>)
+    })
+
+    const button = container.querySelector('button')
+    expect(button).not.toBeNull()
+    expect(button?.className).toContain('rounded-xl')
+    expect(button?.className).not.toContain('rounded-2xl')
+    expect(button?.className).toContain('focus-visible:ring-2')
+  })
+
   it('blocks asChild interactions when disabled', () => {
     const onClick = vi.fn()
 

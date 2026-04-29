@@ -44,11 +44,11 @@ export function PlanningGovernanceBanner({
   void errorMessage
 
   return (
-    <Card data-testid="planning-governance-banner" className="border-cyan-200 bg-slate-950 text-white shadow-sm">
+    <Card data-testid="planning-governance-banner" className="border-blue-200 bg-slate-950 text-white shadow-sm">
       <CardContent className="flex flex-col gap-4 p-4 lg:flex-row lg:items-center lg:justify-between">
         <div className="space-y-2">
           <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="secondary" className="bg-cyan-500/15 text-cyan-100">
+            <Badge variant="secondary" className="bg-blue-500/15 text-blue-100">
               计划治理
             </Badge>
             <Badge variant="outline" className="border-slate-700 bg-slate-900 text-slate-100">

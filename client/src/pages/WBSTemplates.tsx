@@ -812,7 +812,7 @@ export default function WBSTemplates() {
               />
             ) : templates.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
-                <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-white text-slate-400">
+                <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-white text-slate-500">
                   <Layers3 className="h-5 w-5" />
                 </div>
                 <div className="text-sm font-medium text-slate-800">当前还没有模板</div>

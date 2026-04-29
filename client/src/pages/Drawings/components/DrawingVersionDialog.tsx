@@ -193,7 +193,7 @@ export function DrawingVersionDialog({
                         </div>
                         <div className="text-xs text-slate-500">{version.drawingName}</div>
                         {version.changeReason && <div className="text-sm leading-6 text-slate-600">{version.changeReason}</div>}
-                        <div className="text-xs text-slate-400">
+                        <div className="text-xs text-slate-500">
                           {version.createdBy}
                           {version.createdAt ? ` · ${version.createdAt}` : ''}
                         </div>

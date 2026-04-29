@@ -81,8 +81,8 @@ export function MilestoneCard({
             {statusKey === 'completed' && <CheckCircle className="w-5 h-5 text-emerald-600" />}
             {statusKey === 'processing' && <Clock className="w-5 h-5 text-blue-600" />}
             {statusKey === 'overdue' && <AlertTriangle className="w-5 h-5 text-red-500" />}
-            {statusKey === 'cancelled' && <X className="w-5 h-5 text-slate-400" />}
-            {statusKey === 'pending' && <FileText className="w-5 h-5 text-slate-400" />}
+            {statusKey === 'cancelled' && <X className="w-5 h-5 text-slate-500" />}
+            {statusKey === 'pending' && <FileText className="w-5 h-5 text-slate-500" />}
           </div>
           <div className="min-w-0">
             <h3 className="font-medium text-slate-900 text-sm leading-tight truncate">{milestone.name}</h3>
@@ -146,7 +146,7 @@ export function MilestoneCard({
                           ? 'bg-blue-600 text-white ring-2 ring-blue-200'
                           : isDone
                             ? 'bg-blue-400 text-white'
-                            : 'bg-slate-100 text-slate-400'
+                            : 'bg-slate-100 text-slate-500'
                     }`}
                     >
                       {isDone && !isCurrent ? (
@@ -159,7 +159,7 @@ export function MilestoneCard({
                     </div>
                     <span className={`text-xs mt-1 whitespace-nowrap ${
                       isCurrent ? 'text-blue-600 font-medium' :
-                      isDone ? 'text-slate-600' : 'text-slate-400'
+                      isDone ? 'text-slate-600' : 'text-slate-500'
                     }`}
                     >
                       {step}

@@ -11,6 +11,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { Download, History, MoreHorizontal, RotateCcw, RotateCw, Save } from 'lucide-react'
 
@@ -170,7 +171,7 @@ export function BaselineBottomBar({
               <Button
                 type="button"
                 size="sm"
-                className="gap-2 rounded-full bg-cyan-500 text-slate-950 hover:bg-cyan-400"
+                className="gap-2 rounded-full border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
                 onClick={onSaveDraft}
                 disabled={readOnly || saveDisabled}
               >
@@ -178,15 +179,32 @@ export function BaselineBottomBar({
                 {saving ? '保存中...' : '保存草稿'}
               </Button>
               {onOpenConfirm ? (
-                <Button
-                  type="button"
-                  size="sm"
-                  className="gap-2 rounded-full bg-emerald-700 text-white hover:bg-emerald-600"
-                  onClick={onOpenConfirm}
-                  disabled={readOnly || confirmDisabled}
-                >
-                  确认项目基线
-                </Button>
+                readOnly || confirmDisabled ? (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="inline-flex cursor-not-allowed">
+                        <Button
+                          type="button"
+                          size="sm"
+                          className="gap-2 rounded-full bg-blue-600 text-white hover:bg-blue-500"
+                          disabled
+                        >
+                          确认项目基线
+                        </Button>
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent>请先保存草稿</TooltipContent>
+                  </Tooltip>
+                ) : (
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="gap-2 rounded-full bg-blue-600 text-white hover:bg-blue-500"
+                    onClick={onOpenConfirm}
+                  >
+                    确认项目基线
+                  </Button>
+                )
               ) : null}
             </div>
           </div>

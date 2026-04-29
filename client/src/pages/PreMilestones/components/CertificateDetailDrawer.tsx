@@ -123,7 +123,7 @@ function LinkedCard({
         <div className="min-w-0">
           <div className="font-medium text-slate-900">{title}</div>
           {description ? <div className="mt-1 text-xs leading-5 text-slate-600">{description}</div> : null}
-          {footer ? <div className="mt-1 text-xs text-slate-400">{footer}</div> : null}
+          {footer ? <div className="mt-1 text-xs text-slate-500">{footer}</div> : null}
         </div>
         {badges ? <div className="flex flex-wrap gap-2">{badges}</div> : null}
       </div>
@@ -319,7 +319,7 @@ export function CertificateDetailDrawer({
           <Button variant="ghost"
             type="button"
             onClick={onClose}
-            className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+            className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-600"
             aria-label="关闭"
           >
             <X className="h-5 w-5" />

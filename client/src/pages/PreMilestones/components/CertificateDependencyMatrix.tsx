@@ -38,7 +38,7 @@ const cellConfig = {
   none: {
     icon: Slash,
     label: '无关',
-    className: 'bg-white text-slate-400 border-slate-200',
+    className: 'bg-white text-slate-500 border-slate-200',
   },
 } as const
 

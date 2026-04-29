@@ -57,7 +57,7 @@ function resolveCertificateNames(
 
 function getLedgerStatusTone(status?: string | null) {
   const normalized = String(status ?? 'pending')
-  if (['issued', 'approved', 'completed'].includes(normalized)) return { dot: 'bg-green-500', text: 'text-green-700' }
+  if (['issued', 'approved', 'completed'].includes(normalized)) return { dot: 'bg-emerald-500', text: 'text-emerald-700' }
   if (['preparing_documents', 'internal_review', 'external_submission', 'in_progress', 'submitted'].includes(normalized)) return { dot: 'bg-blue-600', text: 'text-blue-700' }
   if (['supplement_required', 'blocked', 'expired'].includes(normalized)) return { dot: 'bg-amber-500', text: 'text-amber-700' }
   if (['voided', 'cancelled'].includes(normalized)) return { dot: 'bg-slate-400', text: 'text-slate-600' }
@@ -176,7 +176,7 @@ export function CertificateLedger({
 
       <div className="mb-3 flex gap-2">
         <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
           <input
             type="text"
             aria-label="搜索证照事项"

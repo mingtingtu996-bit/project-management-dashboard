@@ -430,7 +430,7 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
       <div className="rounded-2xl border border-slate-200 bg-gradient-to-br from-white via-slate-50 to-blue-50 p-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="space-y-2">
-            <div className="text-xs font-semibold uppercase tracking-wider text-slate-400">团队管理</div>
+            <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">团队管理</div>
             <div className="text-2xl font-semibold tracking-tight text-slate-900">{projectName || '当前项目'} 的成员与权限</div>
             <div className="flex flex-wrap gap-2">
               <Badge variant={access?.globalRole === 'company_admin' ? 'default' : 'secondary'}>{getGlobalRoleLabel(access?.globalRole)}</Badge>

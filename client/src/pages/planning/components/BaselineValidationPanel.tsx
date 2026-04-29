@@ -147,8 +147,8 @@ export function BaselineValidationPanel({ issues, emptyLabel = '当前没有待�
                         className={cn(
                           'flex w-full items-start justify-between gap-3 rounded-xl border px-3 py-3 text-left transition',
                           isSelected
-                            ? 'border-cyan-300 bg-cyan-50/60 shadow-sm'
-                            : 'border-slate-200 bg-slate-50/50 hover:border-cyan-200 hover:bg-slate-50',
+                            ? 'border-blue-300 bg-blue-50/60 shadow-sm'
+                            : 'border-slate-200 bg-slate-50/50 hover:border-blue-200 hover:bg-slate-50',
                         )}
                       >
                         <div className="min-w-0 flex-1">

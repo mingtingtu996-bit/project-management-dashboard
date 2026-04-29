@@ -332,7 +332,7 @@ function normalizeChangeLogRows(value: unknown): DashboardChangeLogItem[] {
 
 function getHealthPill(score: number) {
   if (score >= 80) {
-    return { label: '良好', className: 'bg-green-50 text-green-700' }
+    return { label: '良好', className: 'bg-emerald-50 text-emerald-700' }
   }
   if (score >= 60) {
     return { label: '一般', className: 'bg-amber-50 text-amber-700' }
@@ -433,7 +433,7 @@ function formatMetricTrend(value: number, invertTone = false) {
   const isGood = invertTone ? !isPositive : isPositive
   return {
     label: `${isPositive ? '↑+' : '↓'}${Math.abs(value)}`,
-    className: isGood ? 'text-green-700' : 'text-red-700',
+    className: isGood ? 'text-emerald-700' : 'text-red-700',
   }
 }
 
@@ -451,6 +451,7 @@ function DashboardMetricCards({
   const leafTasks = Math.max(summaryData?.leafTaskCount ?? summaryData?.totalTasks ?? 0, 1)
   const completedRatio = Math.round((completedTasks / leafTasks) * 100)
   const progressTrend = Math.max(0, Math.round(completedTasks))
+  const noVerifiedSparkline: Array<{ value: number }> = []
 
   const metrics = [
     {
@@ -459,12 +460,7 @@ function DashboardMetricCards({
       value: overallProgress,
       unit: '%',
       trend: formatMetricTrend(progressTrend),
-      sparkline: [
-        { value: Math.max(0, completedRatio - 8) },
-        { value: completedRatio },
-        { value: summaryData?.milestoneProgress ?? 0 },
-        { value: overallProgress },
-      ],
+      sparkline: noVerifiedSparkline,
       color: '#2563EB',
     },
     {
@@ -473,12 +469,7 @@ function DashboardMetricCards({
       value: monthDeviation,
       unit: '天',
       trend: formatMetricTrend(monthDeviation, true),
-      sparkline: [
-        { value: 0 },
-        { value: summaryData?.delayCount ?? 0 },
-        { value: summaryData?.delayedTaskCount ?? 0 },
-        { value: monthDeviation },
-      ],
+      sparkline: noVerifiedSparkline,
       color: '#F97316',
     },
     {
@@ -487,12 +478,7 @@ function DashboardMetricCards({
       value: activeRisks,
       unit: '',
       trend: formatMetricTrend(activeRisks, true),
-      sparkline: [
-        { value: summaryData?.pendingConditionCount ?? 0 },
-        { value: summaryData?.activeObstacleCount ?? 0 },
-        { value: summaryData?.activeIssueCount ?? 0 },
-        { value: activeRisks },
-      ],
+      sparkline: noVerifiedSparkline,
       color: '#DC2626',
     },
     {
@@ -500,13 +486,9 @@ function DashboardMetricCards({
       label: '今日待办',
       value: todayTodoCount,
       unit: '',
+      // TODO: 需后端补充昨日待办数后替换为真实趋势。
       trend: formatMetricTrend(0),
-      sparkline: [
-        { value: summaryData?.unreadWarningCount ?? 0 },
-        { value: summaryData?.pendingConditionCount ?? 0 },
-        { value: summaryData?.activeObstacleCount ?? 0 },
-        { value: todayTodoCount },
-      ],
+      sparkline: noVerifiedSparkline,
       color: '#64748B',
     },
   ]
@@ -532,7 +514,7 @@ function DashboardMetricCards({
               {metric.unit ? <span className="text-sm text-slate-600">{metric.unit}</span> : null}
               <span className={cn('text-sm font-medium', metric.trend.className)}>{metric.trend.label}</span>
             </div>
-            <Sparkline data={metric.sparkline} color={metric.color} className="mt-4" />
+            {metric.sparkline.length > 1 && <Sparkline data={metric.sparkline} color={metric.color} className="mt-4" />}
           </CardContent>
         </Card>
       ))}
@@ -580,7 +562,11 @@ function TodayLiveListPanel({
             className="min-h-24 border-0 bg-transparent px-0 py-2 shadow-none"
           />
         ) : previewItems.length === 0 ? (
-          <EmptyState icon={CheckCircle} title="今日暂无待处理事项" className="max-w-none py-6" />
+          <div className="flex flex-col items-center justify-center py-8 text-center">
+            <CheckCircle className="h-10 w-10 text-emerald-400" />
+            <h3 className="mt-3 text-sm font-medium text-slate-900">今日事项已全部处理</h3>
+            <p className="mt-1 text-xs text-slate-500">干得漂亮！</p>
+          </div>
         ) : (
           <ul className="space-y-1">
             {previewItems.map((item) => {
@@ -590,9 +576,9 @@ function TodayLiveListPanel({
                   key={item.id}
                   className={cn('flex items-center gap-3 rounded-lg border-l-4 bg-slate-50 px-3 py-2', config.color)}
                 >
-                  <span className="w-9 shrink-0 text-xs font-medium text-slate-400">{config.label}</span>
+                  <span className="w-9 shrink-0 text-xs font-medium text-slate-500">{config.label}</span>
                   <span className="min-w-0 flex-1 truncate text-sm text-slate-700">{item.title}</span>
-                  <span className="shrink-0 text-xs tabular-nums text-slate-400">{item.meta}</span>
+                  <span className="shrink-0 text-xs tabular-nums text-slate-500">{item.meta}</span>
                 </li>
               )
             })}
@@ -623,6 +609,14 @@ function DashboardHero({
   const monthlyPlanningLink = currentProject.id ? `/projects/${currentProject.id}/planning/monthly` : '/company'
   const closeoutPlanningLink = currentProject.id ? `/projects/${currentProject.id}/tasks/closeout` : '/company'
   const [confidenceDialogOpen, setConfidenceDialogOpen] = useState(false)
+  const progressValue = summaryData?.overallProgress ?? 0
+  const progressBadgeClass =
+    progressValue >= 80
+      ? 'bg-emerald-50 text-emerald-700'
+      : progressValue >= 60
+        ? 'bg-amber-50 text-amber-700'
+        : 'bg-red-50 text-red-700'
+  const hasOverdueMilestone = (summaryData?.milestoneOverview?.stats?.overdue ?? 0) > 0
 
   return (
     <section data-testid="dashboard-support-signals" className="space-y-4">
@@ -712,10 +706,10 @@ function DashboardHero({
             >
               数据可靠性 {Math.round(confidence?.score ?? 0)}%
             </StatusBadge>
-            <span className="badge-base bg-slate-100 text-slate-700">
-              当前进度 {summaryData?.overallProgress ?? 0}%
+            <span className={cn('badge-base', progressBadgeClass)}>
+              当前进度 {progressValue}%
             </span>
-            <span className="badge-base bg-slate-100 text-slate-700">
+            <span className={cn('badge-base', hasOverdueMilestone ? 'bg-red-50 text-red-700' : 'bg-slate-100 text-slate-700')}>
               下一关键节点 {nextMilestone?.name || '暂无'}
             </span>
             <span className="badge-base bg-slate-100 text-slate-700">
@@ -861,17 +855,17 @@ function WeeklyDigestPanel({ projectId }: { projectId: string }) {
               <div>
                 <div className="mb-2 text-xs font-medium text-slate-500">Top 5 偏差任务</div>
                 {(digest.top_delayed_tasks || []).length === 0 ? (
-                  <div className="text-xs text-slate-400">暂无偏差任务</div>
+                  <div className="text-xs text-slate-500">暂无偏差任务</div>
                 ) : (
                   <ul className="space-y-1">
                     {(digest.top_delayed_tasks || []).map((t, i) => (
                       <li key={t.task_id} className="flex items-center gap-2 text-xs">
-                        <span className="text-slate-400">{i + 1}.</span>
+                        <span className="text-slate-500">{i + 1}.</span>
                         <Link to={`/projects/${projectId}/gantt?taskId=${t.task_id}`} className="text-blue-600 hover:underline">
                           {t.title}
                         </Link>
                         <span className="text-red-500">(+{t.delay_days}天)</span>
-                        {t.assignee && <span className="text-slate-400">{t.assignee}</span>}
+                        {t.assignee && <span className="text-slate-500">{t.assignee}</span>}
                       </li>
                     ))}
                   </ul>
@@ -880,7 +874,7 @@ function WeeklyDigestPanel({ projectId }: { projectId: string }) {
               <div>
                 <div className="mb-2 text-xs font-medium text-slate-500">责任主体异常</div>
                 {(digest.abnormal_responsibilities || []).length === 0 ? (
-                  <div className="text-xs text-slate-400">暂无异常责任主体</div>
+                  <div className="text-xs text-slate-500">暂无异常责任主体</div>
                 ) : (
                   <ul className="space-y-1">
                     {(digest.abnormal_responsibilities || []).map(r => (
@@ -999,7 +993,7 @@ function DashboardMonthlyTrend({ projectId }: { projectId: string }) {
       </CardHeader>
       <CardContent className="space-y-4">
         {loading ? (
-          <div className="flex h-32 items-center justify-center text-sm text-slate-400">加载中…</div>
+          <div className="flex h-32 items-center justify-center text-sm text-slate-500">加载中…</div>
         ) : trendData.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
             月度趋势将在任务完成后自动生成。
@@ -1141,10 +1135,10 @@ function IssueRiskGrid({ summaryData, projectId }: { summaryData: ProjectSummary
       label: '活跃风险数',
       value: summaryData?.activeRiskCount ?? 0,
       icon: Activity,
-      bg: 'bg-purple-50',
-      iconColor: 'text-purple-500',
-      textColor: 'text-purple-700',
-      badgeBg: 'bg-purple-100 text-purple-700',
+      bg: 'bg-red-50',
+      iconColor: 'text-red-500',
+      textColor: 'text-red-700',
+      badgeBg: 'bg-red-100 text-red-700',
       to: `/projects/${projectId}/risks`,
     },
     {

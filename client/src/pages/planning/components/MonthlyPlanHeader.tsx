@@ -60,8 +60,8 @@ export function MonthlyPlanHeader({
         </div>
 
         <div data-testid="monthly-plan-status-strip" className="grid gap-3 md:grid-cols-3">
-          <div className="rounded-2xl border border-cyan-100 bg-cyan-50/70 p-3">
-            <div className="text-xs font-medium text-cyan-700">当前条件</div>
+          <div className="rounded-2xl border border-blue-100 bg-blue-50/70 p-3">
+            <div className="text-xs font-medium text-blue-700">当前条件</div>
             <div className="mt-1 text-sm font-semibold text-slate-900">
               {conditionCount > 0 ? `${conditionCount} 项待补齐` : '当前条件已满足'}
             </div>

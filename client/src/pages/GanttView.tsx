@@ -26,7 +26,7 @@ import { toast } from '@/hooks/use-toast'
 import { LoadingState } from '@/components/ui/loading-state'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { zhCN } from '@/i18n/zh-CN'
-import { Calendar, Save, ChevronRight, ChevronDown, Search, SlidersHorizontal, AlertTriangle } from 'lucide-react'
+import { Calendar, Save, ChevronRight, ChevronDown, Search, SlidersHorizontal, AlertTriangle, Filter } from 'lucide-react'
 import { apiDelete, apiGet, apiPost, apiPut, getApiErrorMessage, getAuthHeaders, isAbortError } from '@/lib/apiClient'
 import { DashboardApiService, type ProjectSummary } from '@/services/dashboardApi'
 import { DataQualityApiService, type DataQualityLiveCheckSummary, type DataQualityProjectSummary } from '@/services/dataQualityApi'
@@ -631,7 +631,7 @@ export default function GanttView() {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingTask, setEditingTask] = useState<Task | null>(null)
   
-  // WBS 閺嶆垵鑸伴悩鑸碘偓?
+  // WBS 折叠状态
   const [collapsed, setCollapsed] = useState<Set<string>>(() => {
     const saved = safeStorageGet(localStorage, `gantt_collapsed_${id}`)
     return new Set(safeJsonParse<string[]>(saved, [], `gantt collapsed ${id ?? 'unknown'}`))
@@ -639,7 +639,7 @@ export default function GanttView() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [batchUpdating, setBatchUpdating] = useState(false)
   const { confirmDialog, setConfirmDialog, openConfirm } = useConfirmDialog()
-  // 濞ｈ濮炵€涙劒鎹㈤崝鈩冩妫板嫯顔曢惃鍕煑閼哄倻鍋?ID
+  // 新建子任务时继承的父任务 ID
   const [newTaskParentId, setNewTaskParentId] = useState<string | null>(null)
 
   const [milestoneDialogOpen, setMilestoneDialogOpen] = useState(false)
@@ -655,8 +655,8 @@ export default function GanttView() {
   const [forceSatisfyReason, setForceSatisfyReason] = useState('')
   const [newConditionName, setNewConditionName] = useState('')
   const [newConditionType, setNewConditionType] = useState<string>('other')
-  const [newConditionTargetDate, setNewConditionTargetDate] = useState('')       // P1-6: 閻╊喗鐖ｉ弮銉︽埂
-  const [newConditionDescription, setNewConditionDescription] = useState('')     // [G3]: 閺夆€叉鐠囷妇绮忕拠瀛樻
+  const [newConditionTargetDate, setNewConditionTargetDate] = useState('')       // P1-6: 目标日期
+  const [newConditionDescription, setNewConditionDescription] = useState('')     // [G3]: 条件说明
   const [newConditionResponsibleUnit, setNewConditionResponsibleUnit] = useState('')
   const [newConditionPrecedingTaskIds, setNewConditionPrecedingTaskIds] = useState<string[]>([])
 
@@ -964,6 +964,7 @@ export default function GanttView() {
       .catch((error) => {
         if (!isAbortError(error)) {
           console.warn('[GanttView] load project members failed', error)
+          toast({ variant: 'destructive', title: '加载项目成员失败' })
         }
       })
 
@@ -3254,9 +3255,9 @@ export default function GanttView() {
       }
 
     } catch (err: any) {
-      const msg = err?.message || '閺堫亞鐓￠柨娆掝嚖'
+      const msg = err?.message || '更新任务进度失败'
       if (msg.includes('VERSION_MISMATCH')) {
-        // 鐗堟湰鍐茬獊閿涙俺鍤滈崝銊ф暏閺堚偓閺傜増鏆熼幑顕€鍣哥拠鏇氱濞?
+        // 版本冲突时，重新拉取任务并使用最新版本重试。
         try {
           const refetch = await fetch(`${API_BASE}/api/tasks/${taskId}`, withRequestContext())
           const refetchJson = await refetch.json()
@@ -3704,7 +3705,7 @@ export default function GanttView() {
       ) : null}
 
       <div data-testid="task-workspace-body" className={`grid gap-4 transition-all duration-300 ${selectedTask ? 'xl:grid-cols-[minmax(0,1fr)_20rem]' : 'grid-cols-1'}`}>
-        {/* 瀹革缚鏅堕敍姝怋S娴犺濮熼崚妤勩€?*/}
+        {/* 任务工作区主内容层 */}
         <div data-testid="task-workspace-layer-l4" className="min-w-0 transition-all duration-300">
       <Card variant="detail">
         <CardHeader data-testid="task-workspace-layer-l3" className="flex flex-row items-center justify-between space-y-0 pb-3">
@@ -3736,8 +3737,16 @@ export default function GanttView() {
         </CardHeader>
         <Separator />
 
-        {!showFilterBar && activeFilterCount === 0 ? (
-          <div className="px-4 py-2 text-xs text-slate-600">点击展开筛选</div>
+        {!showFilterBar ? (
+          <button
+            type="button"
+            onClick={() => setShowFilterBar(true)}
+            className="flex items-center gap-1.5 px-4 py-2 text-xs text-slate-500 transition-colors hover:text-slate-700"
+          >
+            <Filter className="h-3.5 w-3.5" />
+            点击展开筛选
+            {activeFilterCount > 0 && <span className="h-2 w-2 rounded-full bg-blue-500" />}
+          </button>
         ) : null}
 
         {showFilterBar && (
@@ -3868,7 +3877,7 @@ export default function GanttView() {
           </DndContext>
         )}
       </Card>
-        </div>{/* 瀹革缚鏅堕崚妤勩€冪紒鎾存将 */}
+        </div>{/* 任务工作区主内容层结束 */}
 
         {selectedTask && (
           <aside data-testid="task-workspace-layer-l5" className="space-y-4">

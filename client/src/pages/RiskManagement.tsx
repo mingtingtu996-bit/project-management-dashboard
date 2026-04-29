@@ -1607,7 +1607,7 @@ export default function RiskManagement() {
             <div className="text-base font-semibold text-slate-900">{title}</div>
             {description ? <p className="text-sm leading-6 text-slate-500">{description}</p> : null}
             {banner ? <div className="pt-1">{banner}</div> : null}
-            {footer ? <p className="text-xs text-slate-400">{footer}</p> : null}
+            {footer ? <p className="text-xs text-slate-500">{footer}</p> : null}
           </div>
           {action || detailAction ? <div className="flex shrink-0 flex-wrap gap-2">{detailAction}{action}</div> : null}
         </div>
@@ -1635,7 +1635,7 @@ export default function RiskManagement() {
         {!item.is_acknowledged && item.reactivated_at ? <Badge variant="outline" className="border-orange-300 bg-orange-50 text-orange-700">已重新激活</Badge> : null}
         {hasPendingDelayRequest ? <Badge variant="outline" className="border-blue-300 bg-blue-50 text-blue-700">延期审批中</Badge> : null}
         {resolved && item.resolved_source === 'auto' ? <Badge variant="outline" className="border-blue-300 bg-blue-50 text-blue-700">系统联动消除</Badge> : null}
-        {resolved && item.resolved_source === 'manual' ? <Badge variant="outline" className="border-purple-300 bg-purple-50 text-purple-700">人工消除</Badge> : null}
+        {resolved && item.resolved_source === 'manual' ? <Badge variant="outline" className="border-red-300 bg-red-50 text-red-700">人工消除</Badge> : null}
       </>,
       title: item.title,
       description: item.description,
@@ -1787,7 +1787,7 @@ export default function RiskManagement() {
         <StatusBadge status={row.status} fallbackLabel={ISSUE_STATUS_LABELS[row.status]}>{ISSUE_STATUS_LABELS[row.status]}</StatusBadge>
         {row.pendingManualClose ? <StatusBadge status="warning">{PENDING_MANUAL_CLOSE_LABEL}</StatusBadge> : null}
         {row.status === 'resolved' && row.resolved_source === 'auto' ? <Badge variant="outline" className="border-blue-300 bg-blue-50 text-blue-700">系统联动解决</Badge> : null}
-        {row.status === 'resolved' && row.resolved_source === 'manual' ? <Badge variant="outline" className="border-purple-300 bg-purple-50 text-purple-700">人工解决</Badge> : null}
+        {row.status === 'resolved' && row.resolved_source === 'manual' ? <Badge variant="outline" className="border-red-300 bg-red-50 text-red-700">人工解决</Badge> : null}
       </>,
       title: row.title,
       description: row.description,
@@ -1902,6 +1902,34 @@ export default function RiskManagement() {
             <OverviewCard key={card.id} {...card} />
           ))}
         </div>
+
+        {dataQualitySummary && dataQualityConfidence ? (
+          <Card data-testid="risk-data-quality-banner" className="card-unified p-0">
+            <CardContent className="p-5">
+              <CollapsibleSection title="数据可靠性" defaultOpen={false} count={dataQualityConfidence.activeFindingCount}>
+                <div className="grid gap-4 pt-3 lg:grid-cols-[minmax(0,0.85fr)_minmax(360px,1.15fr)]">
+                  <div className={cn(
+                    'rounded-xl border px-4 py-3',
+                    showDataQualityBanner ? 'border-amber-200 bg-amber-50 text-amber-950' : 'border-emerald-200 bg-emerald-50 text-emerald-950',
+                  )}>
+                    <div className="text-base font-semibold">
+                      当前数据可靠性 {Math.round(dataQualityConfidence.score)}% · {dataQualityConfidence.flag}
+                    </div>
+                    <div className="mt-2 text-sm leading-6">
+                      {dataQualityConfidence.note} · 活跃异常 {dataQualityConfidence.activeFindingCount} 条
+                    </div>
+                  </div>
+                  <DataConfidenceBreakdown
+                    confidence={dataQualityConfidence}
+                    title="可靠性降分贡献"
+                    compact
+                    testId="risk-data-quality-breakdown"
+                  />
+                </div>
+              </CollapsibleSection>
+            </CardContent>
+          </Card>
+        ) : null}
 
         <RiskMultiLineChart
           data={trendChartData}
@@ -2104,34 +2132,6 @@ export default function RiskManagement() {
           </CardContent>
         </Card>
 
-        {dataQualitySummary && dataQualityConfidence ? (
-          <Card data-testid="risk-data-quality-banner" className="card-unified p-0">
-            <CardContent className="p-5">
-              <CollapsibleSection title="数据可靠性" defaultOpen={false} count={dataQualityConfidence.activeFindingCount}>
-                <div className="grid gap-4 pt-3 lg:grid-cols-[minmax(0,0.85fr)_minmax(360px,1.15fr)]">
-                  <div className={cn(
-                    'rounded-2xl border px-4 py-3',
-                    showDataQualityBanner ? 'border-amber-200 bg-amber-50 text-amber-950' : 'border-emerald-200 bg-emerald-50 text-emerald-950',
-                  )}>
-                    <div className="text-base font-semibold">
-                      当前数据可靠性 {Math.round(dataQualityConfidence.score)}% · {dataQualityConfidence.flag}
-                    </div>
-                    <div className="mt-2 text-sm leading-6">
-                      {dataQualityConfidence.note} · 活跃异常 {dataQualityConfidence.activeFindingCount} 条
-                    </div>
-                  </div>
-                  <DataConfidenceBreakdown
-                    confidence={dataQualityConfidence}
-                    title="可靠性降分贡献"
-                    compact
-                    testId="risk-data-quality-breakdown"
-                  />
-                </div>
-              </CollapsibleSection>
-            </CardContent>
-          </Card>
-        ) : null}
-
       </div>
 
       <Dialog open={dialogState !== null} onOpenChange={(open) => !open && setDialogState(null)}>
@@ -2149,7 +2149,7 @@ export default function RiskManagement() {
             <div className="flex h-full flex-col">
               <DialogHeader className="px-6 py-5">
                 <DialogTitle className="flex items-center gap-2 text-xl">
-                  <Eye className="h-5 w-5 text-slate-400" />
+                  <Eye className="h-5 w-5 text-slate-500" />
                   记录详情
                 </DialogTitle>
                 <DialogDescription className="sr-only">
@@ -2448,7 +2448,7 @@ function PipelineFlow({ pipelineStages }: { pipelineStages: RiskPipelineStages }
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="space-y-1">
             <div className="text-base font-semibold text-slate-900">风险处置链路</div>
-            <div className="text-sm text-slate-500">按识别、评估、应对、监控四阶段观察当前风险推进状态。</div>
+            <div className="text-sm text-slate-500">流程阶段展示风险从识别到监控的处置进度，下方按类型查看详情。</div>
           </div>
           <div className="flex flex-wrap items-center justify-center gap-2">
             {stages.map((stage, index) => (
@@ -2598,7 +2598,7 @@ function StreamFlowHint({ activeStream }: { activeStream: ChainStream }) {
     <div data-testid="risk-stream-flow-hint" className="flex items-center justify-end gap-2 text-xs">
       {nodes.map((node, index) => (
         <Fragment key={node.key}>
-          <span className={cn('rounded-full px-2 py-0.5', activeStream === node.key ? 'bg-blue-600 text-white' : 'text-slate-400')}>
+          <span className={cn('rounded-full px-2 py-0.5', activeStream === node.key ? 'bg-blue-600 text-white' : 'text-slate-500')}>
             {node.label}
           </span>
           {index < nodes.length - 1 ? <span className="text-slate-300">→</span> : null}
@@ -2633,7 +2633,7 @@ function WorkspaceFilterBar({
     <div data-testid="risk-workspace-unified-filter" className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-3">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div className="relative min-w-0 flex-1">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
           <Input
             value={search}
             onChange={(event) => onSearchChange(event.target.value)}

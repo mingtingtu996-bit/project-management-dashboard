@@ -281,7 +281,7 @@ function MetricCard({
       <CardContent className="space-y-3 pt-5">
         <div className="flex items-center justify-between">
           <span className="text-sm font-medium text-slate-500">{title}</span>
-          <span className="text-slate-400">{icon}</span>
+          <span className="text-slate-500">{icon}</span>
         </div>
         <div className="flex items-end justify-between gap-4">
           <div className="text-3xl font-semibold text-slate-900">{value}</div>
@@ -347,7 +347,7 @@ function TrendSeriesCard({
             </div>
           ))}
         </div>
-        <div className="mt-2 flex items-center justify-between text-xs text-slate-400">
+        <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
           <span>{sparkPoints[0]?.date?.slice(5) || '--'}</span>
           <span>{sparkPoints[sparkPoints.length - 1]?.date?.slice(5) || '--'}</span>
         </div>

@@ -117,7 +117,7 @@ export default function FeedbackModal({ isOpen, onClose, onSubmit }: FeedbackMod
         <form onSubmit={handleSubmit} className="p-4 space-y-4">
           {isSubmitted ? (
             <div className="py-8 text-center">
-              <CheckCircle className="h-12 w-12 text-green-500 mx-auto mb-2" />
+              <CheckCircle className="h-12 w-12 text-emerald-500 mx-auto mb-2" />
               <p className="font-medium">感谢您的反馈！</p>
             </div>
           ) : (

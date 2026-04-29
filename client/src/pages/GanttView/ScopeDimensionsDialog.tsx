@@ -332,7 +332,7 @@ export function ScopeDimensionsDialog({ projectId, open, onOpenChange }: ScopeDi
 </Tooltip>
                         ))
                       ) : (
-                        <span className="text-sm text-slate-400">未配置</span>
+                        <span className="text-sm text-slate-500">未配置</span>
                       )}
                     </div>
 
@@ -421,7 +421,7 @@ export function ScopeDimensionsDialog({ projectId, open, onOpenChange }: ScopeDi
                                   <Badge variant={row.is_active === false ? 'outline' : 'secondary'}>
                                     {row.is_active === false ? '停用' : '启用'}
                                   </Badge>
-                                  <span className="text-xs text-slate-400">顺序 {row.sort_order ?? 0}</span>
+                                  <span className="text-xs text-slate-500">顺序 {row.sort_order ?? 0}</span>
                                 </div>
                               </div>
                               <div className="flex items-center gap-1">
@@ -436,7 +436,7 @@ export function ScopeDimensionsDialog({ projectId, open, onOpenChange }: ScopeDi
                             </div>
                           )
                         }) : (
-                          <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-4 text-xs text-slate-400">
+                          <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-4 text-xs text-slate-500">
                             暂无字典条目
                           </div>
                         )}
@@ -463,7 +463,7 @@ export function ScopeDimensionsDialog({ projectId, open, onOpenChange }: ScopeDi
                           </Button>
                         )
                       }) : (
-                        <span className="text-xs text-slate-400">暂无可选项</span>
+                        <span className="text-xs text-slate-500">暂无可选项</span>
                       )}
                     </div>
                   </div>

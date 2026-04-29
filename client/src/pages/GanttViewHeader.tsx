@@ -71,8 +71,8 @@ export function GanttViewHeader({
         return {
           testId: 'gantt-governance-banner-reordering',
           badge: '执行编辑模式',
-          className: 'border-violet-200 bg-violet-50 text-violet-900',
-          badgeClassName: 'bg-violet-100 text-violet-800',
+          className: 'border-indigo-200 bg-indigo-50 text-indigo-900',
+          badgeClassName: 'bg-indigo-100 text-indigo-800',
           description: '主动编辑模式进行中，请在编辑模式结束后再进行后续确认与关账。',
         }
       case 'closeout':

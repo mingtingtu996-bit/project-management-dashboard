@@ -66,7 +66,7 @@ export function MilestoneDialog({
       <div className="max-h-[90vh] w-[90%] max-w-[560px] animate-in overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-[var(--el-4)] duration-200 ease-bounce fade-in-0 zoom-in-95">
         <div className="flex items-center justify-between p-6">
           <h2 className="text-xl font-semibold text-slate-900">{mode === 'edit' ? '编辑证照' : '新建证照'}</h2>
-          <Button variant="ghost" onClick={handleClose} className="p-2 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-600 transition-colors">
+          <Button variant="ghost" onClick={handleClose} className="p-2 hover:bg-slate-100 rounded-lg text-slate-500 hover:text-slate-600 transition-colors">
             <X className="w-5 h-5" />
           </Button>
         </div>

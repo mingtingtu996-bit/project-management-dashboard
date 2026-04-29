@@ -171,7 +171,7 @@ export function CertificateWorkItemDialog({
                     disabled={disabled}
                     className={`rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${
                       disabled
-                        ? 'cursor-not-allowed border-slate-100 bg-slate-100 text-slate-400'
+                        ? 'cursor-not-allowed border-slate-100 bg-slate-100 text-slate-500'
                         : active
                         ? 'border-blue-300 bg-blue-100 text-blue-700'
                         : 'border-slate-200 bg-white text-slate-600'

@@ -9,9 +9,11 @@ import {
   Route,
   X,
 } from 'lucide-react'
+import { Link } from 'react-router-dom'
 
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { useStore } from '@/hooks/useStore'
 import { safeStorageGet, safeStorageSet } from '@/lib/browserStorage'
 import { cn } from '@/lib/utils'
 import { toast } from '@/hooks/use-toast'
@@ -78,7 +80,12 @@ const guideSteps: GuideStep[] = [
   },
 ]
 
-const workflowSteps = ['Dashboard 查看概况', '处理 TodayLive 待办', '进甘特图调整任务', '查看报表']
+const workflowSteps = [
+  { label: 'Dashboard 查看概况', path: '/projects/:id/dashboard' },
+  { label: '处理 TodayLive 待办', path: '/projects/:id/dashboard' },
+  { label: '进甘特图调整任务', path: '/projects/:id/gantt' },
+  { label: '查看报表', path: '/projects/:id/reports' },
+]
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max)
@@ -107,7 +114,7 @@ function ProgressDots({ currentStep }: { currentStep: number }) {
   )
 }
 
-function DailyWorkflowCard({ onDismiss }: { onDismiss: () => void }) {
+function DailyWorkflowCard({ onDismiss, projectId }: { onDismiss: () => void; projectId?: string | null }) {
   return (
     <div
       data-testid="onboarding-daily-workflow"
@@ -122,9 +129,18 @@ function DailyWorkflowCard({ onDismiss }: { onDismiss: () => void }) {
           <div className="mt-3 flex flex-wrap items-center gap-2 text-xs font-medium text-blue-900">
             <span className="rounded-lg bg-white/80 px-2.5 py-1 shadow-sm">每天</span>
             {workflowSteps.map((step) => (
-              <span key={step} className="inline-flex items-center gap-2">
+              <span key={step.label} className="inline-flex items-center gap-2">
                 <ArrowRight className="h-3.5 w-3.5 text-blue-500" />
-                <span className="rounded-lg bg-white/80 px-2.5 py-1 shadow-sm">{step}</span>
+                {projectId ? (
+                  <Link
+                    to={step.path.replace(':id', projectId)}
+                    className="rounded-lg bg-white/80 px-2.5 py-1 shadow-sm transition-all hover:bg-white hover:shadow-md"
+                  >
+                    {step.label}
+                  </Link>
+                ) : (
+                  <span className="rounded-lg bg-white/80 px-2.5 py-1 shadow-sm">{step.label}</span>
+                )}
               </span>
             ))}
           </div>
@@ -145,6 +161,8 @@ function DailyWorkflowCard({ onDismiss }: { onDismiss: () => void }) {
 }
 
 export function OnboardingGuide() {
+  const { currentProject } = useStore()
+  const projectId = currentProject?.id
   const [ready, setReady] = useState(false)
   const [active, setActive] = useState(false)
   const [showWorkflow, setShowWorkflow] = useState(false)
@@ -255,7 +273,7 @@ export function OnboardingGuide() {
             <div data-testid="onboarding-guide" className="p-4">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                  <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">
                     {stepIndex + 1}/{guideSteps.length}
                   </div>
                   <h2 className="mt-1 text-base font-semibold text-slate-900">{currentStep.title}</h2>
@@ -266,7 +284,7 @@ export function OnboardingGuide() {
                   size="icon"
                   aria-label="关闭引导"
                   onClick={() => completeGuide(false)}
-                  className="h-8 w-8 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                  className="h-8 w-8 rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-600"
                 >
                   <X className="h-4 w-4" />
                 </Button>
@@ -279,7 +297,7 @@ export function OnboardingGuide() {
                   variant="ghost"
                   size="sm"
                   onClick={() => completeGuide(false)}
-                  className="h-auto rounded-none px-0 py-0 text-sm text-slate-400 transition-colors hover:bg-transparent hover:text-slate-600"
+                  className="h-auto rounded-none px-0 py-0 text-sm text-slate-500 transition-colors hover:bg-transparent hover:text-slate-600"
                 >
                   跳过引导
                 </Button>
@@ -314,7 +332,7 @@ export function OnboardingGuide() {
         </Tooltip>
       )}
 
-      {!active && showWorkflow && <DailyWorkflowCard onDismiss={dismissWorkflow} />}
+      {!active && showWorkflow && <DailyWorkflowCard onDismiss={dismissWorkflow} projectId={projectId} />}
     </>
   )
 }

@@ -40,7 +40,7 @@ export function PlanningAnomalyPanel({
       <CardContent className="space-y-3 p-4">
         {status === 'loading' ? (
           <div className="flex items-center gap-3 rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
-            <AlertCircle className="h-4 w-4 text-slate-400" />
+            <AlertCircle className="h-4 w-4 text-slate-500" />
             <div>
               <div className="font-medium text-slate-800">正在扫描异常</div>
             </div>
@@ -55,7 +55,7 @@ export function PlanningAnomalyPanel({
           </div>
         ) : empty ? (
           <div className="flex items-center gap-3 rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
-            <AlertCircle className="h-4 w-4 text-slate-400" />
+            <AlertCircle className="h-4 w-4 text-slate-500" />
             <div>
               <div className="font-medium text-slate-800">当前无异常</div>
             </div>

@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/dialog'
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
+import { toast } from '@/hooks/use-toast'
 import {
   Select,
   SelectContent,
@@ -156,6 +157,7 @@ export function PreMilestoneDependenciesDialog({
       }
     } catch (error) {
       console.error('Failed to create pre-milestone dependency', error)
+      toast({ variant: 'destructive', title: '创建依赖失败' })
     } finally {
       setSaving(false)
     }
@@ -173,6 +175,7 @@ export function PreMilestoneDependenciesDialog({
       }
     } catch (error) {
       console.error('Failed to delete pre-milestone dependency', error)
+      toast({ variant: 'destructive', title: '删除依赖失败' })
     }
   }
 
@@ -276,7 +279,7 @@ export function PreMilestoneDependenciesDialog({
                     <div className="min-w-0">
                       <div className="font-medium text-slate-900">
                         {entry.sourceLabel}
-                        <span className="mx-2 text-slate-400">→</span>
+                        <span className="mx-2 text-slate-500">→</span>
                         {entry.targetLabel}
                       </div>
                       <div className="mt-1 text-xs text-slate-500">
@@ -291,7 +294,7 @@ export function PreMilestoneDependenciesDialog({
                       <Button variant="ghost"
                         type="button"
                         onClick={() => void handleDelete(entry.id)}
-                        className="rounded-lg p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600"
+                        className="rounded-lg p-1.5 text-slate-500 hover:bg-red-50 hover:text-red-600"
                         aria-label="删除前置依赖"
                       >
                         <Trash2 className="h-4 w-4" />

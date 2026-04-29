@@ -117,9 +117,9 @@ export default function DashboardHealthCard({
             className="p-1 hover:bg-slate-100 rounded-full transition-colors"
           >
             {expanded ? (
-              <ChevronUp className="h-5 w-5 text-slate-400" />
+              <ChevronUp className="h-5 w-5 text-slate-500" />
             ) : (
-              <ChevronDown className="h-5 w-5 text-slate-400" />
+              <ChevronDown className="h-5 w-5 text-slate-500" />
             )}
           </Button>
         </div>
@@ -228,14 +228,14 @@ export default function DashboardHealthCard({
                     <div className="flex justify-between text-sm">
                       <span className="text-slate-600">更新及时性</span>
                       <span className="font-medium text-slate-900">{progressDetails.dataConfidence.updateTimeliness}%</span>
-                      <span className="text-xs text-slate-400 ml-1">({progressDetails.dataConfidence.timelinessDays}天内)</span>
+                      <span className="text-xs text-slate-500 ml-1">({progressDetails.dataConfidence.timelinessDays}天内)</span>
                     </div>
                   </div>
                 </div>
 
                 {/* 分项进度 - 紫色背景 */}
-                <div className="bg-purple-50 rounded-xl p-4">
-                  <h4 className="text-purple-700 font-semibold mb-3">分项进度</h4>
+                <div className="bg-blue-50 rounded-xl p-4">
+                  <h4 className="text-blue-700 font-semibold mb-3">分项进度</h4>
                   {progressDetails.buildingProgress.length > 0 ? (
                     <div className="space-y-3">
                       {progressDetails.buildingProgress.map((building) => {

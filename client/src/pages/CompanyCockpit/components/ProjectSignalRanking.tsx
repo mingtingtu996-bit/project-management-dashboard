@@ -124,7 +124,7 @@ export function ProjectSignalRanking({ projectRows, onNavigate }: ProjectSignalR
                         <BellDot className="mr-1 h-3.5 w-3.5" />
                         提醒中心
                       </Button>
-                      <ChevronRight className="h-4 w-4 text-slate-400" />
+                      <ChevronRight className="h-4 w-4 text-slate-500" />
                     </div>
                   </div>
 

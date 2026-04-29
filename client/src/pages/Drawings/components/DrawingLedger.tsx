@@ -110,7 +110,7 @@ export function DrawingLedger({
             <div className="space-y-3" data-testid="drawing-more-columns-popover">
               <div>
                 <div className="text-sm font-medium text-slate-900">更多列</div>
-                <p className="text-xs text-slate-400">默认只展示 8 个高频字段。</p>
+                <p className="text-xs text-slate-500">默认只展示 8 个高频字段。</p>
               </div>
               <div className="space-y-2">
                 {extraColumnOptions.map((option) => (
@@ -140,7 +140,7 @@ export function DrawingLedger({
       )}
 
       <div className="relative">
-        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
         <input
           type="text"
           aria-label="搜索单图台账"
@@ -231,7 +231,7 @@ export function DrawingLedger({
                         {row.isCurrentVersion ? (
                           <span className="inline-flex items-center rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700">当前版</span>
                         ) : (
-                          <span className="text-xs text-slate-400">历史版</span>
+                          <span className="text-xs text-slate-500">历史版</span>
                         )}
                       </TableCell>
                       )}
@@ -240,7 +240,7 @@ export function DrawingLedger({
                         {row.hasChange ? (
                           <span className="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700">有变更</span>
                         ) : (
-                          <span className="text-xs text-slate-400">—</span>
+                          <span className="text-xs text-slate-500">—</span>
                         )}
                       </TableCell>
                       )}
@@ -249,7 +249,7 @@ export function DrawingLedger({
                         {row.scheduleImpactFlag ? (
                           <span className="inline-flex items-center rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700">影响工期</span>
                         ) : (
-                          <span className="text-xs text-slate-400">—</span>
+                          <span className="text-xs text-slate-500">—</span>
                         )}
                       </TableCell>
                       )}
@@ -271,13 +271,13 @@ export function DrawingLedger({
                       {extraColumns.submitDates && (
                         <TableCell className="px-4 py-4 text-right text-sm text-slate-600 tabular-nums">
                           <div>{row.plannedSubmitDate || '—'}</div>
-                          <div className="mt-1 text-xs text-slate-400">{row.actualSubmitDate || '—'}</div>
+                          <div className="mt-1 text-xs text-slate-500">{row.actualSubmitDate || '—'}</div>
                         </TableCell>
                       )}
                       {extraColumns.passDates && (
                         <TableCell className="px-4 py-4 text-right text-sm text-slate-600 tabular-nums">
                           <div>{row.plannedPassDate || '—'}</div>
-                          <div className="mt-1 text-xs text-slate-400">{row.actualPassDate || '—'}</div>
+                          <div className="mt-1 text-xs text-slate-500">{row.actualPassDate || '—'}</div>
                         </TableCell>
                       )}
                       <TableCell className="px-4 py-4">

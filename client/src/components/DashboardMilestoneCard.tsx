@@ -94,9 +94,9 @@ export default function DashboardMilestoneCard({
               className="p-1 hover:bg-slate-100 rounded-full transition-colors"
             >
               {expanded ? (
-                <ChevronUp className="h-4 w-4 text-slate-400" />
+                <ChevronUp className="h-4 w-4 text-slate-500" />
               ) : (
-                <ChevronDown className="h-4 w-4 text-slate-400" />
+                <ChevronDown className="h-4 w-4 text-slate-500" />
               )}
             </Button>
           </div>
@@ -128,7 +128,7 @@ export default function DashboardMilestoneCard({
                     <span>责任人/单位</span>
                     <span className="font-medium">
                       {nextMilestone.assignee || '未分配'} 
-                      <span className="text-slate-400"> / 待分配</span>
+                      <span className="text-slate-500"> / 待分配</span>
                     </span>
                   </div>
                   <div className="flex justify-between text-slate-600">
@@ -137,7 +137,7 @@ export default function DashboardMilestoneCard({
                   </div>
                   <div className="flex justify-between text-slate-600">
                     <span>准时率</span>
-                    <span className="font-medium text-green-600">
+                    <span className="font-medium text-emerald-600">
                       {nextMilestone.onTimeRate !== undefined && nextMilestone.onTimeRate !== null
                         ? `${nextMilestone.onTimeRate}%`
                         : '-'}
@@ -148,12 +148,12 @@ export default function DashboardMilestoneCard({
             </>
           ) : (
             /* 没有下一节点时显示完成状态 */
-            <div className="p-3 border-l-4 border-green-500 bg-green-50 rounded-r">
+            <div className="p-3 border-l-4 border-emerald-500 bg-emerald-50 rounded-r">
               <div className="flex justify-between items-start mb-1">
                 <span className="font-medium text-slate-800">下一节点</span>
                 <span className={`px-2 py-0.5 rounded text-xs ${getStatusTheme('completed').className}`}>已完成</span>
               </div>
-              <p className="text-sm font-medium text-green-700">所有里程碑已完成</p>
+              <p className="text-sm font-medium text-emerald-700">所有里程碑已完成</p>
             </div>
           )}
 
@@ -206,7 +206,7 @@ export default function DashboardMilestoneCard({
                     );
                   })}
                 {recentMilestones.filter(m => m.status !== 'completed').length <= 1 && (
-                  <div className="text-center py-4 text-slate-400 text-sm">
+                  <div className="text-center py-4 text-slate-500 text-sm">
                     暂无更多未完成的里程碑
                   </div>
                 )}

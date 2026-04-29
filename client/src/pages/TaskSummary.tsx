@@ -138,7 +138,7 @@ function TaskSummaryGroupsSection({
                             {group.planned_end_date ? ` · 计划完成 ${formatDate(group.planned_end_date)}` : ''}
                           </div>
                         </div>
-                        <ChevronDown className="h-4 w-4 shrink-0 text-slate-400 transition-transform duration-300 group-data-[state=open]:rotate-180" />
+                        <ChevronDown className="h-4 w-4 shrink-0 text-slate-500 transition-transform duration-300 group-data-[state=open]:rotate-180" />
                       </Button>
                     </Collapsible.Trigger>
 
@@ -186,7 +186,7 @@ function TaskSummaryGroupsSection({
                           })}
                         </div>
                       ) : (
-                        <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-400">
+                        <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
                           暂无任务明细
                         </div>
                       )}

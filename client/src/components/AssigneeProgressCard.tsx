@@ -133,7 +133,7 @@ export function AssigneeProgressCard({
       </CardHeader>
       <CardContent className="pt-0">
         {/* 列表头部 */}
-        <div className="flex items-center text-xs text-slate-400 mb-2 px-2">
+        <div className="flex items-center text-xs text-slate-500 mb-2 px-2">
           <span className="w-8">排名</span>
           <span className="flex-1">责任人</span>
           <span className="w-20 text-right">完成度</span>
@@ -190,7 +190,7 @@ export function AssigneeProgressCard({
                 </div>
 
                 {/* 箭头 */}
-                <ChevronRight className="w-5 h-5 text-slate-300 group-hover:text-slate-400 flex-shrink-0" />
+                <ChevronRight className="w-5 h-5 text-slate-300 group-hover:text-slate-500 flex-shrink-0" />
               </div>
             )
           })}

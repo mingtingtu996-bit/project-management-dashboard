@@ -65,7 +65,7 @@ function SummaryTile({
           </div>
         </div>
         <div className={`text-3xl font-semibold tabular-nums ${valueClasses[tone]}`}>{value}</div>
-        <p className="text-xs leading-5 text-slate-400">{hint}</p>
+        <p className="text-xs leading-5 text-slate-500">{hint}</p>
       </CardContent>
     </Card>
   )
@@ -165,7 +165,7 @@ export function DrawingReadinessSummary({
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <div className="text-sm font-semibold text-slate-900">整体就绪度</div>
-              <div className="text-xs text-slate-400">
+              <div className="text-xs text-slate-500">
                 {readinessRatio}% 就绪，已审批 {displayMetrics.approvedDrawings} / {displayMetrics.totalDrawings}
               </div>
             </div>
@@ -183,7 +183,7 @@ export function DrawingReadinessSummary({
                   <div className="mt-2">
                     <ProgressBar value={item.ratio} tone={item.overdue > 0 ? 'red' : item.ratio >= 80 ? 'emerald' : 'blue'} />
                   </div>
-                  <div className="mt-2 text-xs text-slate-400">
+                  <div className="mt-2 text-xs text-slate-500">
                     {item.ready}/{item.total} 已就绪{item.overdue > 0 ? ` · ${item.overdue} 逾期` : ''}
                   </div>
                 </div>

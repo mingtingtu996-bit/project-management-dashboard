@@ -126,7 +126,7 @@ const TaskRow = memo(function TaskRow(
         className={`group flex items-center px-4 transition-colors hover:bg-accent/30 ${getTreeRowHeightClass(rowKind)} ${
           criticalSourceClass ||
           (isInDependencyChain
-            ? 'border-l-4 border-l-violet-400 bg-violet-50/30'
+            ? 'border-l-4 border-l-indigo-400 bg-indigo-50/30'
             : isActiveToday
             ? 'border-l-4 border-l-blue-400 bg-blue-50/30'
             : isMilestoneLeaf

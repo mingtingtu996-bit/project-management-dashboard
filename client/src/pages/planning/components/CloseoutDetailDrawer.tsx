@@ -90,7 +90,7 @@ function ReasonCascader({
         <div data-testid="closeout-reason-breadcrumb" className="flex flex-wrap items-center gap-1 text-xs text-slate-500">
           {breadcrumb.map((part, index) => (
             <span key={`${part}-${index}`} className={cn(index > 0 && 'inline-flex items-center gap-1')}>
-              {index > 0 ? <span className="text-slate-400">&gt;</span> : null}
+              {index > 0 ? <span className="text-slate-500">&gt;</span> : null}
               <span className={index === breadcrumb.length - 1 ? 'font-medium text-blue-700' : ''}>{part}</span>
             </span>
           ))}
@@ -123,7 +123,7 @@ function ReasonCascader({
                   {option.leaves.length}
                 </Badge>
               </span>
-              <span className="whitespace-normal break-words text-xs font-normal leading-5 text-slate-400">{option.description}</span>
+              <span className="whitespace-normal break-words text-xs font-normal leading-5 text-slate-500">{option.description}</span>
             </span>
           </Button>
         ))}
@@ -225,7 +225,7 @@ export function CloseoutDetailDrawer({
 
       <div data-testid="closeout-detail-drawer-body" className="flex-1 space-y-4 overflow-y-auto p-4">
         {forceCloseUnlocked ? (
-          <div className="flex items-start gap-3 rounded-2xl border border-cyan-200 bg-cyan-50 p-4 text-sm text-cyan-800">
+          <div className="flex items-start gap-3 rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-800">
             <Lock className="mt-0.5 h-5 w-5 shrink-0" />
             <div className="space-y-1">
               <div className="font-medium">第 7 日强制发起关账已解锁</div>
@@ -356,7 +356,7 @@ export function CloseoutDetailDrawer({
         {batchLayerOpen ? (
           <div
             data-testid="closeout-batch-close-layer"
-            className="space-y-3 rounded-2xl border border-dashed border-cyan-300 bg-cyan-50/60 p-4"
+            className="space-y-3 rounded-2xl border border-dashed border-blue-300 bg-blue-50/60 p-4"
           >
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="space-y-1">

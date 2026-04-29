@@ -22,7 +22,7 @@ const kindClassName: Record<BaselineDiffKind, string> = {
   新增: 'border-emerald-200 bg-emerald-50 text-emerald-700',
   修改: 'border-blue-200 bg-blue-50 text-blue-700',
   移除: 'border-rose-200 bg-rose-50 text-rose-700',
-  里程碑变动: 'border-violet-200 bg-violet-50 text-violet-700',
+  里程碑变动: 'border-indigo-200 bg-indigo-50 text-indigo-700',
 }
 
 function buildCounts(items: BaselineDiffItem[]) {
@@ -86,12 +86,12 @@ export function BaselineDiffView({ fromVersionLabel, toVersionLabel, items }: Ba
                     <div className="font-medium text-slate-900">{fromVersionLabel}</div>
                     <div className="mt-1 truncate">{item.before}</div>
                   </div>
-                  <div className="flex items-center gap-2 text-cyan-600">
+                  <div className="flex items-center gap-2 text-blue-600">
                     <span className="h-2.5 w-2.5 rounded-full bg-slate-300" />
-                    <span className="h-px w-10 bg-cyan-300" />
-                    <span className="h-2.5 w-2.5 rounded-full bg-cyan-500" />
+                    <span className="h-px w-10 bg-blue-300" />
+                    <span className="h-2.5 w-2.5 rounded-full bg-blue-500" />
                   </div>
-                  <div className="min-w-0 flex-1 rounded-full border border-cyan-200 bg-cyan-50 px-3 py-2 text-xs text-cyan-900">
+                  <div className="min-w-0 flex-1 rounded-full border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-900">
                     <div className="font-medium">{toVersionLabel}</div>
                     <div className="mt-1 truncate">{item.after}</div>
                   </div>
@@ -103,9 +103,9 @@ export function BaselineDiffView({ fromVersionLabel, toVersionLabel, items }: Ba
                   <div className="text-xs font-medium text-slate-500">{fromVersionLabel}</div>
                   <div className="mt-1 text-sm leading-6 text-slate-700">{item.before}</div>
                 </div>
-                <div className="rounded-xl border border-cyan-100 bg-cyan-50/70 px-3 py-2">
-                  <div className="text-xs font-medium text-cyan-600">{toVersionLabel}</div>
-                  <div className="mt-1 text-sm leading-6 text-cyan-900">{item.after}</div>
+                <div className="rounded-xl border border-blue-100 bg-blue-50/70 px-3 py-2">
+                  <div className="text-xs font-medium text-blue-600">{toVersionLabel}</div>
+                  <div className="mt-1 text-sm leading-6 text-blue-900">{item.after}</div>
                 </div>
               </div>
 

@@ -1914,7 +1914,7 @@ export default function MonthlyPlanPage() {
               data-testid="monthly-plan-change-summary-strip"
               className={
                 changeSummary.isLargeScale
-                  ? 'border-cyan-200 bg-cyan-50 shadow-sm'
+                  ? 'border-blue-200 bg-blue-50 shadow-sm'
                   : 'border-slate-200 bg-white shadow-sm'
               }
             >
@@ -1951,9 +1951,9 @@ export default function MonthlyPlanPage() {
                     <div className="text-xs text-slate-500">关键里程碑调整数</div>
                     <div className="mt-1 text-lg font-semibold text-slate-900">{changeSummary.milestoneAdjustCount}</div>
                   </div>
-                  <div className="rounded-2xl border border-cyan-200 bg-cyan-50 px-4 py-3">
-                    <div className="text-xs text-cyan-700">目标进度调整数</div>
-                    <div className="mt-1 text-lg font-semibold text-cyan-900">{changeSummary.progressAdjustmentCount}</div>
+                  <div className="rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3">
+                    <div className="text-xs text-blue-700">目标进度调整数</div>
+                    <div className="mt-1 text-lg font-semibold text-blue-900">{changeSummary.progressAdjustmentCount}</div>
                   </div>
                 </div>
               </CardContent>
@@ -2641,7 +2641,7 @@ export default function MonthlyPlanPage() {
                         disabled={option.disabled}
                       >
                         <div className="text-sm font-medium">{option.label}</div>
-                        <div className="mt-1 text-xs text-slate-400">{option.description}</div>
+                        <div className="mt-1 text-xs text-slate-500">{option.description}</div>
                         <div className="mt-1 text-xs opacity-80">{option.detail}</div>
                       </Button>
                     )

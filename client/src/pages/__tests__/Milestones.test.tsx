@@ -225,7 +225,7 @@ describe('Milestones page story coverage', () => {
     expect(container.querySelector('[data-testid="milestone-health-top3"]')?.textContent).toContain('更多(4)')
     expect(container.querySelector('[data-testid="milestone-child-group"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="milestone-card-m1"]')?.className).toContain('border-l-4')
-    expect(container.querySelector('[data-testid="milestone-card-m1"]')?.className).toContain('border-green-500')
+    expect(container.querySelector('[data-testid="milestone-card-m1"]')?.className).toContain('border-emerald-500')
     expect(container.querySelector('[data-testid="milestone-card-m2"]')?.className).toContain('border-blue-500')
     expect(container.querySelector('[data-testid="milestone-progress-m1"]')?.innerHTML).toContain('duration-700')
 

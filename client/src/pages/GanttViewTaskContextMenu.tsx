@@ -51,8 +51,8 @@ export function TaskContextMenu({
   const top = Math.min(Math.max(contextMenu.y, 8), Math.max(8, viewportHeight - menuMaxHeight - 8))
   const itemClass = 'h-auto w-full justify-start rounded-lg px-3 py-2 text-left transition-colors duration-150 hover:bg-slate-50'
   const itemBodyClass = 'flex min-w-0 flex-col items-start leading-5'
-  const iconClass = 'mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400'
-  const groupLabelClass = 'px-3 pb-1 pt-2 text-xs font-semibold text-slate-400'
+  const iconClass = 'mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-500'
+  const groupLabelClass = 'px-3 pb-1 pt-2 text-xs font-semibold text-slate-500'
 
   return (
     <>
@@ -156,7 +156,7 @@ export function TaskContextMenu({
             <GitBranch className={iconClass} />
             <span className={itemBodyClass}>
               <span>标记关键路径关注</span>
-              <span className="text-xs text-slate-400">纳入重点跟踪，不改变依赖关系</span>
+              <span className="text-xs text-slate-500">纳入重点跟踪，不改变依赖关系</span>
             </span>
           </Button>
         )}
@@ -172,7 +172,7 @@ export function TaskContextMenu({
             <GitBranch className={iconClass} />
             <span className={itemBodyClass}>
               <span>插到主链前面</span>
-              <span className="text-xs text-slate-400">以当前任务作为前置插链候选</span>
+              <span className="text-xs text-slate-500">以当前任务作为前置插链候选</span>
             </span>
           </Button>
         )}
@@ -188,7 +188,7 @@ export function TaskContextMenu({
             <GitBranch className={iconClass} />
             <span className={itemBodyClass}>
               <span>插到主链后面</span>
-              <span className="text-xs text-slate-400">以当前任务作为后续插链候选</span>
+              <span className="text-xs text-slate-500">以当前任务作为后续插链候选</span>
             </span>
           </Button>
         )}
@@ -204,7 +204,7 @@ export function TaskContextMenu({
             <GitBranch className={iconClass} />
             <span className={itemBodyClass}>
               <span>取消手动标记</span>
-              <span className="text-xs text-slate-400">移除该任务的关键路径人工覆盖</span>
+              <span className="text-xs text-slate-500">移除该任务的关键路径人工覆盖</span>
             </span>
           </Button>
         )}
@@ -220,7 +220,7 @@ export function TaskContextMenu({
             <GitBranch className={iconClass} />
             <span className={itemBodyClass}>
               <span>取消关注</span>
-              <span className="text-xs text-slate-400">保留自动计算结果，仅撤销关注</span>
+              <span className="text-xs text-slate-500">保留自动计算结果，仅撤销关注</span>
             </span>
           </Button>
         )}
@@ -236,7 +236,7 @@ export function TaskContextMenu({
             <GitBranch className={iconClass} />
             <span className={itemBodyClass}>
               <span>取消插链</span>
-              <span className="text-xs text-slate-400">移除人工插链关系并恢复自动链路</span>
+              <span className="text-xs text-slate-500">移除人工插链关系并恢复自动链路</span>
             </span>
           </Button>
         )}

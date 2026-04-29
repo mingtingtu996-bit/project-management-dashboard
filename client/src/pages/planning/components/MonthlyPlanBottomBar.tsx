@@ -138,7 +138,7 @@ export function MonthlyPlanBottomBar({
                     <Button
                       type="button"
                       size="sm"
-                      className="gap-2 rounded-full bg-cyan-500 text-slate-950 hover:bg-cyan-400"
+                      className="gap-2 rounded-full bg-blue-500 text-slate-950 hover:bg-blue-400"
                       data-testid="monthly-plan-quick-confirm-entry"
                       onClick={onQuickConfirmEntry}
                       disabled={quickDisabled}
@@ -166,7 +166,7 @@ export function MonthlyPlanBottomBar({
 
           <div className="flex flex-wrap items-center gap-3 text-xs text-slate-300">
             <span className="inline-flex items-center gap-1">
-              <Sparkles className="h-3.5 w-3.5 text-cyan-300" />
+              <Sparkles className="h-3.5 w-3.5 text-blue-300" />
               月度计划确认条
             </span>
             <span>草稿状态 {draftStatus}</span>

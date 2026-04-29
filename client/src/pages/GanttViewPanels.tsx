@@ -205,13 +205,13 @@ export function TaskDetailPanel({
               </CardTitle>
             </div>
             {selectedTask.wbs_code && (
-              <span className="font-mono text-xs text-slate-400">{selectedTask.wbs_code}</span>
+              <span className="font-mono text-xs text-slate-500">{selectedTask.wbs_code}</span>
             )}
           </div>
           <Button variant="ghost"
             type="button"
             onClick={onClose}
-            className="ml-2 flex-shrink-0 rounded-lg p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
+            className="ml-2 flex-shrink-0 rounded-lg p-1 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-600"
           >
             <X className="h-3.5 w-3.5" />
           </Button>
@@ -369,7 +369,7 @@ export function TaskDetailPanel({
               {selectedTask.ai_duration && (
                 <div className="flex justify-between text-xs">
                   <span className="text-slate-500">AI 推荐</span>
-                  <span className="font-medium text-purple-600">{selectedTask.ai_duration} 天</span>
+                  <span className="font-medium text-blue-600">{selectedTask.ai_duration} 天</span>
                 </div>
               )}
             </div>
@@ -431,7 +431,7 @@ export function TaskDetailPanel({
           {selectedTask.description && (
             <div className="text-xs leading-relaxed text-slate-600">
               <Separator className="mb-3" />
-              <p className="mb-1 text-slate-400">描述</p>
+              <p className="mb-1 text-slate-500">描述</p>
               <p>{selectedTask.description}</p>
             </div>
           )}
@@ -480,7 +480,7 @@ export function TaskDetailPanel({
                     </span>
                   )}
                   {selectedCriticalPathTask.isManualInserted && (
-                    <span className="rounded-full bg-violet-100 px-2 py-0.5 text-xs font-medium text-violet-700">
+                    <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-medium text-indigo-700">
                       手动插链
                     </span>
                   )}

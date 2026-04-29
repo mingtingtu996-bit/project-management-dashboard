@@ -625,7 +625,7 @@ function MaterialDetailDialog({
               定样已完成
             </label>
           ) : (
-            <div className="rounded-xl border border-dashed border-slate-200 px-4 py-3 text-sm text-slate-400">
+            <div className="rounded-xl border border-dashed border-slate-200 px-4 py-3 text-sm text-slate-500">
               无需定样
             </div>
           )}
@@ -653,7 +653,7 @@ function MaterialDetailDialog({
               送检已完成
             </label>
           ) : (
-            <div className="rounded-xl border border-dashed border-slate-200 px-4 py-3 text-sm text-slate-400">
+            <div className="rounded-xl border border-dashed border-slate-200 px-4 py-3 text-sm text-slate-500">
               无需送检
             </div>
           )}
@@ -785,7 +785,7 @@ function MaterialDetailDialog({
                     <div key={entry.id} className="rounded-2xl border border-white bg-white px-4 py-3 text-sm text-slate-700">
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <div className="font-medium text-slate-900">{formatChangeFieldLabel(entry.field_name)}</div>
-                        <div className="text-xs text-slate-400">{formatDateTimeLabel(entry.changed_at)}</div>
+                        <div className="text-xs text-slate-500">{formatDateTimeLabel(entry.changed_at)}</div>
                       </div>
                       <div className="mt-1 text-xs leading-5 text-slate-500">
                         {formatChangeValue(entry.old_value)} → {formatChangeValue(entry.new_value)}
@@ -1638,6 +1638,7 @@ export default function Materials() {
                           >
                             <TableCell className="px-3 py-2 text-right tabular-nums">
                               <input
+                                aria-label="材料名称"
                                 data-testid={`materials-batch-name-${row.id}`}
                                 value={row.material_name}
                                 onChange={(event) =>
@@ -1652,6 +1653,7 @@ export default function Materials() {
                             </TableCell>
                             <TableCell className="px-3 py-2">
                               <input
+                                aria-label="专业"
                                 data-testid={`materials-batch-specialty-${row.id}`}
                                 value={row.specialty_type}
                                 onChange={(event) =>
@@ -1666,6 +1668,7 @@ export default function Materials() {
                             </TableCell>
                             <TableCell className="px-3 py-2">
                               <select
+                                aria-label="单位"
                                 data-testid={`materials-batch-unit-${row.id}`}
                                 value={row.participant_unit_id}
                                 onChange={(event) =>
@@ -1687,6 +1690,7 @@ export default function Materials() {
                             </TableCell>
                             <TableCell className="px-3 py-2">
                               <input
+                                aria-label="进场日期"
                                 data-testid={`materials-batch-date-${row.id}`}
                                 type="date"
                                 value={row.expected_arrival_date}
@@ -1702,6 +1706,7 @@ export default function Materials() {
                             </TableCell>
                             <TableCell className="px-3 py-2 text-center">
                               <input
+                                aria-label="取样确认"
                                 data-testid={`materials-batch-sample-${row.id}`}
                                 type="checkbox"
                                 checked={row.requires_sample_confirmation}
@@ -1716,6 +1721,7 @@ export default function Materials() {
                             </TableCell>
                             <TableCell className="px-3 py-2 text-center">
                               <input
+                                aria-label="送检确认"
                                 data-testid={`materials-batch-inspection-${row.id}`}
                                 type="checkbox"
                                 checked={row.requires_inspection}
@@ -1865,7 +1871,7 @@ export default function Materials() {
                                 ) : (
                                   <span
                                     data-testid={`material-inline-sample-placeholder-${material.id}`}
-                                    className="text-sm text-slate-400"
+                                    className="text-sm text-slate-500"
                                   >
                                     无需定样
                                   </span>
@@ -1900,7 +1906,7 @@ export default function Materials() {
                                 ) : (
                                   <span
                                     data-testid={`material-inline-inspection-placeholder-${material.id}`}
-                                    className="text-sm text-slate-400"
+                                    className="text-sm text-slate-500"
                                   >
                                     无需送检
                                   </span>

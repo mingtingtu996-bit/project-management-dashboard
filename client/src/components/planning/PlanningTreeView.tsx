@@ -297,7 +297,7 @@ export function PlanningTreeView({
 
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative flex-1 min-w-[200px]">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
             <Input
               type="text"
               aria-label="搜索计划任务"
@@ -311,7 +311,7 @@ export function PlanningTreeView({
                 type="button"
                 aria-label="清空计划任务搜索"
                 onClick={() => setSearchKeyword('')}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-600"
               >
                 <X className="h-4 w-4" />
               </Button>
@@ -455,7 +455,7 @@ export function PlanningTreeView({
               {allSelected ? '取消全选' : '全选当前视图'}
             </Button>
           )}
-          <span className="text-slate-400">·</span>
+          <span className="text-slate-500">·</span>
           <span>当前视图 {filteredAndSortedRows.length} 项</span>
         </div>
       </CardHeader>
@@ -500,7 +500,7 @@ export function PlanningTreeView({
                     className={cn(
                       'group grid items-center gap-3 px-4 transition-colors hover:bg-slate-50',
                       getTreeRowHeightClass(rowKind),
-                      row.selected && 'bg-cyan-50/60',
+                      row.selected && 'bg-blue-50/60',
                       row.isCritical && rowKind !== 'milestone' && 'border-l-2 border-l-sky-400',
                       rowKind === 'milestone' && 'border-l-2 border-l-amber-400 bg-amber-50/30',
                     )}
@@ -518,7 +518,7 @@ export function PlanningTreeView({
                       disabled={readOnly}
                       className={cn(
                         'flex h-5 w-5 items-center justify-center rounded border transition',
-                        row.selected ? 'border-cyan-600 bg-cyan-600 text-white' : 'border-slate-300 bg-white text-transparent',
+                        row.selected ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-300 bg-white text-transparent',
                         readOnly && 'cursor-not-allowed opacity-70',
                       )}
                     >

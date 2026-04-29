@@ -15,7 +15,7 @@ import {
 
 function healthPillClass(value: string) {
   const score = Number(value)
-  if (score >= 80) return 'bg-green-50 text-green-700'
+  if (score >= 80) return 'bg-emerald-50 text-emerald-700'
   if (score >= 60) return 'bg-amber-50 text-amber-700'
   return 'bg-red-50 text-red-700'
 }
@@ -96,7 +96,7 @@ export function CompanyHero({
           {heroStats.map((item) => (
             <div key={item.label} className="card-unified p-6" data-testid="company-hero-metric">
                 <div className="flex items-center justify-between gap-4">
-                  <div className="text-xs uppercase tracking-wider text-slate-400">{item.label}</div>
+                  <div className="text-xs uppercase tracking-wider text-slate-500">{item.label}</div>
                   <div className={`rounded-2xl p-2.5 ${item.tone}`}>
                     <item.icon className="h-5 w-5" />
                   </div>

@@ -63,8 +63,8 @@ export function BaselineHeader({
             <div className="text-xs text-slate-500">查看状态</div>
             <div className="mt-1 text-lg font-semibold text-slate-900">{readOnly ? '只读查看' : '允许编辑'}</div>
           </div>
-          <div className="rounded-2xl bg-cyan-50 px-4 py-3 text-cyan-900">
-            <div className="text-xs text-cyan-700">最近暂存</div>
+          <div className="rounded-2xl bg-blue-50 px-4 py-3 text-blue-900">
+            <div className="text-xs text-blue-700">最近暂存</div>
             <div className="mt-1 text-sm font-semibold">{lastSavedLabel}</div>
           </div>
           <div className="rounded-2xl bg-amber-50 px-4 py-3 text-amber-900">

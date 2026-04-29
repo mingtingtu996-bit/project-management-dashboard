@@ -147,7 +147,7 @@ export function BaselineConfirmDialog({
         : '影响适中，建议复核关键项'
   const impactClass =
     changePercent < 5
-      ? 'bg-green-50 text-green-700'
+      ? 'bg-emerald-50 text-emerald-700'
       : changePercent > 20
         ? 'bg-orange-50 text-orange-700'
         : 'bg-amber-50 text-amber-700'
@@ -191,7 +191,7 @@ export function BaselineConfirmDialog({
       <DialogContent className="max-h-[90vh] max-w-[720px] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-base">
-            <FileDiff className="h-4 w-4 text-cyan-500" />
+            <FileDiff className="h-4 w-4 text-blue-500" />
             基线确认弹窗
           </DialogTitle>
           <DialogDescription className="sr-only">

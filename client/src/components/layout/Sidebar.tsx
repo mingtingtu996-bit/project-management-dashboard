@@ -82,7 +82,7 @@ export default function Sidebar() {
           ? attentionSnapshot.totalAttentionCount
           : companyAttentionSnapshot.totalAttentionCount
         : item.key === 'risks'
-          ? attentionSnapshot.totalAttentionCount
+          ? attentionSnapshot.activeRiskCount
           : 0
 
     return (
@@ -132,7 +132,7 @@ export default function Sidebar() {
                             'flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950',
                             childActive
                               ? 'bg-slate-900 text-white'
-                              : 'text-slate-400 hover:bg-slate-900/80 hover:text-white',
+                              : 'text-slate-500 hover:bg-slate-900/80 hover:text-white',
                           )}
                           onClick={() => setMobileOpen(false)}
                         >
@@ -204,7 +204,7 @@ export default function Sidebar() {
               </div>
               <div className="min-w-0">
                 <div className="truncate text-sm font-semibold tracking-wide text-white">{'\u5de5\u7a0b\u7ba1\u7406\u7cfb\u7edf'}</div>
-                <div className="text-xs text-slate-400">
+                <div className="text-xs text-slate-500">
                   {PROJECT_NAVIGATION_LABELS.company} / {PROJECT_NAVIGATION_LABELS.projectHome}
                 </div>
               </div>
@@ -242,7 +242,7 @@ export default function Sidebar() {
             <div className="mt-6 rounded-xl border border-slate-800 bg-slate-900/80 p-3">
               <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-300">{'\u5f53\u524d\u9879\u76ee'}</div>
                 <div className="truncate text-sm font-semibold text-white">{currentProject.name}</div>
-              <div className="mt-1 text-xs text-slate-400">{currentProject.description || PROJECT_NAVIGATION_LABELS.projectHome}</div>
+              <div className="mt-1 text-xs text-slate-500">{currentProject.description || PROJECT_NAVIGATION_LABELS.projectHome}</div>
               <Link
                 to="/company"
                 className="mt-3 inline-flex items-center gap-1 rounded-lg text-xs font-medium text-slate-300 outline-none transition-colors hover:text-white focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950"

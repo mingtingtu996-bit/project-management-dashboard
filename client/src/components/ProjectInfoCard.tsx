@@ -182,7 +182,7 @@ function buildScopeDraft(sections?: ScopeDimensionSection[]): ScopeDraft {
 function Field({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <p className="text-xs text-slate-400">{label}</p>
+      <p className="text-xs text-slate-500">{label}</p>
       <p className="text-sm font-medium text-slate-800">{value}</p>
     </div>
   )
@@ -291,7 +291,7 @@ export default function ProjectInfoCard({
   }, [plannedEndDate])
 
   const remainingStyle = useMemo(() => {
-    if (remainingDays === null) return { text: '未设置', color: 'text-slate-400', bg: 'bg-slate-50' }
+    if (remainingDays === null) return { text: '未设置', color: 'text-slate-500', bg: 'bg-slate-50' }
     if (remainingDays < 0) return { text: `已延期 ${Math.abs(remainingDays)} 天`, color: 'text-red-600', bg: 'bg-red-50' }
     if (remainingDays === 0) return { text: '今天截止', color: 'text-amber-600', bg: 'bg-amber-50' }
     if (remainingDays <= 7) return { text: `剩余 ${remainingDays} 天`, color: 'text-amber-600', bg: 'bg-amber-50' }
@@ -395,7 +395,7 @@ export default function ProjectInfoCard({
                         {label}
                       </Badge>
                     )) : (
-                      <span className="text-sm text-slate-400">未配置</span>
+                      <span className="text-sm text-slate-500">未配置</span>
                     )}
                   </div>
                 </Card>
@@ -433,7 +433,7 @@ export default function ProjectInfoCard({
                           </Button>
                         )
                       }) : (
-                        <span className="text-sm text-slate-400">暂无可选项</span>
+                        <span className="text-sm text-slate-500">暂无可选项</span>
                       )}
                     </div>
                     <div className="flex gap-2">
@@ -653,11 +653,11 @@ export default function ProjectInfoCard({
 
         <div className={`flex flex-wrap items-center justify-between gap-2 rounded-lg px-3 py-2 ${remainingStyle.bg}`}>
           <div className="flex items-center gap-2 text-sm">
-            <Calendar className="h-4 w-4 text-slate-400" />
+            <Calendar className="h-4 w-4 text-slate-500" />
             <span className="text-slate-600">
               {plannedStartDate ? toReadableDate(plannedStartDate) : '未设置'} - {plannedEndDate ? toReadableDate(plannedEndDate) : '未设置'}
             </span>
-            {plannedDuration && <span className="text-slate-400">({plannedDuration} 天)</span>}
+            {plannedDuration && <span className="text-slate-500">({plannedDuration} 天)</span>}
           </div>
           <div className="flex items-center gap-2 rounded-full px-3 py-1">
             <Timer className={`h-4 w-4 ${remainingStyle.color}`} />
