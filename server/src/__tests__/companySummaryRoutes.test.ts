@@ -137,6 +137,13 @@ describe('dashboard company-summary route', () => {
     expect(mocks.getAllProjectExecutionSummaries).toHaveBeenCalledTimes(1)
     expect(response.body.data).toMatchObject({
       projectCount: 3,
+      statusCounts: {
+        total: 3,
+        inProgress: 0,
+        completed: 0,
+        paused: 0,
+        notStarted: 3,
+      },
       averageHealth: 60,
       averageProgress: 59,
       attentionProjectCount: 2,

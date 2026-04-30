@@ -85,7 +85,7 @@ export function MonthlyPlanExceptionSummary({
 
           return (
             <Card key={card.key} data-testid={card.testId} className={`${card.tone} shadow-sm`}>
-              <CardContent className="space-y-3 p-3">
+              <CardContent className="space-y-3 p-5">
                 <div className={`flex items-center gap-2 ${card.iconTone}`}>
                   <Icon className="h-4 w-4" />
                   <span className="text-xs font-medium">{card.title}</span>

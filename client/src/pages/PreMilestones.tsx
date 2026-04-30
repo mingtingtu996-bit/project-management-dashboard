@@ -5,6 +5,7 @@ import { Breadcrumb } from '@/components/Breadcrumb'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
 import { Button } from '@/components/ui/button'
+import { DisabledReasonTooltip } from '@/components/ui/disabled-reason-tooltip'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import {
   Select,
@@ -45,6 +46,7 @@ import { CertificateWorkItemDialog } from './PreMilestones/components/Certificat
 import { Card } from '@/components/ui/card'
 
 const API_BASE = ''
+const READ_ONLY_ACTION_REASON = '只读成员无编辑权限。'
 
 function buildProjectOptions(currentProject?: { id?: string; name?: string } | null, projects: Array<{ id?: string; name?: string }> = []) {
   if (projects.length > 0) {
@@ -733,15 +735,17 @@ export default function PreMilestones() {
             <AlertTriangle className="h-4 w-4" />
             查看全部逾期
           </Button>
-          <Button
-            type="button"
-            onClick={() => openCreateDialog(buildFormFromItem(null, selectedCertificateId))}
-            className="bg-slate-900 text-white hover:bg-slate-800"
-            disabled={!canEdit}
-          >
-            <Plus className="h-4 w-4" />
-            新增办理事项
-          </Button>
+          <DisabledReasonTooltip reason={!canEdit ? READ_ONLY_ACTION_REASON : null}>
+            <Button
+              type="button"
+              onClick={() => openCreateDialog(buildFormFromItem(null, selectedCertificateId))}
+              className="bg-slate-900 text-white hover:bg-slate-800"
+              disabled={!canEdit}
+            >
+              <Plus className="h-4 w-4" />
+              新增办理事项
+            </Button>
+          </DisabledReasonTooltip>
         </div>
       </div>
 
@@ -948,7 +952,7 @@ export default function PreMilestones() {
               </ul>
             </div>
             {criticalItems.length > 0 ? (
-              <Card className="rounded-xl border border-slate-200 bg-white p-3">
+              <Card className="rounded-xl border border-slate-200 bg-white p-5">
                 <div className="mb-2 text-xs font-medium text-slate-900">关键项</div>
                 <div className="space-y-2">
                   {criticalItems.slice(0, 6).map((item) => (

@@ -242,7 +242,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
   return (
     <>
       <Dialog open={props.dialogOpen} onOpenChange={props.setDialogOpen}>
-        <DialogContent className="max-w-[560px] rounded-2xl shadow-[var(--el-4)]">
+        <DialogContent className="max-h-[90vh] max-w-[560px] overflow-y-auto rounded-2xl shadow-[var(--el-4)]">
           <DialogHeader>
             <DialogTitle>
               {props.editingTask ? '编辑任务' : props.newTaskParentId ? '添加子任务' : '新建任务'}
@@ -658,7 +658,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
       />
 
       <Dialog open={props.milestoneDialogOpen} onOpenChange={props.setMilestoneDialogOpen}>
-        <DialogContent className="max-w-[440px] rounded-2xl shadow-[var(--el-4)]">
+        <DialogContent className="max-h-[90vh] max-w-[440px] overflow-y-auto rounded-2xl shadow-[var(--el-4)]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Flag className="h-4 w-4 text-amber-500" />
@@ -709,7 +709,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
       </Dialog>
 
       <Dialog open={props.conditionDialogOpen} onOpenChange={props.setConditionDialogOpen}>
-        <DialogContent className="max-w-[560px] rounded-2xl shadow-[var(--el-4)]">
+        <DialogContent className="max-h-[90vh] max-w-[560px] overflow-y-auto rounded-2xl shadow-[var(--el-4)]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <ShieldCheck className="h-4 w-4 text-emerald-600" />
@@ -939,7 +939,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
           }
         }}
       >
-        <DialogContent className="max-w-[440px] rounded-2xl shadow-[var(--el-4)]" data-testid="gantt-force-satisfy-dialog">
+        <DialogContent className="max-h-[90vh] max-w-[440px] overflow-y-auto rounded-2xl shadow-[var(--el-4)]" data-testid="gantt-force-satisfy-dialog">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <ShieldCheck className="h-4 w-4 text-amber-600" />
@@ -989,7 +989,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
       </Dialog>
 
       <Dialog open={props.obstacleDialogOpen} onOpenChange={props.setObstacleDialogOpen}>
-        <DialogContent className="max-w-[560px] rounded-2xl shadow-[var(--el-4)]">
+        <DialogContent className="max-h-[90vh] max-w-[560px] overflow-y-auto rounded-2xl shadow-[var(--el-4)]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <AlertOctagon className="h-4 w-4 text-amber-600" />
@@ -1101,16 +1101,17 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
                                 </Button>
                               </div>
                               <div className="grid gap-2 sm:grid-cols-3">
-                                <select
-                                  value={props.editingObstacleSeverity}
-                                  onChange={(event) => props.setEditingObstacleSeverity(event.target.value)}
-                                  className="h-8 rounded-md border border-slate-200 px-2 text-xs"
-                                >
-                                  <option value="low">低</option>
-                                  <option value="medium">中</option>
-                                  <option value="high">高</option>
-                                  <option value="critical">严重</option>
-                                </select>
+                                <Select value={props.editingObstacleSeverity} onValueChange={props.setEditingObstacleSeverity}>
+                                  <SelectTrigger className="h-8 rounded-md border-slate-200 bg-white px-2 text-xs">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="low">低</SelectItem>
+                                    <SelectItem value="medium">中</SelectItem>
+                                    <SelectItem value="high">高</SelectItem>
+                                    <SelectItem value="critical">严重</SelectItem>
+                                  </SelectContent>
+                                </Select>
                                 <Input
                                   type="date"
                                   value={props.editingObstacleExpectedResolutionDate}
@@ -1294,7 +1295,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
           if (!open) props.setNewTaskConditionPromptId(null)
         }}
       >
-        <DialogContent className="max-w-[440px] rounded-2xl shadow-[var(--el-4)]">
+        <DialogContent className="max-h-[90vh] max-w-[440px] overflow-y-auto rounded-2xl shadow-[var(--el-4)]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <ShieldCheck className="h-4 w-4 text-emerald-600" />
@@ -1324,7 +1325,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
         open={props.confirmDialog.open}
         onOpenChange={(open) => !open && props.setConfirmDialog((previous) => ({ ...previous, open: false }))}
       >
-        <DialogContent className="max-w-[440px] rounded-2xl shadow-[var(--el-4)]">
+        <DialogContent className="max-h-[90vh] max-w-[440px] overflow-y-auto rounded-2xl shadow-[var(--el-4)]">
           <DialogHeader>
             <DialogTitle>{props.confirmDialog.title}</DialogTitle>
             <DialogDescription className="sr-only">确认</DialogDescription>

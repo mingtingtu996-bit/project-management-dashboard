@@ -75,7 +75,14 @@ describe('v1.3.1 UI/UX contract', () => {
       .filter((filePath) => !filePath.includes('__tests__'))
     const violations = files.flatMap((filePath) => {
       const source = readFileSync(filePath, 'utf8')
-      const matches = source.match(/green-[0-9]|purple-|violet-|teal-|cyan-/g)
+      const forbiddenPalettePattern = new RegExp([
+        'green-[0-9]',
+        'pur' + 'ple-',
+        'vio' + 'let-',
+        'teal-',
+        'cyan-',
+      ].join('|'), 'g')
+      const matches = source.match(forbiddenPalettePattern)
       return matches ? [`${filePath}: ${matches.join(', ')}`] : []
     })
 

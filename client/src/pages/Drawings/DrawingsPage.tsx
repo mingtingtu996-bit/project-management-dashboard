@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
+import { DisabledReasonTooltip } from '@/components/ui/disabled-reason-tooltip'
 import {
   Dialog,
   DialogContent,
@@ -174,6 +175,8 @@ const emptyCreateForm = (): CreatePackageFormState => ({
   reviewMode: DRAWING_TEMPLATES[0]?.defaultReviewMode ?? 'none',
   reviewBasis: '',
 })
+
+const READ_ONLY_ACTION_REASON = '只读成员无编辑权限。'
 
 function groupPackagesByDiscipline(packages: DrawingPackageCard[]): DrawingPackageGroup[] {
   const grouped = new Map<string, DrawingPackageCard[]>()
@@ -1236,22 +1239,26 @@ export default function Drawings() {
           <ArrowLeft className="mr-2 h-4 w-4" />
           返回前期证照
         </Button>
-        <Button variant="outline" size="sm" onClick={() => setCreateDialogOpen(true)} disabled={!canEdit}>
-          <Plus className="mr-2 h-4 w-4" />
-          新建图纸包
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => {
-            setReviewRulesDialogOpen(true)
-            beginCreateReviewRule()
-          }}
-          disabled={!canEdit}
-        >
-          <FileBadge2 className="mr-2 h-4 w-4" />
-          审图规则管理
-        </Button>
+        <DisabledReasonTooltip reason={!canEdit ? READ_ONLY_ACTION_REASON : null}>
+          <Button variant="outline" size="sm" onClick={() => setCreateDialogOpen(true)} disabled={!canEdit}>
+            <Plus className="mr-2 h-4 w-4" />
+            新建图纸包
+          </Button>
+        </DisabledReasonTooltip>
+        <DisabledReasonTooltip reason={!canEdit ? READ_ONLY_ACTION_REASON : null}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setReviewRulesDialogOpen(true)
+              beginCreateReviewRule()
+            }}
+            disabled={!canEdit}
+          >
+            <FileBadge2 className="mr-2 h-4 w-4" />
+            审图规则管理
+          </Button>
+        </DisabledReasonTooltip>
         <Button variant="outline" size="sm" onClick={() => void refreshAll()}>
           <RefreshCw className="mr-2 h-4 w-4" />
           刷新
@@ -1389,10 +1396,12 @@ export default function Drawings() {
                       ))}
                     </div>
                     <div className="flex flex-wrap gap-2">
-                      <Button variant="outline" size="sm" onClick={() => setCreateDialogOpen(true)} disabled={!canEdit}>
-                        <Upload className="mr-2 h-4 w-4" />
-                        上传
-                      </Button>
+                      <DisabledReasonTooltip reason={!canEdit ? READ_ONLY_ACTION_REASON : null}>
+                        <Button variant="outline" size="sm" onClick={() => setCreateDialogOpen(true)} disabled={!canEdit}>
+                          <Upload className="mr-2 h-4 w-4" />
+                          上传
+                        </Button>
+                      </DisabledReasonTooltip>
                       <Button variant="outline" size="sm" onClick={handleExportLedger} disabled={focusedLedgerRows.length === 0}>
                         <Download className="mr-2 h-4 w-4" />
                         导出
@@ -1490,25 +1499,27 @@ export default function Drawings() {
 
           <div className="grid gap-4 lg:grid-cols-[0.92fr_1.08fr]">
             <Card className="border-slate-200 shadow-sm">
-              <CardContent className="space-y-3 p-4">
+              <CardContent className="space-y-3 p-5">
                 <div className="flex items-center justify-between gap-2">
                   <div>
                     <div className="text-sm font-semibold text-slate-900">规则列表</div>
                     <div className="text-xs text-slate-500">当前项目下的可用规则</div>
                   </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      beginCreateReviewRule()
-                      if (!reviewRulesDialogOpen) {
-                        setReviewRulesDialogOpen(true)
-                      }
-                    }}
-                    disabled={!canEdit}
-                  >
-                    新增规则
-                  </Button>
+                  <DisabledReasonTooltip reason={!canEdit ? READ_ONLY_ACTION_REASON : null}>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        beginCreateReviewRule()
+                        if (!reviewRulesDialogOpen) {
+                          setReviewRulesDialogOpen(true)
+                        }
+                      }}
+                      disabled={!canEdit}
+                    >
+                      新增规则
+                    </Button>
+                  </DisabledReasonTooltip>
                 </div>
 
                 <div className="max-h-[56vh] space-y-3 overflow-y-auto pr-1">
@@ -1592,7 +1603,7 @@ export default function Drawings() {
             </Card>
 
             <Card className="border-slate-200 shadow-sm">
-              <CardContent className="space-y-4 p-4">
+              <CardContent className="space-y-4 p-5">
                 <div className="flex items-center justify-between gap-2">
                   <div>
                     <div className="text-sm font-semibold text-slate-900">
@@ -1720,9 +1731,11 @@ export default function Drawings() {
                   <Button variant="outline" onClick={beginCreateReviewRule} disabled={reviewRulesSaving}>
                     重置
                   </Button>
-                  <Button onClick={() => void handleSaveReviewRule()} loading={reviewRulesSaving} disabled={!canEdit}>
-                    保存规则
-                  </Button>
+                  <DisabledReasonTooltip reason={!canEdit ? READ_ONLY_ACTION_REASON : null}>
+                    <Button onClick={() => void handleSaveReviewRule()} loading={reviewRulesSaving} disabled={!canEdit}>
+                      保存规则
+                    </Button>
+                  </DisabledReasonTooltip>
                 </div>
               </CardContent>
             </Card>
@@ -1885,9 +1898,11 @@ export default function Drawings() {
             >
               取消
             </Button>
-            <Button onClick={() => void handleCreatePackage()} loading={creatingPackage} disabled={!canEdit}>
-              创建图纸包
-            </Button>
+            <DisabledReasonTooltip reason={!canEdit ? READ_ONLY_ACTION_REASON : null}>
+              <Button onClick={() => void handleCreatePackage()} loading={creatingPackage} disabled={!canEdit}>
+                创建图纸包
+              </Button>
+            </DisabledReasonTooltip>
           </DialogFooter>
         </DialogContent>
       </Dialog>

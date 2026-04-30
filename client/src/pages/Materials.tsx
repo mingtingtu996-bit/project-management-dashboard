@@ -17,6 +17,7 @@ import { ConfirmActionDialog } from '@/components/ConfirmActionDialog'
 import { EmptyState } from '@/components/EmptyState'
 import { PageHeader } from '@/components/PageHeader'
 import { Button } from '@/components/ui/button'
+import { DisabledReasonTooltip } from '@/components/ui/disabled-reason-tooltip'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Dialog,
@@ -26,6 +27,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { LoadingState } from '@/components/ui/loading-state'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
   Table,
   TableBody,
@@ -38,6 +40,7 @@ import { usePermissions } from '@/hooks/usePermissions'
 import { toast } from '@/hooks/use-toast'
 import { useCurrentProject } from '@/hooks/useStore'
 import { getApiErrorMessage, isAbortError } from '@/lib/apiClient'
+import { formatDateTime as formatDisplayDateTime } from '@/lib/formatters'
 import { PROJECT_NAVIGATION_LABELS } from '@/config/navigation'
 import {
   MATERIAL_TEMPLATE_GROUPS,
@@ -114,6 +117,56 @@ const STATUS_OPTIONS: Array<{ value: MaterialStatusFilter; label: string }> = [
   { value: 'completed', label: '已完成' },
 ]
 
+const NO_PARTICIPANT_UNIT_VALUE = '__no_participant_unit__'
+
+function ParticipantUnitSelect({
+  value,
+  onChange,
+  units,
+  disabled,
+  dataTestId,
+  triggerClassName = 'h-10 rounded-xl border-slate-200 bg-white text-sm text-slate-900',
+}: {
+  value: string
+  onChange: (value: string) => void
+  units: ParticipantUnitSummary[]
+  disabled?: boolean
+  dataTestId?: string
+  triggerClassName?: string
+}) {
+  return (
+    <>
+      {dataTestId ? (
+        <input
+          type="hidden"
+          data-testid={`${dataTestId}-value`}
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          onInput={(event) => onChange(event.currentTarget.value)}
+          aria-hidden="true"
+        />
+      ) : null}
+      <Select
+        value={value || NO_PARTICIPANT_UNIT_VALUE}
+        onValueChange={(nextValue) => onChange(nextValue === NO_PARTICIPANT_UNIT_VALUE ? '' : nextValue)}
+        disabled={disabled}
+      >
+        <SelectTrigger className={triggerClassName} data-testid={dataTestId}>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={NO_PARTICIPANT_UNIT_VALUE}>暂不关联</SelectItem>
+          {units.map((unit) => (
+            <SelectItem key={unit.id} value={unit.id}>
+              {unit.unit_name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </>
+  )
+}
+
 const EMPTY_FORM: MaterialFormState = {
   material_name: '',
   specialty_type: '',
@@ -170,15 +223,7 @@ function buildCreatePayload(form: MaterialFormState): MaterialMutationPayload {
 }
 
 function formatDateTimeLabel(value?: string | null) {
-  if (!value) return '未生成'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleString('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+  return formatDisplayDateTime(value, '未生成')
 }
 
 function formatWeekLabel(value?: string | null) {
@@ -558,20 +603,14 @@ function MaterialDetailDialog({
           </label>
           <label className="space-y-1 text-sm text-slate-600">
             <span>参建单位</span>
-            <select
-              data-testid="material-detail-unit-select"
+            <ParticipantUnitSelect
+              dataTestId="material-detail-unit-select"
               value={form.participant_unit_id}
-              onChange={(event) => onChange({ participant_unit_id: event.target.value })}
+              onChange={(value) => onChange({ participant_unit_id: value })}
               disabled={readOnly}
-              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 disabled:bg-slate-50"
-            >
-              <option value="">暂不关联</option>
-              {units.map((unit) => (
-                <option key={unit.id} value={unit.id}>
-                  {unit.unit_name}
-                </option>
-              ))}
-            </select>
+              units={units}
+              triggerClassName="h-10 rounded-xl border-slate-200 bg-white text-sm text-slate-900 disabled:bg-slate-50"
+            />
           </label>
           <label className="space-y-1 text-sm text-slate-600">
             <span>预计到场日期</span>
@@ -862,6 +901,7 @@ export default function Materials() {
   const [detailForm, setDetailForm] = useState<MaterialFormState>(EMPTY_FORM)
 
   const isReadOnly = !canEdit
+  const readOnlyActionReason = isReadOnly ? '只读成员无材料维护权限。' : null
   const canReadAllMaterials = globalRole === 'company_admin'
 
   const loadPage = useCallback(async (signal?: AbortSignal, silent = false) => {
@@ -964,10 +1004,10 @@ export default function Materials() {
     [materialSummary?.byCategory],
   )
   const recentArrivals = useMemo(
-    () => [...materials]
+    () => [...filteredMaterials]
       .sort((left, right) => left.expected_arrival_date.localeCompare(right.expected_arrival_date))
       .slice(0, 5),
-    [materials],
+    [filteredMaterials],
   )
   const hasActiveMaterialFilters = Boolean(normalizedSearchKeyword)
     || statusFilter !== 'all'
@@ -1324,12 +1364,12 @@ export default function Materials() {
         title={PROJECT_NAVIGATION_LABELS.materials}
         subtitle="跟踪专项工程材料到场状态，关联分包责任主体。"
       >
-        {!isReadOnly && (
-          <Button onClick={() => void handleCreateSingle()} disabled={saving}>
+        <DisabledReasonTooltip reason={readOnlyActionReason}>
+          <Button onClick={() => void handleCreateSingle()} disabled={isReadOnly || saving}>
             <Plus className="mr-2 h-4 w-4" />
             新增材料
           </Button>
-        )}
+        </DisabledReasonTooltip>
         <Button variant="outline" onClick={() => void loadPage(undefined, true)} disabled={refreshing}>
           <RefreshCw className={`mr-2 h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
           刷新
@@ -1386,48 +1426,60 @@ export default function Materials() {
             </label>
             <label className="space-y-1 text-sm text-slate-600">
               <span>状态筛选</span>
-              <select
+              <Select
                 value={statusFilter}
-                onChange={(event) => setStatusFilter(event.target.value as MaterialStatusFilter)}
-                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                onValueChange={(value) => setStatusFilter(value as MaterialStatusFilter)}
               >
-                {STATUS_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger className="h-10 rounded-xl border-slate-200 bg-white text-sm text-slate-900">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {STATUS_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </label>
             <label className="space-y-1 text-sm text-slate-600">
               <span>参建单位</span>
-              <select
+              <Select
                 value={unitFilter}
-                onChange={(event) => updateSearchFilter('unit', event.target.value)}
-                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                onValueChange={(value) => updateSearchFilter('unit', value)}
               >
-                <option value="all">全部单位</option>
-                {participantUnits.map((unit) => (
-                  <option key={unit.id} value={unit.id}>
-                    {unit.unit_name}
-                  </option>
-                ))}
-                <option value="__unassigned__">无归属单位</option>
-              </select>
+                <SelectTrigger className="h-10 rounded-xl border-slate-200 bg-white text-sm text-slate-900">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">全部单位</SelectItem>
+                  {participantUnits.map((unit) => (
+                    <SelectItem key={unit.id} value={unit.id}>
+                      {unit.unit_name}
+                    </SelectItem>
+                  ))}
+                  <SelectItem value="__unassigned__">无归属单位</SelectItem>
+                </SelectContent>
+              </Select>
             </label>
             <label className="space-y-1 text-sm text-slate-600">
               <span>专项类型</span>
-              <select
+              <Select
                 value={specialtyFilter}
-                onChange={(event) => updateSearchFilter('specialty', event.target.value)}
-                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                onValueChange={(value) => updateSearchFilter('specialty', value)}
               >
-                <option value="all">全部专项</option>
-                {specialtyOptions.map((option) => (
-                  <option key={option} value={option}>
-                    {option}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger className="h-10 rounded-xl border-slate-200 bg-white text-sm text-slate-900">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">全部专项</SelectItem>
+                  {specialtyOptions.map((option) => (
+                    <SelectItem key={option} value={option}>
+                      {option}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </label>
           </div>
 
@@ -1474,19 +1526,12 @@ export default function Materials() {
                   </label>
                   <label className="space-y-1 text-sm text-slate-600">
                     <span>参建单位</span>
-                    <select
-                      data-testid="materials-create-single-unit"
+                    <ParticipantUnitSelect
+                      dataTestId="materials-create-single-unit"
                       value={singleForm.participant_unit_id}
-                      onChange={(event) => setSingleForm((current) => ({ ...current, participant_unit_id: event.target.value }))}
-                      className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
-                    >
-                      <option value="">暂不关联</option>
-                      {participantUnits.map((unit) => (
-                        <option key={unit.id} value={unit.id}>
-                          {unit.unit_name}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={(value) => setSingleForm((current) => ({ ...current, participant_unit_id: value }))}
+                      units={participantUnits}
+                    />
                   </label>
                   <label className="space-y-1 text-sm text-slate-600">
                     <span>预计到场日期</span>
@@ -1530,37 +1575,33 @@ export default function Materials() {
                   <div className="grid gap-3 md:grid-cols-3">
                     <label className="space-y-1 text-sm text-slate-600">
                       <span>专项模板</span>
-                      <select
-                        data-testid="materials-template-specialty"
+                      <Select
                         value={templateSpecialty}
-                        onChange={(event) => {
-                          setTemplateSpecialty(event.target.value)
+                        onValueChange={(value) => {
+                          setTemplateSpecialty(value)
                           setSelectedTemplateItems([])
                         }}
-                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
                       >
-                        {MATERIAL_TEMPLATE_GROUPS.map((group) => (
-                          <option key={group.specialtyType} value={group.specialtyType}>
-                            {group.label}
-                          </option>
-                        ))}
-                      </select>
+                        <SelectTrigger className="h-10 rounded-xl border-slate-200 bg-white text-sm text-slate-900" data-testid="materials-template-specialty">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {MATERIAL_TEMPLATE_GROUPS.map((group) => (
+                            <SelectItem key={group.specialtyType} value={group.specialtyType}>
+                              {group.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </label>
                     <label className="space-y-1 text-sm text-slate-600">
                       <span>参建单位</span>
-                      <select
-                        data-testid="materials-template-unit"
+                      <ParticipantUnitSelect
+                        dataTestId="materials-template-unit"
                         value={templateUnitId}
-                        onChange={(event) => setTemplateUnitId(event.target.value)}
-                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
-                      >
-                        <option value="">暂不关联</option>
-                        {participantUnits.map((unit) => (
-                          <option key={unit.id} value={unit.id}>
-                            {unit.unit_name}
-                          </option>
-                        ))}
-                      </select>
+                        onChange={setTemplateUnitId}
+                        units={participantUnits}
+                      />
                     </label>
                     <label className="space-y-1 text-sm text-slate-600">
                       <span>统一预计到场日期</span>
@@ -1667,26 +1708,19 @@ export default function Materials() {
                               />
                             </TableCell>
                             <TableCell className="px-3 py-2">
-                              <select
-                                aria-label="单位"
-                                data-testid={`materials-batch-unit-${row.id}`}
+                              <ParticipantUnitSelect
+                                dataTestId={`materials-batch-unit-${row.id}`}
                                 value={row.participant_unit_id}
-                                onChange={(event) =>
+                                onChange={(value) =>
                                   setBatchRows((current) =>
                                     current.map((item) =>
-                                      item.id === row.id ? { ...item, participant_unit_id: event.target.value } : item,
+                                      item.id === row.id ? { ...item, participant_unit_id: value } : item,
                                     ),
                                   )
                                 }
-                                className="w-full rounded-lg border border-slate-200 px-2 py-1.5"
-                              >
-                                <option value="">暂不关联</option>
-                                {participantUnits.map((unit) => (
-                                  <option key={unit.id} value={unit.id}>
-                                    {unit.unit_name}
-                                  </option>
-                                ))}
-                              </select>
+                                units={participantUnits}
+                                triggerClassName="h-9 rounded-lg border-slate-200 bg-white px-2 py-1.5 text-sm text-slate-900"
+                              />
                             </TableCell>
                             <TableCell className="px-3 py-2">
                               <input
@@ -1926,17 +1960,18 @@ export default function Materials() {
                                     <PencilLine className="mr-1 h-4 w-4" />
                                     {isReadOnly ? '查看' : '编辑'}
                                   </Button>
-                                  {!isReadOnly && (
+                                  <DisabledReasonTooltip reason={readOnlyActionReason}>
                                     <Button
                                       variant="ghost"
                                       size="sm"
                                       onClick={() => setPendingDeleteMaterial(material)}
                                       data-testid={`material-delete-trigger-${material.id}`}
+                                      disabled={isReadOnly}
                                     >
                                       <Trash2 className="mr-1 h-4 w-4" />
                                       删除
                                     </Button>
-                                  )}
+                                  </DisabledReasonTooltip>
                                 </div>
                               </TableCell>
                             </TableRow>

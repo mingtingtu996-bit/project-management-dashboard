@@ -11,7 +11,7 @@ const scriptsDir = dirname(__filename)
 const repoRoot = join(scriptsDir, '..')
 const distIndex = join(repoRoot, 'client', 'dist', 'index.html')
 const manifestPath = join(repoRoot, '.tmp', 'full-app-test-env', 'manifest.json')
-const outputDir = join(repoRoot, 'artifacts', 'uiux-visual')
+const outputDir = join(repoRoot, process.env.UIUX_VISUAL_OUTPUT_DIR || 'artifacts/uiux-visual')
 const manifestOutPath = join(outputDir, 'visual-manifest.json')
 
 const port = Number(process.env.PORT || 4173)
@@ -20,12 +20,27 @@ const apiBaseUrl = process.env.API_BASE_URL || 'http://127.0.0.1:3001'
 const shouldStartPreview = process.env.VISUAL_START_PREVIEW !== 'false'
 const currentMonth = process.env.UIUX_VISUAL_MONTH || new Date().toISOString().slice(0, 7)
 
-const viewports = [
+function parseFilter(value) {
+  const items = String(value || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+  return items.length > 0 ? new Set(items) : null
+}
+
+const viewportFilter = parseFilter(process.env.UIUX_VISUAL_VIEWPORTS)
+const stateFilter = parseFilter(process.env.UIUX_VISUAL_STATES)
+
+const allViewports = [
   { key: 'desktop-1440', width: 1440, height: 900, purpose: 'standard desktop' },
   { key: 'desktop-1366', width: 1366, height: 768, purpose: 'low-height desktop' },
   { key: 'tablet-768', width: 768, height: 1024, purpose: 'tablet wrapping' },
   { key: 'mobile-390', width: 390, height: 844, purpose: 'mobile dialogs and overflow' },
 ]
+
+const viewports = viewportFilter
+  ? allViewports.filter((viewport) => viewportFilter.has(viewport.key))
+  : allViewports
 
 function assert(condition, message) {
   if (!condition) throw new Error(message)
@@ -139,6 +154,7 @@ function startPreviewServer() {
 
 function isIgnorableConsoleError(message) {
   if (message === 'Failed to load resource: net::ERR_CONNECTION_CLOSED') return true
+  if (message === 'Failed to load resource: net::ERR_PROXY_CONNECTION_FAILED') return true
   return (
     typeof message === 'string'
     && message.includes("WebSocket connection to 'ws://")
@@ -614,10 +630,16 @@ async function main() {
     adminToken: await login(manifest.accounts.companyAdmin),
   }
 
-  const states = [
+  assert(viewports.length > 0, `No visual viewports matched filter: ${process.env.UIUX_VISUAL_VIEWPORTS}`)
+
+  const allStates = [
     ...mainPages(projectId),
     ...overlayStates(projectId),
   ]
+  const states = stateFilter
+    ? allStates.filter((state) => stateFilter.has(state.key))
+    : allStates
+  assert(states.length > 0, `No visual states matched filter: ${process.env.UIUX_VISUAL_STATES}`)
 
   const browser = await chromium.launch({ headless: true })
   const runs = []

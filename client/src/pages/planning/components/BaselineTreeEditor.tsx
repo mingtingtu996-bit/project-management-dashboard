@@ -4,6 +4,7 @@ import { PlanningTreeView, type PlanningTreeRow } from '@/components/planning/Pl
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { DisabledReasonTooltip } from '@/components/ui/disabled-reason-tooltip'
 import { Separator } from '@/components/ui/separator'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { ArrowDown, ArrowUp, ListChecks } from 'lucide-react'
@@ -24,11 +25,13 @@ export interface BaselineTreeEditorProps {
   lockRemainingLabel: string
   canUndo: boolean
   canRedo: boolean
+  canForceUnlock?: boolean
+  forceUnlockDisabledReason?: string | null
   onToggleRow?: (id: string) => void
   onToggleAll?: (checked: boolean) => void
   onUndo: () => void
   onRedo: () => void
-  onForceUnlock: () => void
+  onForceUnlock?: () => void
 }
 
 export function BaselineTreeEditor({
@@ -47,6 +50,8 @@ export function BaselineTreeEditor({
   lockRemainingLabel,
   canUndo,
   canRedo,
+  canForceUnlock = false,
+  forceUnlockDisabledReason = null,
   onToggleRow,
   onToggleAll,
   onUndo,
@@ -106,10 +111,21 @@ export function BaselineTreeEditor({
             <ArrowDown className="h-4 w-4" />
             重做
           </Button>
-          <Button type="button" variant="outline" size="sm" className="gap-2" onClick={onForceUnlock}>
-            <ListChecks className="h-4 w-4" />
-            {unlockLabel}
-          </Button>
+          {canForceUnlock ? (
+            <DisabledReasonTooltip reason={forceUnlockDisabledReason}>
+              <Button
+                type="button"
+                variant="destructive"
+                size="sm"
+                className="gap-2"
+                onClick={onForceUnlock}
+                disabled={Boolean(forceUnlockDisabledReason)}
+              >
+                <ListChecks className="h-4 w-4" />
+                {unlockLabel}
+              </Button>
+            </DisabledReasonTooltip>
+          ) : null}
         </div>
       </CardHeader>
       <Separator />

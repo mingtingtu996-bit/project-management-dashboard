@@ -40,7 +40,7 @@ export function PlanningIntegrityPanel({
         </div>
       </CardHeader>
       <Separator />
-      <CardContent className="space-y-3 p-4">
+      <CardContent className="space-y-3 p-5">
         {status === 'loading' ? (
           <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-4" />
         ) : status === 'error' ? (

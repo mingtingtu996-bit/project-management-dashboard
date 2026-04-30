@@ -26,7 +26,7 @@ export function DeviationFocusHint({
 
   return (
     <Card data-testid="deviation-focus-hint" className="border-slate-200 shadow-sm">
-      <CardContent className="flex flex-col gap-4 p-4 md:flex-row md:items-start md:justify-between">
+      <CardContent className="flex flex-col gap-4 p-5 md:flex-row md:items-start md:justify-between">
         <div className="space-y-2">
           <div className="inline-flex rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700">
             主次引导

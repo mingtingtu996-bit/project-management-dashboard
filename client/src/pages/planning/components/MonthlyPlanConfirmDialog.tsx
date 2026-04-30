@@ -76,49 +76,49 @@ export function MonthlyPlanConfirmDialog({
 
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             <Card className="border-slate-200 shadow-sm">
-              <CardContent className="space-y-1 p-4">
+              <CardContent className="space-y-1 p-5">
                 <div className="text-xs text-slate-500">条目总数</div>
                 <div className="text-2xl font-semibold text-slate-900">{summary.totalItemCount}</div>
               </CardContent>
             </Card>
             <Card className="border-slate-200 shadow-sm">
-              <CardContent className="space-y-1 p-4">
+              <CardContent className="space-y-1 p-5">
                 <div className="text-xs text-slate-500">本月新增数</div>
                 <div className="text-2xl font-semibold text-slate-900">{summary.newlyAddedCount}</div>
               </CardContent>
             </Card>
             <Card className="border-slate-200 shadow-sm">
-              <CardContent className="space-y-1 p-4">
+              <CardContent className="space-y-1 p-5">
                 <div className="text-xs text-slate-500">自动滚入数</div>
                 <div className="text-2xl font-semibold text-slate-900">{summary.autoRolledInCount}</div>
               </CardContent>
             </Card>
             <Card className="border-slate-200 shadow-sm">
-              <CardContent className="space-y-1 p-4">
+              <CardContent className="space-y-1 p-5">
                 <div className="text-xs text-slate-500">待移出数</div>
                 <div className="text-2xl font-semibold text-slate-900">{summary.pendingRemovalCount}</div>
               </CardContent>
             </Card>
             <Card className="border-slate-200 shadow-sm">
-              <CardContent className="space-y-1 p-4">
+              <CardContent className="space-y-1 p-5">
                 <div className="text-xs text-slate-500">关键里程碑数</div>
                 <div className="text-2xl font-semibold text-slate-900">{summary.milestoneCount}</div>
               </CardContent>
             </Card>
             <Card className="border-slate-200 shadow-sm">
-              <CardContent className="space-y-1 p-4">
+              <CardContent className="space-y-1 p-5">
                 <div className="text-xs text-slate-500">目标时间调整数</div>
                 <div className="text-2xl font-semibold text-slate-900">{summary.dateAdjustmentCount}</div>
               </CardContent>
             </Card>
             <Card className="border-slate-200 shadow-sm">
-              <CardContent className="space-y-1 p-4">
+              <CardContent className="space-y-1 p-5">
                 <div className="text-xs text-slate-500">目标进度调整数</div>
                 <div className="text-2xl font-semibold text-slate-900">{summary.progressAdjustmentCount}</div>
               </CardContent>
             </Card>
             <Card className={`shadow-sm ${summary.blockingIssueCount > 0 ? 'border-amber-200 bg-amber-50' : 'border-slate-200 bg-white'}`}>
-              <CardContent className="space-y-1 p-4">
+              <CardContent className="space-y-1 p-5">
                 <div className="text-xs text-slate-500">确认阻断项</div>
                 <div className="text-2xl font-semibold text-slate-900">{summary.blockingIssueCount}</div>
                 {summary.blockingIssueCount > 0 ? (

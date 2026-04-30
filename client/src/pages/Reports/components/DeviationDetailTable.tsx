@@ -28,11 +28,11 @@ type DetailRow = {
 function mappingStatusLabel(status?: DetailRow['mapping_status']) {
   switch (status) {
     case 'mapping_pending':
-      return 'mapping_pending'
+      return '待关联'
     case 'merged_into':
-      return 'merged_into'
+      return '已合并'
     default:
-      return 'mapped'
+      return '已关联'
   }
 }
 
@@ -98,16 +98,16 @@ export function DeviationDetailTable({
                         {mappingStatusLabel(row.mapping_status)}
                       </span>
                       {row.mapping_status === 'mapping_pending' ? (
-                        <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs text-amber-700">mapping_pending</span>
+                        <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs text-amber-700">待关联</span>
                       ) : null}
                       {row.merged_into ? (
                         <span className="rounded-full bg-blue-100 px-2.5 py-1 text-xs text-blue-700">
-                          merged_into {row.merged_into.title}
+                          合并到 {row.merged_into.title}
                         </span>
                       ) : null}
                       {row.child_group ? (
                         <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs text-emerald-700">
-                          child_group {row.child_group.parent_title} · {row.child_group.child_count}
+                          子项组 {row.child_group.parent_title} · {row.child_group.child_count}
                         </span>
                       ) : null}
                     </div>

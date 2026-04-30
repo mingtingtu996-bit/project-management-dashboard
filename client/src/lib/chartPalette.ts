@@ -1,4 +1,4 @@
-const DEFAULT_HEX_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'] as const
+const DEFAULT_HEX_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#0ea5e9', '#0f766e', '#06b6d4', '#84cc16'] as const
 
 export const CHART_PALETTE = DEFAULT_HEX_COLORS
 
@@ -7,7 +7,7 @@ export const CHART_SERIES = {
   success: '#10b981',
   warning: '#f59e0b',
   danger: '#ef4444',
-  purple: '#8b5cf6',
+  info: '#0ea5e9',
 } as const
 
 export const TASK_STAGE_COLORS = {

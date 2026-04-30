@@ -826,7 +826,7 @@ export default function Milestones() {
         ) : (
           <>
             <Card className="border-slate-200 shadow-sm">
-              <CardContent className="flex flex-col gap-4 p-4 lg:flex-row lg:items-center lg:justify-between">
+              <CardContent className="flex flex-col gap-4 p-5 lg:flex-row lg:items-center lg:justify-between">
                 <p className="text-sm font-medium text-slate-900">节点偏差表</p>
                 <Input
                   value={search}

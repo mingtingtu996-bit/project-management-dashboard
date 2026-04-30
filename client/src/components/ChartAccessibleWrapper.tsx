@@ -8,6 +8,7 @@ interface ChartAccessibleWrapperProps {
   rows: Array<Array<ReactNode>>
   summary?: string
   className?: string
+  detailsClassName?: string
 }
 
 export function ChartAccessibleWrapper({
@@ -16,11 +17,12 @@ export function ChartAccessibleWrapper({
   rows,
   summary = '查看数据表',
   className,
+  detailsClassName,
 }: ChartAccessibleWrapperProps) {
   return (
     <div className={className}>
       {children}
-      <details className="mt-2">
+      <details className={cn('mt-2', detailsClassName)}>
         <summary className="cursor-pointer text-xs text-slate-500 hover:text-slate-600">
           {summary}
         </summary>

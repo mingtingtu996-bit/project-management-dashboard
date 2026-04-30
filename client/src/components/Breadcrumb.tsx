@@ -34,7 +34,7 @@ export function Breadcrumb({ items, className, showHome = false }: BreadcrumbPro
           <Link
             to="/"
             aria-label="home"
-            className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 transition-colors hover:border-blue-200 hover:text-blue-700"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 transition-colors hover:border-blue-200 hover:text-blue-700"
           >
             <Home className="h-3.5 w-3.5" />
           </Link>

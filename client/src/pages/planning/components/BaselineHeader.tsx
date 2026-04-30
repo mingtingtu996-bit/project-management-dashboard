@@ -30,7 +30,7 @@ export function BaselineHeader({
 }: BaselineHeaderProps) {
   return (
     <Card className="border-slate-200 shadow-sm">
-      <CardContent className="space-y-4 p-4 sm:p-5">
+      <CardContent className="space-y-4 p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="space-y-1">
             <div className="flex flex-wrap items-center gap-2">

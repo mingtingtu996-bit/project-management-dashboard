@@ -387,7 +387,7 @@ export default function ProjectInfoCard({
               const section = scopeSectionMap.get(key)
               const selected = section?.selected ?? []
               return (
-                <Card key={key} className="rounded-lg border border-slate-200 bg-white p-3">
+                <Card key={key} className="rounded-lg border border-slate-200 bg-white p-5">
                   <p className="text-xs text-slate-500">{section?.label || SCOPE_META[key].label}</p>
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     {selected.length > 0 ? selected.map((label) => (
@@ -404,7 +404,7 @@ export default function ProjectInfoCard({
           </div>
 
           {onSaveScope && scopeExpanded && (
-            <Card className="mt-4 space-y-4 rounded-xl border border-slate-200 bg-white p-4">
+            <Card className="mt-4 space-y-4 rounded-xl border border-slate-200 bg-white p-5">
               {SCOPE_KEYS.map((key) => {
                 const section = scopeSectionMap.get(key)
                 const options = unique([...(section?.options ?? []), ...(scopeDraft[key] ?? [])])
@@ -493,7 +493,7 @@ export default function ProjectInfoCard({
             </div>
 
             {basicInfoExpanded && (
-              <Card className="mt-4 space-y-4 rounded-xl border border-slate-200 bg-white p-4">
+              <Card className="mt-4 space-y-4 rounded-xl border border-slate-200 bg-white p-5">
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className="space-y-2 md:col-span-2">
                     <p className="text-xs text-slate-500">项目名称</p>

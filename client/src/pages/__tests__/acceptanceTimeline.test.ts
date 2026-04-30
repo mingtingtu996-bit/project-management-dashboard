@@ -8,7 +8,7 @@ function makePlan(overrides: Partial<AcceptancePlan>): AcceptancePlan {
     milestone_id: 'milestone-1',
     type_id: 'pre_acceptance',
     type_name: '预验收',
-    type_color: 'bg-purple-500',
+    type_color: 'bg-sky-500',
     name: '预验收事项',
     description: '',
     planned_date: '2026-04-01',

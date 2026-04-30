@@ -86,7 +86,7 @@ export function RiskManagementSkeleton() {
       <div className="mx-auto max-w-7xl space-y-6 px-6 py-6">
         <ShellSkeletonHeader />
         <Card className="border-slate-200 shadow-sm">
-          <CardContent className="space-y-4 p-4 sm:p-5">
+          <CardContent className="space-y-4 p-5">
             <div className="grid gap-3 md:grid-cols-4">
               {[1, 2, 3, 4].map((item) => (
                 <div key={item} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
@@ -300,7 +300,7 @@ export function MilestonesSkeleton() {
       <div className="space-y-3">
         {[1, 2, 3].map((item) => (
           <Card key={item} className="card-l2">
-            <CardContent className="p-4">
+            <CardContent className="p-5">
               <div className="flex items-center justify-between">
                 <div className="space-y-2">
                   <Skeleton className="h-5 w-40 rounded-full" />

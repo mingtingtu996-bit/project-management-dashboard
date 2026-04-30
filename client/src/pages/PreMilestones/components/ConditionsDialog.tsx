@@ -14,6 +14,7 @@ import type {
 } from '../types'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 interface ConditionsDialogProps {
   selectedMilestone: PreMilestone | null
@@ -72,17 +73,21 @@ export function ConditionsDialog({
               <div className="grid grid-cols-2 gap-3 mb-3">
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">条件类型</label>
-                  <select
+                  <Select
                     value={conditionForm.condition_type}
-                    onChange={(event) => setConditionForm((previous) => ({ ...previous, condition_type: event.target.value }))}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    onValueChange={(value) => setConditionForm((previous) => ({ ...previous, condition_type: value }))}
                   >
-                    <option value="all">请选择</option>
-                    <option value="资料">资料</option>
-                    <option value="费用">费用</option>
-                    <option value="审批">审批</option>
-                    <option value="其他">其他</option>
-                  </select>
+                    <SelectTrigger className="h-10 rounded-xl border-slate-300 bg-white text-sm">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">请选择</SelectItem>
+                      <SelectItem value="资料">资料</SelectItem>
+                      <SelectItem value="费用">费用</SelectItem>
+                      <SelectItem value="审批">审批</SelectItem>
+                      <SelectItem value="其他">其他</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">目标日期</label>

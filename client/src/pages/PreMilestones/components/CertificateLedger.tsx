@@ -9,6 +9,7 @@ import {
   mapCertificateStatusLabel,
 } from '../constants'
 import { Button } from '@/components/ui/button'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
   Table,
   TableBody,
@@ -188,31 +189,44 @@ export function CertificateLedger({
           />
         </div>
         {stages.length > 0 && (
-          <select
+          <Select
             value={stageFilter}
-            onChange={(e) => setStageFilter(e.target.value)}
-            aria-label="证照阶段筛选"
-            className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-blue-400 focus:outline-none"
-            data-testid="certificate-ledger-stage-filter"
+            onValueChange={setStageFilter}
           >
-            <option value="all">全部阶段</option>
-            {stages.map((stage) => (
-              <option key={stage} value={stage}>{stage}</option>
-            ))}
-          </select>
+            <SelectTrigger
+              aria-label="证照阶段筛选"
+              className="h-10 min-w-[132px] rounded-xl border-slate-200 bg-slate-50 text-sm text-slate-900"
+              data-testid="certificate-ledger-stage-filter"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">全部阶段</SelectItem>
+              {stages.map((stage) => (
+                <SelectItem key={stage} value={stage}>{stage}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         )}
         {certificateTypes.length > 0 && (
-          <select
+          <Select
             value={typeFilter}
-            onChange={(e) => setTypeFilter(e.target.value)}
-            className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-blue-400 focus:outline-none"
-            data-testid="certificate-ledger-type-filter"
+            onValueChange={setTypeFilter}
           >
-            <option value="all">全部证件类型</option>
-            {[...new Map(certificateTypes.map((c) => [c.type, c])).values()].map((c) => (
-              <option key={c.type} value={c.type}>{c.name}</option>
-            ))}
-          </select>
+            <SelectTrigger
+              aria-label="证件类型筛选"
+              className="h-10 min-w-[150px] rounded-xl border-slate-200 bg-slate-50 text-sm text-slate-900"
+              data-testid="certificate-ledger-type-filter"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">全部证件类型</SelectItem>
+              {[...new Map(certificateTypes.map((c) => [c.type, c])).values()].map((c) => (
+                <SelectItem key={c.type} value={c.type}>{c.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         )}
       </div>
 

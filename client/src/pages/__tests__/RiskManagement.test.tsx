@@ -710,7 +710,7 @@ describe('RiskManagement', () => {
 
     clickButtonText(container, '时间轴')
     await waitForCondition(
-      () => container.textContent?.includes('2026/04/02') || container.textContent?.includes('2026/04/01'),
+      () => container.textContent?.includes('2026-04-02') || container.textContent?.includes('2026-04-01'),
       container,
     )
 
@@ -723,15 +723,15 @@ describe('RiskManagement', () => {
     await waitForCondition(() => document.body.textContent?.includes('实时优先级分'), document.body)
 
     const titleInput = document.body.querySelector('input[placeholder="例如：专项审批资料缺失"]') as HTMLInputElement | null
-    const severitySelect = document.body.querySelector('select') as HTMLSelectElement | null
+    const severityInput = document.body.querySelector('[data-testid="manual-issue-severity-value"]') as HTMLInputElement | null
     const descriptionInput = document.body.querySelector('textarea[placeholder="补充内容"]') as HTMLTextAreaElement | null
 
-    if (!titleInput || !severitySelect || !descriptionInput) {
+    if (!titleInput || !severityInput || !descriptionInput) {
       throw new Error('Manual issue dialog fields not found')
     }
 
     setElementValue(titleInput, '人工补录风险')
-    setElementValue(severitySelect, 'high')
+    setElementValue(severityInput, 'high')
     setElementValue(descriptionInput, '现场临时协调事项需要人工跟进')
 
     await act(async () => {

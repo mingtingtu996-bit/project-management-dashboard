@@ -16,8 +16,17 @@ export type CompanySummaryHealthHistory = {
   periods: CompanySummaryHealthHistoryPoint[]
 }
 
+export type CompanySummaryStatusCounts = {
+  total: number
+  inProgress: number
+  completed: number
+  paused: number
+  notStarted: number
+}
+
 export type CompanySummaryResponse = {
   projectCount: number
+  statusCounts: CompanySummaryStatusCounts
   averageHealth: number
   averageProgress: number
   attentionProjectCount: number
@@ -70,6 +79,10 @@ function toFiniteNumber(value: unknown) {
   return Number.isFinite(next) ? next : null
 }
 
+function normalizeStatus(value: unknown): string {
+  return String(value ?? '').trim().toLowerCase()
+}
+
 function average(values: number[]) {
   if (values.length === 0) return null
   return Math.round(values.reduce((sum, value) => sum + value, 0) / values.length)
@@ -97,6 +110,40 @@ function sortRanking(left: ProjectExecutionSummary, right: ProjectExecutionSumma
   }
 
   return left.name.localeCompare(right.name, 'zh-Hans-CN')
+}
+
+function mapProjectStatusBucket(summary: ProjectExecutionSummary): keyof Omit<CompanySummaryStatusCounts, 'total'> {
+  switch (normalizeStatus(summary.statusLabel || summary.status)) {
+    case '已完成':
+    case 'completed':
+      return 'completed'
+    case '已暂停':
+    case 'paused':
+    case 'archived':
+      return 'paused'
+    case '进行中':
+    case 'active':
+    case 'in_progress':
+      return 'inProgress'
+    default:
+      return 'notStarted'
+  }
+}
+
+function buildStatusCounts(ranking: ProjectExecutionSummary[]): CompanySummaryStatusCounts {
+  const statusCounts: CompanySummaryStatusCounts = {
+    total: ranking.length,
+    inProgress: 0,
+    completed: 0,
+    paused: 0,
+    notStarted: 0,
+  }
+
+  for (const summary of ranking) {
+    statusCounts[mapProjectStatusBucket(summary)] += 1
+  }
+
+  return statusCounts
 }
 
 function latestMonthlySnapshotRows(rows: ProjectDailySnapshotHealthRow[]) {
@@ -209,6 +256,7 @@ export function buildCompanySummaryResponse(
 
   return {
     projectCount,
+    statusCounts: buildStatusCounts(ranking),
     averageHealth,
     averageProgress,
     attentionProjectCount,

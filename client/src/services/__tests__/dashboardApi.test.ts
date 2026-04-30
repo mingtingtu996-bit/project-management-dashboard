@@ -59,6 +59,13 @@ describe('DashboardApiService cache policy', () => {
   it('requests company summary with no-store cache', async () => {
     mocks.apiGet.mockResolvedValueOnce({
       projectCount: 0,
+      statusCounts: {
+        total: 0,
+        inProgress: 0,
+        completed: 0,
+        paused: 0,
+        notStarted: 0,
+      },
       averageHealth: 0,
       averageProgress: 0,
       attentionProjectCount: 0,
@@ -98,6 +105,13 @@ describe('DashboardApiService cache policy', () => {
 
     expect(summary).toMatchObject({
       projectCount: 1,
+      statusCounts: {
+        total: 1,
+        inProgress: 0,
+        completed: 0,
+        paused: 0,
+        notStarted: 0,
+      },
       averageHealth: 0,
       averageProgress: 0,
       attentionProjectCount: 0,

@@ -94,7 +94,7 @@ export function CriticalPathInsertDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-[720px] rounded-2xl shadow-[var(--el-4)]" data-testid="critical-path-insert-dialog">
+      <DialogContent className="max-h-[90vh] max-w-[720px] overflow-y-auto rounded-2xl shadow-[var(--el-4)]" data-testid="critical-path-insert-dialog">
         <DialogHeader>
           <DialogTitle>选择要插入主链的任务</DialogTitle>
           <DialogDescription className="sr-only">

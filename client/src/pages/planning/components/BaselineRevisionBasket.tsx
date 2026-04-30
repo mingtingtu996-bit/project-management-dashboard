@@ -20,7 +20,7 @@ export function BaselineRevisionBasket({ items, onRemoveItem }: BaselineRevision
         {items.length ? (
           items.map((item) => (
             <Card key={item.id} className="border-blue-200 bg-blue-50/70">
-              <CardContent className="space-y-3 p-4">
+              <CardContent className="space-y-3 p-5">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="space-y-1">
                     <div className="flex flex-wrap items-center gap-2">

@@ -2,6 +2,7 @@ import { useRef } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { DisabledReasonTooltip } from '@/components/ui/disabled-reason-tooltip'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -11,7 +12,6 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { Download, History, MoreHorizontal, RotateCcw, RotateCw, Save } from 'lucide-react'
 
@@ -23,6 +23,7 @@ interface BaselineBottomBarProps {
   canUndo: boolean
   canRedo: boolean
   saveDisabled?: boolean
+  saveDisabledReason?: string | null
   saving?: boolean
   selectedCount?: number
   batchShiftDays?: string
@@ -34,6 +35,7 @@ interface BaselineBottomBarProps {
   onBatchSetProgress?: (value?: string) => void
   onOpenConfirm?: () => void
   confirmDisabled?: boolean
+  confirmDisabledReason?: string | null
   onUndo: () => void
   onRedo: () => void
   onSaveDraft: () => void
@@ -47,6 +49,7 @@ export function BaselineBottomBar({
   canUndo,
   canRedo,
   saveDisabled = false,
+  saveDisabledReason = null,
   saving = false,
   selectedCount = 0,
   batchShiftDays = '1',
@@ -58,6 +61,7 @@ export function BaselineBottomBar({
   onBatchSetProgress,
   onOpenConfirm,
   confirmDisabled = false,
+  confirmDisabledReason = null,
   onUndo,
   onRedo,
   onSaveDraft,
@@ -67,6 +71,10 @@ export function BaselineBottomBar({
   const hasBatchActions =
     !readOnly &&
     (Boolean(onBatchDelete) || Boolean(onBatchShift) || Boolean(onBatchSetProgress))
+  const resolvedSaveDisabledReason =
+    saveDisabledReason ?? (readOnly ? '请先进入编辑模式或获取编辑锁。' : saveDisabled ? '需先选择至少 1 项基线条目。' : null)
+  const resolvedConfirmDisabledReason =
+    confirmDisabledReason ?? (readOnly ? '请先进入编辑模式或获取编辑锁。' : confirmDisabled ? '请先保存草稿。' : null)
 
   return (
     <div className="fixed bottom-4 left-1/2 z-40 w-[calc(100%-2rem)] max-w-[1440px] -translate-x-1/2 px-0">
@@ -168,33 +176,30 @@ export function BaselineBottomBar({
             </div>
 
             <div className="flex flex-wrap items-center justify-end gap-2">
-              <Button
-                type="button"
-                size="sm"
-                className="gap-2 rounded-full border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
-                onClick={onSaveDraft}
-                disabled={readOnly || saveDisabled}
-              >
-                <Save className="h-4 w-4" />
-                {saving ? '保存中...' : '保存草稿'}
-              </Button>
+              <DisabledReasonTooltip reason={readOnly || saveDisabled ? resolvedSaveDisabledReason : null}>
+                <Button
+                  type="button"
+                  size="sm"
+                  className="gap-2 rounded-full border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                  onClick={onSaveDraft}
+                  disabled={readOnly || saveDisabled}
+                >
+                  <Save className="h-4 w-4" />
+                  {saving ? '保存中...' : '保存草稿'}
+                </Button>
+              </DisabledReasonTooltip>
               {onOpenConfirm ? (
                 readOnly || confirmDisabled ? (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span className="inline-flex cursor-not-allowed">
-                        <Button
-                          type="button"
-                          size="sm"
-                          className="gap-2 rounded-full bg-blue-600 text-white hover:bg-blue-500"
-                          disabled
-                        >
-                          确认项目基线
-                        </Button>
-                      </span>
-                    </TooltipTrigger>
-                    <TooltipContent>请先保存草稿</TooltipContent>
-                  </Tooltip>
+                  <DisabledReasonTooltip reason={resolvedConfirmDisabledReason}>
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="gap-2 rounded-full bg-blue-600 text-white hover:bg-blue-500"
+                      disabled
+                    >
+                      确认项目基线
+                    </Button>
+                  </DisabledReasonTooltip>
                 ) : (
                   <Button
                     type="button"

@@ -21,6 +21,7 @@ import { DataQualityApiService, type DataQualityProjectSummary } from '@/service
 import type { Task } from '@/pages/GanttViewTypes'
 import type { MonthlyPlanVersion } from '@/types/planning'
 import { AlertTriangle, Clock, MoreHorizontal, RefreshCw, Search } from 'lucide-react'
+import { DisabledReasonTooltip } from '@/components/ui/disabled-reason-tooltip'
 
 import { CloseoutBatchBar } from './components/CloseoutBatchBar'
 import {
@@ -542,9 +543,22 @@ export default function CloseoutPage() {
     )
   }
 
+  const autoAdoptDisabledReason = readOnly
+    ? '只读成员无权采纳系统建议。'
+    : autoAdoptableCount === 0
+      ? '当前没有可自动采纳的待处理事项。'
+      : actionLoading === 'auto_adopt'
+        ? '系统建议正在采纳中。'
+        : null
+  const forceCloseDisabledReason = !canManagePlanning
+    ? '仅项目负责人或公司管理员可强制发起关账。'
+    : !forceCloseUnlocked
+      ? '需到月末关账第 7 日后才可强制发起。'
+      : null
+
   const summary = (
     <Card variant="detail">
-      <CardContent className="space-y-4 p-4 sm:p-5">
+      <CardContent className="space-y-4 p-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="space-y-1">
             <div className="flex flex-wrap items-center gap-2">
@@ -555,17 +569,19 @@ export default function CloseoutPage() {
           </div>
           <div className="flex flex-wrap items-center gap-2">
             {forceCloseUnlocked ? <Badge variant="secondary">已到第 7 日，可强制发起关账</Badge> : null}
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="gap-2"
-              loading={actionLoading === 'auto_adopt'}
-              onClick={handleAutoAdopt}
-              disabled={readOnly || autoAdoptableCount === 0 || actionLoading === 'auto_adopt'}
-            >
-              一键采纳系统建议
-            </Button>
+            <DisabledReasonTooltip reason={autoAdoptDisabledReason}>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="gap-2"
+                loading={actionLoading === 'auto_adopt'}
+                onClick={handleAutoAdopt}
+                disabled={Boolean(autoAdoptDisabledReason)}
+              >
+                一键采纳系统建议
+              </Button>
+            </DisabledReasonTooltip>
           </div>
         </div>
 
@@ -721,7 +737,7 @@ export default function CloseoutPage() {
 
   const sectionHeader = (
     <Card variant="detail">
-      <CardContent className="space-y-4 p-4">
+      <CardContent className="space-y-4 p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="space-y-1">
             <div className="text-sm font-medium text-slate-900">关账分组与状态</div>
@@ -858,7 +874,7 @@ export default function CloseoutPage() {
 
   return (
     <PlanningPageShell
-      projectName={currentProject.name ?? '未命名项目'}
+      projectName={currentProject.name ?? '项目'}
       title="计划编制 / 关闭管理"
       description="收口当月待处理事项，并把结果带回月度计划。"
       tabs={tabs}
@@ -901,17 +917,19 @@ export default function CloseoutPage() {
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-48">
-                <DropdownMenuItem
-                  data-testid="closeout-force-close-entry"
-                  disabled={!forceCloseUnlocked}
-                  onSelect={() => {
-                    setConfirmMode('force')
-                    setConfirmState('ready')
-                    setConfirmOpen(true)
-                  }}
-                >
-                  强制发起关账
-                </DropdownMenuItem>
+                <DisabledReasonTooltip reason={forceCloseDisabledReason} className="w-full">
+                  <DropdownMenuItem
+                    data-testid="closeout-force-close-entry"
+                    disabled={Boolean(forceCloseDisabledReason)}
+                    onSelect={() => {
+                      setConfirmMode('force')
+                      setConfirmState('ready')
+                      setConfirmOpen(true)
+                    }}
+                  >
+                    强制发起关账
+                  </DropdownMenuItem>
+                </DisabledReasonTooltip>
               </DropdownMenuContent>
             </DropdownMenu>
           ) : null}

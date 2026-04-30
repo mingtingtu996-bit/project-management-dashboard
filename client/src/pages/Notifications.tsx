@@ -1316,7 +1316,7 @@ export default function Notifications() {
       ) : null}
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <Card className="rounded-xl border border-slate-200 bg-white p-4" data-testid="notifications-summary-total">
+        <Card className="rounded-xl border border-slate-200 bg-white p-5" data-testid="notifications-summary-total">
           <CardContent className="space-y-3 p-5">
             <div className="flex items-center justify-between">
               <span className="text-sm font-medium text-slate-500">{'\u63d0\u9192\u603b\u6570'}</span>
@@ -1328,7 +1328,7 @@ export default function Notifications() {
           </CardContent>
         </Card>
 
-        <Card className="rounded-xl border border-slate-200 bg-white p-4">
+        <Card className="rounded-xl border border-slate-200 bg-white p-5">
           <CardContent className="space-y-3 p-5">
             <div className="flex items-center justify-between">
               <span className="text-sm font-medium text-slate-500">{'\u672a\u8bfb'}</span>
@@ -1340,7 +1340,7 @@ export default function Notifications() {
           </CardContent>
         </Card>
 
-        <Card className="rounded-xl border border-slate-200 bg-white p-4">
+        <Card className="rounded-xl border border-slate-200 bg-white p-5">
           <CardContent className="space-y-3 p-5">
             <div className="flex items-center justify-between">
               <span className="text-sm font-medium text-slate-500">{'\u4e1a\u52a1\u9884\u8b66'}</span>
@@ -1353,7 +1353,7 @@ export default function Notifications() {
           </CardContent>
         </Card>
 
-        <Card className="rounded-xl border border-slate-200 bg-white p-4">
+        <Card className="rounded-xl border border-slate-200 bg-white p-5">
           <CardContent className="space-y-3 p-5">
             <div className="flex items-center justify-between">
               <span className="text-sm font-medium text-slate-500">{'\u6d41\u7a0b\u50ac\u529e'}</span>
@@ -1557,7 +1557,7 @@ export default function Notifications() {
                                   </div>
                                 ) : null}
 
-                                <div className="grid gap-3 rounded-xl border border-slate-100 bg-white/70 px-3 py-3 text-xs text-slate-500 sm:grid-cols-2 lg:grid-cols-4">
+                                <div className="grid gap-3 rounded-xl border border-slate-100 bg-white/70 px-5 py-5 text-xs text-slate-500 sm:grid-cols-2 lg:grid-cols-4">
                                   <div>
                                     <div className="font-medium text-slate-700">入口</div>
                                     <div className="mt-1">{target.label}</div>

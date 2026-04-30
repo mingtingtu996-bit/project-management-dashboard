@@ -45,7 +45,7 @@ export function ConditionWarningModal({
       <DialogContent className="max-w-[560px]" data-testid="condition-warning-modal">
         <DialogHeader className="space-y-2">
           <DialogTitle className="flex items-center gap-2 text-lg">
-            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-amber-100">
+            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-amber-100">
               <Bell className="h-4 w-4 text-amber-600" />
             </span>
             <span>提醒汇总</span>

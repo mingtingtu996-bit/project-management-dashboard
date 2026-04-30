@@ -279,7 +279,7 @@ export function ScopeDimensionsDialog({ projectId, open, onOpenChange }: ScopeDi
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-[720px] overflow-hidden rounded-2xl shadow-[var(--el-4)]" data-testid="gantt-scope-dimensions-dialog">
+      <DialogContent className="max-h-[90vh] max-w-[720px] overflow-y-auto rounded-2xl shadow-[var(--el-4)]" data-testid="gantt-scope-dimensions-dialog">
         <DialogHeader>
           <DialogTitle>范围维度</DialogTitle>
           <DialogDescription className="sr-only">维护项目的范围维度绑定</DialogDescription>

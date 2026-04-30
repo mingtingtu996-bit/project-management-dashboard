@@ -3,6 +3,7 @@ import { ArrowLeft, CalendarCheck, CalendarDays, FileText, GitBranch, Layers3, L
 import { Breadcrumb } from '@/components/Breadcrumb'
 import { PageHeader } from '@/components/PageHeader'
 import { Button } from '@/components/ui/button'
+import { DisabledReasonTooltip } from '@/components/ui/disabled-reason-tooltip'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { PROJECT_NAVIGATION_LABELS } from '@/config/navigation'
 
@@ -145,10 +146,12 @@ export function GanttViewHeader({
             今天
           </Button>
         )}
-        <Button onClick={onCreateTask} disabled={!canEdit}>
-          <Plus className="mr-2 h-4 w-4" />
-          新建任务
-        </Button>
+        <DisabledReasonTooltip reason={!canEdit ? '只读成员无编辑权限。' : null}>
+          <Button onClick={onCreateTask} disabled={!canEdit}>
+            <Plus className="mr-2 h-4 w-4" />
+            新建任务
+          </Button>
+        </DisabledReasonTooltip>
       </PageHeader>
 
       {governanceBanner ? (

@@ -1,3 +1,4 @@
+import { ChartAccessibleWrapper } from '@/components/ChartAccessibleWrapper'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
 
@@ -64,7 +65,11 @@ export function CompanyHealthHeatmap({ items }: CompanyHealthHeatmapProps) {
             暂无项目健康数据
           </div>
         ) : (
-          <>
+          <ChartAccessibleWrapper
+            summary="健康热力数据"
+            columns={['项目', '状态', '健康度', '总体进度']}
+            rows={sortedItems.map((item) => [item.name, item.statusLabel, item.healthScore, `${item.progress}%`])}
+          >
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
               {sortedItems.map((item) => (
                 <div
@@ -115,7 +120,7 @@ export function CompanyHealthHeatmap({ items }: CompanyHealthHeatmapProps) {
                 稳定 {stableCount} · 预警 {criticalCount} · 共 {items.length} 项
               </div>
             </div>
-          </>
+          </ChartAccessibleWrapper>
         )}
       </CardContent>
     </Card>

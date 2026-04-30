@@ -12,6 +12,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 import { BaselineRevisionActions } from './BaselineRevisionActions'
 import { BaselineRevisionBasket } from './BaselineRevisionBasket'
@@ -19,6 +20,7 @@ import {
   BaselineRevisionCandidateList,
   type BaselineRevisionCandidate,
 } from './BaselineRevisionCandidateList'
+import { formatDateTime } from '@/lib/formatters'
 import { cn } from '@/lib/utils'
 
 interface BaselineRevisionPoolDialogProps {
@@ -199,28 +201,28 @@ export function BaselineRevisionPoolDialog({
 
         <div className="grid gap-3 md:grid-cols-4">
           <Card className="border-slate-200 bg-slate-50/70 shadow-none">
-            <CardContent className="space-y-1 p-4">
+            <CardContent className="space-y-1 p-5">
               <div className="text-xs text-slate-500">高优先级候选数</div>
               <div className="text-lg font-semibold text-slate-900">{overview.highPriority}</div>
             </CardContent>
           </Card>
           <Card className="border-slate-200 bg-slate-50/70 shadow-none">
-            <CardContent className="space-y-1 p-4">
+            <CardContent className="space-y-1 p-5">
               <div className="text-xs text-slate-500">连续跨月候选数</div>
               <div className="text-lg font-semibold text-slate-900">{overview.consecutiveCrossMonth}</div>
             </CardContent>
           </Card>
           <Card className="border-slate-200 bg-slate-50/70 shadow-none">
-            <CardContent className="space-y-1 p-4">
+            <CardContent className="space-y-1 p-5">
               <div className="text-xs text-slate-500">关键路径受影响候选数</div>
               <div className="text-lg font-semibold text-slate-900">{overview.criticalPath}</div>
             </CardContent>
           </Card>
           <Card className="border-slate-200 bg-slate-50/70 shadow-none">
-            <CardContent className="space-y-1 p-4">
+            <CardContent className="space-y-1 p-5">
               <div className="text-xs text-slate-500">最近一次系统评估时间</div>
               <div className="text-sm font-semibold text-slate-900">
-                {overview.lastEvaluatedAt ? new Date(overview.lastEvaluatedAt).toLocaleString('zh-CN', { hour12: false }) : '暂无'}
+                {formatDateTime(overview.lastEvaluatedAt, '暂无')}
               </div>
             </CardContent>
           </Card>
@@ -272,16 +274,20 @@ export function BaselineRevisionPoolDialog({
           <div className="grid gap-3 md:grid-cols-[1fr_1fr_1fr_auto]">
             <label className="block space-y-1">
               <span className="text-xs font-medium uppercase tracking-wider text-slate-500">来源</span>
-              <select
+              <Select
                 value={sourceFilter}
-                onChange={(event) => setSourceFilter(event.target.value as typeof sourceFilter)}
-                className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-slate-400"
+                onValueChange={(value) => setSourceFilter(value as typeof sourceFilter)}
               >
-                <option value="all">全部来源</option>
-                <option value="observation">观测池</option>
-                <option value="deviation">偏差分析</option>
-                <option value="manual">人工补录</option>
-              </select>
+                <SelectTrigger className="h-10 w-full rounded-xl border-slate-200 bg-white text-sm text-slate-900">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">全部来源</SelectItem>
+                  <SelectItem value="observation">观测池</SelectItem>
+                  <SelectItem value="deviation">偏差分析</SelectItem>
+                  <SelectItem value="manual">人工补录</SelectItem>
+                </SelectContent>
+              </Select>
             </label>
             <label className="block space-y-1">
               <span className="text-xs font-medium uppercase tracking-wider text-slate-500">观察窗口起</span>

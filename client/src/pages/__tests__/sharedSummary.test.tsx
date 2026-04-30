@@ -234,6 +234,13 @@ describe('shared summary dashboards', () => {
     } as never)
     companySummarySpy.mockResolvedValue({
       projectCount: 1,
+      statusCounts: {
+        total: 1,
+        inProgress: 1,
+        completed: 0,
+        paused: 0,
+        notStarted: 0,
+      },
       averageHealth: 88,
       averageProgress: 72,
       attentionProjectCount: 1,
@@ -523,6 +530,13 @@ describe('shared summary dashboards', () => {
   it('CompanyCockpit shows the normal empty insight state when no project is anomalous', async () => {
     companySummarySpy.mockResolvedValueOnce({
       projectCount: 1,
+      statusCounts: {
+        total: 1,
+        inProgress: 1,
+        completed: 0,
+        paused: 0,
+        notStarted: 0,
+      },
       averageHealth: 90,
       averageProgress: 90,
       attentionProjectCount: 0,

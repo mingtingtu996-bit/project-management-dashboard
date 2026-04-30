@@ -1,4 +1,5 @@
 import { Button } from '@/components/ui/button'
+import { ChartAccessibleWrapper } from '@/components/ChartAccessibleWrapper'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { BellDot, ChevronRight, Route, ShieldAlert, TimerReset, TriangleAlert } from 'lucide-react'
 
@@ -71,6 +72,22 @@ export function ProjectSignalRanking({ projectRows, onNavigate }: ProjectSignalR
             暂无项目信号数据
           </div>
         ) : (
+          <ChartAccessibleWrapper
+            summary="信号排行数据"
+            columns={['项目', '健康度', '预警级别', '延期审批', '活跃阻碍', '关键路径受影响', '未读预警']}
+            rows={rankedRows.map((row) => {
+              const summary = row.summary
+              return [
+                row.project.name,
+                summary?.healthScore ?? row.healthScore,
+                warningLevelLabel(summary?.highestWarningLevel),
+                summary?.activeDelayRequests ?? 0,
+                summary?.activeObstacles ?? summary?.activeObstacleCount ?? 0,
+                summary?.criticalPathAffectedTasks ?? 0,
+                summary?.unreadWarningCount ?? 0,
+              ]
+            })}
+          >
           <div className="h-[300px] space-y-3 overflow-y-auto pr-1">
             {rankedRows.map((row) => {
               const summary = row.summary
@@ -155,6 +172,7 @@ export function ProjectSignalRanking({ projectRows, onNavigate }: ProjectSignalR
               )
             })}
           </div>
+          </ChartAccessibleWrapper>
         )}
       </CardContent>
     </Card>

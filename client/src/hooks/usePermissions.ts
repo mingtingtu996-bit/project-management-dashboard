@@ -2,6 +2,7 @@ import { useContext, useEffect, useMemo, useState } from 'react'
 
 import { AuthContext } from '@/context/AuthContext'
 import { useCurrentProject } from '@/hooks/useStore'
+import { toast } from '@/hooks/use-toast'
 import { getApiErrorMessage, getAuthHeaders } from '@/lib/apiClient'
 import { PROJECT_ACCESS_OVERRIDE_EVENT } from '@/lib/projectAccessEvents'
 import {
@@ -26,8 +27,10 @@ interface ProjectAccessSummary {
 }
 
 const PROJECT_ACCESS_CACHE_TTL_MS = 15_000
+const PROJECT_ACCESS_FAILURE_NOTICE_DEDUPE_MS = 10_000
 const projectAccessCache = new Map<string, { value: ProjectAccessSummary; fetchedAt: number }>()
 const projectAccessInflight = new Map<string, Promise<ProjectAccessSummary>>()
+const projectAccessFailureNoticeTimestamps = new Map<string, number>()
 
 function buildProjectAccessCacheKey(projectId: string, userId: string) {
   return `${userId}:${projectId}`
@@ -41,6 +44,18 @@ function getCachedProjectAccess(cacheKey: string): ProjectAccessSummary | null {
     return null
   }
   return cached.value
+}
+
+function showProjectAccessFallbackNotice(projectId: string, message: string) {
+  const now = Date.now()
+  const lastShownAt = projectAccessFailureNoticeTimestamps.get(projectId) ?? 0
+  if (now - lastShownAt < PROJECT_ACCESS_FAILURE_NOTICE_DEDUPE_MS) return
+  projectAccessFailureNoticeTimestamps.set(projectId, now)
+  toast({
+    title: '权限检查失败，已切换为只读',
+    description: message,
+    variant: 'destructive',
+  })
 }
 
 async function fetchProjectAccessSummary(
@@ -159,9 +174,11 @@ export function usePermissions(options: UsePermissionsOptions = {}) {
       })
       .catch((error) => {
         if (cancelled) return
+        const message = getApiErrorMessage(error, '权限接口暂时不可用，请刷新后重试。')
         if (import.meta.env.DEV) {
-          console.warn('[usePermissions] fallback to readonly access', getApiErrorMessage(error))
+          console.warn('[usePermissions] fallback to readonly access', message)
         }
+        showProjectAccessFallbackNotice(projectId, message)
         setAccessSummary({
           permissionLevel: 'viewer',
           globalRole: normalizeGlobalRole(user.globalRole),

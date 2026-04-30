@@ -40,7 +40,7 @@ export function MonthlyPlanDraftPanel({
       </CardHeader>
       <Separator />
 
-      <CardContent className="space-y-4 p-4">
+      <CardContent className="space-y-4 p-5">
         <div className="space-y-2">
           {monthlyLayers.map((layer) => (
             <div

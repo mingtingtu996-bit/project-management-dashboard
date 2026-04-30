@@ -964,7 +964,7 @@ function PlanningWorkspaceInner() {
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1.6fr)_360px]">
       <div className="space-y-4">
         <Card className="border-slate-200">
-          <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4">
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 p-5">
             <div className="space-y-1">
               <div className="text-sm font-medium text-slate-900">共享交互状态</div>
               <div className="text-sm text-slate-500">
@@ -1026,7 +1026,7 @@ function PlanningWorkspaceInner() {
         <ValidationPanel title="异常校核区" issues={validationIssues as PlanningValidationIssue[]} />
 
         <Card className="border-slate-200">
-          <CardContent className="space-y-4 p-4">
+          <CardContent className="space-y-4 p-5">
             <div className="flex items-center justify-between">
               <div>
                 <div className="text-sm font-medium text-slate-900">共享协作底座</div>
@@ -1061,7 +1061,7 @@ function PlanningWorkspaceInner() {
     <div className="space-y-4 pb-20 pb-24">
       {closeoutCompleted ? (
         <Card data-testid="closeout-complete-banner" className="border-emerald-200 bg-emerald-50">
-          <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4">
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 p-5">
             <div className="space-y-1">
               <div className="text-sm font-medium text-emerald-900">已完成本月关账，已切换到下月草稿</div>
               <div className="text-sm text-emerald-700">当前工作台已保留关账留痕，可继续处理下月计划草稿。</div>
@@ -1113,7 +1113,7 @@ function PlanningWorkspaceInner() {
   const revisionPoolWorkspaceContent = (
     <div className="space-y-4 pb-24" data-testid="planning-revision-workspace">
       <Card className="border-slate-200">
-        <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4">
+        <CardContent className="flex flex-wrap items-center justify-between gap-3 p-5">
           <div className="space-y-1">
             <div className="text-sm font-medium text-slate-900">基线计划修订候选</div>
             <div className="text-sm text-slate-500">
@@ -1133,7 +1133,7 @@ function PlanningWorkspaceInner() {
 
       {revisionDraftContext ? (
         <Card data-testid="baseline-revision-deeplink-context" className="border-blue-200 bg-blue-50/60">
-          <CardContent className="space-y-2 p-4">
+          <CardContent className="space-y-2 p-5">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <div className="text-sm font-semibold text-slate-900">修订草稿上下文</div>
@@ -1263,7 +1263,7 @@ function PlanningWorkspaceInner() {
       </CollapsibleSection>
 
       <Card data-testid="planning-governance-quick-links" className="border-slate-200">
-        <CardContent className="space-y-4 p-4">
+        <CardContent className="space-y-4 p-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="space-y-1">
               <div className="text-sm font-medium text-slate-900">异常与留痕快链</div>
@@ -1333,7 +1333,7 @@ function PlanningWorkspaceInner() {
   const closeoutWorkspaceContent = (
     <div className="space-y-4 pb-20 pb-24">
       <Card className="overflow-hidden border-slate-200">
-        <CardContent className="space-y-4 p-4">
+        <CardContent className="space-y-4 p-5">
           <div
             data-testid="closeout-header"
             className="flex flex-col gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 lg:flex-row lg:items-center lg:justify-between"

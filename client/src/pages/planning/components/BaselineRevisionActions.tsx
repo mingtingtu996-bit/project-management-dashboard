@@ -113,7 +113,7 @@ export function BaselineRevisionActions({
 
       {deferredReasonVisible ? (
         <Card className="border-amber-200 bg-amber-50/70">
-          <CardContent className="space-y-2 p-4">
+          <CardContent className="space-y-2 p-5">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
                 <div className="text-sm font-semibold text-slate-900">暂不处理原因</div>

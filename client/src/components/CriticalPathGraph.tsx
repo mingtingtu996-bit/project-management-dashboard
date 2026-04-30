@@ -16,6 +16,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import type { CriticalPathOverrideInput, CriticalPathOverrideRecord, CriticalPathSnapshot } from '@/lib/criticalPath'
 import {
@@ -626,7 +627,7 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
 
       {props.error && (
         <Card className="border-amber-200 bg-amber-50 shadow-sm">
-          <CardContent className="flex items-start gap-3 p-4 text-sm text-amber-900">
+          <CardContent className="flex items-start gap-3 p-5 text-sm text-amber-900">
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
             <div>
               <div className="font-medium">关键路径快照暂不可用</div>
@@ -641,7 +642,7 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
           className={calculationBanner.tone === 'amber' ? 'border-amber-200 bg-amber-50 shadow-sm' : 'border-red-200 bg-red-50 shadow-sm'}
           data-testid={calculationBanner.testId}
         >
-          <CardContent className={calculationBanner.tone === 'amber' ? 'flex items-start gap-3 p-4 text-sm text-amber-900' : 'flex items-start gap-3 p-4 text-sm text-red-900'}>
+          <CardContent className={calculationBanner.tone === 'amber' ? 'flex items-start gap-3 p-5 text-sm text-amber-900' : 'flex items-start gap-3 p-5 text-sm text-red-900'}>
             {calculationBanner.tone === 'amber' ? (
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
             ) : (
@@ -667,7 +668,7 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
               </div>
             </CardHeader>
             <Separator />
-            <CardContent className="space-y-4 p-4">
+            <CardContent className="space-y-4 p-5">
               {layout.nodes.length ? (
                 <>
                   <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1023,7 +1024,7 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
               </div>
             </CardHeader>
             <Separator />
-            <CardContent className="space-y-3 p-4" data-testid="critical-path-edge-list">
+            <CardContent className="space-y-3 p-5" data-testid="critical-path-edge-list">
               {snapshotEdges.length ? (
                 <div className="grid gap-2 md:grid-cols-2">
                   {snapshotEdges.map((edge) => {
@@ -1060,7 +1061,7 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
                 <CardTitle className="text-sm">备选链</CardTitle>
               </CardHeader>
               <Separator />
-              <CardContent className="space-y-3 p-4">
+              <CardContent className="space-y-3 p-5">
                 {props.snapshot?.alternateChains.length ? (
                   props.snapshot.alternateChains.map((chain) => (
                     <div
@@ -1123,7 +1124,7 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
                 <CardTitle className="text-sm">手动关注</CardTitle>
               </CardHeader>
               <Separator />
-              <CardContent className="space-y-3 p-4">
+              <CardContent className="space-y-3 p-5">
                 {props.snapshot?.manualAttentionTaskIds.length ? (
                   <div className="flex flex-wrap gap-2" data-testid="critical-path-manual-attention">
                     {props.snapshot.manualAttentionTaskIds.map((taskId) => renderTaskChip(taskId, undefined, '关注'))}
@@ -1142,7 +1143,7 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
               <CardTitle className="text-sm">覆盖记录</CardTitle>
             </CardHeader>
             <Separator />
-            <CardContent className="space-y-3 p-4" data-testid="critical-path-override-list">
+            <CardContent className="space-y-3 p-5" data-testid="critical-path-override-list">
               {props.overrides.length ? (
                 props.overrides.map((override) => (
                   <div key={override.id} className="rounded-2xl border border-slate-200 bg-white p-3">
@@ -1187,7 +1188,7 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
               </div>
             </CardHeader>
             <Separator />
-            <CardContent className="space-y-4 p-4" data-testid="critical-path-action-panel">
+            <CardContent className="space-y-4 p-5" data-testid="critical-path-action-panel">
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
                 <div className="text-xs font-medium uppercase tracking-wide text-slate-500">当前任务</div>
                 <div className="mt-2 text-sm font-semibold text-slate-900">
@@ -1230,53 +1231,53 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
                     <div className="mt-3 grid gap-2 sm:grid-cols-3">
                       <label className="space-y-1 text-xs text-slate-500">
                         <span>插链方式</span>
-                        <select
-                          value={insertAnchorType}
-                          onChange={(event) => setInsertAnchorType(event.target.value as 'before' | 'after' | 'between')}
-                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none transition-colors focus:border-blue-400"
-                          data-testid="critical-path-anchor-type"
-                        >
-                          <option value="before">插到前面</option>
-                          <option value="after">插到后面</option>
-                          <option value="between" disabled={anchorTaskIds.length < 2}>
-                            插到中间
-                          </option>
-                        </select>
+                        <Select value={insertAnchorType} onValueChange={(value) => setInsertAnchorType(value as 'before' | 'after' | 'between')}>
+                          <SelectTrigger className="h-10 rounded-xl border-slate-200 bg-white text-sm text-slate-700" data-testid="critical-path-anchor-type">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="before">插到前面</SelectItem>
+                            <SelectItem value="after">插到后面</SelectItem>
+                            <SelectItem value="between" disabled={anchorTaskIds.length < 2}>
+                              插到中间
+                            </SelectItem>
+                          </SelectContent>
+                        </Select>
                       </label>
 
                       {(insertAnchorType === 'after' || insertAnchorType === 'between') && (
                         <label className="space-y-1 text-xs text-slate-500">
                           <span>左锚点</span>
-                          <select
-                            value={insertLeftTaskId}
-                            onChange={(event) => setInsertLeftTaskId(event.target.value)}
-                            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none transition-colors focus:border-blue-400"
-                            data-testid="critical-path-left-anchor"
-                          >
+                          <Select value={insertLeftTaskId} onValueChange={setInsertLeftTaskId}>
+                            <SelectTrigger className="h-10 rounded-xl border-slate-200 bg-white text-sm text-slate-700" data-testid="critical-path-left-anchor">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
                             {anchorTaskIds.map((taskId) => (
-                              <option key={taskId} value={taskId}>
+                              <SelectItem key={taskId} value={taskId}>
                                 {getTaskLabel(taskMap.get(taskId), taskId)}
-                              </option>
+                              </SelectItem>
                             ))}
-                          </select>
+                            </SelectContent>
+                          </Select>
                         </label>
                       )}
 
                       {(insertAnchorType === 'before' || insertAnchorType === 'between') && (
                         <label className="space-y-1 text-xs text-slate-500">
                           <span>右锚点</span>
-                          <select
-                            value={insertRightTaskId}
-                            onChange={(event) => setInsertRightTaskId(event.target.value)}
-                            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none transition-colors focus:border-blue-400"
-                            data-testid="critical-path-right-anchor"
-                          >
+                          <Select value={insertRightTaskId} onValueChange={setInsertRightTaskId}>
+                            <SelectTrigger className="h-10 rounded-xl border-slate-200 bg-white text-sm text-slate-700" data-testid="critical-path-right-anchor">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
                             {anchorTaskIds.map((taskId) => (
-                              <option key={taskId} value={taskId}>
+                              <SelectItem key={taskId} value={taskId}>
                                 {getTaskLabel(taskMap.get(taskId), taskId)}
-                              </option>
+                              </SelectItem>
                             ))}
-                          </select>
+                            </SelectContent>
+                          </Select>
                         </label>
                       )}
                     </div>

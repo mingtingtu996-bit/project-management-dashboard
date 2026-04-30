@@ -8,6 +8,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import { formatDateTime as formatDisplayDateTime } from '@/lib/formatters'
 import type { PlanningDraftResumeSnapshot } from '../draftPersistence'
 
 interface PlanningDraftResumeDialogProps {
@@ -19,15 +20,7 @@ interface PlanningDraftResumeDialogProps {
 }
 
 function formatDateTime(value: string) {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleString('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+  return formatDisplayDateTime(value, '—')
 }
 
 export function PlanningDraftResumeDialog({

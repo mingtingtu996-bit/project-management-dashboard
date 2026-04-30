@@ -7,6 +7,7 @@ import type {
 } from '../types'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Button } from '@/components/ui/button'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 interface MilestoneToolbarProps {
   selectedProjectId: string
@@ -40,24 +41,28 @@ export function MilestoneToolbar({
   return (
     <div className="shell-surface px-6 py-4 mb-6">
       <div className="flex flex-col md:flex-row gap-4">
-        <select
+        <Select
           value={selectedProjectId}
-          onChange={(event) => onProjectChange(event.target.value)}
+          onValueChange={onProjectChange}
           disabled={projectsLoading || projects.length === 0}
-          className="px-4 py-2 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100 disabled:cursor-not-allowed"
         >
-          {projectsLoading ? (
-            <option value="all">加载项目中...</option>
-          ) : projects.length === 0 ? (
-            <option value="all">暂无项目</option>
-          ) : (
-            projects.map((project) => (
-              <option key={project.id} value={project.id}>
-                {project.name}
-              </option>
-            ))
-          )}
-        </select>
+          <SelectTrigger aria-label="选择项目" className="h-10 min-w-[220px] rounded-xl border-slate-300 bg-white text-sm focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {projectsLoading ? (
+              <SelectItem value="all">加载项目中...</SelectItem>
+            ) : projects.length === 0 ? (
+              <SelectItem value="all">暂无项目</SelectItem>
+            ) : (
+              projects.map((project) => (
+                <SelectItem key={project.id} value={project.id}>
+                  {project.name}
+                </SelectItem>
+              ))
+            )}
+          </SelectContent>
+        </Select>
 
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500" />
@@ -71,17 +76,21 @@ export function MilestoneToolbar({
           />
         </div>
 
-        <select
+        <Select
           value={statusFilter}
-          onChange={(event) => onStatusFilterChange(event.target.value)}
-          className="px-3 py-2 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+          onValueChange={onStatusFilterChange}
         >
-          {statusOptions.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
+          <SelectTrigger aria-label="证照状态筛选" className="h-10 min-w-[140px] rounded-xl border-slate-300 bg-white text-sm focus:ring-2 focus:ring-blue-500">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {statusOptions.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
 
         <div className="flex rounded-xl border border-slate-200 overflow-hidden">
           <Tooltip>

@@ -67,7 +67,7 @@ export function CloseoutGroupedList({
 
         return (
           <Card key={group.id} className="border-slate-200">
-            <CardContent className="space-y-3 p-4">
+            <CardContent className="space-y-3 p-5">
               <div
                 data-testid="closeout-group-header"
                 className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2"

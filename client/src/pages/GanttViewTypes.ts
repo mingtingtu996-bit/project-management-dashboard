@@ -62,9 +62,9 @@ export interface WBSNode extends Task {
 // 开工条件类型枚举
 export const CONDITION_TYPES = [
   { value: 'material',    label: '材料',     color: 'bg-blue-100 text-blue-700' },
-  { value: 'personnel',  label: '人员',     color: 'bg-purple-100 text-purple-700' },
+  { value: 'personnel',  label: '人员',     color: 'bg-teal-100 text-teal-700' },
   { value: 'weather',    label: '天气',     color: 'bg-sky-100 text-sky-700' },
-  { value: 'design',     label: '设计变更', color: 'bg-pink-100 text-pink-700' },
+  { value: 'design',     label: '设计变更', color: 'bg-red-50 text-red-700' },
   { value: 'preceding',  label: '前置工序', color: 'bg-amber-100 text-amber-700' },
   { value: 'other',      label: '其他',     color: 'bg-slate-100 text-slate-600' },
 ] as const
@@ -76,7 +76,7 @@ export const SPECIALTY_TYPES = [
   { value: 'foundation',   label: '地基基础',   color: 'bg-yellow-100 text-yellow-700' },
   { value: 'structure',    label: '主体结构',   color: 'bg-orange-100 text-orange-700' },
   { value: 'mep',          label: '机电安装',   color: 'bg-blue-100 text-blue-700' },
-  { value: 'decoration',   label: '装饰装修',   color: 'bg-purple-100 text-purple-700' },
+  { value: 'decoration',   label: '装饰装修',   color: 'bg-teal-100 text-teal-700' },
   { value: 'curtain_wall', label: '幕墙工程',   color: 'bg-cyan-100 text-cyan-700' },
   { value: 'landscape',    label: '园林景观',   color: 'bg-green-100 text-green-700' },
   { value: 'steel',        label: '钢结构',     color: 'bg-slate-100 text-slate-700' },

@@ -155,15 +155,15 @@ export function TemplateQualityPanel({
                 已完成项目反馈摘要
               </div>
               <div className="mt-3 grid gap-3 sm:grid-cols-3">
-                <Card className="rounded-xl border border-white bg-white p-3">
+                <Card className="rounded-xl border border-white bg-white p-5">
                   <div className="text-xs text-slate-500">已完成项目</div>
                   <div className="mt-1 text-lg font-semibold text-slate-900">{formatNumber(quality.completed_project_count)}</div>
                 </Card>
-                <Card className="rounded-xl border border-white bg-white p-3">
+                <Card className="rounded-xl border border-white bg-white p-5">
                   <div className="text-xs text-slate-500">样本任务</div>
                   <div className="mt-1 text-lg font-semibold text-slate-900">{formatNumber(quality.sample_task_count)}</div>
                 </Card>
-                <Card className="rounded-xl border border-white bg-white p-3">
+                <Card className="rounded-xl border border-white bg-white p-5">
                   <div className="text-xs text-slate-500">模板节点</div>
                   <div className="mt-1 text-lg font-semibold text-slate-900">{formatNumber(quality.node_count)}</div>
                 </Card>

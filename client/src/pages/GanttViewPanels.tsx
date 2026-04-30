@@ -11,7 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { formatDate } from '@/lib/utils'
+import { formatDate, formatDateTime } from '@/lib/utils'
 import { Flag, GitBranch, X } from 'lucide-react'
 import { memo, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
@@ -418,12 +418,7 @@ export function TaskDetailPanel({
             <div className="flex items-center justify-between text-xs">
               <span className="text-slate-500">首次填报</span>
               <span className="tabular-nums text-slate-600">
-                {new Date(selectedTask.first_progress_at).toLocaleString('zh-CN', {
-                  month: '2-digit',
-                  day: '2-digit',
-                  hour: '2-digit',
-                  minute: '2-digit',
-                })}
+                {formatDateTime(selectedTask.first_progress_at)}
               </span>
             </div>
           )}

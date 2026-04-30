@@ -19,7 +19,7 @@ export const DEFAULT_ACCEPTANCE_TYPES: AcceptanceType[] = [
     id: 'pre_acceptance',
     name: '工程竣工预验收',
     shortName: '预验收',
-    color: 'bg-purple-500',
+    color: 'bg-sky-500',
     icon: 'ClipboardCheck',
     isSystem: true,
     description: '监理单位牵头的预验收事项',

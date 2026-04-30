@@ -539,21 +539,23 @@ describe('Materials page', () => {
       await flush()
     })
 
-    const unitSelect = container.querySelector('[data-testid="materials-template-unit"]') as HTMLSelectElement | null
+    const unitSelect = container.querySelector('[data-testid="materials-template-unit"]') as HTMLButtonElement | null
+    const unitValueInput = container.querySelector('[data-testid="materials-template-unit-value"]') as HTMLInputElement | null
     const dateInput = container.querySelector('[data-testid="materials-template-arrival-date"]') as HTMLInputElement | null
     const aluminiumCheckbox = container.querySelector('[data-testid="materials-template-item-幕墙-铝型材"]') as HTMLInputElement | null
     const glassCheckbox = container.querySelector('[data-testid="materials-template-item-幕墙-Low-E 玻璃"]') as HTMLInputElement | null
     const submitButton = container.querySelector('[data-testid="materials-template-submit"]') as HTMLButtonElement | null
 
     expect(unitSelect).not.toBeNull()
+    expect(unitValueInput).not.toBeNull()
     expect(dateInput).not.toBeNull()
     expect(aluminiumCheckbox).not.toBeNull()
     expect(glassCheckbox).not.toBeNull()
     expect(submitButton).not.toBeNull()
 
     await act(async () => {
-      if (unitSelect) {
-        setInputValue(unitSelect as unknown as HTMLInputElement, 'unit-1')
+      if (unitValueInput) {
+        setInputValue(unitValueInput, 'unit-1')
       }
       if (dateInput) {
         setInputValue(dateInput, '2026-04-26')

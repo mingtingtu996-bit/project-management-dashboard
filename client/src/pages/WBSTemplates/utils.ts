@@ -14,7 +14,7 @@ export const API_BASE = ''
 
 export const TYPE_COLOR_MAP: Record<string, { bg: string; text: string; tagBg: string; tagText: string; icon: string }> = {
   '住宅': { bg: 'bg-blue-100', text: 'text-blue-600', tagBg: 'bg-blue-50', tagText: 'text-blue-600', icon: 'home' },
-  '商业': { bg: 'bg-purple-100', text: 'text-purple-600', tagBg: 'bg-purple-50', tagText: 'text-purple-600', icon: 'building' },
+  '商业': { bg: 'bg-sky-100', text: 'text-sky-700', tagBg: 'bg-sky-50', tagText: 'text-sky-700', icon: 'building' },
   '工业': { bg: 'bg-amber-100', text: 'text-amber-600', tagBg: 'bg-amber-50', tagText: 'text-amber-600', icon: 'grid' },
   '公共建筑': { bg: 'bg-emerald-100', text: 'text-emerald-600', tagBg: 'bg-emerald-50', tagText: 'text-emerald-600', icon: 'landmark' },
 }

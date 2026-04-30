@@ -115,7 +115,7 @@ export function FourCertificateBoard({
                     }}
                     style={dimmedByHover ? { opacity: 0.4 } : undefined}
                     className={cn(
-                      'card-unified card-hover w-full rounded-xl p-4 text-left',
+                      'card-unified card-hover w-full rounded-xl p-5 text-left',
                       active
                         ? 'border-blue-300 bg-blue-50 shadow-md'
                         : hoveredWorkItemBelongsHere

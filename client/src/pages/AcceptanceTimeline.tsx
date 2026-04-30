@@ -10,9 +10,11 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { DisabledReasonTooltip } from '@/components/ui/disabled-reason-tooltip'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
@@ -56,6 +58,7 @@ const ACCEPTANCE_STATUS_LABELS: Record<AcceptanceStatus, string> = {
   archived: '已归档',
 }
 const SCOPE_LEVEL_ORDER = ['project', 'building', 'unit', 'specialty'] as const
+const READ_ONLY_ACTION_REASON = '只读成员无编辑权限。'
 type AcceptanceStageKey = 'foundation' | 'main' | 'completion' | 'special'
 
 const ACCEPTANCE_STAGE_DEFINITIONS: Array<{
@@ -562,17 +565,21 @@ export default function AcceptanceTimeline() {
       )}
 
       <PageHeader eyebrow="专项管理" title="验收流程">
-        <Button variant="outline" size="sm" onClick={() => setTypeManagerOpen(true)} className="gap-2" disabled={!canEdit}>
-          <Palette className="h-4 w-4" />
-          类型管理
-        </Button>
-        <Button size="sm" onClick={() => setAddPlanOpen(true)} className="gap-2" disabled={!canEdit}>
-          <Plus className="h-4 w-4" />
-          新增验收
-        </Button>
+        <DisabledReasonTooltip reason={!canEdit ? READ_ONLY_ACTION_REASON : null}>
+          <Button variant="outline" size="sm" onClick={() => setTypeManagerOpen(true)} className="gap-2" disabled={!canEdit}>
+            <Palette className="h-4 w-4" />
+            类型管理
+          </Button>
+        </DisabledReasonTooltip>
+        <DisabledReasonTooltip reason={!canEdit ? READ_ONLY_ACTION_REASON : null}>
+          <Button size="sm" onClick={() => setAddPlanOpen(true)} className="gap-2" disabled={!canEdit}>
+            <Plus className="h-4 w-4" />
+            新增验收
+          </Button>
+        </DisabledReasonTooltip>
       </PageHeader>
 
-      <section data-testid="acceptance-summary-panel" className="card-unified space-y-4 rounded-xl p-4">
+      <section data-testid="acceptance-summary-panel" className="card-unified space-y-4 rounded-xl p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <div className="text-sm font-semibold text-slate-900">摘要区</div>
@@ -630,55 +637,51 @@ export default function AcceptanceTimeline() {
         <div className="mt-4 grid gap-3 lg:grid-cols-2 2xl:grid-cols-4">
           <div className="space-y-1">
             <Label htmlFor="acceptance-scope-select" className="text-xs text-slate-500">范围</Label>
-            <select
-              id="acceptance-scope-select"
-              value={scopeFilter}
-              onChange={(event) => setScopeFilter(event.target.value as 'all' | (typeof SCOPE_LEVEL_ORDER)[number])}
-              className="w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm"
-              data-testid="acceptance-scope-select"
-            >
-              <option value="all">全部范围</option>
-              {scopeOptions.map((scopeLevel) => <option key={scopeLevel} value={scopeLevel}>{getScopeLevelLabel(scopeLevel)}</option>)}
-            </select>
+            <Select value={scopeFilter} onValueChange={(value) => setScopeFilter(value as 'all' | (typeof SCOPE_LEVEL_ORDER)[number])}>
+              <SelectTrigger id="acceptance-scope-select" data-testid="acceptance-scope-select" data-value={scopeFilter}>
+                <SelectValue placeholder="全部范围" />
+              </SelectTrigger>
+              <SelectContent align="start" side="bottom">
+                <SelectItem value="all">全部范围</SelectItem>
+                {scopeOptions.map((scopeLevel) => <SelectItem key={scopeLevel} value={scopeLevel}>{getScopeLevelLabel(scopeLevel)}</SelectItem>)}
+              </SelectContent>
+            </Select>
           </div>
           <div className="space-y-1">
             <Label htmlFor="acceptance-building-select" className="text-xs text-slate-500">楼栋</Label>
-            <select
-              id="acceptance-building-select"
-              value={buildingFilter}
-              onChange={(event) => setBuildingFilter(event.target.value)}
-              className="w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm"
-              data-testid="acceptance-building-select"
-            >
-              <option value="all">全部楼栋</option>
-              {buildingOptions.map((buildingId) => <option key={buildingId} value={buildingId}>{buildingId}</option>)}
-            </select>
+            <Select value={buildingFilter} onValueChange={setBuildingFilter}>
+              <SelectTrigger id="acceptance-building-select" data-testid="acceptance-building-select" data-value={buildingFilter}>
+                <SelectValue placeholder="全部楼栋" />
+              </SelectTrigger>
+              <SelectContent align="start" side="bottom">
+                <SelectItem value="all">全部楼栋</SelectItem>
+                {buildingOptions.map((buildingId) => <SelectItem key={buildingId} value={buildingId}>{buildingId}</SelectItem>)}
+              </SelectContent>
+            </Select>
           </div>
           <div className="space-y-1">
             <Label htmlFor="acceptance-phase-select" className="text-xs text-slate-500">阶段</Label>
-            <select
-              id="acceptance-phase-select"
-              value={phaseFilter}
-              onChange={(event) => setPhaseFilter(event.target.value)}
-              className="w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm"
-              data-testid="acceptance-phase-select"
-            >
-              <option value="all">全部阶段</option>
-              {phaseOptions.map((phase) => <option key={phase.value} value={phase.value}>{phase.label}</option>)}
-            </select>
+            <Select value={phaseFilter} onValueChange={setPhaseFilter}>
+              <SelectTrigger id="acceptance-phase-select" data-testid="acceptance-phase-select" data-value={phaseFilter}>
+                <SelectValue placeholder="全部阶段" />
+              </SelectTrigger>
+              <SelectContent align="start" side="bottom">
+                <SelectItem value="all">全部阶段</SelectItem>
+                {phaseOptions.map((phase) => <SelectItem key={phase.value} value={phase.value}>{phase.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
           </div>
           <div className="space-y-1">
             <Label htmlFor="acceptance-status-select" className="text-xs text-slate-500">状态筛选</Label>
-            <select
-              id="acceptance-status-select"
-              value={statusFilter}
-              onChange={(event) => setStatusFilter(event.target.value as 'all' | AcceptanceStatus)}
-              className="w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm"
-              data-testid="acceptance-status-select"
-            >
-              <option value="all">全部状态</option>
-              {ACCEPTANCE_STATUS_OPTIONS.map((status) => <option key={status} value={status}>{ACCEPTANCE_STATUS_LABELS[status]}</option>)}
-            </select>
+            <Select value={statusFilter} onValueChange={(value) => setStatusFilter(value as 'all' | AcceptanceStatus)}>
+              <SelectTrigger id="acceptance-status-select" data-testid="acceptance-status-select" data-value={statusFilter}>
+                <SelectValue placeholder="全部状态" />
+              </SelectTrigger>
+              <SelectContent align="start" side="bottom">
+                <SelectItem value="all">全部状态</SelectItem>
+                {ACCEPTANCE_STATUS_OPTIONS.map((status) => <SelectItem key={status} value={status}>{ACCEPTANCE_STATUS_LABELS[status]}</SelectItem>)}
+              </SelectContent>
+            </Select>
           </div>
         </div>
         <div className="mt-3">
@@ -753,7 +756,13 @@ export default function AcceptanceTimeline() {
               icon={CheckCircle2}
               title="暂无验收记录"
               description=""
-              action={<Button className="gap-2" onClick={() => setAddPlanOpen(true)} disabled={!canEdit}><Plus className="h-4 w-4" />添加验收</Button>}
+              action={
+                <DisabledReasonTooltip reason={!canEdit ? READ_ONLY_ACTION_REASON : null}>
+                  <Button className="gap-2" onClick={() => setAddPlanOpen(true)} disabled={!canEdit}>
+                    <Plus className="h-4 w-4" />添加验收
+                  </Button>
+                </DisabledReasonTooltip>
+              }
             />
           ) : (
             <AcceptanceFlowBoard layout={flowLayout} plans={visiblePlans} customTypes={allTypes} selectedNodeId={selectedNode?.id} onNodeClick={handleNodeSelect} onNodeDragEnd={canEdit ? handleNodeDragEnd : undefined} />
@@ -766,7 +775,13 @@ export default function AcceptanceTimeline() {
               icon={CheckCircle2}
               title="暂无验收记录"
               description=""
-              action={<Button className="gap-2" onClick={() => setAddPlanOpen(true)} disabled={!canEdit}><Plus className="h-4 w-4" />添加验收</Button>}
+              action={
+                <DisabledReasonTooltip reason={!canEdit ? READ_ONLY_ACTION_REASON : null}>
+                  <Button className="gap-2" onClick={() => setAddPlanOpen(true)} disabled={!canEdit}>
+                    <Plus className="h-4 w-4" />添加验收
+                  </Button>
+                </DisabledReasonTooltip>
+              }
             />
           ) : (
             <AcceptanceLedger
@@ -960,27 +975,35 @@ function TypeManagerDialog({
               </div>
               <div>
                 <Label>阶段</Label>
-                <select
+                <Select
                   value={newTypePhaseCode}
-                  onChange={(event) => setNewTypePhaseCode(event.target.value as (typeof ACCEPTANCE_PHASE_OPTIONS)[number]['value'])}
-                  className="mt-1 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm"
+                  onValueChange={(value) => setNewTypePhaseCode(value as (typeof ACCEPTANCE_PHASE_OPTIONS)[number]['value'])}
                 >
-                  {ACCEPTANCE_PHASE_OPTIONS.map((phase) => (
-                    <option key={phase.value} value={phase.value}>{phase.label}</option>
-                  ))}
-                </select>
+                  <SelectTrigger className="mt-1">
+                    <SelectValue placeholder="选择阶段" />
+                  </SelectTrigger>
+                  <SelectContent align="start" side="bottom">
+                    {ACCEPTANCE_PHASE_OPTIONS.map((phase) => (
+                      <SelectItem key={phase.value} value={phase.value}>{phase.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
               <div>
                 <Label>范围层级</Label>
-                <select
+                <Select
                   value={newTypeScopeLevel}
-                  onChange={(event) => setNewTypeScopeLevel(event.target.value as (typeof SCOPE_LEVEL_ORDER)[number])}
-                  className="mt-1 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm"
+                  onValueChange={(value) => setNewTypeScopeLevel(value as (typeof SCOPE_LEVEL_ORDER)[number])}
                 >
-                  {SCOPE_LEVEL_ORDER.map((scopeLevel) => (
-                    <option key={scopeLevel} value={scopeLevel}>{getScopeLevelLabel(scopeLevel)}</option>
-                  ))}
-                </select>
+                  <SelectTrigger className="mt-1">
+                    <SelectValue placeholder="选择范围层级" />
+                  </SelectTrigger>
+                  <SelectContent align="start" side="bottom">
+                    {SCOPE_LEVEL_ORDER.map((scopeLevel) => (
+                      <SelectItem key={scopeLevel} value={scopeLevel}>{getScopeLevelLabel(scopeLevel)}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
               <div>
                 <Label>分类</Label>
@@ -1006,10 +1029,12 @@ function TypeManagerDialog({
                   ))}
                 </div>
               </div>
-              <Button onClick={handleSubmit} disabled={!canEdit || !newTypeName.trim()} className="w-full gap-2">
-                <Plus className="h-4 w-4" />
-                添加类型
-              </Button>
+              <DisabledReasonTooltip reason={!canEdit ? READ_ONLY_ACTION_REASON : !newTypeName.trim() ? '请输入类型名称。' : null}>
+                <Button onClick={handleSubmit} disabled={!canEdit || !newTypeName.trim()} className="w-full gap-2">
+                  <Plus className="h-4 w-4" />
+                  添加类型
+                </Button>
+              </DisabledReasonTooltip>
             </div>
           </div>
         </div>
@@ -1145,9 +1170,14 @@ function AddPlanDialog({
           <div className="grid gap-3 sm:grid-cols-2">
             <div>
               <Label>范围层级</Label>
-              <select value={scopeLevel} onChange={(event) => setScopeLevel(event.target.value as 'project' | 'building' | 'unit' | 'specialty')} className="mt-1 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm">
-                {SCOPE_LEVEL_ORDER.map((level) => <option key={level} value={level}>{SCOPE_LEVEL_LABELS[level]}</option>)}
-              </select>
+              <Select value={scopeLevel} onValueChange={(value) => setScopeLevel(value as 'project' | 'building' | 'unit' | 'specialty')}>
+                <SelectTrigger className="mt-1">
+                  <SelectValue placeholder="选择范围层级" />
+                </SelectTrigger>
+                <SelectContent align="start" side="bottom">
+                  {SCOPE_LEVEL_ORDER.map((level) => <SelectItem key={level} value={level}>{SCOPE_LEVEL_LABELS[level]}</SelectItem>)}
+                </SelectContent>
+              </Select>
             </div>
             <div>
               <Label>楼栋编号</Label>
@@ -1162,9 +1192,14 @@ function AddPlanDialog({
 
           <div>
             <Label>阶段归属</Label>
-            <select value={phaseCode} onChange={(event) => setPhaseCode(event.target.value as (typeof ACCEPTANCE_PHASE_OPTIONS)[number]['value'])} className="mt-1 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm">
-              {ACCEPTANCE_PHASE_OPTIONS.map((phase) => <option key={phase.value} value={phase.value}>{phase.label}</option>)}
-            </select>
+            <Select value={phaseCode} onValueChange={(value) => setPhaseCode(value as (typeof ACCEPTANCE_PHASE_OPTIONS)[number]['value'])}>
+              <SelectTrigger className="mt-1">
+                <SelectValue placeholder="选择阶段" />
+              </SelectTrigger>
+              <SelectContent align="start" side="bottom">
+                {ACCEPTANCE_PHASE_OPTIONS.map((phase) => <SelectItem key={phase.value} value={phase.value}>{phase.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
           </div>
 
           <div>
@@ -1190,10 +1225,12 @@ function AddPlanDialog({
         </div>
         <DialogFooter className="mt-6">
           <Button variant="outline" onClick={onClose} disabled={submitting}>取消</Button>
-          <Button onClick={handleSubmit} loading={submitting} disabled={!canEdit || !name.trim()} className="gap-2">
-            <Plus className="h-4 w-4" />
-            确认创建
-          </Button>
+          <DisabledReasonTooltip reason={!canEdit ? READ_ONLY_ACTION_REASON : !name.trim() ? '请输入验收名称。' : null}>
+            <Button onClick={handleSubmit} loading={submitting} disabled={!canEdit || !name.trim()} className="gap-2">
+              <Plus className="h-4 w-4" />
+              确认创建
+            </Button>
+          </DisabledReasonTooltip>
         </DialogFooter>
       </DialogContent>
     </Dialog>

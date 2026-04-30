@@ -9,9 +9,11 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { DisabledReasonTooltip } from '@/components/ui/disabled-reason-tooltip'
 import { Input } from '@/components/ui/input'
 import { LoadingState } from '@/components/ui/loading-state'
 import { Separator } from '@/components/ui/separator'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { usePlanningStore } from '@/hooks/usePlanningStore'
@@ -20,6 +22,7 @@ import { useStore } from '@/hooks/useStore'
 import { useToast } from '@/hooks/use-toast'
 import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard'
 import { apiGet, apiPost, getApiErrorMessage } from '@/lib/apiClient'
+import { formatDate } from '@/lib/formatters'
 import type {
   BaselineItem,
   BaselineVersion,
@@ -83,6 +86,9 @@ const TABS = [
   { key: 'baseline', label: '项目基线' },
   { key: 'monthly', label: '月度计划' },
 ] as const
+
+const SELECT_NONE_VALUE = '__none__'
+const SELECT_UNMAPPED_VALUE = '__unmapped__'
 
 function getBaselineDurationLabel(start?: string | null, end?: string | null) {
   if (!start || !end) return '—'
@@ -683,6 +689,7 @@ export default function BaselinePage() {
   const [internalReadOnly, setInternalReadOnly] = useState(false)
   const [statusNotice, setStatusNotice] = useState<string | null>(null)
   const [confirmOpen, setConfirmOpen] = useState(false)
+  const [forceUnlockConfirmOpen, setForceUnlockConfirmOpen] = useState(false)
   const [confirmFailure, setConfirmFailure] = useState<ConfirmFailureContext | null>(null)
   const [revisionPoolOpen, setRevisionPoolOpen] = useState(false)
   const [revisionBasketIds, setRevisionBasketIds] = useState<string[]>([])
@@ -742,6 +749,14 @@ export default function BaselinePage() {
     canManageBaselineActions && (activeBaseline?.status === 'confirmed' || activeBaseline?.status === 'revising')
   const canResolveRealignment = canManageBaselineActions && activeBaseline?.status === 'pending_realign'
   const canForceUnlock = canManageBaselineActions && activeBaseline?.status === 'draft'
+  const canShowForceUnlock = canForceUnlock && readOnly
+  const forceUnlockDisabledReason = actionLoading === 'unlock' ? '强制解锁处理中，请稍候。' : null
+  const baselineReadOnlyReason = !canEdit
+    ? '只读成员无编辑权限。'
+    : readOnly
+      ? '当前未持有基线编辑锁，请先获取编辑锁。'
+      : null
+  const baselineLastSavedLabel = formatDate(activeBaseline?.updated_at, '暂无')
   const baselineChangeLogs = useMemo(
     () =>
       changeLogs
@@ -2049,19 +2064,27 @@ export default function BaselinePage() {
                         {field.label}
                         {field.required ? '（必填）' : '（可选）'}
                       </span>
-                      <select
-                        data-testid={`baseline-import-mapping-${field.key}`}
-                        className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-slate-400"
-                        value={importPreview.mapping[field.key]}
-                        onChange={(event) => handleImportColumnMappingChange(field.key, event.target.value)}
+                      <Select
+                        value={importPreview.mapping[field.key] || SELECT_UNMAPPED_VALUE}
+                        onValueChange={(value) =>
+                          handleImportColumnMappingChange(field.key, value === SELECT_UNMAPPED_VALUE ? '' : value)
+                        }
                       >
-                        <option value="">未映射</option>
-                        {importPreview.columns.map((column) => (
-                          <option key={column} value={column}>
-                            {column}
-                          </option>
-                        ))}
-                      </select>
+                        <SelectTrigger
+                          data-testid={`baseline-import-mapping-${field.key}`}
+                          className="h-10 w-full rounded-xl border-slate-200 bg-white text-sm text-slate-900"
+                        >
+                          <SelectValue placeholder="未映射" />
+                        </SelectTrigger>
+                        <SelectContent align="start" side="bottom">
+                          <SelectItem value={SELECT_UNMAPPED_VALUE}>未映射</SelectItem>
+                          {importPreview.columns.map((column) => (
+                            <SelectItem key={column} value={column}>
+                              {column}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </label>
                   ))}
                 </div>
@@ -2154,17 +2177,19 @@ export default function BaselinePage() {
               结束编辑模式
             </Button>
           ) : null}
-          {canForceUnlock ? (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={handleForceUnlock}
-              disabled={readOnly || actionLoading === 'unlock'}
-            >
-              <LockKeyhole className="mr-2 h-4 w-4" />
-              强制解锁
-            </Button>
+          {canShowForceUnlock ? (
+            <DisabledReasonTooltip reason={forceUnlockDisabledReason}>
+              <Button
+                type="button"
+                variant="destructive"
+                size="sm"
+                onClick={() => setForceUnlockConfirmOpen(true)}
+                disabled={Boolean(forceUnlockDisabledReason)}
+              >
+                <LockKeyhole className="mr-2 h-4 w-4" />
+                强制解锁
+              </Button>
+            </DisabledReasonTooltip>
           ) : null}
         </div>
       }
@@ -2251,7 +2276,7 @@ export default function BaselinePage() {
               </div>
               <div className="space-y-3">
                 <div className="text-sm font-medium text-slate-500">修订与留痕</div>
-                <div className="text-lg font-semibold text-slate-900">{activeBaseline.updated_at ?? '暂无'}</div>
+                <div className="text-lg font-semibold text-slate-900 tabular-nums">{baselineLastSavedLabel}</div>
                 <div className="flex flex-wrap gap-2">
                   <Badge variant="outline">版本 {versions.length}</Badge>
                   <Badge variant="secondary">{revisionCandidates.length} 项候选</Badge>
@@ -2358,7 +2383,9 @@ export default function BaselinePage() {
               onToggleAll={handleToggleAll}
               onUndo={handleUndo}
               onRedo={handleRedo}
-              onForceUnlock={handleForceUnlock}
+              canForceUnlock={canShowForceUnlock}
+              forceUnlockDisabledReason={forceUnlockDisabledReason}
+              onForceUnlock={() => setForceUnlockConfirmOpen(true)}
             />
             {showValidationPanel ? (
               <div
@@ -2416,21 +2443,29 @@ export default function BaselinePage() {
                 </Tabs>
                 <label className="block space-y-2">
                   <span className="text-xs font-medium uppercase tracking-wider text-slate-500">对比版本</span>
-                  <select
-                    value={compareVersionId ?? ''}
-                    onChange={(event) => void handleCompareVersionChange(event.target.value)}
-                    className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-slate-400"
-                    data-testid="baseline-compare-version-select"
+                  <Select
+                    value={compareVersionId ?? SELECT_NONE_VALUE}
+                    onValueChange={(value) =>
+                      void handleCompareVersionChange(value === SELECT_NONE_VALUE ? '' : value)
+                    }
                   >
-                    <option value="">不指定对比版本</option>
-                    {versions
-                      .filter((version) => version.id !== activeBaseline.id)
-                      .map((version) => (
-                        <option key={version.id} value={version.id}>
-                          v{version.version} · {formatStatusLabel(version.status)}
-                        </option>
-                      ))}
-                  </select>
+                    <SelectTrigger
+                      className="h-10 w-full rounded-xl border-slate-200 bg-white text-sm text-slate-900"
+                      data-testid="baseline-compare-version-select"
+                    >
+                      <SelectValue placeholder="不指定对比版本" />
+                    </SelectTrigger>
+                    <SelectContent align="start" side="bottom">
+                      <SelectItem value={SELECT_NONE_VALUE}>不指定对比版本</SelectItem>
+                      {versions
+                        .filter((version) => version.id !== activeBaseline.id)
+                        .map((version) => (
+                          <SelectItem key={version.id} value={version.id}>
+                            v{version.version} · {formatStatusLabel(version.status)}
+                          </SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
                 </label>
               </CardContent>
             </Card>
@@ -2475,7 +2510,7 @@ export default function BaselinePage() {
                   {baselineChangeLogs.length ? (
                     <div className="mt-3 space-y-2">
                       {baselineChangeLogs.map((record) => (
-                        <Card key={record.id} className="rounded-xl border border-white/80 bg-white px-3 py-2 text-xs text-slate-600">
+                        <div key={record.id} className="rounded-xl border border-white/80 bg-white px-3 py-2 text-xs text-slate-600">
                           <div className="font-medium text-slate-900">
                             {record.field_name}
                             {record.change_reason ? ` · ${record.change_reason}` : ''}
@@ -2483,7 +2518,7 @@ export default function BaselinePage() {
                           <div className="mt-1">
                             {record.old_value ?? '空'} → {record.new_value ?? '空'}
                           </div>
-                        </Card>
+                        </div>
                       ))}
                     </div>
                   ) : (
@@ -2500,10 +2535,11 @@ export default function BaselinePage() {
         isDirty={isDirty}
         readOnly={readOnly}
         lockRemainingLabel={lockRemainingLabel}
-        lastSavedLabel={activeBaseline.updated_at ?? '暂无'}
+        lastSavedLabel={baselineLastSavedLabel}
         canUndo={canUndo}
         canRedo={canRedo}
         saveDisabled={readOnly || normalizedSelectedItemIds.length === 0}
+        saveDisabledReason={baselineReadOnlyReason ?? (normalizedSelectedItemIds.length === 0 ? '需先选择至少 1 项基线条目。' : null)}
         saving={actionLoading === 'save'}
         selectedCount={normalizedSelectedItemIds.length}
         batchShiftDays={batchShiftDays}
@@ -2515,6 +2551,7 @@ export default function BaselinePage() {
         onBatchSetProgress={handleBatchSetProgress}
         onOpenConfirm={handleOpenConfirmDialog}
         confirmDisabled={readOnly || noDiff || Boolean(confirmDisabledReason)}
+        confirmDisabledReason={baselineReadOnlyReason ?? (noDiff ? '当前版本与对比版本没有差异。' : confirmDisabledReason)}
         onUndo={handleUndo}
         onRedo={handleRedo}
         onSaveDraft={handleSaveDraft}
@@ -2579,6 +2616,19 @@ export default function BaselinePage() {
         snapshot={resumeSnapshot}
         onContinue={handleContinueDraftWorkspace}
         onDiscard={handleDiscardDraftWorkspace}
+      />
+      <ConfirmActionDialog
+        open={forceUnlockConfirmOpen}
+        onOpenChange={setForceUnlockConfirmOpen}
+        title="确认强制解锁"
+        description="强制解锁会释放当前基线草稿的编辑锁，并重新尝试为你获取编辑锁。请确认没有其他人正在处理这份草稿。"
+        confirmLabel={actionLoading === 'unlock' ? '解锁中...' : '确认解锁'}
+        confirmTone="destructive"
+        testId="baseline-force-unlock-confirm"
+        onConfirm={() => {
+          setForceUnlockConfirmOpen(false)
+          void handleForceUnlock()
+        }}
       />
       <ConfirmActionDialog
         {...unsavedChangesGuard.confirmDialog}

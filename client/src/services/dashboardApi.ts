@@ -94,8 +94,17 @@ export interface CompanySummaryHealthHistory {
   }>
 }
 
+export interface CompanySummaryStatusCounts {
+  total: number
+  inProgress: number
+  completed: number
+  paused: number
+  notStarted: number
+}
+
 export interface CompanySummaryResponse {
   projectCount: number
+  statusCounts: CompanySummaryStatusCounts
   averageHealth: number
   averageProgress: number
   attentionProjectCount: number
@@ -132,9 +141,62 @@ function normalizeNumber(value: unknown, fallback = 0): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback
 }
 
+function mapSummaryStatusToBucket(summary: ProjectSummary): keyof Omit<CompanySummaryStatusCounts, 'total'> {
+  switch (String(summary.statusLabel || summary.status || '').trim()) {
+    case '已完成':
+    case 'completed':
+      return 'completed'
+    case '已暂停':
+    case 'paused':
+    case 'archived':
+      return 'paused'
+    case '进行中':
+    case 'active':
+    case 'in_progress':
+      return 'inProgress'
+    default:
+      return 'notStarted'
+  }
+}
+
+function buildStatusCountsFromRanking(
+  ranking: ProjectSummary[],
+  fallbackTotal: number,
+): CompanySummaryStatusCounts {
+  const statusCounts: CompanySummaryStatusCounts = {
+    total: ranking.length > 0 ? ranking.length : fallbackTotal,
+    inProgress: 0,
+    completed: 0,
+    paused: 0,
+    notStarted: 0,
+  }
+
+  for (const summary of ranking) {
+    statusCounts[mapSummaryStatusToBucket(summary)] += 1
+  }
+
+  return statusCounts
+}
+
+function normalizeStatusCounts(
+  value: Partial<CompanySummaryStatusCounts> | null | undefined,
+  ranking: ProjectSummary[],
+  fallbackTotal: number,
+): CompanySummaryStatusCounts {
+  const fallback = buildStatusCountsFromRanking(ranking, fallbackTotal)
+  return {
+    total: normalizeNumber(value?.total, fallback.total),
+    inProgress: normalizeNumber(value?.inProgress, fallback.inProgress),
+    completed: normalizeNumber(value?.completed, fallback.completed),
+    paused: normalizeNumber(value?.paused, fallback.paused),
+    notStarted: normalizeNumber(value?.notStarted, fallback.notStarted),
+  }
+}
+
 function normalizeCompanySummary(value: CompanySummaryResponse | null | undefined): CompanySummaryResponse {
   const raw = (value ?? {}) as Partial<CompanySummaryResponse>
   const ranking = normalizeArray(raw.ranking)
+  const projectCount = normalizeNumber(raw.projectCount, ranking.length)
   const healthHistory = raw.healthHistory ?? {
     thisMonth: null,
     lastMonth: null,
@@ -145,7 +207,8 @@ function normalizeCompanySummary(value: CompanySummaryResponse | null | undefine
   }
 
   return {
-    projectCount: normalizeNumber(raw.projectCount, ranking.length),
+    projectCount,
+    statusCounts: normalizeStatusCounts(raw.statusCounts, ranking, projectCount),
     averageHealth: normalizeNumber(raw.averageHealth),
     averageProgress: normalizeNumber(raw.averageProgress),
     attentionProjectCount: normalizeNumber(raw.attentionProjectCount),

@@ -67,7 +67,7 @@ export const GanttStatsCards = memo(function GanttStatsCards({ projectStats }: G
     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
       {cards.map((card) => (
         <Card key={card.label} variant="metric">
-          <CardContent className="space-y-2 p-4">
+          <CardContent className="space-y-2 p-5">
             <div className="flex items-center gap-1.5">
               <p className="text-xs font-medium text-slate-500">{card.label}</p>
               {'tooltip' in card && card.tooltip ? (
@@ -200,7 +200,7 @@ export const GanttBatchBar = memo(function GanttBatchBar({
     >
       <div className="mx-4">
         <Card data-testid="batch-action-bar" className="border-slate-200/70 bg-white shadow-[var(--el-3)]">
-          <CardContent className="flex flex-col gap-3 p-3 lg:flex-row lg:items-center lg:justify-between">
+          <CardContent className="flex flex-col gap-3 p-5 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex flex-wrap items-center gap-3">
               <label className="flex cursor-pointer items-center gap-3 select-none">
                   <input
@@ -412,7 +412,7 @@ export const GanttFilterBar = memo(function GanttFilterBar({
 
   return (
     <Card variant="surface">
-      <CardContent className="space-y-3 p-4">
+      <CardContent className="space-y-3 p-5">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2 text-sm font-medium text-slate-700">
             <SlidersHorizontal className="h-4 w-4 text-blue-600" />

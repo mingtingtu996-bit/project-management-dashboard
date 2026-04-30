@@ -41,7 +41,7 @@ export const toPersistedProject = (project: ProjectSource): LocalProject => {
 
   return {
     id: project.id,
-    name: project.name || '未命名项目',
+    name: project.name || '项目',
     description: toOptionalString(project.description) ?? '',
     status: normalizeProjectStatus(project.status),
     start_date: toOptionalString(project.start_date),

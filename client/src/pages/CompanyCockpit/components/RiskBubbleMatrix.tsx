@@ -1,4 +1,5 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { ChartAccessibleWrapper } from '@/components/ChartAccessibleWrapper'
 import { Separator } from '@/components/ui/separator'
 import type { Issue, Risk } from '@/lib/supabase'
 
@@ -156,6 +157,13 @@ export function RiskBubbleMatrix({ risks, issues, projectRows }: RiskBubbleMatri
           ))}
         </div>
 
+        <ChartAccessibleWrapper
+          summary="风险矩阵数据"
+          columns={['来源', '级别', '信号数', '权重']}
+          rows={matrix.flatMap((item) =>
+            item.counts.map((cell) => [item.source, cell.label, cell.count, cell.weight]),
+          )}
+        >
         <div className="relative">
           <div className="absolute bottom-0 left-0 top-0 flex w-10 flex-col justify-around py-2 text-xs text-slate-500">
             {[...SIGNAL_LEVELS].reverse().map((level) => (
@@ -181,10 +189,9 @@ export function RiskBubbleMatrix({ risks, issues, projectRows }: RiskBubbleMatri
                     const weight = cell?.weight ?? 0
 
                     return (
-                      <Tooltip>
+                      <Tooltip key={`${source}-${level.key}`}>
   <TooltipTrigger asChild>
     <div
-                        key={`${source}-${level.key}`}
                         className="relative aspect-square rounded-xl bg-white transition-colors hover:bg-slate-100"
                         
                       >
@@ -212,6 +219,7 @@ export function RiskBubbleMatrix({ risks, issues, projectRows }: RiskBubbleMatri
             </div>
           </div>
         </div>
+        </ChartAccessibleWrapper>
 
         {totalSignals > 0 ? (
           <div className="mt-4 pt-3">

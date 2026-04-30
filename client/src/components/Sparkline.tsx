@@ -1,3 +1,4 @@
+import { ChartAccessibleWrapper } from '@/components/ChartAccessibleWrapper'
 import { cn } from '@/lib/utils'
 
 interface SparklineProps {
@@ -31,23 +32,31 @@ export function Sparkline({ data, color = '#2563EB', className }: SparklineProps
   const path = buildPath(values, width, height)
 
   return (
-    <svg
-      className={cn('h-8 w-20 overflow-visible', className)}
-      viewBox={`0 0 ${width} ${height}`}
-      role="img"
-      aria-label="趋势微图"
-      focusable="false"
+    <ChartAccessibleWrapper
+      className="inline-block"
+      detailsClassName="sr-only"
+      summary="趋势微图数据"
+      columns={['序号', '数值']}
+      rows={values.map((value, index) => [index + 1, value])}
     >
-      {path ? (
-        <path
-          d={path}
-          fill="none"
-          stroke={color}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeWidth={1.5}
-        />
-      ) : null}
-    </svg>
+      <svg
+        className={cn('h-8 w-20 overflow-visible', className)}
+        viewBox={`0 0 ${width} ${height}`}
+        role="img"
+        aria-label="趋势微图"
+        focusable="false"
+      >
+        {path ? (
+          <path
+            d={path}
+            fill="none"
+            stroke={color}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={1.5}
+          />
+        ) : null}
+      </svg>
+    </ChartAccessibleWrapper>
   )
 }

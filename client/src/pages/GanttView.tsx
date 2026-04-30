@@ -2664,8 +2664,7 @@ export default function GanttView() {
     setTaskConditions,
   ])
 
-  const handleDeleteCondition = async (condId: string) => {
-    if (!canEdit) return
+  const deleteCondition = async (condId: string) => {
     try {
       const res = await fetch(
         `/api/task-conditions/${condId}`,
@@ -2690,6 +2689,18 @@ export default function GanttView() {
     } catch {
       toast({ title: '删除条件失败', variant: 'destructive' })
     }
+  }
+
+  const handleDeleteCondition = (condId: string) => {
+    if (!canEdit) return
+    const targetName = taskConditions.find((condition) => condition.id === condId)?.name ?? '该开工条件'
+    openConfirm(
+      '删除开工条件',
+      `确认删除“${targetName}”？删除后将从任务条件和行内条件中同步移除。`,
+      () => {
+        void deleteCondition(condId)
+      },
+    )
   }
 
   const pendingDelayRequest = selectedTaskDelayRequests.find((request) => request.status === 'pending') ?? null
@@ -3886,7 +3897,7 @@ export default function GanttView() {
             <Suspense
               fallback={
                 <Card variant="detail">
-                  <CardContent className="p-4">
+                  <CardContent className="p-5">
                     <LoadingState label="正在加载任务详情" className="min-h-[18rem]" />
                   </CardContent>
                 </Card>

@@ -11,6 +11,7 @@ import { ChevronDown, ChevronRight } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 
 import type { Task, WBSNode } from '../GanttViewTypes'
@@ -56,6 +57,7 @@ const ROW_HEIGHT = 40
 const OVERSCAN = 10
 const VIRTUALIZE_AFTER = 200
 const TIMELINE_LIMIT = 500
+const NO_BASELINE_SELECT_VALUE = '__no_confirmed_baseline__'
 const PX_PER_DAY: Record<GanttTimelineScale, number> = {
   day: 24,
   week: 10,
@@ -563,23 +565,33 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
             </Button>
           </div>
           {compareMode === 'baseline' ? (
-            <select
-              data-testid="gantt-timeline-baseline-select"
-              value={baselineVersionId}
+            <Select
+              value={baselineVersionId || NO_BASELINE_SELECT_VALUE}
               disabled={baselineLoading || baselineOptions.length === 0}
-              onChange={(event) => onBaselineVersionIdChange(event.target.value)}
-              className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700 shadow-sm disabled:cursor-not-allowed disabled:bg-slate-100"
+              onValueChange={(value) => {
+                if (value === NO_BASELINE_SELECT_VALUE) return
+                onBaselineVersionIdChange(value)
+              }}
             >
-              {baselineOptions.length === 0 ? (
-                <option value="">暂无已确认基线</option>
-              ) : (
-                baselineOptions.map((option) => (
-                  <option key={option.id} value={option.id}>
-                    V{option.version} · {option.title}
-                  </option>
-                ))
-              )}
-            </select>
+              <SelectTrigger
+                aria-label="选择对比基线版本"
+                data-testid="gantt-timeline-baseline-select"
+                className="h-10 min-w-[220px] rounded-xl border-slate-200 bg-white text-sm text-slate-700 shadow-sm disabled:cursor-not-allowed disabled:bg-slate-100"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {baselineOptions.length === 0 ? (
+                  <SelectItem value={NO_BASELINE_SELECT_VALUE}>暂无已确认基线</SelectItem>
+                ) : (
+                  baselineOptions.map((option) => (
+                    <SelectItem key={option.id} value={option.id}>
+                      V{option.version} · {option.title}
+                    </SelectItem>
+                  ))
+                )}
+              </SelectContent>
+            </Select>
           ) : null}
         </div>
         <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">

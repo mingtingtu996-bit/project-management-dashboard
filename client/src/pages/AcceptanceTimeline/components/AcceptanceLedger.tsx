@@ -2,7 +2,9 @@ import React, { useMemo, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import { DisabledReasonTooltip } from '@/components/ui/disabled-reason-tooltip'
 import { Separator } from '@/components/ui/separator'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { CHART_SERIES } from '@/lib/chartPalette'
 import { cn } from '@/lib/utils'
 import { CheckSquare, ChevronDown, ChevronRight, GripVertical, Search, Square, X } from 'lucide-react'
@@ -76,6 +78,7 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
   const [batchPhase, setBatchPhase] = useState('preparation')
   const [batchActionLoading, setBatchActionLoading] = useState(false)
   const editable = canEdit !== false
+  const readOnlyActionReason = editable ? undefined : '只读成员无编辑权限。'
 
   const dndSensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -278,13 +281,17 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
           </Button>
         ))}
         <div className="ml-auto flex items-center gap-2">
-          <Button variant="ghost" type="button" onClick={selectAll} disabled={!editable} className="flex items-center gap-1 rounded-full border border-slate-200 bg-white px-3 py-1 text-slate-500 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50" data-testid="acceptance-select-all">
-            <CheckSquare className="h-3.5 w-3.5" />全选
-          </Button>
-          {selectedPlanIds.size > 0 && (
-            <Button variant="ghost" type="button" onClick={clearSelection} disabled={!editable} className="flex items-center gap-1 rounded-full border border-slate-200 bg-white px-3 py-1 text-slate-500 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50" data-testid="acceptance-clear-selection">
-              <X className="h-3.5 w-3.5" />清除({selectedPlanIds.size})
+          <DisabledReasonTooltip reason={readOnlyActionReason}>
+            <Button variant="ghost" type="button" onClick={selectAll} disabled={!editable} className="flex items-center gap-1 rounded-full border border-slate-200 bg-white px-3 py-1 text-slate-500 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50" data-testid="acceptance-select-all">
+              <CheckSquare className="h-3.5 w-3.5" />全选
             </Button>
+          </DisabledReasonTooltip>
+          {selectedPlanIds.size > 0 && (
+            <DisabledReasonTooltip reason={readOnlyActionReason}>
+              <Button variant="ghost" type="button" onClick={clearSelection} disabled={!editable} className="flex items-center gap-1 rounded-full border border-slate-200 bg-white px-3 py-1 text-slate-500 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50" data-testid="acceptance-clear-selection">
+                <X className="h-3.5 w-3.5" />清除({selectedPlanIds.size})
+              </Button>
+            </DisabledReasonTooltip>
           )}
         </div>
       </div>
@@ -295,33 +302,51 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
           <div className="flex flex-wrap items-center gap-3">
             {onBatchStatusChange && (
               <div className="flex items-center gap-2">
-                <select value={batchStatus} onChange={(e) => setBatchStatus(e.target.value as AcceptanceStatus)} disabled={!editable} className="rounded-md border border-blue-200 bg-white px-2 py-1 text-sm">
-                  {ACCEPTANCE_STATUSES.map((s) => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}
-                </select>
-                <Button size="sm" variant="outline" disabled={!editable || batchActionLoading} onClick={() => void handleBatchStatus()} data-testid="acceptance-batch-status-apply">批量改状态</Button>
+                <Select value={batchStatus} onValueChange={(value) => setBatchStatus(value as AcceptanceStatus)} disabled={!editable}>
+                  <SelectTrigger className="h-9 min-w-[124px] border-blue-200 bg-white text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {ACCEPTANCE_STATUSES.map((s) => <SelectItem key={s} value={s}>{STATUS_LABELS[s]}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                <DisabledReasonTooltip reason={readOnlyActionReason}>
+                  <Button size="sm" variant="outline" disabled={!editable || batchActionLoading} onClick={() => void handleBatchStatus()} data-testid="acceptance-batch-status-apply">批量改状态</Button>
+                </DisabledReasonTooltip>
               </div>
             )}
             {onBatchDateUpdate && (
               <div className="flex items-center gap-2">
                 <input type="date" value={batchDate} onChange={(e) => setBatchDate(e.target.value)} disabled={!editable} className="rounded-md border border-blue-200 bg-white px-2 py-1 text-sm disabled:cursor-not-allowed disabled:opacity-50" />
-                <Button size="sm" variant="outline" disabled={!editable || batchActionLoading || !batchDate} onClick={() => void handleBatchDate()} data-testid="acceptance-batch-date-apply">批量改日期</Button>
+                <DisabledReasonTooltip reason={readOnlyActionReason}>
+                  <Button size="sm" variant="outline" disabled={!editable || batchActionLoading || !batchDate} onClick={() => void handleBatchDate()} data-testid="acceptance-batch-date-apply">批量改日期</Button>
+                </DisabledReasonTooltip>
               </div>
             )}
             {onBatchResponsibleUnitUpdate && (
               <div className="flex items-center gap-2">
                 <input value={batchUnit} onChange={(e) => setBatchUnit(e.target.value)} disabled={!editable} placeholder="责任单位" className="rounded-md border border-blue-200 bg-white px-2 py-1 text-sm disabled:cursor-not-allowed disabled:opacity-50" />
-                <Button size="sm" variant="outline" disabled={!editable || batchActionLoading || !batchUnit.trim()} onClick={() => void handleBatchUnit()} data-testid="acceptance-batch-unit-apply">批量改责任单位</Button>
+                <DisabledReasonTooltip reason={readOnlyActionReason}>
+                  <Button size="sm" variant="outline" disabled={!editable || batchActionLoading || !batchUnit.trim()} onClick={() => void handleBatchUnit()} data-testid="acceptance-batch-unit-apply">批量改责任单位</Button>
+                </DisabledReasonTooltip>
               </div>
             )}
             {onBatchPhaseUpdate && (
               <div className="flex items-center gap-2">
-                <select value={batchPhase} onChange={(e) => setBatchPhase(e.target.value)} disabled={!editable} className="rounded-md border border-blue-200 bg-white px-2 py-1 text-sm">
-                  <option value="preparation">准备阶段</option>
-                  <option value="special_acceptance">专项验收</option>
-                  <option value="unit_completion">单位工程验收</option>
-                  <option value="completion_acceptance">竣工验收</option>
-                </select>
-                <Button size="sm" variant="outline" disabled={!editable || batchActionLoading} onClick={() => void handleBatchPhase()} data-testid="acceptance-batch-phase-apply">批量调整阶段</Button>
+                <Select value={batchPhase} onValueChange={setBatchPhase} disabled={!editable}>
+                  <SelectTrigger className="h-9 min-w-[148px] border-blue-200 bg-white text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="preparation">准备阶段</SelectItem>
+                    <SelectItem value="special_acceptance">专项验收</SelectItem>
+                    <SelectItem value="unit_completion">单位工程验收</SelectItem>
+                    <SelectItem value="completion_acceptance">竣工验收</SelectItem>
+                  </SelectContent>
+                </Select>
+                <DisabledReasonTooltip reason={readOnlyActionReason}>
+                  <Button size="sm" variant="outline" disabled={!editable || batchActionLoading} onClick={() => void handleBatchPhase()} data-testid="acceptance-batch-phase-apply">批量调整阶段</Button>
+                </DisabledReasonTooltip>
               </div>
             )}
           </div>

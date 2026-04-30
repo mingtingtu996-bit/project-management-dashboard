@@ -31,6 +31,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { toast } from '@/hooks/use-toast'
 import { apiGet, getApiErrorMessage } from '@/lib/apiClient'
+import { formatDate as formatDisplayDate, formatDateTime as formatDisplayDateTime } from '@/lib/formatters'
 import {
   selectProjectScopeOrEmpty,
   useCurrentProject,
@@ -382,8 +383,7 @@ function AnalysisEntryCard({
 }
 
 function formatDateLabel(value?: string | null) {
-  if (!value) return '未设置'
-  return value
+  return formatDisplayDate(value, '未设置')
 }
 
 function parseStatusLabel(status?: string | null) {
@@ -408,16 +408,41 @@ function parseStatusLabel(status?: string | null) {
 }
 
 function formatDateTimeLabel(value?: string | null) {
-  if (!value) return '未设置'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleString('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+  return formatDisplayDateTime(value, '未设置')
+}
+
+function mappingStatusLabel(status?: ProgressDeviationRow['mapping_status'] | null) {
+  switch (status) {
+    case 'mapping_pending':
+      return '待关联'
+    case 'merged_into':
+      return '已合并'
+    case 'mapped':
+      return '已关联'
+    default:
+      return '已关联'
+  }
+}
+
+function changeSourceLabel(source?: string | null) {
+  switch (String(source || '').trim().toLowerCase()) {
+    case 'manual_adjusted':
+    case 'manual':
+      return '人工调整'
+    case 'approval':
+    case 'approved':
+      return '审批流'
+    case 'system':
+    case 'auto':
+    case 'automatic':
+      return '系统自动'
+    case 'baseline':
+      return '基线变更'
+    case 'import':
+      return '导入'
+    default:
+      return source ? source : '人工调整'
+  }
 }
 
 function getCurrentMonthKey() {
@@ -1460,7 +1485,7 @@ export default function Reports() {
   const activeEntry = analysisEntries.find((entry) => entry.view === activeView)
 
   const changeLogSourceSummary = useMemo(
-    () => buildCountSummary(changeLogs, (record) => record.change_source || 'manual_adjusted'),
+    () => buildCountSummary(changeLogs, (record) => changeSourceLabel(record.change_source)),
     [changeLogs],
   )
   const changeLogTypeCounts = useMemo(() => buildChangeLogTypeCounts(changeLogs), [changeLogs])
@@ -1816,7 +1841,7 @@ export default function Reports() {
             偏差率: `${row.deviation_rate}%`,
             状态: row.status,
             原因: row.reason || '',
-            关联状态: row.mapping_status || 'mapped',
+            关联状态: mappingStatusLabel(row.mapping_status),
             合并到: row.merged_into?.title || '',
             子项数: row.child_group?.child_count ?? '',
           })),
@@ -1874,11 +1899,11 @@ export default function Reports() {
           recentChangeLogs.map((record) => ({
             实体类型: record.entity_type,
             字段: record.field_name,
-            来源: record.change_source || 'manual_adjusted',
+            来源: changeSourceLabel(record.change_source),
             旧值: record.old_value || '',
             新值: record.new_value || '',
             原因: record.change_reason || '',
-            时间: record.changed_at || '',
+            时间: formatDateTimeLabel(record.changed_at),
           })),
           '当前视图暂无变更记录',
         ),
@@ -2191,68 +2216,76 @@ export default function Reports() {
             <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
               <label className="space-y-1 text-xs text-slate-500">
                 <span>时间范围</span>
-                <select
-                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700"
+                <Select
                   value={deviationTimeRange}
-                  onChange={(event) => setDeviationTimeRange(event.target.value as 'all' | '7d' | '30d' | '90d')}
+                  onValueChange={(value) => setDeviationTimeRange(value as 'all' | '7d' | '30d' | '90d')}
                 >
-                  <option value="all">全部时间</option>
-                  <option value="7d">近 7 天</option>
-                  <option value="30d">近 30 天</option>
-                  <option value="90d">近 90 天</option>
-                </select>
+                  <SelectTrigger className="h-10 rounded-xl border-slate-200 bg-white text-sm text-slate-700">
+                    <SelectValue placeholder="全部时间" />
+                  </SelectTrigger>
+                  <SelectContent align="start" side="bottom">
+                    <SelectItem value="all">全部时间</SelectItem>
+                    <SelectItem value="7d">近 7 天</SelectItem>
+                    <SelectItem value="30d">近 30 天</SelectItem>
+                    <SelectItem value="90d">近 90 天</SelectItem>
+                  </SelectContent>
+                </Select>
               </label>
               <label className="space-y-1 text-xs text-slate-500">
                 <span>楼栋</span>
-                <select
-                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700"
-                  value={deviationBuildingFilter}
-                  onChange={(event) => setDeviationBuildingFilter(event.target.value)}
-                >
-                  <option value="all">全部楼栋</option>
-                  {deviationFilterOptions.buildings.map((value) => (
-                    <option key={value} value={value}>{value}</option>
-                  ))}
-                </select>
+                <Select value={deviationBuildingFilter} onValueChange={setDeviationBuildingFilter}>
+                  <SelectTrigger className="h-10 rounded-xl border-slate-200 bg-white text-sm text-slate-700">
+                    <SelectValue placeholder="全部楼栋" />
+                  </SelectTrigger>
+                  <SelectContent align="start" side="bottom">
+                    <SelectItem value="all">全部楼栋</SelectItem>
+                    {deviationFilterOptions.buildings.map((value) => (
+                      <SelectItem key={value} value={value}>{value}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </label>
               <label className="space-y-1 text-xs text-slate-500">
                 <span>标段</span>
-                <select
-                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700"
-                  value={deviationSectionFilter}
-                  onChange={(event) => setDeviationSectionFilter(event.target.value)}
-                >
-                  <option value="all">全部标段</option>
-                  {deviationFilterOptions.sections.map((value) => (
-                    <option key={value} value={value}>{value}</option>
-                  ))}
-                </select>
+                <Select value={deviationSectionFilter} onValueChange={setDeviationSectionFilter}>
+                  <SelectTrigger className="h-10 rounded-xl border-slate-200 bg-white text-sm text-slate-700">
+                    <SelectValue placeholder="全部标段" />
+                  </SelectTrigger>
+                  <SelectContent align="start" side="bottom">
+                    <SelectItem value="all">全部标段</SelectItem>
+                    {deviationFilterOptions.sections.map((value) => (
+                      <SelectItem key={value} value={value}>{value}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </label>
               <label className="space-y-1 text-xs text-slate-500">
                 <span>专业</span>
-                <select
-                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700"
-                  value={deviationSpecialtyFilter}
-                  onChange={(event) => setDeviationSpecialtyFilter(event.target.value)}
-                >
-                  <option value="all">全部专业</option>
-                  {deviationFilterOptions.specialties.map((value) => (
-                    <option key={value} value={value}>{value}</option>
-                  ))}
-                </select>
+                <Select value={deviationSpecialtyFilter} onValueChange={setDeviationSpecialtyFilter}>
+                  <SelectTrigger className="h-10 rounded-xl border-slate-200 bg-white text-sm text-slate-700">
+                    <SelectValue placeholder="全部专业" />
+                  </SelectTrigger>
+                  <SelectContent align="start" side="bottom">
+                    <SelectItem value="all">全部专业</SelectItem>
+                    {deviationFilterOptions.specialties.map((value) => (
+                      <SelectItem key={value} value={value}>{value}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </label>
               <label className="space-y-1 text-xs text-slate-500">
                 <span>偏差等级</span>
-                <select
-                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700"
-                  value={deviationLevelFilter}
-                  onChange={(event) => setDeviationLevelFilter(event.target.value)}
-                >
-                  <option value="all">全部等级</option>
-                  {deviationFilterOptions.levels.map((value) => (
-                    <option key={value} value={value}>{getDeviationStatusLabel(value)}</option>
-                  ))}
-                </select>
+                <Select value={deviationLevelFilter} onValueChange={setDeviationLevelFilter}>
+                  <SelectTrigger className="h-10 rounded-xl border-slate-200 bg-white text-sm text-slate-700">
+                    <SelectValue placeholder="全部等级" />
+                  </SelectTrigger>
+                  <SelectContent align="start" side="bottom">
+                    <SelectItem value="all">全部等级</SelectItem>
+                    {deviationFilterOptions.levels.map((value) => (
+                      <SelectItem key={value} value={value}>{getDeviationStatusLabel(value)}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </label>
             </CardContent>
           </Card>
@@ -2474,7 +2507,7 @@ export default function Reports() {
                       </div>
                       <div>
                         <div className="text-xs font-medium uppercase tracking-wider text-slate-500">关联状态</div>
-                        <div className="mt-1 text-slate-900">{selectedDeviationRow.mapping_status || 'mapped'}</div>
+                        <div className="mt-1 text-slate-900">{mappingStatusLabel(selectedDeviationRow.mapping_status)}</div>
                       </div>
                       <div>
                         <div className="text-xs font-medium uppercase tracking-wider text-slate-500">实际日期</div>

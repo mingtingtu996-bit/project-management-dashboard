@@ -37,7 +37,7 @@ export function PlanningAnomalyPanel({
         </div>
       </CardHeader>
       <Separator />
-      <CardContent className="space-y-3 p-4">
+      <CardContent className="space-y-3 p-5">
         {status === 'loading' ? (
           <div className="flex items-center gap-3 rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
             <AlertCircle className="h-4 w-4 text-slate-500" />

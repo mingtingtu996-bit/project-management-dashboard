@@ -324,8 +324,8 @@ describe('AcceptanceTimeline linked data', () => {
 
     expect(document.querySelector('[data-testid="acceptance-list-row-plan-pass"]')).toBeTruthy()
     expect(document.querySelector('[data-testid="acceptance-list-row-plan-draft"]')).toBeNull()
-    expect((document.querySelector('[data-testid="acceptance-phase-select"]') as HTMLSelectElement | null)?.value).toBe('phase1')
-    expect((document.querySelector('[data-testid="acceptance-status-select"]') as HTMLSelectElement | null)?.value).toBe('passed')
+    expect(document.querySelector('[data-testid="acceptance-phase-select"]')?.getAttribute('data-value')).toBe('phase1')
+    expect(document.querySelector('[data-testid="acceptance-status-select"]')?.getAttribute('data-value')).toBe('passed')
   })
 
   it('disables submit when required acceptance conditions are not yet satisfied', async () => {

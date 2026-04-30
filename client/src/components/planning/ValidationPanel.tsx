@@ -37,7 +37,7 @@ export function ValidationPanel({ title, issues, emptyLabel = '当前没有待�
         </div>
       </CardHeader>
       <Separator />
-      <CardContent className="space-y-3 p-4">
+      <CardContent className="space-y-3 p-5">
         {issues.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
             {emptyLabel}

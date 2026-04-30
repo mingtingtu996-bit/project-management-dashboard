@@ -285,75 +285,90 @@ export default function CompanyCockpit() {
     })
   }, [filteredProjects, summaryMap])
 
-  const stats = useMemo(() => {
-    const total = companySummary?.projectCount ?? 0
-    const inProgress = summaries.filter((summary) => mapSummaryStatusToTab(summary.statusLabel) === 'in_progress').length
-    const completed = summaries.filter((summary) => mapSummaryStatusToTab(summary.statusLabel) === 'completed').length
-    const paused = summaries.filter((summary) => mapSummaryStatusToTab(summary.statusLabel) === 'paused').length
-    const averageHealth = companySummary?.averageHealth ?? 0
-    const averageProgress = companySummary?.averageProgress ?? 0
-    const attentionProjectCount = companySummary?.attentionProjectCount ?? 0
-    const lowHealthProjectCount = companySummary?.lowHealthProjectCount ?? 0
-    const overdueMilestoneProjectCount = companySummary?.overdueMilestoneProjectCount ?? 0
+  const listStats = useMemo(() => {
+    const total = projects.length
+    const inProgress = projects.filter((project) => {
+      const summary = summaryMap.get(project.id)
+      return mapSummaryStatusToTab(summary?.statusLabel || project.status) === 'in_progress'
+    }).length
+    const completed = projects.filter((project) => {
+      const summary = summaryMap.get(project.id)
+      return mapSummaryStatusToTab(summary?.statusLabel || project.status) === 'completed'
+    }).length
+    const paused = projects.filter((project) => {
+      const summary = summaryMap.get(project.id)
+      return mapSummaryStatusToTab(summary?.statusLabel || project.status) === 'paused'
+    }).length
 
     return {
       total,
       inProgress,
       completed,
       paused,
-      averageHealth,
-      averageProgress,
-      attentionProjectCount,
-      lowHealthProjectCount,
-      overdueMilestoneProjectCount,
     }
-  }, [companySummary, summaries])
+  }, [projects, summaryMap])
+
+  const companyStats = useMemo(() => {
+    const statusCounts = companySummary?.statusCounts
+
+    return {
+      total: companySummary?.projectCount ?? 0,
+      inProgress: statusCounts?.inProgress ?? 0,
+      completed: statusCounts?.completed ?? 0,
+      paused: statusCounts?.paused ?? 0,
+      averageHealth: companySummary?.averageHealth ?? 0,
+      averageProgress: companySummary?.averageProgress ?? 0,
+      attentionProjectCount: companySummary?.attentionProjectCount ?? 0,
+      lowHealthProjectCount: companySummary?.lowHealthProjectCount ?? 0,
+      overdueMilestoneProjectCount: companySummary?.overdueMilestoneProjectCount ?? 0,
+    }
+  }, [companySummary])
 
   const tabItems = useMemo(
     () => [
-      { key: 'all' as const, label: '全部', count: stats.total },
-      { key: 'in_progress' as const, label: '进行中', count: stats.inProgress },
-      { key: 'completed' as const, label: '已完成', count: stats.completed },
-      { key: 'paused' as const, label: '已暂停', count: stats.paused },
+      { key: 'all' as const, label: '全部', count: listStats.total },
+      { key: 'in_progress' as const, label: '进行中', count: listStats.inProgress },
+      { key: 'completed' as const, label: '已完成', count: listStats.completed },
+      { key: 'paused' as const, label: '已暂停', count: listStats.paused },
     ],
-    [stats.completed, stats.inProgress, stats.paused, stats.total],
+    [listStats.completed, listStats.inProgress, listStats.paused, listStats.total],
   )
 
   const heroStats = useMemo(
     () => [
       {
         label: '项目总数',
-        value: String(stats.total),
-        hint: `进行中 ${stats.inProgress} · 已完成 ${stats.completed}`,
+        value: String(companyStats.total),
+        hint: `进行中 ${companyStats.inProgress} · 已完成 ${companyStats.completed}`,
         icon: FolderKanban,
         tone: 'bg-blue-50 text-blue-600',
-        sparklineData: buildHeroSparkline(stats.total),
+        sparklineData: buildHeroSparkline(companyStats.total),
       },
       {
         label: '活跃项目',
-        value: String(stats.inProgress),
-        hint: projectRows.length === stats.total ? '公司层共享摘要平均值' : `当前筛出 ${projectRows.length} / ${stats.total} 个项目`,
+        value: String(companyStats.inProgress),
+        hint: projectRows.length === companyStats.total ? '公司层共享摘要平均值' : `当前筛出 ${projectRows.length} / ${companyStats.total} 个项目`,
         icon: Target,
         tone: 'bg-emerald-50 text-emerald-600',
-        sparklineData: buildHeroSparkline(stats.inProgress),
+        sparklineData: buildHeroSparkline(companyStats.inProgress),
       },
       {
         label: '整体健康',
-        value: String(stats.averageHealth),
+        value: String(companyStats.averageHealth),
         hint: formatDelta(healthHistory.change),
         icon: Activity,
         tone: 'bg-amber-50 text-amber-600',
         pill: true,
-        sparklineData: buildHeroSparkline(stats.averageHealth, healthHistory.lastMonth),
+        sparklineData: buildHeroSparkline(companyStats.averageHealth, healthHistory.lastMonth),
       },
     ],
     [
       healthHistory.change,
       projectRows.length,
-      stats.averageHealth,
-      stats.completed,
-      stats.inProgress,
-      stats.total,
+      companyStats.averageHealth,
+      companyStats.completed,
+      companyStats.inProgress,
+      companyStats.total,
     ],
   )
 
@@ -554,9 +569,9 @@ export default function CompanyCockpit() {
             heroStats={heroStats}
             healthHistory={healthHistory}
             stats={{
-              inProgress: stats.inProgress,
-              completed: stats.completed,
-              paused: stats.paused,
+              inProgress: companyStats.inProgress,
+              completed: companyStats.completed,
+              paused: companyStats.paused,
             }}
             focusProjects={[] as never}
             onNavigate={navigate}
@@ -567,12 +582,12 @@ export default function CompanyCockpit() {
           projectRows={projectRows}
           healthHistory={healthHistory}
           stats={{
-            total: stats.total,
-            inProgress: stats.inProgress,
-            completed: stats.completed,
-            paused: stats.paused,
-            averageHealth: stats.averageHealth,
-            averageProgress: stats.averageProgress,
+            total: companyStats.total,
+            inProgress: companyStats.inProgress,
+            completed: companyStats.completed,
+            paused: companyStats.paused,
+            averageHealth: companyStats.averageHealth,
+            averageProgress: companyStats.averageProgress,
           }}
           companyRisks={companyRisks}
           companyIssues={companyIssues}
@@ -581,7 +596,7 @@ export default function CompanyCockpit() {
 
         <ProjectOverviewSection
           projectRows={projectRows}
-          totalProjects={stats.total}
+          totalProjects={listStats.total}
           activeTab={activeTab}
           tabItems={tabItems}
           onTabChange={setActiveTab}

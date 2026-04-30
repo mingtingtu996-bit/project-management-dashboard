@@ -30,6 +30,7 @@ import { useStore } from '@/hooks/useStore'
 import { usePermissions } from '@/hooks/usePermissions'
 import { CHART_SERIES } from '@/lib/chartPalette'
 import { apiDelete, apiGet, apiPost, apiPut } from '@/lib/apiClient'
+import { formatDate as formatDisplayDate, formatDateTime as formatDisplayDateTime } from '@/lib/formatters'
 import { cn } from '@/lib/utils'
 import { getMuteDurationActionLabel, MUTE_DURATION_OPTIONS, type AllowedMuteHours } from '@/lib/muteDurations'
 import { DataQualityApiService, type DataQualityProjectSummary } from '@/services/dataQualityApi'
@@ -249,9 +250,7 @@ function getSourceBucket(sourceType: string): SourceFilterValue {
 }
 
 function formatDateTime(value?: string | null) {
-  if (!value) return '--'
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? '--' : date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+  return formatDisplayDateTime(value, '--')
 }
 
 function buildTaskBucket(taskId?: string | null) {
@@ -262,7 +261,7 @@ function buildTimelineBucket(createdAt?: string) {
   if (!createdAt) return '未记录时间'
   const date = new Date(createdAt)
   if (Number.isNaN(date.getTime())) return '未记录时间'
-  return date.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' })
+  return formatDisplayDate(date, '未记录时间')
 }
 
 function calculateIssuePriorityScore(sourceType: string, severity: IssueRow['severity'], createdAt?: string, options?: { isLocked?: boolean; currentPriority?: number }) {
@@ -2136,8 +2135,97 @@ export default function RiskManagement() {
 
       <Dialog open={dialogState !== null} onOpenChange={(open) => !open && setDialogState(null)}>
         {dialogState?.type === 'convert-risk' ? <DialogContent className="max-w-[560px]"><DialogHeader><DialogTitle>转为问题</DialogTitle><DialogDescription className="sr-only">转为问题</DialogDescription></DialogHeader><div className="space-y-3 text-sm text-slate-600"><div><span className="font-medium text-slate-900">标题：</span>{dialogState.row.title}</div>{dialogState.row.description ? <div>{dialogState.row.description}</div> : null}</div><DialogFooter><Button variant="outline" onClick={() => setDialogState(null)} disabled={saving}>取消</Button><Button onClick={() => void handleConvertRiskToIssue()} loading={saving}>确认转入</Button></DialogFooter></DialogContent> : null}
-        {dialogState?.type === 'create-manual-risk' ? <DialogContent className="max-w-[560px]"><DialogHeader><DialogTitle>新建风险</DialogTitle><DialogDescription className="sr-only">新建风险</DialogDescription></DialogHeader><div className="space-y-4 text-sm text-slate-600"><label className="block space-y-2"><span className="font-medium text-slate-900">风险标题</span><input value={manualRiskTitle} onChange={(event) => setManualRiskTitle(event.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400" placeholder="例如：主体结构窗口受天气影响" /></label><label className="block space-y-2"><span className="font-medium text-slate-900">严重程度</span><select value={manualRiskSeverity} onChange={(event) => setManualRiskSeverity(event.target.value as RiskRow['severity'])} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400"><option value="low">低</option><option value="medium">中</option><option value="high">高</option><option value="critical">严重</option></select></label><label className="block space-y-2"><span className="font-medium text-slate-900">风险描述</span><textarea value={manualRiskDescription} onChange={(event) => setManualRiskDescription(event.target.value)} className="min-h-24 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400" placeholder="补充内容" /></label></div><DialogFooter><Button variant="outline" onClick={() => setDialogState(null)} disabled={saving}>取消</Button><Button onClick={() => void handleCreateManualRisk()} loading={saving}>确认创建</Button></DialogFooter></DialogContent> : null}
-        {dialogState?.type === 'create-manual-issue' ? <DialogContent className="max-w-[560px]"><DialogHeader><DialogTitle>新建问题</DialogTitle><DialogDescription className="sr-only">新建问题</DialogDescription></DialogHeader><div className="space-y-4 text-sm text-slate-600"><label className="block space-y-2"><span className="font-medium text-slate-900">问题标题</span><input value={manualIssueTitle} onChange={(event) => setManualIssueTitle(event.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400" placeholder="例如：专项审批资料缺失" /></label><label className="block space-y-2"><span className="font-medium text-slate-900">严重程度</span><select value={manualIssueSeverity} onChange={(event) => setManualIssueSeverity(event.target.value as IssueRow['severity'])} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400"><option value="low">低</option><option value="medium">中</option><option value="high">高</option><option value="critical">严重</option></select></label><label className="block space-y-2"><span className="font-medium text-slate-900">问题描述</span><textarea value={manualIssueDescription} onChange={(event) => setManualIssueDescription(event.target.value)} className="min-h-24 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400" placeholder="补充内容" /></label><div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">实时优先级分：<span className="font-semibold text-slate-900">{calculateIssuePriorityScore('manual', manualIssueSeverity)}</span></div></div><DialogFooter><Button variant="outline" onClick={() => setDialogState(null)} disabled={saving}>取消</Button><Button onClick={() => void handleCreateManualIssue()} loading={saving}>确认创建</Button></DialogFooter></DialogContent> : null}
+        {dialogState?.type === 'create-manual-risk' ? (
+          <DialogContent className="max-w-[560px]">
+            <DialogHeader>
+              <DialogTitle>新建风险</DialogTitle>
+              <DialogDescription className="sr-only">新建风险</DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 text-sm text-slate-600">
+              <label className="block space-y-2">
+                <span className="font-medium text-slate-900">风险标题</span>
+                <input value={manualRiskTitle} onChange={(event) => setManualRiskTitle(event.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400" placeholder="例如：主体结构窗口受天气影响" />
+              </label>
+              <label className="block space-y-2">
+                <span className="font-medium text-slate-900">严重程度</span>
+                <input
+                  type="hidden"
+                  data-testid="manual-risk-severity-value"
+                  value={manualRiskSeverity}
+                  onInput={(event) => setManualRiskSeverity(event.currentTarget.value as RiskRow['severity'])}
+                  onChange={(event) => setManualRiskSeverity(event.target.value as RiskRow['severity'])}
+                  aria-hidden="true"
+                />
+                <Select value={manualRiskSeverity} onValueChange={(value) => setManualRiskSeverity(value as RiskRow['severity'])}>
+                  <SelectTrigger className="h-10 rounded-xl border-slate-200 bg-white text-sm text-slate-900" data-testid="manual-risk-severity-select" data-value={manualRiskSeverity}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="low">低</SelectItem>
+                    <SelectItem value="medium">中</SelectItem>
+                    <SelectItem value="high">高</SelectItem>
+                    <SelectItem value="critical">严重</SelectItem>
+                  </SelectContent>
+                </Select>
+              </label>
+              <label className="block space-y-2">
+                <span className="font-medium text-slate-900">风险描述</span>
+                <textarea value={manualRiskDescription} onChange={(event) => setManualRiskDescription(event.target.value)} className="min-h-24 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400" placeholder="补充内容" />
+              </label>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setDialogState(null)} disabled={saving}>取消</Button>
+              <Button onClick={() => void handleCreateManualRisk()} loading={saving}>确认创建</Button>
+            </DialogFooter>
+          </DialogContent>
+        ) : null}
+        {dialogState?.type === 'create-manual-issue' ? (
+          <DialogContent className="max-w-[560px]">
+            <DialogHeader>
+              <DialogTitle>新建问题</DialogTitle>
+              <DialogDescription className="sr-only">新建问题</DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 text-sm text-slate-600">
+              <label className="block space-y-2">
+                <span className="font-medium text-slate-900">问题标题</span>
+                <input value={manualIssueTitle} onChange={(event) => setManualIssueTitle(event.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400" placeholder="例如：专项审批资料缺失" />
+              </label>
+              <label className="block space-y-2">
+                <span className="font-medium text-slate-900">严重程度</span>
+                <input
+                  type="hidden"
+                  data-testid="manual-issue-severity-value"
+                  value={manualIssueSeverity}
+                  onInput={(event) => setManualIssueSeverity(event.currentTarget.value as IssueRow['severity'])}
+                  onChange={(event) => setManualIssueSeverity(event.target.value as IssueRow['severity'])}
+                  aria-hidden="true"
+                />
+                <Select value={manualIssueSeverity} onValueChange={(value) => setManualIssueSeverity(value as IssueRow['severity'])}>
+                  <SelectTrigger className="h-10 rounded-xl border-slate-200 bg-white text-sm text-slate-900" data-testid="manual-issue-severity-select" data-value={manualIssueSeverity}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="low">低</SelectItem>
+                    <SelectItem value="medium">中</SelectItem>
+                    <SelectItem value="high">高</SelectItem>
+                    <SelectItem value="critical">严重</SelectItem>
+                  </SelectContent>
+                </Select>
+              </label>
+              <label className="block space-y-2">
+                <span className="font-medium text-slate-900">问题描述</span>
+                <textarea value={manualIssueDescription} onChange={(event) => setManualIssueDescription(event.target.value)} className="min-h-24 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400" placeholder="补充内容" />
+              </label>
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                实时优先级分：<span className="font-semibold text-slate-900">{calculateIssuePriorityScore('manual', manualIssueSeverity)}</span>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setDialogState(null)} disabled={saving}>取消</Button>
+              <Button onClick={() => void handleCreateManualIssue()} loading={saving}>确认创建</Button>
+            </DialogFooter>
+          </DialogContent>
+        ) : null}
       </Dialog>
 
       <Dialog open={detailDialog !== null} onOpenChange={(open) => !open && setDetailDialog(null)}>

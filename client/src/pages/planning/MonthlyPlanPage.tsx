@@ -1746,7 +1746,7 @@ export default function MonthlyPlanPage() {
                 : 'border-slate-200 bg-slate-50'
           }
         >
-          <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4">
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 p-5">
             <div className="space-y-1">
               <div className="text-sm font-medium text-slate-900">{priorityBanner.title}</div>
               <div className="text-sm text-slate-600">{priorityBanner.detail}</div>
@@ -1767,7 +1767,7 @@ export default function MonthlyPlanPage() {
                 : 'border-slate-200 bg-slate-50'
           }
         >
-          <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4">
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 p-5">
             <div className="space-y-1">
               <div className="text-sm font-medium text-slate-900">{confirmReminder.title}</div>
               <div className="text-sm text-slate-600">{confirmReminder.detail}</div>
@@ -1780,7 +1780,7 @@ export default function MonthlyPlanPage() {
       {noBaselineIntercept ? null : (
         <>
           <Card variant="detail">
-            <CardContent className="space-y-4 p-4 sm:p-5">
+            <CardContent className="space-y-4 p-5">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="space-y-1">
                   <div className="flex flex-wrap items-center gap-2">
@@ -1918,7 +1918,7 @@ export default function MonthlyPlanPage() {
                   : 'border-slate-200 bg-white shadow-sm'
               }
             >
-              <CardContent className="space-y-4 p-4 sm:p-5">
+              <CardContent className="space-y-4 p-5">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="space-y-1">
                     <div className="flex flex-wrap items-center gap-2">
@@ -1966,7 +1966,7 @@ export default function MonthlyPlanPage() {
 
   const sectionHeader = noBaselineIntercept || activePlan?.status !== 'draft' ? null : (
     <Card variant="detail" data-testid="monthly-plan-source-block">
-      <CardContent className="space-y-4 p-4 sm:p-5">
+      <CardContent className="space-y-4 p-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="space-y-1">
             <div className="flex flex-wrap items-center gap-2">
@@ -2093,7 +2093,7 @@ export default function MonthlyPlanPage() {
     <div className="space-y-4">
       {activePlan.status !== 'draft' ? (
         <Card className="border-emerald-200 bg-emerald-50">
-          <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4">
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 p-5">
             <div className="space-y-1">
               <div className="text-sm font-medium text-emerald-900">
                 {activePlan.status === 'pending_realign'
@@ -2123,7 +2123,7 @@ export default function MonthlyPlanPage() {
       ) : null}
       {activePlan.status === 'draft' ? (
         <Card data-testid="monthly-plan-batch-strip" className="border-slate-200 bg-slate-50 shadow-sm">
-          <CardContent className="space-y-4 p-4">
+          <CardContent className="space-y-4 p-5">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="space-y-1">
                 <div className="flex flex-wrap items-center gap-2">
@@ -2314,7 +2314,7 @@ export default function MonthlyPlanPage() {
           ) : null}
 
           <Card data-testid="monthly-plan-confirm-summary" variant="detail">
-            <CardContent className="space-y-4 p-4">
+            <CardContent className="space-y-4 p-5">
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <div className="flex flex-wrap items-center gap-2">
@@ -2357,7 +2357,7 @@ export default function MonthlyPlanPage() {
           <ValidationPanel title="确认前校核区" issues={validationIssues} />
 
           <Card variant="detail">
-            <CardContent className="space-y-3 p-4">
+            <CardContent className="space-y-3 p-5">
               <div className="flex items-center justify-between gap-3">
                 <div className="text-sm font-medium text-slate-900">变更留痕入口</div>
                 <Badge variant="outline">共享分析</Badge>
@@ -2394,7 +2394,7 @@ export default function MonthlyPlanPage() {
           </Card>
 
           <Card variant="detail">
-            <CardContent className="space-y-3 p-4">
+            <CardContent className="space-y-3 p-5">
               <div className="flex items-center justify-between gap-3">
                 <div className="text-sm font-medium text-slate-900">当前版本摘要</div>
                 <Badge variant="outline">{activePlan ? `v${activePlan.version}` : '待生成'}</Badge>
@@ -2471,7 +2471,7 @@ export default function MonthlyPlanPage() {
 
   return (
     <PlanningPageShell
-      projectName={currentProject.name ?? '未命名项目'}
+      projectName={currentProject.name ?? '项目'}
       title="计划编制 / 月度计划"
       description=""
       tabs={tabs}

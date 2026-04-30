@@ -390,7 +390,7 @@ function DashboardCompactHeader({
     <Collapsible.Root open={open} onOpenChange={setOpen} className="space-y-3">
       <div
         data-testid="dashboard-compact-header"
-        className="flex flex-col gap-4 rounded-xl border border-slate-200/60 bg-white p-4 shadow-[var(--el-1)] md:flex-row md:items-center md:justify-between"
+        className="flex flex-col gap-4 rounded-xl border border-slate-200/60 bg-white p-5 shadow-[var(--el-1)] md:flex-row md:items-center md:justify-between"
       >
         <div className="min-w-0 space-y-2">
           <div data-testid="dashboard-global-summary" className="text-xs font-semibold uppercase tracking-wider text-slate-500">
@@ -624,8 +624,11 @@ function DashboardHero({
             <>
               <div data-testid="dashboard-data-quality-breakdown" className="rounded-2xl border border-slate-200 bg-white px-5 py-5 shadow-[var(--el-1)]">
                 <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0 flex-1">
-                    <DataConfidenceBreakdown confidence={confidence} compact title="本月主要降分维度" />
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">数据可靠性</div>
+                    <div className="text-sm text-slate-700">
+                      当前总分 {Math.round(confidence.score)}%，详细维度收纳在弹窗中查看。
+                    </div>
                   </div>
                   <Button
                     type="button"
@@ -886,7 +889,7 @@ function WeeklyDigestPanel({ projectId }: { projectId: string }) {
                 )}
               </div>
             </div>
-            <div className="rounded-xl bg-slate-50 p-3 text-xs text-slate-600">
+            <div className="rounded-xl bg-slate-50 p-5 text-xs text-slate-600">
               本周新增风险 {digest.new_risks_count ?? 0} 条 / 阻碍 {digest.new_obstacles_count ?? 0} 条
               {digest.max_risk_level && <span className="ml-2 font-medium text-red-600">最高级别：{digest.max_risk_level}</span>}
             </div>
@@ -1013,7 +1016,7 @@ function DashboardMonthlyTrend({ projectId }: { projectId: string }) {
             ])}
             summary="查看月度趋势图表数据"
           >
-            <div className="relative w-full overflow-hidden rounded-2xl border border-slate-100 bg-white p-3">
+            <div className="relative w-full overflow-hidden rounded-2xl border border-slate-100 bg-white p-5">
             <div className="mb-2 flex flex-wrap items-center gap-3 text-xs text-slate-500">
               <span className="inline-flex items-center gap-1">
                 <span className="h-2.5 w-2.5 rounded-full bg-blue-600" />

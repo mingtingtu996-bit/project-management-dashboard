@@ -3,6 +3,7 @@ import type { WbsTemplate, ApiResponse } from '../types'
 import { API_BASE, withCredentials } from '../utils'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useParams } from 'react-router-dom'
 import { IconX } from './WbsIcons'
 
@@ -87,15 +88,19 @@ export function EditModal({
           </div>
           <div>
             <label className="block text-xs text-slate-500 mb-1">模板类型</label>
-            <select
+            <Select
               value={templateType}
-              onChange={e => setTemplateType(e.target.value)}
-              className="w-full text-sm px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              onValueChange={setTemplateType}
             >
-              {['住宅', '商业', '工业', '公共建筑'].map(t => (
-                <option key={t} value={t}>{t}</option>
-              ))}
-            </select>
+              <SelectTrigger className="h-10 rounded-lg border-slate-200 bg-white text-sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {['住宅', '商业', '工业', '公共建筑'].map(t => (
+                  <SelectItem key={t} value={t}>{t}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <div>
             <label className="block text-xs text-slate-500 mb-1">模板描述</label>

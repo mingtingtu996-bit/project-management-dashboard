@@ -270,7 +270,7 @@ export function CloseoutDetailDrawer({
         ) : null}
 
         <Card className="border-slate-200">
-          <CardContent className="space-y-3 p-4">
+          <CardContent className="space-y-3 p-5">
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0 space-y-1">
                 <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">基本信息</div>

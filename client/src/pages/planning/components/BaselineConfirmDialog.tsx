@@ -240,7 +240,7 @@ export function BaselineConfirmDialog({
                                 metric.emphasis === 'warning' ? 'ring-1 ring-amber-200' : '',
                               )}
                             >
-                              <CardContent className="space-y-1 p-3">
+                              <CardContent className="space-y-1 p-5">
                                 <div className="text-xs text-slate-500">{metric.label}</div>
                                 <div className="text-base font-semibold text-slate-900">{metric.value}</div>
                               </CardContent>

@@ -60,6 +60,7 @@
     /* v1.3 页面背景 slate-50 */
     background-color: #F8FAFC;
     color: #0f172a;
+    overscroll-behavior: contain;
   }
 
   /* heading 全局基础样式（L18/L19） */
