@@ -87,6 +87,11 @@ function findButton(container: HTMLElement, label: string) {
   ) as HTMLButtonElement | undefined
 }
 
+function currentMonthIso(day: number, hour = 10) {
+  const now = new Date()
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}T${String(hour).padStart(2, '0')}:00:00.000Z`
+}
+
 async function renderReports(root: Root | null, initialEntry: string) {
   root?.render(
     <MemoryRouter key={initialEntry} initialEntries={[initialEntry]}>
@@ -451,7 +456,7 @@ describe('Reports story coverage', () => {
             new_value: '2026-04-13',
             change_reason: '顺延施工窗口',
             change_source: 'manual_adjusted',
-            changed_at: '2026-04-12T10:00:00.000Z',
+            changed_at: currentMonthIso(12),
           },
           {
             id: 'log-2',
@@ -463,7 +468,7 @@ describe('Reports story coverage', () => {
             new_value: 'approved',
             change_reason: '延期审批通过',
             change_source: 'approval',
-            changed_at: '2026-04-13T10:00:00.000Z',
+            changed_at: currentMonthIso(13),
           },
           {
             id: 'log-3',
@@ -475,7 +480,7 @@ describe('Reports story coverage', () => {
             new_value: '1',
             change_reason: '任务开工自动闭合',
             change_source: 'system_auto',
-            changed_at: '2026-04-14T10:00:00.000Z',
+            changed_at: currentMonthIso(14),
           },
         ]
       }
@@ -642,13 +647,13 @@ describe('Reports story coverage', () => {
       await flush()
     })
 
-    await waitForText(container, ['基线偏差', 'mapping_pending', '基线版本切换标记'])
+    await waitForText(container, ['基线偏差', '待关联', '基线版本切换标记'])
     expect(container.querySelector('[data-testid="deviation-shell"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="baseline-dumbbell-chart"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="deviation-detail-table"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="baseline-switch-marker"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="deviation-version-note"]')).toBeTruthy()
-    expect(container.textContent).toContain('mapping_pending')
+    expect(container.textContent).toContain('待关联')
 
     const monthlyTab = findButton(container, '月度兑现偏差')
     expect(monthlyTab).toBeTruthy()
@@ -657,13 +662,13 @@ describe('Reports story coverage', () => {
       await flush()
     })
 
-    await waitForText(container, ['月度兑现偏差', 'merged_into', '基线版本切换标记'])
+    await waitForText(container, ['月度兑现偏差', '已合并', '基线版本切换标记'])
     expect(container.querySelector('[data-testid="deviation-shell"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="monthly-stacked-bar-chart"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="deviation-detail-table"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="baseline-switch-marker"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="deviation-version-note"]')).toBeTruthy()
-    expect(container.textContent).toContain('merged_into')
+    expect(container.textContent).toContain('已合并')
 
     const executionTab = findButton(container, '执行偏差')
     expect(executionTab).toBeTruthy()
@@ -672,13 +677,13 @@ describe('Reports story coverage', () => {
       await flush()
     })
 
-    await waitForText(container, ['执行偏差', 'child_group', '基线版本切换标记'])
+    await waitForText(container, ['执行偏差', '子项组', '基线版本切换标记'])
     expect(container.querySelector('[data-testid="deviation-shell"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="execution-scatter-chart"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="deviation-detail-table"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="baseline-switch-marker"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="deviation-version-note"]')).toBeTruthy()
-    expect(container.textContent).toContain('child_group')
+    expect(container.textContent).toContain('子项组')
 
     const deviationRow = container.querySelector('[data-testid="deviation-detail-table"] tr[role="button"]') as HTMLTableRowElement | null
     expect(deviationRow).toBeTruthy()
@@ -762,20 +767,20 @@ describe('Reports story coverage', () => {
   it('shows the current view markers directly from the chosen route', async () => {
     await renderReports(root, `/projects/${projectId}/reports?view=baseline`)
 
-    await waitForText(container, ['基线偏差', 'mapping_pending', '基线版本切换标记'])
+    await waitForText(container, ['基线偏差', '待关联', '基线版本切换标记'])
 
     expect(container.querySelector('[data-testid="baseline-dumbbell-chart"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="deviation-detail-table"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="baseline-switch-marker"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="deviation-version-note"]')).toBeTruthy()
-    expect(container.textContent).toContain('mapping_pending')
+    expect(container.textContent).toContain('待关联')
     expect(container.textContent).toContain('基线版本切换标记')
   })
 
   it('exposes the change log analysis entry with real project-level records', async () => {
     await renderReports(root, `/projects/${projectId}/reports?view=change_log`)
 
-    await waitForText(container, ['变更记录分析', '顺延施工窗口', 'manual_adjusted'])
+    await waitForText(container, ['变更记录分析', '顺延施工窗口', '人工调整'])
 
     expect(container.querySelector('[data-testid="change-log-view"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="analysis-entry-progress"]')).toBeTruthy()

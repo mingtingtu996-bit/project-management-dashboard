@@ -45,6 +45,11 @@ function flush() {
   return new Promise((resolve) => setTimeout(resolve, 0))
 }
 
+function monthLabel(month: string) {
+  const [year, rawMonth] = month.split('-')
+  return `${year}年${Number(rawMonth)}月`
+}
+
 async function waitForCondition(check: () => boolean) {
   const deadline = Date.now() + 8000
   while (Date.now() < deadline) {
@@ -403,10 +408,10 @@ describe('Planning real pages', () => {
     expect(confirmSummaryItems).toHaveLength(7)
     expect(quickConfirmButton?.disabled).toBe(true)
 
-    const currentMonthButton = Array.from(view.container.querySelectorAll('button')).find(
-      (button) => button.textContent?.includes('2026年4月') && button.textContent?.includes('当前'),
+    const selectedMonthButton = Array.from(view.container.querySelectorAll('button')).find(
+      (button) => button.textContent?.includes(monthLabel(monthlyDraft.month)),
     ) as HTMLButtonElement | undefined
-    expect(currentMonthButton?.className).toContain('ring-blue-500')
+    expect(selectedMonthButton?.className).toContain('ring-blue-500')
 
     await clickButtonByText(view.container, '移出本月计划')
     await waitForSelector(document.body, '[data-testid="monthly-plan-batch-move-out-dialog"]')

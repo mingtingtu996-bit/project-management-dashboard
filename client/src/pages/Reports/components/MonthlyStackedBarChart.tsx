@@ -132,17 +132,15 @@ export function MonthlyStackedBarChart({
                     </div>
                     <div className="mt-3 flex h-4 overflow-hidden rounded-full bg-white">
                       {segments.map((segment) => (
-                        <Tooltip>
-  <TooltipTrigger asChild>
-    <div
-                          key={`${bucket.month}-${segment.label}`}
-                          className={segment.className}
-                          style={{ width: `${(segment.value / safeTotal) * 100}%` }}
-                          
-                        />
-  </TooltipTrigger>
-  <TooltipContent>{`${segment.label} ${segment.value}`}</TooltipContent>
-</Tooltip>
+                        <Tooltip key={`${bucket.month}-${segment.label}`}>
+                          <TooltipTrigger asChild>
+                            <div
+                              className={segment.className}
+                              style={{ width: `${(segment.value / safeTotal) * 100}%` }}
+                            />
+                          </TooltipTrigger>
+                          <TooltipContent>{`${segment.label} ${segment.value}`}</TooltipContent>
+                        </Tooltip>
                       ))}
                     </div>
                     <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">

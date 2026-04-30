@@ -66,6 +66,33 @@ function flush() {
   return new Promise((resolve) => setTimeout(resolve, 0))
 }
 
+function ensureSelectDomPolyfills() {
+  if (!HTMLElement.prototype.hasPointerCapture) {
+    Object.defineProperty(HTMLElement.prototype, 'hasPointerCapture', {
+      configurable: true,
+      value: () => false,
+    })
+  }
+  if (!HTMLElement.prototype.setPointerCapture) {
+    Object.defineProperty(HTMLElement.prototype, 'setPointerCapture', {
+      configurable: true,
+      value: () => undefined,
+    })
+  }
+  if (!HTMLElement.prototype.releasePointerCapture) {
+    Object.defineProperty(HTMLElement.prototype, 'releasePointerCapture', {
+      configurable: true,
+      value: () => undefined,
+    })
+  }
+  if (!HTMLElement.prototype.scrollIntoView) {
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: () => undefined,
+    })
+  }
+}
+
 async function waitForCondition(check: () => boolean) {
   const deadline = Date.now() + 2500
 
@@ -181,15 +208,20 @@ async function setFileInput(input: HTMLInputElement, file: File) {
   })
 }
 
-async function setSelectValue(select: HTMLSelectElement, value: string) {
-  const valueSetter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set
+async function selectRadixOption(trigger: HTMLElement, optionText: string) {
+  ensureSelectDomPolyfills()
+  await clickElement(trigger)
+  await waitForCondition(() =>
+    Array.from(document.body.querySelectorAll('[role="option"]')).some((option) =>
+      option.textContent?.includes(optionText),
+    ),
+  )
 
-  await act(async () => {
-    valueSetter?.call(select, value)
-    select.dispatchEvent(new Event('input', { bubbles: true }))
-    select.dispatchEvent(new Event('change', { bubbles: true }))
-    await flush()
-  })
+  const option = Array.from(document.body.querySelectorAll('[role="option"]')).find((item) =>
+    item.textContent?.includes(optionText),
+  ) as HTMLElement | undefined
+  expect(option).toBeTruthy()
+  await clickElement(option as HTMLElement)
 }
 
 async function setCheckboxChecked(input: HTMLInputElement, checked: boolean) {
@@ -659,9 +691,9 @@ describe('BaselinePage planning workflow', () => {
 
     await waitForCondition(() => Boolean(container.querySelector('[data-testid="baseline-compare-version-select"]')))
 
-    await setSelectValue(
-      container.querySelector('[data-testid="baseline-compare-version-select"]') as HTMLSelectElement,
-      'baseline-v7',
+    await selectRadixOption(
+      container.querySelector('[data-testid="baseline-compare-version-select"]') as HTMLElement,
+      'v7 · 草稿',
     )
 
     await waitForText(container, ['v7 → v6', '3 项变更', '月度收口 L4'])
