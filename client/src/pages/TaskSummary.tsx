@@ -3,6 +3,7 @@ import * as Collapsible from '@radix-ui/react-collapsible'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 
 import { Breadcrumb } from '@/components/Breadcrumb'
+import { EmptyState } from '@/components/EmptyState'
 import { PageHeader } from '@/components/PageHeader'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -118,7 +119,7 @@ function TaskSummaryGroupsSection({
 
             return (
               <Collapsible.Root key={group.id} defaultOpen={defaultOpen}>
-                <Card className="border-slate-200 shadow-sm">
+                <Card className="surface-card">
                   <CardContent className="space-y-4 p-5">
                     <Collapsible.Trigger asChild>
                       <Button
@@ -153,7 +154,7 @@ function TaskSummaryGroupsSection({
                               <div
                                 key={task.id}
                                 className={cn(
-                                  'grid gap-3 rounded-xl px-4 py-3 transition-colors hover:bg-blue-50/60 md:grid-cols-[minmax(0,1fr)_140px_140px_96px]',
+                                  'grid gap-3 rounded-xl px-4 py-3 transition-colors hover:bg-blue-50/60 md:grid-cols-[minmax(0,1fr)_8.75rem_8.75rem_6rem]',
                                   taskIndex % 2 === 0 ? 'bg-slate-50' : 'bg-white',
                                 )}
                               >
@@ -186,9 +187,11 @@ function TaskSummaryGroupsSection({
                           })}
                         </div>
                       ) : (
-                        <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
-                          暂无任务明细
-                        </div>
+                        <EmptyState
+                          title="暂无任务明细"
+                          description="当前分组下没有可展示的任务明细。"
+                          className="rounded-xl empty-state-frame border-slate-200 bg-slate-50 py-6"
+                        />
                       )}
                     </Collapsible.Content>
                   </CardContent>
@@ -203,10 +206,13 @@ function TaskSummaryGroupsSection({
           ) : null}
         </div>
       ) : (
-        <Card className="border-slate-200 shadow-sm">
-          <CardContent className="flex flex-col items-center justify-center gap-2 py-10 text-center">
-            <div className="text-sm font-medium text-slate-900">暂无总结列表数据</div>
-            <div className="text-xs text-slate-500">请先确认任务总结接口已返回里程碑分组。</div>
+        <Card className="surface-card">
+          <CardContent className="p-0">
+            <EmptyState
+              title="暂无总结列表数据"
+              description="请先确认任务总结接口已返回里程碑分组。"
+              className="py-10"
+            />
           </CardContent>
         </Card>
       )}
@@ -231,7 +237,7 @@ function TaskSummaryFulfillmentSection({
       {hasData ? (
         <div className="space-y-3">
           {monthlyFulfillment.map((item) => (
-            <Card key={item.month} className="border-slate-200 shadow-sm">
+            <Card key={item.month} className="surface-card">
               <CardContent className="space-y-3 p-5">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
@@ -255,10 +261,13 @@ function TaskSummaryFulfillmentSection({
           ))}
         </div>
       ) : (
-        <Card className="border-slate-200 shadow-sm">
-          <CardContent className="flex flex-col items-center justify-center gap-2 py-10 text-center">
-            <div className="text-sm font-medium text-slate-900">暂无月度兑现数据</div>
-            <div className="text-xs text-slate-500">请确认任务总结接口已返回最近月度兑现趋势。</div>
+        <Card className="surface-card">
+          <CardContent className="p-0">
+            <EmptyState
+              title="暂无月度兑现数据"
+              description="请确认任务总结接口已返回最近月度兑现趋势。"
+              className="py-10"
+            />
           </CardContent>
         </Card>
       )}
@@ -366,7 +375,7 @@ export default function TaskSummary() {
   if (!loading && !projectId) {
     return (
       <div className="page-shell">
-        <Card className="border-slate-200 shadow-sm">
+        <Card className="surface-card">
           <CardContent className="flex flex-col items-center justify-center gap-3 py-16 text-center">
             <CheckSquare className="h-12 w-12 text-slate-300" />
             <div className="space-y-1">
@@ -383,7 +392,7 @@ export default function TaskSummary() {
       <div className="page-shell">
         <LoadingState
           label="任务总结加载中"
-          className="min-h-[320px]"
+          className="min-h-80"
         />
       </div>
     )

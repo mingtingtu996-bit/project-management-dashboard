@@ -13,6 +13,7 @@ interface EmptyStateProps {
   onRetry?: () => void
   onClearFilter?: () => void
   className?: string
+  testId?: string
 }
 
 const emptyStateConfig = {
@@ -45,12 +46,14 @@ export function EmptyState({
   onRetry,
   onClearFilter,
   className,
+  testId,
 }: EmptyStateProps) {
   const config = emptyStateConfig[variant]
   const Icon = icon ?? config.icon
 
   return (
     <div
+      data-testid={testId}
       className={cn(
         'flex flex-col items-center justify-center gap-3 py-12 text-center',
         className,

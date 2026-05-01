@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link2, Trash2 } from 'lucide-react'
+import { EmptyState } from '@/components/EmptyState'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -135,7 +136,7 @@ export function CertificateDependenciesDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent className="max-h-[88vh] max-w-[720px] overflow-y-auto">
+      <DialogContent className="max-h-[88vh] max-w-3xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Link2 className="h-5 w-5" />
@@ -237,7 +238,7 @@ export function CertificateDependenciesDialog({
             </div>
           </section>
 
-          <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <section className="rounded-2xl border border-slate-100 bg-white p-4 shadow-[var(--el-1)]">
             <div className="flex items-center justify-between gap-3">
               <div>
                 <h4 className="text-sm font-semibold text-slate-900">已有依赖</h4>
@@ -265,12 +266,12 @@ export function CertificateDependenciesDialog({
                   <div key={dependency.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
-                        <div className="font-medium text-slate-900">
-                          {predecessorLabel}
+                        <div className="flex min-w-0 items-center gap-2 font-medium text-slate-900">
+                          <span className="truncate" title={predecessorLabel}>{predecessorLabel}</span>
                           <span className="mx-2 text-slate-500">→</span>
-                          {successorLabel}
+                          <span className="truncate" title={successorLabel}>{successorLabel}</span>
                         </div>
-                        <div className="mt-1 text-xs text-slate-500">
+                        <div className="mt-1 line-clamp-2 text-xs text-slate-500" title={`${dependency.predecessor_type} → ${dependency.successor_type}${dependency.notes ? ` · ${dependency.notes}` : ''}`}>
                           {dependency.predecessor_type} → {dependency.successor_type}
                           {dependency.notes ? ` · ${dependency.notes}` : ''}
                         </div>
@@ -292,9 +293,11 @@ export function CertificateDependenciesDialog({
                   </div>
                 )
               }) : (
-                <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                  暂无依赖记录。
-                </div>
+                <EmptyState
+                  title="暂无依赖记录"
+                  description="新增后会展示当前证照与办理事项之间的显式依赖。"
+                  className="rounded-xl empty-state-frame border-slate-200 bg-slate-50 py-8"
+                />
               )}
             </div>
           </section>

@@ -77,7 +77,7 @@ export function BaselineBottomBar({
     confirmDisabledReason ?? (readOnly ? '请先进入编辑模式或获取编辑锁。' : confirmDisabled ? '请先保存草稿。' : null)
 
   return (
-    <div className="fixed bottom-4 left-1/2 z-40 w-[calc(100%-2rem)] max-w-[1440px] -translate-x-1/2 px-0">
+    <div className="fixed bottom-4 left-1/2 z-40 w-[calc(100%-2rem)] max-w-[var(--content-max-width)] -translate-x-1/2 px-0">
       <Card
         data-testid="baseline-bottom-bar"
         className={cn(
@@ -85,7 +85,7 @@ export function BaselineBottomBar({
         )}
       >
         <div className="flex flex-col gap-3">
-          <div className="grid items-center gap-3 lg:grid-cols-[minmax(260px,1fr)_auto_minmax(260px,1fr)]">
+          <div className="grid items-center gap-3 lg:grid-cols-[minmax(16.25rem,1fr)_auto_minmax(16.25rem,1fr)]">
             <div className="flex flex-wrap items-center gap-2">
               <span
                 className={cn(
@@ -183,9 +183,10 @@ export function BaselineBottomBar({
                   className="gap-2 rounded-full border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
                   onClick={onSaveDraft}
                   disabled={readOnly || saveDisabled}
+                  loading={saving}
                 >
                   <Save className="h-4 w-4" />
-                  {saving ? '保存中...' : '保存草稿'}
+                  保存草稿
                 </Button>
               </DisabledReasonTooltip>
               {onOpenConfirm ? (

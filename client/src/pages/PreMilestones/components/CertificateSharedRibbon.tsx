@@ -23,14 +23,14 @@ export function CertificateSharedRibbon({
 }: CertificateSharedRibbonProps) {
   if (items.length === 0) {
     return (
-      <div className="rounded-2xl border border-dashed border-slate-200 bg-white/70 p-4 text-sm text-slate-500">
+      <div className="rounded-2xl empty-state-frame border-slate-200 bg-white/70 p-4 text-sm text-slate-500">
         当前没有跨证共享事项。
       </div>
     )
   }
 
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+    <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-[var(--el-1)]">
       <div className="flex items-center gap-2 mb-4">
         <Link2 className="h-4 w-4 text-slate-500" />
         <h3 className="text-sm font-semibold text-slate-900">共享事项条带</h3>

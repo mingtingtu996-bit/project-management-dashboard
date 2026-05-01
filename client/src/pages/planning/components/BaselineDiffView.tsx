@@ -51,7 +51,7 @@ export function BaselineDiffView({ fromVersionLabel, toVersionLabel, items }: Ba
       </div>
 
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-        <Card className="border-slate-200 shadow-sm">
+        <Card className="surface-card">
           <CardContent className="space-y-1 p-5">
             <div className="text-xs text-slate-500">版本对比</div>
             <div className="text-lg font-semibold text-slate-900">
@@ -60,7 +60,7 @@ export function BaselineDiffView({ fromVersionLabel, toVersionLabel, items }: Ba
           </CardContent>
         </Card>
         {(['新增', '修改', '移除', '里程碑变动'] as BaselineDiffKind[]).map((kind) => (
-          <Card key={kind} className="border-slate-200 shadow-sm">
+          <Card key={kind} className="surface-card">
             <CardContent className="space-y-1 p-5">
               <div className="text-xs text-slate-500">{kind}</div>
               <div className="text-lg font-semibold text-slate-900">{counts[kind]}</div>
@@ -71,7 +71,7 @@ export function BaselineDiffView({ fromVersionLabel, toVersionLabel, items }: Ba
 
       <div className="space-y-2">
         {items.map((item) => (
-          <Card key={item.id} className="border-slate-200 shadow-sm">
+          <Card key={item.id} className="surface-card">
             <CardContent className="space-y-3 p-5">
               <div className="flex flex-wrap items-center gap-2">
                 <Badge variant="outline" className={kindClassName[item.kind]}>

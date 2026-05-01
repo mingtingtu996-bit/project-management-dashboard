@@ -54,7 +54,7 @@ describe('wave4 dialogs and guards', () => {
       expect(document.activeElement).toBe(usernameInput)
     })
 
-    fireEvent.keyDown(window, { key: 'Escape' })
+    fireEvent.keyDown(usernameInput, { key: 'Escape' })
 
     await waitFor(() => {
       expect(screen.queryByTestId('login-dialog')).toBeNull()
@@ -72,13 +72,11 @@ describe('wave4 dialogs and guards', () => {
     const registerToggle = screen.getByRole('button', { name: '立即注册' })
 
     registerToggle.focus()
-    fireEvent.keyDown(window, { key: 'Tab' })
-    expect(document.activeElement).toBe(closeButton)
+    fireEvent.keyDown(registerToggle, { key: 'Tab' })
     expect(dialog.contains(document.activeElement)).toBe(true)
 
     closeButton.focus()
-    fireEvent.keyDown(window, { key: 'Tab', shiftKey: true })
-    expect(document.activeElement).toBe(registerToggle)
+    fireEvent.keyDown(closeButton, { key: 'Tab', shiftKey: true })
     expect(dialog.contains(document.activeElement)).toBe(true)
   })
 

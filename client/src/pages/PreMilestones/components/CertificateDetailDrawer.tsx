@@ -1,8 +1,9 @@
 import type { ReactNode } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { X } from 'lucide-react'
+import { EmptyState } from '@/components/EmptyState'
 import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Separator } from '@/components/ui/separator'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { useDialogFocusRestore } from '@/hooks/useDialogFocusRestore'
@@ -149,7 +150,7 @@ function LinkedSection({
   children: ReactNode
 }) {
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm" data-testid={testId}>
+    <section className="rounded-2xl border border-slate-100 bg-white p-4 shadow-[var(--el-1)]" data-testid={testId}>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h4 className="text-sm font-semibold text-slate-900">{title}</h4>
@@ -289,23 +290,19 @@ export function CertificateDetailDrawer({
 
   return (
     <>
-      {open && (
-        <div
-          className="fixed inset-0 z-40 bg-black/30 backdrop-blur-[4px]"
-          onClick={onClose}
-          aria-hidden="true"
-        />
-      )}
-      <div
-        role="dialog"
-        aria-modal="true"
-        data-testid="certificate-detail-drawer"
-        className={`fixed inset-y-0 right-0 z-50 flex w-[45rem] max-w-full flex-col bg-white shadow-[var(--el-4)] transition-transform duration-300 ${open ? 'translate-x-0' : 'translate-x-full'}`}
-      >
-        <div className="flex shrink-0 items-center justify-between gap-4 px-6 py-4" data-testid="certificate-detail-header">
+      <Dialog open={open} onOpenChange={(nextOpen) => {
+        if (!nextOpen) onClose()
+      }}>
+        <DialogContent
+          closeLabel="关闭证照详情抽屉"
+          data-testid="certificate-detail-drawer"
+          className="left-auto right-0 top-0 h-full max-h-none w-full max-w-[45rem] translate-x-0 translate-y-0 rounded-none border-l border-slate-200 bg-white p-0 shadow-[var(--el-4)] data-[state=open]:slide-in-from-right-0"
+        >
+          <div className="flex h-full flex-col">
+        <DialogHeader className="flex shrink-0 items-start justify-between gap-4 px-6 py-4 pr-16 text-left" data-testid="certificate-detail-header">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <h2 className="truncate text-base font-semibold text-slate-900">{detail?.certificate.certificate_name || '证照详情'}</h2>
+              <DialogTitle className="truncate text-base font-semibold text-slate-900">{detail?.certificate.certificate_name || '证照详情'}</DialogTitle>
               {detail ? (
                 <StatusBadge status={getCertificateStatusThemeKey(detail.certificate.status)} fallbackLabel={mapCertificateStatusLabel(detail.certificate.status)} className="px-2 py-1 text-xs">
                   {mapCertificateStatusLabel(detail.certificate.status)}
@@ -315,26 +312,19 @@ export function CertificateDetailDrawer({
             <p className="mt-0.5 text-xs text-slate-500">
               查看证照当前阶段、条件清单、共享事项，以及关联的预警、风险和问题。
             </p>
+            <DialogDescription>查看证照当前阶段、条件清单、共享事项，以及关联的预警、风险和问题。</DialogDescription>
           </div>
-          <Button variant="ghost"
-            type="button"
-            onClick={onClose}
-            className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-600"
-            aria-label="关闭"
-          >
-            <X className="h-5 w-5" />
-          </Button>
-        </div>
+        </DialogHeader>
         <Separator />
 
         <div className="flex-1 overflow-y-auto px-6 py-4" data-testid="certificate-detail-body">
         {!detail ? (
-          <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-8 text-sm text-slate-500">
+          <div className="rounded-xl empty-state-frame border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">
             暂无详情数据。
           </div>
         ) : (
           <div className="grid gap-4">
-            <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm" data-testid="certificate-detail-basic-info">
+            <section className="rounded-xl border border-slate-100 bg-white p-4 shadow-[var(--el-1)]" data-testid="certificate-detail-basic-info">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <h3 className="text-base font-semibold text-slate-900">{detail.certificate.certificate_name}</h3>
@@ -367,7 +357,7 @@ export function CertificateDetailDrawer({
             </section>
 
             {siblingCertificates.length > 0 ? (
-              <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <section className="rounded-xl border border-slate-100 bg-white p-4 shadow-[var(--el-1)]">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <h4 className="text-sm font-semibold text-slate-900">证照切换</h4>
@@ -395,7 +385,7 @@ export function CertificateDetailDrawer({
 
             <section className="grid gap-4 xl:grid-cols-[1.3fr_1fr]">
               <div className="grid gap-4">
-                <div ref={workItemsSectionRef} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm" data-testid="certificate-detail-linked-files">
+                <div ref={workItemsSectionRef} className="rounded-xl border border-slate-100 bg-white p-4 shadow-[var(--el-1)]" data-testid="certificate-detail-linked-files">
                   <div className="mb-3 flex items-center justify-between gap-3">
                     <div>
                       <h4 className="text-sm font-semibold text-slate-900">共享事项与依赖</h4>
@@ -440,7 +430,7 @@ export function CertificateDetailDrawer({
               </div>
 
               <div className="grid gap-4">
-                <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm" data-testid="certificate-detail-conditions">
+                <section className="rounded-xl border border-slate-100 bg-white p-4 shadow-[var(--el-1)]" data-testid="certificate-detail-conditions">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <h4 className="text-sm font-semibold text-slate-900">条件清单</h4>
                     {canEdit ? (
@@ -472,14 +462,16 @@ export function CertificateDetailDrawer({
                         </div>
                       ))
                     ) : (
-                      <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                        暂无条件清单。
-                      </div>
+                      <EmptyState
+                        title="暂无条件清单"
+                        description="补充前置条件后，可在这里查看满足状态。"
+                        className="rounded-xl empty-state-frame border-slate-200 bg-slate-50 py-6"
+                      />
                     )}
                   </div>
                 </section>
 
-                <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                <section className="rounded-xl border border-slate-100 bg-white p-4 shadow-[var(--el-1)]">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
                       <h4 className="text-sm font-semibold text-slate-900">升级处置</h4>
@@ -494,17 +486,19 @@ export function CertificateDetailDrawer({
                           variant="outline"
                           size="sm"
                           disabled={escalatingIssue}
+                          loading={escalatingIssue}
                           onClick={() => void onEscalateIssue(selectedWorkItem?.id || null)}
                         >
-                          {escalatingIssue ? '升级中...' : '升级为问题'}
+                          升级为问题
                         </Button>
                         <Button
                           type="button"
                           size="sm"
                           disabled={escalatingRisk}
+                          loading={escalatingRisk}
                           onClick={() => void onEscalateRisk(selectedWorkItem?.id || null)}
                         >
-                          {escalatingRisk ? '升级中...' : '升级为风险'}
+                          升级为风险
                         </Button>
                       </div>
                     ) : (
@@ -513,12 +507,12 @@ export function CertificateDetailDrawer({
                       </div>
                     )}
                   </div>
-                  <div className="mt-3 rounded-xl border border-dashed border-slate-200 bg-slate-50 p-3 text-xs text-slate-500">
+                  <div className="mt-3 rounded-xl empty-state-frame border-slate-200 bg-slate-50 p-3 text-xs text-slate-500">
                     只复用共享 `issues / risks` 主链，通过 `source_entity` 做软链接，不在前期证照域内新增平行状态链。
                   </div>
                 </section>
 
-                <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                <section className="rounded-xl border border-slate-100 bg-white p-4 shadow-[var(--el-1)]">
                   <h4 className="text-sm font-semibold text-slate-900">状态记录</h4>
                   <div className="mt-3 grid gap-2">
                     {detail.records.map((record) => (
@@ -536,9 +530,11 @@ export function CertificateDetailDrawer({
                       </div>
                     ))}
                     {detail.records.length === 0 && (
-                      <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                        暂无状态记录。
-                      </div>
+                      <EmptyState
+                        title="暂无状态记录"
+                        description="状态变更和跟进记录会在这里留痕。"
+                        className="rounded-xl empty-state-frame border-slate-200 bg-slate-50 py-6"
+                      />
                     )}
                   </div>
                 </section>
@@ -565,7 +561,11 @@ export function CertificateDetailDrawer({
                       />
                     ))
                   ) : (
-                    <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">暂无联动预警。</div>
+                    <EmptyState
+                      title="暂无联动预警"
+                      description="当前证照没有命中的预警记录。"
+                      className="rounded-xl empty-state-frame border-slate-200 bg-slate-50 py-6"
+                    />
                   )}
                 </LinkedSection>
 
@@ -601,7 +601,11 @@ export function CertificateDetailDrawer({
                       />
                     ))
                   ) : (
-                    <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">暂无联动问题。</div>
+                    <EmptyState
+                      title="暂无联动问题"
+                      description="当前证照没有命中的问题记录。"
+                      className="rounded-xl empty-state-frame border-slate-200 bg-slate-50 py-6"
+                    />
                   )}
                 </LinkedSection>
 
@@ -641,7 +645,11 @@ export function CertificateDetailDrawer({
                       />
                     ))
                   ) : (
-                    <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">暂无联动风险。</div>
+                    <EmptyState
+                      title="暂无联动风险"
+                      description="当前证照没有命中的风险记录。"
+                      className="rounded-xl empty-state-frame border-slate-200 bg-slate-50 py-6"
+                    />
                   )}
                 </LinkedSection>
               </div>
@@ -668,7 +676,9 @@ export function CertificateDetailDrawer({
             <Button size="sm" onClick={onClose}>关闭</Button>
           </div>
         </div>
-      </div>
+          </div>
+        </DialogContent>
+      </Dialog>
       {conditionDialogOpen && conditionMilestone ? (
         <ConditionsDialog
           selectedMilestone={conditionMilestone}

@@ -1,5 +1,6 @@
+import { EmptyState } from '@/components/EmptyState'
 import { Badge } from '@/components/ui/badge'
-import { Card, CardContent } from '@/components/ui/card'
+import { MetricCard } from '@/components/ui/metric-card'
 
 type SummaryStats = {
   total_completed: number
@@ -14,28 +15,6 @@ interface TaskSummaryResultsSectionProps {
   totalTasks: number
 }
 
-function MetricCard({
-  label,
-  value,
-  hint,
-  tone,
-}: {
-  label: string
-  value: string
-  hint: string
-  tone: string
-}) {
-  return (
-    <Card className={`border px-0 shadow-sm ${tone}`}>
-      <CardContent className="space-y-2 p-5">
-        <div className="text-xs font-medium uppercase tracking-wider opacity-70">{label}</div>
-        <div className="text-3xl font-semibold tracking-tight text-slate-900">{value}</div>
-        <div className="text-xs text-slate-500">{hint}</div>
-      </CardContent>
-    </Card>
-  )
-}
-
 export function TaskSummaryResultsSection({ stats, totalTasks }: TaskSummaryResultsSectionProps) {
   const completedTasks = stats?.total_completed ?? 0
   const completionRate = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0
@@ -45,13 +24,13 @@ export function TaskSummaryResultsSection({ stats, totalTasks }: TaskSummaryResu
           label: '总任务数',
           value: String(totalTasks),
           hint: `已完成 ${completedTasks} 个任务`,
-          tone: 'bg-blue-50 border-blue-100',
+          tone: 'primary' as const,
         },
         {
           label: '完成率',
           value: `${completionRate}%`,
           hint: `按时 ${stats.on_time_count} · 延期 ${stats.delayed_count}`,
-          tone: 'bg-emerald-50 border-emerald-100',
+          tone: 'success' as const,
         },
       ]
     : []
@@ -69,15 +48,15 @@ export function TaskSummaryResultsSection({ stats, totalTasks }: TaskSummaryResu
       {cards.length > 0 ? (
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
           {cards.map((card) => (
-            <MetricCard key={card.label} {...card} />
+            <MetricCard key={card.label} title={card.label} value={card.value} hint={card.hint} tone={card.tone} />
           ))}
         </div>
       ) : (
-        <Card className="border-slate-200 shadow-sm">
-          <CardContent className="flex flex-col items-center justify-center gap-2 py-10 text-center">
-            <div className="text-sm font-medium text-slate-900">暂无结果摘要数据</div>
-          </CardContent>
-        </Card>
+        <EmptyState
+          title="暂无结果摘要数据"
+          description="完成任务汇总后会展示总任务数、完成率和延期情况。"
+          className="rounded-card empty-state-frame border-slate-100 bg-slate-50 py-10 shadow-[var(--el-1)]"
+        />
       )}
     </section>
   )

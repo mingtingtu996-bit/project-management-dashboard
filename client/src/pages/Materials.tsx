@@ -19,6 +19,7 @@ import { PageHeader } from '@/components/PageHeader'
 import { Button } from '@/components/ui/button'
 import { DisabledReasonTooltip } from '@/components/ui/disabled-reason-tooltip'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { MetricCard } from '@/components/ui/metric-card'
 import {
   Dialog,
   DialogContent,
@@ -40,7 +41,12 @@ import { usePermissions } from '@/hooks/usePermissions'
 import { toast } from '@/hooks/use-toast'
 import { useCurrentProject } from '@/hooks/useStore'
 import { getApiErrorMessage, isAbortError } from '@/lib/apiClient'
-import { formatDateTime as formatDisplayDateTime } from '@/lib/formatters'
+import { MATERIAL_CATEGORY_PALETTE } from '@/lib/chartPalette'
+import {
+  formatDateTime as formatDisplayDateTime,
+  formatRatioPercent,
+  formatWholePercent,
+} from '@/lib/formatters'
 import { PROJECT_NAVIGATION_LABELS } from '@/config/navigation'
 import {
   MATERIAL_TEMPLATE_GROUPS,
@@ -116,6 +122,33 @@ const STATUS_OPTIONS: Array<{ value: MaterialStatusFilter; label: string }> = [
   { value: 'pending_inspection', label: '待送检' },
   { value: 'completed', label: '已完成' },
 ]
+
+const MATERIAL_BATCH_COLUMN_WIDTHS = {
+  name: '220px',
+  specialty: '180px',
+  unit: '220px',
+  date: '150px',
+  sample: '96px',
+  inspection: '96px',
+  actions: '104px',
+} as const
+
+const MATERIAL_TABLE_COLUMN_WIDTHS = {
+  name: '300px',
+  sample: '128px',
+  expectedDate: '128px',
+  actualDate: '160px',
+  inspection: '128px',
+  status: '128px',
+  actions: '172px',
+} as const
+
+function calcColumnMinWidth(widths: Record<string, string>) {
+  return `calc(${Object.values(widths).join(' + ')})`
+}
+
+const MATERIAL_BATCH_TABLE_MIN_WIDTH = calcColumnMinWidth(MATERIAL_BATCH_COLUMN_WIDTHS)
+const MATERIAL_TABLE_MIN_WIDTH = calcColumnMinWidth(MATERIAL_TABLE_COLUMN_WIDTHS)
 
 const NO_PARTICIPANT_UNIT_VALUE = '__no_participant_unit__'
 
@@ -237,14 +270,6 @@ function getReminderTone(reminder: Pick<MaterialReminderRecord, 'severity' | 'ty
   return 'border-amber-200 bg-amber-50 text-amber-800'
 }
 
-const MATERIAL_CATEGORY_COLORS: Record<string, string> = {
-  钢材: '#2563eb',
-  混凝土: '#64748b',
-  管材: '#0f766e',
-  电气: '#f59e0b',
-  其他: '#94a3b8',
-}
-
 function getMaterialStatusDotTone(status: MaterialPrimaryStatus) {
   switch (status) {
     case 'pending_sample':
@@ -276,33 +301,6 @@ function MaterialStatusPill({ material }: { material: ProjectMaterialRecord }) {
   )
 }
 
-function MaterialMetricCard({
-  label,
-  value,
-  trend,
-  icon: Icon,
-}: {
-  label: string
-  value: string | number
-  trend: string
-  icon: typeof Boxes
-}) {
-  return (
-    <Card className="card-unified p-0" data-testid={`materials-metric-${label}`}>
-      <CardContent className="flex items-start justify-between gap-4 p-5">
-        <div className="min-w-0">
-          <p className="text-sm text-muted-foreground">{label}</p>
-          <div className="mt-2 text-2xl font-bold text-slate-900">{value}</div>
-          <div className="mt-2 text-xs leading-5 text-slate-500">{trend}</div>
-        </div>
-        <div className="shrink-0 rounded-lg bg-blue-50 p-2 text-blue-700">
-          <Icon className="h-5 w-5" />
-        </div>
-      </CardContent>
-    </Card>
-  )
-}
-
 function MiniMetric({ label, value, tone = 'slate' }: { label: string; value: string | number; tone?: 'slate' | 'amber' | 'red' | 'sky' }) {
   const toneClass = {
     slate: 'bg-slate-50 text-slate-900 ring-slate-200',
@@ -321,14 +319,14 @@ function MiniMetric({ label, value, tone = 'slate' }: { label: string; value: st
 
 function buildCategoryPieGradient(categories: MaterialCategorySummary[]) {
   const visible = categories.filter((item) => item.count > 0 && item.percentage > 0)
-  if (visible.length === 0) return '#e2e8f0 0 100%'
+  if (visible.length === 0) return MATERIAL_CATEGORY_PALETTE.fallbackGradient
 
   let cursor = 0
   return visible
     .map((item) => {
       const start = cursor
       cursor += item.percentage
-      return `${MATERIAL_CATEGORY_COLORS[item.category] ?? MATERIAL_CATEGORY_COLORS.其他} ${start}% ${Math.min(cursor, 100)}%`
+      return `${MATERIAL_CATEGORY_PALETTE[item.category] ?? MATERIAL_CATEGORY_PALETTE.其他} ${start}% ${Math.min(cursor, 100)}%`
     })
     .join(', ')
 }
@@ -337,7 +335,7 @@ function MaterialCategoryPie({ categories }: { categories: MaterialCategorySumma
   const total = categories.reduce((sum, item) => sum + item.count, 0)
 
   return (
-    <Card className="border-slate-200 shadow-sm" data-testid="materials-category-pie-card">
+    <Card className="surface-card" data-testid="materials-category-pie-card">
       <CardHeader className="pb-3">
         <CardTitle className="text-base text-slate-900">分类饼图</CardTitle>
       </CardHeader>
@@ -354,12 +352,12 @@ function MaterialCategoryPie({ categories }: { categories: MaterialCategorySumma
                 <span className="inline-flex items-center gap-2 text-slate-600">
                   <span
                     className="h-2.5 w-2.5 rounded-full"
-                    style={{ backgroundColor: MATERIAL_CATEGORY_COLORS[item.category] ?? MATERIAL_CATEGORY_COLORS.其他 }}
+                    style={{ backgroundColor: MATERIAL_CATEGORY_PALETTE[item.category] ?? MATERIAL_CATEGORY_PALETTE.其他 }}
                   />
                   {item.category}
                 </span>
                 <span className="font-medium tabular-nums text-slate-900">
-                  {item.count} · {item.percentage}%
+                  {item.count} · {formatWholePercent(item.percentage)}
                 </span>
               </div>
             ))}
@@ -373,7 +371,7 @@ function MaterialCategoryPie({ categories }: { categories: MaterialCategorySumma
 
 function RecentArrivalsList({ materials }: { materials: ProjectMaterialRecord[] }) {
   return (
-    <Card className="border-slate-200 shadow-sm" data-testid="materials-recent-arrivals">
+    <Card className="surface-card" data-testid="materials-recent-arrivals">
       <CardHeader className="pb-3">
         <CardTitle className="text-base text-slate-900">近期到场</CardTitle>
       </CardHeader>
@@ -392,9 +390,12 @@ function RecentArrivalsList({ materials }: { materials: ProjectMaterialRecord[] 
             </div>
           ))
         ) : (
-          <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-            暂无近期到场材料
-          </div>
+          <EmptyState
+            icon={PackageSearch}
+            title="暂无近期到场材料"
+            description="最近窗口内没有材料到场记录。"
+            className="rounded-lg empty-state-frame border-slate-200 bg-slate-50 px-4 py-6"
+          />
         )}
       </CardContent>
     </Card>
@@ -575,7 +576,7 @@ function MaterialDetailDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-[720px] border-slate-200" data-testid="material-detail-dialog">
+      <DialogContent className="max-w-3xl border-slate-200" data-testid="material-detail-dialog">
         <DialogHeader>
           <DialogTitle>{readOnly ? '材料详情' : '编辑材料详情'}</DialogTitle>
         </DialogHeader>
@@ -664,7 +665,7 @@ function MaterialDetailDialog({
               定样已完成
             </label>
           ) : (
-            <div className="rounded-xl border border-dashed border-slate-200 px-4 py-3 text-sm text-slate-500">
+            <div className="rounded-xl empty-state-frame border-slate-200 px-4 py-3 text-sm text-slate-500">
               无需定样
             </div>
           )}
@@ -692,7 +693,7 @@ function MaterialDetailDialog({
               送检已完成
             </label>
           ) : (
-            <div className="rounded-xl border border-dashed border-slate-200 px-4 py-3 text-sm text-slate-500">
+            <div className="rounded-xl empty-state-frame border-slate-200 px-4 py-3 text-sm text-slate-500">
               无需送检
             </div>
           )}
@@ -740,7 +741,7 @@ function MaterialDetailDialog({
                         <span className={`rounded-full px-2 py-1 text-xs ring-1 ${getConfidenceTone(aiDurationEstimate.confidence_level)}`}>
                           置信度 {formatConfidenceLabel(aiDurationEstimate.confidence_level)}
                           {typeof aiDurationEstimate.confidence_score === 'number'
-                            ? ` · ${Math.round((aiDurationEstimate.confidence_score > 1 ? aiDurationEstimate.confidence_score / 100 : aiDurationEstimate.confidence_score) * 100)}%`
+                            ? ` · ${formatRatioPercent(aiDurationEstimate.confidence_score)}`
                             : ''}
                         </span>
                       </div>
@@ -750,7 +751,12 @@ function MaterialDetailDialog({
                     </div>
                   ) : (
                     !aiLoading && (
-                      <div className="rounded-2xl border border-dashed border-blue-200 bg-white/70 px-4 py-3" />
+                      <EmptyState
+                        icon={PackageSearch}
+                        title="暂无工期估算"
+                        description="当前材料还没有可展示的 AI 工期估算。"
+                        className="rounded-2xl empty-state-frame border-blue-200 bg-white/70 px-4 py-6"
+                      />
                     )
                   )}
 
@@ -759,7 +765,7 @@ function MaterialDetailDialog({
                       <div className="flex flex-wrap items-center gap-2">
                         <div className="text-sm font-semibold text-slate-900">AI 排程：{formatDelayRiskLabel(delayRiskInsight.delay_risk)}</div>
                         <span className="rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-600">
-                          延期概率 {Math.round(delayRiskInsight.delay_probability)}%
+                          延期概率 {formatRatioPercent(delayRiskInsight.delay_probability)}
                         </span>
                       </div>
                       <div className="mt-2 text-xs leading-5 text-slate-500">
@@ -798,7 +804,12 @@ function MaterialDetailDialog({
                   ) : null}
                 </div>
               ) : (
-                <div className="mt-4 rounded-2xl border border-dashed border-blue-200 bg-white/70 px-4 py-3" />
+                <EmptyState
+                  icon={PackageSearch}
+                  title="暂无关联任务"
+                  description="当前材料还没有匹配到可用于排程分析的任务。"
+                  className="mt-4 rounded-2xl empty-state-frame border-blue-200 bg-white/70 px-4 py-6"
+                />
               )}
             </div>
 
@@ -833,7 +844,7 @@ function MaterialDetailDialog({
                     </div>
                   ))
                 ) : (
-                  <div className="rounded-2xl border border-dashed border-slate-200 bg-white px-4 py-6 text-sm text-slate-500">
+                  <div className="rounded-2xl empty-state-frame border-slate-200 bg-white px-4 py-6 text-sm text-slate-500">
                     {changeLogLoading ? '加载中...' : '暂无记录'}
                   </div>
                 )}
@@ -847,7 +858,7 @@ function MaterialDetailDialog({
             {readOnly ? '关闭' : '取消'}
           </Button>
           {!readOnly && (
-            <Button onClick={onSubmit} disabled={saving} data-testid="material-detail-save">
+            <Button onClick={onSubmit} disabled={saving} loading={saving} data-testid="material-detail-save">
               保存详情
             </Button>
           )}
@@ -1365,7 +1376,7 @@ export default function Materials() {
         subtitle="跟踪专项工程材料到场状态，关联分包责任主体。"
       >
         <DisabledReasonTooltip reason={readOnlyActionReason}>
-          <Button onClick={() => void handleCreateSingle()} disabled={isReadOnly || saving}>
+          <Button onClick={() => void handleCreateSingle()} disabled={isReadOnly || saving} loading={saving}>
             <Plus className="mr-2 h-4 w-4" />
             新增材料
           </Button>
@@ -1377,35 +1388,43 @@ export default function Materials() {
       </PageHeader>
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <MaterialMetricCard
-          label="到场率"
-          value={`${arrivalRate}%`}
-          trend={`已到场 ${arrivedCount}/${materials.length || 0}`}
-          icon={PackageCheck}
+        <MetricCard
+          testId="materials-metric-到场率"
+          title="到场率"
+          value={formatWholePercent(arrivalRate)}
+          hint={`已到场 ${arrivedCount}/${materials.length || 0}`}
+          icon={<PackageCheck className="h-5 w-5" />}
+          tone="success"
         />
-        <MaterialMetricCard
-          label="定样推进"
+        <MetricCard
+          testId="materials-metric-定样推进"
+          title="定样推进"
           value={`${sampleConfirmedCount}/${requiredSampleCount}`}
-          trend={`待定样 ${summary.pendingSample} 项`}
-          icon={ClipboardList}
+          hint={`待定样 ${summary.pendingSample} 项`}
+          icon={<ClipboardList className="h-5 w-5" />}
+          tone="primary"
         />
-        <MaterialMetricCard
-          label="验收情况"
+        <MetricCard
+          testId="materials-metric-验收情况"
+          title="验收情况"
           value={`${inspectionDoneCount}/${requiredInspectionCount}`}
-          trend={`待送检 ${summary.pendingInspection} · 不合格 0`}
-          icon={Boxes}
+          hint={`待送检 ${summary.pendingInspection} · 不合格 0`}
+          icon={<Boxes className="h-5 w-5" />}
+          tone="info"
         />
-        <MaterialMetricCard
-          label="风险提醒"
+        <MetricCard
+          testId="materials-metric-风险提醒"
+          title="风险提醒"
           value={summary.overdueArrival}
-          trend={`待到场 ${summary.pendingArrival} · 本周到场 ${summary.arrivedThisWeek}`}
-          icon={Wrench}
+          hint={`待到场 ${summary.pendingArrival} · 本周到场 ${summary.arrivedThisWeek}`}
+          icon={<Wrench className="h-5 w-5" />}
+          tone={summary.overdueArrival > 0 ? 'danger' : 'slate'}
         />
       </section>
 
-      <section className="grid gap-6 xl:grid-cols-[minmax(0,7fr)_minmax(280px,3fr)]">
+      <section className="grid gap-6 xl:grid-cols-[minmax(0,7fr)_minmax(17.5rem,3fr)]">
         <div className="space-y-4">
-          <Card className="border-slate-200 shadow-sm" data-testid="materials-toolbar-card">
+          <Card className="surface-card" data-testid="materials-toolbar-card">
         <CardHeader className="pb-4">
           <CardTitle className="text-base text-slate-900">材料列表工具栏</CardTitle>
         </CardHeader>
@@ -1562,7 +1581,7 @@ export default function Materials() {
                     需要送检
                   </label>
                   <div className="md:col-span-2 xl:col-span-3">
-                    <Button onClick={() => void handleCreateSingle()} disabled={saving} data-testid="materials-create-single-submit">
+                    <Button onClick={() => void handleCreateSingle()} disabled={saving} loading={saving} data-testid="materials-create-single-submit">
                       <Plus className="mr-2 h-4 w-4" />
                       新增材料
                     </Button>
@@ -1648,7 +1667,7 @@ export default function Materials() {
                       )
                     })}
                   </div>
-                  <Button onClick={() => void handleCreateFromTemplate()} disabled={saving} data-testid="materials-template-submit">
+                  <Button onClick={() => void handleCreateFromTemplate()} disabled={saving} loading={saving} data-testid="materials-template-submit">
                     <ClipboardList className="mr-2 h-4 w-4" />
                     用模板批量创建
                   </Button>
@@ -1658,16 +1677,16 @@ export default function Materials() {
               {createMode === 'batch' && (
                 <div className="space-y-4">
                   <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
-                    <Table className="min-w-full text-sm">
+                    <Table className="w-full table-fixed text-sm" style={{ minWidth: MATERIAL_BATCH_TABLE_MIN_WIDTH }}>
                       <TableHeader className="sticky top-0 z-10 bg-white text-left text-slate-500">
                         <TableRow className="py-3">
-                          <TableHead className="px-3 py-2 font-medium">材料名称</TableHead>
-                          <TableHead className="px-3 py-2 font-medium">专项</TableHead>
-                          <TableHead className="px-3 py-2 font-medium">参建单位</TableHead>
-                          <TableHead className="px-3 py-2 text-right font-medium tabular-nums">预计到场</TableHead>
-                          <TableHead className="px-3 py-2 font-medium">定样</TableHead>
-                          <TableHead className="px-3 py-2 font-medium">送检</TableHead>
-                          <TableHead className="px-3 py-2 font-medium">操作</TableHead>
+                          <TableHead className="px-3 py-2 font-medium" style={{ width: MATERIAL_BATCH_COLUMN_WIDTHS.name }}>材料名称</TableHead>
+                          <TableHead className="px-3 py-2 font-medium" style={{ width: MATERIAL_BATCH_COLUMN_WIDTHS.specialty }}>专项</TableHead>
+                          <TableHead className="px-3 py-2 font-medium" style={{ width: MATERIAL_BATCH_COLUMN_WIDTHS.unit }}>参建单位</TableHead>
+                          <TableHead className="px-3 py-2 text-right font-medium tabular-nums" style={{ width: MATERIAL_BATCH_COLUMN_WIDTHS.date }}>预计到场</TableHead>
+                          <TableHead className="px-3 py-2 font-medium" style={{ width: MATERIAL_BATCH_COLUMN_WIDTHS.sample }}>定样</TableHead>
+                          <TableHead className="px-3 py-2 font-medium" style={{ width: MATERIAL_BATCH_COLUMN_WIDTHS.inspection }}>送检</TableHead>
+                          <TableHead className="px-3 py-2 font-medium" style={{ width: MATERIAL_BATCH_COLUMN_WIDTHS.actions }}>操作</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -1677,7 +1696,7 @@ export default function Materials() {
                             className="group py-3 even:bg-slate-50/50 hover:bg-slate-100/60"
                             data-testid={`materials-batch-row-${row.id}`}
                           >
-                            <TableCell className="px-3 py-2 text-right tabular-nums">
+                            <TableCell className="px-3 py-2" style={{ width: MATERIAL_BATCH_COLUMN_WIDTHS.name }}>
                               <input
                                 aria-label="材料名称"
                                 data-testid={`materials-batch-name-${row.id}`}
@@ -1689,10 +1708,10 @@ export default function Materials() {
                                     ),
                                   )
                                 }
-                                className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-right tabular-nums"
+                                className="w-full rounded-lg border border-slate-200 px-2 py-1.5"
                               />
                             </TableCell>
-                            <TableCell className="px-3 py-2">
+                            <TableCell className="px-3 py-2" style={{ width: MATERIAL_BATCH_COLUMN_WIDTHS.specialty }}>
                               <input
                                 aria-label="专业"
                                 data-testid={`materials-batch-specialty-${row.id}`}
@@ -1707,7 +1726,7 @@ export default function Materials() {
                                 className="w-full rounded-lg border border-slate-200 px-2 py-1.5"
                               />
                             </TableCell>
-                            <TableCell className="px-3 py-2">
+                            <TableCell className="px-3 py-2" style={{ width: MATERIAL_BATCH_COLUMN_WIDTHS.unit }}>
                               <ParticipantUnitSelect
                                 dataTestId={`materials-batch-unit-${row.id}`}
                                 value={row.participant_unit_id}
@@ -1722,7 +1741,7 @@ export default function Materials() {
                                 triggerClassName="h-9 rounded-lg border-slate-200 bg-white px-2 py-1.5 text-sm text-slate-900"
                               />
                             </TableCell>
-                            <TableCell className="px-3 py-2">
+                            <TableCell className="px-3 py-2" style={{ width: MATERIAL_BATCH_COLUMN_WIDTHS.date }}>
                               <input
                                 aria-label="进场日期"
                                 data-testid={`materials-batch-date-${row.id}`}
@@ -1738,7 +1757,7 @@ export default function Materials() {
                                 className="w-full rounded-lg border border-slate-200 px-2 py-1.5"
                               />
                             </TableCell>
-                            <TableCell className="px-3 py-2 text-center">
+                            <TableCell className="px-3 py-2 text-center" style={{ width: MATERIAL_BATCH_COLUMN_WIDTHS.sample }}>
                               <input
                                 aria-label="取样确认"
                                 data-testid={`materials-batch-sample-${row.id}`}
@@ -1753,7 +1772,7 @@ export default function Materials() {
                                 }
                               />
                             </TableCell>
-                            <TableCell className="px-3 py-2 text-center">
+                            <TableCell className="px-3 py-2 text-center" style={{ width: MATERIAL_BATCH_COLUMN_WIDTHS.inspection }}>
                               <input
                                 aria-label="送检确认"
                                 data-testid={`materials-batch-inspection-${row.id}`}
@@ -1768,12 +1787,12 @@ export default function Materials() {
                                 }
                               />
                             </TableCell>
-                            <TableCell className="px-3 py-2">
+                            <TableCell className="px-3 py-2" style={{ width: MATERIAL_BATCH_COLUMN_WIDTHS.actions }}>
                               <Button
                                 variant="ghost"
                                 size="sm"
                                 data-testid={`materials-batch-delete-${row.id}`}
-                                className="opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100"
+                                className="opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
                                 onClick={() =>
                                   setBatchRows((current) => (current.length === 1 ? current : current.filter((item) => item.id !== row.id)))
                                 }
@@ -1801,7 +1820,7 @@ export default function Materials() {
                     >
                       清空草稿
                     </Button>
-                    <Button onClick={() => void handleCreateBatch()} disabled={saving} data-testid="materials-batch-submit">
+                    <Button onClick={() => void handleCreateBatch()} disabled={saving} loading={saving} data-testid="materials-batch-submit">
                       提交批量录入
                     </Button>
                   </div>
@@ -1823,7 +1842,7 @@ export default function Materials() {
           ) : (
             <div className="space-y-4">
               {groupedMaterials.map((group) => (
-                <Card key={group.participantUnitId ?? '__unassigned__'} className="border-slate-200 shadow-sm">
+                <Card key={group.participantUnitId ?? '__unassigned__'} className="surface-card">
                   <CardHeader className="pb-3">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div>
@@ -1850,16 +1869,16 @@ export default function Materials() {
                     )}
 
                     <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
-                      <Table className="min-w-[980px] w-full text-left text-sm" data-testid="materials-table">
+                      <Table className="w-full table-fixed text-left text-sm" style={{ minWidth: MATERIAL_TABLE_MIN_WIDTH }} data-testid="materials-table">
                         <TableHeader className="sticky top-0 z-10 bg-white text-xs text-slate-500">
                           <TableRow className="py-3">
-                            <TableHead className="px-3 py-2 font-medium">材料名</TableHead>
-                            <TableHead className="px-3 py-2 font-medium">定样</TableHead>
-                            <TableHead className="px-3 py-2 text-right font-medium tabular-nums">预计到场</TableHead>
-                            <TableHead className="px-3 py-2 text-right font-medium tabular-nums">实际到场</TableHead>
-                            <TableHead className="px-3 py-2 font-medium">送检</TableHead>
-                            <TableHead className="px-3 py-2 font-medium">状态</TableHead>
-                            <TableHead className="px-3 py-2 text-right font-medium">操作</TableHead>
+                            <TableHead className="px-3 py-2 font-medium" style={{ width: MATERIAL_TABLE_COLUMN_WIDTHS.name }}>材料名</TableHead>
+                            <TableHead className="px-3 py-2 font-medium" style={{ width: MATERIAL_TABLE_COLUMN_WIDTHS.sample }}>定样</TableHead>
+                            <TableHead className="px-3 py-2 text-right font-medium tabular-nums" style={{ width: MATERIAL_TABLE_COLUMN_WIDTHS.expectedDate }}>预计到场</TableHead>
+                            <TableHead className="px-3 py-2 text-right font-medium tabular-nums" style={{ width: MATERIAL_TABLE_COLUMN_WIDTHS.actualDate }}>实际到场</TableHead>
+                            <TableHead className="px-3 py-2 font-medium" style={{ width: MATERIAL_TABLE_COLUMN_WIDTHS.inspection }}>送检</TableHead>
+                            <TableHead className="px-3 py-2 font-medium" style={{ width: MATERIAL_TABLE_COLUMN_WIDTHS.status }}>状态</TableHead>
+                            <TableHead className="px-3 py-2 text-right font-medium" style={{ width: MATERIAL_TABLE_COLUMN_WIDTHS.actions }}>操作</TableHead>
                           </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -1869,8 +1888,8 @@ export default function Materials() {
                               className="group py-3 even:bg-slate-50/50 hover:bg-slate-100/60"
                               data-testid={`materials-table-row-${material.id}`}
                             >
-                              <TableCell className="px-3 py-3 align-top">
-                                <div className="font-medium text-slate-900">{material.material_name}</div>
+                              <TableCell className="px-3 py-3 align-top" style={{ width: MATERIAL_TABLE_COLUMN_WIDTHS.name }}>
+                                <div className="truncate font-medium text-slate-900" title={material.material_name}>{material.material_name}</div>
                                 <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
                                   {material.specialty_type ? <span>{material.specialty_type}</span> : null}
                                   {isMaterialArrivedThisWeek(material) ? (
@@ -1879,7 +1898,7 @@ export default function Materials() {
                                     </span>
                                   ) : null}
                                 </div>
-                                <div className="mt-2 max-w-[320px] text-xs leading-5 text-slate-500" data-testid={`material-linked-task-${material.id}`}>
+                                <div className="mt-2 line-clamp-2 text-xs leading-5 text-slate-500" data-testid={`material-linked-task-${material.id}`}>
                                   {material.linked_task_id ? (
                                     <>
                                       关联任务：{material.linked_task_title || '未命名任务'} · 计划开工 {material.linked_task_start_date || '--'} · 到货缓冲{' '}
@@ -1890,7 +1909,7 @@ export default function Materials() {
                                   )}
                                 </div>
                               </TableCell>
-                              <TableCell className="px-3 py-3 align-top">
+                              <TableCell className="px-3 py-3 align-top" style={{ width: MATERIAL_TABLE_COLUMN_WIDTHS.sample }}>
                                 {material.requires_sample_confirmation ? (
                                   <label className="inline-flex items-center gap-2 text-sm text-slate-700">
                                     <input
@@ -1911,10 +1930,10 @@ export default function Materials() {
                                   </span>
                                 )}
                               </TableCell>
-                              <TableCell className="px-3 py-3 text-right align-top tabular-nums text-slate-700">
+                              <TableCell className="px-3 py-3 text-right align-top tabular-nums text-slate-700" style={{ width: MATERIAL_TABLE_COLUMN_WIDTHS.expectedDate }}>
                                 {material.expected_arrival_date}
                               </TableCell>
-                              <TableCell className="px-3 py-3 align-top">
+                              <TableCell className="px-3 py-3 align-top" style={{ width: MATERIAL_TABLE_COLUMN_WIDTHS.actualDate }}>
                                 <input
                                   data-testid={`material-inline-actual-arrival-${material.id}`}
                                   type="date"
@@ -1922,10 +1941,10 @@ export default function Materials() {
                                   value={material.actual_arrival_date ?? ''}
                                   onChange={(event) => void handleInlineUpdate(material.id, { actual_arrival_date: event.target.value || null })}
                                   disabled={isReadOnly}
-                                  className="w-full min-w-[140px] rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-right text-sm tabular-nums text-slate-900 disabled:bg-slate-50"
+                                  className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-right text-sm tabular-nums text-slate-900 disabled:bg-slate-50"
                                 />
                               </TableCell>
-                              <TableCell className="px-3 py-3 align-top">
+                              <TableCell className="px-3 py-3 align-top" style={{ width: MATERIAL_TABLE_COLUMN_WIDTHS.inspection }}>
                                 {material.requires_inspection ? (
                                   <label className="inline-flex items-center gap-2 text-sm text-slate-700">
                                     <input
@@ -1946,10 +1965,10 @@ export default function Materials() {
                                   </span>
                                 )}
                               </TableCell>
-                              <TableCell className="px-3 py-3 align-top">
+                              <TableCell className="px-3 py-3 align-top" style={{ width: MATERIAL_TABLE_COLUMN_WIDTHS.status }}>
                                 <MaterialStatusPill material={material} />
                               </TableCell>
-                              <TableCell className="px-3 py-3 align-top">
+                              <TableCell className="px-3 py-3 align-top" style={{ width: MATERIAL_TABLE_COLUMN_WIDTHS.actions }}>
                                 <div className="flex justify-end gap-2 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
                                   <Button
                                     variant="outline"
@@ -1987,7 +2006,7 @@ export default function Materials() {
         </div>
 
         <aside className="space-y-4" data-testid="materials-side-panel">
-          <Card className="border-slate-200 shadow-sm" data-testid="materials-quick-stats">
+          <Card className="surface-card" data-testid="materials-quick-stats">
             <CardHeader className="pb-3">
               <CardTitle className="text-base text-slate-900">快速统计</CardTitle>
             </CardHeader>
@@ -2001,7 +2020,7 @@ export default function Materials() {
           <MaterialCategoryPie categories={materialCategories} />
           <RecentArrivalsList materials={recentArrivals} />
 
-          <Card className="border-slate-200 shadow-sm" data-testid="materials-weekly-summary">
+          <Card className="surface-card" data-testid="materials-weekly-summary">
             <CardHeader className="pb-3">
               <CardTitle className="text-base text-slate-900">周报摘要</CardTitle>
               <div className="mt-1 text-sm text-slate-500">
@@ -2014,12 +2033,12 @@ export default function Materials() {
                 <MiniMetric label="准时到场" value={weeklySummary.onTimeCount} />
               </div>
               <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-sm text-blue-900">
-                准时到场率 {weeklySummary.arrivalRate}%
+                准时到场率 {formatWholePercent(weeklySummary.arrivalRate)}
               </div>
             </CardContent>
           </Card>
 
-          <Card className="border-slate-200 shadow-sm" data-testid="materials-reminder-feed">
+          <Card className="surface-card" data-testid="materials-reminder-feed">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between gap-3">
                 <CardTitle className="text-base text-slate-900">提醒列表</CardTitle>
@@ -2044,9 +2063,12 @@ export default function Materials() {
                   </div>
                 ))
               ) : (
-                <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-                  暂无材料提醒
-                </div>
+                <EmptyState
+                  icon={PackageCheck}
+                  title="暂无材料提醒"
+                  description="当前没有待处理的材料提醒。"
+                  className="rounded-lg empty-state-frame border-slate-200 bg-slate-50 px-4 py-6"
+                />
               )}
             </CardContent>
           </Card>

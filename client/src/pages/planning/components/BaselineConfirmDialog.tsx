@@ -188,7 +188,7 @@ export function BaselineConfirmDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] max-w-[720px] overflow-y-auto">
+      <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-base">
             <FileDiff className="h-4 w-4 text-blue-500" />
@@ -367,7 +367,7 @@ export function BaselineConfirmDialog({
           </div>
 
           <CollapsibleSection key={showDiff ? 'open-diff' : 'closed-diff'} title="查看详情" defaultOpen={showDiff}>
-            <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-[var(--el-1)]">
               <BaselineDiffView
                 fromVersionLabel={summary.fromVersionLabel}
                 toVersionLabel={summary.toVersionLabel}
@@ -395,8 +395,9 @@ export function BaselineConfirmDialog({
               type="button"
               onClick={onConfirm}
               disabled={!canConfirmNow}
+              loading={confirming}
             >
-              {confirming ? '发布中...' : state === 'failed' && !isRealignmentFailure ? '继续重试发布' : '确认发布'}
+              {state === 'failed' && !isRealignmentFailure ? '继续重试发布' : '确认发布'}
             </Button>
           </div>
         </div>

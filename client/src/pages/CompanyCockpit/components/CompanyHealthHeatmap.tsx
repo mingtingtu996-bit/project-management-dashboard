@@ -1,4 +1,5 @@
 import { ChartAccessibleWrapper } from '@/components/ChartAccessibleWrapper'
+import { EmptyState } from '@/components/EmptyState'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
 
@@ -61,9 +62,11 @@ export function CompanyHealthHeatmap({ items }: CompanyHealthHeatmapProps) {
       </CardHeader>
       <CardContent className="space-y-4">
         {sortedItems.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-white px-4 py-8 text-center text-sm text-slate-500">
-            暂无项目健康数据
-          </div>
+          <EmptyState
+            title="暂无项目健康数据"
+            description="项目健康度形成后会在这里展示公司级热力分布。"
+            className="rounded-2xl empty-state-frame border-slate-200 bg-white py-10"
+          />
         ) : (
           <ChartAccessibleWrapper
             summary="健康热力数据"

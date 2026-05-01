@@ -2,10 +2,17 @@
  * ChangePasswordDialog - 修改密码弹窗
  */
 
-import { useState, useEffect, useRef, useId } from 'react';
-import { useAuth } from '@/hooks/useAuth';
-import { X, Eye, EyeOff } from 'lucide-react';
+import { useState } from 'react';
+import { Eye, EyeOff } from 'lucide-react';
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 
 interface ChangePasswordDialogProps {
   isOpen: boolean;
@@ -22,22 +29,6 @@ export const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({ isOp
   const [error, setError] = useState('');
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
-  const { user } = useAuth();
-  const titleId = useId();
-  const closeRef = useRef<HTMLButtonElement>(null);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    closeRef.current?.focus();
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !loading) handleClose();
-    };
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, loading]);
-
-  if (!isOpen) return null;
 
   const clearFieldError = (field: string) => {
     setFieldErrors((current) => {
@@ -118,14 +109,22 @@ export const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({ isOp
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex animate-in items-center justify-center bg-black/60 px-4 py-6 backdrop-blur-[4px] duration-200 fade-in-0" onClick={handleClose}>
-      <div role="dialog" aria-modal="true" aria-labelledby={titleId} className="w-[90%] max-w-[560px] animate-in rounded-2xl border border-slate-200 bg-white p-6 shadow-[var(--el-4)] duration-200 ease-bounce fade-in-0 zoom-in-95" onClick={e => e.stopPropagation()}>
-        <div className="flex justify-between items-center mb-4">
-          <h2 id={titleId} className="text-lg font-semibold text-slate-800">修改密码</h2>
-          <Button variant="ghost" ref={closeRef} onClick={handleClose} className="text-slate-500 hover:text-slate-600" aria-label="关闭">
-            <X className="h-5 w-5" />
-          </Button>
-        </div>
+    <Dialog open={isOpen} onOpenChange={(open) => {
+      if (!open) handleClose();
+    }}>
+      <DialogContent
+        className="max-h-[calc(100vh-4rem)] max-w-xl overflow-y-auto"
+        onEscapeKeyDown={(event) => {
+          if (loading) event.preventDefault();
+        }}
+        onInteractOutside={(event) => {
+          if (loading) event.preventDefault();
+        }}
+      >
+        <DialogHeader>
+          <DialogTitle>修改密码</DialogTitle>
+          <DialogDescription>修改当前账号密码。</DialogDescription>
+        </DialogHeader>
 
         {error && (
           <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded text-sm">{error}</div>
@@ -146,7 +145,7 @@ export const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({ isOp
                 onBlur={() => validateRequired('oldPassword', oldPassword)}
                 aria-invalid={Boolean(fieldErrors.oldPassword)}
                 aria-describedby={fieldErrors.oldPassword ? 'change-password-old-error' : undefined}
-                className={`w-full px-3 py-2 pr-10 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm ${fieldErrors.oldPassword ? 'border-red-500' : 'border-slate-300'}`}
+                className={`w-full px-3 py-2 pr-10 border rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 text-sm ${fieldErrors.oldPassword ? 'border-red-500' : 'border-slate-300'}`}
                 required
                 disabled={loading}
               />
@@ -173,7 +172,7 @@ export const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({ isOp
                 onBlur={() => validateRequired('newPassword', newPassword)}
                 aria-invalid={Boolean(fieldErrors.newPassword)}
                 aria-describedby={fieldErrors.newPassword ? 'change-password-new-error' : undefined}
-                className={`w-full px-3 py-2 pr-10 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm ${fieldErrors.newPassword ? 'border-red-500' : 'border-slate-300'}`}
+                className={`w-full px-3 py-2 pr-10 border rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 text-sm ${fieldErrors.newPassword ? 'border-red-500' : 'border-slate-300'}`}
                 placeholder="至少6位"
                 required
                 disabled={loading}
@@ -201,7 +200,7 @@ export const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({ isOp
                 onBlur={() => validateRequired('confirmPassword', confirmPassword)}
                 aria-invalid={Boolean(fieldErrors.confirmPassword)}
                 aria-describedby={fieldErrors.confirmPassword ? 'change-password-confirm-error' : undefined}
-                className={`w-full px-3 py-2 pr-10 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm ${fieldErrors.confirmPassword ? 'border-red-500' : 'border-slate-300'}`}
+                className={`w-full px-3 py-2 pr-10 border rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 text-sm ${fieldErrors.confirmPassword ? 'border-red-500' : 'border-slate-300'}`}
                 required
                 disabled={loading}
               />
@@ -214,16 +213,16 @@ export const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({ isOp
             ) : null}
           </div>
 
-          <div className="flex gap-3 pt-2">
-            <Button variant="ghost" type="button" onClick={handleClose} disabled={loading} className="flex-1 px-4 py-2 border border-slate-300 rounded text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50">
+          <DialogFooter className="gap-3 pt-2">
+            <Button variant="outline" type="button" onClick={handleClose} disabled={loading} className="flex-1">
               取消
             </Button>
-            <Button variant="ghost" type="submit" disabled={loading} className="flex-1 px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50">
-              {loading ? '修改中...' : '确认修改'}
+            <Button type="submit" loading={loading} className="flex-1">
+              确认修改
             </Button>
-          </div>
+          </DialogFooter>
         </form>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 };

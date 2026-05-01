@@ -1,5 +1,6 @@
 import { authFetch } from '../lib/apiClient'
 import { safeJsonParse } from '@/lib/browserStorage'
+import { ACCEPTANCE_TYPE_COLOR_PALETTE } from '@/lib/chartPalette'
 import type {
   AcceptanceDependencyKind,
   AcceptanceDocument,
@@ -234,26 +235,15 @@ function buildDerivedOverlayBadges(input: {
   return badges
 }
 
-const CUSTOM_TYPE_COLOR_PALETTE = [
-  '#2563eb',
-  '#ea580c',
-  '#16a34a',
-  '#dc2626',
-  '#0891b2',
-  '#7c3aed',
-  '#ca8a04',
-  '#4f46e5',
-] as const
-
 function pickCustomTypeColor(seed: string) {
   const normalized = seed.trim()
-  if (!normalized) return CUSTOM_TYPE_COLOR_PALETTE[0]
+  if (!normalized) return ACCEPTANCE_TYPE_COLOR_PALETTE[0]
 
   let hash = 0
   for (let index = 0; index < normalized.length; index += 1) {
     hash = (hash * 31 + normalized.charCodeAt(index)) >>> 0
   }
-  return CUSTOM_TYPE_COLOR_PALETTE[hash % CUSTOM_TYPE_COLOR_PALETTE.length]
+  return ACCEPTANCE_TYPE_COLOR_PALETTE[hash % ACCEPTANCE_TYPE_COLOR_PALETTE.length]
 }
 
 function mapCatalogToType(row: AcceptanceCatalogRow): AcceptanceType {

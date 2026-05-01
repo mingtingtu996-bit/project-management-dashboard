@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 
 import { Breadcrumb } from '@/components/Breadcrumb'
+import { EmptyState } from '@/components/EmptyState'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -71,13 +72,13 @@ function CompanyCockpitSkeleton() {
   return (
     <div className="space-y-6">
       <div className="shell-surface overflow-hidden">
-        <div className="grid gap-px bg-slate-100 xl:grid-cols-[minmax(0,1.58fr)_400px]">
+        <div className="grid gap-px bg-slate-100 xl:grid-cols-[minmax(0,1.58fr)_25rem]">
           <div className="space-y-6 bg-white p-6">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
               <div className="space-y-3">
                 <Skeleton className="h-5 w-28 rounded-full" />
                 <Skeleton className="h-10 w-56 rounded-2xl" />
-                <Skeleton className="h-4 w-[420px] max-w-full rounded-full" />
+                <Skeleton className="h-4 w-[26.25rem] max-w-full rounded-full" />
               </div>
               <div className="flex gap-3">
                 <Skeleton className="h-11 w-52 rounded-2xl" />
@@ -88,7 +89,7 @@ function CompanyCockpitSkeleton() {
 
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
               {[1, 2, 3, 4].map((item) => (
-                <Card key={item} className="card-l2">
+                <Card key={item} variant="surface">
                   <CardContent className="space-y-4 p-6">
                     <div className="flex items-center justify-between">
                       <Skeleton className="h-4 w-24 rounded-full" />
@@ -115,7 +116,7 @@ function CompanyCockpitSkeleton() {
         </div>
       </div>
 
-      <Card className="card-l2">
+      <Card variant="surface">
         <CardContent className="space-y-5 p-6">
           <div className="flex items-center justify-between gap-3">
             <Skeleton className="h-6 w-32 rounded-full" />
@@ -134,7 +135,7 @@ function CompanyCockpitSkeleton() {
         </CardContent>
       </Card>
 
-      <Card className="card-l2">
+      <Card variant="surface">
         <CardContent className="space-y-5 p-6">
           <div className="flex flex-wrap gap-3">
             {[1, 2, 3, 4].map((item) => (
@@ -520,7 +521,7 @@ export default function CompanyCockpit() {
         <div className="space-y-6">
           <Breadcrumb items={[{ label: '公司驾驶舱' }]} />
           <Card data-testid="company-cockpit-access-denied" className="border border-amber-100 bg-amber-50/70 shadow-none">
-            <CardContent className="space-y-3 p-8">
+            <CardContent className="space-y-3 p-5">
               <p className="text-lg font-semibold text-slate-900">公司驾驶舱仅公司管理员可见</p>
             </CardContent>
           </Card>
@@ -535,14 +536,14 @@ export default function CompanyCockpit() {
         <Breadcrumb items={[{ label: '公司驾驶舱' }]} />
 
         {projects.length === 0 ? (
-          <Card className="border-dashed border-slate-200 bg-white shadow-[var(--el-1)]">
-            <CardContent className="flex flex-col items-center justify-center px-6 py-12 text-center">
-              <FolderKanban className="h-12 w-12 text-slate-300" />
-              <h2 className="mt-4 text-lg font-semibold text-slate-900">暂无项目</h2>
-              <p className="mt-2 text-sm text-slate-500">创建第一个项目开始使用 WorkBuddy</p>
+          <EmptyState
+            icon={FolderKanban}
+            title="暂无项目"
+            description="创建第一个项目开始使用 WorkBuddy"
+            className="rounded-card empty-state-frame border-slate-200 bg-white px-6 py-12 shadow-[var(--el-1)]"
+            action={(
               <Button
                 type="button"
-                className="mt-5"
                 onClick={() => {
                   setDialogMode('create')
                   setEditTarget(null)
@@ -552,8 +553,8 @@ export default function CompanyCockpit() {
               >
                 创建项目
               </Button>
-            </CardContent>
-          </Card>
+            )}
+          />
         ) : (
           <CompanyHero
             search={search}

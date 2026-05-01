@@ -1,6 +1,7 @@
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { LoadingState } from '@/components/ui/loading-state'
 import { Separator } from '@/components/ui/separator'
 
 interface PlanningIntegrityPanelProps {
@@ -30,7 +31,7 @@ export function PlanningIntegrityPanel({
   void detail
 
   return (
-    <Card data-testid="planning-integrity-panel" className="border-slate-200 shadow-sm">
+    <Card data-testid="planning-integrity-panel" className="surface-card">
       <CardHeader className="space-y-3 bg-slate-50/80">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -42,7 +43,7 @@ export function PlanningIntegrityPanel({
       <Separator />
       <CardContent className="space-y-3 p-5">
         {status === 'loading' ? (
-          <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-4" />
+          <LoadingState label="完整性校核加载中" description="" className="min-h-24 rounded-xl empty-state-frame border-slate-200 bg-slate-50 py-6" />
         ) : status === 'error' ? (
           <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-4 text-sm text-rose-700">
             {errorBody}

@@ -182,7 +182,7 @@ export function MonthlyPlanSkeletonDiffDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         data-testid="monthly-plan-skeleton-diff-dialog"
-        className="max-h-[90vh] max-w-[720px] overflow-y-auto rounded-2xl shadow-[var(--el-4)]"
+        className="max-h-[90vh] max-w-3xl overflow-y-auto rounded-2xl shadow-[var(--el-4)]"
       >
         <DialogHeader>
           <DialogTitle>查看计划变更对比</DialogTitle>
@@ -212,7 +212,7 @@ export function MonthlyPlanSkeletonDiffDialog({
           ) : (
             sections.map((section) =>
               section.rows.length > 0 ? (
-                <div key={section.key} className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                <div key={section.key} className="space-y-3 rounded-2xl border border-slate-100 bg-white p-4 shadow-[var(--el-1)]">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="space-y-1">
                       <div className="text-sm font-semibold text-slate-900">{section.title}</div>

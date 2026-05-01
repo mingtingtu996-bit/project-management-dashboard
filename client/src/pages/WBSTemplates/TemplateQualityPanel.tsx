@@ -1,8 +1,10 @@
 import { ArrowRight, CheckCircle2, Layers3, Sparkles } from 'lucide-react'
 
+import { EmptyState } from '@/components/EmptyState'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { LoadingState } from '@/components/ui/loading-state'
+import { MetricCard } from '@/components/ui/metric-card'
 
 export interface TemplateQualitySuggestion {
   path: string
@@ -51,38 +53,6 @@ function formatNumber(value: number): string {
   return Number.isFinite(value) ? String(value) : '0'
 }
 
-function MetricCard({
-  testId,
-  label,
-  value,
-  detail,
-  tone,
-}: {
-  testId: string
-  label: string
-  value: string
-  detail: string
-  tone: 'amber' | 'emerald' | 'rose'
-}) {
-  void detail
-
-  const toneClass = tone === 'amber'
-    ? 'border-amber-200 bg-amber-50 text-amber-700'
-    : tone === 'emerald'
-      ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-      : 'border-rose-200 bg-rose-50 text-rose-700'
-
-  return (
-    <div
-      data-testid={testId}
-      className={`rounded-2xl border p-4 ${toneClass}`}
-    >
-      <div className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</div>
-      <div className="mt-2 text-2xl font-semibold text-slate-900">{value}</div>
-    </div>
-  )
-}
-
 export function TemplateQualityPanel({
   templateName,
   templateType,
@@ -103,7 +73,7 @@ export function TemplateQualityPanel({
   const selectedSuggestionCount = suggestions.filter((suggestion) => selectedSuggestionPaths.includes(suggestion.path)).length
 
   return (
-    <Card data-testid="wbs-template-quality-panel" className="border-slate-200 bg-white shadow-sm">
+    <Card data-testid="wbs-template-quality-panel" className="surface-card">
       <CardHeader className="space-y-2">
         <div className="flex flex-wrap items-center gap-2">
           <Sparkles className="h-4 w-4 text-amber-500" />
@@ -126,26 +96,24 @@ export function TemplateQualityPanel({
             <div className="grid gap-3 md:grid-cols-3">
               <MetricCard
                 testId="wbs-template-quality-missing-reference-days"
-                label="缺少 reference_days"
+                title="缺少 reference_days"
                 value={`${formatNumber(quality.missing_reference_days_leaf_count)} / ${formatNumber(
                   Math.max(quality.leaf_count, quality.missing_reference_days_leaf_count),
                 )}`}
-                detail={`叶子节点缺少工期占比 ${formatPercent(quality.missing_reference_days_ratio)}`}
-                tone="amber"
+                hint={`叶子节点缺少工期占比 ${formatPercent(quality.missing_reference_days_ratio)}`}
+                tone="warning"
               />
               <MetricCard
                 testId="wbs-template-quality-missing-standard-steps"
-                label="缺少标准工序节点"
+                title="缺少标准工序节点"
                 value={formatNumber(quality.missing_standard_step_count)}
-                detail=""
-                tone="emerald"
+                tone="success"
               />
               <MetricCard
                 testId="wbs-template-quality-structure-anomalies"
-                label="结构异常"
+                title="结构异常"
                 value={formatNumber(quality.structure_anomaly_count)}
-                detail=""
-                tone="rose"
+                tone="danger"
               />
             </div>
 
@@ -170,7 +138,7 @@ export function TemplateQualityPanel({
               </div>
             </div>
 
-            <div className="grid gap-4 lg:grid-cols-[1fr_220px]">
+            <div className="grid gap-4 lg:grid-cols-[1fr_13.75rem]">
               <div className="space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="text-sm font-semibold text-slate-900">模板校正建议</div>
@@ -233,7 +201,12 @@ export function TemplateQualityPanel({
                     ))}
                   </div>
                 ) : (
-                  <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4" />
+                  <EmptyState
+                    variant="default"
+                    title="暂无优化建议"
+                    description="当前模板没有可自动推荐的参考工期调整。"
+                    className="rounded-2xl empty-state-frame border-slate-300 bg-slate-50 py-8"
+                  />
                 )}
               </div>
 
@@ -263,7 +236,11 @@ export function TemplateQualityPanel({
             </div>
           </>
         ) : (
-          <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6" />
+          <EmptyState
+            title="暂无质量快照"
+            description="选择模板或生成质量分析后，会在这里展示结构质量和优化建议。"
+            className="rounded-2xl empty-state-frame border-slate-300 bg-slate-50 py-8"
+          />
         )}
       </CardContent>
     </Card>

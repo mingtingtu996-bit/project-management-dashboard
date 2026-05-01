@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { AlertTriangle, BarChart3, Bug, Clock, Zap } from 'lucide-react'
 
+import { EmptyState } from '@/components/EmptyState'
 import { PageHeader } from '@/components/PageHeader'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
@@ -74,7 +75,7 @@ export default function MonitoringDashboard() {
                 data-testid={`monitoring-tab-${tab.id}`}
                 className={`flex items-center gap-2 rounded-t-xl border border-b-0 px-4 py-2 text-sm transition-colors ${
                   activeTab === tab.id
-                    ? 'border-slate-200 bg-white text-slate-900 shadow-sm'
+                    ? 'border-slate-100 bg-white text-slate-900 shadow-[var(--el-1)]'
                     : 'border-transparent text-slate-500 hover:bg-slate-50 hover:text-slate-900'
                 }`}
               >
@@ -88,8 +89,12 @@ export default function MonitoringDashboard() {
 
         <div className="p-6 md:p-7">
           {activeTab === 'api' && (
-            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50/70 p-8 text-center text-slate-500" data-testid="monitoring-tabpanel-api">
-              接口监控暂时由本地监控数据提供
+            <div data-testid="monitoring-tabpanel-api">
+              <EmptyState
+                title="接口监控由本地数据提供"
+                description="当前没有远端接口监控事件。"
+                className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50/70 py-10"
+              />
             </div>
           )}
 
@@ -138,11 +143,13 @@ function PerformanceMetrics() {
 
   if (metrics.length === 0) {
     return (
-      <div className="py-12 text-center text-slate-500" data-testid="monitoring-tabpanel-performance-empty">
-        <Zap className="mx-auto mb-4 h-12 w-12 opacity-50" />
-        <p>暂无性能指标</p>
-        <p className="mt-1 text-sm">使用系统后会自动采集性能记录</p>
-      </div>
+      <EmptyState
+        icon={Zap}
+        title="暂无性能指标"
+        description="使用系统后会自动采集性能记录。"
+        className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50/70 py-10"
+        testId="monitoring-tabpanel-performance-empty"
+      />
     )
   }
 
@@ -178,11 +185,13 @@ function ErrorTracker() {
 
   if (errorMetrics.length === 0) {
     return (
-      <div className="py-12 text-center text-slate-500" data-testid="monitoring-tabpanel-errors-empty">
-        <Bug className="mx-auto mb-4 h-12 w-12 opacity-50" />
-        <p>暂无错误记录</p>
-        <p className="mt-1 text-sm">出现异常时会自动进入错误追踪</p>
-      </div>
+      <EmptyState
+        icon={Bug}
+        title="暂无错误记录"
+        description="出现异常时会自动进入错误追踪。"
+        className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50/70 py-10"
+        testId="monitoring-tabpanel-errors-empty"
+      />
     )
   }
 

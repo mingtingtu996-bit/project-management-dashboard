@@ -143,7 +143,7 @@ export function DrawingVersionDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-[720px] border-slate-200">
+      <DialogContent className="max-w-3xl border-slate-200">
         <DialogHeader>
           <DialogTitle className="text-slate-900">
             {packageCard?.packageName ? `${packageCard.packageName} 版本窗口` : '版本变更窗口'}
@@ -165,10 +165,10 @@ export function DrawingVersionDialog({
             </div>
           )}
 
-          <div className="grid gap-4 md:grid-cols-[1fr_280px]">
+          <div className="grid gap-4 md:grid-cols-[1fr_17.5rem]">
             <div className="max-h-[50vh] space-y-2 overflow-y-auto pr-1">
               {versions.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-500">
+                <div className="rounded-2xl empty-state-frame border-slate-200 p-6 text-center text-sm text-slate-500">
                   暂无版本记录。
                 </div>
               ) : (
@@ -326,7 +326,7 @@ export function DrawingVersionDialog({
                   )}
                 </div>
               ) : (
-                <div className="flex h-full min-h-[120px] items-center justify-center text-sm text-slate-500">
+                <div className="flex h-full min-h-32 items-center justify-center text-sm text-slate-500">
                   未选择版本
                 </div>
               )}

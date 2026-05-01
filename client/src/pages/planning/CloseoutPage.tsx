@@ -4,6 +4,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { PlanningPageShell } from '@/components/planning/PlanningPageShell'
 import { PlanningWorkspaceLayers } from '@/components/planning/PlanningWorkspaceLayers'
 import { DataConfidenceBreakdown } from '@/components/DataConfidenceBreakdown'
+import { EmptyState } from '@/components/EmptyState'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -794,9 +795,13 @@ export default function CloseoutPage() {
         }}
       />
     ) : (
-      <Card data-testid="closeout-empty-state" className="border-dashed border-slate-300 bg-slate-50">
-        <CardContent className="space-y-3 p-6">
-          <div className="text-lg font-semibold text-slate-900">当前筛选下没有匹配条目</div>
+      <EmptyState
+        icon={Search}
+        title="当前筛选下没有匹配条目"
+        description="调整办理状态、分组或搜索关键词后再查看。"
+        testId="closeout-empty-state"
+        className="rounded-card empty-state-frame border-slate-300 bg-slate-50 p-6"
+        action={(
           <div className="flex flex-wrap gap-2">
             <Button type="button" variant="outline" onClick={() => setActiveFilter('all')}>
               显示全部
@@ -805,18 +810,21 @@ export default function CloseoutPage() {
               清空搜索
             </Button>
           </div>
-        </CardContent>
-      </Card>
+        )}
+      />
     )
   ) : (
-    <Card className="border-dashed border-slate-300 bg-slate-50">
-      <CardContent className="space-y-3 p-6">
-        <div className="text-lg font-semibold text-slate-900">当前没有可关账的已确认月份</div>
+    <EmptyState
+      icon={Clock}
+      title="当前没有可关账的已确认月份"
+      description="请先确认月度计划，再进入关账办理。"
+      className="rounded-card empty-state-frame border-slate-300 bg-slate-50 p-6"
+      action={(
         <Button type="button" onClick={() => navigate(`/projects/${projectId}/planning/monthly`)}>
           去月度计划
         </Button>
-      </CardContent>
-    </Card>
+      )}
+    />
   )
 
   const aside = (

@@ -279,7 +279,7 @@ export function ScopeDimensionsDialog({ projectId, open, onOpenChange }: ScopeDi
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] max-w-[720px] overflow-y-auto rounded-2xl shadow-[var(--el-4)]" data-testid="gantt-scope-dimensions-dialog">
+      <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto rounded-2xl shadow-[var(--el-4)]" data-testid="gantt-scope-dimensions-dialog">
         <DialogHeader>
           <DialogTitle>范围维度</DialogTitle>
           <DialogDescription className="sr-only">维护项目的范围维度绑定</DialogDescription>
@@ -365,7 +365,7 @@ export function ScopeDimensionsDialog({ projectId, open, onOpenChange }: ScopeDi
 
                           return isEditing ? (
                             <div key={row.id} className="space-y-2 rounded-xl border border-blue-200 bg-blue-50/60 p-3">
-                              <div className="grid gap-2 sm:grid-cols-[1fr_92px_84px]">
+                              <div className="grid gap-2 sm:grid-cols-[1fr_5.75rem_5.25rem]">
                                 <Input
                                   value={draftRow.label}
                                   onChange={(event) =>
@@ -407,7 +407,7 @@ export function ScopeDimensionsDialog({ projectId, open, onOpenChange }: ScopeDi
                                 <Button type="button" variant="ghost" size="sm" className="h-8 px-3 text-xs" onClick={() => cancelEditRow(row.id)} disabled={saving}>
                                   取消
                                 </Button>
-                                <Button type="button" size="sm" className="h-8 px-3 text-xs" onClick={() => void saveDictionaryRow(row)} disabled={saving}>
+                                <Button type="button" size="sm" className="h-8 px-3 text-xs" onClick={() => void saveDictionaryRow(row)} disabled={saving} loading={saving}>
                                   <Save className="mr-1 h-3.5 w-3.5" />
                                   保存
                                 </Button>
@@ -428,7 +428,7 @@ export function ScopeDimensionsDialog({ projectId, open, onOpenChange }: ScopeDi
                                 <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => startEditRow(row)} disabled={saving}>
                                   编辑
                                 </Button>
-                                <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs text-red-600 hover:text-red-700" onClick={() => void deleteDictionaryRow(row)} disabled={saving}>
+                                <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs text-red-600 hover:text-red-700" onClick={() => void deleteDictionaryRow(row)} disabled={saving} loading={saving}>
                                   <Trash2 className="mr-1 h-3.5 w-3.5" />
                                   删除
                                 </Button>
@@ -436,7 +436,7 @@ export function ScopeDimensionsDialog({ projectId, open, onOpenChange }: ScopeDi
                             </div>
                           )
                         }) : (
-                          <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-4 text-xs text-slate-500">
+                          <div className="rounded-xl empty-state-frame border-slate-200 bg-slate-50 px-3 py-4 text-xs text-slate-500">
                             暂无字典条目
                           </div>
                         )}
@@ -481,8 +481,8 @@ export function ScopeDimensionsDialog({ projectId, open, onOpenChange }: ScopeDi
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
             取消
           </Button>
-          <Button type="button" onClick={() => void handleSave()} disabled={loading || saving}>
-            {saving ? '保存中' : '保存范围'}
+          <Button type="button" onClick={() => void handleSave()} disabled={loading} loading={saving}>
+            保存范围
           </Button>
         </DialogFooter>
       </DialogContent>

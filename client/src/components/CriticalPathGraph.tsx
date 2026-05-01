@@ -13,6 +13,7 @@ import {
   Trash2,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
+import { EmptyState } from '@/components/EmptyState'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
@@ -27,6 +28,7 @@ import {
   type CriticalPathLayoutNode,
 } from '@/lib/buildCriticalPathLayout'
 import { formatCriticalPathCount, USER_FACING_TERMS } from '@/lib/userFacingTerms'
+import { CHART_NEUTRAL, CRITICAL_PATH_EDGE_PALETTE, CRITICAL_PATH_LANE_PALETTE, CRITICAL_PATH_NODE_PALETTE } from '@/lib/chartPalette'
 import { formatDateTime } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import type { Task } from '@/pages/GanttViewTypes'
@@ -66,82 +68,29 @@ function getSnapshotTaskClass(task?: CriticalPathSnapshot['tasks'][number] | nul
 
 function getNodePalette(node: CriticalPathLayoutNode) {
   if (node.isManualInserted) {
-    return {
-      fill: '#fff7ed',
-      stroke: '#fb923c',
-      tagFill: '#fed7aa',
-      tagText: '#c2410c',
-      title: '#9a3412',
-      body: '#6b7280',
-    }
+    return CRITICAL_PATH_NODE_PALETTE.manualInsert
   }
   if (node.isManualAttention) {
-    return {
-      fill: '#fffbeb',
-      stroke: '#f59e0b',
-      tagFill: '#fef3c7',
-      tagText: '#b45309',
-      title: '#92400e',
-      body: '#6b7280',
-    }
+    return CRITICAL_PATH_NODE_PALETTE.manualAttention
   }
   if (node.isAutoCritical || node.isPrimary) {
-    return {
-      fill: '#fef2f2',
-      stroke: '#ef4444',
-      tagFill: '#fecaca',
-      tagText: '#b91c1c',
-      title: '#7f1d1d',
-      body: '#6b7280',
-    }
+    return CRITICAL_PATH_NODE_PALETTE.autoCritical
   }
-  return {
-    fill: '#ffffff',
-    stroke: '#cbd5e1',
-    tagFill: '#f1f5f9',
-    tagText: '#475569',
-    title: '#0f172a',
-    body: '#64748b',
-  }
+  return CRITICAL_PATH_NODE_PALETTE.default
 }
 
 function getLanePalette(lane: CriticalPathLayoutLane) {
   switch (lane.type) {
     case 'primary':
-      return {
-        fill: '#fef2f2',
-        stroke: '#fca5a5',
-        labelFill: '#fee2e2',
-        labelText: '#b91c1c',
-      }
+      return CRITICAL_PATH_LANE_PALETTE.primary
     case 'alternate':
-      return {
-        fill: '#eff6ff',
-        stroke: '#93c5fd',
-        labelFill: '#dbeafe',
-        labelText: '#1d4ed8',
-      }
+      return CRITICAL_PATH_LANE_PALETTE.alternate
     case 'attention':
-      return {
-        fill: '#fefce8',
-        stroke: '#facc15',
-        labelFill: '#fef9c3',
-        labelText: '#854d0e',
-      }
+      return CRITICAL_PATH_LANE_PALETTE.attention
     case 'manual_insert':
-      return {
-        fill: '#fff7ed',
-        stroke: '#fdba74',
-        labelFill: '#ffedd5',
-        labelText: '#c2410c',
-      }
+      return CRITICAL_PATH_LANE_PALETTE.manualInsert
     default:
-      return {
-        fill: '#f8fafc',
-        stroke: '#cbd5e1',
-        labelFill: '#e2e8f0',
-        labelText: '#334155',
-      }
+      return CRITICAL_PATH_LANE_PALETTE.default
   }
 }
 
@@ -516,7 +465,7 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
       const context = canvas.getContext('2d')
       if (!context) return
 
-      context.fillStyle = '#ffffff'
+      context.fillStyle = CHART_NEUTRAL.white
       context.fillRect(0, 0, canvas.width, canvas.height)
       context.scale(scale, scale)
       context.drawImage(image, 0, 0, layout.canvasWidth, layout.canvasHeight)
@@ -556,7 +505,7 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
         onBlur={() => setHoveredTaskId((current) => (current === taskId ? null : current))}
         
         className={cn(
-          'group flex min-w-[180px] flex-1 items-center justify-between gap-2 rounded-2xl border px-3 py-2 text-left shadow-sm transition-all hover:-translate-y-[1px] hover:shadow-md',
+          'group flex min-w-44 flex-1 items-center justify-between gap-2 rounded-2xl border px-3 py-2 text-left shadow-sm transition-all hover:-translate-y-px hover:shadow-md',
           getSnapshotTaskClass(snapshotTask),
           !emphasized && 'opacity-45',
           selected && 'ring-2 ring-blue-400 ring-offset-2',
@@ -743,7 +692,7 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
                   <div
                     ref={graphViewportRef}
                     data-testid="critical-path-svg-viewport"
-                    className="relative max-h-[680px] overflow-auto rounded-2xl border border-slate-200 bg-slate-950/[0.02] p-3"
+                    className="relative max-h-[42.5rem] overflow-auto rounded-2xl border border-slate-200 bg-slate-950/[0.02] p-3"
                   >
                     <div
                       style={{
@@ -767,13 +716,13 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
                     >
                       <defs>
                         <marker id="critical-path-arrow-primary" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
-                          <path d="M 0 0 L 10 5 L 0 10 z" fill="#f43f5e" />
+                          <path d="M 0 0 L 10 5 L 0 10 z" fill={CRITICAL_PATH_EDGE_PALETTE.primary} />
                         </marker>
                         <marker id="critical-path-arrow-secondary" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
-                          <path d="M 0 0 L 10 5 L 0 10 z" fill="#94a3b8" />
+                          <path d="M 0 0 L 10 5 L 0 10 z" fill={CRITICAL_PATH_EDGE_PALETTE.normal} />
                         </marker>
                         <marker id="critical-path-arrow-manual" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
-                          <path d="M 0 0 L 10 5 L 0 10 z" fill="#fb923c" />
+                          <path d="M 0 0 L 10 5 L 0 10 z" fill={CRITICAL_PATH_EDGE_PALETTE.manual} />
                         </marker>
                       </defs>
 
@@ -827,7 +776,7 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
                                 width={66}
                                 height={18}
                                 rx={9}
-                                fill="#ffffff"
+                                fill={CRITICAL_PATH_EDGE_PALETTE.surface}
                                 stroke={palette.stroke}
                               />
                               <text
@@ -885,7 +834,7 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
                             data-testid={`critical-path-svg-edge-${edge.id}`}
                             d={edge.path}
                             fill="none"
-                            stroke={edge.source === 'manual_link' ? '#fb923c' : edge.isPrimary ? '#f43f5e' : '#94a3b8'}
+                            stroke={edge.source === 'manual_link' ? CRITICAL_PATH_EDGE_PALETTE.manual : edge.isPrimary ? CRITICAL_PATH_EDGE_PALETTE.primary : CRITICAL_PATH_EDGE_PALETTE.normal}
                             strokeWidth={edge.source === 'manual_link' ? 2.4 : edge.isPrimary ? 2.6 : 1.8}
                             strokeDasharray={edge.source === 'manual_link' ? '7 5' : undefined}
                             markerEnd={`url(#${edge.source === 'manual_link' ? 'critical-path-arrow-manual' : edge.isPrimary ? 'critical-path-arrow-primary' : 'critical-path-arrow-secondary'})`}
@@ -932,7 +881,7 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
                               height={node.height}
                               rx={8}
                               fill={palette.fill}
-                              stroke={selected ? '#2563eb' : emphasized ? palette.stroke : '#cbd5e1'}
+                              stroke={selected ? CRITICAL_PATH_EDGE_PALETTE.selected : emphasized ? palette.stroke : CRITICAL_PATH_EDGE_PALETTE.border}
                               strokeWidth={selected ? 3 : emphasized ? 2.1 : 1.4}
                               filter={
                                 selected
@@ -982,7 +931,7 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
                     </svg>
                     </div>
                     {hoveredTaskId && (
-                      <div className="pointer-events-none sticky bottom-3 left-3 w-fit max-w-[320px] rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 shadow-[var(--el-2)]">
+                      <div className="pointer-events-none sticky bottom-3 left-3 w-fit max-w-xs rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 shadow-[var(--el-2)]">
                         <div className="font-semibold text-slate-900">{getTaskLabel(hoveredTask, hoveredTaskId)}</div>
                         <div className="mt-1 flex flex-wrap gap-2">
                           <span>工期 {hoveredSnapshotTask?.durationDays ?? 0} 天</span>
@@ -1009,9 +958,11 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
                   ) : null}
                 </>
               ) : (
-                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                  当前没有可展示的关键路径节点。
-                </div>
+                <EmptyState
+                  title="暂无关键路径节点"
+                  description="当前快照没有可展示的关键路径节点。"
+                  className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 py-8"
+                />
               )}
             </CardContent>
           </Card>
@@ -1048,9 +999,11 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
                   })}
                 </div>
               ) : (
-                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                  当前快照没有可展示的关系边。
-                </div>
+                <EmptyState
+                  title="暂无关系边"
+                  description="当前快照没有可展示的任务依赖关系。"
+                  className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 py-8"
+                />
               )}
             </CardContent>
           </Card>
@@ -1103,7 +1056,7 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
                         </div>
                       ) : (
                         <div
-                          className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500"
+                          className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500"
                           data-testid={`critical-path-alternate-collapsed-${chain.id}`}
                         >
                           已折叠
@@ -1112,9 +1065,11 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
                     </div>
                   ))
                 ) : (
-                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                    暂无备选链。
-                  </div>
+                  <EmptyState
+                    title="暂无备选链"
+                    description="系统当前未生成关键路径备选链。"
+                    className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 py-8"
+                  />
                 )}
               </CardContent>
             </Card>
@@ -1130,9 +1085,11 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
                     {props.snapshot.manualAttentionTaskIds.map((taskId) => renderTaskChip(taskId, undefined, '关注'))}
                   </div>
                 ) : (
-                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                    暂无手动关注项。
-                  </div>
+                  <EmptyState
+                    title="暂无手动关注项"
+                    description="还没有被手动标记关注的关键路径任务。"
+                    className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 py-8"
+                  />
                 )}
               </CardContent>
             </Card>
@@ -1171,9 +1128,11 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
                   </div>
                 ))
               ) : (
-                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                  暂无覆盖记录。
-                </div>
+                <EmptyState
+                  title="暂无覆盖记录"
+                  description="当前没有手动关注、插链或覆盖配置记录。"
+                  className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 py-8"
+                />
               )}
             </CardContent>
           </Card>
@@ -1282,9 +1241,11 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
                       )}
                     </div>
                   ) : (
-                    <div className="mt-3 rounded-2xl border border-dashed border-slate-200 bg-white p-3 text-xs text-slate-500">
-                      当前没有可用锚点，暂时只能设置手动关注。
-                    </div>
+                    <EmptyState
+                      title="暂无可用锚点"
+                      description="暂时只能设置手动关注。"
+                      className="mt-3 rounded-2xl empty-state-frame border-slate-200 bg-white py-5"
+                    />
                   )}
                   <div className="mt-3 text-xs text-slate-500">
                     插链会把当前选中任务作为覆盖对象，锚点任务从现有关键路径或显示链里选择。
@@ -1338,7 +1299,15 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
                 </div>
               </div>
 
-              {(selectedAttentionOverride || selectedInsertOverride) && <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-3" />}
+              {(selectedAttentionOverride || selectedInsertOverride) && (
+                <div className="rounded-2xl border border-slate-200 bg-white p-3 text-xs text-slate-600">
+                  <div className="mb-2 font-medium text-slate-900">当前任务覆盖状态</div>
+                  <div className="flex flex-wrap gap-2">
+                    {selectedAttentionOverride ? <Badge variant="secondary">已手动关注</Badge> : null}
+                    {selectedInsertOverride ? <Badge variant="outline">已保存插链</Badge> : null}
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>

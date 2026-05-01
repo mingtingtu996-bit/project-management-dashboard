@@ -100,10 +100,10 @@ export default function Sidebar() {
               )}
               onClick={() => setMobileOpen(false)}
             >
-              <item.icon className="h-[18px] w-[18px] flex-shrink-0" />
+              <item.icon className="h-5 w-5 flex-shrink-0" />
               {sidebarOpen && <span className="flex-1">{item.label}</span>}
               {sidebarOpen && badgeCount > 0 && (
-                <span className="min-w-[18px] rounded-full bg-red-700 px-1.5 py-0.5 text-center text-xs font-semibold leading-none text-white">
+                <span className="min-w-5 rounded-full bg-red-700 px-1.5 py-0.5 text-center text-xs font-semibold leading-none text-white">
                   {badgeCount > 99 ? '99+' : badgeCount}
                 </span>
               )}
@@ -160,13 +160,18 @@ export default function Sidebar() {
         aria-label="打开导航菜单"
         aria-controls="app-sidebar"
         aria-expanded={mobileOpen}
-        className="fixed left-4 top-4 z-50 rounded-xl border border-slate-200 bg-white/95 shadow-lg backdrop-blur transition-colors duration-200 hover:bg-slate-100 hover:shadow-sm lg:hidden"
+        className="fixed left-4 top-4 z-50 rounded-xl border border-slate-100 bg-white/95 shadow-lg backdrop-blur transition-colors duration-200 hover:bg-slate-100 hover:shadow-[var(--el-1)] lg:hidden"
       >
         <Menu className="h-5 w-5 text-slate-700" />
       </Button>
 
       {mobileOpen && (
-        <div className="fixed inset-0 z-40 bg-slate-950/45 lg:hidden" onClick={() => setMobileOpen(false)} />
+        <button
+          type="button"
+          aria-label="关闭导航遮罩"
+          className="fixed left-0 top-0 z-40 h-screen w-screen bg-slate-950/45 p-0 lg:hidden"
+          onClick={() => setMobileOpen(false)}
+        />
       )}
 
       <aside
@@ -174,7 +179,7 @@ export default function Sidebar() {
         data-onboarding-target="sidebar"
         className={cn(
           'fixed inset-y-0 left-0 z-50 flex flex-col overflow-hidden border-r border-slate-800 bg-slate-950 text-slate-100 transition-[transform,width] duration-300 ease-out lg:relative lg:translate-x-0',
-          sidebarOpen ? 'w-64' : 'w-[72px]',
+          sidebarOpen ? 'w-64' : 'w-[var(--sidebar-collapsed-width)]',
           mobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0',
         )}
       >

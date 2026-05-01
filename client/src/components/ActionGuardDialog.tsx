@@ -50,7 +50,7 @@ export function ActionGuardDialog({
 }: ActionGuardDialogProps) {
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent data-testid={testId} className="max-w-[440px]">
+      <AlertDialogContent data-testid={testId} className="max-w-md">
         <AlertDialogHeader className="space-y-3">
           <div className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-amber-50 text-amber-600">
             <ShieldAlert className="h-5 w-5" />
@@ -84,7 +84,7 @@ export function ActionGuardDialog({
             </Button>
           ) : null}
           <AlertDialogAction
-            className="bg-slate-900 text-white hover:bg-slate-800 focus:ring-slate-500"
+            className="bg-slate-900 text-white hover:bg-slate-800 focus-visible:ring-slate-500"
             onClick={() => onOpenChange(false)}
           >
             {confirmLabel}

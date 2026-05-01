@@ -46,7 +46,7 @@ export function MilestoneToolbar({
           onValueChange={onProjectChange}
           disabled={projectsLoading || projects.length === 0}
         >
-          <SelectTrigger aria-label="选择项目" className="h-10 min-w-[220px] rounded-xl border-slate-300 bg-white text-sm focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100">
+          <SelectTrigger aria-label="选择项目" className="h-10 min-w-56 rounded-xl border-slate-300 bg-white text-sm focus-visible:ring-2 focus-visible:ring-blue-500 disabled:bg-slate-100">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -72,7 +72,7 @@ export function MilestoneToolbar({
             placeholder="搜索证照名称或类型..."
             value={searchQuery}
             onChange={(event) => onSearchChange(event.target.value)}
-            className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
           />
         </div>
 
@@ -80,7 +80,7 @@ export function MilestoneToolbar({
           value={statusFilter}
           onValueChange={onStatusFilterChange}
         >
-          <SelectTrigger aria-label="证照状态筛选" className="h-10 min-w-[140px] rounded-xl border-slate-300 bg-white text-sm focus:ring-2 focus:ring-blue-500">
+          <SelectTrigger aria-label="证照状态筛选" className="h-10 min-w-36 rounded-xl border-slate-300 bg-white text-sm focus-visible:ring-2 focus-visible:ring-blue-500">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>

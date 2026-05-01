@@ -49,13 +49,13 @@ export function MonthlyPlanBottomBar({
     : `存在 ${blockingIssueCount} 个待处理问题，请使用标准确认`
 
   return (
-    <div data-testid="planning-shared-batch-bar" className="fixed bottom-4 left-1/2 z-40 w-[calc(100%-2rem)] max-w-[1440px] -translate-x-1/2 px-0">
+    <div data-testid="planning-shared-batch-bar" className="fixed bottom-4 left-1/2 z-40 w-[calc(100%-2rem)] max-w-[var(--content-max-width)] -translate-x-1/2 px-0">
       <Card
         data-testid="monthly-plan-bottom-bar"
         className="border-slate-700/70 bg-slate-950 px-4 py-3 text-white shadow-2xl shadow-slate-950/30"
       >
         <div className="flex flex-col gap-3">
-          <div className="grid items-center gap-3 lg:grid-cols-[minmax(260px,1fr)_auto_minmax(320px,1fr)]">
+          <div className="grid items-center gap-3 lg:grid-cols-[minmax(16.25rem,1fr)_auto_minmax(20rem,1fr)]">
             <div className="flex flex-wrap items-center gap-2">
               <span
                 className={`flex h-7 min-w-7 items-center justify-center rounded-full px-2 text-xs font-bold ${

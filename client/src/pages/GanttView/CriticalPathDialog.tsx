@@ -128,7 +128,7 @@ export function CriticalPathDialog(props: CriticalPathDialogProps) {
                   <TooltipTrigger asChild>
                     <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 cursor-help" />
                   </TooltipTrigger>
-                  <TooltipContent className="max-w-[260px]">存在循环依赖会导致关键路径计算不准确</TooltipContent>
+                  <TooltipContent className="max-w-xs">存在循环依赖会导致关键路径计算不准确</TooltipContent>
                 </Tooltip>
                 <div>
                   <span className="font-semibold">检测到依赖环，关键路径已回退到兜底排序。</span>

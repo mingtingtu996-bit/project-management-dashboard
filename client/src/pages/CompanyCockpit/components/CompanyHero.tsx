@@ -1,7 +1,7 @@
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Sparkline } from '@/components/Sparkline'
+import { MetricCard } from '@/components/ui/metric-card'
 import { cn } from '@/lib/utils'
 import {
   AlertTriangle,
@@ -25,6 +25,15 @@ function healthPillLabel(value: string) {
   if (score >= 80) return '良好'
   if (score >= 60) return '一般'
   return '预警'
+}
+
+function resolveMetricTone(item: HeroStatItem) {
+  if (item.pill) return 'warning'
+  if (item.tone.includes('emerald')) return 'success'
+  if (item.tone.includes('amber')) return 'warning'
+  if (item.tone.includes('red')) return 'danger'
+  if (item.tone.includes('sky')) return 'info'
+  return 'primary'
 }
 
 interface CompanyHeroProps {
@@ -94,31 +103,21 @@ export function CompanyHero({
 
         <div className="grid gap-6 xl:grid-cols-3">
           {heroStats.map((item) => (
-            <div key={item.label} className="card-unified p-6" data-testid="company-hero-metric">
-                <div className="flex items-center justify-between gap-4">
-                  <div className="text-xs uppercase tracking-wider text-slate-500">{item.label}</div>
-                  <div className={`rounded-2xl p-2.5 ${item.tone}`}>
-                    <item.icon className="h-5 w-5" />
-                  </div>
-                </div>
-                <div className="mt-3 flex items-end justify-between gap-4">
-                  <div className="min-w-0">
-                    <div className="flex items-baseline gap-2">
-                      <span className="text-3xl font-bold tabular-nums text-slate-900">{item.value}</span>
-                      {item.pill ? (
-                        <span className={cn('rounded-full px-2 py-0.5 text-xs font-medium', healthPillClass(item.value))}>
-                          {healthPillLabel(item.value)}
-                        </span>
-                      ) : null}
-                    </div>
-                    <div className="mt-2 text-xs text-slate-500">{item.hint}</div>
-                  </div>
-                  <Sparkline
-                    data={item.sparklineData?.length ? item.sparklineData : [{ value: Number(item.value.replace('%', '')) || 0 }]}
-                    color={item.pill ? '#F59E0B' : '#2563EB'}
-                  />
-                </div>
-            </div>
+            <MetricCard
+              key={item.label}
+              testId="company-hero-metric"
+              title={item.label}
+              value={item.value}
+              hint={item.hint}
+              trend={item.pill ? (
+                <span className={cn('rounded-full px-2 py-0.5 text-xs font-medium', healthPillClass(item.value))}>
+                  {healthPillLabel(item.value)}
+                </span>
+              ) : null}
+              icon={<item.icon className="h-5 w-5" />}
+              sparkline={item.sparklineData}
+              tone={resolveMetricTone(item)}
+            />
           ))}
         </div>
 

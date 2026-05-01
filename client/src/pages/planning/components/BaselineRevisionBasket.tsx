@@ -1,6 +1,7 @@
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import { EmptyState } from '@/components/EmptyState'
 
 import type { BaselineRevisionCandidate } from './BaselineRevisionCandidateList'
 
@@ -37,7 +38,12 @@ export function BaselineRevisionBasket({ items, onRemoveItem }: BaselineRevision
             </Card>
           ))
         ) : (
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4" />
+          <EmptyState
+            variant="default"
+            title="修订篮为空"
+            description="从左侧候选项选择需要纳入本次基线修订的内容。"
+            className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 py-8"
+          />
         )}
       </div>
     </div>

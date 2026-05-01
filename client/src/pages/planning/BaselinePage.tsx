@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, ty
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 
 import { ConfirmActionDialog } from '@/components/ConfirmActionDialog'
+import { EmptyState } from '@/components/EmptyState'
 import { PlanningPageShell } from '@/components/planning/PlanningPageShell'
 import type { PlanningTreeRow } from '@/components/planning/PlanningTreeView'
 import { PlanningWorkspaceLayers } from '@/components/planning/PlanningWorkspaceLayers'
@@ -10,6 +11,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { DisabledReasonTooltip } from '@/components/ui/disabled-reason-tooltip'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { LoadingState } from '@/components/ui/loading-state'
 import { Separator } from '@/components/ui/separator'
@@ -30,7 +32,7 @@ import type {
   PlanningDraftLockRecord,
   RevisionPoolCandidate,
 } from '@/types/planning'
-import { AlertTriangle, Calendar, FileDiff, FilePlus2, FileSpreadsheet, FolderGit2, History, LockKeyhole, Pencil, X } from 'lucide-react'
+import { AlertTriangle, Calendar, FileDiff, FilePlus2, FileSpreadsheet, FolderGit2, History, LockKeyhole, Pencil } from 'lucide-react'
 
 import { BaselineBottomBar } from './components/BaselineBottomBar'
 import { BaselineConfirmDialog, type BaselineConfirmState } from './components/BaselineConfirmDialog'
@@ -164,8 +166,16 @@ function BaselineItemDetailDrawer({
   if (!item) return null
 
   return (
-    <div data-testid="baseline-detail-drawer" className="fixed inset-y-0 right-0 z-50 flex w-full max-w-md flex-col border-l border-slate-200 bg-white shadow-[var(--el-4)]">
-      <div className="flex items-start justify-between gap-3 px-5 py-4">
+    <Dialog open={Boolean(item)} onOpenChange={(open) => {
+      if (!open) onClose()
+    }}>
+      <DialogContent
+        closeLabel="关闭基线详情抽屉"
+        data-testid="baseline-detail-drawer"
+        className="left-auto right-0 top-0 h-full max-h-none w-full max-w-md translate-x-0 translate-y-0 rounded-none border-l border-slate-200 bg-white p-0 shadow-[var(--el-4)] data-[state=open]:slide-in-from-right-0"
+      >
+        <div className="flex h-full flex-col">
+      <DialogHeader className="px-5 py-4 pr-16 text-left">
         <div className="min-w-0 space-y-2">
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant={item.is_milestone ? 'secondary' : 'outline'}>
@@ -173,12 +183,10 @@ function BaselineItemDetailDrawer({
             </Badge>
             <Badge variant={readOnly ? 'outline' : 'secondary'}>{readOnly ? '只读' : '可编辑'}</Badge>
           </div>
-          <div className="truncate text-base font-semibold text-slate-900">{item.title}</div>
+          <DialogTitle className="truncate text-base font-semibold text-slate-900">{item.title}</DialogTitle>
+          <DialogDescription>查看基线条目的计划日期、目标进度、映射状态和备注。</DialogDescription>
         </div>
-        <Button type="button" variant="ghost" size="icon" onClick={onClose} aria-label="关闭详情抽屉">
-          <X className="h-4 w-4" />
-        </Button>
-      </div>
+      </DialogHeader>
       <Separator />
       <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
         <div className="grid gap-3 sm:grid-cols-2">
@@ -219,7 +227,9 @@ function BaselineItemDetailDrawer({
           关闭
         </Button>
       </div>
-    </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -1762,6 +1772,7 @@ export default function BaselinePage() {
       !sameIdSequence(normalizedSelectedItemIds, (activeBaseline.items ?? []).map((item) => item.id))
     )
   }, [activeBaseline, editorItems, normalizedSelectedItemIds])
+  const shouldShowBottomBar = !readOnly || isDirty || activeBaseline?.status === 'draft'
   const canUndo = historyCursorRef.current > 0
   const canRedo = historyCursorRef.current >= 0 && historyCursorRef.current < historyRef.current.length - 1
   const handleRevisionAddToBasket = useCallback(() => {
@@ -1916,7 +1927,7 @@ export default function BaselinePage() {
         ) : null}
 
         <div className="space-y-4">
-          <Card data-testid="baseline-entry-selector" className="border-slate-200 shadow-sm">
+          <Card data-testid="baseline-entry-selector" className="surface-card">
             <CardHeader>
               <CardTitle className="text-base">首版基线创建入口</CardTitle>
             </CardHeader>
@@ -1926,7 +1937,7 @@ export default function BaselinePage() {
                 data-testid="baseline-entry-blank"
                 onClick={() => void handleCreateBlankBaseline()}
                 disabled={creationDisabled}
-                className="group flex min-h-[172px] flex-col justify-between rounded-2xl border border-blue-600 bg-blue-600 p-5 text-left text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-blue-700 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60"
+                className="group flex min-h-44 flex-col justify-between rounded-2xl border border-blue-600 bg-blue-600 p-5 text-left text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-blue-700 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white/15 text-white transition group-hover:bg-white/25">
@@ -1946,7 +1957,7 @@ export default function BaselinePage() {
                 data-testid="baseline-entry-schedule"
                 onClick={() => void handleBootstrapFromSchedule()}
                 disabled={creationDisabled}
-                className="group flex min-h-[172px] flex-col justify-between rounded-2xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60"
+                className="group flex min-h-44 flex-col justify-between rounded-2xl border border-slate-100 bg-white p-5 text-left shadow-[var(--el-1)] transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-100 text-blue-700 transition group-hover:bg-blue-600 group-hover:text-white">
@@ -1967,7 +1978,7 @@ export default function BaselinePage() {
                 data-testid="baseline-entry-import"
                 onClick={() => importInputRef.current?.click()}
                 disabled={creationDisabled}
-                className="group flex min-h-[172px] flex-col justify-between rounded-2xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60"
+                className="group flex min-h-44 flex-col justify-between rounded-2xl border border-slate-100 bg-white p-5 text-left shadow-[var(--el-1)] transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-amber-100 text-amber-700 transition group-hover:bg-amber-600 group-hover:text-white">
@@ -2204,7 +2215,7 @@ export default function BaselinePage() {
         summary={
           <div
             data-testid="baseline-info-bar"
-            className="rounded-2xl border border-slate-200 bg-white px-5 py-4 shadow-sm"
+            className="rounded-2xl border border-slate-100 bg-white px-5 py-4 shadow-[var(--el-1)]"
           >
             <div className="grid gap-4 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1fr)]">
               <div className="space-y-2">
@@ -2390,7 +2401,7 @@ export default function BaselinePage() {
             {showValidationPanel ? (
               <div
                 data-testid="baseline-validation-bottom-panel"
-                className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
+                className="rounded-2xl border border-slate-100 bg-white p-4 shadow-[var(--el-1)]"
               >
                 <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
@@ -2480,7 +2491,7 @@ export default function BaselinePage() {
                 </div>
                 {diffItems.length ? (
                   <>
-                    <div className="max-h-[420px] overflow-y-auto pr-1">
+                    <div className="max-h-[26.25rem] overflow-y-auto pr-1">
                       <BaselineDiffView
                         fromVersionLabel={compareLabel}
                         toVersionLabel={currentLabel}
@@ -2496,9 +2507,12 @@ export default function BaselinePage() {
                     </Button>
                   </>
                 ) : (
-                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500">
-                    当前与对比版本暂无差异，可直接继续校核和确认流程。
-                  </div>
+                  <EmptyState
+                    icon={FileDiff}
+                    title="当前与对比版本暂无差异"
+                    description="可直接继续校核和确认流程。"
+                    className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 px-4 py-6"
+                  />
                 )}
                 <div data-testid="baseline-change-log-preview" className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
                   <div className="flex items-center justify-between gap-3">
@@ -2522,7 +2536,12 @@ export default function BaselinePage() {
                       ))}
                     </div>
                   ) : (
-                    <div className="mt-3 text-xs leading-5 text-slate-500">暂无变更留痕</div>
+                    <EmptyState
+                      icon={History}
+                      title="暂无变更留痕"
+                      description="保存或确认修订后，系统会在这里展示变更记录。"
+                      className="mt-3 rounded-xl empty-state-frame border-slate-200 bg-white px-3 py-5"
+                    />
                   )}
                 </div>
               </CardContent>
@@ -2531,31 +2550,33 @@ export default function BaselinePage() {
         }
       />
 
-      <BaselineBottomBar
-        isDirty={isDirty}
-        readOnly={readOnly}
-        lockRemainingLabel={lockRemainingLabel}
-        lastSavedLabel={baselineLastSavedLabel}
-        canUndo={canUndo}
-        canRedo={canRedo}
-        saveDisabled={readOnly || normalizedSelectedItemIds.length === 0}
-        saveDisabledReason={baselineReadOnlyReason ?? (normalizedSelectedItemIds.length === 0 ? '需先选择至少 1 项基线条目。' : null)}
-        saving={actionLoading === 'save'}
-        selectedCount={normalizedSelectedItemIds.length}
-        batchShiftDays={batchShiftDays}
-        batchProgressValue={batchProgressValue}
-        onBatchShiftDaysChange={setBatchShiftDays}
-        onBatchProgressValueChange={setBatchProgressValue}
-        onBatchDelete={handleBatchDelete}
-        onBatchShift={handleBatchShift}
-        onBatchSetProgress={handleBatchSetProgress}
-        onOpenConfirm={handleOpenConfirmDialog}
-        confirmDisabled={readOnly || noDiff || Boolean(confirmDisabledReason)}
-        confirmDisabledReason={baselineReadOnlyReason ?? (noDiff ? '当前版本与对比版本没有差异。' : confirmDisabledReason)}
-        onUndo={handleUndo}
-        onRedo={handleRedo}
-        onSaveDraft={handleSaveDraft}
-      />
+      {shouldShowBottomBar ? (
+        <BaselineBottomBar
+          isDirty={isDirty}
+          readOnly={readOnly}
+          lockRemainingLabel={lockRemainingLabel}
+          lastSavedLabel={baselineLastSavedLabel}
+          canUndo={canUndo}
+          canRedo={canRedo}
+          saveDisabled={readOnly || normalizedSelectedItemIds.length === 0}
+          saveDisabledReason={baselineReadOnlyReason ?? (normalizedSelectedItemIds.length === 0 ? '需先选择至少 1 项基线条目。' : null)}
+          saving={actionLoading === 'save'}
+          selectedCount={normalizedSelectedItemIds.length}
+          batchShiftDays={batchShiftDays}
+          batchProgressValue={batchProgressValue}
+          onBatchShiftDaysChange={setBatchShiftDays}
+          onBatchProgressValueChange={setBatchProgressValue}
+          onBatchDelete={handleBatchDelete}
+          onBatchShift={handleBatchShift}
+          onBatchSetProgress={handleBatchSetProgress}
+          onOpenConfirm={handleOpenConfirmDialog}
+          confirmDisabled={readOnly || noDiff || Boolean(confirmDisabledReason)}
+          confirmDisabledReason={baselineReadOnlyReason ?? (noDiff ? '当前版本与对比版本没有差异。' : confirmDisabledReason)}
+          onUndo={handleUndo}
+          onRedo={handleRedo}
+          onSaveDraft={handleSaveDraft}
+        />
+      ) : null}
 
       <BaselineConfirmDialog
         open={confirmOpen}
@@ -2622,8 +2643,9 @@ export default function BaselinePage() {
         onOpenChange={setForceUnlockConfirmOpen}
         title="确认强制解锁"
         description="强制解锁会释放当前基线草稿的编辑锁，并重新尝试为你获取编辑锁。请确认没有其他人正在处理这份草稿。"
-        confirmLabel={actionLoading === 'unlock' ? '解锁中...' : '确认解锁'}
+        confirmLabel="确认解锁"
         confirmTone="destructive"
+        loading={actionLoading === 'unlock'}
         testId="baseline-force-unlock-confirm"
         onConfirm={() => {
           setForceUnlockConfirmOpen(false)

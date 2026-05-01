@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { CHART_SERIES } from '@/lib/chartPalette'
 import { ChartAccessibleWrapper } from '@/components/ChartAccessibleWrapper'
+import { EmptyState } from '@/components/EmptyState'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { LoadingState } from '@/components/ui/loading-state'
@@ -170,10 +171,11 @@ export default function RiskTrendChart({ defaultExpanded = true }: RiskTrendChar
           {loading ? (
             <LoadingState label="风险趋势加载中" description="" className="min-h-32 py-8" />
           ) : !trend.length ? (
-            <div className="py-8 text-center text-slate-500">
-              <p>暂无趋势数据</p>
-              <p className="mt-1 text-sm text-slate-500">系统将自动收集每日风险、问题和预警统计数据</p>
-            </div>
+            <EmptyState
+              title="暂无趋势数据"
+              description="系统将自动收集每日风险、问题和预警统计数据。"
+              className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 py-8"
+            />
           ) : (
             <div className="space-y-6">
               <div className="grid grid-cols-2 gap-4 lg:grid-cols-6">
@@ -203,7 +205,7 @@ export default function RiskTrendChart({ defaultExpanded = true }: RiskTrendChar
                 </div>
               </div>
 
-              <div className="grid gap-6 xl:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]">
+              <div className="grid gap-6 xl:grid-cols-[minmax(0,1.35fr)_minmax(20rem,0.65fr)]">
                 <div className="space-y-6">
                   <div>
                     <div className="mb-2 flex items-center justify-between">
@@ -383,9 +385,11 @@ export default function RiskTrendChart({ defaultExpanded = true }: RiskTrendChar
                           </div>
                         ))
                       ) : (
-                        <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
-                          暂无来源分布
-                        </div>
+                        <EmptyState
+                          title="暂无来源分布"
+                          description="风险来源统计形成后会在这里展示。"
+                          className="rounded-xl empty-state-frame border-slate-200 bg-slate-50 py-6"
+                        />
                       )}
                     </CardContent>
                   </Card>

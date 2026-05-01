@@ -26,12 +26,18 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { LoadingState } from '@/components/ui/loading-state'
+import { MetricCard as SharedMetricCard } from '@/components/ui/metric-card'
 import { Separator } from '@/components/ui/separator'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { toast } from '@/hooks/use-toast'
 import { apiGet, getApiErrorMessage } from '@/lib/apiClient'
-import { formatDate as formatDisplayDate, formatDateTime as formatDisplayDateTime } from '@/lib/formatters'
+import { CHART_SERIES } from '@/lib/chartPalette'
+import {
+  formatDate as formatDisplayDate,
+  formatDateTime as formatDisplayDateTime,
+  formatWholePercent,
+} from '@/lib/formatters'
 import {
   selectProjectScopeOrEmpty,
   useCurrentProject,
@@ -297,23 +303,6 @@ function normalizeIssueSummaryResponse(value: unknown, projectId?: string): Issu
   }
 }
 
-function MetricCard({ title, value, hint, icon }: MetricItem) {
-  return (
-    <Card className="card-unified p-0">
-      <CardContent className="p-5">
-        <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0">
-            <p className="text-sm text-muted-foreground">{title}</p>
-            <div className="mt-2 text-2xl font-bold">{value}</div>
-            {hint ? <div className="mt-2 text-xs leading-5 text-slate-500">{hint}</div> : null}
-          </div>
-          {icon ? <div className="shrink-0 rounded-lg bg-primary/10 p-2 text-primary">{icon}</div> : null}
-        </div>
-      </CardContent>
-    </Card>
-  )
-}
-
 function DetailStatCard({ label, value, hint, to, testId }: DetailStat) {
   void hint
 
@@ -363,7 +352,7 @@ function AnalysisEntryCard({
     <Button variant="ghost"
       data-testid={testId}
       onClick={onClick}
-      className="group flex h-full flex-col rounded-2xl border border-slate-200 bg-white p-5 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-md"
+      className="group flex h-full flex-col rounded-2xl border border-slate-100 bg-white p-5 text-left shadow-[var(--el-1)] transition-all hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-md"
     >
       <div className="flex items-start justify-between gap-4">
         <div className="space-y-3">
@@ -1511,7 +1500,12 @@ export default function Reports() {
         backTo: projectId ? `/projects/${projectId}/milestones` : undefined,
         metrics: [
           { title: '总任务数', value: summary?.totalTasks ?? projectTasks.length, hint: `叶子任务 ${summary?.leafTaskCount ?? projectTasks.length}`, icon: <ClipboardList className="h-4 w-4" /> },
-          { title: '完成率', value: `${summary?.overallProgress ?? 0}%`, hint: `里程碑完成率 ${summary?.milestoneProgress ?? 0}%`, icon: <BarChart3 className="h-4 w-4" /> },
+          {
+            title: '完成率',
+            value: formatWholePercent(summary?.overallProgress ?? 0),
+            hint: `里程碑完成率 ${formatWholePercent(summary?.milestoneProgress ?? 0)}`,
+            icon: <BarChart3 className="h-4 w-4" />,
+          },
           { title: '本月新增', value: monthNewTaskCount, hint: `本月新增任务 · ${getCurrentMonthKey()}`, icon: <Flag className="h-4 w-4" /> },
         ] as MetricItem[],
       }
@@ -1541,8 +1535,8 @@ export default function Reports() {
         backLabel: '返回风险与问题',
         backTo: projectId ? `/projects/${projectId}/risks` : undefined,
         metrics: [
-          { title: '活跃风险', value: activeRiskCount, hint: `总风险 ${summary?.riskCount ?? projectRisks.length}`, icon: <Sparkline data={riskTrendData} color="#dc2626" /> },
-          { title: '未关闭问题', value: issueSummary.active_issues || activeProjectIssues.length, hint: `问题总数 ${issueSummary.total_issues || projectIssues.length}`, icon: <Sparkline data={riskTrendData} color="#f97316" /> },
+          { title: '活跃风险', value: activeRiskCount, hint: `总风险 ${summary?.riskCount ?? projectRisks.length}`, icon: <Sparkline data={riskTrendData} color={CHART_SERIES.danger} /> },
+          { title: '未关闭问题', value: issueSummary.active_issues || activeProjectIssues.length, hint: `问题总数 ${issueSummary.total_issues || projectIssues.length}`, icon: <Sparkline data={riskTrendData} color={CHART_SERIES.warning} /> },
         ] as MetricItem[],
       }
     }
@@ -1569,7 +1563,12 @@ export default function Reports() {
       backTo: projectId ? `/projects/${projectId}/milestones` : undefined,
       metrics: [
         { title: '总任务数', value: summary?.totalTasks ?? projectTasks.length, hint: `叶子任务 ${summary?.leafTaskCount ?? projectTasks.length}`, icon: <ClipboardList className="h-4 w-4" /> },
-        { title: '完成率', value: `${summary?.overallProgress ?? 0}%`, hint: `里程碑完成率 ${summary?.milestoneProgress ?? 0}%`, icon: <BarChart3 className="h-4 w-4" /> },
+        {
+          title: '完成率',
+          value: formatWholePercent(summary?.overallProgress ?? 0),
+          hint: `里程碑完成率 ${formatWholePercent(summary?.milestoneProgress ?? 0)}`,
+          icon: <BarChart3 className="h-4 w-4" />,
+        },
         { title: '本月新增', value: monthNewTaskCount, hint: `本月新增任务 · ${getCurrentMonthKey()}`, icon: <Flag className="h-4 w-4" /> },
       ] as MetricItem[],
     }
@@ -1740,7 +1739,7 @@ export default function Reports() {
       },
       {
         title: '月度兑现偏差',
-        value: `${summary?.overallProgress ?? 0}%`,
+        value: formatWholePercent(summary?.overallProgress ?? 0),
         description: '月度兑现偏差受确认状态、延期与月末待处理事项共同影响。',
         hint: '非主线摘要默认折叠',
       },
@@ -1838,7 +1837,7 @@ export default function Reports() {
             实际进度: row.actual_progress ?? '',
             实际日期: formatDateLabel(row.actual_date || null),
             偏差天数: row.deviation_days,
-            偏差率: `${row.deviation_rate}%`,
+            偏差率: formatWholePercent(row.deviation_rate),
             状态: row.status,
             原因: row.reason || '',
             关联状态: mappingStatusLabel(row.mapping_status),
@@ -1921,12 +1920,12 @@ export default function Reports() {
 
   const renderProgressDetail = () => (
     <>
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(300px,1fr)]">
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(18.75rem,1fr)]">
         <div className="space-y-3">
           {sCurveLoading && sCurvePoints.length === 0 ? (
             <LoadingState
               label="S 曲线加载中"
-              className="min-h-64 rounded-2xl border border-dashed border-slate-200 bg-slate-50"
+              className="min-h-64 rounded-2xl empty-state-frame border-slate-200 bg-slate-50"
             />
           ) : (
             <SCurveChart points={sCurvePoints} tasks={projectTasks} />
@@ -1938,13 +1937,13 @@ export default function Reports() {
           ) : null}
         </div>
 
-        <Card data-testid="reports-key-node-list" className="card-unified p-0">
+        <Card data-testid="reports-key-node-list" variant="surface">
           <CardHeader className="pb-3">
             <CardTitle className="text-base">关键节点列表</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
             {reportMilestoneCards.length === 0 ? (
-              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+              <div className="rounded-xl empty-state-frame border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
                 暂无关键节点
               </div>
             ) : (
@@ -1956,12 +1955,12 @@ export default function Reports() {
                 return (
                   <div
                     key={milestone.id}
-                    className="grid grid-cols-[92px_minmax(0,1fr)_10px] items-center gap-3 rounded-xl border border-slate-100 bg-white px-3 py-3 transition-colors even:bg-slate-50/50 hover:bg-slate-100/60"
+                    className="grid grid-cols-[5.75rem_minmax(0,1fr)_0.625rem] items-center gap-3 rounded-xl border border-slate-100 bg-white px-3 py-3 transition-colors even:bg-slate-50/50 hover:bg-slate-100/60"
                   >
                     <div className="text-xs text-slate-500 tabular-nums">{formatDateLabel(milestone.currentPlannedDate)}</div>
                     <div className="min-w-0">
                       <div className="truncate text-sm font-medium text-slate-900">{milestone.name}</div>
-                      <div className="mt-1 text-xs text-slate-500">进度 {milestone.progress}% · {milestone.statusLabel}</div>
+                      <div className="mt-1 text-xs text-slate-500">进度 {formatWholePercent(milestone.progress)} · {milestone.statusLabel}</div>
                     </div>
                     <span className={`h-2.5 w-2.5 rounded-full ${dotClass}`} aria-hidden="true" />
                   </div>
@@ -1972,15 +1971,15 @@ export default function Reports() {
         </Card>
       </div>
       <CriticalPathSummaryCard summary={criticalPathSummary} />
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(360px,0.85fr)]">
-      <Card className="border-slate-200 shadow-sm">
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(22.5rem,0.85fr)]">
+      <Card className="surface-card">
         <CardHeader className="pb-4">
           <CardTitle className="text-base">工期偏差与执行判断</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <DetailStatCard label="整体完成率" value={`${summary?.overallProgress ?? 0}%`} hint={`任务总数 ${summary?.totalTasks ?? 0}`} />
-            <DetailStatCard label="里程碑完成率" value={`${summary?.milestoneProgress ?? 0}%`} hint={`${summary?.completedMilestones ?? 0}/${summary?.totalMilestones ?? 0}`} />
+            <DetailStatCard label="整体完成率" value={formatWholePercent(summary?.overallProgress ?? 0)} hint={`任务总数 ${summary?.totalTasks ?? 0}`} />
+            <DetailStatCard label="里程碑完成率" value={formatWholePercent(summary?.milestoneProgress ?? 0)} hint={`${summary?.completedMilestones ?? 0}/${summary?.totalMilestones ?? 0}`} />
             <DetailStatCard label="延期任务" value={summary?.delayedTaskCount ?? delayedTasks.length} hint={`累计延期 ${summary?.delayDays ?? 0} 天`} />
             <DetailStatCard
               label="验收通过"
@@ -1993,13 +1992,13 @@ export default function Reports() {
         </CardContent>
       </Card>
 
-      <Card className="border-slate-200 shadow-sm">
+      <Card className="surface-card">
         <CardHeader className="pb-4">
           <CardTitle className="text-base">里程碑窗口</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           {reportMilestoneCards.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+            <div className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
               暂无里程碑任务
             </div>
           ) : (
@@ -2024,7 +2023,7 @@ export default function Reports() {
                   </div>
                 </div>
                 <div className="mt-2 text-xs text-slate-500">
-                  当前进度 {milestone.progress}% · 主对比 {formatDateLabel(milestone.currentPlannedDate)} / {formatDateLabel(milestone.actualDate)}
+                  当前进度 {formatWholePercent(milestone.progress)} · 主对比 {formatDateLabel(milestone.currentPlannedDate)} / {formatDateLabel(milestone.actualDate)}
                 </div>
               </div>
             ))
@@ -2032,7 +2031,7 @@ export default function Reports() {
         </CardContent>
       </Card>
 
-      <Card className="border-slate-200 shadow-sm">
+      <Card className="surface-card">
         <CardHeader className="pb-4">
           <CardTitle className="text-base">专项与关键路径概览</CardTitle>
         </CardHeader>
@@ -2055,23 +2054,23 @@ export default function Reports() {
         </CardContent>
       </Card>
 
-      <Card className="border-slate-200 shadow-sm xl:col-span-2">
+      <Card className="surface-card xl:col-span-2">
         <CardHeader className="pb-4">
           <CardTitle className="text-base">关键任务 / WBS 节点</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           {wbsFocusRows.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+            <div className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
               暂无任务节点数据
             </div>
           ) : (
             wbsFocusRows.map((task) => (
-              <div key={task.id} className="grid gap-3 rounded-2xl border border-slate-100 bg-white px-4 py-4 md:grid-cols-[minmax(0,1.2fr)_120px_140px_120px]">
+              <div key={task.id} className="grid gap-3 rounded-2xl border border-slate-100 bg-white px-4 py-4 md:grid-cols-[minmax(0,1.2fr)_7.5rem_8.75rem_7.5rem]">
                 <div>
                   <div className="text-sm font-medium text-slate-900">{getTaskDisplayName(task)}</div>
                   <div className="mt-1 text-xs text-slate-500">WBS {task.wbs_code || '未编码'} · {getTaskStatus(task)}</div>
                 </div>
-                <div className="text-sm text-slate-700">进度 {task.progress ?? 0}%</div>
+                <div className="text-sm text-slate-700">进度 {formatWholePercent(task.progress ?? 0)}</div>
                 <div className="text-sm text-slate-700">计划完成 {formatDateLabel(task.planned_end_date || task.end_date)}</div>
                 <div className={`text-sm font-medium ${isDelayedTask(task) ? 'text-red-600' : 'text-slate-700'}`}>
                   {isDelayedTask(task) ? '存在延期' : '节奏正常'}
@@ -2110,7 +2109,7 @@ export default function Reports() {
 
       <div
         data-testid="deviation-filter-chips"
-        className="flex flex-wrap gap-2 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
+        className="flex flex-wrap gap-2 rounded-2xl border border-slate-100 bg-white p-4 shadow-[var(--el-1)]"
       >
         {deviationChips.map((chip) => (
           <Button variant="ghost"
@@ -2139,19 +2138,19 @@ export default function Reports() {
       </div>
 
       <div className="grid gap-4 md:grid-cols-3">
-        <MetricCard
+        <SharedMetricCard
           title="基线偏差"
           value={deviationData?.summary.baseline_items ?? 0}
           hint="聚焦基线节点、对应关系状态与版本切换影响"
           icon={<Flag className="h-4 w-4" />}
         />
-        <MetricCard
+        <SharedMetricCard
           title="月度兑现偏差"
           value={deviationData?.summary.monthly_plan_items ?? 0}
           hint="聚焦月度计划兑现、延期与月末待处理事项"
           icon={<ClipboardList className="h-4 w-4" />}
         />
-        <MetricCard
+        <SharedMetricCard
           title="执行偏差"
           value={deviationData?.summary.execution_items ?? projectTasks.length}
           hint="聚焦任务推进、条件阻碍与执行节奏"
@@ -2169,7 +2168,7 @@ export default function Reports() {
         />
       </div>
 
-      <Card data-testid="reports-deviation-lock-card" className="border-slate-200 shadow-sm">
+      <Card data-testid="reports-deviation-lock-card" className="surface-card">
         <CardContent className="flex flex-wrap items-center justify-between gap-4 p-5">
           <div className="space-y-1">
             <div className="flex items-center gap-2 text-sm font-medium text-slate-900">
@@ -2185,7 +2184,7 @@ export default function Reports() {
               <div className="text-xs text-amber-700">{deviationLockError}</div>
             ) : null}
           </div>
-          <div className="grid gap-2 text-right text-xs text-slate-500 sm:min-w-[220px]">
+          <div className="grid gap-2 text-right text-xs text-slate-500 sm:min-w-56">
             <div>锁定时间：{formatDateTimeLabel(activeDeviationLock?.locked_at)}</div>
             <div>到期时间：{formatDateTimeLabel(activeDeviationLock?.lock_expires_at)}</div>
           </div>
@@ -2193,7 +2192,7 @@ export default function Reports() {
       </Card>
 
       {deviationError ? (
-        <Card className="border-slate-200 shadow-sm">
+        <Card className="surface-card">
           <CardContent className="py-10 text-center text-sm text-red-600">
             {deviationError}
           </CardContent>
@@ -2209,7 +2208,7 @@ export default function Reports() {
             <>
           <BaselineSwitchMarker events={deviationVersionEvents} baselineLabel={baselineLabel} />
 
-          <Card data-testid="reports-deviation-filter-panel" className="border-slate-200 shadow-sm">
+          <Card data-testid="reports-deviation-filter-panel" className="surface-card">
             <CardHeader className="pb-4">
               <CardTitle className="text-base">偏差筛选</CardTitle>
             </CardHeader>
@@ -2302,7 +2301,7 @@ export default function Reports() {
             <ExecutionScatterChart rows={executionDeviationChartRows} mainlineLabel={deviationMainline?.label || deviationViewLabel} />
           )}
 
-          <div className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(360px,0.9fr)]">
+          <div className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(22.5rem,0.9fr)]">
             <DeviationDetailTable
               rows={deviationTableRows}
               mainlineLabel={deviationMainline?.label || deviationViewLabel}
@@ -2310,8 +2309,8 @@ export default function Reports() {
             />
           </div>
 
-          <div className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(360px,0.9fr)]">
-            <Card data-testid="deviation-detail-panel" className="border-slate-200 shadow-sm">
+          <div className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(22.5rem,0.9fr)]">
+            <Card data-testid="deviation-detail-panel" className="surface-card">
               <CardHeader className="pb-4">
                 <CardTitle className="text-base">下钻明细区</CardTitle>
               </CardHeader>
@@ -2324,12 +2323,17 @@ export default function Reports() {
                     </div>
                   ))
                 ) : (
-                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-5" />
+                  <EmptyState
+                    icon={BarChart3}
+                    title="下钻明细已收起"
+                    description="当前只展示主表和责任归因摘要。"
+                    className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 p-5"
+                  />
                 )}
               </CardContent>
             </Card>
 
-            <Card data-testid="reports-responsibility-analysis" className="border-slate-200 shadow-sm">
+            <Card data-testid="reports-responsibility-analysis" className="surface-card">
               <CardHeader className="pb-4">
                 <CardTitle className="text-base">责任归因分析</CardTitle>
               </CardHeader>
@@ -2346,7 +2350,7 @@ export default function Reports() {
                               {entry.task_ids.length} 个任务 · {entry.count} 项偏差
                             </div>
                           </div>
-                          <div className="text-xs text-slate-500">{entry.percentage}%</div>
+                          <div className="text-xs text-slate-500">{formatWholePercent(entry.percentage)}</div>
                         </div>
                         <div className="mt-2 h-2 rounded-full bg-white">
                           <div
@@ -2357,7 +2361,7 @@ export default function Reports() {
                       </div>
                     ))
                   ) : (
-                    <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+                    <div className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
                       当前筛选条件下暂无责任贡献数据。
                     </div>
                   )}
@@ -2369,7 +2373,7 @@ export default function Reports() {
                       <div key={cause.reason} className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
                         <div className="flex items-center justify-between gap-3">
                           <div className="text-sm font-medium text-slate-900">{cause.reason}</div>
-                          <div className="text-xs text-slate-500">{cause.count} 项 · {cause.percentage}%</div>
+                          <div className="text-xs text-slate-500">{cause.count} 项 · {formatWholePercent(cause.percentage)}</div>
                         </div>
                         <div className="mt-2 h-2 rounded-full bg-white">
                           <div
@@ -2380,7 +2384,7 @@ export default function Reports() {
                       </div>
                     ))
                   ) : (
-                    <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+                    <div className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
                       当前筛选条件下暂无偏差原因数据。
                     </div>
                   )}
@@ -2390,7 +2394,7 @@ export default function Reports() {
           </div>
 
           <div className="grid gap-6 xl:grid-cols-2">
-            <Card data-testid="reports-delay-statistics" className="border-slate-200 shadow-sm">
+            <Card data-testid="reports-delay-statistics" className="surface-card">
               <CardHeader className="pb-4">
                 <CardTitle className="text-base">延期统计</CardTitle>
               </CardHeader>
@@ -2408,12 +2412,17 @@ export default function Reports() {
                     </div>
                   ))
                 ) : (
-                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4" />
+                  <EmptyState
+                    variant="filter"
+                    title="暂无延期统计"
+                    description="当前筛选条件下没有可展示的延期任务。"
+                    className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 py-8"
+                  />
                 )}
               </CardContent>
             </Card>
 
-            <Card data-testid="reports-delay-obstacle-correlation" className="border-slate-200 shadow-sm">
+            <Card data-testid="reports-delay-obstacle-correlation" className="surface-card">
               <CardHeader className="pb-4">
                 <CardTitle className="text-base">延期与阻碍关联分析</CardTitle>
               </CardHeader>
@@ -2435,7 +2444,7 @@ export default function Reports() {
                     </div>
                   ))
                 ) : (
-                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+                  <div className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
                     当前延期任务尚未与阻碍记录形成明显关联。
                   </div>
                 )}
@@ -2451,7 +2460,7 @@ export default function Reports() {
           >
             <DialogContent
               data-testid="reports-deviation-row-drawer"
-              className="left-auto right-0 top-0 h-full max-h-none w-full max-w-[720px] translate-x-0 translate-y-0 rounded-none border-l border-slate-200 bg-white p-0 shadow-[var(--el-4)] data-[state=open]:slide-in-from-right-0"
+              className="left-auto right-0 top-0 h-full max-h-none w-full max-w-3xl translate-x-0 translate-y-0 rounded-none border-l border-slate-200 bg-white p-0 shadow-[var(--el-4)] data-[state=open]:slide-in-from-right-0"
             >
               {selectedDeviationRow ? (
                 <div className="flex h-full flex-col">
@@ -2468,18 +2477,18 @@ export default function Reports() {
                     <div className="grid gap-3 sm:grid-cols-2">
                       <DetailStatCard
                         label="计划进度"
-                        value={`${selectedDeviationRow.planned_progress ?? 0}%`}
+                        value={formatWholePercent(selectedDeviationRow.planned_progress ?? 0)}
                         hint="计划口径"
                       />
                       <DetailStatCard
                         label="实际进度"
-                        value={`${selectedDeviationRow.actual_progress ?? 0}%`}
+                        value={formatWholePercent(selectedDeviationRow.actual_progress ?? 0)}
                         hint={selectedDeviationRow.actual_date || '无实际日期'}
                       />
                       <DetailStatCard
                         label="偏差天数"
                         value={selectedDeviationRow.deviation_days}
-                        hint={`${selectedDeviationRow.deviation_rate}% 偏差率`}
+                        hint={`${formatWholePercent(selectedDeviationRow.deviation_rate)} 偏差率`}
                       />
                       <DetailStatCard
                         label="主线"
@@ -2544,7 +2553,7 @@ export default function Reports() {
         </>
       )}
       {showConditionSections ? (
-        <Card data-testid="reports-condition-summary" className="border-slate-200 shadow-sm">
+        <Card data-testid="reports-condition-summary" className="surface-card">
           <CardHeader className="pb-4">
             <CardTitle className="text-base">条件未满足分析</CardTitle>
           </CardHeader>
@@ -2557,7 +2566,7 @@ export default function Reports() {
       ) : null}
 
       {showRiskSections ? (
-        <Card data-testid="reports-risk-linkage-summary" className="border-slate-200 shadow-sm">
+        <Card data-testid="reports-risk-linkage-summary" className="surface-card">
           <CardHeader className="pb-4">
             <CardTitle className="text-base">风险联动摘要</CardTitle>
           </CardHeader>
@@ -2573,7 +2582,7 @@ export default function Reports() {
         <div className="grid gap-6 xl:grid-cols-2">
           <MaterialArrivalSummaryCard summary={materialSummary} projectId={projectId} />
 
-          <Card data-testid="reports-obstacle-type-summary" className="border-slate-200 shadow-sm">
+          <Card data-testid="reports-obstacle-type-summary" className="surface-card">
             <CardHeader className="pb-4">
               <CardTitle className="text-base">阻碍类型汇总</CardTitle>
             </CardHeader>
@@ -2586,7 +2595,7 @@ export default function Reports() {
                   </div>
                 ))
               ) : (
-                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+                <div className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
                   当前暂无阻碍类型数据。
                 </div>
               )}
@@ -2614,13 +2623,13 @@ export default function Reports() {
 
     return (
       <>
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(360px,0.9fr)]">
-        <Card data-testid="reports-risk-matrix" className="card-unified p-0">
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(22.5rem,0.9fr)]">
+        <Card data-testid="reports-risk-matrix" variant="surface">
           <CardHeader className="pb-4">
             <CardTitle className="text-base">风险矩阵热力图</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid grid-cols-[56px_repeat(5,minmax(0,1fr))] gap-2 text-center text-xs">
+            <div className="grid grid-cols-[3.5rem_repeat(5,minmax(0,1fr))] gap-2 text-center text-xs">
               <div />
               {[1, 2, 3, 4, 5].map((probability) => (
                 <div key={`probability-${probability}`} className="text-slate-500 tabular-nums">P{probability}</div>
@@ -2648,7 +2657,7 @@ export default function Reports() {
           </CardContent>
         </Card>
 
-        <Card data-testid="reports-risk-list" className="card-unified p-0">
+        <Card data-testid="reports-risk-list" variant="surface">
           <CardHeader className="pb-4">
             <div className="flex items-center justify-between gap-3">
               <CardTitle className="text-base">最新风险列表</CardTitle>
@@ -2699,7 +2708,7 @@ export default function Reports() {
 
             <div className="space-y-3">
               {visibleRiskRows.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+                <div className="rounded-xl empty-state-frame border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
                   当前筛选条件下暂无风险。
                 </div>
               ) : (
@@ -2716,7 +2725,7 @@ export default function Reports() {
                       key={risk.id}
                       data-testid={`reports-risk-drilldown-${risk.id}`}
                       to={riskHref}
-                      className="grid grid-cols-[4px_minmax(0,1fr)] gap-3 rounded-xl border border-slate-100 bg-white px-3 py-3 transition-colors even:bg-slate-50/50 hover:bg-slate-100/60"
+                      className="grid grid-cols-[0.25rem_minmax(0,1fr)] gap-3 rounded-xl border border-slate-100 bg-white px-3 py-3 transition-colors even:bg-slate-50/50 hover:bg-slate-100/60"
                     >
                       <span className={`rounded-full ${tone.bar}`} aria-hidden="true" />
                       <div className="min-w-0">
@@ -2738,8 +2747,8 @@ export default function Reports() {
         </Card>
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(360px,0.9fr)]">
-        <Card className="border-slate-200 shadow-sm">
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(22.5rem,0.9fr)]">
+        <Card className="surface-card">
           <CardHeader className="pb-4">
             <CardTitle className="text-base">风险压力结构</CardTitle>
           </CardHeader>
@@ -2764,7 +2773,7 @@ export default function Reports() {
           </CardContent>
         </Card>
 
-        <Card className="border-slate-200 shadow-sm">
+        <Card className="surface-card">
           <CardHeader className="pb-4">
             <CardTitle className="text-base">处置入口</CardTitle>
           </CardHeader>
@@ -2785,13 +2794,13 @@ export default function Reports() {
           <MaterialArrivalSummaryCard summary={materialSummary} projectId={projectId} />
         </div>
 
-        <Card className="border-slate-200 shadow-sm xl:col-span-2">
+        <Card className="surface-card xl:col-span-2">
           <CardHeader className="pb-4">
             <CardTitle className="text-base">重点风险与问题清单</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
             {focusRisks.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+              <div className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
                 暂无重点风险与问题
               </div>
             ) : (
@@ -2807,7 +2816,7 @@ export default function Reports() {
                     key={risk.id}
                     data-testid={`reports-risk-drilldown-${risk.id}`}
                     to={riskHref}
-                    className="grid gap-3 rounded-2xl border border-slate-100 bg-white px-4 py-4 transition-colors hover:border-blue-200 hover:bg-blue-50/40 md:grid-cols-[minmax(0,1.3fr)_140px_140px_140px]"
+                    className="grid gap-3 rounded-2xl border border-slate-100 bg-white px-4 py-4 transition-colors hover:border-blue-200 hover:bg-blue-50/40 md:grid-cols-[minmax(0,1.3fr)_8.75rem_8.75rem_8.75rem]"
                   >
                     <div>
                       <div className="text-sm font-medium text-slate-900">{risk.title || '未命名风险'}</div>
@@ -2823,7 +2832,7 @@ export default function Reports() {
           </CardContent>
         </Card>
 
-        <Card data-testid="reports-issue-analysis" className="border-slate-200 shadow-sm xl:col-span-2">
+        <Card data-testid="reports-issue-analysis" className="surface-card xl:col-span-2">
           <CardHeader className="pb-4">
             <CardTitle className="text-base">问题独立分析</CardTitle>
           </CardHeader>
@@ -2838,7 +2847,7 @@ export default function Reports() {
               <div className="space-y-3">
                 <div className="text-sm font-medium text-slate-700">近 30 天趋势</div>
                 {issueSummaryLoading ? (
-                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
+                  <div className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
                     问题摘要加载中
                   </div>
                 ) : issueTrend.length > 0 ? (
@@ -2889,7 +2898,7 @@ export default function Reports() {
                     </div>
                   </div>
                 ) : (
-                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
+                  <div className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
                     当前项目暂无问题趋势数据。
                   </div>
                 )}
@@ -2904,7 +2913,7 @@ export default function Reports() {
                     </div>
                   ))
                 ) : (
-                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
+                  <div className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
                     当前项目暂无问题来源数据。
                   </div>
                 )}
@@ -2923,7 +2932,7 @@ export default function Reports() {
                       </div>
                     ))
                 ) : (
-                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
+                  <div className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
                     当前项目暂无问题严重度数据。
                   </div>
                 )}
@@ -2946,7 +2955,7 @@ export default function Reports() {
                     </div>
                   ))
                 ) : (
-                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
+                  <div className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
                     当前项目暂无问题记录。
                   </div>
                 )}
@@ -2960,7 +2969,7 @@ export default function Reports() {
   }
 
   const renderChangeLogDetail = () => (
-    <Card data-testid="change-log-view" className="card-unified p-0">
+    <Card data-testid="change-log-view" variant="surface">
       <CardHeader className="pb-4">
         <CardTitle className="text-base">变更记录分析</CardTitle>
       </CardHeader>
@@ -2980,10 +2989,10 @@ export default function Reports() {
         ) : changeLogLoading ? (
           <LoadingState
             label="变更记录加载中"
-            className="min-h-24 rounded-xl border border-dashed border-slate-200 bg-slate-50"
+            className="min-h-24 rounded-xl empty-state-frame border-slate-200 bg-slate-50"
           />
         ) : sortedChangeLogs.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+          <div className="rounded-xl empty-state-frame border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
             暂无变更记录
           </div>
         ) : (
@@ -2995,7 +3004,7 @@ export default function Reports() {
                 return (
                   <div
                     key={record.id}
-                    className="grid grid-cols-[110px_4px_minmax(0,1fr)_auto] gap-3 rounded-xl border border-slate-100 bg-white px-4 py-4 transition-colors even:bg-slate-50/50 hover:bg-slate-100/60"
+                    className="grid grid-cols-[6.875rem_0.25rem_minmax(0,1fr)_auto] gap-3 rounded-xl border border-slate-100 bg-white px-4 py-4 transition-colors even:bg-slate-50/50 hover:bg-slate-100/60"
                   >
                     <div className="text-xs text-slate-500 tabular-nums">{formatDateLabel(record.changed_at)}</div>
                     <span className={`rounded-full ${meta.bar}`} aria-hidden="true" />
@@ -3182,7 +3191,7 @@ export default function Reports() {
 
             <div data-testid="reports-current-metrics" className={metricGridClass}>
               {currentMetrics.map((metric) => (
-                <MetricCard
+                <SharedMetricCard
                   key={metric.title}
                   title={metric.title}
                   value={metric.value}
@@ -3192,7 +3201,7 @@ export default function Reports() {
               ))}
             </div>
 
-            <Card data-testid="reports-trend-panel" className="border-slate-200 shadow-sm">
+            <Card data-testid="reports-trend-panel" className="surface-card">
               <CardHeader className="pb-4">
                 <CardTitle className="text-base">指标 / 时间 / 维度</CardTitle>
               </CardHeader>
@@ -3264,7 +3273,7 @@ export default function Reports() {
                     {trendError}
                   </div>
                 ) : trendLoading && trendPoints.length === 0 ? (
-                  <LoadingState label="趋势数据加载中" className="min-h-24 rounded-2xl border border-dashed border-slate-200 bg-slate-50" />
+                  <LoadingState label="趋势数据加载中" className="min-h-24 rounded-2xl empty-state-frame border-slate-200 bg-slate-50" />
                 ) : trendPoints.length > 0 ? (
                   <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
                     {trendPoints.slice(0, 9).map((point) => (
@@ -3281,7 +3290,7 @@ export default function Reports() {
                     ))}
                   </div>
                 ) : (
-                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
+                  <div className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
                     暂无趋势数据。
                   </div>
                 )}
@@ -3317,7 +3326,7 @@ function CriticalPathSummaryCard({
   summary: CriticalPathSummaryModel | null
 }) {
   return (
-    <Card data-testid="reports-critical-path-summary" className="border-slate-200 shadow-sm">
+    <Card data-testid="reports-critical-path-summary" className="surface-card">
       <CardHeader className="pb-4">
         <CardTitle className="text-base">关键路径摘要</CardTitle>
       </CardHeader>
@@ -3344,7 +3353,12 @@ function CriticalPathSummaryCard({
             </div>
           </>
         ) : (
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5" />
+          <EmptyState
+            icon={ShieldAlert}
+            title="暂无关键路径摘要"
+            description="当前项目还没有可展示的关键路径统计。"
+            className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 px-4 py-5"
+          />
         )}
       </CardContent>
     </Card>
@@ -3367,7 +3381,7 @@ function MaterialArrivalSummaryCard({
   const monthlyTrend = Array.isArray(summary?.monthlyTrend) ? summary.monthlyTrend : []
 
   return (
-    <Card data-testid="reports-material-arrival-summary" className="border-slate-200 shadow-sm">
+    <Card data-testid="reports-material-arrival-summary" className="surface-card">
       <CardHeader className="pb-4">
         <CardTitle className="text-base">材料到场率分析</CardTitle>
       </CardHeader>
@@ -3377,9 +3391,9 @@ function MaterialArrivalSummaryCard({
             <div className="grid gap-3 md:grid-cols-3">
               <DetailStatCard label="预计到场总数" value={overview.totalExpectedCount} hint="按预计到场日期口径" />
               <DetailStatCard label="按时到场数" value={overview.onTimeCount} hint="实际到场 <= 预计到场" />
-              <DetailStatCard label="整体到场率" value={`${overview.arrivalRate}%`} hint="近 6 个月与当前项目材料总览" />
+              <DetailStatCard label="整体到场率" value={formatWholePercent(overview.arrivalRate)} hint="近 6 个月与当前项目材料总览" />
             </div>
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(20rem,0.9fr)]">
               <div className="space-y-3">
                 <div className="text-sm font-medium text-slate-700">参建单位到场率</div>
                 {byUnit.length > 0 ? (
@@ -3405,39 +3419,56 @@ function MaterialArrivalSummaryCard({
                           </div>
                         </div>
                         <div className="text-right text-sm text-slate-700">
-                          <div className="text-lg font-semibold text-slate-900">{row.arrivalRate}%</div>
+                          <div className="text-lg font-semibold text-slate-900">{formatWholePercent(row.arrivalRate)}</div>
                           <div>{row.onTimeCount} / {row.totalExpectedCount}</div>
                         </div>
                       </div>
                     </div>
                   ))
                 ) : (
-                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
-                    当前项目还没有材料到场记录。
-                  </div>
+                  <EmptyState
+                    icon={ClipboardList}
+                    title="暂无单位到场记录"
+                    description="当前项目还没有按参建单位汇总的材料到场数据。"
+                    className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 px-4 py-5"
+                  />
                 )}
               </div>
               <div className="space-y-3">
                 <div className="text-sm font-medium text-slate-700">近 6 个月趋势</div>
-                {monthlyTrend.map((row) => (
-                  <div key={row.month} className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="text-sm font-medium text-slate-900">{row.month}</div>
-                      <div className="text-sm text-slate-700">{row.arrivalRate}%</div>
+                {monthlyTrend.length > 0 ? (
+                  monthlyTrend.map((row) => (
+                    <div key={row.month} className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="text-sm font-medium text-slate-900">{row.month}</div>
+                        <div className="text-sm text-slate-700">{formatWholePercent(row.arrivalRate)}</div>
+                      </div>
+                      <div className="mt-2 h-2 rounded-full bg-slate-200">
+                        <div className="h-2 rounded-full bg-emerald-500" style={{ width: `${Math.max(row.arrivalRate, row.totalExpectedCount > 0 ? 8 : 0)}%` }} />
+                      </div>
+                      <div className="mt-2 text-xs text-slate-500">
+                        按时 {row.onTimeCount} / 预计 {row.totalExpectedCount}
+                      </div>
                     </div>
-                    <div className="mt-2 h-2 rounded-full bg-slate-200">
-                      <div className="h-2 rounded-full bg-emerald-500" style={{ width: `${Math.max(row.arrivalRate, row.totalExpectedCount > 0 ? 8 : 0)}%` }} />
-                    </div>
-                    <div className="mt-2 text-xs text-slate-500">
-                      按时 {row.onTimeCount} / 预计 {row.totalExpectedCount}
-                    </div>
-                  </div>
-                ))}
+                  ))
+                ) : (
+                  <EmptyState
+                    icon={BarChart3}
+                    title="暂无趋势数据"
+                    description="当前项目还没有形成材料到场月度趋势。"
+                    className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 px-4 py-5"
+                  />
+                )}
               </div>
             </div>
           </>
         ) : (
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5" />
+          <EmptyState
+            icon={ClipboardList}
+            title="暂无材料到场摘要"
+            description="当前项目还没有可展示的材料到场统计。"
+            className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 px-4 py-5"
+          />
         )}
       </CardContent>
     </Card>

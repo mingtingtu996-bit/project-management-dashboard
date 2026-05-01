@@ -42,7 +42,7 @@ export function BatchActionBar({
       )}
       aria-live="polite"
     >
-      <div className="mx-auto flex max-w-[1440px] items-center justify-between gap-4 rounded-2xl border border-slate-700/70 bg-slate-950 px-4 py-3 text-white shadow-2xl shadow-slate-950/30">
+      <div className="mx-auto flex max-w-[var(--content-max-width)] items-center justify-between gap-4 rounded-2xl border border-slate-700/70 bg-slate-950 px-4 py-3 text-white shadow-2xl shadow-slate-950/30">
         <div className="flex items-center gap-3">
           <span className="flex h-7 min-w-7 items-center justify-center rounded-full bg-blue-500 px-2 text-xs font-bold text-slate-950">
             {selectedCount}

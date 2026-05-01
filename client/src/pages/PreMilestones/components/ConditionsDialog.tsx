@@ -3,17 +3,23 @@ import {
   CheckCircle,
   Edit2,
   Trash2,
-  X,
 } from 'lucide-react'
 import type { Dispatch, SetStateAction } from 'react'
-import { Separator } from '@/components/ui/separator'
 import type {
   ConditionFormData,
   PreMilestone,
   PreMilestoneCondition,
 } from '../types'
+import { EmptyState } from '@/components/EmptyState'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 interface ConditionsDialogProps {
@@ -50,21 +56,14 @@ export function ConditionsDialog({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex animate-in items-center justify-center bg-slate-950/50 px-4 py-6 backdrop-blur-[4px] duration-200 fade-in-0">
-      <div className="max-h-[90vh] w-[90%] max-w-[720px] animate-in overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-[var(--el-4)] duration-200 ease-bounce fade-in-0 zoom-in-95">
-        <div className="flex items-center justify-between p-6">
-          <div>
-            <h2 className="text-xl font-semibold text-slate-900">{selectedMilestone.name} - 前置条件</h2>
-            <p className="text-sm text-slate-500 mt-1">管理证照办理所需的各项前置条件</p>
-          </div>
-          <Button variant="ghost"
-            onClick={onClose}
-            className="p-2 hover:bg-slate-100 rounded-xl"
-          >
-            <X className="w-5 h-5" />
-          </Button>
-        </div>
-        <Separator />
+    <Dialog open={Boolean(selectedMilestone)} onOpenChange={(open) => {
+      if (!open) onClose()
+    }}>
+      <DialogContent className="max-h-[calc(100vh-4rem)] max-w-3xl overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>{selectedMilestone.name} - 前置条件</DialogTitle>
+          <DialogDescription>管理证照办理所需的各项前置条件。</DialogDescription>
+        </DialogHeader>
 
         <div className="p-6">
           {!readOnly ? (
@@ -95,7 +94,7 @@ export function ConditionsDialog({
                     type="date"
                     value={conditionForm.target_date}
                     onChange={(event) => setConditionForm((previous) => ({ ...previous, target_date: event.target.value }))}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
                   />
                 </div>
               </div>
@@ -107,7 +106,7 @@ export function ConditionsDialog({
                   type="text"
                   value={conditionForm.condition_name}
                   onChange={(event) => setConditionForm((previous) => ({ ...previous, condition_name: event.target.value }))}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
                 />
               </div>
               <div className="mb-3">
@@ -116,7 +115,7 @@ export function ConditionsDialog({
                   value={conditionForm.description}
                   onChange={(event) => setConditionForm((previous) => ({ ...previous, description: event.target.value }))}
                   rows={2}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
                 />
               </div>
               <Button variant="ghost"
@@ -136,9 +135,11 @@ export function ConditionsDialog({
               ) : null}
             </div>
           ) : (
-            <div className="mb-6 rounded-xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-              当前为只读模式，仅可查看条件清单。
-            </div>
+            <EmptyState
+              title="只读模式"
+              description="当前仅可查看条件清单。"
+              className="mb-6 rounded-xl empty-state-frame border-slate-200 bg-slate-50 py-6"
+            />
           )}
 
           <div>
@@ -146,16 +147,18 @@ export function ConditionsDialog({
               条件列表 ({conditions.length})
             </h3>
             {conditions.length === 0 ? (
-              <div className="text-center py-8 bg-slate-50 rounded-xl border border-slate-100">
-                <CheckCircle className="w-12 h-12 text-slate-300 mx-auto mb-2" />
-                <p className="text-slate-500">暂无前置条件</p>
-              </div>
+              <EmptyState
+                icon={CheckCircle}
+                title="暂无前置条件"
+                description="添加条件后，可在这里跟踪满足和确认状态。"
+                className="rounded-xl border border-slate-100 bg-slate-50 py-8"
+              />
             ) : (
               <div className="space-y-3">
                 {conditions.map((condition) => (
                   <Card
                     key={condition.id}
-                    className="bg-white border border-slate-200 rounded-xl p-4 hover:shadow-sm transition-shadow"
+                    className="bg-white border border-slate-100 rounded-xl p-4 hover:shadow-[var(--el-1)] transition-shadow"
                   >
                     <div className="flex items-start justify-between">
                       <div className="flex-1">
@@ -232,7 +235,7 @@ export function ConditionsDialog({
             )}
           </div>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }

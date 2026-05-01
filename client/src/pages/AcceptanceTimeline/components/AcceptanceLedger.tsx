@@ -259,7 +259,7 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           placeholder="搜索验收节点名称..."
-          className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-9 pr-4 text-sm text-slate-900 placeholder-slate-400 focus:border-blue-400 focus:outline-none"
+          className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-9 pr-4 text-sm text-slate-900 placeholder-slate-400 focus-visible:border-blue-400 focus-visible:outline-none"
           data-testid="acceptance-ledger-search"
         />
       </div>
@@ -303,7 +303,7 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
             {onBatchStatusChange && (
               <div className="flex items-center gap-2">
                 <Select value={batchStatus} onValueChange={(value) => setBatchStatus(value as AcceptanceStatus)} disabled={!editable}>
-                  <SelectTrigger className="h-9 min-w-[124px] border-blue-200 bg-white text-sm">
+                  <SelectTrigger className="h-9 min-w-32 border-blue-200 bg-white text-sm">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -311,7 +311,7 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
                   </SelectContent>
                 </Select>
                 <DisabledReasonTooltip reason={readOnlyActionReason}>
-                  <Button size="sm" variant="outline" disabled={!editable || batchActionLoading} onClick={() => void handleBatchStatus()} data-testid="acceptance-batch-status-apply">批量改状态</Button>
+                  <Button size="sm" variant="outline" disabled={!editable || batchActionLoading} loading={batchActionLoading} onClick={() => void handleBatchStatus()} data-testid="acceptance-batch-status-apply">批量改状态</Button>
                 </DisabledReasonTooltip>
               </div>
             )}
@@ -319,7 +319,7 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
               <div className="flex items-center gap-2">
                 <input type="date" value={batchDate} onChange={(e) => setBatchDate(e.target.value)} disabled={!editable} className="rounded-md border border-blue-200 bg-white px-2 py-1 text-sm disabled:cursor-not-allowed disabled:opacity-50" />
                 <DisabledReasonTooltip reason={readOnlyActionReason}>
-                  <Button size="sm" variant="outline" disabled={!editable || batchActionLoading || !batchDate} onClick={() => void handleBatchDate()} data-testid="acceptance-batch-date-apply">批量改日期</Button>
+                  <Button size="sm" variant="outline" disabled={!editable || batchActionLoading || !batchDate} loading={batchActionLoading} onClick={() => void handleBatchDate()} data-testid="acceptance-batch-date-apply">批量改日期</Button>
                 </DisabledReasonTooltip>
               </div>
             )}
@@ -327,14 +327,14 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
               <div className="flex items-center gap-2">
                 <input value={batchUnit} onChange={(e) => setBatchUnit(e.target.value)} disabled={!editable} placeholder="责任单位" className="rounded-md border border-blue-200 bg-white px-2 py-1 text-sm disabled:cursor-not-allowed disabled:opacity-50" />
                 <DisabledReasonTooltip reason={readOnlyActionReason}>
-                  <Button size="sm" variant="outline" disabled={!editable || batchActionLoading || !batchUnit.trim()} onClick={() => void handleBatchUnit()} data-testid="acceptance-batch-unit-apply">批量改责任单位</Button>
+                  <Button size="sm" variant="outline" disabled={!editable || batchActionLoading || !batchUnit.trim()} loading={batchActionLoading} onClick={() => void handleBatchUnit()} data-testid="acceptance-batch-unit-apply">批量改责任单位</Button>
                 </DisabledReasonTooltip>
               </div>
             )}
             {onBatchPhaseUpdate && (
               <div className="flex items-center gap-2">
                 <Select value={batchPhase} onValueChange={setBatchPhase} disabled={!editable}>
-                  <SelectTrigger className="h-9 min-w-[148px] border-blue-200 bg-white text-sm">
+                  <SelectTrigger className="h-9 min-w-36 border-blue-200 bg-white text-sm">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -345,7 +345,7 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
                   </SelectContent>
                 </Select>
                 <DisabledReasonTooltip reason={readOnlyActionReason}>
-                  <Button size="sm" variant="outline" disabled={!editable || batchActionLoading} onClick={() => void handleBatchPhase()} data-testid="acceptance-batch-phase-apply">批量调整阶段</Button>
+                  <Button size="sm" variant="outline" disabled={!editable || batchActionLoading} loading={batchActionLoading} onClick={() => void handleBatchPhase()} data-testid="acceptance-batch-phase-apply">批量调整阶段</Button>
                 </DisabledReasonTooltip>
               </div>
             )}
@@ -559,7 +559,7 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
                           onClick={(e) => e.stopPropagation()}
                           onChange={(e) => { if (e.target.value) onDateUpdate(plan.id, e.target.value) }}
                           disabled={!editable}
-                          className="rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs text-amber-800 focus:border-amber-400 focus:outline-none"
+                          className="rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs text-amber-800 focus-visible:border-amber-400 focus-visible:outline-none"
                           data-testid={`acceptance-quick-date-${plan.id}`}
                           
                         />

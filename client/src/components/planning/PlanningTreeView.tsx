@@ -86,17 +86,26 @@ type ExtraColumnKey =
   | 'notes'
   | 'actions'
 
-const BASELINE_DEFAULT_GRID = '64px 96px minmax(200px,1.6fr) 110px 110px 80px 120px 140px'
+const BASE_COLUMNS = [
+  { key: 'sequence', label: '序号', width: '4rem', className: 'text-center tabular-nums' },
+  { key: 'wbs', label: 'WBS', width: '6rem' },
+  { key: 'title', label: '任务名', width: 'minmax(13.75rem,1.6fr)' },
+  { key: 'start', label: '开始', width: '112px', className: 'text-right tabular-nums' },
+  { key: 'end', label: '结束', width: '112px', className: 'text-right tabular-nums' },
+  { key: 'duration', label: '工期', width: '5.25rem', className: 'text-right tabular-nums' },
+  { key: 'status', label: '状态', width: '8.25rem' },
+  { key: 'assignee', label: '责任人', width: '9.25rem' },
+] as const
 const EXTRA_COLUMNS: Array<{ key: ExtraColumnKey; label: string; width: string }> = [
   { key: 'progress', label: '目标进度', width: '90px' },
   { key: 'type', label: '类型', width: '100px' },
-  { key: 'mapping', label: '映射', width: '110px' },
-  { key: 'critical', label: '关键路径', width: '110px' },
+  { key: 'mapping', label: '映射', width: '6.875rem' },
+  { key: 'critical', label: '关键路径', width: '6.875rem' },
   { key: 'milestone', label: '里程碑', width: '90px' },
-  { key: 'parent', label: '父级', width: '140px' },
-  { key: 'level', label: '层级', width: '80px' },
+  { key: 'parent', label: '父级', width: '8.75rem' },
+  { key: 'level', label: '层级', width: '5rem' },
   { key: 'lock', label: '锁定', width: '90px' },
-  { key: 'notes', label: '备注', width: '180px' },
+  { key: 'notes', label: '备注', width: '11.25rem' },
   { key: 'actions', label: '操作', width: '128px' },
 ]
 
@@ -181,7 +190,9 @@ export function PlanningTreeView({
   const someSelected = filteredAndSortedRows.some((row) => row.selected)
   const renderValue = (value?: string | null) => value?.trim() || '—'
   const visibleExtraColumns = EXTRA_COLUMNS.filter((column) => extraColumns.includes(column.key))
-  const gridTemplateColumns = [BASELINE_DEFAULT_GRID, ...visibleExtraColumns.map((column) => column.width)].join(' ')
+  const gridColumns = [...BASE_COLUMNS, ...visibleExtraColumns]
+  const gridTemplateColumns = gridColumns.map((column) => column.width).join(' ')
+  const gridMinWidth = `calc(${gridColumns.map((column) => column.width.replace(/^minmax\(([^,]+),.*\)$/, '$1')).join(' + ')})`
   const extraColumnLabels = Object.fromEntries(EXTRA_COLUMNS.map((column) => [column.key, column.label])) as Record<
     ExtraColumnKey,
     string
@@ -296,7 +307,7 @@ export function PlanningTreeView({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <div className="relative flex-1 min-w-[200px]">
+          <div className="relative flex-1 min-w-52">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
             <Input
               type="text"
@@ -463,26 +474,23 @@ export function PlanningTreeView({
 
       <CardContent className="p-0">
         {rows.length === 0 ? (
-          <div className="flex min-h-[280px] items-center justify-center px-6 py-12 text-sm text-slate-500">
+          <div className="flex min-h-72 items-center justify-center px-6 py-12 text-sm text-slate-500">
             {emptyLabel}
           </div>
         ) : (
-          <ScrollArea className="max-h-[560px]">
-            <div className="min-w-[1040px]">
+          <ScrollArea className="max-h-[35rem]">
+            <div style={{ minWidth: gridMinWidth }}>
               <div
                 className="grid items-center gap-3 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-wider text-slate-500"
                 style={{ gridTemplateColumns }}
               >
-                <div className="text-center tabular-nums">序号</div>
-                <div>WBS</div>
-                <div className="min-w-[200px]">任务名</div>
-                <div className="w-[110px] text-right tabular-nums">开始</div>
-                <div className="w-[110px] text-right tabular-nums">结束</div>
-                <div className="w-[80px] text-right tabular-nums">工期</div>
-                <div>状态</div>
-                <div>责任人</div>
+                {BASE_COLUMNS.map((column) => (
+                  <div key={column.key} className={cn('min-w-0', 'className' in column ? column.className : undefined)}>
+                    {column.label}
+                  </div>
+                ))}
                 {visibleExtraColumns.map((column) => (
-                  <div key={column.key} className={cn(column.key === 'progress' && 'w-[80px] text-right tabular-nums')}>
+                  <div key={column.key} className={cn('min-w-0', column.key === 'progress' && 'text-right tabular-nums')}>
                     {extraColumnLabels[column.key]}
                   </div>
                 ))}
@@ -554,11 +562,11 @@ export function PlanningTreeView({
                     )}
                   </div>
 
-                  <div className="w-[110px] truncate text-right text-sm text-slate-700 tabular-nums">{row.startCell ?? renderValue(row.startDateLabel)}</div>
+                  <div className="min-w-0 truncate text-right text-sm text-slate-700 tabular-nums">{row.startCell ?? renderValue(row.startDateLabel)}</div>
 
-                  <div className="w-[110px] truncate text-right text-sm text-slate-700 tabular-nums">{row.endCell ?? renderValue(row.endDateLabel)}</div>
+                  <div className="min-w-0 truncate text-right text-sm text-slate-700 tabular-nums">{row.endCell ?? renderValue(row.endDateLabel)}</div>
 
-                  <div className="w-[80px] truncate text-right text-sm text-slate-700 tabular-nums">{renderValue(row.durationLabel)}</div>
+                  <div className="min-w-0 truncate text-right text-sm text-slate-700 tabular-nums">{renderValue(row.durationLabel)}</div>
 
                   <div className="flex min-w-0 items-center gap-2">
                     <div className="flex min-w-0 flex-wrap items-center gap-2">

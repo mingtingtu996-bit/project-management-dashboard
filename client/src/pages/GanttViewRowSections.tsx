@@ -20,6 +20,7 @@ import {
   TreeDiamondIcon,
 } from '@/components/tree/SharedTreePrimitives'
 import type { CriticalTaskSnapshot } from '@/lib/criticalPath'
+import { EmptyState } from '@/components/EmptyState'
 import { LoadingState } from '@/components/ui/loading-state'
 import { getTaskLagLevel } from '@/lib/taskBusinessStatus'
 import { cn } from '@/lib/utils'
@@ -174,7 +175,7 @@ export function TaskRowIdentityCell({
             <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
           </svg>
         )}
-        {task.wbs_code && <span className="flex-shrink-0 text-xs tabular-nums text-slate-500 font-mono min-w-[24px]">{task.wbs_code}</span>}
+        {task.wbs_code && <span className="flex-shrink-0 text-xs tabular-nums text-slate-500 font-mono min-w-6">{task.wbs_code}</span>}
         {inlineTitleTaskId === task.id ? (
           <input
             type="text"
@@ -202,7 +203,7 @@ export function TaskRowIdentityCell({
               event.stopPropagation()
               onStartInlineTitleEdit(task)
             }}
-            className={`min-w-0 max-w-[200px] justify-start overflow-hidden px-1.5 text-left text-sm font-medium hover:text-blue-600 transition-colors ${
+            className={`min-w-0 max-w-52 justify-start overflow-hidden px-1.5 text-left text-sm font-medium hover:text-blue-600 transition-colors ${
               isOverdue
                 ? 'text-red-600'
                 : lagLevel === 'severe'
@@ -624,7 +625,12 @@ export function TaskRowConditionPanel({
           className="min-h-0 border-0 bg-transparent px-0 py-1 shadow-none"
         />
       ) : inlineConditions.length === 0 ? (
-        <div className="text-xs text-slate-500 py-1">暂无条件记录</div>
+        <EmptyState
+          icon={ShieldCheck}
+          title="暂无条件记录"
+          description="当前任务还没有维护开工条件。"
+          className="min-h-0 border-0 bg-transparent px-0 py-2 shadow-none"
+        />
       ) : (
         <div className="space-y-1.5">
           {inlineConditions.map((condition) => (

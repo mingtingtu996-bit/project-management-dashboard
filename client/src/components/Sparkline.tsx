@@ -1,4 +1,5 @@
 import { ChartAccessibleWrapper } from '@/components/ChartAccessibleWrapper'
+import { CHART_SERIES } from '@/lib/chartPalette'
 import { cn } from '@/lib/utils'
 
 interface SparklineProps {
@@ -25,7 +26,7 @@ function buildPath(values: number[], width: number, height: number) {
     .join(' ')
 }
 
-export function Sparkline({ data, color = '#2563EB', className }: SparklineProps) {
+export function Sparkline({ data, color = CHART_SERIES.primary, className }: SparklineProps) {
   const values = data.map((item) => item.value).filter(Number.isFinite)
   const width = 80
   const height = 32

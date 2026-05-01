@@ -1195,7 +1195,7 @@ export default function Drawings() {
     <div className="space-y-6">
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {[1, 2, 3, 4].map((item) => (
-          <Card key={item} className="border-slate-200 shadow-sm">
+          <Card key={item} className="surface-card">
             <CardContent className="space-y-3 p-5">
               <Skeleton className="h-4 w-20 rounded-full" />
               <Skeleton className="h-8 w-24 rounded-full" />
@@ -1204,7 +1204,7 @@ export default function Drawings() {
           </Card>
         ))}
       </div>
-      <Card className="border-slate-200 shadow-sm">
+      <Card className="surface-card">
         <CardContent className="space-y-3 p-5">
           <Skeleton className="h-5 w-40 rounded-full" />
           <Skeleton className="h-64 w-full rounded-2xl" />
@@ -1271,8 +1271,8 @@ export default function Drawings() {
         <div className="space-y-8">
           <DrawingReadinessSummary summary={summary} projectName={projectName} metrics={readinessMetrics} />
 
-            <Card className="card-unified">
-              <CardContent className="grid gap-4 p-5 lg:grid-cols-[minmax(260px,1.6fr)_repeat(4,minmax(160px,0.8fr))]">
+            <Card variant="surface">
+              <CardContent className="grid gap-4 p-5 lg:grid-cols-[minmax(16.25rem,1.6fr)_repeat(4,minmax(10rem,0.8fr))]">
                 <div className="space-y-2">
                   <Label htmlFor="drawing-search" className="text-xs text-slate-500">
                     搜索
@@ -1486,7 +1486,7 @@ export default function Drawings() {
           }
         }}
       >
-        <DialogContent className="max-w-[720px] border-slate-200">
+        <DialogContent className="max-w-3xl border-slate-200">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-slate-900">
               <FileBadge2 className="h-5 w-5" />
@@ -1498,7 +1498,7 @@ export default function Drawings() {
           </DialogHeader>
 
           <div className="grid gap-4 lg:grid-cols-[0.92fr_1.08fr]">
-            <Card className="border-slate-200 shadow-sm">
+            <Card className="surface-card">
               <CardContent className="space-y-3 p-5">
                 <div className="flex items-center justify-between gap-2">
                   <div>
@@ -1534,7 +1534,7 @@ export default function Drawings() {
                       ))}
                     </>
                   ) : reviewRules.length === 0 ? (
-                    <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+                    <div className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
                       暂无审图规则，可先新增一条。
                     </div>
                   ) : (
@@ -1602,7 +1602,7 @@ export default function Drawings() {
               </CardContent>
             </Card>
 
-            <Card className="border-slate-200 shadow-sm">
+            <Card className="surface-card">
               <CardContent className="space-y-4 p-5">
                 <div className="flex items-center justify-between gap-2">
                   <div>
@@ -1752,7 +1752,7 @@ export default function Drawings() {
           }
         }}
       >
-        <DialogContent className="max-w-[560px] border-slate-200">
+        <DialogContent className="max-w-xl border-slate-200">
           <DialogHeader>
             <DialogTitle className="text-slate-900">新建图纸包</DialogTitle>
             <DialogDescription className="sr-only">新建图纸包</DialogDescription>
@@ -1913,7 +1913,8 @@ export default function Drawings() {
         }}
         title="删除审图规则"
         description="删除后这条审图规则将不再参与图纸包送审判定，规则列表会同步刷新。"
-        confirmLabel={reviewRulesSaving ? '删除中...' : '删除规则'}
+        confirmLabel="删除规则"
+        loading={reviewRulesSaving}
         cancelLabel="取消"
         confirmTone="destructive"
         testId="drawing-review-rule-delete-confirm"

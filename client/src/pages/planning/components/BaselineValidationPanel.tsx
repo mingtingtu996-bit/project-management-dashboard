@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
 
+import { EmptyState } from '@/components/EmptyState'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -86,7 +87,7 @@ export function BaselineValidationPanel({ issues, emptyLabel = '当前没有待�
   const infoCount = groups[2]?.issues.length ?? 0
 
   return (
-    <Card className="border-slate-200 shadow-sm">
+    <Card className="surface-card">
       <CardHeader className="space-y-3 bg-slate-50/80">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="space-y-1">
@@ -104,9 +105,11 @@ export function BaselineValidationPanel({ issues, emptyLabel = '当前没有待�
 
       <CardContent className="space-y-4 p-5">
         {totalCount === 0 ? (
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-            {emptyLabel}
-          </div>
+          <EmptyState
+            title="暂无异常校核项"
+            description={emptyLabel}
+            className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 py-8"
+          />
         ) : (
           groups.map((group) => {
             const Icon = group.icon
@@ -115,7 +118,7 @@ export function BaselineValidationPanel({ issues, emptyLabel = '当前没有待�
               <section
                 key={group.level}
                 data-testid={`baseline-validation-group-${group.level}`}
-                className="rounded-2xl border border-slate-200 bg-white shadow-sm"
+                className="rounded-2xl border surface-card"
               >
                 <div className="flex flex-wrap items-start justify-between gap-3 px-4 py-3">
                   <div className="space-y-1">

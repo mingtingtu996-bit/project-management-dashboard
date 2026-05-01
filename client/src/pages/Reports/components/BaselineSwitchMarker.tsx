@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { EmptyState } from '@/components/EmptyState'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
@@ -48,7 +49,12 @@ export function BaselineSwitchMarker({
             </div>
           </div>
         ) : (
-          <div data-testid="deviation-version-note" className="rounded-2xl border border-blue-100 bg-blue-50 p-4" />
+          <EmptyState
+            testId="deviation-version-note"
+            title="暂无版本切换说明"
+            description="存在基线切换事件后，这里会展示切换原因。"
+            className="rounded-2xl border border-blue-100 bg-blue-50 py-6"
+          />
         )}
         <div className="space-y-2">
           {events.length > 0 ? (
@@ -70,9 +76,11 @@ export function BaselineSwitchMarker({
               </Button>
             ))
           ) : (
-            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-              暂无版本切换事件
-            </div>
+            <EmptyState
+              title="暂无版本切换事件"
+              description="当前对比范围没有基线版本切换记录。"
+              className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 py-8"
+            />
           )}
         </div>
       </CardContent>

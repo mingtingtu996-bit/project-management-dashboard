@@ -1,4 +1,5 @@
 import { ChartAccessibleWrapper } from '@/components/ChartAccessibleWrapper'
+import { EmptyState } from '@/components/EmptyState'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
@@ -38,7 +39,7 @@ export function ExecutionScatterChart({
   ])
 
   return (
-    <Card data-testid="execution-scatter-chart" className="card-unified p-0">
+    <Card data-testid="execution-scatter-chart" variant="surface">
       <CardHeader className="pb-3">
         <CardTitle className="text-base">{mainlineLabel} · 散点图</CardTitle>
       </CardHeader>
@@ -90,9 +91,11 @@ export function ExecutionScatterChart({
             </div>
           </ChartAccessibleWrapper>
         ) : (
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-500">
-            暂无散点图数据
-          </div>
+          <EmptyState
+            title="暂无散点图数据"
+            description="当前筛选条件下没有可绘制的执行偏差点。"
+            className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 py-8"
+          />
         )}
       </CardContent>
     </Card>

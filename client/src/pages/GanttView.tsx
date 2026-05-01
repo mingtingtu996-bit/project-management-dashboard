@@ -4169,7 +4169,7 @@ export default function GanttView() {
                 : '若当前阻碍仍在跟踪链路中，建议优先使用“关闭此记录”转为已解决。'
             : undefined
         }
-        confirmLabel={deleteGuardTarget?.blocked ? '知道了' : deleteGuardSubmitting ? '删除中...' : '确认删除'}
+        confirmLabel={deleteGuardTarget?.blocked ? '知道了' : '确认删除'}
         secondaryActionLabel={
           deleteGuardTarget
             ? deleteGuardTarget.details?.close_action?.label || '关闭此记录'

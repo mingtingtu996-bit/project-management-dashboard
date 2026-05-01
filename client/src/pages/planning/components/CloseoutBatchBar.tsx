@@ -24,7 +24,7 @@ export function CloseoutBatchBar({
     <div
       data-testid="planning-shared-batch-bar"
       className={cn(
-        'fixed bottom-4 left-1/2 z-40 w-[calc(100%-2rem)] max-w-[1440px] -translate-x-1/2 px-0 transition-all duration-300',
+        'fixed bottom-4 left-1/2 z-40 w-[calc(100%-2rem)] max-w-[var(--content-max-width)] -translate-x-1/2 px-0 transition-all duration-300',
         visible ? 'translate-y-0' : 'translate-y-[140%]',
         drawerOpen ? 'pointer-events-auto opacity-95' : 'opacity-100'
       )}
@@ -34,7 +34,7 @@ export function CloseoutBatchBar({
         data-testid="closeout-batch-bar"
         className={cn(
           'flex items-center justify-between gap-4 border-slate-700/70 bg-slate-950 px-4 py-3 text-white shadow-2xl shadow-slate-950/30 transition-all',
-          'w-full max-w-[1440px]',
+          'w-full max-w-[var(--content-max-width)]',
           drawerOpen ? 'h-14 opacity-90' : 'h-auto'
         )}
       >

@@ -67,6 +67,7 @@
     "verify:browser-suite:project-chains": "node scripts/run-browser-suite.mjs verify:gantt verify:gantt-change-log verify:drawings verify:acceptance verify:reports verify:risk-management verify:risk-guard verify:pre-milestones verify:milestones",
     "verify:browser-suite:planning-and-tooling": "node scripts/run-browser-suite.mjs verify:planning-monthly verify:planning-baseline verify:planning-closeout verify:planning-revision verify:planning-deviation verify:planning-confirm-failure verify:planning-fine-flows verify:wbs-templates verify:monitoring",
     "verify:uiux-visual": "npm run build --workspace=client && node scripts/verify-uiux-visual.mjs",
+    "verify:uiux-overlap": "npm run build --workspace=client && node scripts/verify-uiux-overlap.mjs",
     "verify:uiux-a11y": "npm run build --workspace=client && node scripts/verify-uiux-a11y.mjs",
     "verify:uiux-performance": "node scripts/verify-uiux-performance.mjs",
     "verify:uiux-release-smoke": "npm run build --workspace=client && node scripts/verify-uiux-release-smoke.mjs",
@@ -76,6 +77,9 @@
     "verify:uiux-token-audit": "node scripts/verify-uiux-predeploy-gates.mjs token-audit",
     "verify:uiux-contrast": "node scripts/verify-uiux-predeploy-gates.mjs contrast",
     "verify:uiux-predeploy-gates": "npm run build --workspace=client && node scripts/verify-uiux-predeploy-gates.mjs all",
+    "figma:extract-design": "node scripts/extract-figma-design-data.mjs",
+    "figma:clean-design": "node scripts/clean-figma-design-data.mjs",
+    "figma:bundle-design": "node scripts/bundle-figma-design-data.mjs",
     "acceptance:v1": "npx vitest run --root client src/pages/__tests__/sharedSummary.test.tsx src/pages/__tests__/GanttView.test.tsx src/pages/__tests__/Notifications.test.tsx && npx vitest run --root server src/__tests__/projectCreationSummaryChain.test.ts src/__tests__/taskCompletionSummaryChain.test.ts src/__tests__/riskNotificationChain.test.ts"
   },
   "devDependencies": {

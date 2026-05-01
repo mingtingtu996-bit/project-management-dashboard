@@ -19,6 +19,8 @@ export function ChartAccessibleWrapper({
   className,
   detailsClassName,
 }: ChartAccessibleWrapperProps) {
+  const tableMinWidth = Math.max(480, columns.length * 128)
+
   return (
     <div className={className}>
       {children}
@@ -27,12 +29,12 @@ export function ChartAccessibleWrapper({
           {summary}
         </summary>
         <div className="mt-2 overflow-x-auto rounded-lg border border-slate-200">
-          <table className="w-full min-w-full text-left text-xs">
+          <table className="w-full table-fixed text-left text-xs" style={{ minWidth: tableMinWidth }}>
             <thead className="bg-slate-50 text-slate-500">
               <tr>
                 {columns.map((column) => (
-                  <th key={column} scope="col" className="px-3 py-2 font-medium">
-                    {column}
+                  <th key={column} scope="col" className="max-w-0 px-3 py-2 font-medium">
+                    <span className="block truncate" title={column}>{column}</span>
                   </th>
                 ))}
               </tr>
@@ -43,9 +45,10 @@ export function ChartAccessibleWrapper({
                   {row.map((cell, cellIndex) => (
                     <td
                       key={cellIndex}
-                      className={cn('px-3 py-2 text-slate-600', typeof cell === 'number' && 'text-right tabular-nums')}
+                      className={cn('max-w-0 px-3 py-2 text-slate-600', typeof cell === 'number' && 'text-right tabular-nums')}
+                      title={typeof cell === 'string' || typeof cell === 'number' ? String(cell) : undefined}
                     >
-                      {cell}
+                      <span className="block truncate">{cell}</span>
                     </td>
                   ))}
                 </tr>

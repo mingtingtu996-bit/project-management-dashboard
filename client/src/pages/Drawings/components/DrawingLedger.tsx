@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { FilePenLine, Files, Layers3, Search, SlidersHorizontal, Star } from 'lucide-react'
 
+import { EmptyState } from '@/components/EmptyState'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -39,18 +40,30 @@ function resolveApprover(row: DrawingLedgerRow) {
   return row.designPerson || row.reviewUnit || '未指定'
 }
 
+const baseColumnOptions = [
+  { id: 'index', label: '序号', width: '4rem', className: 'text-right tabular-nums' },
+  { id: 'drawing', label: '图纸', width: '16.25rem' },
+  { id: 'discipline', label: '专业', width: '128px' },
+  { id: 'version', label: '版本', width: '88px', className: 'text-right tabular-nums' },
+  { id: 'status', label: '状态', width: '7.5rem' },
+  { id: 'approver', label: '审批人', width: '144px' },
+  { id: 'date', label: '日期', width: '128px', className: 'text-right tabular-nums' },
+] as const
+
+const actionColumn = { id: 'actions', label: '动作', width: '220px' } as const
+
 const extraColumnOptions = [
-  { id: 'package', label: '图纸包' },
-  { id: 'purpose', label: '用途 / 属性' },
-  { id: 'current', label: '当前版' },
-  { id: 'change', label: '变更' },
-  { id: 'impact', label: '影响工期' },
-  { id: 'review', label: '审图要求' },
-  { id: 'designUnit', label: '设计单位' },
-  { id: 'reviewUnit', label: '审图单位' },
-  { id: 'notes', label: '备注' },
-  { id: 'submitDates', label: '送审日期' },
-  { id: 'passDates', label: '通过日期' },
+  { id: 'package', label: '图纸包', width: '13.75rem' },
+  { id: 'purpose', label: '用途 / 属性', width: '9.375rem' },
+  { id: 'current', label: '当前版', width: '112px' },
+  { id: 'change', label: '变更', width: '112px' },
+  { id: 'impact', label: '影响工期', width: '128px' },
+  { id: 'review', label: '审图要求', width: '10rem' },
+  { id: 'designUnit', label: '设计单位', width: '11.25rem' },
+  { id: 'reviewUnit', label: '审图单位', width: '11.25rem' },
+  { id: 'notes', label: '备注', width: '13.75rem' },
+  { id: 'submitDates', label: '送审日期', width: '8.75rem', className: 'text-right tabular-nums' },
+  { id: 'passDates', label: '通过日期', width: '8.75rem', className: 'text-right tabular-nums' },
 ] as const
 
 type ExtraColumnId = (typeof extraColumnOptions)[number]['id']
@@ -60,6 +73,19 @@ const initialExtraColumns = extraColumnOptions.reduce((state, option) => {
   state[option.id] = false
   return state
 }, {} as ExtraColumnState)
+
+const baseColumnWidths = Object.fromEntries(baseColumnOptions.map((column) => [column.id, column.width])) as Record<
+  (typeof baseColumnOptions)[number]['id'],
+  string
+>
+const extraColumnMeta = Object.fromEntries(extraColumnOptions.map((column) => [column.id, column])) as Record<
+  ExtraColumnId,
+  (typeof extraColumnOptions)[number]
+>
+
+function calcTableMinWidth(widths: string[]) {
+  return `calc(${widths.join(' + ')})`
+}
 
 export function DrawingLedger({
   drawings,
@@ -76,6 +102,12 @@ export function DrawingLedger({
 }) {
   const [searchQuery, setSearchQuery] = useState('')
   const [extraColumns, setExtraColumns] = useState<ExtraColumnState>(initialExtraColumns)
+  const activeExtraColumns = extraColumnOptions.filter((option) => extraColumns[option.id])
+  const tableMinWidth = calcTableMinWidth([
+    ...baseColumnOptions.map((column) => column.width),
+    ...activeExtraColumns.map((column) => column.width),
+    actionColumn.width,
+  ])
   const isFiltered = totalCount !== undefined && totalCount > drawings.length
   const displayRows = searchQuery.trim()
     ? drawings.filter((row) => {
@@ -147,52 +179,49 @@ export function DrawingLedger({
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           placeholder="搜索图纸名称、图纸编号、图纸包..."
-          className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-9 pr-4 text-sm text-slate-900 placeholder-slate-400 focus:border-blue-400 focus:outline-none"
+          className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-9 pr-4 text-sm text-slate-900 placeholder-slate-400 focus-visible:border-blue-400 focus-visible:outline-none"
           data-testid="drawing-ledger-search"
         />
       </div>
 
-      <Card className="overflow-hidden border-slate-200 shadow-sm">
+      <Card className="overflow-hidden surface-card">
         <CardHeader className="bg-slate-50/70">
           <CardTitle className="text-base text-slate-900">单图台账明细</CardTitle>
         </CardHeader>
         <Separator />
         <CardContent className="p-0">
           {drawings.length === 0 ? (
-            <div className="flex flex-col items-center justify-center gap-3 py-14 text-center">
-              <Files className="h-8 w-8 text-slate-300" />
-              <div className="text-base font-medium text-slate-900">暂无图纸台账</div>
-            </div>
+            <EmptyState
+              icon={Files}
+              title="暂无图纸台账"
+              description="当前项目还没有录入单图台账记录。"
+              className="py-14"
+            />
           ) : displayRows.length === 0 ? (
-            <div className="flex flex-col items-center justify-center gap-3 py-14 text-center">
-              <Files className="h-8 w-8 text-slate-300" />
-              <div className="text-base font-medium text-slate-900">没有匹配结果</div>
-            </div>
+            <EmptyState
+              variant="filter"
+              icon={Files}
+              title="没有匹配结果"
+              description="调整图纸名称、编号、状态或列筛选后再查看。"
+              className="py-14"
+            />
           ) : (
             <div className="overflow-x-auto">
-              <Table className="min-w-full text-left text-sm">
+              <Table className="w-full table-fixed text-left text-sm" style={{ minWidth: tableMinWidth }}>
                 <TableCaption className="sr-only">施工图纸台账明细表</TableCaption>
                 <TableHeader className="sticky top-0 z-10 bg-white text-xs uppercase tracking-wide text-slate-500">
                   <TableRow className="py-3">
-                    <TableHead scope="col" className="px-4 py-3 text-right tabular-nums">序号</TableHead>
-                    <TableHead scope="col" className="px-4 py-3">图纸</TableHead>
-                    <TableHead scope="col" className="px-4 py-3">专业</TableHead>
-                    <TableHead scope="col" className="px-4 py-3 text-right tabular-nums">版本</TableHead>
-                    <TableHead scope="col" className="px-4 py-3">状态</TableHead>
-                    <TableHead scope="col" className="px-4 py-3">审批人</TableHead>
-                    <TableHead scope="col" className="px-4 py-3 text-right tabular-nums">日期</TableHead>
-                    {extraColumns.package && <TableHead scope="col" className="px-4 py-3">图纸包</TableHead>}
-                    {extraColumns.purpose && <TableHead scope="col" className="px-4 py-3">用途 / 属性</TableHead>}
-                    {extraColumns.current && <TableHead scope="col" className="px-4 py-3">当前版</TableHead>}
-                    {extraColumns.change && <TableHead scope="col" className="px-4 py-3">变更</TableHead>}
-                    {extraColumns.impact && <TableHead scope="col" className="px-4 py-3">影响工期</TableHead>}
-                    {extraColumns.review && <TableHead scope="col" className="px-4 py-3">审图要求</TableHead>}
-                    {extraColumns.designUnit && <TableHead scope="col" className="px-4 py-3">设计单位</TableHead>}
-                    {extraColumns.reviewUnit && <TableHead scope="col" className="px-4 py-3">审图单位</TableHead>}
-                    {extraColumns.notes && <TableHead scope="col" className="px-4 py-3">备注</TableHead>}
-                    {extraColumns.submitDates && <TableHead scope="col" className="px-4 py-3 text-right tabular-nums">送审日期</TableHead>}
-                    {extraColumns.passDates && <TableHead scope="col" className="px-4 py-3 text-right tabular-nums">通过日期</TableHead>}
-                    <TableHead scope="col" className="px-4 py-3">动作</TableHead>
+                    {baseColumnOptions.map((column) => (
+                      <TableHead key={column.id} scope="col" className={cn('px-4 py-3', 'className' in column ? column.className : undefined)} style={{ width: column.width }}>
+                        {column.label}
+                      </TableHead>
+                    ))}
+                    {activeExtraColumns.map((column) => (
+                      <TableHead key={column.id} scope="col" className={cn('px-4 py-3', 'className' in column ? column.className : undefined)} style={{ width: column.width }}>
+                        {column.label}
+                      </TableHead>
+                    ))}
+                    <TableHead scope="col" className="px-4 py-3" style={{ width: actionColumn.width }}>动作</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody className="bg-white">
@@ -202,30 +231,30 @@ export function DrawingLedger({
                       className="group py-3 transition-colors even:bg-slate-50/50 hover:bg-slate-100/60"
                       data-testid={`drawing-ledger-row-${row.drawingId}`}
                     >
-                      <TableCell className="px-4 py-4 text-right text-sm text-slate-500 tabular-nums">{index + 1}</TableCell>
-                      <TableCell className="px-4 py-4">
-                        <div className="font-medium text-slate-900">{row.drawingName}</div>
-                        <div className="mt-1 text-xs text-slate-500">{row.drawingCode}</div>
+                      <TableCell className="px-4 py-4 text-right text-sm text-slate-500 tabular-nums" style={{ width: baseColumnWidths.index }}>{index + 1}</TableCell>
+                      <TableCell className="px-4 py-4" style={{ width: baseColumnWidths.drawing }}>
+                        <div className="truncate font-medium text-slate-900" title={row.drawingName}>{row.drawingName}</div>
+                        <div className="mt-1 truncate text-xs text-slate-500" title={row.drawingCode}>{row.drawingCode}</div>
                       </TableCell>
-                      <TableCell className="px-4 py-4 text-slate-900">{row.disciplineType}</TableCell>
-                      <TableCell className="px-4 py-4 text-right tabular-nums">
+                      <TableCell className="truncate px-4 py-4 text-slate-900" style={{ width: baseColumnWidths.discipline }} title={row.disciplineType}>{row.disciplineType}</TableCell>
+                      <TableCell className="px-4 py-4 text-right tabular-nums" style={{ width: baseColumnWidths.version }}>
                         <div className="font-medium text-slate-900">{row.versionNo}</div>
                       </TableCell>
-                      <TableCell className="px-4 py-4">
+                      <TableCell className="px-4 py-4" style={{ width: baseColumnWidths.status }}>
                         <span className="inline-flex items-center gap-2 text-sm font-medium text-slate-700">
                           <span className={cn('h-2 w-2 rounded-full', statusDotClass(row.drawingStatus))} />
                           {statusLabel(row.drawingStatus)}
                         </span>
                       </TableCell>
-                      <TableCell className="px-4 py-4 text-sm text-slate-600">{resolveApprover(row)}</TableCell>
-                      <TableCell className="px-4 py-4 text-right text-sm text-slate-600 tabular-nums">{resolveMainDate(row)}</TableCell>
+                      <TableCell className="truncate px-4 py-4 text-sm text-slate-600" style={{ width: baseColumnWidths.approver }} title={resolveApprover(row)}>{resolveApprover(row)}</TableCell>
+                      <TableCell className="px-4 py-4 text-right text-sm text-slate-600 tabular-nums" style={{ width: baseColumnWidths.date }}>{resolveMainDate(row)}</TableCell>
                       {extraColumns.package && (
-                        <TableCell className="px-4 py-4">
-                        <div className="font-medium text-slate-900">{row.packageName}</div>
-                        <div className="mt-1 text-xs text-slate-500">{row.packageCode}</div>
+                        <TableCell className="px-4 py-4" style={{ width: extraColumnMeta.package.width }}>
+                        <div className="truncate font-medium text-slate-900" title={row.packageName}>{row.packageName}</div>
+                        <div className="mt-1 truncate text-xs text-slate-500" title={row.packageCode}>{row.packageCode}</div>
                       </TableCell>
                       )}
-                      {extraColumns.purpose && <TableCell className="px-4 py-4 text-sm text-slate-600">{row.documentPurpose}</TableCell>}
+                      {extraColumns.purpose && <TableCell className="truncate px-4 py-4 text-sm text-slate-600" style={{ width: extraColumnMeta.purpose.width }} title={row.documentPurpose}>{row.documentPurpose}</TableCell>}
                       {extraColumns.current && (
                         <TableCell className="px-4 py-4">
                         {row.isCurrentVersion ? (
@@ -265,9 +294,9 @@ export function DrawingLedger({
                           </div>
                       </TableCell>
                       )}
-                      {extraColumns.designUnit && <TableCell className="px-4 py-4 text-sm text-slate-600">{row.designUnit || '—'}</TableCell>}
-                      {extraColumns.reviewUnit && <TableCell className="px-4 py-4 text-sm text-slate-600">{row.reviewUnit || '—'}</TableCell>}
-                      {extraColumns.notes && <TableCell className="max-w-[180px] truncate px-4 py-4 text-sm text-slate-600">{row.notes || '—'}</TableCell>}
+                      {extraColumns.designUnit && <TableCell className="truncate px-4 py-4 text-sm text-slate-600" style={{ width: extraColumnMeta.designUnit.width }} title={row.designUnit || '—'}>{row.designUnit || '—'}</TableCell>}
+                      {extraColumns.reviewUnit && <TableCell className="truncate px-4 py-4 text-sm text-slate-600" style={{ width: extraColumnMeta.reviewUnit.width }} title={row.reviewUnit || '—'}>{row.reviewUnit || '—'}</TableCell>}
+                      {extraColumns.notes && <TableCell className="truncate px-4 py-4 text-sm text-slate-600" style={{ width: extraColumnMeta.notes.width }} title={row.notes || '—'}>{row.notes || '—'}</TableCell>}
                       {extraColumns.submitDates && (
                         <TableCell className="px-4 py-4 text-right text-sm text-slate-600 tabular-nums">
                           <div>{row.plannedSubmitDate || '—'}</div>
@@ -280,7 +309,7 @@ export function DrawingLedger({
                           <div className="mt-1 text-xs text-slate-500">{row.actualPassDate || '—'}</div>
                         </TableCell>
                       )}
-                      <TableCell className="px-4 py-4">
+                      <TableCell className="px-4 py-4" style={{ width: actionColumn.width }}>
                         <div className="flex flex-wrap justify-end gap-2 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
                           <Button
                             size="sm"

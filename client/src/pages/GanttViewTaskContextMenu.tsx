@@ -56,8 +56,10 @@ export function TaskContextMenu({
 
   return (
     <>
-      <div
-        className="fixed inset-0 z-40"
+      <button
+        type="button"
+        aria-label="关闭任务操作菜单"
+        className="fixed left-0 top-0 z-40 h-screen w-screen bg-transparent p-0"
         data-testid="gantt-task-context-menu-overlay"
         onClick={onClose}
         onContextMenu={(event) => {
@@ -66,7 +68,7 @@ export function TaskContextMenu({
         }}
       />
       <div
-        className="fixed z-50 max-h-[520px] w-[280px] overflow-y-auto rounded-2xl border border-slate-200 bg-white p-2 text-sm shadow-[var(--el-3)]"
+        className="fixed z-50 max-h-[32.5rem] w-72 overflow-y-auto rounded-2xl border border-slate-200 bg-white p-2 text-sm shadow-[var(--el-3)]"
         data-testid="gantt-task-context-menu"
         role="menu"
         style={{ left, top }}

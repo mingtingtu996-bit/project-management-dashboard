@@ -12,7 +12,7 @@ interface ProjectTeamManagementDrawerProps {
 export function ProjectTeamManagementDrawer({ open, onOpenChange, projectId, projectName }: ProjectTeamManagementDrawerProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="left-auto right-0 top-0 h-screen max-h-screen w-full max-w-[720px] translate-x-0 translate-y-0 overflow-y-auto rounded-none border-l border-slate-200 p-0 sm:max-w-[720px]">
+      <DialogContent className="left-auto right-0 top-0 h-screen max-h-screen w-full max-w-3xl translate-x-0 translate-y-0 overflow-y-auto rounded-none border-l border-slate-200 p-0 sm:max-w-3xl">
         <div className="bg-white px-6 py-5">
           <DialogHeader>
             <DialogTitle>团队管理</DialogTitle>

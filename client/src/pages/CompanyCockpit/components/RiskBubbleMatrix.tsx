@@ -1,5 +1,6 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { ChartAccessibleWrapper } from '@/components/ChartAccessibleWrapper'
+import { EmptyState } from '@/components/EmptyState'
 import { Separator } from '@/components/ui/separator'
 import type { Issue, Risk } from '@/lib/supabase'
 
@@ -239,7 +240,11 @@ export function RiskBubbleMatrix({ risks, issues, projectRows }: RiskBubbleMatri
             </div>
           </div>
         ) : (
-          <div className="py-8 text-center text-sm text-slate-500">暂无活跃风险信号</div>
+          <EmptyState
+            title="暂无活跃风险信号"
+            description="当前项目组合没有待跟踪的风险、问题、前置条件或阻碍信号。"
+            className="mt-4 rounded-2xl empty-state-frame border-slate-200 bg-slate-50 py-8"
+          />
         )}
       </CardContent>
     </Card>

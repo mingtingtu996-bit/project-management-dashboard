@@ -29,7 +29,7 @@ export function DisabledReasonTooltip({ reason, children, className }: DisabledR
           </span>
         </span>
       </TooltipTrigger>
-      <TooltipContent className="max-w-[260px]">{reason}</TooltipContent>
+      <TooltipContent className="max-w-xs">{reason}</TooltipContent>
     </Tooltip>
   )
 }

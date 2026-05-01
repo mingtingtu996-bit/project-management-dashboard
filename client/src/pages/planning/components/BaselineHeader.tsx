@@ -29,7 +29,7 @@ export function BaselineHeader({
   onForceUnlock,
 }: BaselineHeaderProps) {
   return (
-    <Card className="border-slate-200 shadow-sm">
+    <Card className="surface-card">
       <CardContent className="space-y-4 p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="space-y-1">

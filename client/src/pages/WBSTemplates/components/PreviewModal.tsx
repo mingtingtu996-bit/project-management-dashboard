@@ -13,11 +13,12 @@ import { PreviewNodeTree } from './PreviewNodeTree'
 import {
   IconEdit,
   IconUpload,
-  IconX,
 } from './WbsIcons'
 import { TemplateIcon } from './TemplateIcon'
+import { EmptyState } from '@/components/EmptyState'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 
 interface PreviewModalProps {
   template: WbsTemplate
@@ -63,21 +64,20 @@ export function PreviewModal({
     template.template_data?.usage_history ?? []
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex animate-in items-center justify-center bg-slate-950/50 px-4 py-6 backdrop-blur-[4px] duration-200 fade-in-0"
-      onClick={onClose}
-    >
-      <div
-        className="flex max-h-[88vh] w-[90%] max-w-[720px] animate-in flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[var(--el-4)] duration-200 ease-bounce fade-in-0 zoom-in-95"
-        onClick={(event) => event.stopPropagation()}
+    <Dialog open onOpenChange={(open) => {
+      if (!open) onClose()
+    }}>
+      <DialogContent
+        closeLabel="关闭模板预览弹窗"
+        className="flex max-h-[calc(100vh-4rem)] max-w-3xl flex-col overflow-hidden border-slate-200 p-0"
       >
-        <div className="flex flex-shrink-0 items-center justify-between px-6 py-4">
+        <DialogHeader className="flex-shrink-0 px-6 py-4 pr-16">
           <div className="flex items-center gap-3">
             <div className={`w-8 h-8 rounded-lg ${color.bg} flex items-center justify-center`}>
               <TemplateIcon type={template.template_type} className="w-4 h-4" />
             </div>
             <div>
-              <h2 className="font-semibold text-slate-800">{template.name}</h2>
+              <DialogTitle className="font-semibold text-slate-800">{template.name}</DialogTitle>
               <p className="text-xs text-slate-500">
                 {nodeCount ? `${nodeCount} 个任务节点 · ` : ''}
                 {refDays ? `参考工期 ${refDays} 天 · ` : ''}
@@ -86,13 +86,8 @@ export function PreviewModal({
               </p>
             </div>
           </div>
-          <Button variant="ghost"
-            onClick={onClose}
-            className="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-500 hover:text-slate-600 transition-colors"
-          >
-            <IconX />
-          </Button>
-        </div>
+          <DialogDescription>预览模板任务结构、节点详情和使用记录。</DialogDescription>
+        </DialogHeader>
         <Separator />
 
         <div className="flex flex-1 overflow-hidden">
@@ -120,7 +115,11 @@ export function PreviewModal({
               </div>
             </div>
             {wbsNodes.length === 0 ? (
-              <div className="text-sm text-slate-500 py-6 text-center">暂无节点数据</div>
+              <EmptyState
+                title="暂无节点数据"
+                description="当前模板还没有可预览的 WBS 节点。"
+                className="rounded-xl empty-state-frame border-slate-200 bg-slate-50 py-8"
+              />
             ) : (
               <PreviewNodeTree
                 nodes={wbsNodes}
@@ -237,7 +236,11 @@ export function PreviewModal({
                   ))}
                 </div>
               ) : (
-                <p className="text-xs text-slate-500 px-2">暂无使用记录</p>
+                <EmptyState
+                  title="暂无使用记录"
+                  description="应用到项目后会在这里记录最近使用情况。"
+                  className="rounded-xl empty-state-frame border-slate-200 bg-white px-2 py-5"
+                />
               )}
             </div>
 
@@ -277,7 +280,7 @@ export function PreviewModal({
             </div>
           </div>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }

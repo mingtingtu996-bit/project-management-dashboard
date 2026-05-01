@@ -961,7 +961,7 @@ function PlanningWorkspaceInner() {
   )
 
   const baselineWorkspaceContent = (
-    <div className="grid gap-4 xl:grid-cols-[minmax(0,1.6fr)_360px]">
+    <div className="grid gap-4 xl:grid-cols-[minmax(0,1.6fr)_22.5rem]">
       <div className="space-y-4">
         <Card className="border-slate-200">
           <CardContent className="flex flex-wrap items-center justify-between gap-3 p-5">
@@ -1384,7 +1384,7 @@ function PlanningWorkspaceInner() {
         onOpenChange={planningKeyboard.setOpen}
       />
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_420px]">
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_26.25rem]">
         <div className="space-y-4">
           <CloseoutGroupedList
             groups={closeoutGroups}

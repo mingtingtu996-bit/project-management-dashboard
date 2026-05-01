@@ -12,6 +12,7 @@ import { Separator } from '@/components/ui/separator'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ToastAction } from '@/components/ui/toast'
 import { ConfirmActionDialog } from '@/components/ConfirmActionDialog'
+import { EmptyState } from '@/components/EmptyState'
 import { useConfirmDialog } from '@/hooks/useConfirmDialog'
 import { useUpdateProject } from '@/hooks/useStore'
 import { getApiErrorMessage, getAuthHeaders } from '@/lib/apiClient'
@@ -422,7 +423,7 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
   }
 
   if (loading) {
-    return <LoadingState label="团队信息加载中" description="" className={layout === 'drawer' ? 'min-h-[320px] border-0 bg-transparent shadow-none' : undefined} />
+    return <LoadingState label="团队信息加载中" description="" className={layout === 'drawer' ? 'min-h-80 border-0 bg-transparent shadow-none' : undefined} />
   }
 
   return (
@@ -472,7 +473,11 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
             <Separator />
             <CardContent className="space-y-3 pt-6">
               {members.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-10 text-center text-sm text-slate-500">暂无项目成员</div>
+                <EmptyState
+                  title="暂无项目成员"
+                  description="成员加入项目后，会在这里显示权限与最近活跃信息。"
+                  className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 py-10"
+                />
               ) : members.map((member) => {
                 const memberPermission = normalizeProjectPermissionLevel(member.permissionLevel)
                 const rowBusyPrefix = `member:${member.userId}`
@@ -484,7 +489,7 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
                     </div>
                     <div className="min-w-0 flex-1 space-y-2">
                       <div className="flex flex-wrap items-center gap-2">
-                        <div className="text-sm font-semibold text-slate-900">{member.displayName || member.username}</div>
+                        <div className="max-w-full truncate text-sm font-semibold text-slate-900" title={member.displayName || member.username}>{member.displayName || member.username}</div>
                         <Badge variant={memberPermission === 'owner' ? 'default' : memberPermission === 'editor' ? 'secondary' : 'outline'}>
                           {getProjectRoleLabel(memberPermission)}
                         </Badge>
@@ -492,7 +497,7 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
                           {getGlobalRoleLabel(member.globalRole)}
                         </Badge>
                       </div>
-                      <div className="text-sm text-slate-500">
+                      <div className="line-clamp-2 text-sm text-slate-500" title={`${member.username}${member.email ? ` · ${member.email}` : ''}`}>
                         {member.username}
                         {member.email ? ` · ${member.email}` : ''}
                       </div>
@@ -569,7 +574,7 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
                             示例任务：{item.sampleTaskTitles.length > 0 ? item.sampleTaskTitles.join('、') : '暂无标题样例'}
                           </div>
                         </div>
-                        <div className="flex w-full flex-col gap-2 lg:w-[320px]">
+                        <div className="flex w-full flex-col gap-2 lg:w-80">
                           <Select
                             value={selectedUserId}
                             onValueChange={(value) => setLinkSelections((current) => ({ ...current, [item.assigneeName]: value }))}
@@ -612,7 +617,11 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
               <Separator />
               <CardContent className="space-y-3 pt-6">
                 {invitations.length === 0 ? (
-                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-10 text-center text-sm text-slate-500">暂无邀请码，创建后即可通过链接邀请成员加入项目。</div>
+                  <EmptyState
+                    title="暂无邀请码"
+                    description="创建后即可通过链接邀请成员加入项目。"
+                    className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 py-10"
+                  />
                 ) : invitations.map((item) => {
                   const revoked = readInvitationRevoked(item)
                   return (

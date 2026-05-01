@@ -228,7 +228,7 @@ function StatCard({
   } as const
 
   return (
-    <Card className="card-unified p-0" data-testid={`milestone-summary-card-${title}`}>
+    <Card variant="surface" data-testid={`milestone-summary-card-${title}`}>
       <CardContent className="space-y-2 p-5">
         <p className="text-sm font-medium text-slate-500">{title}</p>
         <div className={`text-3xl font-semibold ${textColorMap[tone]}`}>{value}</div>
@@ -272,7 +272,7 @@ function LinkedTasksCard({
       <div className="text-sm font-medium text-slate-900">关联执行</div>
       <div className="mt-3 space-y-3">
         {loading ? (
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-white px-4 py-5 text-sm text-slate-500">
+          <div className="rounded-2xl empty-state-frame border-slate-200 bg-white px-4 py-5 text-sm text-slate-500">
             关联执行加载中...
           </div>
         ) : tasks.length > 0 ? (
@@ -304,7 +304,7 @@ function LinkedTasksCard({
             </div>
           ))
         ) : (
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-white px-4 py-5 text-sm text-slate-500">
+          <div className="rounded-2xl empty-state-frame border-slate-200 bg-white px-4 py-5 text-sm text-slate-500">
             暂无关联执行任务
           </div>
         )}
@@ -356,7 +356,7 @@ function MilestoneNodeCard({
       onClick={() => onSelect(milestone)}
       id={`milestone-${milestone.id}`}
       data-testid={`milestone-card-${milestone.id}`}
-      className={`h-auto min-h-[132px] w-full items-start justify-start whitespace-normal rounded-xl border p-4 text-left transition-colors ${completed ? 'opacity-80' : ''} ${
+      className={`h-auto min-h-36 w-full items-start justify-start whitespace-normal rounded-xl border p-4 text-left transition-colors ${completed ? 'opacity-80' : ''} ${
         milestone.status === 'overdue'
           ? 'border-red-200 bg-red-50'
           : milestone.status === 'soon'
@@ -670,7 +670,7 @@ export default function Milestones() {
             任务管理
           </Button>
         </PageHeader>
-        <Card className="border-slate-200 shadow-sm">
+        <Card className="surface-card">
           <CardContent className="flex flex-col items-center gap-4 p-10 text-center">
             <AlertCircle className="h-12 w-12 text-amber-500" />
             <p className="text-base font-medium text-slate-900">里程碑共享摘要暂不可用</p>
@@ -808,24 +808,21 @@ export default function Milestones() {
         </Card>
 
         {!hasAnyMilestones ? (
-          <Card className="border-dashed border-slate-200 shadow-sm">
-            <CardContent className="flex flex-col items-center gap-4 py-14 text-center">
-              <Flag className="h-12 w-12 text-slate-300" />
-              <div className="space-y-2">
-                <div className="text-lg font-semibold text-slate-900">暂无里程碑数据</div>
-                <p className="max-w-xl text-sm leading-6 text-slate-500">
-                  在任务列表中将关键节点标记为里程碑后，这里会自动展示。
-                </p>
-              </div>
+          <EmptyState
+            icon={Flag}
+            title="暂无里程碑数据"
+            description="在任务列表中将关键节点标记为里程碑后，这里会自动展示。"
+            className="rounded-card empty-state-frame border-slate-100 bg-white px-6 py-14 shadow-[var(--el-1)]"
+            action={(
               <Button variant="outline" onClick={() => goToTaskList()}>
                 <ExternalLink className="mr-2 h-4 w-4" />
                 前往任务列表
               </Button>
-            </CardContent>
-          </Card>
+            )}
+          />
         ) : (
           <>
-            <Card className="border-slate-200 shadow-sm">
+            <Card className="surface-card">
               <CardContent className="flex flex-col gap-4 p-5 lg:flex-row lg:items-center lg:justify-between">
                 <p className="text-sm font-medium text-slate-900">节点偏差表</p>
                 <Input
@@ -833,7 +830,7 @@ export default function Milestones() {
                   onChange={(event) => setSearch(event.target.value)}
                   aria-label="搜索里程碑节点"
                   placeholder="搜索节点名称、描述、状态"
-                  className="w-full lg:w-[320px]"
+                  className="w-full lg:w-80"
                 />
               </CardContent>
             </Card>
@@ -848,8 +845,8 @@ export default function Milestones() {
               </TabsList>
 
               <TabsContent value={filter} className="mt-6 space-y-6">
-                <div className={`grid gap-6 ${selectedMilestone ? 'xl:grid-cols-[minmax(0,1.5fr)_minmax(320px,0.85fr)]' : ''}`}>
-                  <Card className="border-slate-200 shadow-sm">
+                <div className={`grid gap-6 ${selectedMilestone ? 'xl:grid-cols-[minmax(0,1.5fr)_minmax(20rem,0.85fr)]' : ''}`}>
+                  <Card className="surface-card">
                     <CardHeader className="pb-4">
                       <CardTitle className="flex items-center gap-2 text-base">
                         <Flag className="h-4 w-4" />
@@ -871,7 +868,7 @@ export default function Milestones() {
                           <div key={group.root.id} className="space-y-3">
                             <MilestoneNodeCard milestone={group.root} onSelect={setSelectedMilestone} />
                             {group.children.length > 0 && (
-                              <div data-testid="milestone-child-group" className="ml-4 space-y-2 rounded-2xl border border-dashed border-slate-200 bg-slate-50/70 p-3">
+                              <div data-testid="milestone-child-group" className="ml-4 space-y-2 rounded-2xl empty-state-frame border-slate-200 bg-slate-50/70 p-3">
                                 <div className="text-xs font-medium text-slate-500">子里程碑组 · {group.children.length} 项</div>
                                 <div className="space-y-2">
                                   {group.children.map((child) => (
@@ -887,7 +884,7 @@ export default function Milestones() {
                   </Card>
 
                   {selectedMilestone && (
-                    <Card className="border-slate-200 shadow-sm">
+                    <Card className="surface-card">
                       <CardHeader className="pb-4">
                         <div className="flex items-start justify-between gap-2">
                           <CardTitle className="text-base">{selectedMilestone.name}</CardTitle>

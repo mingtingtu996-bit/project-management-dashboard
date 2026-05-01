@@ -2,10 +2,10 @@ import { useState } from 'react'
 import type { WbsTemplate, ApiResponse } from '../types'
 import { API_BASE, withCredentials } from '../utils'
 import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Separator } from '@/components/ui/separator'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useParams } from 'react-router-dom'
-import { IconX } from './WbsIcons'
 
 export function EditModal({
   template,
@@ -57,23 +57,17 @@ export function EditModal({
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex animate-in items-center justify-center bg-slate-950/50 px-4 py-6 backdrop-blur-[4px] duration-200 fade-in-0"
-      onClick={onClose}
-    >
-      <div
-        className="w-[90%] max-w-[560px] animate-in rounded-2xl border border-slate-200 bg-white shadow-[var(--el-4)] duration-200 ease-bounce fade-in-0 zoom-in-95"
-        onClick={e => e.stopPropagation()}
+    <Dialog open onOpenChange={(open) => {
+      if (!open) onClose()
+    }}>
+      <DialogContent
+        closeLabel="关闭编辑模板弹窗"
+        className="max-h-[calc(100vh-4rem)] max-w-xl overflow-y-auto border-slate-200 p-0"
       >
-        <div className="flex items-center justify-between px-6 py-4">
-          <h2 className="font-semibold text-slate-800">编辑模板</h2>
-          <Button variant="ghost"
-            onClick={onClose}
-            className="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-500 hover:text-slate-600 transition-colors"
-          >
-            <IconX />
-          </Button>
-        </div>
+        <DialogHeader className="px-6 py-4 pr-16">
+          <DialogTitle className="font-semibold text-slate-800">编辑模板</DialogTitle>
+          <DialogDescription>修改模板名称、类型与描述。</DialogDescription>
+        </DialogHeader>
         <Separator />
         <div className="p-6 space-y-4">
           <div>
@@ -83,7 +77,7 @@ export function EditModal({
               value={name}
               onChange={e => setName(e.target.value)}
               placeholder="例：18层住宅标准施工工序"
-              className="w-full text-sm px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full text-sm px-3 py-2 border border-slate-200 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
             />
           </div>
           <div>
@@ -109,7 +103,7 @@ export function EditModal({
               onChange={e => setDescription(e.target.value)}
               rows={3}
               placeholder="简要描述该模板的适用场景..."
-              className="w-full text-sm px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+              className="w-full text-sm px-3 py-2 border border-slate-200 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 resize-none"
             />
           </div>
           {error && (
@@ -130,7 +124,7 @@ export function EditModal({
             保存
           </Button>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }

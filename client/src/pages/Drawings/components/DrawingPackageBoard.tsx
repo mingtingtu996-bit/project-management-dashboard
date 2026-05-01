@@ -1,6 +1,7 @@
 import { ChevronRight, ChevronDown, FileText, FileWarning, Layers3, RefreshCw, ShieldCheck } from 'lucide-react'
 import { useState } from 'react'
 
+import { EmptyState } from '@/components/EmptyState'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -40,7 +41,6 @@ export function DrawingPackageBoard({
   emptyDescription?: string
 }) {
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
-  void emptyDescription
 
   function toggleGroup(disciplineType: string) {
     setCollapsedGroups((prev) => {
@@ -65,12 +65,12 @@ export function DrawingPackageBoard({
       </div>
 
       {groups.length === 0 ? (
-        <Card className="border-dashed border-slate-200 shadow-sm">
-          <CardContent className="flex flex-col items-center justify-center gap-3 py-14 text-center">
-            <FileWarning className="h-8 w-8 text-slate-300" />
-            <div className="text-base font-medium text-slate-900">{emptyTitle}</div>
-          </CardContent>
-        </Card>
+        <EmptyState
+          icon={FileWarning}
+          title={emptyTitle}
+          description={emptyDescription || '当前筛选范围内没有可展示的图纸包。'}
+          className="rounded-card empty-state-frame border-slate-100 bg-white px-6 py-14 shadow-[var(--el-1)]"
+        />
       ) : (
         <div className="space-y-5">
           {groups.map((group) => {
@@ -90,7 +90,7 @@ export function DrawingPackageBoard({
 
               {!isCollapsed && <div className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-3">
                 {group.packages.map((pkg) => (
-                  <Card key={pkg.packageId} className="overflow-hidden border-slate-200 shadow-sm" data-testid={`drawing-package-card-${pkg.packageId}`}>
+                  <Card key={pkg.packageId} className="overflow-hidden surface-card" data-testid={`drawing-package-card-${pkg.packageId}`}>
                     <CardHeader className="space-y-3 bg-slate-50/70 p-5">
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">

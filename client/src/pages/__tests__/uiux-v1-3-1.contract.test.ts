@@ -43,7 +43,7 @@ describe('v1.3.1 UI/UX contract', () => {
     expect(readSource('src/components/ui/card.tsx')).not.toContain('=> null')
     expect(readSource('src/components/ui/button.tsx')).toContain('rounded-xl')
     expect(readSource('src/components/ui/select.tsx')).not.toContain('focus:ring')
-    expect(readSource('src/components/ui/dialog.tsx')).toContain('min-h-[44px]')
+    expect(readSource('src/components/ui/dialog.tsx')).toContain('min-h-11')
   })
 
   it('keeps interaction and accessibility fixes wired', () => {

@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react'
 import type { WbsTemplate, ApiResponse, WbsProject } from '../types'
 import { API_BASE, withCredentials, getTypeColor } from '../utils'
+import { EmptyState } from '@/components/EmptyState'
 import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { LoadingState } from '@/components/ui/loading-state'
 import { Separator } from '@/components/ui/separator'
 import { useLoadingButton } from '@/hooks/useLoadingButton'
-import { IconX, IconUpload } from './WbsIcons'
+import { IconUpload } from './WbsIcons'
 import { TemplateIcon } from './TemplateIcon'
 
 export function ApplyModal({
@@ -88,29 +90,25 @@ export function ApplyModal({
   const color = getTypeColor(template.template_type)
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex animate-in items-center justify-center bg-slate-950/50 px-4 py-6 backdrop-blur-[4px] duration-200 fade-in-0"
-      onClick={onClose}
-    >
-      <div
-        className="w-[90%] max-w-[560px] animate-in rounded-2xl border border-slate-200 bg-white shadow-[var(--el-4)] duration-200 ease-bounce fade-in-0 zoom-in-95"
-        onClick={e => e.stopPropagation()}
+    <Dialog open onOpenChange={(open) => {
+      if (!open) onClose()
+    }}>
+      <DialogContent
+        closeLabel="关闭生成项目基线草稿弹窗"
+        className="max-h-[calc(100vh-4rem)] max-w-xl overflow-y-auto border-slate-200 p-0"
       >
-        {/* 头部 */}
-        <div className="flex items-center justify-between px-6 py-4">
+        <DialogHeader className="px-6 py-4 pr-16">
           <div className="flex items-center gap-3">
             <div className={`w-8 h-8 rounded-lg ${color.bg} flex items-center justify-center`}>
               <TemplateIcon type={template.template_type} className="w-4 h-4" />
             </div>
               <div>
-              <h2 className="font-semibold text-slate-800">生成项目基线草稿</h2>
+              <DialogTitle className="font-semibold text-slate-800">生成项目基线草稿</DialogTitle>
               <p className="text-xs text-slate-500 mt-0.5">{template.name}</p>
             </div>
           </div>
-          <Button variant="ghost" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-500 hover:text-slate-600 transition-colors">
-            <IconX />
-          </Button>
-        </div>
+          <DialogDescription>选择目标项目并由模板生成基线草稿。</DialogDescription>
+        </DialogHeader>
         <Separator />
 
         <div className="p-6 space-y-4">
@@ -135,12 +133,16 @@ export function ApplyModal({
           <div>
             <div id="apply-project-label" className="mb-2 block text-sm font-medium text-slate-700">选择目标项目</div>
             {loading ? (
-              <LoadingState
-                label="目标项目加载中"
-                className="min-h-28"
+            <LoadingState
+              label="目标项目加载中"
+              className="min-h-28"
+            />
+          ) : projects.length === 0 ? (
+              <EmptyState
+                title="暂无可用项目"
+                description="当前账号还没有可应用模板的目标项目。"
+                className="rounded-xl empty-state-frame border-slate-200 bg-slate-50 py-6"
               />
-            ) : projects.length === 0 ? (
-              <div className="text-sm text-slate-500 py-3 text-center">暂无可用项目</div>
             ) : (
               <div className="space-y-2 max-h-48 overflow-y-auto" role="radiogroup" aria-labelledby="apply-project-label">
                 {projects.map(proj => {
@@ -209,7 +211,7 @@ export function ApplyModal({
             </Button>
           </div>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }

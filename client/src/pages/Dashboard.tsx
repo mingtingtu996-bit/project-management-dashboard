@@ -10,9 +10,7 @@ import { EmptyState } from '@/components/EmptyState'
 import { PageHeader } from '@/components/PageHeader'
 import ProjectInfoCard, { type ProjectBasicInfoDraft, type ScopeDimensionSection } from '@/components/ProjectInfoCard'
 import RecentTasksCard from '@/components/RecentTasksCard'
-import { AnimatedNumber } from '@/components/AnimatedNumber'
 import { SectionHeader } from '@/components/SectionHeader'
-import { Sparkline } from '@/components/Sparkline'
 import { UnitProgressCard, type UnitProgress } from '@/components/UnitProgressCard'
 import { TaskStatusCard } from '@/components/TaskStatusCard'
 import { Badge } from '@/components/ui/badge'
@@ -21,6 +19,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { LoadingState } from '@/components/ui/loading-state'
+import { MetricCard as SharedMetricCard } from '@/components/ui/metric-card'
 import { Separator } from '@/components/ui/separator'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -28,6 +27,7 @@ import { useStore } from '@/hooks/useStore'
 import { useToast } from '@/hooks/use-toast'
 import { PROJECT_NAVIGATION_LABELS } from '@/config/navigation'
 import { apiGet, apiPut, getApiErrorMessage, isAbortError } from '@/lib/apiClient'
+import { CHART_AXIS_COLORS, CHART_NEUTRAL, CHART_SERIES } from '@/lib/chartPalette'
 import { getTaskDisplayStatus, isCompletedTask, isDelayedTask } from '@/lib/taskBusinessStatus'
 import { cn } from '@/lib/utils'
 import { DashboardApiService, type ProjectSummary } from '@/services/dashboardApi'
@@ -448,10 +448,8 @@ function DashboardMetricCards({
   const monthDeviation = Math.round(summaryData?.scheduleVarianceDays ?? summaryData?.delayDays ?? 0)
   const activeRisks = summaryData?.activeRiskCount ?? 0
   const completedTasks = summaryData?.completedTaskCount ?? 0
-  const leafTasks = Math.max(summaryData?.leafTaskCount ?? summaryData?.totalTasks ?? 0, 1)
-  const completedRatio = Math.round((completedTasks / leafTasks) * 100)
   const progressTrend = Math.max(0, Math.round(completedTasks))
-  const noVerifiedSparkline: Array<{ value: number }> = []
+  const noVerifiedSparkline: number[] = []
 
   const metrics = [
     {
@@ -461,7 +459,7 @@ function DashboardMetricCards({
       unit: '%',
       trend: formatMetricTrend(progressTrend),
       sparkline: noVerifiedSparkline,
-      color: '#2563EB',
+      tone: 'primary' as const,
     },
     {
       key: 'deviation',
@@ -470,7 +468,7 @@ function DashboardMetricCards({
       unit: '天',
       trend: formatMetricTrend(monthDeviation, true),
       sparkline: noVerifiedSparkline,
-      color: '#F97316',
+      tone: monthDeviation > 0 ? 'warning' as const : 'success' as const,
     },
     {
       key: 'risks',
@@ -479,7 +477,7 @@ function DashboardMetricCards({
       unit: '',
       trend: formatMetricTrend(activeRisks, true),
       sparkline: noVerifiedSparkline,
-      color: '#DC2626',
+      tone: activeRisks > 0 ? 'danger' as const : 'slate' as const,
     },
     {
       key: 'todos',
@@ -489,7 +487,7 @@ function DashboardMetricCards({
       // TODO: 需后端补充昨日待办数后替换为真实趋势。
       trend: formatMetricTrend(0),
       sparkline: noVerifiedSparkline,
-      color: '#64748B',
+      tone: 'slate' as const,
     },
   ]
 
@@ -500,23 +498,18 @@ function DashboardMetricCards({
       className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4"
     >
       {metrics.map((metric, index) => (
-        <Card
+        <SharedMetricCard
           key={metric.key}
-          data-testid={`dashboard-hero-card-${metric.key}`}
-          variant="metric"
+          testId={`dashboard-hero-card-${metric.key}`}
+          title={metric.label}
+          value={metric.value}
+          unit={metric.unit}
+          trend={<span className={metric.trend.className}>{metric.trend.label}</span>}
+          sparkline={metric.sparkline}
+          tone={metric.tone}
           className="motion-safe:animate-fade-in"
           style={{ animationDelay: `${index * 60}ms` }}
-        >
-          <CardContent className="p-5">
-            <div className="text-xs font-semibold uppercase tracking-wider text-slate-600">{metric.label}</div>
-            <div className="mt-2 flex items-baseline gap-2">
-              <AnimatedNumber value={metric.value} className="text-3xl font-bold tabular-nums text-slate-900" />
-              {metric.unit ? <span className="text-sm text-slate-600">{metric.unit}</span> : null}
-              <span className={cn('text-sm font-medium', metric.trend.className)}>{metric.trend.label}</span>
-            </div>
-            {metric.sparkline.length > 1 && <Sparkline data={metric.sparkline} color={metric.color} className="mt-4" />}
-          </CardContent>
-        </Card>
+        />
       ))}
     </div>
   )
@@ -770,7 +763,7 @@ function WeeklyDigestPanel({ projectId }: { projectId: string }) {
 
   if (loading) {
     return (
-      <Card data-testid="dashboard-weekly-digest" className="card-l2 border-slate-100">
+      <Card data-testid="dashboard-weekly-digest" variant="surface" className="border-slate-100">
         <CardContent className="py-6">
           <LoadingState label="本周进度简报加载中" description="" className="min-h-24 border-0 bg-transparent px-0 py-0 shadow-none" />
         </CardContent>
@@ -780,17 +773,17 @@ function WeeklyDigestPanel({ projectId }: { projectId: string }) {
 
   if (!digest) {
     return (
-      <Card data-testid="dashboard-weekly-digest" className="card-l2 border-slate-100">
+      <Card data-testid="dashboard-weekly-digest" variant="surface" className="border-slate-100">
         <CardHeader className="pb-3">
           <CardTitle className="text-xl text-slate-900">本周进度简报</CardTitle>
         </CardHeader>
         <CardContent>
-          <div
-            data-testid="dashboard-critical-path-summary"
-            className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500"
-          >
-            周报将在每周一自动生成，当前暂无数据。
-          </div>
+          <EmptyState
+            testId="dashboard-critical-path-summary"
+            title="暂无本周进度简报"
+            description="周报将在每周一自动生成，形成后会在这里展示关键进展。"
+            className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 py-8"
+          />
         </CardContent>
       </Card>
     )
@@ -805,7 +798,7 @@ function WeeklyDigestPanel({ projectId }: { projectId: string }) {
   const isSevereDelay = nearestDelayDays !== null && nearestDelayDays >= 20
 
   return (
-    <Card data-testid="dashboard-weekly-digest" className="card-l2 border-slate-100">
+    <Card data-testid="dashboard-weekly-digest" variant="surface" className="border-slate-100">
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between gap-3">
           <CardTitle className="text-xl text-slate-900">本周进度简报</CardTitle>
@@ -858,7 +851,11 @@ function WeeklyDigestPanel({ projectId }: { projectId: string }) {
               <div>
                 <div className="mb-2 text-xs font-medium text-slate-500">Top 5 偏差任务</div>
                 {(digest.top_delayed_tasks || []).length === 0 ? (
-                  <div className="text-xs text-slate-500">暂无偏差任务</div>
+                  <EmptyState
+                    title="暂无偏差任务"
+                    description="当前周报未识别出需要重点跟踪的偏差任务。"
+                    className="rounded-xl empty-state-frame border-slate-200 bg-slate-50 py-5"
+                  />
                 ) : (
                   <ul className="space-y-1">
                     {(digest.top_delayed_tasks || []).map((t, i) => (
@@ -877,7 +874,11 @@ function WeeklyDigestPanel({ projectId }: { projectId: string }) {
               <div>
                 <div className="mb-2 text-xs font-medium text-slate-500">责任主体异常</div>
                 {(digest.abnormal_responsibilities || []).length === 0 ? (
-                  <div className="text-xs text-slate-500">暂无异常责任主体</div>
+                  <EmptyState
+                    title="暂无异常责任主体"
+                    description="当前周报未识别出需要额外跟进的责任主体。"
+                    className="rounded-xl empty-state-frame border-slate-200 bg-slate-50 py-5"
+                  />
                 ) : (
                   <ul className="space-y-1">
                     {(digest.abnormal_responsibilities || []).map(r => (
@@ -987,7 +988,7 @@ function DashboardMonthlyTrend({ projectId }: { projectId: string }) {
   }
 
   return (
-    <Card data-testid="dashboard-monthly-trend" className="card-l2 border-slate-100">
+    <Card data-testid="dashboard-monthly-trend" variant="surface" className="border-slate-100">
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between gap-3">
           <CardTitle className="text-xl text-slate-900">月度趋势（近6个月）</CardTitle>
@@ -996,11 +997,13 @@ function DashboardMonthlyTrend({ projectId }: { projectId: string }) {
       </CardHeader>
       <CardContent className="space-y-4">
         {loading ? (
-          <div className="flex h-32 items-center justify-center text-sm text-slate-500">加载中…</div>
+          <LoadingState label="月度趋势加载中" description="" className="min-h-32 border-0 bg-transparent px-0 py-0 shadow-none" />
         ) : trendData.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
-            月度趋势将在任务完成后自动生成。
-          </div>
+          <EmptyState
+            title="暂无月度趋势"
+            description="月度趋势将在任务完成后自动生成。"
+            className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 py-8"
+          />
         ) : (
           <ChartAccessibleWrapper
             columns={['月份', '任务完成数', '按时完成数', '延期数', '月计划承诺数', '月计划兑现数', '按时完成率(%)', '月计划兑现率(%)']}
@@ -1032,8 +1035,8 @@ function DashboardMonthlyTrend({ projectId }: { projectId: string }) {
                 const y = PT + innerH * (1 - v)
                 return (
                   <g key={v}>
-                    <line x1={PL} y1={y} x2={W - PR} y2={y} stroke="#e2e8f0" strokeWidth="1" strokeDasharray="3 3" />
-                    <text x={PL - 4} y={y + 4} fontSize="9" fill="#94a3b8" textAnchor="end">{Math.round(v * 100)}%</text>
+                    <line x1={PL} y1={y} x2={W - PR} y2={y} stroke={CHART_NEUTRAL.softSurface} strokeWidth="1" strokeDasharray="3 3" />
+                    <text x={PL - 4} y={y + 4} fontSize="9" fill={CHART_AXIS_COLORS.axisText} textAnchor="end">{Math.round(v * 100)}%</text>
                   </g>
                 )
               })}
@@ -1041,7 +1044,7 @@ function DashboardMonthlyTrend({ projectId }: { projectId: string }) {
                 <polyline
                   points={taskPoints.map((point) => `${point.x},${point.taskY}`).join(' ')}
                   fill="none"
-                  stroke="#3b82f6"
+                  stroke={CHART_SERIES.primary}
                   strokeWidth="2"
                   strokeLinejoin="round"
                 />
@@ -1050,21 +1053,21 @@ function DashboardMonthlyTrend({ projectId }: { projectId: string }) {
                 <polyline
                   points={fulfillmentPoints.map((point) => `${point.x},${point.fulfillmentY}`).join(' ')}
                   fill="none"
-                  stroke="#10b981"
+                  stroke={CHART_SERIES.success}
                   strokeWidth="2"
                   strokeLinejoin="round"
                 />
               )}
               {points.map((p, i) => (
                 <g key={i}>
-                  <text x={p.x} y={H - 4} fontSize="9" fill="#94a3b8" textAnchor="middle">{monthLabel(p.row.month)}</text>
+                  <text x={p.x} y={H - 4} fontSize="9" fill={CHART_AXIS_COLORS.axisText} textAnchor="middle">{monthLabel(p.row.month)}</text>
                   {p.taskY !== null && (
                     <circle
                       cx={p.x}
                       cy={p.taskY}
                       r={4}
                       fill="white"
-                      stroke="#3b82f6"
+                      stroke={CHART_SERIES.primary}
                       strokeWidth="2"
                       onMouseEnter={(event) => {
                         const rect = (event.target as SVGCircleElement).closest('svg')!.getBoundingClientRect()
@@ -1082,7 +1085,7 @@ function DashboardMonthlyTrend({ projectId }: { projectId: string }) {
                       cy={p.fulfillmentY}
                       r={4}
                       fill="white"
-                      stroke="#10b981"
+                      stroke={CHART_SERIES.success}
                       strokeWidth="2"
                       onMouseEnter={(event) => {
                         const rect = (event.target as SVGCircleElement).closest('svg')!.getBoundingClientRect()
@@ -1181,7 +1184,7 @@ function IssueRiskGrid({ summaryData, projectId }: { summaryData: ProjectSummary
   }
 
   return (
-    <Card data-testid="dashboard-risk-snapshot" className="card-l2 border-slate-100">
+    <Card data-testid="dashboard-risk-snapshot" variant="surface" className="border-slate-100">
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between gap-3">
           <CardTitle className="text-base text-slate-900">问题与风险快照</CardTitle>
@@ -1797,7 +1800,7 @@ export default function Dashboard() {
               </TabsTrigger>
             </TabsList>
 
-            <div className="min-h-[400px]">
+            <div className="min-h-[25rem]">
               <TabsContent value="trend" forceMount className="mt-4 space-y-4">
                 <DashboardMonthlyTrend projectId={currentProject.id ?? ''} />
                 <WeeklyDigestPanel projectId={currentProject.id ?? ''} />
@@ -1841,7 +1844,7 @@ export default function Dashboard() {
 
               <TabsContent value="unit" forceMount className="mt-4">
                 {responsibilityLoading && unitProgressItems.length === 0 ? (
-                  <LoadingState label="责任单位加载中" className="min-h-[320px]" />
+                  <LoadingState label="责任单位加载中" className="min-h-80" />
                 ) : (
                   <UnitProgressCard
                     units={unitProgressItems}

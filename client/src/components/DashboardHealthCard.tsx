@@ -1,4 +1,5 @@
 import { Card, CardContent } from '@/components/ui/card';
+import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/ui/loading-state';
 import { ChevronDown, ChevronUp, TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import { useState, useEffect, useMemo } from 'react';
@@ -258,16 +259,20 @@ export default function DashboardHealthCard({
                       })}
                     </div>
                   ) : (
-                    <div className="text-sm text-slate-500 py-2">
-                      暂无分项进度数据
-                    </div>
+                    <EmptyState
+                      title="暂无分项进度数据"
+                      description="楼栋或分项进度形成后会在这里展示。"
+                      className="rounded-xl empty-state-frame border-slate-200 bg-slate-50 py-6"
+                    />
                   )}
                 </div>
               </>
             ) : (
-              <div className="text-center py-4 text-slate-500">
-                暂无详细数据
-              </div>
+              <EmptyState
+                title="暂无详细数据"
+                description="健康度详情会在数据快照形成后自动补齐。"
+                className="rounded-xl empty-state-frame border-slate-200 bg-slate-50 py-6"
+              />
             )}
           </div>
         )}

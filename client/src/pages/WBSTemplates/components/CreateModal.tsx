@@ -2,11 +2,12 @@ import { useState } from 'react'
 import type { ApiResponse } from '../types'
 import { API_BASE, withCredentials } from '../utils'
 import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Separator } from '@/components/ui/separator'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useLoadingButton } from '@/hooks/useLoadingButton'
 import { useParams } from 'react-router-dom'
-import { IconX, IconChevronRight, IconUpload } from './WbsIcons'
+import { IconChevronRight, IconUpload } from './WbsIcons'
 
 export function CreateModal({ onClose, onSuccess }: { onClose: () => void; onSuccess?: () => void }) {
   const { id: projectId = '' } = useParams<{ id: string }>()
@@ -174,21 +175,17 @@ export function CreateModal({ onClose, onSuccess }: { onClose: () => void; onSuc
   const createButton = useLoadingButton(handleCreate)
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex animate-in items-center justify-center bg-slate-950/50 px-4 py-6 backdrop-blur-[4px] duration-200 fade-in-0"
-      onClick={onClose}
-    >
-      <div
-        className="max-h-[85vh] w-[90%] max-w-[720px] animate-in overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-[var(--el-4)] duration-200 ease-bounce fade-in-0 zoom-in-95"
-        onClick={e => e.stopPropagation()}
+    <Dialog open onOpenChange={(open) => {
+      if (!open) onClose()
+    }}>
+      <DialogContent
+        closeLabel="关闭新建 WBS 模板弹窗"
+        className="max-h-[calc(100vh-4rem)] max-w-3xl overflow-y-auto border-slate-200 p-0"
       >
-        {/* 头部 */}
-        <div className="flex items-center justify-between px-6 py-4">
-          <h2 className="font-semibold text-slate-800">新建 WBS 模板</h2>
-          <Button variant="ghost" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-500 hover:text-slate-600 transition-colors">
-            <IconX />
-          </Button>
-        </div>
+        <DialogHeader className="px-6 py-4 pr-16">
+          <DialogTitle className="font-semibold text-slate-800">新建 WBS 模板</DialogTitle>
+          <DialogDescription>选择创建方式并填写模板基础信息。</DialogDescription>
+        </DialogHeader>
         <Separator />
 
         <div className="p-6">
@@ -244,7 +241,7 @@ export function CreateModal({ onClose, onSuccess }: { onClose: () => void; onSuc
 
               {/* Excel 文件选择区（仅 excel 模式） */}
               {createType === 'excel' && (
-                <div className="mt-4 p-4 bg-slate-50 rounded-xl border border-dashed border-slate-300">
+                <div className="mt-4 p-4 bg-slate-50 rounded-xl empty-state-frame border-slate-300">
                   <label htmlFor="wbs-template-excel-file" className="flex flex-col items-center gap-2 cursor-pointer">
                     <IconUpload className="w-6 h-6 text-slate-500" />
                     <span className="text-sm text-slate-500">
@@ -277,7 +274,7 @@ export function CreateModal({ onClose, onSuccess }: { onClose: () => void; onSuc
                   aria-invalid={Boolean(fieldErrors.templateName)}
                   aria-describedby={fieldErrors.templateName ? 'wbs-template-name-error' : undefined}
                   placeholder="例：18层住宅标准施工工序"
-                  className={`w-full text-sm px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${fieldErrors.templateName ? 'border-red-500' : 'border-slate-200'}`}
+                  className={`w-full text-sm px-3 py-2 border rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${fieldErrors.templateName ? 'border-red-500' : 'border-slate-200'}`}
                   autoFocus
                 />
                 {fieldErrors.templateName ? (
@@ -343,7 +340,7 @@ export function CreateModal({ onClose, onSuccess }: { onClose: () => void; onSuc
             )}
           </div>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }

@@ -46,7 +46,7 @@ export function TemplateCard({
 
   // U2: 停用模板用虚线边框
   const cardBorderClass = isDisabled
-    ? 'border-dashed border-slate-200 opacity-70'
+    ? 'empty-state-frame border-slate-200 opacity-70'
     : 'border-slate-100 hover:ring-1 ring-blue-100'
 
   return (
@@ -57,7 +57,10 @@ export function TemplateCard({
           ? 'border-blue-400 ring-2 ring-blue-200'
           : cardBorderClass
       }`}
-      onClick={() => onPreview(template)}
+      onClick={(event) => {
+        if ((event.target as HTMLElement).closest('[data-template-interactive="true"]')) return
+        onPreview(template)
+      }}
       onContextMenu={(e) => {
         // F7: 右键菜单
         e.preventDefault()
@@ -66,7 +69,10 @@ export function TemplateCard({
     >
       {/* F8: 多选 checkbox（左上角，hover 或已选时显示）*/}
       {onSelect && (
-        <div
+        <button
+          type="button"
+          aria-label={selected ? '取消选择模板' : '选择模板'}
+          data-template-interactive="true"
           className={`absolute top-3 left-3 z-10 transition-opacity ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
           onClick={(e) => { e.stopPropagation(); onSelect(template.id) }}
         >
@@ -79,7 +85,7 @@ export function TemplateCard({
               </svg>
             )}
           </div>
-        </div>
+        </button>
       )}
       {/* 头部 */}
       <div className="flex items-start justify-between mb-3">
@@ -119,7 +125,12 @@ export function TemplateCard({
 </Tooltip>
             {menuOpen && (
               <>
-                <div className="fixed inset-0 z-10" onClick={(e) => { e.stopPropagation(); setMenuOpen(false) }} />
+                <button
+                  type="button"
+                  aria-label="关闭模板操作菜单"
+                  className="fixed left-0 top-0 z-10 h-screen w-screen bg-transparent p-0"
+                  onClick={(e) => { e.stopPropagation(); setMenuOpen(false) }}
+                />
                 <div
                   role="menu"
                   className="absolute right-0 top-8 z-20 bg-white border border-slate-100 rounded-xl shadow-lg py-1 w-36 text-sm"
@@ -213,7 +224,7 @@ export function TemplateCard({
       )}
 
       {/* 底部操作 */}
-      <div className="flex items-center justify-between mt-auto" onClick={e => e.stopPropagation()}>
+      <div className="flex items-center justify-between mt-auto" data-template-interactive="true">
         <span className="text-xs text-slate-500">{template.updated_at ? `更新于 ${formatDate(template.updated_at)}` : ''}</span>
         <div className="flex gap-2">
           <Button variant="ghost"
@@ -251,15 +262,17 @@ export function TemplateCard({
       {/* F7: 右键上下文菜单 */}
       {ctxMenu && (
         <>
-          <div
-            className="fixed inset-0 z-40"
+          <button
+            type="button"
+            aria-label="关闭模板右键菜单"
+            className="fixed left-0 top-0 z-40 h-screen w-screen bg-transparent p-0"
             onClick={(e) => { e.stopPropagation(); setCtxMenu(null) }}
             onContextMenu={(e) => { e.preventDefault(); setCtxMenu(null) }}
           />
           <div
+            data-template-interactive="true"
             className="fixed z-50 bg-white border border-slate-100 rounded-xl shadow-xl py-1 w-44 text-sm"
             style={{ top: ctxMenu.y, left: ctxMenu.x }}
-            onClick={(e) => e.stopPropagation()}
           >
             <Button variant="ghost"
               className="w-full text-left px-3 py-2 hover:bg-slate-50 text-slate-700 flex items-center gap-2"

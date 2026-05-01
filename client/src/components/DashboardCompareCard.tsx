@@ -12,6 +12,7 @@ import {
 
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { EmptyState } from '@/components/EmptyState'
 import { LoadingState } from '@/components/ui/loading-state'
 import { Separator } from '@/components/ui/separator'
 import { apiGet, isAbortError } from '@/lib/apiClient'
@@ -209,9 +210,11 @@ function DailyProgressSection({ projectId }: { projectId?: string }) {
 
   if (!data) {
     return (
-      <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
-        今天暂无进度更新，周边变化会在有快照后自动出现。
-      </div>
+      <EmptyState
+        title="暂无今日进度更新"
+        description="周边变化会在有快照后自动出现。"
+        className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 py-8"
+      />
     )
   }
 
@@ -532,9 +535,11 @@ export default function DashboardCompareCard({ projectId }: DashboardCompareCard
                     {blockState.loading ? (
                       <LoadingState label={`${block.title}加载中`} description="" className="min-h-24" />
                     ) : blockState.results.length === 0 ? (
-                      <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
-                        暂无{block.title}数据，稍后有任务快照后会自动补齐。
-                      </div>
+                      <EmptyState
+                        title={`暂无${block.title}数据`}
+                        description="稍后有任务快照后会自动补齐。"
+                        className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 py-8"
+                      />
                     ) : (
                       <div className="space-y-3">
                         {blockState.results.map((result, index) => (

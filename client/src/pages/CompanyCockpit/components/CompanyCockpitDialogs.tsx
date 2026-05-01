@@ -98,8 +98,8 @@ export function CompanyCockpitDialogs({
             <Button variant="outline" onClick={() => onDialogChange(false)} disabled={submitting}>
               取消
             </Button>
-            <Button onClick={onSubmit} disabled={submitting}>
-              {submitting ? (isEditMode ? '保存中...' : '创建中...') : isEditMode ? '保存变更' : '创建项目'}
+            <Button onClick={onSubmit} loading={submitting}>
+              {isEditMode ? '保存变更' : '创建项目'}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -115,7 +115,7 @@ export function CompanyCockpitDialogs({
             : '确认是否删除当前项目及其关联摘要数据。'
         }
         warning="删除项目会级联移除项目级摘要与业务数据，请确认当前项目不再需要保留。"
-        confirmLabel={submitting ? '删除中...' : '确认删除'}
+        confirmLabel="确认删除"
         loading={submitting}
         onConfirm={onDelete}
         testId="project-delete-guard"

@@ -26,7 +26,7 @@ export function MonthlyPlanDraftPanel({
   canQuickConfirm,
 }: MonthlyPlanDraftPanelProps) {
   return (
-    <Card data-testid="monthly-plan-draft-panel" className="border-slate-200 shadow-sm">
+    <Card data-testid="monthly-plan-draft-panel" className="surface-card">
       <CardHeader className="space-y-2 bg-slate-50/80">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="space-y-1">

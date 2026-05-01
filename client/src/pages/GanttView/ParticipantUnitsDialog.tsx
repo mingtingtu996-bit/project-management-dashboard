@@ -1,5 +1,6 @@
 import type { Dispatch, SetStateAction } from 'react'
 import { Plus, Pencil, Trash2 } from 'lucide-react'
+import { EmptyState } from '@/components/EmptyState'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -71,7 +72,7 @@ export function ParticipantUnitsDialog({
 }: ParticipantUnitsDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] max-w-[720px] overflow-y-auto rounded-2xl shadow-[var(--el-4)]" aria-describedby={undefined}>
+      <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto rounded-2xl shadow-[var(--el-4)]" aria-describedby={undefined}>
         <DialogHeader>
           <DialogTitle>参建单位台账</DialogTitle>
           <DialogDescription className="sr-only">参建单位台账</DialogDescription>
@@ -89,26 +90,26 @@ export function ParticipantUnitsDialog({
               </Button>
             </div>
 
-            <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
+            <div className="max-h-[26.25rem] space-y-2 overflow-y-auto pr-1">
               {loading ? (
                 <LoadingState
                   label="参建单位加载中"
-                  className="min-h-24 rounded-lg border border-dashed bg-transparent"
+                  className="min-h-24 rounded-lg empty-state-frame bg-transparent"
                 />
               ) : units.length > 0 ? (
                 units.map((unit) => (
                   <div key={unit.id} className="rounded-lg border bg-background p-3">
                     <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="font-medium">{unit.unit_name}</p>
-                        <p className="text-xs text-muted-foreground">{unit.unit_type}</p>
+                      <div className="min-w-0">
+                        <p className="truncate font-medium" title={unit.unit_name}>{unit.unit_name}</p>
+                        <p className="truncate text-xs text-muted-foreground" title={unit.unit_type}>{unit.unit_type}</p>
                         {unit.contact_name || unit.contact_phone || unit.contact_email ? (
-                          <p className="mt-1 text-xs text-muted-foreground">
+                          <p className="mt-1 line-clamp-2 text-xs text-muted-foreground" title={[unit.contact_name, unit.contact_role, unit.contact_phone, unit.contact_email].filter(Boolean).join(' / ')}>
                             {[unit.contact_name, unit.contact_role, unit.contact_phone, unit.contact_email].filter(Boolean).join(' / ')}
                           </p>
                         ) : null}
                       </div>
-                      <div className="flex items-center gap-1">
+                      <div className="flex shrink-0 items-center gap-1">
                         <Button size="sm" variant="ghost" onClick={() => onEdit(unit)}>
                           <Pencil className="mr-1 h-3.5 w-3.5" />
                           编辑
@@ -127,7 +128,11 @@ export function ParticipantUnitsDialog({
                   </div>
                 ))
               ) : (
-                <div className="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">暂无参建单位</div>
+                <EmptyState
+                  title="暂无参建单位"
+                  description="新增单位后，可在任务责任单位中复用。"
+                  className="rounded-lg empty-state-frame border-slate-200 bg-slate-50 py-8"
+                />
               )}
             </div>
           </div>
@@ -215,8 +220,8 @@ export function ParticipantUnitsDialog({
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               关闭
             </Button>
-            <Button type="button" onClick={onSubmit} disabled={saving}>
-              {saving ? '保存中...' : draft.id ? '保存修改' : '新增单位'}
+            <Button type="button" onClick={onSubmit} loading={saving}>
+              {draft.id ? '保存修改' : '新增单位'}
             </Button>
           </div>
         </DialogFooter>

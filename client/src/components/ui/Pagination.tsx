@@ -90,7 +90,7 @@ export function Pagination({
               value={String(pageSize)}
               onValueChange={(value) => onPageSizeChange(Number(value))}
             >
-              <SelectTrigger aria-label="每页条数" className="h-8 w-[84px] rounded-md bg-background text-sm">
+              <SelectTrigger aria-label="每页条数" className="h-8 w-24 rounded-md bg-background text-sm">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>

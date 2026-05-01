@@ -1,7 +1,7 @@
 import React from 'react'
 
 import { useMemo } from 'react'
-import { CHART_AXIS_COLORS } from '@/lib/chartPalette'
+import { ACCEPTANCE_FLOW_PALETTE, CHART_AXIS_COLORS } from '@/lib/chartPalette'
 import { cn } from '@/lib/utils'
 
 import type {
@@ -82,7 +82,7 @@ export default function AcceptanceFlowConnectors({
           orient="auto"
           markerUnits="strokeWidth"
         >
-          <path d="M 0 0 L 8 4 L 0 8 z" fill="#3b82f6" />
+          <path d="M 0 0 L 8 4 L 0 8 z" fill={ACCEPTANCE_FLOW_PALETTE.primary} />
         </marker>
       </defs>
 
@@ -124,10 +124,10 @@ export default function AcceptanceFlowConnectors({
           <g key={`fork-${nodeId}`} data-testid={`acceptance-fork-indicator-${nodeId}`}>
             <polygon
               points={`${cx},${cy - 8} ${cx + 8},${cy} ${cx},${cy + 8} ${cx - 8},${cy}`}
-              fill={isFocused ? '#3b82f6' : '#94a3b8'}
+              fill={isFocused ? ACCEPTANCE_FLOW_PALETTE.primary : ACCEPTANCE_FLOW_PALETTE.connector}
               opacity={isFocused ? 0.95 : 0.55}
             />
-            <text x={cx} y={cy + 14} textAnchor="middle" fontSize="8" fill={isFocused ? '#3b82f6' : '#64748b'} fontWeight="600">
+            <text x={cx} y={cy + 14} textAnchor="middle" fontSize="8" fill={isFocused ? ACCEPTANCE_FLOW_PALETTE.primary : ACCEPTANCE_FLOW_PALETTE.connectorText} fontWeight="600">
               分叉
             </text>
           </g>
@@ -147,10 +147,10 @@ export default function AcceptanceFlowConnectors({
               cx={cx}
               cy={cy}
               r={8}
-              fill={isFocused ? '#8b5cf6' : '#cbd5e1'}
+              fill={isFocused ? ACCEPTANCE_FLOW_PALETTE.merge : ACCEPTANCE_FLOW_PALETTE.mergeMuted}
               opacity={isFocused ? 0.95 : 0.55}
             />
-            <text x={cx} y={cy + 14} textAnchor="middle" fontSize="8" fill={isFocused ? '#7c3aed' : '#64748b'} fontWeight="600">
+            <text x={cx} y={cy + 14} textAnchor="middle" fontSize="8" fill={isFocused ? ACCEPTANCE_FLOW_PALETTE.mergeText : ACCEPTANCE_FLOW_PALETTE.connectorText} fontWeight="600">
               汇合
             </text>
           </g>

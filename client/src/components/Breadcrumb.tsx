@@ -54,7 +54,7 @@ export function Breadcrumb({ items, className, showHome = false }: BreadcrumbPro
   <TooltipTrigger asChild>
     <span
                 className={cn(
-                  'max-w-[120px] truncate md:max-w-[180px]',
+                  'max-w-32 truncate md:max-w-44',
                   isLast ? 'font-medium text-slate-900' : 'text-slate-500',
                   needsTruncate && 'cursor-default',
                 )}
@@ -71,7 +71,7 @@ export function Breadcrumb({ items, className, showHome = false }: BreadcrumbPro
                   <Link
                     to={item.href}
                     className={cn(
-                      'max-w-[120px] truncate text-blue-600 underline-offset-2 transition-colors hover:text-blue-700 hover:underline md:max-w-[180px]',
+                      'max-w-32 truncate text-blue-600 underline-offset-2 transition-colors hover:text-blue-700 hover:underline md:max-w-44',
                       needsTruncate && 'cursor-pointer',
                     )}
                   >

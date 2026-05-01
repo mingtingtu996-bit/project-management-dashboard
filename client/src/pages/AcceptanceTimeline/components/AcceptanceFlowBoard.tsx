@@ -65,7 +65,7 @@ export default function AcceptanceFlowBoard({
   return (
     <DndContext sensors={sensors} onDragEnd={handleDndEnd}>
     <div className="space-y-4" data-testid="acceptance-flow-board">
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-100 bg-white px-4 py-3 shadow-[var(--el-1)]">
         <div className="space-y-1">
           <div className="text-sm font-semibold text-slate-900">流程板</div>
           <div className="text-xs text-slate-500">
@@ -80,7 +80,7 @@ export default function AcceptanceFlowBoard({
         </div>
       </div>
 
-      <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
+      <div className="rounded-xl border surface-card">
         <div className="flex flex-wrap items-center gap-2 bg-slate-50 px-4 py-3 text-xs text-slate-500">
           <Badge variant="outline" className="gap-1.5 rounded-full bg-white">
             <Network className="h-3.5 w-3.5" />
@@ -131,7 +131,7 @@ export default function AcceptanceFlowBoard({
             })}
 
             <div
-              className="absolute left-0 top-0 z-20 flex h-[76px] w-full bg-white/95 backdrop-blur"
+              className="absolute left-0 top-0 z-20 flex h-20 w-full bg-white/95 backdrop-blur"
               style={{ height: FLOW_HEADER_HEIGHT }}
             >
               <div

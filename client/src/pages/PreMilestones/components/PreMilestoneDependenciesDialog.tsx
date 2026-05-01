@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link2, Trash2 } from 'lucide-react'
+import { EmptyState } from '@/components/EmptyState'
 import { Button } from '@/components/ui/button'
+import { LoadingState } from '@/components/ui/loading-state'
 import {
   Dialog,
   DialogContent,
@@ -181,7 +183,7 @@ export function PreMilestoneDependenciesDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent className="max-h-[88vh] max-w-[720px] overflow-y-auto">
+      <DialogContent className="max-h-[88vh] max-w-3xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Link2 className="h-5 w-5" />
@@ -258,7 +260,7 @@ export function PreMilestoneDependenciesDialog({
             </div>
           </section>
 
-          <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <section className="rounded-2xl border border-slate-100 bg-white p-4 shadow-[var(--el-1)]">
             <div className="flex items-center justify-between gap-3">
               <div>
                 <h4 className="text-sm font-semibold text-slate-900">依赖列表</h4>
@@ -270,19 +272,17 @@ export function PreMilestoneDependenciesDialog({
             </div>
             <div className="mt-4 grid gap-2">
               {loading ? (
-                <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                  正在加载依赖图...
-                </div>
+                <LoadingState label="依赖图加载中" description="" className="min-h-24 rounded-xl empty-state-frame border-slate-200 bg-slate-50 py-6" />
               ) : dependencyEntries.length > 0 ? dependencyEntries.map((entry) => (
                 <div key={entry.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <div className="font-medium text-slate-900">
-                        {entry.sourceLabel}
-                        <span className="mx-2 text-slate-500">→</span>
-                        {entry.targetLabel}
+                      <div className="flex min-w-0 items-center gap-2 font-medium text-slate-900">
+                        <span className="truncate" title={entry.sourceLabel}>{entry.sourceLabel}</span>
+                        <span className="shrink-0 text-slate-500">→</span>
+                        <span className="truncate" title={entry.targetLabel}>{entry.targetLabel}</span>
                       </div>
-                      <div className="mt-1 text-xs text-slate-500">
+                      <div className="mt-1 line-clamp-2 text-xs text-slate-500" title={`${entry.sourceId} → ${entry.targetId}${entry.notes ? ` · ${entry.notes}` : ''}`}>
                         {entry.sourceId} → {entry.targetId}
                         {entry.notes ? ` · ${entry.notes}` : ''}
                       </div>
@@ -303,9 +303,11 @@ export function PreMilestoneDependenciesDialog({
                   </div>
                 </div>
               )) : (
-                <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                  暂无前置依赖记录。
-                </div>
+                <EmptyState
+                  title="暂无前置依赖记录"
+                  description="新增后会展示项目内证照之间的前置关系。"
+                  className="rounded-xl empty-state-frame border-slate-200 bg-slate-50 py-8"
+                />
               )}
             </div>
           </section>

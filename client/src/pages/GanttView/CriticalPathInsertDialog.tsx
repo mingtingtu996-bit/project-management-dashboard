@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 
+import { EmptyState } from '@/components/EmptyState'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
@@ -94,7 +95,7 @@ export function CriticalPathInsertDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] max-w-[720px] overflow-y-auto rounded-2xl shadow-[var(--el-4)]" data-testid="critical-path-insert-dialog">
+      <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto rounded-2xl shadow-[var(--el-4)]" data-testid="critical-path-insert-dialog">
         <DialogHeader>
           <DialogTitle>选择要插入主链的任务</DialogTitle>
           <DialogDescription className="sr-only">
@@ -119,11 +120,14 @@ export function CriticalPathInsertDialog({
             </div>
           </div>
 
-          <div className="max-h-[320px] space-y-2 overflow-y-auto pr-1">
+          <div className="max-h-80 space-y-2 overflow-y-auto pr-1">
             {filteredTasks.length === 0 ? (
-              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-                没有找到可插入的任务。
-              </div>
+              <EmptyState
+                variant="filter"
+                title="没有找到可插入的任务"
+                description="当前筛选下没有未展示在链路中的可选任务。"
+                className="rounded-xl empty-state-frame border-slate-200 bg-slate-50 py-8"
+              />
             ) : (
               filteredTasks.map((task) => {
                 const active = selectedTaskId === task.id
@@ -144,7 +148,7 @@ export function CriticalPathInsertDialog({
                         <div className="truncate text-sm font-medium text-slate-900">{getTaskLabel(task)}</div>
                         <div className="mt-0.5 text-xs text-slate-500">任务 ID：{task.id}</div>
                       </div>
-                      <span className="shrink-0 text-xs text-slate-500">
+                      <span className="max-w-44 shrink-0 truncate text-xs text-slate-500" title={task.status || '未设置状态'}>
                         {task.status ? `状态：${task.status}` : '未设置状态'}
                       </span>
                     </div>
@@ -165,10 +169,11 @@ export function CriticalPathInsertDialog({
               <Button
                 type="button"
                 onClick={() => void handleSubmit()}
-                disabled={!anchorTask || !selectedTask || actionLoading}
+                disabled={!anchorTask || !selectedTask}
+                loading={actionLoading}
                 data-testid="critical-path-insert-submit"
               >
-                {actionLoading ? '保存中...' : submitLabel}
+                {submitLabel}
               </Button>
             </div>
           </div>

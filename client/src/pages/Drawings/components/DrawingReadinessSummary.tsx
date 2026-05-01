@@ -56,7 +56,7 @@ function SummaryTile({
   } as const
 
   return (
-    <Card className="card-unified">
+    <Card variant="surface">
       <CardContent className="space-y-3 p-5">
         <div className="flex items-center justify-between gap-3">
           <div className="text-sm font-medium text-slate-500">{label}</div>
@@ -160,7 +160,7 @@ export function DrawingReadinessSummary({
         />
       </div>
 
-      <Card className="card-unified" data-testid="drawing-readiness-progress">
+      <Card variant="surface" data-testid="drawing-readiness-progress">
         <CardContent className="space-y-5 p-5">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div>

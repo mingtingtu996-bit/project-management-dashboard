@@ -1076,7 +1076,7 @@ export default function Notifications() {
         title={PROJECT_NAVIGATION_LABELS.notifications}
         subtitle=""
       >
-        <div className="relative w-full min-w-[220px] lg:w-72">
+        <div className="relative w-full min-w-56 lg:w-72">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
           <Input
             value={searchQuery}
@@ -1159,7 +1159,7 @@ export default function Notifications() {
             </Button>
           </PopoverTrigger>
 
-          <PopoverContent align="end" side="bottom" className="w-[340px] rounded-xl border-slate-200 bg-white p-4 shadow-[var(--el-3)]">
+          <PopoverContent align="end" side="bottom" className="w-80 rounded-xl border-slate-200 bg-white p-4 shadow-[var(--el-3)]">
               <div className="space-y-4">
                 <div>
                   <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">
@@ -1676,7 +1676,7 @@ export default function Notifications() {
             ? `来源模块：${deleteTarget.targetLabel}`
             : undefined
         }
-        confirmLabel={deleteSubmitting ? '删除中...' : '确认删除'}
+        confirmLabel="确认删除"
         loading={deleteSubmitting}
         onConfirm={() => void deleteNotification()}
         testId="notification-delete-guard"
@@ -1691,7 +1691,7 @@ export default function Notifications() {
         title="批量删除提醒"
         description={`确认删除当前筛选中的 ${bulkDeleteIds.length} 条已处理提醒？删除后只会从提醒中心移除，不会删除对应业务数据。`}
         warning="批量删除仅作用于已读、已知悉或静音提醒，未读提醒会保留。"
-        confirmLabel={bulkDeleteSubmitting ? '删除中...' : '确认删除'}
+        confirmLabel="确认删除"
         loading={bulkDeleteSubmitting}
         onConfirm={() => void deleteBulkNotifications()}
         testId="notification-bulk-delete-guard"

@@ -20,6 +20,7 @@
  */
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { EmptyState } from '@/components/EmptyState'
 import { Separator } from '@/components/ui/separator'
 import { ChevronRight, Building2, Palette, ClipboardCheck, Compass, Zap } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -141,9 +142,11 @@ export function UnitProgressCard({
           <CardTitle className="text-base font-semibold">责任单位完成情况</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="text-center py-8 text-muted-foreground">
-            <p className="text-sm">暂无责任单位数据</p>
-          </div>
+          <EmptyState
+            title="暂无责任单位数据"
+            description="任务绑定责任单位后会展示单位完成情况。"
+            className="py-8"
+          />
         </CardContent>
       </Card>
     )

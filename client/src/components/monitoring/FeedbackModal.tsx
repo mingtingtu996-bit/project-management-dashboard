@@ -4,13 +4,19 @@
  */
 
 import { useState } from 'react'
-import { MessageSquare, Send, X, CheckCircle } from 'lucide-react'
+import { MessageSquare, Send, CheckCircle } from 'lucide-react'
 import { z } from 'zod'
-import { Separator } from '@/components/ui/separator'
 import { getBrowserStorage, safeJsonParse, safeStorageGet, safeStorageSet } from '@/lib/browserStorage'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 
 interface FeedbackData {
   type: 'bug' | 'feature' | 'improvement' | 'other'
@@ -86,32 +92,18 @@ export default function FeedbackModal({ isOpen, onClose, onSubmit }: FeedbackMod
     }, 1500)
   }
 
-  if (!isOpen) return null
-
   return (
-    <div className="fixed inset-0 z-50 flex animate-in items-center justify-center px-4 py-6 duration-200 fade-in-0">
-      {/* 背景遮罩 */}
-      <div 
-        className="absolute inset-0 bg-black/50 backdrop-blur-[4px]" 
-        onClick={onClose}
-      />
-      
-      {/* 模态框 */}
-      <div className="relative w-[90%] max-w-[560px] animate-in rounded-2xl border bg-background shadow-[var(--el-4)] duration-200 ease-bounce fade-in-0 zoom-in-95">
-        {/* 头部 */}
-        <div className="flex items-center justify-between px-4 py-3">
-          <div className="flex items-center gap-2">
+    <Dialog open={isOpen} onOpenChange={(open) => {
+      if (!open) onClose()
+    }}>
+      <DialogContent className="max-h-[calc(100vh-4rem)] max-w-xl overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
             <MessageSquare className="h-5 w-5 text-primary" />
-            <span className="font-medium">提交反馈</span>
-          </div>
-          <Button variant="ghost"
-            onClick={onClose}
-            className="p-1 hover:bg-accent rounded-md"
-          >
-            <X className="h-4 w-4" />
-          </Button>
-        </div>
-        <Separator />
+            提交反馈
+          </DialogTitle>
+          <DialogDescription>提交产品问题、功能建议或其他反馈。</DialogDescription>
+        </DialogHeader>
 
         {/* 内容 */}
         <form onSubmit={handleSubmit} className="p-4 space-y-4">
@@ -156,7 +148,7 @@ export default function FeedbackModal({ isOpen, onClose, onSubmit }: FeedbackMod
                   onChange={(e) => setTitle(e.target.value)}
                   placeholder="请简要描述问题或建议"
                   required
-                  className="w-full px-3 py-2 border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary"
+                  className="w-full px-3 py-2 border rounded-md bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                 />
               </div>
 
@@ -169,7 +161,7 @@ export default function FeedbackModal({ isOpen, onClose, onSubmit }: FeedbackMod
                   placeholder="请详细描述您遇到的问题或建议..."
                   required
                   rows={4}
-                  className="w-full px-3 py-2 border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary resize-none"
+                  className="w-full px-3 py-2 border rounded-md bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary resize-none"
                 />
               </div>
 
@@ -181,14 +173,14 @@ export default function FeedbackModal({ isOpen, onClose, onSubmit }: FeedbackMod
                   value={contact}
                   onChange={(e) => setContact(e.target.value)}
                   placeholder="邮箱或微信"
-                  className="w-full px-3 py-2 border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary"
+                  className="w-full px-3 py-2 border rounded-md bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                 />
               </div>
 
               {/* 提交按钮 */}
-              <Button variant="ghost"
+              <Button
                 type="submit"
-                className="w-full flex items-center justify-center gap-2 bg-primary text-primary-foreground py-2 rounded-md hover:bg-primary/90 transition-colors"
+                className="w-full gap-2"
               >
                 <Send className="h-4 w-4" />
                 提交反馈
@@ -196,8 +188,8 @@ export default function FeedbackModal({ isOpen, onClose, onSubmit }: FeedbackMod
             </>
           )}
         </form>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -212,7 +204,8 @@ export function FeedbackButton() {
     <Button variant="ghost"
         onClick={() => setIsOpen(true)}
         aria-label="打开反馈"
-        className="fixed bottom-4 right-4 z-40 bg-primary text-primary-foreground p-3 rounded-full shadow-lg hover:bg-primary/90 transition-all hover:scale-110"
+        data-overlap-ignore="true"
+        className="fixed bottom-5 right-5 z-30 h-11 w-11 rounded-full bg-primary p-0 text-primary-foreground shadow-lg transition-all hover:shadow-[var(--el-3)] hover:bg-primary/90"
         
       >
         <MessageSquare className="h-5 w-5" />

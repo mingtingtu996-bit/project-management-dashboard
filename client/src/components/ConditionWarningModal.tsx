@@ -42,7 +42,7 @@ export function ConditionWarningModal({
 
   return (
     <Dialog open={resolvedOpen} onOpenChange={setResolvedOpen}>
-      <DialogContent className="max-w-[560px]" data-testid="condition-warning-modal">
+      <DialogContent className="max-w-xl" data-testid="condition-warning-modal">
         <DialogHeader className="space-y-2">
           <DialogTitle className="flex items-center gap-2 text-lg">
             <span className="flex h-8 w-8 items-center justify-center rounded-full bg-amber-100">

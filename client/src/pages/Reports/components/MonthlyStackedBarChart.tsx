@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 
 import { ChartAccessibleWrapper } from '@/components/ChartAccessibleWrapper'
+import { EmptyState } from '@/components/EmptyState'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
@@ -93,7 +94,7 @@ export function MonthlyStackedBarChart({
   })
 
   return (
-    <Card data-testid="monthly-stacked-bar-chart" className="card-unified p-0">
+    <Card data-testid="monthly-stacked-bar-chart" variant="surface">
       <CardHeader className="pb-3">
         <CardTitle className="text-base">{mainlineLabel} · 月度堆叠柱</CardTitle>
       </CardHeader>
@@ -156,9 +157,11 @@ export function MonthlyStackedBarChart({
             </div>
           </ChartAccessibleWrapper>
         ) : (
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
-            暂无月度堆叠柱数据
-          </div>
+          <EmptyState
+            title="暂无月度堆叠柱数据"
+            description="当前筛选条件下没有可汇总的月度偏差数据。"
+            className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 py-8"
+          />
         )}
       </CardContent>
     </Card>

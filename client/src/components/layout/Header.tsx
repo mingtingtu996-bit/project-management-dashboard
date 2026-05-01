@@ -104,17 +104,17 @@ export default function Header() {
   }
 
   return (
-    <header className="sticky top-0 z-20 flex h-[72px] items-center justify-between bg-white/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-white/90 lg:px-8">
+    <header className="sticky top-0 z-20 flex h-[var(--header-height)] items-center justify-between bg-white/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-white/90 lg:px-8">
       <div className="flex min-w-0 items-center gap-4">
-        <div className="hidden lg:block">
-          <div className="text-lg font-bold tracking-tight text-slate-900">{title}</div>
-          <div className="text-xs text-slate-500">{contextLabel}</div>
+        <div className="hidden w-28 shrink-0 lg:block">
+          <div className="truncate whitespace-nowrap text-lg font-bold tracking-tight text-slate-900">{title}</div>
+          <div className="truncate whitespace-nowrap text-xs text-slate-500">{contextLabel}</div>
         </div>
 
         {currentProject && isProjectPage ? (
-          <div className="hidden items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm text-slate-700 lg:flex">
+          <div className="hidden min-w-0 items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm text-slate-700 lg:flex">
             <span className="h-2 w-2 rounded-full bg-emerald-500" />
-            <span className="max-w-[160px] truncate font-medium xl:max-w-[220px]">{currentProject.name}</span>
+            <span className="max-w-40 truncate font-medium xl:max-w-56">{currentProject.name}</span>
             <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
               {getProjectRoleLabel(permissionLevel)}
             </span>
@@ -128,7 +128,7 @@ export default function Header() {
           <Input
             aria-label="搜索项目、任务或提醒"
             placeholder="搜索项目、任务或提醒..."
-            className="h-11 w-[360px] rounded-2xl border-slate-200 bg-slate-50 pl-11 text-sm shadow-none placeholder:text-slate-500 focus-visible:ring-2 focus-visible:ring-blue-100"
+            className="h-11 w-96 rounded-2xl border-slate-200 bg-slate-50 pl-11 text-sm shadow-none placeholder:text-slate-500 focus-visible:ring-2 focus-visible:ring-blue-100"
           />
         </div>
 
@@ -157,7 +157,7 @@ export default function Header() {
           <Link to="/notifications" aria-label="打开提醒中心">
             <Bell className="h-5 w-5" />
             {bellBadgeCount > 0 ? (
-              <span className="absolute -top-0.5 -right-0.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-red-700 px-1 text-xs font-bold text-white">
+              <span className="absolute -top-0.5 -right-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-700 px-1 text-xs font-bold text-white">
                 {bellBadgeCount > 99 ? '99+' : bellBadgeCount}
               </span>
             ) : null}
@@ -170,7 +170,7 @@ export default function Header() {
               <Avatar className="h-8 w-8">
                 <AvatarFallback>{userName.slice(0, 2)}</AvatarFallback>
               </Avatar>
-              <span className="hidden max-w-[120px] truncate sm:inline">{userName}</span>
+              <span className="hidden max-w-32 truncate sm:inline">{userName}</span>
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-64">

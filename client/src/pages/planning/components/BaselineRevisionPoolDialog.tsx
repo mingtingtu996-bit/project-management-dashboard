@@ -159,7 +159,7 @@ export function BaselineRevisionPoolDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent data-testid="baseline-revision-pool-dialog" className="max-w-[720px]">
+      <DialogContent data-testid="baseline-revision-pool-dialog" className="max-w-3xl">
         <DialogHeader className="text-left">
           <div className="flex flex-wrap items-center gap-2">
             <DialogTitle>计划修订候选</DialogTitle>
@@ -295,7 +295,7 @@ export function BaselineRevisionPoolDialog({
                 type="date"
                 value={windowStartFilter}
                 onChange={(event) => setWindowStartFilter(event.target.value)}
-                className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-slate-400"
+                className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus-visible:border-slate-400"
               />
             </label>
             <label className="block space-y-1">
@@ -304,7 +304,7 @@ export function BaselineRevisionPoolDialog({
                 type="date"
                 value={windowEndFilter}
                 onChange={(event) => setWindowEndFilter(event.target.value)}
-                className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-slate-400"
+                className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus-visible:border-slate-400"
               />
             </label>
             <div className="flex items-end gap-2">
@@ -324,7 +324,7 @@ export function BaselineRevisionPoolDialog({
           </div>
         </div>
 
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(20rem,0.8fr)]">
           <BaselineRevisionCandidateList
             candidates={filteredCandidates}
             basketIds={basketItems.map((item) => item.id)}

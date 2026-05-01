@@ -2,10 +2,17 @@
  * EditProfileDialog - 编辑个人信息弹窗
  */
 
-import { useState, useEffect, useRef, useId } from 'react';
+import { useState, useEffect } from 'react';
 import { useAuth } from '@/hooks/useAuth';
-import { X } from 'lucide-react';
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 
 interface EditProfileDialogProps {
   isOpen: boolean;
@@ -19,8 +26,6 @@ export const EditProfileDialog: React.FC<EditProfileDialogProps> = ({ isOpen, on
   const [error, setError] = useState('');
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
-  const titleId = useId();
-  const closeRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (isOpen && user) {
@@ -30,18 +35,6 @@ export const EditProfileDialog: React.FC<EditProfileDialogProps> = ({ isOpen, on
       setFieldErrors({});
     }
   }, [isOpen, user]);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    closeRef.current?.focus();
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !loading) onClose();
-    };
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, loading, onClose]);
-
-  if (!isOpen) return null;
 
   const validateRequired = (field: string, value: string) => {
     if (value.trim()) {
@@ -77,15 +70,27 @@ export const EditProfileDialog: React.FC<EditProfileDialogProps> = ({ isOpen, on
     }
   };
 
+  const handleClose = () => {
+    if (!loading) onClose();
+  };
+
   return (
-    <div className="fixed inset-0 z-50 flex animate-in items-center justify-center bg-black/60 px-4 py-6 backdrop-blur-[4px] duration-200 fade-in-0" onClick={() => !loading && onClose()}>
-      <div role="dialog" aria-modal="true" aria-labelledby={titleId} className="w-[90%] max-w-[560px] animate-in rounded-2xl border border-slate-200 bg-white p-6 shadow-[var(--el-4)] duration-200 ease-bounce fade-in-0 zoom-in-95" onClick={e => e.stopPropagation()}>
-        <div className="flex justify-between items-center mb-4">
-          <h2 id={titleId} className="text-lg font-semibold text-slate-800">编辑个人信息</h2>
-          <Button variant="ghost" ref={closeRef} onClick={onClose} className="text-slate-500 hover:text-slate-600" disabled={loading} aria-label="关闭">
-            <X className="h-5 w-5" />
-          </Button>
-        </div>
+    <Dialog open={isOpen} onOpenChange={(open) => {
+      if (!open) handleClose();
+    }}>
+      <DialogContent
+        className="max-h-[calc(100vh-4rem)] max-w-xl overflow-y-auto"
+        onEscapeKeyDown={(event) => {
+          if (loading) event.preventDefault();
+        }}
+        onInteractOutside={(event) => {
+          if (loading) event.preventDefault();
+        }}
+      >
+        <DialogHeader>
+          <DialogTitle>编辑个人信息</DialogTitle>
+          <DialogDescription>更新当前账号的显示名称和邮箱。</DialogDescription>
+        </DialogHeader>
 
         {error && (
           <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded text-sm">{error}</div>
@@ -117,7 +122,7 @@ export const EditProfileDialog: React.FC<EditProfileDialogProps> = ({ isOpen, on
               onBlur={() => validateRequired('displayName', displayName)}
               aria-invalid={Boolean(fieldErrors.displayName)}
               aria-describedby={fieldErrors.displayName ? 'edit-profile-display-name-error' : undefined}
-              className={`w-full px-3 py-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm ${fieldErrors.displayName ? 'border-red-500' : 'border-slate-300'}`}
+              className={`w-full px-3 py-2 border rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 text-sm ${fieldErrors.displayName ? 'border-red-500' : 'border-slate-300'}`}
               placeholder="请输入显示名称"
               disabled={loading}
             />
@@ -135,22 +140,22 @@ export const EditProfileDialog: React.FC<EditProfileDialogProps> = ({ isOpen, on
               type="email"
               value={email}
               onChange={e => setEmail(e.target.value)}
-              className="w-full px-3 py-2 border border-slate-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+              className="w-full px-3 py-2 border border-slate-300 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 text-sm"
               placeholder="请输入邮箱（可选）"
               disabled={loading}
             />
           </div>
 
-          <div className="flex gap-3 pt-2">
-            <Button variant="ghost" type="button" onClick={onClose} disabled={loading} className="flex-1 px-4 py-2 border border-slate-300 rounded text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50">
+          <DialogFooter className="gap-3 pt-2">
+            <Button variant="outline" type="button" onClick={handleClose} disabled={loading} className="flex-1">
               取消
             </Button>
-            <Button variant="ghost" type="submit" disabled={loading} className="flex-1 px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50">
-              {loading ? '保存中...' : '保存'}
+            <Button type="submit" loading={loading} className="flex-1">
+              保存
             </Button>
-          </div>
+          </DialogFooter>
         </form>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 };

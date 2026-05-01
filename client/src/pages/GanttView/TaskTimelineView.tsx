@@ -9,9 +9,11 @@ import {
 } from 'react'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 
+import { EmptyState } from '@/components/EmptyState'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { GANTT_BAR_PALETTE } from '@/lib/chartPalette'
 import { cn } from '@/lib/utils'
 
 import type { Task, WBSNode } from '../GanttViewTypes'
@@ -198,65 +200,30 @@ function getTaskTone(task: WBSNode, sourceType: CriticalPathSourceType) {
     && (parseDate(task.end_date)?.getTime() ?? 0) < Date.now()
 
   if (sourceType === 'auto') {
-    return {
-      fill: '#fef2f2',
-      progressFill: '#ef4444',
-      stroke: '#fca5a5',
-      actualFill: '#dc2626',
-    }
+    return GANTT_BAR_PALETTE.auto
   }
 
   if (sourceType === 'manual_attention') {
-    return {
-      fill: '#fffbeb',
-      progressFill: '#f59e0b',
-      stroke: '#facc15',
-      actualFill: '#d97706',
-    }
+    return GANTT_BAR_PALETTE.manualAttention
   }
 
   if (sourceType === 'manual_insert') {
-    return {
-      fill: '#fff7ed',
-      progressFill: '#f97316',
-      stroke: '#fdba74',
-      actualFill: '#c2410c',
-    }
+    return GANTT_BAR_PALETTE.manualInsert
   }
 
   if (status === 'completed' || clampProgress(task.progress) >= 100) {
-    return {
-      fill: '#d1fae5',
-      progressFill: '#10b981',
-      stroke: '#6ee7b7',
-      actualFill: '#047857',
-    }
+    return GANTT_BAR_PALETTE.completed
   }
 
   if (status === 'blocked') {
-    return {
-      fill: '#fef3c7',
-      progressFill: '#f59e0b',
-      stroke: '#fbbf24',
-      actualFill: '#b45309',
-    }
+    return GANTT_BAR_PALETTE.blocked
   }
 
   if (overdue) {
-    return {
-      fill: '#fee2e2',
-      progressFill: '#ef4444',
-      stroke: '#fca5a5',
-      actualFill: '#dc2626',
-    }
+    return GANTT_BAR_PALETTE.overdue
   }
 
-  return {
-    fill: '#dbeafe',
-    progressFill: '#2563eb',
-    stroke: '#93c5fd',
-    actualFill: '#1d4ed8',
-  }
+  return GANTT_BAR_PALETTE.default
 }
 
 function getUnitLabel(task: WBSNode) {
@@ -499,7 +466,12 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
 
   if (!isDesktop) {
     return (
-      <div data-testid="gantt-timeline-mobile-fallback" className="rounded-2xl border border-amber-200 bg-amber-50 px-5 py-6" />
+      <EmptyState
+        testId="gantt-timeline-mobile-fallback"
+        title="横道图请在宽屏查看"
+        description="当前视口较窄，建议切换到桌面宽度查看完整时间轴。"
+        className="rounded-2xl border border-amber-200 bg-amber-50 py-8"
+      />
     )
   }
 
@@ -513,7 +485,11 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
 
   if (rows.length === 0) {
     return (
-      <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-5 py-10" />
+      <EmptyState
+        title="暂无横道图任务"
+        description="当前筛选条件下没有可展示的任务时间轴。"
+        className="rounded-2xl empty-state-frame border-slate-300 bg-slate-50 py-10"
+      />
     )
   }
 
@@ -576,7 +552,7 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
               <SelectTrigger
                 aria-label="选择对比基线版本"
                 data-testid="gantt-timeline-baseline-select"
-                className="h-10 min-w-[220px] rounded-xl border-slate-200 bg-white text-sm text-slate-700 shadow-sm disabled:cursor-not-allowed disabled:bg-slate-100"
+                className="h-10 min-w-56 rounded-xl border-slate-100 bg-white text-sm text-slate-700 shadow-[var(--el-1)] disabled:cursor-not-allowed disabled:bg-slate-100"
               >
                 <SelectValue />
               </SelectTrigger>
@@ -604,7 +580,7 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
       {compareMode === 'baseline' && baselineOptions.length === 0 ? (
         <div className="rounded-2xl border border-amber-200 bg-amber-50 px-5 py-6" />
       ) : (
-        <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="overflow-hidden rounded-2xl border surface-card">
           <div className="grid" style={{ gridTemplateColumns: `${leftPaneWidth}px minmax(0, 1fr)` }}>
             <div className="border-r border-slate-200">
               <div className="grid h-14 grid-cols-[minmax(0,1fr)_7rem_7rem] items-center gap-3 bg-slate-50 px-4 text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -725,12 +701,12 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
                         x2={segment.left}
                         y1={0}
                         y2={totalHeight}
-                        stroke="#e2e8f0"
+                        stroke={GANTT_BAR_PALETTE.grid}
                         strokeWidth={1}
                       />
                     ))}
                     {todayX !== null ? (
-                      <line x1={todayX} x2={todayX} y1={0} y2={totalHeight} stroke="#fb7185" strokeWidth={1.5} />
+                      <line x1={todayX} x2={todayX} y1={0} y2={totalHeight} stroke={GANTT_BAR_PALETTE.today} strokeWidth={1.5} />
                     ) : null}
 
                     <TimelineDependencyLayer edges={dependencyEdges} />
@@ -771,7 +747,7 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
                                 width={mainWidth}
                                 height={14}
                                 rx={7}
-                                fill={layout.missingBaseline ? '#f8fafc' : layout.mainTone.fill}
+                                fill={layout.missingBaseline ? GANTT_BAR_PALETTE.grid : layout.mainTone.fill}
                                 stroke={layout.mainTone.stroke}
                                 strokeDasharray={layout.missingBaseline ? '4 3' : undefined}
                                 strokeWidth={selected ? 1.8 : 1.2}
@@ -793,7 +769,7 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
                           {layout.task.is_milestone && milestoneX !== null ? (
                             <polygon
                               points={`${milestoneX},${layout.top + 8} ${milestoneX + 8},${layout.top + 16} ${milestoneX},${layout.top + 24} ${milestoneX - 8},${layout.top + 16}`}
-                              fill="#f59e0b"
+                              fill={GANTT_BAR_PALETTE.milestone}
                               stroke={layout.mainTone.stroke}
                               strokeWidth={1.5}
                             />
@@ -806,7 +782,7 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
                               width={compareWidth}
                               height={compareMode === 'baseline' ? 5 : 6}
                               rx={compareMode === 'baseline' ? 2.5 : 3}
-                              fill={compareMode === 'baseline' ? '#475569' : layout.mainTone.actualFill}
+                              fill={compareMode === 'baseline' ? GANTT_BAR_PALETTE.compare : layout.mainTone.actualFill}
                               opacity={0.88}
                             />
                           ) : null}

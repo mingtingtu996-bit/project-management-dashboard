@@ -63,7 +63,7 @@ export function FourCertificateBoard({
   }))
 
   return (
-    <div data-testid="pre-milestones-board" className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+    <div data-testid="pre-milestones-board" className="rounded-xl border border-slate-100 bg-white p-4 shadow-[var(--el-1)]">
       <div className="flex items-center justify-between gap-3 mb-4">
         <div>
           <h3 className="text-sm font-semibold text-slate-900">四证推进看板</h3>
@@ -115,7 +115,7 @@ export function FourCertificateBoard({
                     }}
                     style={dimmedByHover ? { opacity: 0.4 } : undefined}
                     className={cn(
-                      'card-unified card-hover w-full rounded-xl p-5 text-left',
+                      'w-full rounded-card border p-5 text-left shadow-[var(--el-1)] transition-all duration-200',
                       active
                         ? 'border-blue-300 bg-blue-50 shadow-md'
                         : hoveredWorkItemBelongsHere
@@ -212,7 +212,7 @@ export function FourCertificateBoard({
               </div>
 
               <div className="mt-4 overflow-x-auto">
-                <div className="grid min-w-[480px] gap-2 sm:min-w-0 lg:grid-cols-4">
+                <div className="grid min-w-[30rem] gap-2 sm:min-w-0 lg:grid-cols-4">
                 {CERTIFICATE_STAGE_SEQUENCE.map((stage, stageIndex) => {
                   const currentIndex = certificate
                     ? CERTIFICATE_STAGE_SEQUENCE.indexOf(certificate.current_stage as typeof CERTIFICATE_STAGE_SEQUENCE[number])

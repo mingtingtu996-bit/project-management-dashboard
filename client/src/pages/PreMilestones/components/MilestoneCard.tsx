@@ -115,7 +115,7 @@ export function MilestoneCard({
         {milestone.lead_unit && (
           <div className="flex items-center gap-1">
             <Users className="w-3.5 h-3.5" />
-            <span className="truncate max-w-[80px]">{milestone.lead_unit}</span>
+            <span className="truncate max-w-20">{milestone.lead_unit}</span>
           </div>
         )}
       </div>

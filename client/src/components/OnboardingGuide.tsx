@@ -118,7 +118,7 @@ function DailyWorkflowCard({ onDismiss, projectId }: { onDismiss: () => void; pr
   return (
     <div
       data-testid="onboarding-daily-workflow"
-      className="fixed bottom-5 right-5 z-[60] w-[min(420px,calc(100vw-40px))] rounded-xl border border-blue-200 bg-blue-50 p-4 shadow-[var(--el-3)] motion-safe:animate-fade-in"
+      className="fixed bottom-5 right-5 z-[60] w-[min(26.25rem,calc(100vw-2.5rem))] rounded-xl border border-blue-200 bg-blue-50 p-4 shadow-[var(--el-3)] motion-safe:animate-fade-in"
     >
       <div className="flex items-start justify-between gap-3">
         <div>
@@ -268,7 +268,7 @@ export function OnboardingGuide() {
             side={currentStep.side}
             align="center"
             sideOffset={12}
-            className="z-[80] w-[min(340px,calc(100vw-32px))] rounded-xl border border-slate-200 bg-white p-0 text-slate-900 shadow-[var(--el-4)]"
+            className="z-[80] w-[min(21.25rem,calc(100vw-2rem))] rounded-xl border border-slate-200 bg-white p-0 text-slate-900 shadow-[var(--el-4)]"
           >
             <div data-testid="onboarding-guide" className="p-4">
               <div className="flex items-start justify-between gap-3">

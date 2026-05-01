@@ -1,5 +1,6 @@
 import { Button } from '@/components/ui/button'
 import { ChartAccessibleWrapper } from '@/components/ChartAccessibleWrapper'
+import { EmptyState } from '@/components/EmptyState'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { BellDot, ChevronRight, Route, ShieldAlert, TimerReset, TriangleAlert } from 'lucide-react'
 
@@ -68,9 +69,11 @@ export function ProjectSignalRanking({ projectRows, onNavigate }: ProjectSignalR
       </CardHeader>
       <CardContent>
         {rankedRows.length === 0 ? (
-          <div className="flex h-[300px] items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-white text-sm text-slate-500">
-            暂无项目信号数据
-          </div>
+          <EmptyState
+            title="暂无项目信号数据"
+            description="项目产生预警、延期审批或关键路径影响后会在这里排序。"
+            className="min-h-[18.75rem] rounded-2xl empty-state-frame border-slate-200 bg-white py-10"
+          />
         ) : (
           <ChartAccessibleWrapper
             summary="信号排行数据"
@@ -88,7 +91,7 @@ export function ProjectSignalRanking({ projectRows, onNavigate }: ProjectSignalR
               ]
             })}
           >
-          <div className="h-[300px] space-y-3 overflow-y-auto pr-1">
+          <div className="h-[18.75rem] space-y-3 overflow-y-auto pr-1">
             {rankedRows.map((row) => {
               const summary = row.summary
               const closeoutOverdueDays = summary?.closeoutOverdueDays ?? 0

@@ -75,7 +75,7 @@ export function ProjectOverviewSection({
   })
 
   return (
-    <Card className="card-l2 border-slate-100" data-testid="company-project-overview">
+    <Card variant="surface" className="border-slate-100" data-testid="company-project-overview">
       <CardHeader className="space-y-4 pb-0">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
@@ -252,7 +252,7 @@ export function ProjectOverviewSection({
                               : '当前没有已识别的下一关键节点。'}
                           </p>
                         </div>
-                        <div className="max-w-[280px] text-xs leading-5 text-slate-600">
+                        <div className="max-w-72 text-xs leading-5 text-slate-600">
                           {highestWarningSummary}
                         </div>
                       </div>

@@ -58,7 +58,7 @@ export function BatchActionBar({ selectedCount, onClear, actions, className }: B
     >
       <div
         className={cn(
-          'mx-auto max-w-[1440px] px-4 pb-4 lg:px-6',
+          'mx-auto max-w-[var(--content-max-width)] px-4 pb-4 lg:px-6',
           sidebarOpen ? 'lg:pl-72' : 'lg:pl-20',
         )}
       >

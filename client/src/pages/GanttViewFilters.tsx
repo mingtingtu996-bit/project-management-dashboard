@@ -77,7 +77,7 @@ export const GanttStatsCards = memo(function GanttStatsCards({ projectStats }: G
                       ?
                     </span>
                   </TooltipTrigger>
-                  <TooltipContent className="max-w-[260px]">{card.tooltip}</TooltipContent>
+                  <TooltipContent className="max-w-xs">{card.tooltip}</TooltipContent>
                 </Tooltip>
               ) : null}
             </div>
@@ -154,6 +154,10 @@ export const GanttBatchBar = memo(function GanttBatchBar({
     }
   }, [selectedCount])
 
+  if (selectedCount === 0) {
+    return null
+  }
+
   const applyBatch = async () => {
     const payload: {
       status?: string | null
@@ -194,7 +198,7 @@ export const GanttBatchBar = memo(function GanttBatchBar({
   return (
     <div
       data-testid="gantt-batch-action-bar"
-      className="fixed bottom-4 left-1/2 z-40 w-full max-w-[1440px] -translate-x-1/2 transition-transform duration-300"
+      className="fixed bottom-4 left-1/2 z-40 w-full max-w-[var(--content-max-width)] -translate-x-1/2 transition-transform duration-300"
       style={{ transform: selectedCount > 0 ? 'translateY(0)' : 'translateY(100%)' }}
       aria-live="polite"
     >
@@ -231,7 +235,7 @@ export const GanttBatchBar = memo(function GanttBatchBar({
 
             <div className="flex flex-wrap items-center gap-2">
               <Select value={status} onValueChange={setStatus}>
-                <SelectTrigger className="h-9 w-[132px] border-slate-200 bg-white text-slate-700">
+                <SelectTrigger className="h-9 w-32 border-slate-200 bg-white text-slate-700">
                   <SelectValue placeholder="状态不变" />
                 </SelectTrigger>
                 <SelectContent>
@@ -272,7 +276,7 @@ export const GanttBatchBar = memo(function GanttBatchBar({
                     更多操作
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-[360px] space-y-3 rounded-2xl border-slate-200 p-4 shadow-[var(--el-3)]">
+                <DropdownMenuContent align="end" className="w-96 space-y-3 rounded-2xl border-slate-200 p-4 shadow-[var(--el-3)]">
                   <DropdownMenuLabel className="px-0 py-0 text-sm text-slate-900">批量责任与日期</DropdownMenuLabel>
                   <div className="space-y-2">
                     <div className="text-xs text-slate-500">责任人</div>
@@ -408,7 +412,7 @@ export const GanttFilterBar = memo(function GanttFilterBar({
   onClose,
 }: GanttFilterBarProps) {
   const controlClass =
-    'h-10 rounded-xl border-slate-200 bg-white text-sm shadow-sm transition-colors focus:border-blue-300 focus:ring-2 focus:ring-blue-100'
+    'h-10 rounded-xl border-slate-100 bg-white text-sm shadow-[var(--el-1)] transition-colors focus-visible:border-blue-300 focus-visible:ring-2 focus-visible:ring-blue-100'
 
   return (
     <Card variant="surface">

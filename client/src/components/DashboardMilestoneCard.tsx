@@ -191,7 +191,7 @@ export default function DashboardMilestoneCard({
                           <span className="w-5 h-5 flex items-center justify-center bg-slate-200 rounded-full text-xs text-slate-600">
                             {idx + 2}
                           </span>
-                          <span className="text-slate-700 truncate max-w-[120px]">{milestone.name}</span>
+                          <span className="text-slate-700 truncate max-w-32">{milestone.name}</span>
                         </div>
                         {remaining && (
                           <span className={`text-xs px-2 py-0.5 rounded ${

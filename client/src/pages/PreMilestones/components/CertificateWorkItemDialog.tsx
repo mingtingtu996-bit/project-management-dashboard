@@ -30,7 +30,7 @@ export function CertificateWorkItemDialog({
 }: CertificateWorkItemDialogProps) {
   return (
     <Dialog open={open} onOpenChange={(value) => !value && onClose()}>
-      <DialogContent className="max-h-[90vh] max-w-[720px] overflow-y-auto">
+      <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{mode === 'create' ? '新增办理事项' : '编辑办理事项'}</DialogTitle>
         </DialogHeader>
@@ -41,7 +41,7 @@ export function CertificateWorkItemDialog({
             <input
               value={formData.item_name}
               onChange={(event) => setFormData((previous) => ({ ...previous, item_name: event.target.value }))}
-              className="rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+              className="rounded-xl border border-slate-200 px-3 py-2 outline-none focus-visible:border-blue-300 focus-visible:ring-2 focus-visible:ring-blue-100"
               placeholder="例如：共享资料收集"
             />
           </label>
@@ -51,7 +51,7 @@ export function CertificateWorkItemDialog({
             <input
               value={formData.item_code}
               onChange={(event) => setFormData((previous) => ({ ...previous, item_code: event.target.value }))}
-              className="rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+              className="rounded-xl border border-slate-200 px-3 py-2 outline-none focus-visible:border-blue-300 focus-visible:ring-2 focus-visible:ring-blue-100"
               placeholder="可选"
             />
           </label>
@@ -100,7 +100,7 @@ export function CertificateWorkItemDialog({
               type="date"
               value={formData.planned_finish_date}
               onChange={(event) => setFormData((previous) => ({ ...previous, planned_finish_date: event.target.value }))}
-              className="rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+              className="rounded-xl border border-slate-200 px-3 py-2 outline-none focus-visible:border-blue-300 focus-visible:ring-2 focus-visible:ring-blue-100"
             />
           </label>
 
@@ -110,7 +110,7 @@ export function CertificateWorkItemDialog({
               type="date"
               value={formData.actual_finish_date}
               onChange={(event) => setFormData((previous) => ({ ...previous, actual_finish_date: event.target.value }))}
-              className="rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+              className="rounded-xl border border-slate-200 px-3 py-2 outline-none focus-visible:border-blue-300 focus-visible:ring-2 focus-visible:ring-blue-100"
             />
           </label>
 
@@ -119,7 +119,7 @@ export function CertificateWorkItemDialog({
             <input
               value={formData.approving_authority}
               onChange={(event) => setFormData((previous) => ({ ...previous, approving_authority: event.target.value }))}
-              className="rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+              className="rounded-xl border border-slate-200 px-3 py-2 outline-none focus-visible:border-blue-300 focus-visible:ring-2 focus-visible:ring-blue-100"
               placeholder="例如：规划局"
             />
           </label>
@@ -129,7 +129,7 @@ export function CertificateWorkItemDialog({
             <input
               value={formData.next_action}
               onChange={(event) => setFormData((previous) => ({ ...previous, next_action: event.target.value }))}
-              className="rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+              className="rounded-xl border border-slate-200 px-3 py-2 outline-none focus-visible:border-blue-300 focus-visible:ring-2 focus-visible:ring-blue-100"
               placeholder="例如：补齐盖章资料"
             />
           </label>
@@ -140,7 +140,7 @@ export function CertificateWorkItemDialog({
               type="date"
               value={formData.next_action_due_date}
               onChange={(event) => setFormData((previous) => ({ ...previous, next_action_due_date: event.target.value }))}
-              className="rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+              className="rounded-xl border border-slate-200 px-3 py-2 outline-none focus-visible:border-blue-300 focus-visible:ring-2 focus-visible:ring-blue-100"
             />
           </label>
 
@@ -149,7 +149,7 @@ export function CertificateWorkItemDialog({
             <textarea
               value={formData.block_reason}
               onChange={(event) => setFormData((previous) => ({ ...previous, block_reason: event.target.value }))}
-              className="min-h-20 rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+              className="min-h-20 rounded-xl border border-slate-200 px-3 py-2 outline-none focus-visible:border-blue-300 focus-visible:ring-2 focus-visible:ring-blue-100"
               placeholder="阻塞来源"
             />
           </label>
@@ -159,7 +159,7 @@ export function CertificateWorkItemDialog({
             <textarea
               value={formData.notes}
               onChange={(event) => setFormData((previous) => ({ ...previous, notes: event.target.value }))}
-              className="min-h-20 rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+              className="min-h-20 rounded-xl border border-slate-200 px-3 py-2 outline-none focus-visible:border-blue-300 focus-visible:ring-2 focus-visible:ring-blue-100"
               placeholder="跟进备注"
             />
           </label>

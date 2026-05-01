@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { AlertTriangle, ArrowRight, CheckCircle2, FileCheck2, FileBadge2, Plus } from 'lucide-react'
 
+import { EmptyState } from '@/components/EmptyState'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -408,7 +409,7 @@ export default function AcceptanceDetailDrawer({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent className="max-h-[90vh] max-w-[720px] overflow-y-auto" data-testid="acceptance-detail-drawer">
+      <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto" data-testid="acceptance-detail-drawer">
         <DialogHeader>
           <div className="flex items-start justify-between gap-4">
             <div className="space-y-2">
@@ -445,7 +446,7 @@ export default function AcceptanceDetailDrawer({
           </DialogDescription>
         </DialogHeader>
 
-        <Card className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm" data-testid="acceptance-detail-info-group">
+        <Card className="rounded-xl border border-slate-100 bg-white p-5 shadow-[var(--el-1)]" data-testid="acceptance-detail-info-group">
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
             <div className="space-y-1">
               <div className="text-xs text-slate-500">计划日期</div>
@@ -458,7 +459,7 @@ export default function AcceptanceDetailDrawer({
                     void persistPlanUpdates({ planned_date: nextValue || null })
                   }
                 }}
-                className="w-full rounded-lg border border-slate-200 px-2 py-1 text-sm text-slate-900 focus:border-blue-400 focus:outline-none"
+                className="w-full rounded-lg border border-slate-200 px-2 py-1 text-sm text-slate-900 focus-visible:border-blue-400 focus-visible:outline-none"
                 data-testid="acceptance-planned-date-input"
               />
             </div>
@@ -473,7 +474,7 @@ export default function AcceptanceDetailDrawer({
                     void persistPlanUpdates({ actual_date: nextValue || null })
                   }
                 }}
-                className="w-full rounded-lg border border-slate-200 px-2 py-1 text-sm text-slate-900 focus:border-blue-400 focus:outline-none"
+                className="w-full rounded-lg border border-slate-200 px-2 py-1 text-sm text-slate-900 focus-visible:border-blue-400 focus-visible:outline-none"
                 data-testid="acceptance-actual-date-input"
               />
             </div>
@@ -489,7 +490,7 @@ export default function AcceptanceDetailDrawer({
                   }
                 }}
                 placeholder="填写并行组编号"
-                className="w-full rounded-lg border border-slate-200 px-2 py-1 text-sm text-slate-900 focus:border-blue-400 focus:outline-none"
+                className="w-full rounded-lg border border-slate-200 px-2 py-1 text-sm text-slate-900 focus-visible:border-blue-400 focus-visible:outline-none"
                 data-testid="acceptance-parallel-group-input"
               />
             </div>
@@ -513,7 +514,7 @@ export default function AcceptanceDetailDrawer({
           </div>
         </Card>
 
-        <Card className="rounded-xl border border-slate-200 bg-slate-50 p-5 shadow-sm" data-testid="acceptance-task-linkage">
+        <Card className="rounded-xl border border-slate-100 bg-slate-50 p-5 shadow-[var(--el-1)]" data-testid="acceptance-task-linkage">
           <h4 className="mb-2 text-sm font-semibold text-slate-900">任务联动</h4>
           <div className="grid gap-3 md:grid-cols-3">
             <CompactMetric label="楼栋归属" value={planRow?.building_id || '项目级'} />
@@ -543,7 +544,7 @@ export default function AcceptanceDetailDrawer({
         </Card>
 
         {node.description ? (
-          <Card className="rounded-xl border border-slate-200 bg-slate-50 p-5 shadow-sm">
+          <Card className="rounded-xl border border-slate-100 bg-slate-50 p-5 shadow-[var(--el-1)]">
             <div className="mb-1 text-sm font-medium text-slate-700">备注</div>
             <p className="text-sm text-slate-600">{node.description}</p>
           </Card>
@@ -567,7 +568,7 @@ export default function AcceptanceDetailDrawer({
               </div>
             ) : null}
 
-            <div className="grid gap-3 rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-5">
+            <div className="grid gap-3 rounded-2xl empty-state-frame border-slate-200 bg-slate-50 p-5">
               <div className="grid gap-3 md:grid-cols-2">
                 <label className="grid gap-1 text-xs text-slate-500">
                   条件类型
@@ -637,11 +638,12 @@ export default function AcceptanceDetailDrawer({
                     type="button"
                     className="gap-2"
                     disabled={!canMutate || !canCreateRequirement || creatingRequirement}
+                    loading={creatingRequirement}
                     onClick={() => void handleRequirementCreate()}
                     data-testid="acceptance-create-requirement"
                   >
                     <Plus className="h-4 w-4" />
-                    {creatingRequirement ? '保存中...' : '新增条件'}
+                    新增条件
                   </Button>
                 </DisabledReasonTooltip>
               </div>
@@ -737,7 +739,7 @@ export default function AcceptanceDetailDrawer({
             subtitle=""
             data-testid="acceptance-records"
           >
-            <div className="grid gap-3 rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-5">
+            <div className="grid gap-3 rounded-2xl empty-state-frame border-slate-200 bg-slate-50 p-5">
               <div className="grid gap-3 md:grid-cols-2">
                 <label className="grid gap-1 text-xs text-slate-500">
                   记录类型
@@ -786,10 +788,11 @@ export default function AcceptanceDetailDrawer({
                     type="button"
                     className="gap-2"
                     disabled={!canMutate || !canCreateRecord || creatingRecord}
+                    loading={creatingRecord}
                     onClick={() => void handleRecordCreate()}
                   >
                     <Plus className="h-4 w-4" />
-                    {creatingRecord ? '保存中...' : '新增记录'}
+                    新增记录
                   </Button>
                 </DisabledReasonTooltip>
               </div>
@@ -887,7 +890,7 @@ export default function AcceptanceDetailDrawer({
           </LinkedBundleSection>
         </div>
 
-        <Card className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-5 shadow-sm" data-testid="acceptance-detail-structure-group">
+        <Card className="mt-4 rounded-xl border border-slate-100 bg-slate-50 p-5 shadow-[var(--el-1)]" data-testid="acceptance-detail-structure-group">
           <div className="flex items-center justify-between gap-3">
             <div>
               <h4 className="text-sm font-semibold text-slate-900">结构维护</h4>
@@ -921,11 +924,12 @@ export default function AcceptanceDetailDrawer({
                 type="button"
                 className="shrink-0 gap-2"
                 disabled={!canMutate || !dependencyTargetId || mutatingDependency}
+                loading={mutatingDependency}
                 onClick={() => void handleDependencyAdd()}
                 data-testid="acceptance-add-dependency"
               >
                 <Plus className="h-4 w-4" />
-                {mutatingDependency ? '保存中...' : '添加前置'}
+                添加前置
               </Button>
             </DisabledReasonTooltip>
           </div>
@@ -961,7 +965,7 @@ export default function AcceptanceDetailDrawer({
             )) : <LinkedEmptyState text="暂无前置依赖，可在此维护。" />}
           </div>
 
-          <Card className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-5 shadow-sm" data-testid="acceptance-parallel-group-panel">
+          <Card className="mt-4 rounded-xl border border-slate-100 bg-slate-50 p-5 shadow-[var(--el-1)]" data-testid="acceptance-parallel-group-panel">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
                 <div className="text-sm font-semibold text-slate-900">并行组</div>
@@ -1023,10 +1027,11 @@ export default function AcceptanceDetailDrawer({
                   variant="outline"
                   className="shrink-0"
                   disabled={!canMutate || !parallelGroupTargetId || mutatingParallelGroup}
+                  loading={mutatingParallelGroup}
                   onClick={() => void handleJoinParallelGroup(parallelGroupTargetId)}
                   data-testid="acceptance-join-parallel-group"
                 >
-                  {mutatingParallelGroup ? '保存中...' : '加入并行组'}
+                  加入并行组
                 </Button>
               </DisabledReasonTooltip>
             </div>
@@ -1045,13 +1050,14 @@ export default function AcceptanceDetailDrawer({
                   type="button"
                   className="shrink-0"
                   disabled={!canMutate || mutatingParallelGroup}
+                  loading={mutatingParallelGroup}
                   onClick={() => {
                     const fallbackGroupId = `PG-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${currentNodeId.slice(0, 4) || 'new'}`
                     void handleJoinParallelGroup(parallelGroupDraft || fallbackGroupId)
                   }}
                   data-testid="acceptance-create-parallel-group"
                 >
-                  {mutatingParallelGroup ? '保存中...' : '创建并加入'}
+                  创建并加入
                 </Button>
               </DisabledReasonTooltip>
             </div>
@@ -1061,21 +1067,21 @@ export default function AcceptanceDetailDrawer({
         <Separator className="mt-4" />
         <div className="sticky bottom-0 z-30 -mx-6 -mb-6 flex flex-wrap gap-3 bg-white/95 px-6 py-4 backdrop-blur" data-testid="acceptance-detail-footer">
           {['inspecting', 'rectifying'].includes(node.status) && (
-            <Button className="gap-2 bg-emerald-600 hover:bg-emerald-500" disabled={!canMutate || changingStatus} onClick={() => void handleStatusChange('passed')}>
+            <Button className="gap-2 bg-emerald-600 hover:bg-emerald-500" disabled={!canMutate || changingStatus} loading={changingStatus} onClick={() => void handleStatusChange('passed')}>
               <CheckCircle2 className="h-4 w-4" />
-              {changingStatus ? '提交中...' : '标记通过'}
+              标记通过
             </Button>
           )}
           {node.status === 'submitted' && (
-            <Button variant="outline" className="gap-2" disabled={!canMutate || changingStatus} onClick={() => void handleStatusChange('inspecting')}>
+            <Button variant="outline" className="gap-2" disabled={!canMutate || changingStatus} loading={changingStatus} onClick={() => void handleStatusChange('inspecting')}>
               <ArrowRight className="h-4 w-4" />
-              {changingStatus ? '提交中...' : '开始验收'}
+              开始验收
             </Button>
           )}
           {node.status === 'draft' && (
-            <Button variant="outline" className="gap-2" disabled={!canMutate || changingStatus} onClick={() => void handleStatusChange('preparing')}>
+            <Button variant="outline" className="gap-2" disabled={!canMutate || changingStatus} loading={changingStatus} onClick={() => void handleStatusChange('preparing')}>
               <ArrowRight className="h-4 w-4" />
-              {changingStatus ? '提交中...' : '开始准备'}
+              开始准备
             </Button>
           )}
           {node.status === 'ready_to_submit' && (
@@ -1085,11 +1091,12 @@ export default function AcceptanceDetailDrawer({
                   <Button
                     variant="outline"
                     className="gap-2"
-                    disabled={!canMutate || !canSubmitDeclaration}
+                    disabled={!canMutate || !canSubmitDeclaration || changingStatus}
+                    loading={changingStatus}
                     onClick={() => void handleStatusChange('submitted')}
                   >
                     <ArrowRight className="h-4 w-4" />
-                    {changingStatus ? '提交中...' : '提交申报'}
+                    提交申报
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>{submitBlockedReason ?? undefined}</TooltipContent>
@@ -1100,21 +1107,22 @@ export default function AcceptanceDetailDrawer({
             </div>
           )}
           {node.status === 'rectifying' && (
-            <Button variant="outline" className="gap-2" disabled={!canMutate || changingStatus} onClick={() => void handleStatusChange('ready_to_submit')}>
+            <Button variant="outline" className="gap-2" disabled={!canMutate || changingStatus} loading={changingStatus} onClick={() => void handleStatusChange('ready_to_submit')}>
               <ArrowRight className="h-4 w-4" />
-              {changingStatus ? '提交中...' : '回到待申报'}
+              回到待申报
             </Button>
           )}
           {node.status === 'passed' && (
-            <Button variant="outline" className="gap-2" disabled={!canMutate || changingStatus} onClick={() => void handleStatusChange('archived')}>
+            <Button variant="outline" className="gap-2" disabled={!canMutate || changingStatus} loading={changingStatus} onClick={() => void handleStatusChange('archived')}>
               <CheckCircle2 className="h-4 w-4" />
-              {changingStatus ? '提交中...' : '标记已归档'}
+              标记已归档
             </Button>
           )}
           <Button
             variant="outline"
             className="gap-2 text-amber-700 border-amber-200 hover:bg-amber-50"
             disabled={!canMutate || escalatingIssue}
+            loading={escalatingIssue}
             onClick={async () => {
               setEscalatingIssue(true)
               try {
@@ -1135,7 +1143,7 @@ export default function AcceptanceDetailDrawer({
             data-testid="acceptance-escalate-issue"
           >
             <AlertTriangle className="h-4 w-4" />
-            {escalatingIssue ? '升级中...' : '升级为问题'}
+            升级为问题
           </Button>
         </div>
       </DialogContent>
@@ -1230,7 +1238,7 @@ function LinkedBundleSection(
 ) {
   const { title, subtitle, children, ...rest } = props
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" {...rest}>
+    <section className="rounded-2xl border border-slate-100 bg-white p-5 shadow-[var(--el-1)]" {...rest}>
       <div className="mb-3 space-y-1">
         <h4 className="text-sm font-semibold text-slate-900">{title}</h4>
         {subtitle ? <p className="text-xs text-slate-500">{subtitle}</p> : null}
@@ -1242,9 +1250,11 @@ function LinkedBundleSection(
 
 function LinkedEmptyState({ text }: { text: string }) {
   return (
-    <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-500">
-      {text}
-    </div>
+    <EmptyState
+      title={text.replace(/[。.]$/, '')}
+      description="当前节点没有对应的联动记录。"
+      className="rounded-xl empty-state-frame border-slate-200 bg-slate-50 px-3 py-6"
+    />
   )
 }
 

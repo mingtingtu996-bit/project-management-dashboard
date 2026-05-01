@@ -2,7 +2,8 @@ import { useEffect, useRef } from 'react'
 import { Chart, registerables } from 'chart.js'
 
 import { ChartAccessibleWrapper } from '@/components/ChartAccessibleWrapper'
-import { CHART_AXIS_COLORS, getProgressThresholdColor } from '@/lib/chartPalette'
+import { EmptyState } from '@/components/EmptyState'
+import { CHART_AXIS_COLORS, CHART_NEUTRAL, CHART_SERIES, getProgressThresholdColor, hexToRgba } from '@/lib/chartPalette'
 
 Chart.register(...registerables)
 
@@ -60,10 +61,10 @@ export function MilestoneAchievementChart({ projects }: { projects: MilestoneCha
             label: '已偏移里程碑数',
             data: shiftedValues,
             type: 'line',
-            borderColor: '#f97316',
-            backgroundColor: 'rgba(249, 115, 22, 0.16)',
-            pointBackgroundColor: '#f97316',
-            pointBorderColor: '#ffffff',
+            borderColor: CHART_SERIES.warning,
+            backgroundColor: hexToRgba(CHART_SERIES.warning, 0.16),
+            pointBackgroundColor: CHART_SERIES.warning,
+            pointBorderColor: CHART_NEUTRAL.white,
             pointBorderWidth: 2,
             pointRadius: 4,
             tension: 0.28,
@@ -159,17 +160,21 @@ export function MilestoneAchievementChart({ projects }: { projects: MilestoneCha
 
   if (projects.length === 0) {
     return (
-      <div className="flex h-64 items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-slate-50 text-sm text-slate-500">
-        当前暂无可展示的里程碑趋势
-      </div>
+      <EmptyState
+        title="暂无里程碑趋势"
+        description="当前暂无可展示的项目里程碑趋势。"
+        className="min-h-64 rounded-2xl empty-state-frame border-slate-200 bg-slate-50 py-10"
+      />
     )
   }
 
   if (!hasMilestoneSignal) {
     return (
-      <div className="flex h-64 flex-col items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-6 text-center">
-        <div className="text-base font-semibold text-slate-900">暂无里程碑趋势</div>
-      </div>
+      <EmptyState
+        title="暂无里程碑趋势"
+        description="当前项目里程碑暂无达成或偏移信号。"
+        className="min-h-64 rounded-2xl empty-state-frame border-slate-200 bg-slate-50 py-10"
+      />
     )
   }
 

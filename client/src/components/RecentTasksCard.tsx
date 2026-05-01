@@ -376,7 +376,7 @@ export default function RecentTasksCard({ projectId, tasks: sourceTasks, onViewA
             <span className="text-slate-500">共 {filteredTasks.length} 个</span>
           </div>
 
-          <div className="max-h-[320px] space-y-2 overflow-y-auto pr-1">
+          <div className="max-h-80 space-y-2 overflow-y-auto pr-1">
             {loading ? (
               <>
                 {[1, 2, 3].map((item) => (

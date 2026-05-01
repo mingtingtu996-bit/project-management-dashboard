@@ -1,5 +1,6 @@
 import { useState } from 'react'
 
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Separator } from '@/components/ui/separator'
 import { ConflictItem, ResolutionStrategy, smartMerge, getFieldDifference } from '@/hooks/useConflictDetection'
 import { Button } from '@/components/ui/button'
@@ -62,33 +63,22 @@ export function ConflictResolutionModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex animate-in items-center justify-center px-4 py-6 duration-200 fade-in-0">
-      {/* 背景遮罩 */}
-      <div className="absolute inset-0 bg-black/50 backdrop-blur-[4px]" onClick={onClose} />
-      
-      {/* 模态框主体 */}
-      <div className="relative max-h-[80vh] w-[90%] max-w-[720px] animate-in overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[var(--el-4)] duration-200 ease-bounce fade-in-0 zoom-in-95">
-        {/* 头部 */}
-        <div className="px-6 py-4 bg-amber-50">
-          <div className="flex items-center justify-between">
-            <div>
-              <h3 className="text-lg font-semibold text-amber-800">
-                数据冲突检测
-              </h3>
-              <p className="text-sm text-amber-600">
-                检测到 {conflicts.length} 个冲突，请选择解决方案
-              </p>
-            </div>
-            <Button variant="ghost"
-              onClick={onClose}
-              className="text-slate-500 hover:text-slate-600"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </Button>
-          </div>
-        </div>
+    <Dialog open={isOpen} onOpenChange={(open) => {
+      if (!open) onClose()
+    }}>
+      <DialogContent
+        closeLabel="关闭冲突解决弹窗"
+        className="max-h-[80vh] max-w-3xl overflow-hidden border-slate-200 p-0"
+      >
+        <DialogHeader className="bg-amber-50 px-6 py-4 pr-16">
+          <DialogTitle className="text-lg font-semibold text-amber-800">数据冲突检测</DialogTitle>
+          <DialogDescription>
+            检测到 {conflicts.length} 个冲突，请选择解决方案
+          </DialogDescription>
+          <p className="text-sm text-amber-600">
+            检测到 {conflicts.length} 个冲突，请选择解决方案
+          </p>
+        </DialogHeader>
         <Separator />
 
         {/* 冲突列表（如果有多个） */}
@@ -206,8 +196,8 @@ export function ConflictResolutionModal({
             </div>
           )}
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 

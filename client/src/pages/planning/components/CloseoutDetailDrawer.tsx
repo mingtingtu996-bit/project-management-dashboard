@@ -203,7 +203,7 @@ export function CloseoutDetailDrawer({
       data-testid="closeout-detail-drawer"
       aria-disabled={batchLayerOpen ? 'true' : undefined}
       className={cn(
-        'sticky top-4 flex h-[calc(100vh-180px)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm transition-all',
+        'sticky top-4 flex h-[calc(100vh-11.25rem)] flex-col overflow-hidden rounded-2xl border surface-card transition-all',
         open ? 'translate-x-0 opacity-100' : 'translate-x-2 opacity-90',
         batchLayerOpen ? 'pointer-events-none opacity-70' : ''
       )}
@@ -356,7 +356,7 @@ export function CloseoutDetailDrawer({
         {batchLayerOpen ? (
           <div
             data-testid="closeout-batch-close-layer"
-            className="space-y-3 rounded-2xl border border-dashed border-blue-300 bg-blue-50/60 p-4"
+            className="space-y-3 rounded-2xl empty-state-frame border-blue-300 bg-blue-50/60 p-4"
           >
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="space-y-1">

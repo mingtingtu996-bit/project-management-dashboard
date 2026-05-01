@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { ArrowRight, FileSymlink, Layers3, Sparkles, WandSparkles } from 'lucide-react'
 
 import { Breadcrumb } from '@/components/Breadcrumb'
+import { EmptyState } from '@/components/EmptyState'
 import { PageHeader } from '@/components/PageHeader'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -718,7 +719,7 @@ export default function WBSTemplates() {
       />
 
       <div className="mt-6 grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
-        <Card className="border-slate-200 bg-white shadow-sm">
+        <Card className="surface-card">
           <CardContent className="space-y-5 p-6">
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant="secondary" className="gap-1">
@@ -765,7 +766,7 @@ export default function WBSTemplates() {
           </CardContent>
         </Card>
 
-        <Card className="border-slate-200 bg-gradient-to-br from-white to-slate-50 shadow-sm">
+        <Card className="border-slate-100 bg-gradient-to-br from-white to-slate-50 shadow-[var(--el-1)]">
           <CardHeader>
             <CardTitle className="text-base">当前项目状态</CardTitle>
           </CardHeader>
@@ -803,8 +804,8 @@ export default function WBSTemplates() {
         </div>
       ) : null}
 
-      <div className="mt-6 grid gap-4 xl:grid-cols-[1fr_320px]">
-        <Card className="border-slate-200 bg-white shadow-sm">
+      <div className="mt-6 grid gap-4 xl:grid-cols-[1fr_20rem]">
+        <Card className="surface-card">
           <CardHeader>
             <CardTitle className="text-base">模板列表</CardTitle>
           </CardHeader>
@@ -815,12 +816,12 @@ export default function WBSTemplates() {
                 className="min-h-40 border-slate-200 bg-slate-50/50"
               />
             ) : templates.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
-                <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-white text-slate-500">
-                  <Layers3 className="h-5 w-5" />
-                </div>
-                <div className="text-sm font-medium text-slate-800">当前还没有模板</div>
-              </div>
+              <EmptyState
+                icon={Layers3}
+                title="当前还没有模板"
+                description="可从已完成项目生成，或导入标准 WBS 模板。"
+                className="rounded-2xl empty-state-frame border-slate-300 bg-slate-50 py-10"
+              />
             ) : (
               <div className="grid gap-4 md:grid-cols-2">
                 {templates.map((template) => (

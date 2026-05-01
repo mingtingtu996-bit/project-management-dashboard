@@ -3,6 +3,7 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 
 import { ConfirmActionDialog } from '@/components/ConfirmActionDialog'
+import { EmptyState } from '@/components/EmptyState'
 import { PlanningPageShell } from '@/components/planning/PlanningPageShell'
 import { PlanningWorkspaceLayers } from '@/components/planning/PlanningWorkspaceLayers'
 import { ValidationPanel } from '@/components/planning/ValidationPanel'
@@ -1871,7 +1872,7 @@ export default function MonthlyPlanPage() {
             </CardContent>
           </Card>
 
-          <div data-testid="monthly-plan-info-bar" className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm md:grid-cols-6">
+          <div data-testid="monthly-plan-info-bar" className="grid gap-3 rounded-2xl border border-slate-100 bg-white p-4 shadow-[var(--el-1)] md:grid-cols-6">
             <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
               <div className="text-xs text-slate-500">当前月份</div>
               <div className="mt-1 text-lg font-semibold text-slate-900">{formatMonthLabel(selectedMonth)}</div>
@@ -1915,7 +1916,7 @@ export default function MonthlyPlanPage() {
               className={
                 changeSummary.isLargeScale
                   ? 'border-blue-200 bg-blue-50 shadow-sm'
-                  : 'border-slate-200 bg-white shadow-sm'
+                  : 'surface-card'
               }
             >
               <CardContent className="space-y-4 p-5">
@@ -2122,7 +2123,7 @@ export default function MonthlyPlanPage() {
         </Card>
       ) : null}
       {activePlan.status === 'draft' ? (
-        <Card data-testid="monthly-plan-batch-strip" className="border-slate-200 bg-slate-50 shadow-sm">
+        <Card data-testid="monthly-plan-batch-strip" className="border-slate-100 bg-slate-50 shadow-[var(--el-1)]">
           <CardContent className="space-y-4 p-5">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="space-y-1">
@@ -2287,19 +2288,22 @@ export default function MonthlyPlanPage() {
       </div>
     </div>
   ) : (
-    <Card className="border-dashed border-slate-300 bg-slate-50">
-      <CardContent className="space-y-3 p-6">
-        <div className="text-lg font-semibold text-slate-900">{formatMonthLabel(selectedMonth)} 尚未生成月度草稿</div>
+    <EmptyState
+      icon={CalendarDays}
+      title={`${formatMonthLabel(selectedMonth)} 尚未生成月度草稿`}
+      description="生成草稿后可在月度计划树中维护本月承诺与执行项。"
+      className="rounded-card empty-state-frame border-slate-300 bg-slate-50 p-6"
+      action={(
         <div className="flex flex-wrap gap-2">
-              <Button type="button" onClick={() => void handleGenerateDraft()} loading={actionLoading === 'generate'} disabled={readOnly}>
-                生成本月草稿
-              </Button>
+          <Button type="button" onClick={() => void handleGenerateDraft()} loading={actionLoading === 'generate'} disabled={readOnly}>
+            生成本月草稿
+          </Button>
           <Button type="button" variant="outline" onClick={() => navigateWithGuard(`/projects/${projectId}/planning/baseline`)}>
             去看项目基线
           </Button>
         </div>
-      </CardContent>
-    </Card>
+      )}
+    />
   )
 
   const aside = noBaselineIntercept || activePlan?.status !== 'draft'
@@ -2590,7 +2594,7 @@ export default function MonthlyPlanPage() {
           if (open) setRegenStep(1)
         }}
       >
-        <AlertDialogContent data-testid="monthly-plan-regenerate-dialog" className="max-w-[720px] rounded-2xl shadow-[var(--el-4)]">
+        <AlertDialogContent data-testid="monthly-plan-regenerate-dialog" className="max-w-3xl rounded-2xl shadow-[var(--el-4)]">
           <AlertDialogHeader>
             <AlertDialogTitle>重新生成本月草稿？</AlertDialogTitle>
             <AlertDialogDescription className="not-sr-only leading-6 text-slate-600">

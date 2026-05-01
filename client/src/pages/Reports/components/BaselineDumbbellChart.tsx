@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 
 import { ChartAccessibleWrapper } from '@/components/ChartAccessibleWrapper'
+import { EmptyState } from '@/components/EmptyState'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
@@ -71,7 +72,7 @@ export function BaselineDumbbellChart({
   ])
 
   return (
-    <Card data-testid="baseline-dumbbell-chart" className="card-unified p-0">
+    <Card data-testid="baseline-dumbbell-chart" variant="surface">
       <CardHeader className="pb-3">
         <CardTitle className="text-base">{mainlineLabel} · 哑铃图</CardTitle>
       </CardHeader>
@@ -101,7 +102,7 @@ export function BaselineDumbbellChart({
                   <div key={row.id} className="grid gap-2 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
                     <div className="flex items-start justify-between gap-3">
                       <div>
-                        <div className="text-sm font-medium text-slate-900">{row.title}</div>
+                        <div className="truncate text-sm font-medium text-slate-900" title={row.title}>{row.title}</div>
                         <div className="mt-1 text-xs text-slate-500">
                           偏差 {row.deviation_days} 天 · {row.deviation_rate}% · 计划 {plannedLabel} · 实际 {actualLabel}
                         </div>
@@ -145,9 +146,11 @@ export function BaselineDumbbellChart({
             </div>
           </ChartAccessibleWrapper>
         ) : (
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
-            暂无基线哑铃图数据
-          </div>
+          <EmptyState
+            title="暂无基线哑铃图数据"
+            description="当前筛选条件下没有可对比的计划和实际日期。"
+            className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 py-8"
+          />
         )}
       </CardContent>
     </Card>

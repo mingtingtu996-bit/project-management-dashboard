@@ -1,11 +1,45 @@
-export function formatNumber(value: number): string {
-  if (!Number.isFinite(value)) return '0'
+export function formatNumber(value: number, fallback = '0'): string {
+  if (!Number.isFinite(value)) return fallback
   return value.toLocaleString('zh-CN')
 }
 
-export function formatPercent(value: number): string {
-  if (!Number.isFinite(value)) return '0.0%'
-  return `${value.toFixed(1)}%`
+export function clampPercent(value: number, fallback = 0): number {
+  if (!Number.isFinite(value)) return fallback
+  return Math.max(0, Math.min(100, value))
+}
+
+export function formatPercent(
+  value: number,
+  fallback = '0.0%',
+  options: { fractionDigits?: number; clamp?: boolean } = {},
+): string {
+  if (!Number.isFinite(value)) return fallback
+  const fractionDigits = options.fractionDigits ?? 1
+  const normalized = options.clamp === false ? value : clampPercent(value)
+  return `${normalized.toFixed(fractionDigits)}%`
+}
+
+export function formatWholePercent(value: number, fallback = '0%'): string {
+  return formatPercent(value, fallback, { fractionDigits: 0 })
+}
+
+export function formatRatioPercent(value: number, fallback = '0%'): string {
+  if (!Number.isFinite(value)) return fallback
+  const percentValue = Math.abs(value) <= 1 ? value * 100 : value
+  return formatWholePercent(percentValue, fallback)
+}
+
+export function formatMetricValue(value: string | number | null | undefined, unit = '', fallback = '--'): string {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? `${formatNumber(value)}${unit}` : fallback
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    return trimmed ? `${trimmed}${unit}` : fallback
+  }
+
+  return fallback
 }
 
 export function formatDate(value?: string | Date | null, fallback = '—'): string {

@@ -19,6 +19,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { EmptyState } from '@/components/EmptyState'
 import { cn } from '@/lib/utils'
 
 interface CertificateLedgerProps {
@@ -64,6 +65,21 @@ function getLedgerStatusTone(status?: string | null) {
   if (['voided', 'cancelled'].includes(normalized)) return { dot: 'bg-slate-400', text: 'text-slate-600' }
   return { dot: 'bg-slate-300', text: 'text-slate-600' }
 }
+
+const CERTIFICATE_LEDGER_COLUMN_WIDTHS = {
+  item: 260,
+  certificates: 220,
+  stage: 140,
+  status: 150,
+  plannedDate: 132,
+  actualDate: 132,
+  authority: 180,
+  supplement: 96,
+  blocked: 96,
+  actions: 320,
+} as const
+
+const CERTIFICATE_LEDGER_MIN_WIDTH = Object.values(CERTIFICATE_LEDGER_COLUMN_WIDTHS).reduce((sum, width) => sum + width, 0)
 
 export function CertificateLedger({
   items,
@@ -142,7 +158,7 @@ export function CertificateLedger({
   }, [filteredItems])
 
   return (
-    <div data-testid="pre-milestones-ledger" className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+    <div data-testid="pre-milestones-ledger" className="rounded-xl border border-slate-100 bg-white p-4 shadow-[var(--el-1)]">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between mb-4">
         <div>
           <h3 className="text-sm font-semibold text-slate-900">办理台账</h3>
@@ -184,7 +200,7 @@ export function CertificateLedger({
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="搜索事项名称、证书名称..."
-            className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-9 pr-4 text-sm text-slate-900 placeholder-slate-400 focus:border-blue-400 focus:outline-none"
+            className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-9 pr-4 text-sm text-slate-900 placeholder-slate-400 focus-visible:border-blue-400 focus-visible:outline-none"
             data-testid="certificate-ledger-search"
           />
         </div>
@@ -195,7 +211,7 @@ export function CertificateLedger({
           >
             <SelectTrigger
               aria-label="证照阶段筛选"
-              className="h-10 min-w-[132px] rounded-xl border-slate-200 bg-slate-50 text-sm text-slate-900"
+              className="h-10 min-w-32 rounded-xl border-slate-200 bg-slate-50 text-sm text-slate-900"
               data-testid="certificate-ledger-stage-filter"
             >
               <SelectValue />
@@ -215,7 +231,7 @@ export function CertificateLedger({
           >
             <SelectTrigger
               aria-label="证件类型筛选"
-              className="h-10 min-w-[150px] rounded-xl border-slate-200 bg-slate-50 text-sm text-slate-900"
+              className="h-10 min-w-40 rounded-xl border-slate-200 bg-slate-50 text-sm text-slate-900"
               data-testid="certificate-ledger-type-filter"
             >
               <SelectValue />
@@ -231,29 +247,34 @@ export function CertificateLedger({
       </div>
 
       {items.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-sm text-slate-500">
-          当前没有办理事项，先新增一条共享或单证事项。
-        </div>
+        <EmptyState
+          title="暂无办理事项"
+          description="先新增一条共享或单证事项，台账会在这里形成可追踪清单。"
+          className="rounded-xl empty-state-frame border-slate-200 bg-slate-50 py-10"
+        />
       ) : filteredItems.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-sm text-slate-500">
-          没有符合搜索条件的办理事项。
-        </div>
+        <EmptyState
+          variant="filter"
+          title="没有符合条件的办理事项"
+          description="调整搜索词、阶段或快捷筛选后再查看。"
+          className="rounded-xl empty-state-frame border-slate-200 bg-slate-50 py-10"
+        />
       ) : (
         <div className="overflow-x-auto">
-          <Table className="min-w-full border-collapse">
+          <Table className="w-full table-fixed border-collapse" style={{ minWidth: CERTIFICATE_LEDGER_MIN_WIDTH }}>
             <TableCaption className="sr-only">前期证照办理台账</TableCaption>
             <TableHeader className="sticky top-0 z-10 bg-white text-left text-xs uppercase tracking-wide text-slate-500">
               <TableRow className="py-3">
-                <TableHead scope="col" className="px-3 py-2 font-medium">办理事项</TableHead>
-                <TableHead scope="col" className="px-3 py-2 font-medium">所属证件</TableHead>
-                <TableHead scope="col" className="px-3 py-2 font-medium">当前阶段</TableHead>
-                <TableHead scope="col" className="px-3 py-2 font-medium">当前状态</TableHead>
-                <TableHead scope="col" className="px-3 py-2 font-medium">计划完成日期</TableHead>
-                <TableHead scope="col" className="px-3 py-2 font-medium">实际完成日期</TableHead>
-                <TableHead scope="col" className="px-3 py-2 font-medium">审批部门</TableHead>
-                <TableHead scope="col" className="px-3 py-2 font-medium">是否补正</TableHead>
-                <TableHead scope="col" className="px-3 py-2 font-medium">是否阻塞</TableHead>
-                <TableHead scope="col" className="px-3 py-2 font-medium">操作</TableHead>
+                <TableHead scope="col" className="px-3 py-2 font-medium" style={{ width: CERTIFICATE_LEDGER_COLUMN_WIDTHS.item }}>办理事项</TableHead>
+                <TableHead scope="col" className="px-3 py-2 font-medium" style={{ width: CERTIFICATE_LEDGER_COLUMN_WIDTHS.certificates }}>所属证件</TableHead>
+                <TableHead scope="col" className="px-3 py-2 font-medium" style={{ width: CERTIFICATE_LEDGER_COLUMN_WIDTHS.stage }}>当前阶段</TableHead>
+                <TableHead scope="col" className="px-3 py-2 font-medium" style={{ width: CERTIFICATE_LEDGER_COLUMN_WIDTHS.status }}>当前状态</TableHead>
+                <TableHead scope="col" className="px-3 py-2 text-right font-medium tabular-nums" style={{ width: CERTIFICATE_LEDGER_COLUMN_WIDTHS.plannedDate }}>计划完成</TableHead>
+                <TableHead scope="col" className="px-3 py-2 text-right font-medium tabular-nums" style={{ width: CERTIFICATE_LEDGER_COLUMN_WIDTHS.actualDate }}>实际完成</TableHead>
+                <TableHead scope="col" className="px-3 py-2 font-medium" style={{ width: CERTIFICATE_LEDGER_COLUMN_WIDTHS.authority }}>审批部门</TableHead>
+                <TableHead scope="col" className="px-3 py-2 text-center font-medium" style={{ width: CERTIFICATE_LEDGER_COLUMN_WIDTHS.supplement }}>补正</TableHead>
+                <TableHead scope="col" className="px-3 py-2 text-center font-medium" style={{ width: CERTIFICATE_LEDGER_COLUMN_WIDTHS.blocked }}>阻塞</TableHead>
+                <TableHead scope="col" className="px-3 py-2 font-medium" style={{ width: CERTIFICATE_LEDGER_COLUMN_WIDTHS.actions }}>操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -282,42 +303,44 @@ export function CertificateLedger({
                           isActive && 'bg-blue-50/70 hover:bg-blue-50',
                         )}
                       >
-                    <TableCell className="px-3 py-4">
+                    <TableCell className="max-w-0 px-3 py-4" style={{ width: CERTIFICATE_LEDGER_COLUMN_WIDTHS.item }}>
                       <Button variant="ghost"
                         type="button"
                         onClick={() => onSelectWorkItem(item.id)}
-                        className="text-left"
+                        className="h-auto w-full min-w-0 justify-start px-0 py-0 text-left hover:bg-transparent"
                       >
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium text-slate-900">{item.item_name}</span>
+                        <div className="min-w-0 space-y-1">
+                          <div className="flex min-w-0 items-center gap-2">
+                          <span className="truncate font-medium text-slate-900" title={item.item_name}>{item.item_name}</span>
                           {shared && (
-                            <span className="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700">共享</span>
+                            <span className="shrink-0 rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700">共享</span>
                           )}
                           {item.is_blocked && (
-                            <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">
+                            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">
                               <AlertTriangle className="h-3.5 w-3.5" />
                               阻塞
                             </span>
                           )}
+                          </div>
+                          <div className="truncate text-xs text-slate-500" title={item.next_action || '待补充下一动作'}>{item.next_action || '待补充下一动作'}</div>
                         </div>
-                        <div className="mt-1 text-xs text-slate-500">{item.next_action || '待补充下一动作'}</div>
                       </Button>
                     </TableCell>
-                    <TableCell className="px-3 py-4">
+                    <TableCell className="px-3 py-4" style={{ width: CERTIFICATE_LEDGER_COLUMN_WIDTHS.certificates }}>
                       <div className="flex flex-wrap gap-1.5">
                         {certificateNames.map((name) => (
-                          <span key={name} className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs text-slate-600">
+                          <span key={name} className="max-w-full truncate rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs text-slate-600" title={name}>
                             {name}
                           </span>
                         ))}
                       </div>
                     </TableCell>
-                    <TableCell className="px-3 py-4">
-                      <span className={`inline-flex rounded-full px-2 py-1 text-xs font-medium ${certificateStageBadge(item.item_stage)}`}>
+                    <TableCell className="px-3 py-4" style={{ width: CERTIFICATE_LEDGER_COLUMN_WIDTHS.stage }}>
+                      <span className={`inline-flex max-w-full truncate rounded-full px-2 py-1 text-xs font-medium ${certificateStageBadge(item.item_stage)}`} title={item.item_stage}>
                         {item.item_stage}
                       </span>
                     </TableCell>
-                    <TableCell className="px-3 py-4">
+                    <TableCell className="px-3 py-4" style={{ width: CERTIFICATE_LEDGER_COLUMN_WIDTHS.status }}>
                       <div className="space-y-2">
                         <span className={cn('inline-flex items-center gap-2 text-xs font-medium', statusTone.text)}>
                           <span className={cn('h-2 w-2 rounded-full', statusTone.dot)} />
@@ -333,12 +356,12 @@ export function CertificateLedger({
                         </div>
                       </div>
                     </TableCell>
-                    <TableCell className="px-3 py-4 text-sm tabular-nums text-slate-600">{item.planned_finish_date || '待补充'}</TableCell>
-                    <TableCell className="px-3 py-4 text-sm tabular-nums text-slate-600">{item.actual_finish_date || '—'}</TableCell>
-                    <TableCell className="px-3 py-4 text-sm text-slate-600">{item.approving_authority || '待补充'}</TableCell>
-                    <TableCell className="px-3 py-4 text-sm text-slate-600">{item.status === 'supplement_required' ? '是' : '否'}</TableCell>
-                    <TableCell className="px-3 py-4 text-sm text-slate-600">{item.is_blocked ? '是' : '否'}</TableCell>
-                    <TableCell className="px-3 py-4">
+                    <TableCell className="px-3 py-4 text-right text-sm tabular-nums text-slate-600" style={{ width: CERTIFICATE_LEDGER_COLUMN_WIDTHS.plannedDate }}>{item.planned_finish_date || '待补充'}</TableCell>
+                    <TableCell className="px-3 py-4 text-right text-sm tabular-nums text-slate-600" style={{ width: CERTIFICATE_LEDGER_COLUMN_WIDTHS.actualDate }}>{item.actual_finish_date || '—'}</TableCell>
+                    <TableCell className="truncate px-3 py-4 text-sm text-slate-600" style={{ width: CERTIFICATE_LEDGER_COLUMN_WIDTHS.authority }} title={item.approving_authority || '待补充'}>{item.approving_authority || '待补充'}</TableCell>
+                    <TableCell className="px-3 py-4 text-center text-sm text-slate-600" style={{ width: CERTIFICATE_LEDGER_COLUMN_WIDTHS.supplement }}>{item.status === 'supplement_required' ? '是' : '否'}</TableCell>
+                    <TableCell className="px-3 py-4 text-center text-sm text-slate-600" style={{ width: CERTIFICATE_LEDGER_COLUMN_WIDTHS.blocked }}>{item.is_blocked ? '是' : '否'}</TableCell>
+                    <TableCell className="px-3 py-4" style={{ width: CERTIFICATE_LEDGER_COLUMN_WIDTHS.actions }}>
                       <div className={cn('flex flex-wrap items-center gap-2 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100', isActive && 'opacity-100')}>
                         {certificateNames.length > 0 && certificateNames[0] !== '待关联证件' && (
                           <Button variant="ghost"

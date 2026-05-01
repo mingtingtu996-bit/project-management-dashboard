@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 
-import { Dialog, DialogContent, DialogTitle } from '../dialog'
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../dialog'
 import { Select, SelectTrigger, SelectValue } from '../select'
 
 describe('Dialog and Select UI contract', () => {
@@ -10,13 +10,14 @@ describe('Dialog and Select UI contract', () => {
       <Dialog open>
         <DialogContent>
           <DialogTitle>测试弹窗</DialogTitle>
+          <DialogDescription>测试弹窗说明</DialogDescription>
         </DialogContent>
       </Dialog>,
     )
 
     const closeButton = screen.getByRole('button', { name: '关闭对话框' })
-    expect(closeButton.className).toContain('min-h-[44px]')
-    expect(closeButton.className).toContain('min-w-[44px]')
+    expect(closeButton.className).toContain('min-h-11')
+    expect(closeButton.className).toContain('min-w-11')
     expect(closeButton.className).toContain('focus-visible:ring-2')
   })
 

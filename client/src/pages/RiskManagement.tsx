@@ -9,7 +9,6 @@ import { RiskManagementSkeleton } from '@/components/ui/page-skeleton'
 import { ActionGuardDialog } from '@/components/ActionGuardDialog'
 import { EmptyState } from '@/components/EmptyState'
 import { CollapsibleSection } from '@/components/CollapsibleSection'
-import { Sparkline } from '@/components/Sparkline'
 import { ChartAccessibleWrapper } from '@/components/ChartAccessibleWrapper'
 import { PageHeader } from '@/components/PageHeader'
 import { ReadOnlyGuard } from '@/components/ReadOnlyGuard'
@@ -20,6 +19,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { MetricCard as SharedMetricCard } from '@/components/ui/metric-card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
 import { StatusBadge } from '@/components/ui/status-badge'
@@ -28,7 +28,7 @@ import { Pagination } from '@/components/ui/Pagination'
 import { useToast } from '@/hooks/use-toast'
 import { useStore } from '@/hooks/useStore'
 import { usePermissions } from '@/hooks/usePermissions'
-import { CHART_SERIES } from '@/lib/chartPalette'
+import { CHART_AXIS_COLORS, CHART_SERIES } from '@/lib/chartPalette'
 import { apiDelete, apiGet, apiPost, apiPut } from '@/lib/apiClient'
 import { formatDate as formatDisplayDate, formatDateTime as formatDisplayDateTime } from '@/lib/formatters'
 import { cn } from '@/lib/utils'
@@ -1599,7 +1599,7 @@ export default function RiskManagement() {
     detailAction?: ReactNode
   }) {
     return (
-      <div className={`rounded-2xl border border-slate-200 p-4 shadow-sm ${entryClassName ?? 'bg-white/80'}`}>
+      <div className={`rounded-2xl border border-slate-100 p-4 shadow-[var(--el-1)] ${entryClassName ?? 'bg-white/80'}`}>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0 space-y-2">
             {badges ? <div className="flex flex-wrap gap-2">{badges}</div> : null}
@@ -1872,7 +1872,7 @@ export default function RiskManagement() {
 
         {error ? <Alert className="border-red-200 bg-red-50 text-red-900"><AlertTriangle className="h-4 w-4" /><AlertDescription>{error}</AlertDescription></Alert> : null}
 
-        <Card data-testid="risk-summary-band" className="card-unified p-0">
+        <Card data-testid="risk-summary-band" variant="surface">
           <CardContent className="space-y-5 p-5">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="space-y-1">
@@ -1886,10 +1886,10 @@ export default function RiskManagement() {
               </div>
             </div>
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-              <SummaryMetricCard title="近 7 天新增" value={recentWarningCount + recentRiskCount + recentIssueCount} hint={`预警 ${recentWarningCount} / 风险 ${recentRiskCount} / 问题 ${recentIssueCount}`} icon={Clock3} sparkline={[recentWarningCount, recentRiskCount, recentIssueCount, recentWarningCount + recentRiskCount + recentIssueCount]} />
-              <SummaryMetricCard title="待人工关闭" value={pendingManualCloseCount} hint="来源已解除但仍需要人工确认关闭" icon={TriangleAlert} sparkline={[0, pendingManualCloseCount, pendingManualCloseCount]} />
-              <SummaryMetricCard title="高位事项" value={highAttentionCount} hint="严重预警 + 高/严重风险问题总量" icon={Activity} sparkline={[activeWarnings.length, activeRisks.length, activeIssues.length, highAttentionCount]} />
-              <SummaryMetricCard title="链路来源占比" value={`${chainLinkedCount}/${riskRows.length + issueRows.length || 0}`} hint="来源于预警、阻碍、条件或风险升级链的记录" icon={GitBranch} sparkline={[chainLinkedCount, riskRows.length, issueRows.length, chainLinkedCount]} />
+              <SharedMetricCard title="近 7 天新增" value={recentWarningCount + recentRiskCount + recentIssueCount} hint={`预警 ${recentWarningCount} / 风险 ${recentRiskCount} / 问题 ${recentIssueCount}`} icon={<Clock3 className="h-4 w-4" />} sparkline={[recentWarningCount, recentRiskCount, recentIssueCount, recentWarningCount + recentRiskCount + recentIssueCount]} tone="primary" />
+              <SharedMetricCard title="待人工关闭" value={pendingManualCloseCount} hint="来源已解除但仍需要人工确认关闭" icon={<TriangleAlert className="h-4 w-4" />} sparkline={[0, pendingManualCloseCount, pendingManualCloseCount]} tone={pendingManualCloseCount > 0 ? 'warning' : 'slate'} />
+              <SharedMetricCard title="高位事项" value={highAttentionCount} hint="严重预警 + 高/严重风险问题总量" icon={<Activity className="h-4 w-4" />} sparkline={[activeWarnings.length, activeRisks.length, activeIssues.length, highAttentionCount]} tone={highAttentionCount > 0 ? 'danger' : 'slate'} />
+              <SharedMetricCard title="链路来源占比" value={`${chainLinkedCount}/${riskRows.length + issueRows.length || 0}`} hint="来源于预警、阻碍、条件或风险升级链的记录" icon={<GitBranch className="h-4 w-4" />} sparkline={[chainLinkedCount, riskRows.length, issueRows.length, chainLinkedCount]} tone="info" />
             </div>
           </CardContent>
         </Card>
@@ -1903,10 +1903,10 @@ export default function RiskManagement() {
         </div>
 
         {dataQualitySummary && dataQualityConfidence ? (
-          <Card data-testid="risk-data-quality-banner" className="card-unified p-0">
+          <Card data-testid="risk-data-quality-banner" variant="surface">
             <CardContent className="p-5">
               <CollapsibleSection title="数据可靠性" defaultOpen={false} count={dataQualityConfidence.activeFindingCount}>
-                <div className="grid gap-4 pt-3 lg:grid-cols-[minmax(0,0.85fr)_minmax(360px,1.15fr)]">
+                <div className="grid gap-4 pt-3 lg:grid-cols-[minmax(0,0.85fr)_minmax(22.5rem,1.15fr)]">
                   <div className={cn(
                     'rounded-xl border px-4 py-3',
                     showDataQualityBanner ? 'border-amber-200 bg-amber-50 text-amber-950' : 'border-emerald-200 bg-emerald-50 text-emerald-950',
@@ -1936,7 +1936,7 @@ export default function RiskManagement() {
           onToggleSeries={(key) => setHiddenTrendSeries((current) => ({ ...current, [key]: !current[key] }))}
         />
 
-        <Card data-testid="risk-chain-workspace" className="border-slate-200 shadow-sm">
+        <Card data-testid="risk-chain-workspace" className="surface-card">
           <CardHeader className="space-y-4">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
               <div className="space-y-1">
@@ -1979,14 +1979,14 @@ export default function RiskManagement() {
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <Select value={warningFilter} onValueChange={setWarningFilter}>
-                      <SelectTrigger className="h-8 w-[220px]" data-testid="warning-filter-select"><SelectValue placeholder="全部预警" /></SelectTrigger>
+                      <SelectTrigger className="h-8 w-56" data-testid="warning-filter-select"><SelectValue placeholder="全部预警" /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value="all">全部预警</SelectItem>
                         {warningFilterOptions.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}
                       </SelectContent>
                     </Select>
                     <Select value={warningSourceFilter} onValueChange={(value) => setWarningSourceFilter(value as SourceFilterValue)}>
-                      <SelectTrigger className="h-8 w-[180px]" data-testid="warning-source-filter-select"><SelectValue placeholder="全部来源" /></SelectTrigger>
+                      <SelectTrigger className="h-8 w-44" data-testid="warning-source-filter-select"><SelectValue placeholder="全部来源" /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value="all">全部来源</SelectItem>
                         <SelectItem value="manual">手动来源</SelectItem>
@@ -2008,7 +2008,7 @@ export default function RiskManagement() {
                   />
                 ) : (
                   groupedWarnings.map((group) => (
-                    <Card key={group.title} className="border-slate-200 shadow-sm">
+                    <Card key={group.title} className="surface-card">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between gap-3">
                           <CardTitle className="text-base">{group.title}</CardTitle>
@@ -2042,7 +2042,7 @@ export default function RiskManagement() {
                     {groupedRisks.map((group) => (
                       <div key={group.title} className={riskViewMode === 'timeline' ? 'relative mb-4' : ''}>
                         {riskViewMode === 'timeline' && <div className="absolute -left-6 top-4 h-3.5 w-3.5 rounded-full border-2 border-slate-400 bg-white" />}
-                        <Card className="border-slate-200 shadow-sm"><CardHeader className="pb-3"><div className="flex items-center justify-between gap-3"><CardTitle className="text-base">{group.title}</CardTitle><Badge variant="secondary">{group.items.length} 条</Badge></div></CardHeader><CardContent className="space-y-3 pt-0">{group.items.map((row) => <div key={row.id}>{renderRiskEntry(row)}</div>)}</CardContent></Card>
+                        <Card className="surface-card"><CardHeader className="pb-3"><div className="flex items-center justify-between gap-3"><CardTitle className="text-base">{group.title}</CardTitle><Badge variant="secondary">{group.items.length} 条</Badge></div></CardHeader><CardContent className="space-y-3 pt-0">{group.items.map((row) => <div key={row.id}>{renderRiskEntry(row)}</div>)}</CardContent></Card>
                       </div>
                     ))}
                   </div>
@@ -2110,7 +2110,7 @@ export default function RiskManagement() {
                     {groupedIssues.map((group) => (
                       <div key={group.title} className={issueViewMode === 'timeline' ? 'relative mb-4' : ''}>
                         {issueViewMode === 'timeline' && <div className="absolute -left-6 top-4 h-3.5 w-3.5 rounded-full border-2 border-slate-400 bg-white" />}
-                        <Card className="border-slate-200 shadow-sm"><CardHeader className="pb-3"><div className="flex items-center justify-between gap-3"><CardTitle className="text-base">{group.title}</CardTitle><Badge variant="secondary">{group.items.length} 条</Badge></div></CardHeader><CardContent className="space-y-3 pt-0">{group.items.map((row) => <div key={row.id}>{renderIssueEntry(row)}</div>)}</CardContent></Card>
+                        <Card className="surface-card"><CardHeader className="pb-3"><div className="flex items-center justify-between gap-3"><CardTitle className="text-base">{group.title}</CardTitle><Badge variant="secondary">{group.items.length} 条</Badge></div></CardHeader><CardContent className="space-y-3 pt-0">{group.items.map((row) => <div key={row.id}>{renderIssueEntry(row)}</div>)}</CardContent></Card>
                       </div>
                     ))}
                   </div>
@@ -2134,9 +2134,9 @@ export default function RiskManagement() {
       </div>
 
       <Dialog open={dialogState !== null} onOpenChange={(open) => !open && setDialogState(null)}>
-        {dialogState?.type === 'convert-risk' ? <DialogContent className="max-w-[560px]"><DialogHeader><DialogTitle>转为问题</DialogTitle><DialogDescription className="sr-only">转为问题</DialogDescription></DialogHeader><div className="space-y-3 text-sm text-slate-600"><div><span className="font-medium text-slate-900">标题：</span>{dialogState.row.title}</div>{dialogState.row.description ? <div>{dialogState.row.description}</div> : null}</div><DialogFooter><Button variant="outline" onClick={() => setDialogState(null)} disabled={saving}>取消</Button><Button onClick={() => void handleConvertRiskToIssue()} loading={saving}>确认转入</Button></DialogFooter></DialogContent> : null}
+        {dialogState?.type === 'convert-risk' ? <DialogContent className="max-w-xl"><DialogHeader><DialogTitle>转为问题</DialogTitle><DialogDescription className="sr-only">转为问题</DialogDescription></DialogHeader><div className="space-y-3 text-sm text-slate-600"><div><span className="font-medium text-slate-900">标题：</span>{dialogState.row.title}</div>{dialogState.row.description ? <div>{dialogState.row.description}</div> : null}</div><DialogFooter><Button variant="outline" onClick={() => setDialogState(null)} disabled={saving}>取消</Button><Button onClick={() => void handleConvertRiskToIssue()} loading={saving}>确认转入</Button></DialogFooter></DialogContent> : null}
         {dialogState?.type === 'create-manual-risk' ? (
-          <DialogContent className="max-w-[560px]">
+          <DialogContent className="max-w-xl">
             <DialogHeader>
               <DialogTitle>新建风险</DialogTitle>
               <DialogDescription className="sr-only">新建风险</DialogDescription>
@@ -2144,7 +2144,7 @@ export default function RiskManagement() {
             <div className="space-y-4 text-sm text-slate-600">
               <label className="block space-y-2">
                 <span className="font-medium text-slate-900">风险标题</span>
-                <input value={manualRiskTitle} onChange={(event) => setManualRiskTitle(event.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400" placeholder="例如：主体结构窗口受天气影响" />
+                <input value={manualRiskTitle} onChange={(event) => setManualRiskTitle(event.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none transition focus-visible:border-slate-400" placeholder="例如：主体结构窗口受天气影响" />
               </label>
               <label className="block space-y-2">
                 <span className="font-medium text-slate-900">严重程度</span>
@@ -2170,7 +2170,7 @@ export default function RiskManagement() {
               </label>
               <label className="block space-y-2">
                 <span className="font-medium text-slate-900">风险描述</span>
-                <textarea value={manualRiskDescription} onChange={(event) => setManualRiskDescription(event.target.value)} className="min-h-24 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400" placeholder="补充内容" />
+                <textarea value={manualRiskDescription} onChange={(event) => setManualRiskDescription(event.target.value)} className="min-h-24 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none transition focus-visible:border-slate-400" placeholder="补充内容" />
               </label>
             </div>
             <DialogFooter>
@@ -2180,7 +2180,7 @@ export default function RiskManagement() {
           </DialogContent>
         ) : null}
         {dialogState?.type === 'create-manual-issue' ? (
-          <DialogContent className="max-w-[560px]">
+          <DialogContent className="max-w-xl">
             <DialogHeader>
               <DialogTitle>新建问题</DialogTitle>
               <DialogDescription className="sr-only">新建问题</DialogDescription>
@@ -2188,7 +2188,7 @@ export default function RiskManagement() {
             <div className="space-y-4 text-sm text-slate-600">
               <label className="block space-y-2">
                 <span className="font-medium text-slate-900">问题标题</span>
-                <input value={manualIssueTitle} onChange={(event) => setManualIssueTitle(event.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400" placeholder="例如：专项审批资料缺失" />
+                <input value={manualIssueTitle} onChange={(event) => setManualIssueTitle(event.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none transition focus-visible:border-slate-400" placeholder="例如：专项审批资料缺失" />
               </label>
               <label className="block space-y-2">
                 <span className="font-medium text-slate-900">严重程度</span>
@@ -2214,7 +2214,7 @@ export default function RiskManagement() {
               </label>
               <label className="block space-y-2">
                 <span className="font-medium text-slate-900">问题描述</span>
-                <textarea value={manualIssueDescription} onChange={(event) => setManualIssueDescription(event.target.value)} className="min-h-24 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-400" placeholder="补充内容" />
+                <textarea value={manualIssueDescription} onChange={(event) => setManualIssueDescription(event.target.value)} className="min-h-24 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none transition focus-visible:border-slate-400" placeholder="补充内容" />
               </label>
               <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
                 实时优先级分：<span className="font-semibold text-slate-900">{calculateIssuePriorityScore('manual', manualIssueSeverity)}</span>
@@ -2232,7 +2232,7 @@ export default function RiskManagement() {
         {detailDialog ? (
           <DialogContent
             data-testid="risk-detail-dialog"
-            className="left-auto right-0 top-0 h-screen max-w-[720px] translate-x-0 translate-y-0 rounded-none border-l border-slate-200 p-0 shadow-[var(--el-4)] sm:max-w-[720px]"
+            className="left-auto right-0 top-0 h-screen max-w-3xl translate-x-0 translate-y-0 rounded-none border-l border-slate-200 p-0 shadow-[var(--el-4)] sm:max-w-3xl"
           >
             <div className="flex h-full flex-col">
               <DialogHeader className="px-6 py-5">
@@ -2398,7 +2398,7 @@ export default function RiskManagement() {
 
       <Dialog open={chainDialog !== null} onOpenChange={(open) => !open && setChainDialog(null)}>
         {chainDialog && chainDialogItems ? (
-          <DialogContent className="max-w-[720px]" data-testid="risk-chain-dialog">
+          <DialogContent className="max-w-3xl" data-testid="risk-chain-dialog">
             <DialogHeader>
               <DialogTitle>全链查看</DialogTitle>
               <DialogDescription>链路标识 {chainDialog.chainId}</DialogDescription>
@@ -2437,7 +2437,7 @@ export default function RiskManagement() {
                     </div>
                   ))}
                   {chainDialogItems.linkedWarnings.length + chainDialogItems.linkedRisks.length + chainDialogItems.linkedIssues.length === 0 ? (
-                    <div className="rounded-xl border border-dashed border-slate-200 px-4 py-5 text-sm text-slate-500">
+                    <div className="rounded-xl empty-state-frame border-slate-200 px-4 py-5 text-sm text-slate-500">
                       当前链路暂无可展示的预警、风险或问题记录。
                     </div>
                   ) : null}
@@ -2462,7 +2462,7 @@ export default function RiskManagement() {
                     </div>
                   ))}
                   {chainDialogItems.linkedChangeLogs.length === 0 ? (
-                    <div className="rounded-xl border border-dashed border-slate-200 px-4 py-5 text-sm text-slate-500">
+                    <div className="rounded-xl empty-state-frame border-slate-200 px-4 py-5 text-sm text-slate-500">
                       当前链路暂无变更留痕。
                     </div>
                   ) : null}
@@ -2502,26 +2502,6 @@ export default function RiskManagement() {
   )
 }
 
-function SummaryMetricCard({ title, value, hint, icon: Icon, sparkline }: { title: string; value: string | number; hint: string; icon: typeof Activity; sparkline: number[] }) {
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-      <div className="flex items-start justify-between gap-3">
-        <div className="space-y-1">
-          <div className="text-xs uppercase tracking-wider text-slate-500">{title}</div>
-          <div className="text-2xl font-semibold tabular-nums text-slate-900">{value}</div>
-        </div>
-        <div className="rounded-full border border-slate-200 bg-white p-2 text-slate-500">
-          <Icon className="h-4 w-4" />
-        </div>
-      </div>
-      <div className="mt-3 flex items-end justify-between gap-3">
-        <div className="min-w-0 text-xs leading-5 text-slate-500">{hint}</div>
-        <Sparkline data={sparkline.map((item) => ({ value: item }))} color={CHART_SERIES.primary} className="shrink-0" />
-      </div>
-    </div>
-  )
-}
-
 function PipelineFlow({ pipelineStages }: { pipelineStages: RiskPipelineStages }) {
   const stages = [
     { label: '识别', count: pipelineStages.identified, status: pipelineStages.identified > 0 ? 'active' : 'empty' },
@@ -2531,7 +2511,7 @@ function PipelineFlow({ pipelineStages }: { pipelineStages: RiskPipelineStages }
   ] as const
 
   return (
-    <Card data-testid="risk-pipeline-flow" className="card-unified p-0">
+    <Card data-testid="risk-pipeline-flow" variant="surface">
       <CardContent className="p-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="space-y-1">
@@ -2584,7 +2564,7 @@ function OverviewCard({
   onViewAll: () => void
 }) {
   return (
-    <div className={cn('card-unified card-hover space-y-4 p-5 transition-all duration-200 motion-safe:hover:-translate-y-0.5 motion-safe:hover:shadow-[var(--el-3)]', accentClassName)}>
+    <div className={cn('space-y-4 rounded-card border border-slate-100 bg-white p-5 shadow-[var(--el-1)] transition-all duration-200 motion-safe:hover:-translate-y-0.5 motion-safe:hover:shadow-[var(--el-3)]', accentClassName)}>
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="text-xs uppercase tracking-wider text-slate-500">{title}</div>
@@ -2599,7 +2579,11 @@ function OverviewCard({
             <div className="mt-1 text-xs tabular-nums text-slate-500">{item.meta}</div>
           </div>
         )) : (
-          <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-500">暂无记录</div>
+          <EmptyState
+            title="暂无记录"
+            description="当前分类没有需要展示的链路记录。"
+            className="rounded-xl empty-state-frame border-slate-200 bg-slate-50 py-6"
+          />
         )}
       </div>
       <Button variant="ghost" size="sm" className="w-full justify-between" onClick={onViewAll}>
@@ -2620,7 +2604,7 @@ function RiskMultiLineChart({
   onToggleSeries: (key: TrendSeriesKey) => void
 }) {
   return (
-    <div data-testid="risk-trend-summary" className="card-unified space-y-5 p-5">
+    <div data-testid="risk-trend-summary" className="space-y-5 rounded-card border border-slate-100 bg-white p-5 shadow-[var(--el-1)]">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div className="space-y-1">
           <div className="flex items-center gap-2 text-base font-semibold text-slate-900">
@@ -2653,8 +2637,8 @@ function RiskMultiLineChart({
         <div className="overflow-x-auto">
           <LineChart width={920} height={280} data={data} margin={{ top: 10, right: 24, bottom: 8, left: -12 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.22)" />
-            <XAxis dataKey="date" tick={{ fill: '#475569', fontSize: 12 }} tickLine={false} axisLine={{ stroke: '#CBD5E1' }} />
-            <YAxis allowDecimals={false} tick={{ fill: '#475569', fontSize: 12 }} tickLine={false} axisLine={{ stroke: '#CBD5E1' }} />
+            <XAxis dataKey="date" tick={{ fill: CHART_AXIS_COLORS.axisText, fontSize: 12 }} tickLine={false} axisLine={{ stroke: CHART_AXIS_COLORS.neutralStroke }} />
+            <YAxis allowDecimals={false} tick={{ fill: CHART_AXIS_COLORS.axisText, fontSize: 12 }} tickLine={false} axisLine={{ stroke: CHART_AXIS_COLORS.neutralStroke }} />
             <RechartsTooltip />
             {TREND_SERIES.map((series) => hiddenSeries[series.key] ? null : (
               <Line
@@ -2825,7 +2809,7 @@ function ChainToolbar({
         <Button variant={chainViewMode === 'timeline' ? 'default' : 'outline'} size="sm" onClick={() => onViewModeChange('timeline')}>时间轴</Button>
         <Button variant={showPendingManualCloseOnly ? 'default' : 'outline'} size="sm" onClick={onPendingFilterToggle} data-testid="pending-manual-close-toggle">待确认关闭{pendingCount > 0 ? ` (${pendingCount})` : ''}</Button>
         <Button variant="ghost" type="button" className="sr-only" data-testid="pending-manual-close-filter" onClick={onPendingFilterToggle}>pending manual close filter</Button>
-        <Select value={sourceFilter} onValueChange={(value) => onSourceFilterChange(value as SourceFilterValue)}><SelectTrigger className="h-9 w-[160px]"><SelectValue placeholder="来源筛选" /></SelectTrigger><SelectContent><SelectItem value="all">全部来源</SelectItem><SelectItem value="manual">只看手动添加</SelectItem><SelectItem value="chain">只看链路记录</SelectItem></SelectContent></Select>
+        <Select value={sourceFilter} onValueChange={(value) => onSourceFilterChange(value as SourceFilterValue)}><SelectTrigger className="h-9 w-40"><SelectValue placeholder="来源筛选" /></SelectTrigger><SelectContent><SelectItem value="all">全部来源</SelectItem><SelectItem value="manual">只看手动添加</SelectItem><SelectItem value="chain">只看链路记录</SelectItem></SelectContent></Select>
       </div>
       <div className="flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-slate-500">
         <GitBranch className="h-3.5 w-3.5" />

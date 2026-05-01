@@ -92,7 +92,7 @@ export default function AcceptanceFlowNode({
         !relation.isSelected && relation.isUpstream && 'border-blue-300 bg-blue-50/90',
         !relation.isSelected && relation.isDownstream && 'border-slate-300 bg-slate-50/90',
         !relation.isSelected && !relation.isRelated && relation.isDimmed && 'opacity-35 grayscale-[0.15]',
-        !hasPlannedDate && 'border-dashed border-slate-300 bg-slate-50/80',
+        !hasPlannedDate && 'empty-state-frame border-slate-300 bg-slate-50/80',
         isBlocked && 'ring-2 ring-blue-100',
       )}
       style={{

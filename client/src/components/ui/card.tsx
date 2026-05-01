@@ -10,7 +10,7 @@ const cardVariants = cva('text-card-foreground transition-all duration-200', {
       surface: 'rounded-card border border-slate-100 bg-white/95 shadow-[var(--el-1)] backdrop-blur-sm hover:shadow-[var(--el-2)] hover:ring-1 hover:ring-blue-100/50',
       metric: 'rounded-card border border-l-4 border-slate-100 border-l-blue-500 bg-white shadow-[var(--el-1)] hover:shadow-[var(--el-2)] hover:ring-1 hover:ring-blue-100/50',
       detail: 'rounded-card border border-slate-100 bg-white shadow-[var(--el-2)] hover:shadow-[var(--el-3)] hover:ring-1 hover:ring-blue-100/50',
-      ghost: 'rounded-card border border-dashed border-slate-200 bg-slate-50/80 shadow-none hover:shadow-[var(--el-1)] hover:ring-1 hover:ring-blue-100/40',
+      ghost: 'rounded-card empty-state-frame border-slate-200 bg-slate-50/80 shadow-none hover:shadow-[var(--el-1)] hover:ring-1 hover:ring-blue-100/40',
     },
   },
   defaultVariants: {
@@ -42,8 +42,19 @@ const CardDescription = React.forwardRef<HTMLParagraphElement, React.HTMLAttribu
 )
 CardDescription.displayName = 'CardDescription'
 
-const CardContent = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(({ className, ...props }, ref) => (
-  <div ref={ref} className={cn('p-5 pt-0', className)} {...props} />
+const cardContentPadding = {
+  none: 'p-0',
+  sm: 'p-4',
+  md: 'p-5',
+  lg: 'p-6',
+} as const
+
+interface CardContentProps extends React.HTMLAttributes<HTMLDivElement> {
+  padding?: keyof typeof cardContentPadding
+}
+
+const CardContent = React.forwardRef<HTMLDivElement, CardContentProps>(({ className, padding, ...props }, ref) => (
+  <div ref={ref} className={cn(padding ? cardContentPadding[padding] : 'p-5 pt-0', className)} {...props} />
 ))
 CardContent.displayName = 'CardContent'
 

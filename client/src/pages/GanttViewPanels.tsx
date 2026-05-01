@@ -396,7 +396,7 @@ export function TaskDetailPanel({
               <span className="text-slate-500">责任单位</span>
               <Tooltip>
   <TooltipTrigger asChild>
-    <span className="max-w-[160px] truncate text-slate-700" >
+    <span className="max-w-40 truncate text-slate-700" >
                 {selectedTask.responsible_unit}
               </span>
   </TooltipTrigger>
@@ -520,7 +520,7 @@ export function TaskDetailPanel({
                         
                       >
                         <span className="font-semibold">{index + 1}</span>
-                        <span className="max-w-[180px] truncate">{snapshotTask?.title || taskId}</span>
+                        <span className="max-w-44 truncate">{snapshotTask?.title || taskId}</span>
                       </span>
   </TooltipTrigger>
   <TooltipContent>{snapshotTask?.title || taskId}</TooltipContent>
@@ -651,7 +651,7 @@ export function TaskDetailPanel({
                     placeholder="填写延期原因"
                     disabled={Boolean(pendingDelayRequest) || delayRequestSubmitting}
                     data-testid="gantt-delay-request-reason"
-                    className="min-h-20 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
+                    className="min-h-20 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                   />
                   {delayFormErrors.reason && (
                     <p className="text-xs text-red-600">{delayFormErrors.reason}</p>

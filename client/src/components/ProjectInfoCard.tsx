@@ -464,8 +464,8 @@ export default function ProjectInfoCard({
                 >
                   取消
                 </Button>
-                <Button type="button" onClick={() => void handleSaveScope()} disabled={scopeSaving}>
-                  {scopeSaving ? '保存中' : '保存范围'}
+                <Button type="button" onClick={() => void handleSaveScope()} disabled={scopeSaving} loading={scopeSaving}>
+                  保存范围
                 </Button>
               </div>
             </Card>
@@ -509,7 +509,7 @@ export default function ProjectInfoCard({
                       value={basicInfoDraft.projectDescription}
                       onChange={(event) => setBasicInfoDraft((previous) => ({ ...previous, projectDescription: event.target.value }))}
                       placeholder="请输入项目描述"
-                      className="min-h-[96px]"
+                      className="min-h-24"
                     />
                   </div>
                   <div className="space-y-2">
@@ -618,8 +618,9 @@ export default function ProjectInfoCard({
                     type="button"
                     onClick={() => void handleSaveBasicInfo()}
                     disabled={basicInfoSaving || basicInfoDraft.projectName.trim().length === 0}
+                    loading={basicInfoSaving}
                   >
-                    {basicInfoSaving ? '保存中' : '保存基础信息'}
+                    保存基础信息
                   </Button>
                 </div>
               </Card>

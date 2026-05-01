@@ -318,7 +318,7 @@ function AppContent() {
           role="main"
           aria-label="主要内容"
           tabIndex={-1}
-          className="flex-1 overflow-y-auto bg-slate-50/80 focus:outline-none"
+          className="flex-1 overflow-y-auto bg-slate-50/80 focus-visible:outline-none"
         >
           <div className="w-full">
             <PageErrorBoundary>

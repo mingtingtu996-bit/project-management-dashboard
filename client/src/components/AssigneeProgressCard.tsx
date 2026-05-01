@@ -19,6 +19,7 @@
  */
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { EmptyState } from '@/components/EmptyState'
 import { Separator } from '@/components/ui/separator'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { ChevronRight } from 'lucide-react'
@@ -102,9 +103,11 @@ export function AssigneeProgressCard({
           <CardTitle className="text-base font-semibold">责任人完成情况</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="text-center py-8 text-muted-foreground">
-            <p className="text-sm">暂无责任人数据</p>
-          </div>
+          <EmptyState
+            title="暂无责任人数据"
+            description="任务绑定责任人后会展示完成情况排行。"
+            className="py-8"
+          />
         </CardContent>
       </Card>
     )

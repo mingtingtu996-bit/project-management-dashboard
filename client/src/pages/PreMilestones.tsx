@@ -687,7 +687,7 @@ export default function PreMilestones() {
         <div className="flex items-center gap-3">
           {projectOptions.length > 1 && (
             <Select value={selectedProjectId || undefined} onValueChange={setSelectedProjectId}>
-              <SelectTrigger className="w-[220px] rounded-2xl border-slate-200 bg-white text-sm">
+              <SelectTrigger className="w-56 rounded-2xl border-slate-200 bg-white text-sm">
                 <SelectValue placeholder="请选择项目" />
               </SelectTrigger>
               <SelectContent className="rounded-2xl border-slate-200 bg-white">
@@ -795,7 +795,7 @@ export default function PreMilestones() {
           }}
           />
 
-          <div data-testid="pre-milestones-overview" className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div data-testid="pre-milestones-overview" className="rounded-2xl border border-slate-100 bg-white p-4 shadow-[var(--el-1)]">
             <div className="flex items-center justify-between gap-3 mb-4">
               <div>
                 <h3 className="text-sm font-semibold text-slate-900">开工准入总览</h3>
@@ -928,7 +928,7 @@ export default function PreMilestones() {
       />
 
       <Dialog open={expectedDateDialogOpen} onOpenChange={setExpectedDateDialogOpen}>
-        <DialogContent className="max-w-[560px]" data-testid="expected-date-dialog">
+        <DialogContent className="max-w-xl" data-testid="expected-date-dialog">
           <DialogHeader>
             <DialogTitle>预计具备开工条件日期</DialogTitle>
             <DialogDescription className="sr-only">显示证件依赖关系和预计开工时间推算依据。</DialogDescription>

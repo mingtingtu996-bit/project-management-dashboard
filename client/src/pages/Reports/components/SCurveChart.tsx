@@ -1,6 +1,7 @@
 import { ChartAccessibleWrapper } from '@/components/ChartAccessibleWrapper'
+import { EmptyState } from '@/components/EmptyState'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { CHART_SERIES } from '@/lib/chartPalette'
+import { CHART_AXIS_COLORS, CHART_SERIES } from '@/lib/chartPalette'
 
 type SCurvePoint = {
   date: string
@@ -111,21 +112,23 @@ export function SCurveChart({ tasks = [], points: apiPoints }: { tasks?: SCurveT
     : null
 
   return (
-    <Card data-testid="reports-s-curve-chart" className="card-unified p-0">
+    <Card data-testid="reports-s-curve-chart" variant="surface">
       <CardHeader className="pb-2">
         <CardTitle className="flex items-center gap-2 text-sm font-semibold text-slate-900">
           S 曲线 — 计划 vs 实际累计进度
           <div className="ml-auto flex items-center gap-3 text-xs font-normal text-slate-500">
             <span className="flex items-center gap-1"><span className="inline-block h-0.5 w-5" style={{ backgroundColor: CHART_SERIES.primary }} />计划</span>
-            <span className="flex items-center gap-1"><span className="inline-block h-0.5 w-5 border-b-2 border-dashed" style={{ borderColor: CHART_SERIES.success }} />实际</span>
+            <span className="flex items-center gap-1"><span className="inline-block h-0.5 w-5 border-b-2" style={{ borderColor: CHART_SERIES.success, borderBottomStyle: 'dashed' }} />实际</span>
           </div>
         </CardTitle>
       </CardHeader>
       <CardContent className="px-4 pb-4">
         {displayPoints.length === 0 ? (
-          <div className="flex h-40 items-center justify-center rounded-xl border border-dashed border-slate-200 bg-slate-50 text-sm text-slate-500">
-            任务数据不足，无法生成 S 曲线。
-          </div>
+          <EmptyState
+            title="暂无 S 曲线数据"
+            description="任务数据不足，暂时无法生成计划与实际累计进度曲线。"
+            className="rounded-xl empty-state-frame border-slate-200 bg-slate-50 py-10"
+          />
         ) : (
             <ChartAccessibleWrapper
             columns={['日期', '计划累计进度(%)', '实际累计进度(%)']}
@@ -138,7 +141,7 @@ export function SCurveChart({ tasks = [], points: apiPoints }: { tasks?: SCurveT
                 const y = PAD.top + (1 - tick / 100) * chartH
                 return (
                   <g key={tick}>
-                    <line x1={PAD.left} x2={PAD.left + chartW} y1={y} y2={y} stroke="#e2e8f0" strokeWidth="1" />
+                    <line x1={PAD.left} x2={PAD.left + chartW} y1={y} y2={y} stroke={CHART_AXIS_COLORS.neutralStroke} strokeWidth="1" />
                     <text x={PAD.left - 6} y={y + 4} textAnchor="end" className="fill-slate-400" fontSize="10">{tick}%</text>
                   </g>
                 )
@@ -157,7 +160,7 @@ export function SCurveChart({ tasks = [], points: apiPoints }: { tasks?: SCurveT
 
               {/* Today line */}
               {todayX != null && (
-                <line x1={todayX} x2={todayX} y1={PAD.top} y2={PAD.top + chartH} stroke="#f97316" strokeWidth="1.5" strokeDasharray="4 3" opacity="0.7" />
+                <line x1={todayX} x2={todayX} y1={PAD.top} y2={PAD.top + chartH} stroke={CHART_SERIES.warning} strokeWidth="1.5" strokeDasharray="4 3" opacity="0.7" />
               )}
 
               {/* Planned curve */}
@@ -169,8 +172,8 @@ export function SCurveChart({ tasks = [], points: apiPoints }: { tasks?: SCurveT
               )}
 
               {/* Axes */}
-              <line x1={PAD.left} x2={PAD.left} y1={PAD.top} y2={PAD.top + chartH} stroke="#cbd5e1" strokeWidth="1" />
-              <line x1={PAD.left} x2={PAD.left + chartW} y1={PAD.top + chartH} y2={PAD.top + chartH} stroke="#cbd5e1" strokeWidth="1" />
+              <line x1={PAD.left} x2={PAD.left} y1={PAD.top} y2={PAD.top + chartH} stroke={CHART_AXIS_COLORS.neutralStroke} strokeWidth="1" />
+              <line x1={PAD.left} x2={PAD.left + chartW} y1={PAD.top + chartH} y2={PAD.top + chartH} stroke={CHART_AXIS_COLORS.neutralStroke} strokeWidth="1" />
             </svg>
           </ChartAccessibleWrapper>
         )}

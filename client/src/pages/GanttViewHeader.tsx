@@ -167,7 +167,7 @@ export function GanttViewHeader({
                     {governanceBanner.badge}
                   </span>
                 </TooltipTrigger>
-                <TooltipContent className="max-w-[260px]">{governanceBanner.description}</TooltipContent>
+                <TooltipContent className="max-w-xs">{governanceBanner.description}</TooltipContent>
               </Tooltip>
               {planningGovernance?.activeCount ? (
                 <span

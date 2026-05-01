@@ -21,13 +21,13 @@ import {
 import { Breadcrumb } from '@/components/Breadcrumb'
 import { EmptyState } from '@/components/EmptyState'
 import { PageHeader } from '@/components/PageHeader'
-import { Sparkline } from '@/components/Sparkline'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { LoadingState } from '@/components/ui/loading-state'
+import { MetricCard as SharedMetricCard } from '@/components/ui/metric-card'
 import { Separator } from '@/components/ui/separator'
 import {
   Select,
@@ -40,6 +40,7 @@ import { usePermissions } from '@/hooks/usePermissions'
 import { useCurrentProject } from '@/hooks/useStore'
 import { useToast } from '@/hooks/use-toast'
 import { apiDelete, apiGet, apiPost, apiPut, getApiErrorMessage, isAbortError } from '@/lib/apiClient'
+import { formatWholePercent as formatPercent } from '@/lib/formatters'
 import { cn } from '@/lib/utils'
 import {
   ParticipantUnitsDialog,
@@ -158,10 +159,6 @@ function normalizeDimension(value: string | null): ResponsibilityDimension {
   return value === 'unit' ? 'unit' : 'person'
 }
 
-function formatPercent(value: number) {
-  return `${Math.max(0, Math.min(100, Math.round(value)))}%`
-}
-
 function formatDate(value?: string | null) {
   if (!value) return '未设置'
   return value.slice(0, 10)
@@ -258,41 +255,6 @@ function toParticipantUnitDraft(unit: ParticipantUnitRecord, projectId: string):
   }
 }
 
-function MetricCard({
-  title,
-  value,
-  hint,
-  icon,
-  sparklineData,
-  sparklineColor = '#2563EB',
-}: {
-  title: string
-  value: string | number
-  hint?: string
-  icon: React.ReactNode
-  sparklineData?: number[]
-  sparklineColor?: string
-}) {
-  const normalizedSparkline = (sparklineData && sparklineData.length > 0 ? sparklineData : [0, Number(value) || 0])
-    .map((item) => ({ value: item }))
-
-  return (
-    <Card variant="metric">
-      <CardContent className="space-y-3 pt-5">
-        <div className="flex items-center justify-between">
-          <span className="text-sm font-medium text-slate-500">{title}</span>
-          <span className="text-slate-500">{icon}</span>
-        </div>
-        <div className="flex items-end justify-between gap-4">
-          <div className="text-3xl font-semibold text-slate-900">{value}</div>
-          <Sparkline data={normalizedSparkline} color={sparklineColor} />
-        </div>
-        {hint ? <div className="text-xs text-slate-500">{hint}</div> : null}
-      </CardContent>
-    </Card>
-  )
-}
-
 function TrendSeriesCard({
   row,
 }: {
@@ -302,7 +264,7 @@ function TrendSeriesCard({
   const lastPoint = row.points[row.points.length - 1]
 
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+    <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-[var(--el-1)]">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="truncate text-sm font-medium text-slate-900">{row.label}</div>
@@ -332,7 +294,7 @@ function TrendSeriesCard({
                 
               />
   </TooltipTrigger>
-  <TooltipContent>{`${point.date} 按时率 ${point.completion_rate}%`}</TooltipContent>
+  <TooltipContent>{`${point.date} 按时率 ${formatPercent(point.completion_rate)}`}</TooltipContent>
 </Tooltip>
               <Tooltip>
   <TooltipTrigger asChild>
@@ -342,7 +304,7 @@ function TrendSeriesCard({
                 
               />
   </TooltipTrigger>
-  <TooltipContent>{`${point.date} 逾期率 ${point.delay_rate}%`}</TooltipContent>
+  <TooltipContent>{`${point.date} 逾期率 ${formatPercent(point.delay_rate)}`}</TooltipContent>
 </Tooltip>
             </div>
           ))}
@@ -833,7 +795,7 @@ export default function ResponsibilityView() {
         </Button>
       </PageHeader>
 
-      <div className="sticky top-[88px] z-20 flex flex-wrap gap-2 rounded-2xl border border-slate-200 bg-white/95 px-3 py-2 shadow-sm backdrop-blur">
+      <div className="sticky top-[var(--sticky-toolbar-top)] z-20 flex flex-wrap gap-2 rounded-2xl border border-slate-100 bg-white/95 px-3 py-2 shadow-[var(--el-1)] backdrop-blur">
         <Button
           size="sm"
           variant={activePanel === 'monitoring' ? 'default' : 'ghost'}
@@ -876,38 +838,39 @@ export default function ResponsibilityView() {
         </div>
 
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <MetricCard
+          <SharedMetricCard
             title={dimension === 'person' ? '责任人对象数' : '责任单位对象数'}
             value={summary.total}
             icon={dimension === 'person' ? <Users className="h-5 w-5" /> : <Building2 className="h-5 w-5" />}
-            sparklineData={[Math.max(summary.total - summary.abnormal, 0), summary.total]}
+            sparkline={[Math.max(summary.total - summary.abnormal, 0), summary.total]}
+            tone="primary"
           />
-          <MetricCard
+          <SharedMetricCard
             title="异常主体"
             value={summary.abnormal}
             icon={<AlertTriangle className="h-5 w-5" />}
-            sparklineData={[0, summary.abnormal]}
-            sparklineColor="#DC2626"
+            sparkline={[0, summary.abnormal]}
+            tone={summary.abnormal > 0 ? 'danger' : 'slate'}
           />
-          <MetricCard
+          <SharedMetricCard
             title="关注名单"
             value={summary.watched}
             hint={`${data?.watchlist.filter((item) => item.status === 'active').length ?? 0} 条`}
             icon={<ShieldAlert className="h-5 w-5" />}
-            sparklineData={[0, summary.watched]}
-            sparklineColor="#F97316"
+            sparkline={[0, summary.watched]}
+            tone={summary.watched > 0 ? 'warning' : 'slate'}
           />
-          <MetricCard
+          <SharedMetricCard
             title="待确认恢复正常"
             value={summary.recoveryPending}
             icon={<CheckCheck className="h-5 w-5" />}
-            sparklineData={[0, summary.recoveryPending]}
-            sparklineColor="#10B981"
+            sparkline={[0, summary.recoveryPending]}
+            tone="success"
           />
         </div>
 
         <Card variant="detail">
-          <CardContent className="grid gap-4 pt-6 lg:grid-cols-[1fr,260px]">
+          <CardContent className="grid gap-4 pt-6 lg:grid-cols-[1fr,16.25rem]">
             <Input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
@@ -1127,25 +1090,26 @@ export default function ResponsibilityView() {
         ) : (
           <div className="space-y-4">
             <div className="grid gap-4 md:grid-cols-3">
-              <MetricCard
+              <SharedMetricCard
                 title="趋势对象数"
                 value={trendSummary.seriesCount}
                 icon={<BarChart3 className="h-5 w-5" />}
-                sparklineData={[0, trendSummary.seriesCount]}
+                sparkline={[0, trendSummary.seriesCount]}
+                tone="primary"
               />
-              <MetricCard
+              <SharedMetricCard
                 title="平均按时率"
-                value={`${trendSummary.avgCompletionRate}%`}
+                value={formatPercent(trendSummary.avgCompletionRate)}
                 icon={<CheckCheck className="h-5 w-5" />}
-                sparklineData={[0, trendSummary.avgCompletionRate]}
-                sparklineColor="#10B981"
+                sparkline={[0, trendSummary.avgCompletionRate]}
+                tone="success"
               />
-              <MetricCard
+              <SharedMetricCard
                 title="平均逾期率"
-                value={`${trendSummary.avgDelayRate}%`}
+                value={formatPercent(trendSummary.avgDelayRate)}
                 icon={<AlertTriangle className="h-5 w-5" />}
-                sparklineData={[0, trendSummary.avgDelayRate]}
-                sparklineColor="#DC2626"
+                sparkline={[0, trendSummary.avgDelayRate]}
+                tone={trendSummary.avgDelayRate > 0 ? 'danger' : 'slate'}
               />
             </div>
 

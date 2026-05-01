@@ -1,4 +1,5 @@
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import { EmptyState } from '@/components/EmptyState'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
@@ -39,9 +40,11 @@ export function ValidationPanel({ title, issues, emptyLabel = '当前没有待�
       <Separator />
       <CardContent className="space-y-3 p-5">
         {issues.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-            {emptyLabel}
-          </div>
+          <EmptyState
+            title="暂无校核项"
+            description={emptyLabel}
+            className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 py-8"
+          />
         ) : (
           issues.map((issue) => {
             const Icon = icons[issue.level]

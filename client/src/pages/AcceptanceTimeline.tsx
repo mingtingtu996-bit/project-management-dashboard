@@ -534,7 +534,7 @@ export default function AcceptanceTimeline() {
   if (loading) {
     return (
       <div className="page-shell page-enter" data-testid="acceptance-loading-skeleton">
-        <div className="space-y-4 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="space-y-4 rounded-xl border border-slate-100 bg-white p-6 shadow-[var(--el-1)]">
           <div className="flex items-center justify-between gap-4">
             <div className="space-y-2">
               <Skeleton className="h-6 w-40" />
@@ -579,7 +579,7 @@ export default function AcceptanceTimeline() {
         </DisabledReasonTooltip>
       </PageHeader>
 
-      <section data-testid="acceptance-summary-panel" className="card-unified space-y-4 rounded-xl p-5">
+      <section data-testid="acceptance-summary-panel" className="space-y-4 rounded-card border border-slate-100 bg-white p-5 shadow-[var(--el-1)]">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <div className="text-sm font-semibold text-slate-900">摘要区</div>
@@ -624,7 +624,7 @@ export default function AcceptanceTimeline() {
         </div>
       </section>
 
-      <section data-testid="acceptance-filter-panel" className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      <section data-testid="acceptance-filter-panel" className="rounded-xl border border-slate-100 bg-white p-4 shadow-[var(--el-1)]">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <div className="text-sm font-semibold text-slate-900">筛选区</div>
@@ -832,7 +832,7 @@ export default function AcceptanceTimeline() {
 
 function AcceptanceStageCard({ stage }: { stage: ReturnType<typeof buildAcceptanceStageSummaries>[number] }) {
   return (
-    <Card className={cn('card-unified rounded-xl border-l-4 bg-white', stage.accentClass)} data-testid={`acceptance-stage-card-${stage.key}`}>
+    <Card variant="metric" className={cn('rounded-xl bg-white', stage.accentClass)} data-testid={`acceptance-stage-card-${stage.key}`}>
       <CardContent className="p-5">
         <div className="flex items-start justify-between gap-3">
           <div>
@@ -923,7 +923,7 @@ function TypeManagerDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && handleClose()}>
-      <DialogContent className="max-h-[80vh] max-w-[560px] overflow-y-auto">
+      <DialogContent className="max-h-[80vh] max-w-xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Palette className="h-5 w-5" />
@@ -952,7 +952,7 @@ function TypeManagerDialog({
                   <div key={type.id} className="group flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm" style={{ backgroundColor: `${type.color}20`, color: type.color }}>
                     <span>{type.icon}</span>
                     <span>{type.name}</span>
-                    <Button variant="ghost" type="button" onClick={() => onDeleteType(type.id)} disabled={!canEdit} className="ml-1 rounded-full p-0.5 opacity-0 transition-opacity group-hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-30">
+                    <Button variant="ghost" type="button" onClick={() => onDeleteType(type.id)} disabled={!canEdit} className="ml-1 rounded-full p-0.5 opacity-0 transition-opacity group-hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-50">
                       <CheckCircle2 className="h-4 w-4" />
                     </Button>
                   </div>
@@ -1127,7 +1127,7 @@ function AddPlanDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent className="max-w-[560px]">
+      <DialogContent className="max-w-xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Plus className="h-5 w-5" />

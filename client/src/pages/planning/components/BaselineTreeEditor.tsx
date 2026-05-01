@@ -67,7 +67,7 @@ export function BaselineTreeEditor({
   }, [isDirty, readOnly])
 
   return (
-    <Card className="border-slate-200 shadow-sm" data-testid={testId}>
+    <Card className="surface-card" data-testid={testId}>
       <CardHeader className="space-y-3 bg-slate-50/80">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="space-y-1">

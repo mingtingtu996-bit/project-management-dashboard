@@ -1,6 +1,4 @@
 import { useState, type Dispatch, type SetStateAction } from 'react'
-import { X } from 'lucide-react'
-import { Separator } from '@/components/ui/separator'
 import {
   MILESTONE_NAME_OPTIONS,
   MILESTONE_NAME_TO_TYPE_MAP,
@@ -11,6 +9,14 @@ import type {
   PreMilestoneDialogMode,
 } from '../types'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 
 interface MilestoneDialogProps {
   mode: Extract<PreMilestoneDialogMode, 'create' | 'edit'> | null
@@ -62,15 +68,14 @@ export function MilestoneDialog({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex animate-in items-center justify-center bg-slate-950/50 px-4 py-6 backdrop-blur-[4px] duration-200 fade-in-0">
-      <div className="max-h-[90vh] w-[90%] max-w-[560px] animate-in overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-[var(--el-4)] duration-200 ease-bounce fade-in-0 zoom-in-95">
-        <div className="flex items-center justify-between p-6">
-          <h2 className="text-xl font-semibold text-slate-900">{mode === 'edit' ? '编辑证照' : '新建证照'}</h2>
-          <Button variant="ghost" onClick={handleClose} className="p-2 hover:bg-slate-100 rounded-lg text-slate-500 hover:text-slate-600 transition-colors">
-            <X className="w-5 h-5" />
-          </Button>
-        </div>
-        <Separator />
+    <Dialog open={Boolean(mode)} onOpenChange={(open) => {
+      if (!open) handleClose()
+    }}>
+      <DialogContent className="max-h-[calc(100vh-4rem)] max-w-xl overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>{mode === 'edit' ? '编辑证照' : '新建证照'}</DialogTitle>
+          <DialogDescription>维护证照名称、计划日期、牵头单位和备注。</DialogDescription>
+        </DialogHeader>
 
         <div className="p-6 space-y-4">
           <div>
@@ -96,7 +101,7 @@ export function MilestoneDialog({
                 aria-invalid={Boolean(fieldErrors.name)}
                 aria-describedby={fieldErrors.name ? 'milestone-name-error' : undefined}
                 placeholder="选择或输入证照名称"
-                className={`w-full px-4 py-2 border rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 ${fieldErrors.name ? 'border-red-500' : 'border-slate-300'}`}
+                className={`w-full px-4 py-2 border rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${fieldErrors.name ? 'border-red-500' : 'border-slate-300'}`}
               />
               <datalist id="milestone-name-options">
                 {MILESTONE_NAME_OPTIONS.map((option) => (
@@ -133,7 +138,7 @@ export function MilestoneDialog({
               value={formData.description}
               onChange={(event) => setFormData((previous) => ({ ...previous, description: event.target.value }))}
               rows={3}
-              className="w-full px-4 py-2 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full px-4 py-2 border border-slate-300 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
             />
           </div>
 
@@ -144,7 +149,7 @@ export function MilestoneDialog({
                 type="date"
                 value={formData.planned_start_date}
                 onChange={(event) => setFormData((previous) => ({ ...previous, planned_start_date: event.target.value }))}
-                className="w-full px-4 py-2 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full px-4 py-2 border border-slate-300 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
               />
             </div>
             <div>
@@ -153,7 +158,7 @@ export function MilestoneDialog({
                 type="date"
                 value={formData.planned_end_date}
                 onChange={(event) => setFormData((previous) => ({ ...previous, planned_end_date: event.target.value }))}
-                className="w-full px-4 py-2 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full px-4 py-2 border border-slate-300 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
               />
             </div>
           </div>
@@ -164,7 +169,7 @@ export function MilestoneDialog({
               type="text"
               value={formData.lead_unit}
               onChange={(event) => setFormData((previous) => ({ ...previous, lead_unit: event.target.value }))}
-              className="w-full px-4 py-2 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full px-4 py-2 border border-slate-300 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
             />
           </div>
 
@@ -174,27 +179,24 @@ export function MilestoneDialog({
               value={formData.notes}
               onChange={(event) => setFormData((previous) => ({ ...previous, notes: event.target.value }))}
               rows={2}
-              className="w-full px-4 py-2 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full px-4 py-2 border border-slate-300 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
             />
           </div>
         </div>
 
-        <Separator />
-        <div className="flex justify-end gap-3 p-6">
-          <Button variant="ghost"
+        <DialogFooter className="gap-3">
+          <Button variant="outline"
             onClick={handleClose}
-            className="px-4 py-2 border border-slate-300 rounded-xl hover:bg-slate-50"
           >
             取消
           </Button>
-          <Button variant="ghost"
+          <Button
             onClick={handleSave}
-            className="px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700"
           >
             保存
           </Button>
-        </div>
-      </div>
-    </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
