@@ -112,10 +112,10 @@ export default function Header() {
         </div>
 
         {currentProject && isProjectPage ? (
-          <div className="hidden min-w-0 items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm text-slate-700 lg:flex">
-            <span className="h-2 w-2 rounded-full bg-emerald-500" />
+          <div className="hidden min-w-0 max-w-80 items-center gap-2 overflow-hidden rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm text-slate-700 lg:flex xl:max-w-96">
+            <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-500" />
             <span className="max-w-40 truncate font-medium xl:max-w-56">{currentProject.name}</span>
-            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
+            <span className="shrink-0 whitespace-nowrap rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium leading-5 text-slate-600">
               {getProjectRoleLabel(permissionLevel)}
             </span>
           </div>

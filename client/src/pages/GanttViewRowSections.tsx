@@ -119,13 +119,13 @@ export function TaskRowIdentityCell({
         />
         </div>
 
-        <div className="flex-shrink-0 w-5 mr-1">
+        <div className="flex-shrink-0 w-7 mr-1">
         {hasChildren ? (
           <Button
             variant="ghost"
             aria-label={`${isCollapsed ? '展开' : '收起'}任务 ${taskTitle}`}
             onClick={() => onToggleCollapse(task.id)}
-            className="text-slate-500 hover:text-slate-700 transition-colors"
+            className="h-7 w-7 p-0 text-slate-500 transition-colors hover:text-slate-700"
           >
             {isCollapsed ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
           </Button>
@@ -143,7 +143,7 @@ export function TaskRowIdentityCell({
           onOpenMilestoneDialog(task)
         }}
         aria-label={task.is_milestone ? `修改任务 ${taskTitle} 的里程碑设置` : `将任务 ${taskTitle} 设为里程碑`}
-        className={`flex-shrink-0 p-0.5 rounded transition-colors hover:bg-accent mr-1.5 ${
+        className={`h-7 w-7 flex-shrink-0 rounded p-0 transition-colors hover:bg-accent mr-1.5 ${
           task.is_milestone
             ? MILESTONE_LEVEL_CONFIG[task.milestone_level ?? 1]?.color
             : 'text-slate-500 hover:text-slate-700'
@@ -432,13 +432,14 @@ export function TaskRowDetailCells({
 
   return (
     <>
-      <div className="flex-shrink-0 w-24">
+      <div className="flex-shrink-0 w-36">
         <span
           data-testid={`gantt-task-status-${task.id}`}
-          className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${bizStatus.cls}`}
+          title={bizStatus.badge ? `${bizStatus.label} · ${bizStatus.badge.text}` : bizStatus.label}
+          className={`inline-flex max-w-full items-center gap-1 overflow-hidden rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap ${bizStatus.cls}`}
         >
-          {bizStatus.label}
-          {bizStatus.badge && <span>· {bizStatus.badge.text}</span>}
+          <span className="min-w-0 truncate">{bizStatus.label}</span>
+          {bizStatus.badge && <span className="shrink-0">· {bizStatus.badge.text}</span>}
         </span>
       </div>
 

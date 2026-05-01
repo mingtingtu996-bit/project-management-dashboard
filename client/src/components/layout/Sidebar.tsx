@@ -236,21 +236,21 @@ export default function Sidebar() {
             {sidebarOpen ? <ChevronLeft className="h-5 w-5" /> : <ChevronRight className="h-5 w-5" />}
           </Button>
         </div>
-        <Separator className="border-slate-800" />
+        <Separator className="shrink-0 border-slate-800" />
 
-        <nav className="flex-1 overflow-y-auto px-3 py-4">
+        <nav className="min-h-0 flex-1 overflow-y-auto px-3 py-4 pb-6">
           <ul className="space-y-1.5">
             {filteredNavigation.map(renderTopNavItem)}
           </ul>
 
           {sidebarOpen && currentProject && isProjectPage && (
-            <div className="mt-6 rounded-xl border border-slate-800 bg-slate-900/80 p-3">
+            <div className="mt-6 rounded-xl border border-slate-800 bg-slate-900/80 p-3 [@media(max-height:820px)]:mt-4">
               <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-300">{'\u5f53\u524d\u9879\u76ee'}</div>
                 <div className="truncate text-sm font-semibold text-white">{currentProject.name}</div>
-              <div className="mt-1 text-xs text-slate-500">{currentProject.description || PROJECT_NAVIGATION_LABELS.projectHome}</div>
+              <div className="mt-1 text-xs text-slate-500 [@media(max-height:820px)]:hidden">{currentProject.description || PROJECT_NAVIGATION_LABELS.projectHome}</div>
               <Link
                 to="/company"
-                className="mt-3 inline-flex items-center gap-1 rounded-lg text-xs font-medium text-slate-300 outline-none transition-colors hover:text-white focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950"
+                className="mt-3 inline-flex items-center gap-1 rounded-lg text-xs font-medium text-slate-300 outline-none transition-colors hover:text-white focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950 [@media(max-height:820px)]:hidden"
               >
                 <ArrowLeft className="h-3.5 w-3.5" />
                 {'\u8fd4\u56de\u516c\u53f8\u9a71\u9a76\u8231'}
@@ -260,8 +260,8 @@ export default function Sidebar() {
 
         </nav>
 
-        <Separator className="border-slate-800" />
-        <div className="p-3">
+        <Separator className="shrink-0 border-slate-800" />
+        <div className="shrink-0 p-3">
           <Link
             to="/company?create=1"
             className={cn(
