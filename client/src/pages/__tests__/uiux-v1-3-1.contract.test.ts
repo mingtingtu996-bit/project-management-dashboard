@@ -59,7 +59,8 @@ describe('v1.3.1 UI/UX contract', () => {
 
   it('keeps dashboard and planning information architecture fixes', () => {
     const dashboardSource = readSource('src/pages/Dashboard.tsx')
-    expect(dashboardSource).toContain('metric.sparkline.length > 1')
+    expect(dashboardSource).toContain('sparkline={metric.sparkline}')
+    expect(readSource('src/components/ui/metric-card.tsx')).toContain('sparklineData.length > 1')
     expect(dashboardSource).toContain('今日事项已全部处理')
     expect(dashboardSource).toContain('需后端补充昨日待办数')
 
