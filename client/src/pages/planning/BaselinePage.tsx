@@ -32,7 +32,7 @@ import type {
   PlanningDraftLockRecord,
   RevisionPoolCandidate,
 } from '@/types/planning'
-import { AlertTriangle, Calendar, FileDiff, FilePlus2, FileSpreadsheet, FolderGit2, History, LockKeyhole, Pencil } from 'lucide-react'
+import { AlertTriangle, Calendar, FileDiff, FilePlus2, FileSpreadsheet, FolderGit2, History, LockKeyhole } from 'lucide-react'
 
 import { BaselineBottomBar } from './components/BaselineBottomBar'
 import { BaselineConfirmDialog, type BaselineConfirmState } from './components/BaselineConfirmDialog'
@@ -131,25 +131,23 @@ function BaselineEditableCellFrame({
   readOnly: boolean
   children: ReactNode
 }) {
+  if (readOnly) {
+    return (
+      <span className="block min-w-0 truncate text-sm text-slate-700" title={label}>
+        {label}
+      </span>
+    )
+  }
+
   return (
     <div
-      className="group/baseline-cell space-y-1"
+      className="min-w-0"
+      title={label}
       onDoubleClick={() => {
-        if (!readOnly) focusBaselineEditorCell(cellKey)
+        focusBaselineEditorCell(cellKey)
       }}
     >
-      <div className="flex min-w-0 items-center gap-1 text-xs text-slate-500">
-        <span className="truncate">{label}</span>
-        {!readOnly ? (
-          <Pencil className="h-3.5 w-3.5 text-slate-500 opacity-0 transition-opacity group-hover/baseline-cell:opacity-70" />
-        ) : null}
-      </div>
       {children}
-      {!readOnly ? (
-        <div className="hidden text-xs text-slate-500 group-focus-within/baseline-cell:block">
-          Tab 下一格 · Enter 确认 · Esc 取消
-        </div>
-      ) : null}
     </div>
   )
 }

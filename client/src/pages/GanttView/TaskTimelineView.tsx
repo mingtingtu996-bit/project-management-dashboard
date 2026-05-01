@@ -55,7 +55,7 @@ interface TaskTimelineViewProps {
 
 const DAY_MS = 24 * 60 * 60 * 1000
 const BODY_HEIGHT = 560
-const ROW_HEIGHT = 40
+const ROW_HEIGHT = 48
 const OVERSCAN = 10
 const VIRTUALIZE_AFTER = 200
 const TIMELINE_LIMIT = 500
@@ -299,7 +299,7 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
   ))
 
   const isDesktop = screenWidth >= 1024
-  const leftPaneWidth = screenWidth >= 1440 ? 360 : 300
+  const leftPaneWidth = screenWidth >= 1440 ? 520 : 420
   const pxPerDay = PX_PER_DAY[scale]
   const shouldVirtualize = rows.length > VIRTUALIZE_AFTER
 
@@ -608,7 +608,7 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
                         role="button"
                         tabIndex={0}
                         className={cn(
-                          'absolute left-0 right-0 grid h-10 grid-cols-[minmax(0,1fr)_7rem_7rem] items-center gap-3 border-b border-slate-100 px-4 text-left transition-colors',
+                          'absolute left-0 right-0 grid h-12 grid-cols-[minmax(0,1fr)_7rem_7rem] items-center gap-3 border-b border-slate-100 px-4 text-left transition-colors',
                           selected && 'bg-blue-50',
                           highlighted && 'bg-orange-50 ring-1 ring-inset ring-orange-300',
                           !selected && !highlighted && layout.index % 2 === 1 && 'bg-slate-50/70',
@@ -642,19 +642,19 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
                           ) : (
                             <span className="h-6 w-6 shrink-0" />
                           )}
-                          <div className="min-w-0">
+                          <div className="min-w-0 leading-tight">
                             <div className="truncate text-sm font-medium text-slate-900">
                               {layout.task.title || layout.task.name || '未命名任务'}
                             </div>
-                            <div className="flex flex-wrap items-center gap-2 pt-0.5 text-xs text-slate-500">
-                              {layout.task.wbs_code ? <span>WBS {layout.task.wbs_code}</span> : null}
-                              {layout.task.is_milestone ? <span>里程碑</span> : null}
-                              {layout.missingBaseline ? <span className="text-amber-600">未映射基线</span> : null}
+                            <div className="flex min-w-0 items-center gap-2 pt-0.5 text-xs text-slate-500">
+                              {layout.task.wbs_code ? <span className="shrink-0">WBS {layout.task.wbs_code}</span> : null}
+                              {layout.task.is_milestone ? <span className="shrink-0">里程碑</span> : null}
+                              {layout.missingBaseline ? <span className="shrink-0 text-amber-600">未映射</span> : null}
                             </div>
                           </div>
                         </div>
-                        <span className="truncate text-sm text-slate-600">{getUnitLabel(layout.task)}</span>
-                        <span className="truncate text-sm text-slate-600">{getAssigneeLabel(layout.task)}</span>
+                        <span className="min-w-0 truncate text-sm text-slate-600">{getUnitLabel(layout.task)}</span>
+                        <span className="min-w-0 truncate text-sm text-slate-600">{getAssigneeLabel(layout.task)}</span>
                       </div>
                     )
                   })}
@@ -743,7 +743,7 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
                             <>
                               <rect
                                 x={mainX}
-                                y={layout.top + 8}
+                                y={layout.top + 11}
                                 width={mainWidth}
                                 height={14}
                                 rx={7}
@@ -755,7 +755,7 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
                               {progressWidth > 0 ? (
                                 <rect
                                   x={mainX}
-                                  y={layout.top + 8}
+                                  y={layout.top + 11}
                                   width={progressWidth}
                                   height={14}
                                   rx={7}
@@ -768,7 +768,7 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
 
                           {layout.task.is_milestone && milestoneX !== null ? (
                             <polygon
-                              points={`${milestoneX},${layout.top + 8} ${milestoneX + 8},${layout.top + 16} ${milestoneX},${layout.top + 24} ${milestoneX - 8},${layout.top + 16}`}
+                              points={`${milestoneX},${layout.top + 10} ${milestoneX + 8},${layout.top + 18} ${milestoneX},${layout.top + 26} ${milestoneX - 8},${layout.top + 18}`}
                               fill={GANTT_BAR_PALETTE.milestone}
                               stroke={layout.mainTone.stroke}
                               strokeWidth={1.5}
@@ -778,7 +778,7 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
                           {compareX !== null && compareWidth > 0 ? (
                             <rect
                               x={compareX}
-                              y={compareMode === 'baseline' ? layout.top + 27 : layout.top + 26}
+                              y={compareMode === 'baseline' ? layout.top + 33 : layout.top + 32}
                               width={compareWidth}
                               height={compareMode === 'baseline' ? 5 : 6}
                               rx={compareMode === 'baseline' ? 2.5 : 3}

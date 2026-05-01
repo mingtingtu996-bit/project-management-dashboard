@@ -33,19 +33,40 @@ export function TimelineScaleHeader({
             transformOrigin: 'left center',
           }}
         >
-          {segments.map((segment, index) => (
-            <div
-              key={segment.key}
-              className={cn(
-                'absolute inset-y-0 border-r border-slate-200 px-2 py-2 text-slate-600',
-                index % 2 === 0 ? 'bg-slate-50' : 'bg-white/70',
-              )}
-              style={{ left: segment.left, width: segment.width }}
-            >
-              <div className="truncate text-xs font-semibold text-slate-900">{segment.label}</div>
-              {segment.hint ? <div className="truncate pt-1 text-xs text-slate-500">{segment.hint}</div> : null}
-            </div>
-          ))}
+          {segments.map((segment, index) => {
+            const isNarrow = segment.width < 36
+            const compactLabel = isNarrow && segment.label.includes('/')
+              ? segment.label.split('/').at(-1) || segment.label
+              : segment.label
+
+            return (
+              <div
+                key={segment.key}
+                className={cn(
+                  'absolute inset-y-0 border-r border-slate-200 text-slate-600',
+                  isNarrow ? 'px-0.5 py-1 text-center' : 'px-2 py-2',
+                  index % 2 === 0 ? 'bg-slate-50' : 'bg-white/70',
+                )}
+                style={{ left: segment.left, width: segment.width }}
+                title={segment.hint ? `${segment.label} ${segment.hint}` : segment.label}
+              >
+                <div className={cn(
+                  'truncate font-semibold text-slate-900',
+                  isNarrow ? 'text-[0.6875rem] leading-4' : 'text-xs',
+                )}>
+                  {compactLabel}
+                </div>
+                {segment.hint ? (
+                  <div className={cn(
+                    'truncate text-slate-500',
+                    isNarrow ? 'pt-0 text-[0.625rem] leading-3' : 'pt-1 text-xs',
+                  )}>
+                    {segment.hint}
+                  </div>
+                ) : null}
+              </div>
+            )
+          })}
           {todayX !== null ? (
             <>
               <div className="absolute inset-y-0 w-px bg-rose-400/80" style={{ left: todayX }} />

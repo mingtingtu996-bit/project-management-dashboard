@@ -16,7 +16,6 @@ import {
   DropdownMenuCheckboxItem,
 } from '@/components/ui/dropdown-menu'
 import {
-  SHARED_TREE_LAYOUT,
   TreeDiamondIcon,
   getTreeIndentPx,
   getTreeRowHeightClass,
@@ -90,8 +89,8 @@ const BASE_COLUMNS = [
   { key: 'sequence', label: '序号', width: '4rem', className: 'text-center tabular-nums' },
   { key: 'wbs', label: 'WBS', width: '6rem' },
   { key: 'title', label: '任务名', width: 'minmax(13.75rem,1.6fr)' },
-  { key: 'start', label: '开始', width: '112px', className: 'text-right tabular-nums' },
-  { key: 'end', label: '结束', width: '112px', className: 'text-right tabular-nums' },
+  { key: 'start', label: '开始', width: '9rem', className: 'text-right tabular-nums' },
+  { key: 'end', label: '结束', width: '9rem', className: 'text-right tabular-nums' },
   { key: 'duration', label: '工期', width: '5.25rem', className: 'text-right tabular-nums' },
   { key: 'status', label: '状态', width: '8.25rem' },
   { key: 'assignee', label: '责任人', width: '9.25rem' },
@@ -501,13 +500,15 @@ export function PlanningTreeView({
               {filteredAndSortedRows.map((row) => {
                 const rowKind: SharedTreeRowKind =
                   row.rowType ?? (row.isMilestone ? 'milestone' : 'leaf')
+                const rowHeightKind: SharedTreeRowKind =
+                  row.titleCell || row.startCell || row.endCell || row.progressCell ? 'edit' : rowKind
 
                 return (
                   <div
                     key={row.id}
                     className={cn(
                       'group grid items-center gap-3 px-4 transition-colors hover:bg-slate-50',
-                      getTreeRowHeightClass(rowKind),
+                      getTreeRowHeightClass(rowHeightKind),
                       row.selected && 'bg-blue-50/60',
                       row.isCritical && rowKind !== 'milestone' && 'border-l-2 border-l-sky-400',
                       rowKind === 'milestone' && 'border-l-2 border-l-amber-400 bg-amber-50/30',
@@ -540,7 +541,7 @@ export function PlanningTreeView({
                   </div>
 
                   <div
-                    className={cn('min-w-0 shrink-0', SHARED_TREE_LAYOUT.firstColumnClass)}
+                    className="min-w-0"
                     style={{ paddingLeft: `${getTreeIndentPx(row.depth, 1)}px` }}
                   >
                     {row.titleCell ? (
