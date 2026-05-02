@@ -1,23 +1,23 @@
 # 项目状态报告
 
-**更新时间**: 2026-05-01 23:44:13
-**Git 提交**: 9961009 - test: align dashboard metric contract
+**更新时间**: 2026-05-02 15:01:58
+**Git 提交**: aa88a0c - fix-planning-timeline-overlaps
 
 ## 📊 当前统计
 
 | 指标 | 数量 |
 |-----|-----|
-| 总文件数 | 1253 |
-| 代码行数 | 98422 |
-| 最近提交 | 9961009 - test: align dashboard metric contract (60 minutes ago) |
+| 总文件数 | 1252 |
+| 代码行数 | 102097 |
+| 最近提交 | aa88a0c - fix-planning-timeline-overlaps (14 hours ago) |
 
 ## 🔄 最近变更
 
-9961009 test: align dashboard metric contract
+aa88a0c fix-planning-timeline-overlaps
+18bc0ba fix-layout-overlaps
+76c8fc6 test: align dashboard metric contract
 7f996ad fix: complete uiux v1.3.3 structural cleanup
 11bd8d2 test: align v1.3.2 client quality gates
-6b00474 fix: complete uiux v1.3.2 release fixes
-ccf75ee fix: apply uiux v1.3.1 refinements
 
 ## 📁 项目结构
 
