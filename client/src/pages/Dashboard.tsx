@@ -25,8 +25,11 @@ import {
 import { Breadcrumb } from '@/components/Breadcrumb'
 import { ChartAccessibleWrapper } from '@/components/ChartAccessibleWrapper'
 import DashboardCompareCard from '@/components/DashboardCompareCard'
+import { DashboardHealthCards } from '@/components/DashboardHealthCards'
+import DashboardMilestoneCard from '@/components/DashboardMilestoneCard'
 import { DataConfidenceBreakdown } from '@/components/DataConfidenceBreakdown'
 import { EmptyState } from '@/components/EmptyState'
+import RecentTasksCard from '@/components/RecentTasksCard'
 import { CardHead } from '@/components/ui/card-head'
 import { ChartTooltip, chartTooltipCursor } from '@/components/ui/chart-tooltip'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -100,6 +103,23 @@ type TodayLiveItem = {
   detail: string
   meta: string
   created_at?: string
+}
+
+type DashboardMilestoneStatus = 'completed' | 'pending' | 'delayed'
+
+type DashboardMilestonePanelItem = {
+  id: string
+  name: string
+  dueDate: string
+  status: DashboardMilestoneStatus
+  progress?: number
+  projectId: string
+}
+
+function toDashboardMilestoneStatus(status: string, daysRemaining?: number): DashboardMilestoneStatus {
+  if (status === 'completed') return 'completed'
+  if (status === 'overdue' || (typeof daysRemaining === 'number' && daysRemaining < 0)) return 'delayed'
+  return 'pending'
 }
 
 function normalizeWeeklyDigestData<T extends { project_id?: string | null }>(value: T | null | undefined): T | null {
@@ -876,6 +896,7 @@ export default function Dashboard() {
   const { toast } = useToast()
   const currentProject = useStore((state) => state.currentProject)
   const tasks = useStore((state) => state.tasks)
+  const risks = useStore((state) => state.risks)
   const warnings = useStore((state) => state.warnings)
   const issueRows = useStore((state) => state.issueRows)
   const problemRows = useStore((state) => state.problemRows)
@@ -900,6 +921,53 @@ export default function Dashboard() {
     () => tasks.filter((task) => task.project_id === currentProject?.id),
     [currentProject?.id, tasks],
   )
+  const scopedRisks = useMemo(
+    () => risks.filter((risk) => risk.project_id === currentProject?.id),
+    [currentProject?.id, risks],
+  )
+  const focusTasks = useMemo(
+    () => scopedTasks.filter((task) => Boolean(task.id)).map((task) => ({ ...task, id: task.id || '' })),
+    [scopedTasks],
+  )
+  const milestonePanelData = useMemo(() => {
+    const overview = summaryData?.milestoneOverview
+    const items = overview?.items ?? []
+    const recentMilestones: DashboardMilestonePanelItem[] = items
+      .map((item) => ({
+        id: item.id,
+        name: item.name,
+        dueDate: item.targetDate || item.current_planned_date || item.planned_date || '',
+        status: toDashboardMilestoneStatus(item.status),
+        progress: item.progress,
+        projectId,
+      }))
+      .sort((left, right) => {
+        if (left.status !== right.status) {
+          const order: Record<DashboardMilestoneStatus, number> = { delayed: 0, pending: 1, completed: 2 }
+          return order[left.status] - order[right.status]
+        }
+        return new Date(left.dueDate || 0).getTime() - new Date(right.dueDate || 0).getTime()
+      })
+
+    if (recentMilestones.length === 0 && summaryData?.nextMilestone) {
+      recentMilestones.push({
+        id: summaryData.nextMilestone.id,
+        name: summaryData.nextMilestone.name,
+        dueDate: summaryData.nextMilestone.targetDate,
+        status: toDashboardMilestoneStatus(summaryData.nextMilestone.status, summaryData.nextMilestone.daysRemaining),
+        progress: 0,
+        projectId,
+      })
+    }
+
+    return {
+      completed: overview?.stats.completed ?? summaryData?.completedMilestones ?? 0,
+      total: overview?.stats.total ?? summaryData?.totalMilestones ?? recentMilestones.length,
+      upcoming: overview?.stats.upcomingSoon ?? recentMilestones.filter((item) => item.status === 'pending').length,
+      overdue: overview?.stats.overdue ?? recentMilestones.filter((item) => item.status === 'delayed').length,
+      recentMilestones,
+    }
+  }, [projectId, summaryData])
   const liveWarnings = useMemo(
     () =>
       normalizeWarningRows(warnings).filter(
@@ -1198,6 +1266,12 @@ export default function Dashboard() {
             <TabsTrigger value="trend" className="relative rounded-none bg-transparent px-0 py-3 text-sm font-medium text-slate-500 shadow-none after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-slate-900 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600">
               进度趋势
             </TabsTrigger>
+            <TabsTrigger value="milestone" className="relative rounded-none bg-transparent px-0 py-3 text-sm font-medium text-slate-500 shadow-none after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-slate-900 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600">
+              里程碑
+            </TabsTrigger>
+            <TabsTrigger value="execution" className="relative rounded-none bg-transparent px-0 py-3 text-sm font-medium text-slate-500 shadow-none after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-slate-900 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600">
+              执行概况
+            </TabsTrigger>
             <TabsTrigger value="today" className="relative rounded-none bg-transparent px-0 py-3 text-sm font-medium text-slate-500 shadow-none after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-slate-900 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600">
               今日动态
             </TabsTrigger>
@@ -1214,6 +1288,36 @@ export default function Dashboard() {
                 </div>
                 <div className="col-span-12">
                   <DashboardCompareCard projectId={projectId} />
+                </div>
+              </div>
+            </TabsContent>
+
+            <TabsContent value="milestone" className="pt-5">
+              <div className="grid grid-cols-12 gap-5">
+                <div className="col-span-12">
+                  <DashboardMilestoneCard
+                    completed={milestonePanelData.completed}
+                    total={milestonePanelData.total}
+                    upcoming={milestonePanelData.upcoming}
+                    overdue={milestonePanelData.overdue}
+                    recentMilestones={milestonePanelData.recentMilestones}
+                  />
+                </div>
+              </div>
+            </TabsContent>
+
+            <TabsContent value="execution" className="pt-5">
+              <div className="grid grid-cols-12 gap-5">
+                <div className="col-span-12">
+                  <DashboardHealthCards
+                    summary={summaryData}
+                    tasks={scopedTasks}
+                    risks={scopedRisks}
+                    projectId={projectId}
+                  />
+                </div>
+                <div className="col-span-12">
+                  <RecentTasksCard projectId={projectId} tasks={focusTasks} />
                 </div>
               </div>
             </TabsContent>
