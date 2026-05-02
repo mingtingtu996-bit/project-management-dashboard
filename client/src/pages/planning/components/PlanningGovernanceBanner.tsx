@@ -44,7 +44,7 @@ export function PlanningGovernanceBanner({
   void errorMessage
 
   return (
-    <Card data-testid="planning-governance-banner" className="border-blue-200 bg-slate-950 text-white shadow-sm">
+    <Card data-testid="planning-governance-banner" className="border-blue-200 bg-slate-950 text-white shadow-[var(--el-1)]">
       <CardContent className="flex flex-col gap-4 p-5 lg:flex-row lg:items-center lg:justify-between">
         <div className="space-y-2">
           <div className="flex flex-wrap items-center gap-2">

@@ -47,6 +47,9 @@
     --dialog-sm: 440px;
     --dialog-md: 560px;
     --dialog-lg: 720px;
+    --dialog-sm-width: var(--dialog-sm);
+    --dialog-md-width: var(--dialog-md);
+    --dialog-lg-width: var(--dialog-lg);
     --dialog-offset: 64px;
 
     /* ── 企业品牌色 CSS 变量 (L15) ───────────────────────── */
@@ -93,6 +96,14 @@
 
   .page-stack {
     @apply space-y-6;
+  }
+
+  .page-section-grid {
+    @apply grid gap-4;
+  }
+
+  .content-sidebar-grid {
+    @apply grid gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(300px,1fr)];
   }
 
   .section-stack {
@@ -144,7 +155,7 @@
   }
 
   .shell-surface {
-    @apply rounded-card border border-slate-100 bg-white shadow-sm;
+    @apply rounded-card border border-slate-100 bg-white shadow-[var(--el-1)];
   }
 
   .shell-section-title {

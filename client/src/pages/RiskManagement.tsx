@@ -1834,19 +1834,16 @@ export default function RiskManagement() {
 
   if (!projectId) {
     return (
-      <div className="min-h-screen bg-slate-50">
-        <div className="page-shell">
+      <div className="page-shell">
           <Breadcrumb items={[{ label: '公司驾驶舱', href: '/company' }, { label: '风险管理' }]} />
           <PageHeader eyebrow="风险管理" title="风险与问题" subtitle="预警 → 风险 → 问题全链路跟踪与处置" />
           <EmptyState icon={AlertTriangle} title="未找到当前项目" action={<Button onClick={goBack}><ArrowLeft className="mr-2 h-4 w-4" />返回</Button>} />
-        </div>
       </div>
     )
   }
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      <div className="page-shell">
+    <div className="page-shell">
         <Breadcrumb
           items={[
             { label: projectName, href: `/projects/${projectId}/dashboard` },
@@ -2063,7 +2060,7 @@ export default function RiskManagement() {
                   action={<ReadOnlyGuard action="create" message="请登录后新建问题"><Button size="sm" onClick={() => { resetManualForms(); setDialogState({ type: 'create-manual-issue' }) }} data-testid="manual-issue-create" disabled={!canEdit}>新建问题</Button></ReadOnlyGuard>}
                 />
                 {escalatableObstacles.length > 0 ? (
-                  <Card data-testid="obstacle-escalation-panel" className="border-amber-200 bg-amber-50 shadow-sm">
+                  <Card data-testid="obstacle-escalation-panel" className="border-amber-200 bg-amber-50 shadow-[var(--el-1)]">
                     <CardHeader className="pb-3">
                       <CardTitle className="text-base">长期阻碍待上卷</CardTitle>
                     </CardHeader>
@@ -2131,12 +2128,10 @@ export default function RiskManagement() {
           </CardContent>
         </Card>
 
-      </div>
-
       <Dialog open={dialogState !== null} onOpenChange={(open) => !open && setDialogState(null)}>
-        {dialogState?.type === 'convert-risk' ? <DialogContent className="max-w-xl"><DialogHeader><DialogTitle>转为问题</DialogTitle><DialogDescription className="sr-only">转为问题</DialogDescription></DialogHeader><div className="space-y-3 text-sm text-slate-600"><div><span className="font-medium text-slate-900">标题：</span>{dialogState.row.title}</div>{dialogState.row.description ? <div>{dialogState.row.description}</div> : null}</div><DialogFooter><Button variant="outline" onClick={() => setDialogState(null)} disabled={saving}>取消</Button><Button onClick={() => void handleConvertRiskToIssue()} loading={saving}>确认转入</Button></DialogFooter></DialogContent> : null}
+        {dialogState?.type === 'convert-risk' ? <DialogContent className="max-w-[var(--dialog-md-width)]"><DialogHeader><DialogTitle>转为问题</DialogTitle><DialogDescription className="sr-only">转为问题</DialogDescription></DialogHeader><div className="space-y-3 text-sm text-slate-600"><div><span className="font-medium text-slate-900">标题：</span>{dialogState.row.title}</div>{dialogState.row.description ? <div>{dialogState.row.description}</div> : null}</div><DialogFooter><Button variant="outline" onClick={() => setDialogState(null)} disabled={saving}>取消</Button><Button onClick={() => void handleConvertRiskToIssue()} loading={saving}>确认转入</Button></DialogFooter></DialogContent> : null}
         {dialogState?.type === 'create-manual-risk' ? (
-          <DialogContent className="max-w-xl">
+          <DialogContent className="max-w-[var(--dialog-md-width)]">
             <DialogHeader>
               <DialogTitle>新建风险</DialogTitle>
               <DialogDescription className="sr-only">新建风险</DialogDescription>
@@ -2180,7 +2175,7 @@ export default function RiskManagement() {
           </DialogContent>
         ) : null}
         {dialogState?.type === 'create-manual-issue' ? (
-          <DialogContent className="max-w-xl">
+          <DialogContent className="max-w-[var(--dialog-md-width)]">
             <DialogHeader>
               <DialogTitle>新建问题</DialogTitle>
               <DialogDescription className="sr-only">新建问题</DialogDescription>
@@ -2232,7 +2227,7 @@ export default function RiskManagement() {
         {detailDialog ? (
           <DialogContent
             data-testid="risk-detail-dialog"
-            className="left-auto right-0 top-0 h-screen max-w-3xl translate-x-0 translate-y-0 rounded-none border-l border-slate-200 p-0 shadow-[var(--el-4)] sm:max-w-3xl"
+            className="left-auto right-0 top-0 h-screen max-w-[var(--dialog-lg-width)] translate-x-0 translate-y-0 rounded-none border-l border-slate-200 p-0 shadow-[var(--el-4)] sm:max-w-[var(--dialog-lg-width)]"
           >
             <div className="flex h-full flex-col">
               <DialogHeader className="px-6 py-5">
@@ -2250,7 +2245,7 @@ export default function RiskManagement() {
               </DialogHeader>
               <Separator />
 
-              <div className="flex-1 space-y-6 overflow-y-auto px-6 py-5">
+              <div className="flex-1 space-y-8 overflow-y-auto px-6 py-5">
                 {detailDialog.entityType === 'warning' ? (
                   <>
                     <div className="space-y-3">
@@ -2268,7 +2263,7 @@ export default function RiskManagement() {
                         <p className="mt-2 text-sm leading-6 text-slate-500">{detailDialog.item.description}</p>
                       </div>
                     </div>
-                    <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="grid gap-4 sm:grid-cols-2">
                       <DetailField label="归类方式" value={getWarningCategory(detailDialog.item)} />
                       <DetailField label="来源口径" value={getWarningSourceLabel(detailDialog.item)} />
                       <DetailField label="任务归属" value={buildTaskBucket(detailDialog.item.task_id)} />
@@ -2305,7 +2300,7 @@ export default function RiskManagement() {
                       ) : null}
                       {renderPendingManualCloseBanner(detailDialog.row, 'risk')}
                     </div>
-                    <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="grid gap-4 sm:grid-cols-2">
                       <DetailField label="任务归属" value={buildTaskBucket(detailDialog.row.taskId)} />
                       <DetailField label="来源口径" value={detailDialog.row.sourceLabel} />
                       <DetailField label="链路标识" value={detailDialog.row.chainId || '未挂链'} />
@@ -2344,7 +2339,7 @@ export default function RiskManagement() {
                       </div>
                       {renderPendingManualCloseBanner(detailDialog.row, 'issue')}
                     </div>
-                    <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="grid gap-4 sm:grid-cols-2">
                       <DetailField label="任务归属" value={buildTaskBucket(detailDialog.row.taskId)} />
                       <DetailField label="来源口径" value={detailDialog.row.sourceLabel} />
                       <DetailField label="链路标识" value={detailDialog.row.chainId || '未挂链'} />
@@ -2398,7 +2393,7 @@ export default function RiskManagement() {
 
       <Dialog open={chainDialog !== null} onOpenChange={(open) => !open && setChainDialog(null)}>
         {chainDialog && chainDialogItems ? (
-          <DialogContent className="max-w-3xl" data-testid="risk-chain-dialog">
+          <DialogContent className="max-w-[var(--dialog-lg-width)]" data-testid="risk-chain-dialog">
             <DialogHeader>
               <DialogTitle>全链查看</DialogTitle>
               <DialogDescription>链路标识 {chainDialog.chainId}</DialogDescription>
@@ -2717,7 +2712,7 @@ function WorkspaceFilterBar({
         </div>
         <Badge variant="secondary">当前 {total} 条</Badge>
       </div>
-      <div className="grid gap-3 xl:grid-cols-3">
+      <div className="grid gap-4 xl:grid-cols-3">
         <FilterChipGroup
           label="等级"
           options={[

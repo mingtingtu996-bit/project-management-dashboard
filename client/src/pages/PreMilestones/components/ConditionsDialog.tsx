@@ -59,7 +59,7 @@ export function ConditionsDialog({
     <Dialog open={Boolean(selectedMilestone)} onOpenChange={(open) => {
       if (!open) onClose()
     }}>
-      <DialogContent className="max-h-[calc(100vh-4rem)] max-w-3xl overflow-y-auto">
+      <DialogContent className="max-h-[calc(100vh-4rem)] max-w-[var(--dialog-lg-width)] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{selectedMilestone.name} - 前置条件</DialogTitle>
           <DialogDescription>管理证照办理所需的各项前置条件。</DialogDescription>

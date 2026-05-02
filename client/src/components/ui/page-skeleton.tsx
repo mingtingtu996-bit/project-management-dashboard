@@ -3,7 +3,7 @@ import { Skeleton } from './skeleton'
 
 function ShellSkeletonHeader() {
   return (
-    <div className="flex flex-col gap-4 rounded-2xl border border-slate-100 bg-white/90 p-6 shadow-sm md:flex-row md:items-end md:justify-between">
+    <div className="flex flex-col gap-4 rounded-2xl border border-slate-100 bg-white/90 p-5 shadow-[var(--el-1)] md:flex-row md:items-end md:justify-between">
       <div className="space-y-3">
         <Skeleton className="h-5 w-24 rounded-full" />
         <Skeleton className="h-9 w-56 rounded-2xl" />
@@ -48,13 +48,13 @@ function ShellCardGrid() {
 
 export function PageSkeleton() {
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <ShellSkeletonHeader />
 
       <div className="grid gap-4 md:grid-cols-3">
         {[1, 2, 3].map((item) => (
           <Card key={item} variant="surface">
-            <CardContent className="space-y-4 p-6">
+            <CardContent className="space-y-4 p-5">
               <div className="flex items-center justify-between">
                 <Skeleton className="h-4 w-24 rounded-full" />
                 <Skeleton className="h-10 w-10 rounded-2xl" />
@@ -73,7 +73,7 @@ export function PageSkeleton() {
 
 export function ProjectListSkeleton() {
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <ShellSkeletonHeader />
       <ShellCardGrid />
     </div>
@@ -82,12 +82,11 @@ export function ProjectListSkeleton() {
 
 export function RiskManagementSkeleton() {
   return (
-    <div className="min-h-screen bg-slate-50">
-      <div className="mx-auto max-w-7xl space-y-6 px-6 py-6">
+    <div className="page-shell">
         <ShellSkeletonHeader />
         <Card className="surface-card">
           <CardContent className="space-y-4 p-5">
-            <div className="grid gap-3 md:grid-cols-4">
+            <div className="grid gap-4 md:grid-cols-4">
               {[1, 2, 3, 4].map((item) => (
                 <div key={item} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
                   <Skeleton className="h-3 w-20 rounded-full" />
@@ -107,7 +106,7 @@ export function RiskManagementSkeleton() {
               </CardHeader>
               <CardContent className="space-y-3">
                 {[1, 2, 3].map((row) => (
-                  <div key={row} className="rounded-2xl border border-slate-200 p-4">
+                  <div key={row} className="rounded-2xl border border-slate-200 p-5">
                     <div className="flex flex-wrap gap-2">
                       <Skeleton className="h-5 w-12 rounded-full" />
                       <Skeleton className="h-5 w-16 rounded-full" />
@@ -120,14 +119,13 @@ export function RiskManagementSkeleton() {
             </Card>
           ))}
         </div>
-      </div>
     </div>
   )
 }
 
 export function GanttViewSkeleton() {
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <ShellSkeletonHeader />
       <div className="grid gap-4 xl:grid-cols-6">
         {[1, 2, 3, 4, 5, 6].map((item) => (
@@ -230,7 +228,7 @@ export function StatsCardSkeleton() {
 
 export function ReportsSkeleton() {
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <div className="grid gap-4 md:grid-cols-4">
         {[1, 2, 3, 4].map((item) => (
           <StatsCardSkeleton key={item} />
@@ -268,7 +266,7 @@ export function TeamMembersSkeleton() {
       </div>
 
       <Card variant="surface">
-        <CardContent className="p-6">
+        <CardContent padding="md">
           <div className="space-y-4">
             {[1, 2, 3, 4].map((item) => (
               <div key={item} className="flex items-center justify-between">
@@ -318,7 +316,7 @@ export function MilestonesSkeleton() {
 
 export function SettingsSkeleton() {
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <Skeleton className="h-8 w-32 rounded-full" />
 
       <Card variant="surface">

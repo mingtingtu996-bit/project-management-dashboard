@@ -277,7 +277,7 @@ function LinkedTasksCard({
           </div>
         ) : tasks.length > 0 ? (
           tasks.map((task) => (
-            <div key={task.id} className="rounded-2xl border border-white bg-white px-4 py-3 shadow-sm">
+            <div key={task.id} className="rounded-2xl border border-white bg-white px-4 py-3 shadow-[var(--el-1)]">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="truncate text-sm font-medium text-slate-900">{task.title}</div>
@@ -417,7 +417,7 @@ function MilestoneNodeCard({
           <div className="pt-1" data-testid={`milestone-progress-${milestone.id}`}>
             <div className="h-2 overflow-hidden rounded-full bg-slate-100">
               <div
-                className="h-full rounded-full bg-blue-600 motion-safe:transition-[width] duration-700 ease-out"
+                className="h-full rounded-full bg-blue-600 motion-safe:transition-[width] motion-safe:duration-700 motion-safe:ease-out"
                 style={{ width: `${progressValue}%` }}
               />
             </div>
@@ -774,7 +774,7 @@ export default function Milestones() {
           ))}
         </div>
 
-        <Card data-testid="milestone-health-summary" className={`border shadow-sm ${healthTone.container}`}>
+        <Card data-testid="milestone-health-summary" className={`border shadow-[var(--el-1)] ${healthTone.container}`}>
           <CardContent className="grid gap-4 p-5 xl:grid-cols-[1fr_auto] xl:items-center">
             <div className="space-y-3">
               <div className="flex flex-wrap items-center gap-2">
@@ -844,7 +844,7 @@ export default function Milestones() {
                 <TabsTrigger value="completed">已完成 {milestoneOverview.stats.completed}</TabsTrigger>
               </TabsList>
 
-              <TabsContent value={filter} className="mt-6 space-y-6">
+              <TabsContent value={filter} className="mt-6 space-y-8">
                 <div className={`grid gap-6 ${selectedMilestone ? 'xl:grid-cols-[minmax(0,1.5fr)_minmax(20rem,0.85fr)]' : ''}`}>
                   <Card className="surface-card">
                     <CardHeader className="pb-4">
@@ -905,7 +905,7 @@ export default function Milestones() {
                           const actualVariance = getVarianceDays(baselineDate, actualDate)
 
                           return (
-                            <div className="grid gap-3 sm:grid-cols-2">
+                            <div className="grid gap-4 sm:grid-cols-2">
                               <MilestoneDetailCard
                                 title="三时间对比"
                                 rows={[

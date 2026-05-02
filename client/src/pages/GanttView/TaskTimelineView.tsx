@@ -61,7 +61,7 @@ const VIRTUALIZE_AFTER = 200
 const TIMELINE_LIMIT = 500
 const NO_BASELINE_SELECT_VALUE = '__no_confirmed_baseline__'
 const PX_PER_DAY: Record<GanttTimelineScale, number> = {
-  day: 24,
+  day: 32,
   week: 10,
   month: 4,
 }
@@ -299,7 +299,7 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
   ))
 
   const isDesktop = screenWidth >= 1024
-  const leftPaneWidth = screenWidth >= 1440 ? 520 : 420
+  const leftPaneWidth = screenWidth >= 1440 ? 600 : 520
   const pxPerDay = PX_PER_DAY[scale]
   const shouldVirtualize = rows.length > VIRTUALIZE_AFTER
 
@@ -583,7 +583,7 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
         <div className="overflow-hidden rounded-2xl border surface-card">
           <div className="grid" style={{ gridTemplateColumns: `${leftPaneWidth}px minmax(0, 1fr)` }}>
             <div className="border-r border-slate-200">
-              <div className="grid h-14 grid-cols-[minmax(0,1fr)_7rem_7rem] items-center gap-3 bg-slate-50 px-4 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <div className="grid h-14 grid-cols-[minmax(16rem,1fr)_8rem_7rem] items-center gap-3 bg-slate-50 px-4 text-xs font-semibold uppercase tracking-wide text-slate-500">
                 <span>任务名称</span>
                 <span>责任单位</span>
                 <span>责任人</span>
@@ -608,7 +608,7 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
                         role="button"
                         tabIndex={0}
                         className={cn(
-                          'absolute left-0 right-0 grid h-12 grid-cols-[minmax(0,1fr)_7rem_7rem] items-center gap-3 border-b border-slate-100 px-4 text-left transition-colors',
+                          'absolute left-0 right-0 grid h-12 grid-cols-[minmax(16rem,1fr)_8rem_7rem] items-center gap-3 border-b border-slate-100 px-4 text-left transition-colors',
                           selected && 'bg-blue-50',
                           highlighted && 'bg-orange-50 ring-1 ring-inset ring-orange-300',
                           !selected && !highlighted && layout.index % 2 === 1 && 'bg-slate-50/70',
@@ -622,7 +622,7 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
                           }
                         }}
                       >
-                        <div className="flex min-w-0 items-center gap-2" style={{ paddingLeft: layout.task.depth * 14 }}>
+                        <div className="flex min-w-0 items-center gap-2 overflow-hidden" style={{ paddingLeft: layout.task.depth * 14 }}>
                           {hasChildren ? (
                             <Button variant="ghost"
                               type="button"
@@ -642,12 +642,12 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
                           ) : (
                             <span className="h-6 w-6 shrink-0" />
                           )}
-                          <div className="min-w-0 leading-tight">
+                          <div className="min-w-0 overflow-hidden leading-tight">
                             <div className="truncate text-sm font-medium text-slate-900">
                               {layout.task.title || layout.task.name || '未命名任务'}
                             </div>
-                            <div className="flex min-w-0 items-center gap-2 pt-0.5 text-xs text-slate-500">
-                              {layout.task.wbs_code ? <span className="shrink-0">WBS {layout.task.wbs_code}</span> : null}
+                            <div className="flex min-w-0 items-center gap-2 overflow-hidden pt-0.5 text-xs text-slate-500">
+                              {layout.task.wbs_code ? <span className="min-w-0 truncate">WBS {layout.task.wbs_code}</span> : null}
                               {layout.task.is_milestone ? <span className="shrink-0">里程碑</span> : null}
                               {layout.missingBaseline ? <span className="shrink-0 text-amber-600">未映射</span> : null}
                             </div>

@@ -173,7 +173,7 @@ export function DrawingReadinessSummary({
           </div>
           <ProgressBar value={readinessRatio} tone={readinessRatio >= 80 ? 'emerald' : readinessRatio >= 60 ? 'blue' : 'amber'} />
           {displayMetrics.disciplineReadiness.length > 0 ? (
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
               {displayMetrics.disciplineReadiness.map((item) => (
                 <div key={item.disciplineType} className="rounded-xl border border-slate-100 bg-slate-50/70 p-3">
                   <div className="flex items-center justify-between gap-2 text-xs">

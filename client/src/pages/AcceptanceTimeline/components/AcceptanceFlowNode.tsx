@@ -83,12 +83,12 @@ export default function AcceptanceFlowNode({
       data-fan-out={relation.hasFanOut}
       className={cn(
         'absolute z-10 cursor-pointer overflow-hidden whitespace-normal rounded-xl border p-4 text-left',
-        'shadow-sm hover:-translate-y-0.5 hover:shadow-[var(--el-2)]',
+        'shadow-[var(--el-1)] hover:-translate-y-0.5 hover:shadow-[var(--el-2)]',
         flowNodeState.surfaceClass,
-        isDragging ? 'z-30 cursor-grabbing shadow-xl ring-2 ring-blue-300' : onDragEnd ? 'cursor-grab' : 'cursor-pointer',
+        isDragging ? 'z-30 cursor-grabbing shadow-[var(--el-4)] ring-2 ring-blue-300' : onDragEnd ? 'cursor-grab' : 'cursor-pointer',
         snapping && 'transition-all duration-300 ease-out',
         !isDragging && !snapping && 'transition-shadow',
-        relation.isSelected && 'border-blue-400 bg-blue-50/90 shadow-md ring-2 ring-blue-200',
+        relation.isSelected && 'border-blue-400 bg-blue-50/90 shadow-[var(--el-2)] ring-2 ring-blue-200',
         !relation.isSelected && relation.isUpstream && 'border-blue-300 bg-blue-50/90',
         !relation.isSelected && relation.isDownstream && 'border-slate-300 bg-slate-50/90',
         !relation.isSelected && !relation.isRelated && relation.isDimmed && 'opacity-35 grayscale-[0.15]',

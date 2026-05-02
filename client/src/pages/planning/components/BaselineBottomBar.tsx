@@ -70,6 +70,7 @@ export function BaselineBottomBar({
   const batchProgressInputRef = useRef<HTMLInputElement | null>(null)
   const hasBatchActions =
     !readOnly &&
+    selectedCount > 0 &&
     (Boolean(onBatchDelete) || Boolean(onBatchShift) || Boolean(onBatchSetProgress))
   const resolvedSaveDisabledReason =
     saveDisabledReason ?? (readOnly ? '请先进入编辑模式或获取编辑锁。' : saveDisabled ? '需先选择至少 1 项基线条目。' : null)
@@ -81,7 +82,7 @@ export function BaselineBottomBar({
       <Card
         data-testid="baseline-bottom-bar"
         className={cn(
-          'border-slate-700/70 bg-slate-950 px-4 py-3 text-white shadow-2xl shadow-slate-950/30',
+          'border-slate-700/70 bg-slate-950 px-4 py-3 text-white shadow-[var(--el-4)] shadow-slate-950/30',
         )}
       >
         <div className="flex flex-col gap-3">

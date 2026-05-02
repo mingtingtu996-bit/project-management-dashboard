@@ -188,7 +188,7 @@ export function BaselineConfirmDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
+      <DialogContent className="max-h-[90vh] max-w-[var(--dialog-lg-width)] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-base">
             <FileDiff className="h-4 w-4 text-blue-500" />
@@ -224,7 +224,7 @@ export function BaselineConfirmDialog({
                   {realignmentSummary ? (
                     <div
                       data-testid="baseline-confirm-realignment-summary"
-                      className="space-y-3 rounded-2xl border border-amber-200/80 bg-white/85 p-3 shadow-sm"
+                      className="space-y-3 rounded-2xl border border-amber-200/80 bg-white/85 p-3 shadow-[var(--el-1)]"
                     >
                       <div>
                         <div className="text-sm font-medium text-slate-900">触发摘要</div>
@@ -313,7 +313,7 @@ export function BaselineConfirmDialog({
                 {impactLabel}
               </span>
             </div>
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
               <div className="rounded-xl border border-white bg-white px-3 py-2">
                 <div className="text-xs text-slate-500">当前版本</div>
                 <div className="mt-1 text-lg font-semibold text-slate-900">{summary.fromVersionLabel}</div>

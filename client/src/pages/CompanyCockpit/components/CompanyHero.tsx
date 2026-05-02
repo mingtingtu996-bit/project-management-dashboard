@@ -87,7 +87,7 @@ export function CompanyHero({
               <RefreshCw className="h-4 w-4" />
               刷新
             </Button>
-            <Button onClick={onCreate} className="h-11 gap-2 rounded-2xl px-5">
+            <Button onClick={onCreate} className="h-11 gap-2 px-5">
               <Plus className="h-4 w-4" />
               新建项目
             </Button>
@@ -129,7 +129,7 @@ export function CompanyHero({
               进行中 {stats.inProgress} · 已完成 {stats.completed}
             </div>
           </div>
-          <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1.12fr)_minmax(0,0.88fr)]">
+          <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1.12fr)_minmax(0,0.88fr)]">
             <div className="rounded-2xl border border-white bg-white px-4 py-4">
               <div className="flex items-center justify-between text-xs text-slate-500">
                 <span>本月健康均值</span>
@@ -149,7 +149,7 @@ export function CompanyHero({
               </p>
             </div>
 
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="grid gap-4 sm:grid-cols-2">
               <div className="rounded-2xl border border-white bg-white px-4 py-4">
                 <div className="text-xs text-slate-500">已暂停</div>
                 <div className="mt-2 text-2xl font-semibold text-slate-900">{stats.paused}</div>

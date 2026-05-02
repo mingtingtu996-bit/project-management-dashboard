@@ -182,7 +182,7 @@ export function MonthlyPlanSkeletonDiffDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         data-testid="monthly-plan-skeleton-diff-dialog"
-        className="max-h-[90vh] max-w-3xl overflow-y-auto rounded-2xl shadow-[var(--el-4)]"
+        className="max-h-[90vh] max-w-[var(--dialog-lg-width)] overflow-y-auto rounded-2xl shadow-[var(--el-4)]"
       >
         <DialogHeader>
           <DialogTitle>查看计划变更对比</DialogTitle>
@@ -224,7 +224,7 @@ export function MonthlyPlanSkeletonDiffDialog({
                     {section.rows.map((row) => (
                       <div key={row.id} className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
                         <div className="text-sm font-medium text-slate-900">{row.title}</div>
-                        <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                        <div className="mt-3 grid gap-4 lg:grid-cols-2">
                           <Card className={getBeforeCardClass(row.kind)}>
                             <div className={cn('text-xs', row.kind === 'removed' ? 'text-red-700' : 'text-slate-500')}>主骨架</div>
                             <div className="mt-1 text-sm leading-6 text-slate-700">{row.before}</div>

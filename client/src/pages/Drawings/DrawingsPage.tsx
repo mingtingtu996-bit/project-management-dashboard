@@ -5,6 +5,7 @@ import { ArrowLeft, Download, FileBadge2, Plus, RefreshCw, Search, Upload } from
 import { Breadcrumb } from '@/components/Breadcrumb'
 import { ConfirmActionDialog } from '@/components/ConfirmActionDialog'
 import { PageHeader } from '@/components/PageHeader'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -300,6 +301,7 @@ export default function Drawings() {
   const [board, setBoard] = useState<DrawingsBoardResponse | null>(null)
   const [ledgerRows, setLedgerRows] = useState<DrawingLedgerRow[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [selectedPackage, setSelectedPackage] = useState<DrawingPackageCard | null>(null)
   const [selectedDetail, setSelectedDetail] = useState<DrawingPackageDetailView | null>(null)
@@ -347,6 +349,7 @@ export default function Drawings() {
     const controller = new AbortController()
     boardAbortRef.current = controller
     setLoading(true)
+    setLoadError(null)
 
     try {
       const result = await apiGet<DrawingsBoardResponse | ApiFailureEnvelope>(
@@ -360,6 +363,7 @@ export default function Drawings() {
       if (!isAbortError(error)) {
         console.error('Failed to load drawings board', error)
         setBoard(null)
+        setLoadError(getApiErrorMessage(error, '图纸看板加载失败，请刷新后重试。'))
         toast({ variant: 'destructive', title: '加载图纸数据失败' })
       }
     } finally {
@@ -391,6 +395,7 @@ export default function Drawings() {
       if (!isAbortError(error)) {
         console.error('Failed to load drawings ledger', error)
         setLedgerRows([])
+        setLoadError(getApiErrorMessage(error, '图纸台账加载失败，请刷新后重试。'))
         toast({ variant: 'destructive', title: '加载图纸数据失败' })
       }
     } finally {
@@ -1192,7 +1197,7 @@ export default function Drawings() {
   }, [createForm, id, refreshAll, toast])
 
   const loadingSkeleton = (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {[1, 2, 3, 4].map((item) => (
           <Card key={item} className="surface-card">
@@ -1264,6 +1269,12 @@ export default function Drawings() {
           刷新
         </Button>
       </PageHeader>
+
+      {loadError ? (
+        <Alert variant="destructive">
+          <AlertDescription>{loadError}</AlertDescription>
+        </Alert>
+      ) : null}
 
       {loading ? (
         loadingSkeleton
@@ -1486,7 +1497,7 @@ export default function Drawings() {
           }
         }}
       >
-        <DialogContent className="max-w-3xl border-slate-200">
+        <DialogContent className="max-w-[var(--dialog-lg-width)] border-slate-200">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-slate-900">
               <FileBadge2 className="h-5 w-5" />
@@ -1752,7 +1763,7 @@ export default function Drawings() {
           }
         }}
       >
-        <DialogContent className="max-w-xl border-slate-200">
+        <DialogContent className="max-w-[var(--dialog-md-width)] border-slate-200">
           <DialogHeader>
             <DialogTitle className="text-slate-900">新建图纸包</DialogTitle>
             <DialogDescription className="sr-only">新建图纸包</DialogDescription>

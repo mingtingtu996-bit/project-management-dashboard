@@ -1557,7 +1557,7 @@ export default function Notifications() {
                                   </div>
                                 ) : null}
 
-                                <div className="grid gap-3 rounded-xl border border-slate-100 bg-white/70 px-5 py-5 text-xs text-slate-500 sm:grid-cols-2 lg:grid-cols-4">
+                                <div className="grid gap-4 rounded-xl border border-slate-100 bg-white/70 px-5 py-5 text-xs text-slate-500 sm:grid-cols-2 lg:grid-cols-4">
                                   <div>
                                     <div className="font-medium text-slate-700">入口</div>
                                     <div className="mt-1">{target.label}</div>

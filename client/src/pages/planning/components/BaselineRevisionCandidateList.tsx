@@ -42,7 +42,7 @@ export function BaselineRevisionCandidateList({
               data-testid="baseline-revision-candidate-item"
               className={cn(
                 'cursor-pointer border-slate-200 transition',
-                active ? 'border-blue-300 bg-blue-50/60 shadow-sm' : 'hover:border-slate-300 hover:bg-slate-50'
+                active ? 'border-blue-300 bg-blue-50/60 shadow-[var(--el-1)]' : 'hover:border-slate-300 hover:bg-slate-50'
               )}
               role="button"
               tabIndex={0}

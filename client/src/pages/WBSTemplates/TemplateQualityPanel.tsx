@@ -93,7 +93,7 @@ export function TemplateQualityPanel({
           />
         ) : quality ? (
           <>
-            <div className="grid gap-3 md:grid-cols-3">
+            <div className="grid gap-4 md:grid-cols-3">
               <MetricCard
                 testId="wbs-template-quality-missing-reference-days"
                 title="缺少 reference_days"
@@ -122,7 +122,7 @@ export function TemplateQualityPanel({
                 <Layers3 className="h-4 w-4 text-slate-500" />
                 已完成项目反馈摘要
               </div>
-              <div className="mt-3 grid gap-3 sm:grid-cols-3">
+              <div className="mt-3 grid gap-4 sm:grid-cols-3">
                 <Card className="rounded-xl border border-white bg-white p-5">
                   <div className="text-xs text-slate-500">已完成项目</div>
                   <div className="mt-1 text-lg font-semibold text-slate-900">{formatNumber(quality.completed_project_count)}</div>

@@ -106,7 +106,7 @@ export function TaskRowIdentityCell({
   const taskTitle = task.title || task.name || '未命名任务'
 
   return (
-    <div className={cn('flex h-full min-w-0 shrink-0 items-center', SHARED_TREE_LAYOUT.firstColumnClass)}>
+    <div className={cn('flex h-full min-w-0 shrink-0 items-center overflow-hidden', SHARED_TREE_LAYOUT.firstColumnClass)}>
       <div className="flex min-w-0 items-center gap-1.5" style={{ paddingLeft: `${indentPx}px` }}>
         <div className="flex-shrink-0 w-6">
         <input
@@ -156,7 +156,7 @@ export function TaskRowIdentityCell({
 </Tooltip>
 
         <div
-          className="flex min-w-0 flex-1 items-center gap-1.5 mr-3 cursor-pointer"
+          className="mr-3 flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 overflow-hidden"
           data-testid={`gantt-task-select-${task.id}`}
           onClick={() => onSelectTask(task)}
         >
@@ -203,7 +203,7 @@ export function TaskRowIdentityCell({
               event.stopPropagation()
               onStartInlineTitleEdit(task)
             }}
-            className={`min-w-0 max-w-52 justify-start overflow-hidden px-1.5 text-left text-sm font-medium hover:text-blue-600 transition-colors ${
+            className={`min-w-0 max-w-48 justify-start overflow-hidden px-1.5 text-left text-sm font-medium hover:text-blue-600 transition-colors ${
               isOverdue
                 ? 'text-red-600'
                 : lagLevel === 'severe'
@@ -268,7 +268,7 @@ export function TaskRowMetaChips({
   const specialtyConfig = specialtyType ? SPECIALTY_TYPES.find(s => s.value === specialtyType) : null
   const showBusinessChip = !['进行中', '已完成', '待开始'].includes(bizStatus.label)
   return (
-    <>
+    <span className="hidden min-w-0 shrink items-center gap-1 overflow-hidden 2xl:inline-flex">
       {showBusinessChip && (
         <span
           data-testid={`gantt-business-status-chip-${taskId}`}
@@ -369,7 +369,7 @@ export function TaskRowMetaChips({
           )}
         </>
       )}
-    </>
+    </span>
   )
 }
 

@@ -197,7 +197,7 @@ function FilterButton({
     <Button variant="ghost"
       onClick={onClick}
       className={`rounded-full px-2.5 py-1 text-xs font-medium transition-all ${
-        activeFilter ? 'bg-blue-600 text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+        activeFilter ? 'bg-blue-600 text-white shadow-[var(--el-1)]' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
       }`}
       type="button"
     >
@@ -409,7 +409,7 @@ export default function RecentTasksCard({ projectId, tasks: sourceTasks, onViewA
                   <Link
                     key={task.id}
                     to={projectId ? `/projects/${projectId}/gantt?task=${task.id}` : '/company'}
-                    className={`block rounded-xl border border-slate-100 border-l-4 bg-white p-3 transition-shadow hover:shadow-sm ${getBorderColorClass(task.due_status)}`}
+                    className={`block rounded-xl border border-slate-100 border-l-4 bg-white p-3 transition-shadow hover:shadow-[var(--el-1)] ${getBorderColorClass(task.due_status)}`}
                   >
                     <div className="flex items-start justify-between">
                       <div className="min-w-0 flex-1">

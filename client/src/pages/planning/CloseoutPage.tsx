@@ -590,7 +590,7 @@ export default function CloseoutPage() {
           data-testid="closeout-escalation-ladder"
           className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-3"
         >
-          <div className="grid gap-3 lg:grid-cols-3">
+          <div className="grid gap-4 lg:grid-cols-3">
             {[
               {
                 day: 3,
@@ -630,7 +630,7 @@ export default function CloseoutPage() {
           </div>
         </div>
 
-        <div className="grid gap-3 md:grid-cols-5">
+        <div className="grid gap-4 md:grid-cols-5">
           <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
             <div className="text-xs text-slate-500">关账月份</div>
             <div className="mt-1 text-lg font-semibold text-slate-900">{activePlan ? formatMonthLabel(activePlan.month) : '暂无'}</div>
@@ -689,7 +689,7 @@ export default function CloseoutPage() {
         ) : null}
         <div
           data-testid="closeout-filter-bar"
-          className="grid gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-3 lg:grid-cols-[minmax(0,1fr)_auto]"
+          className="grid gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-3 lg:grid-cols-[minmax(0,1fr)_auto]"
         >
           <div className="space-y-2">
             <div className="text-xs font-medium uppercase tracking-wider text-slate-500">筛选与搜索</div>

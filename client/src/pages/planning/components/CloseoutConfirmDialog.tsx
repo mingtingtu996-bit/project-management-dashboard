@@ -46,7 +46,7 @@ export function CloseoutConfirmDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent data-testid="closeout-confirm-dialog" className="max-w-3xl">
+      <DialogContent data-testid="closeout-confirm-dialog" className="max-w-[var(--dialog-lg-width)]">
         <DialogHeader className="text-left">
           <div className="flex flex-wrap items-center gap-2">
             <DialogTitle>{modeLabel}</DialogTitle>
@@ -59,7 +59,7 @@ export function CloseoutConfirmDialog({
         </DialogDescription>
         </DialogHeader>
 
-        <div className="grid gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700 sm:grid-cols-2 xl:grid-cols-4">
           <Card className="surface-card">
             <CardContent className="space-y-1 p-5">
               <div className="text-xs uppercase tracking-wider text-slate-500">滚入数</div>

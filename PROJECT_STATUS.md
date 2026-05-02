@@ -1,23 +1,23 @@
 # 项目状态报告
 
-**更新时间**: 2026-04-28 10:39:54
-**Git 提交**: d9082a5 - perf: add api runtime cache for v1.2.3
+**更新时间**: 2026-05-01 23:44:13
+**Git 提交**: 9961009 - test: align dashboard metric contract
 
 ## 📊 当前统计
 
 | 指标 | 数量 |
 |-----|-----|
-| 总文件数 | 1200 |
-| 代码行数 | 86221 |
-| 最近提交 | d9082a5 - perf: add api runtime cache for v1.2.3 (37 minutes ago) |
+| 总文件数 | 1253 |
+| 代码行数 | 98422 |
+| 最近提交 | 9961009 - test: align dashboard metric contract (60 minutes ago) |
 
 ## 🔄 最近变更
 
-d9082a5 perf: add api runtime cache for v1.2.3
-8898255 ci: back up dirty self-hosted deploy files
-83fc1c3 perf: add project bootstrap initialization
-051a901 ci: enforce lf for deploy script
-0ec37b2 ci: deploy self hosted release archive
+9961009 test: align dashboard metric contract
+7f996ad fix: complete uiux v1.3.3 structural cleanup
+11bd8d2 test: align v1.3.2 client quality gates
+6b00474 fix: complete uiux v1.3.2 release fixes
+ccf75ee fix: apply uiux v1.3.1 refinements
 
 ## 📁 项目结构
 

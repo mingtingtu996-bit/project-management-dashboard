@@ -170,7 +170,7 @@ function BaselineItemDetailDrawer({
       <DialogContent
         closeLabel="关闭基线详情抽屉"
         data-testid="baseline-detail-drawer"
-        className="left-auto right-0 top-0 h-full max-h-none w-full max-w-md translate-x-0 translate-y-0 rounded-none border-l border-slate-200 bg-white p-0 shadow-[var(--el-4)] data-[state=open]:slide-in-from-right-0"
+        className="left-auto right-0 top-0 h-full max-h-none w-full max-w-[var(--dialog-sm-width)] translate-x-0 translate-y-0 rounded-none border-l border-slate-200 bg-white p-0 shadow-[var(--el-4)] data-[state=open]:slide-in-from-right-0"
       >
         <div className="flex h-full flex-col">
       <DialogHeader className="px-5 py-4 pr-16 text-left">
@@ -187,7 +187,7 @@ function BaselineItemDetailDrawer({
       </DialogHeader>
       <Separator />
       <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-1">
             <div className="text-xs uppercase tracking-wider text-slate-500">计划开始</div>
             <div className="text-sm font-medium text-slate-900 tabular-nums">{item.planned_start_date ?? '—'}</div>
@@ -1894,12 +1894,16 @@ export default function BaselinePage() {
   }))
 
   if (loading) {
-    return <LoadingState label="正在加载项目基线..." />
+    return (
+      <div className="page-shell">
+        <LoadingState label="正在加载项目基线..." />
+      </div>
+    )
   }
 
   if (error) {
     return (
-      <div className="px-6 py-8">
+      <div className="page-shell">
         <Alert variant="destructive">
           <AlertTriangle className="h-4 w-4" />
           <AlertDescription>{error}</AlertDescription>
@@ -1929,13 +1933,13 @@ export default function BaselinePage() {
             <CardHeader>
               <CardTitle className="text-base">首版基线创建入口</CardTitle>
             </CardHeader>
-            <CardContent className="grid gap-3 md:grid-cols-3">
+            <CardContent className="grid gap-4 md:grid-cols-3">
               <Button variant="ghost"
                 type="button"
                 data-testid="baseline-entry-blank"
                 onClick={() => void handleCreateBlankBaseline()}
                 disabled={creationDisabled}
-                className="group flex min-h-44 flex-col justify-between rounded-2xl border border-blue-600 bg-blue-600 p-5 text-left text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-blue-700 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50"
+                className="group flex min-h-44 flex-col justify-between rounded-2xl border border-blue-600 bg-blue-600 p-5 text-left text-white shadow-[var(--el-1)] transition hover:-translate-y-0.5 hover:bg-blue-700 hover:shadow-[var(--el-2)] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white/15 text-white transition group-hover:bg-white/25">
@@ -1955,7 +1959,7 @@ export default function BaselinePage() {
                 data-testid="baseline-entry-schedule"
                 onClick={() => void handleBootstrapFromSchedule()}
                 disabled={creationDisabled}
-                className="group flex min-h-44 flex-col justify-between rounded-2xl border border-slate-100 bg-white p-5 text-left shadow-[var(--el-1)] transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50"
+                className="group flex min-h-44 flex-col justify-between rounded-2xl border border-slate-100 bg-white p-5 text-left shadow-[var(--el-1)] transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-[var(--el-2)] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-100 text-blue-700 transition group-hover:bg-blue-600 group-hover:text-white">
@@ -1976,7 +1980,7 @@ export default function BaselinePage() {
                 data-testid="baseline-entry-import"
                 onClick={() => importInputRef.current?.click()}
                 disabled={creationDisabled}
-                className="group flex min-h-44 flex-col justify-between rounded-2xl border border-slate-100 bg-white p-5 text-left shadow-[var(--el-1)] transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50"
+                className="group flex min-h-44 flex-col justify-between rounded-2xl border border-slate-100 bg-white p-5 text-left shadow-[var(--el-1)] transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-[var(--el-2)] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-amber-100 text-amber-700 transition group-hover:bg-amber-600 group-hover:text-white">
@@ -2022,7 +2026,7 @@ export default function BaselinePage() {
         ) : null}
 
         {importPreview ? (
-          <Card data-testid="baseline-import-preview" className="border-amber-200 bg-amber-50 shadow-sm">
+          <Card data-testid="baseline-import-preview" className="border-amber-200 bg-amber-50 shadow-[var(--el-1)]">
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-base">
                 <FileSpreadsheet className="h-4 w-4 text-amber-700" />
@@ -2030,7 +2034,7 @@ export default function BaselinePage() {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4 text-sm text-slate-700">
-              <div className="grid gap-3 md:grid-cols-4">
+              <div className="grid gap-4 md:grid-cols-4">
                 <div className="rounded-2xl border border-white/80 bg-white px-4 py-3">
                   <div className="text-xs text-slate-500">文件</div>
                   <div className="mt-1 font-medium text-slate-900">{importPreview.fileName}</div>
@@ -2066,7 +2070,7 @@ export default function BaselinePage() {
                     {BASELINE_IMPORT_FIELD_CONFIG.length} 已匹配
                   </Badge>
                 </div>
-                <div className="grid gap-3 md:grid-cols-2">
+                <div className="grid gap-4 md:grid-cols-2">
                   {BASELINE_IMPORT_FIELD_CONFIG.map((field) => (
                     <label key={field.key} className="block space-y-1">
                       <span className="text-xs font-medium text-slate-500">
@@ -2399,7 +2403,7 @@ export default function BaselinePage() {
             {showValidationPanel ? (
               <div
                 data-testid="baseline-validation-bottom-panel"
-                className="rounded-2xl border border-slate-100 bg-white p-4 shadow-[var(--el-1)]"
+                className="rounded-2xl border border-slate-100 bg-white p-5 shadow-[var(--el-1)]"
               >
                 <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>

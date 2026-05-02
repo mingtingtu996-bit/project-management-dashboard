@@ -180,7 +180,7 @@ export function CreateModal({ onClose, onSuccess }: { onClose: () => void; onSuc
     }}>
       <DialogContent
         closeLabel="关闭新建 WBS 模板弹窗"
-        className="max-h-[calc(100vh-4rem)] max-w-3xl overflow-y-auto border-slate-200 p-0"
+        className="max-h-[calc(100vh-4rem)] max-w-[var(--dialog-lg-width)] overflow-y-auto border-slate-200 p-0"
       >
         <DialogHeader className="px-6 py-4 pr-16">
           <DialogTitle className="font-semibold text-slate-800">新建 WBS 模板</DialogTitle>
@@ -213,7 +213,7 @@ export function CreateModal({ onClose, onSuccess }: { onClose: () => void; onSuc
                     onClick={() => setCreateType(card.key)}
                     className={`relative flex flex-col items-center text-center gap-3 p-5 rounded-xl border-2 cursor-pointer transition-all duration-150 ${
                       createType === card.key
-                        ? 'border-blue-500 bg-blue-50 shadow-sm'
+                        ? 'border-blue-500 bg-blue-50 shadow-[var(--el-1)]'
                         : 'border-slate-200 hover:border-blue-300 hover:bg-slate-50'
                     }`}
                   >
@@ -317,13 +317,13 @@ export function CreateModal({ onClose, onSuccess }: { onClose: () => void; onSuc
 
           {/* 底部按钮 */}
           <div className="flex justify-between mt-6">
-            <Button variant="ghost" onClick={step === 2 ? () => setStep(1) : onClose} className="text-sm text-slate-500 hover:text-slate-700 px-4 py-2 rounded-lg hover:bg-slate-100 transition-colors">
+            <Button variant="ghost" onClick={step === 2 ? () => setStep(1) : onClose} className="px-4 py-2 text-sm text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700">
               {step === 2 ? '返回' : '取消'}
             </Button>
             {step === 1 ? (
               <Button
                 onClick={handleNext}
-                className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors shadow-sm"
+                className="flex items-center gap-2 rounded-xl bg-blue-600 px-6 py-2 text-sm font-medium text-white shadow-[var(--el-1)] transition-colors hover:bg-blue-700"
               >
                 下一步
                 <IconChevronRight className="w-4 h-4" />
@@ -333,7 +333,7 @@ export function CreateModal({ onClose, onSuccess }: { onClose: () => void; onSuc
                 onClick={() => void createButton.run()}
                 loading={creating || excelUploading || createButton.loading}
                 disabled={!templateName.trim() || createButton.loading}
-                className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors shadow-sm"
+                className="flex items-center gap-2 rounded-xl bg-blue-600 px-6 py-2 text-sm font-medium text-white shadow-[var(--el-1)] transition-colors hover:bg-blue-700"
               >
                 创建模板
               </Button>

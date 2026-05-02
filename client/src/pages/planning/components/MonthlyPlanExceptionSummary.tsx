@@ -78,13 +78,13 @@ export function MonthlyPlanExceptionSummary({
         </Badge>
       </div>
 
-      <div className="mt-4 grid gap-3 md:grid-cols-3">
+      <div className="mt-4 grid gap-4 md:grid-cols-3">
         {cards.map((card) => {
           const Icon = card.icon
           const topIssue = card.issues[0]
 
           return (
-            <Card key={card.key} data-testid={card.testId} className={`${card.tone} shadow-sm`}>
+            <Card key={card.key} data-testid={card.testId} className={`${card.tone} shadow-[var(--el-1)]`}>
               <CardContent className="space-y-3 p-5">
                 <div className={`flex items-center gap-2 ${card.iconTone}`}>
                   <Icon className="h-4 w-4" />

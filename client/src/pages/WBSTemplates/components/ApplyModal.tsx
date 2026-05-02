@@ -95,7 +95,7 @@ export function ApplyModal({
     }}>
       <DialogContent
         closeLabel="关闭生成项目基线草稿弹窗"
-        className="max-h-[calc(100vh-4rem)] max-w-xl overflow-y-auto border-slate-200 p-0"
+        className="max-h-[calc(100vh-4rem)] max-w-[var(--dialog-md-width)] overflow-y-auto border-slate-200 p-0"
       >
         <DialogHeader className="px-6 py-4 pr-16">
           <div className="flex items-center gap-3">
@@ -204,7 +204,7 @@ export function ApplyModal({
               onClick={() => void applyButton.run()}
               loading={applying || applyButton.loading}
               disabled={!selectedProjectId || loading || applyButton.loading}
-              className="bg-blue-600 text-white shadow-sm hover:bg-blue-700"
+              className="bg-blue-600 text-white shadow-[var(--el-1)] hover:bg-blue-700"
             >
               <IconUpload />
               生成草稿

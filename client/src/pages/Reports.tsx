@@ -352,7 +352,7 @@ function AnalysisEntryCard({
     <Button variant="ghost"
       data-testid={testId}
       onClick={onClick}
-      className="group flex h-full flex-col rounded-2xl border border-slate-100 bg-white p-5 text-left shadow-[var(--el-1)] transition-all hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-md"
+      className="group flex h-full flex-col rounded-2xl border border-slate-100 bg-white p-5 text-left shadow-[var(--el-1)] transition-all hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-[var(--el-2)]"
     >
       <div className="flex items-start justify-between gap-4">
         <div className="space-y-3">
@@ -1920,7 +1920,7 @@ export default function Reports() {
 
   const renderProgressDetail = () => (
     <>
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(18.75rem,1fr)]">
+      <div className="content-sidebar-grid">
         <div className="space-y-3">
           {sCurveLoading && sCurvePoints.length === 0 ? (
             <LoadingState
@@ -1955,7 +1955,7 @@ export default function Reports() {
                 return (
                   <div
                     key={milestone.id}
-                    className="grid grid-cols-[5.75rem_minmax(0,1fr)_0.625rem] items-center gap-3 rounded-xl border border-slate-100 bg-white px-3 py-3 transition-colors even:bg-slate-50/50 hover:bg-slate-100/60"
+                    className="grid grid-cols-[5.75rem_minmax(0,1fr)_0.625rem] items-center gap-4 rounded-xl border border-slate-100 bg-white px-3 py-3 transition-colors even:bg-slate-50/50 hover:bg-slate-100/60"
                   >
                     <div className="text-xs text-slate-500 tabular-nums">{formatDateLabel(milestone.currentPlannedDate)}</div>
                     <div className="min-w-0">
@@ -1971,13 +1971,13 @@ export default function Reports() {
         </Card>
       </div>
       <CriticalPathSummaryCard summary={criticalPathSummary} />
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(22.5rem,0.85fr)]">
+      <div className="content-sidebar-grid">
       <Card className="surface-card">
         <CardHeader className="pb-4">
           <CardTitle className="text-base">工期偏差与执行判断</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
             <DetailStatCard label="整体完成率" value={formatWholePercent(summary?.overallProgress ?? 0)} hint={`任务总数 ${summary?.totalTasks ?? 0}`} />
             <DetailStatCard label="里程碑完成率" value={formatWholePercent(summary?.milestoneProgress ?? 0)} hint={`${summary?.completedMilestones ?? 0}/${summary?.totalMilestones ?? 0}`} />
             <DetailStatCard label="延期任务" value={summary?.delayedTaskCount ?? delayedTasks.length} hint={`累计延期 ${summary?.delayDays ?? 0} 天`} />
@@ -2035,7 +2035,7 @@ export default function Reports() {
         <CardHeader className="pb-4">
           <CardTitle className="text-base">专项与关键路径概览</CardTitle>
         </CardHeader>
-        <CardContent className="grid gap-3 sm:grid-cols-3">
+        <CardContent className="grid gap-4 sm:grid-cols-3">
           <DetailStatCard
             label="专项准备度"
             value={(summary?.completedPreMilestoneCount ?? 0) + (summary?.issuedConstructionDrawingCount ?? 0)}
@@ -2065,7 +2065,7 @@ export default function Reports() {
             </div>
           ) : (
             wbsFocusRows.map((task) => (
-              <div key={task.id} className="grid gap-3 rounded-2xl border border-slate-100 bg-white px-4 py-4 md:grid-cols-[minmax(0,1.2fr)_7.5rem_8.75rem_7.5rem]">
+              <div key={task.id} className="grid gap-4 rounded-2xl border border-slate-100 bg-white px-4 py-4 md:grid-cols-[minmax(0,1.2fr)_7.5rem_8.75rem_7.5rem]">
                 <div>
                   <div className="text-sm font-medium text-slate-900">{getTaskDisplayName(task)}</div>
                   <div className="mt-1 text-xs text-slate-500">WBS {task.wbs_code || '未编码'} · {getTaskStatus(task)}</div>
@@ -2212,7 +2212,7 @@ export default function Reports() {
             <CardHeader className="pb-4">
               <CardTitle className="text-base">偏差筛选</CardTitle>
             </CardHeader>
-            <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+            <CardContent className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
               <label className="space-y-1 text-xs text-slate-500">
                 <span>时间范围</span>
                 <Select
@@ -2301,7 +2301,7 @@ export default function Reports() {
             <ExecutionScatterChart rows={executionDeviationChartRows} mainlineLabel={deviationMainline?.label || deviationViewLabel} />
           )}
 
-          <div className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(22.5rem,0.9fr)]">
+          <div className="content-sidebar-grid">
             <DeviationDetailTable
               rows={deviationTableRows}
               mainlineLabel={deviationMainline?.label || deviationViewLabel}
@@ -2309,7 +2309,7 @@ export default function Reports() {
             />
           </div>
 
-          <div className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(22.5rem,0.9fr)]">
+          <div className="content-sidebar-grid">
             <Card data-testid="deviation-detail-panel" className="surface-card">
               <CardHeader className="pb-4">
                 <CardTitle className="text-base">下钻明细区</CardTitle>
@@ -2337,7 +2337,7 @@ export default function Reports() {
               <CardHeader className="pb-4">
                 <CardTitle className="text-base">责任归因分析</CardTitle>
               </CardHeader>
-              <CardContent className="space-y-6">
+              <CardContent className="space-y-8">
                 <div className="space-y-3">
                   <div className="text-sm font-medium text-slate-700">责任贡献</div>
                   {responsibilityContribution.length > 0 ? (
@@ -2460,7 +2460,7 @@ export default function Reports() {
           >
             <DialogContent
               data-testid="reports-deviation-row-drawer"
-              className="left-auto right-0 top-0 h-full max-h-none w-full max-w-3xl translate-x-0 translate-y-0 rounded-none border-l border-slate-200 bg-white p-0 shadow-[var(--el-4)] data-[state=open]:slide-in-from-right-0"
+              className="left-auto right-0 top-0 h-full max-h-none w-full max-w-[var(--dialog-lg-width)] translate-x-0 translate-y-0 rounded-none border-l border-slate-200 bg-white p-0 shadow-[var(--el-4)] data-[state=open]:slide-in-from-right-0"
             >
               {selectedDeviationRow ? (
                 <div className="flex h-full flex-col">
@@ -2474,7 +2474,7 @@ export default function Reports() {
                   </div>
                   <Separator />
                   <div className="flex-1 space-y-5 overflow-y-auto px-6 py-5">
-                    <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="grid gap-4 sm:grid-cols-2">
                       <DetailStatCard
                         label="计划进度"
                         value={formatWholePercent(selectedDeviationRow.planned_progress ?? 0)}
@@ -2498,7 +2498,7 @@ export default function Reports() {
                     </div>
 
                     {selectedDeviationRow.source_task_id ? (
-                      <Button asChild variant="outline" className="w-full justify-between rounded-2xl border-slate-200 bg-white">
+                      <Button asChild variant="outline" className="w-full justify-between border-slate-200 bg-white">
                         <Link
                           data-testid="reports-open-gantt-from-deviation"
                           to={`/projects/${projectId}/gantt?view=gantt&highlight=${encodeURIComponent(selectedDeviationRow.source_task_id)}`}
@@ -2509,7 +2509,7 @@ export default function Reports() {
                       </Button>
                     ) : null}
 
-                    <div className="grid gap-3 rounded-2xl border border-slate-100 bg-slate-50 p-4 text-sm text-slate-700 sm:grid-cols-2">
+                    <div className="grid gap-4 rounded-2xl border border-slate-100 bg-slate-50 p-4 text-sm text-slate-700 sm:grid-cols-2">
                       <div>
                         <div className="text-xs font-medium uppercase tracking-wider text-slate-500">状态</div>
                         <div className="mt-1 text-slate-900">{selectedDeviationRow.status}</div>
@@ -2557,7 +2557,7 @@ export default function Reports() {
           <CardHeader className="pb-4">
             <CardTitle className="text-base">条件未满足分析</CardTitle>
           </CardHeader>
-          <CardContent className="grid gap-3 md:grid-cols-3">
+          <CardContent className="grid gap-4 md:grid-cols-3">
             <DetailStatCard label="条件总数" value={projectConditions.length} hint="项目当前条件项总量" />
             <DetailStatCard label="未满足任务" value={summary?.pendingConditionTaskCount ?? 0} hint="仍受条件限制的任务" />
             <DetailStatCard label="活跃条件" value={summary?.pendingConditionCount ?? 0} hint="尚未满足的条件项" />
@@ -2570,7 +2570,7 @@ export default function Reports() {
           <CardHeader className="pb-4">
             <CardTitle className="text-base">风险联动摘要</CardTitle>
           </CardHeader>
-          <CardContent className="grid gap-3 md:grid-cols-3">
+          <CardContent className="grid gap-4 md:grid-cols-3">
             <DetailStatCard label="活跃风险" value={projectRisks.length} hint={`摘要口径 ${summary?.activeRiskCount ?? projectRisks.length}`} />
             <DetailStatCard label="活跃问题" value={issueSummary.active_issues} hint={`问题总数 ${issueSummary.total_issues}`} />
             <DetailStatCard label="问题来源" value={issueSummary.source_counts.length} hint="来源分布已接入后端摘要" />
@@ -2623,7 +2623,7 @@ export default function Reports() {
 
     return (
       <>
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(22.5rem,0.9fr)]">
+      <div className="content-sidebar-grid">
         <Card data-testid="reports-risk-matrix" variant="surface">
           <CardHeader className="pb-4">
             <CardTitle className="text-base">风险矩阵热力图</CardTitle>
@@ -2725,7 +2725,7 @@ export default function Reports() {
                       key={risk.id}
                       data-testid={`reports-risk-drilldown-${risk.id}`}
                       to={riskHref}
-                      className="grid grid-cols-[0.25rem_minmax(0,1fr)] gap-3 rounded-xl border border-slate-100 bg-white px-3 py-3 transition-colors even:bg-slate-50/50 hover:bg-slate-100/60"
+                      className="grid grid-cols-[0.25rem_minmax(0,1fr)] gap-4 rounded-xl border border-slate-100 bg-white px-3 py-3 transition-colors even:bg-slate-50/50 hover:bg-slate-100/60"
                     >
                       <span className={`rounded-full ${tone.bar}`} aria-hidden="true" />
                       <div className="min-w-0">
@@ -2747,13 +2747,13 @@ export default function Reports() {
         </Card>
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(22.5rem,0.9fr)]">
+      <div className="content-sidebar-grid">
         <Card className="surface-card">
           <CardHeader className="pb-4">
             <CardTitle className="text-base">风险压力结构</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
               <DetailStatCard label="活跃风险" value={summary?.activeRiskCount ?? projectRisks.length} hint={`总风险 ${summary?.riskCount ?? projectRisks.length}`} />
               <DetailStatCard label="条件未满足" value={summary?.pendingConditionTaskCount ?? projectConditions.length} hint={`条件项 ${summary?.pendingConditionCount ?? projectConditions.length}`} />
               <DetailStatCard label="阻碍任务" value={summary?.activeObstacleTaskCount ?? projectObstacles.length} hint={`阻碍项 ${summary?.activeObstacleCount ?? projectObstacles.length}`} />
@@ -2816,7 +2816,7 @@ export default function Reports() {
                     key={risk.id}
                     data-testid={`reports-risk-drilldown-${risk.id}`}
                     to={riskHref}
-                    className="grid gap-3 rounded-2xl border border-slate-100 bg-white px-4 py-4 transition-colors hover:border-blue-200 hover:bg-blue-50/40 md:grid-cols-[minmax(0,1.3fr)_8.75rem_8.75rem_8.75rem]"
+                    className="grid gap-4 rounded-2xl border border-slate-100 bg-white px-4 py-4 transition-colors hover:border-blue-200 hover:bg-blue-50/40 md:grid-cols-[minmax(0,1.3fr)_8.75rem_8.75rem_8.75rem]"
                   >
                     <div>
                       <div className="text-sm font-medium text-slate-900">{risk.title || '未命名风险'}</div>
@@ -2837,7 +2837,7 @@ export default function Reports() {
             <CardTitle className="text-base">问题独立分析</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid gap-3 md:grid-cols-4">
+            <div className="grid gap-4 md:grid-cols-4">
               <DetailStatCard label="问题总数" value={issueSummary.total_issues} hint="后端汇总口径" />
               <DetailStatCard label="活跃问题" value={issueSummary.active_issues} hint={`open ${issueOpenCount} · investigating ${issueInvestigatingCount}`} />
               <DetailStatCard label="已解决 / 关闭" value={`${issueResolvedCount}/${issueClosedCount}`} hint={`严重问题 ${issueCriticalCount}`} />
@@ -3004,7 +3004,7 @@ export default function Reports() {
                 return (
                   <div
                     key={record.id}
-                    className="grid grid-cols-[6.875rem_0.25rem_minmax(0,1fr)_auto] gap-3 rounded-xl border border-slate-100 bg-white px-4 py-4 transition-colors even:bg-slate-50/50 hover:bg-slate-100/60"
+                    className="grid grid-cols-[6.875rem_0.25rem_minmax(0,1fr)_auto] gap-4 rounded-xl border border-slate-100 bg-white px-4 py-4 transition-colors even:bg-slate-50/50 hover:bg-slate-100/60"
                   >
                     <div className="text-xs text-slate-500 tabular-nums">{formatDateLabel(record.changed_at)}</div>
                     <span className={`rounded-full ${meta.bar}`} aria-hidden="true" />
@@ -3128,7 +3128,7 @@ export default function Reports() {
         </PageHeader>
 
         {activeView === 'progress_deviation' && dataQualitySummary ? (
-          <Card data-testid="reports-data-quality-banner" className="border-sky-200 bg-sky-50 shadow-sm">
+          <Card data-testid="reports-data-quality-banner" className="border-sky-200 bg-sky-50 shadow-[var(--el-1)]">
             <CardContent className="flex flex-col gap-3 p-5 md:flex-row md:items-center md:justify-between">
               <div className="space-y-1">
                 <div className="text-base font-semibold text-sky-950">
@@ -3166,7 +3166,7 @@ export default function Reports() {
                     key={entry.key}
                     value={entry.key}
                     data-testid={`analysis-entry-${entry.key}`}
-                    className="gap-2 rounded-lg bg-slate-100 px-3 py-1.5 text-sm font-medium text-slate-600 shadow-none data-[state=active]:bg-blue-600 data-[state=active]:text-white data-[state=active]:shadow-sm data-[state=inactive]:hover:bg-slate-200"
+                    className="gap-2 rounded-lg bg-slate-100 px-3 py-1.5 text-sm font-medium text-slate-600 shadow-none data-[state=active]:bg-blue-600 data-[state=active]:text-white data-[state=active]:shadow-[var(--el-1)] data-[state=inactive]:hover:bg-slate-200"
                   >
                     <span>{entry.label}</span>
                     {entry.badge != null ? (
@@ -3206,7 +3206,7 @@ export default function Reports() {
                 <CardTitle className="text-base">指标 / 时间 / 维度</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
-                <div className="grid gap-3 md:grid-cols-3">
+                <div className="grid gap-4 md:grid-cols-3">
                   <label className="space-y-1 text-xs text-slate-500">
                     <span>指标选择器</span>
                     <Select value={trendMetric} onValueChange={(value) => setTrendMetric(value as ReportMetricKey)}>
@@ -3388,12 +3388,12 @@ function MaterialArrivalSummaryCard({
       <CardContent className="space-y-4">
         {summary ? (
           <>
-            <div className="grid gap-3 md:grid-cols-3">
+            <div className="grid gap-4 md:grid-cols-3">
               <DetailStatCard label="预计到场总数" value={overview.totalExpectedCount} hint="按预计到场日期口径" />
               <DetailStatCard label="按时到场数" value={overview.onTimeCount} hint="实际到场 <= 预计到场" />
               <DetailStatCard label="整体到场率" value={formatWholePercent(overview.arrivalRate)} hint="近 6 个月与当前项目材料总览" />
             </div>
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(20rem,0.9fr)]">
+            <div className="content-sidebar-grid">
               <div className="space-y-3">
                 <div className="text-sm font-medium text-slate-700">参建单位到场率</div>
                 {byUnit.length > 0 ? (

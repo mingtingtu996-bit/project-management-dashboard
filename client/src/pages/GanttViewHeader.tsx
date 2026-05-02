@@ -1,6 +1,5 @@
 import { ArrowLeft, CalendarCheck, CalendarDays, FileText, GitBranch, Layers3, List, Plus } from 'lucide-react'
 
-import { Breadcrumb } from '@/components/Breadcrumb'
 import { PageHeader } from '@/components/PageHeader'
 import { Button } from '@/components/ui/button'
 import { DisabledReasonTooltip } from '@/components/ui/disabled-reason-tooltip'
@@ -91,15 +90,6 @@ export function GanttViewHeader({
 
   return (
     <div data-testid="task-workspace-layer-l1" className="space-y-4">
-      {projectName ? (
-        <Breadcrumb
-          items={[
-            { label: projectName || '当前项目', href: `/projects/${projectId}/dashboard` },
-            { label: '甘特图' },
-          ]}
-        />
-      ) : null}
-
       <PageHeader
         eyebrow={PROJECT_NAVIGATION_LABELS.tasks}
         title="甘特图"

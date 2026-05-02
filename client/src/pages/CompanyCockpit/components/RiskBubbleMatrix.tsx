@@ -199,7 +199,7 @@ export function RiskBubbleMatrix({ risks, issues, projectRows }: RiskBubbleMatri
                         <div className="flex h-full items-center justify-center">
                           {count > 0 ? (
                             <div
-                              className={`flex items-center justify-center rounded-full text-xs font-semibold text-white shadow-sm ${level.color}`}
+                              className={`flex items-center justify-center rounded-full text-xs font-semibold text-white shadow-[var(--el-1)] ${level.color}`}
                               style={{
                                 width: `${calcBubbleSize(Math.max(count, weight))}px`,
                                 height: `${calcBubbleSize(Math.max(count, weight))}px`,

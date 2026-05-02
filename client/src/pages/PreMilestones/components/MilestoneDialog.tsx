@@ -71,7 +71,7 @@ export function MilestoneDialog({
     <Dialog open={Boolean(mode)} onOpenChange={(open) => {
       if (!open) handleClose()
     }}>
-      <DialogContent className="max-h-[calc(100vh-4rem)] max-w-xl overflow-y-auto">
+      <DialogContent className="max-h-[calc(100vh-4rem)] max-w-[var(--dialog-md-width)] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{mode === 'edit' ? '编辑证照' : '新建证照'}</DialogTitle>
           <DialogDescription>维护证照名称、计划日期、牵头单位和备注。</DialogDescription>

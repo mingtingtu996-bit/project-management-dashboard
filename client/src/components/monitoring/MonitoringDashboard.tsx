@@ -128,7 +128,7 @@ function StatCard({
   }
 
   return (
-    <div className={`border rounded-2xl p-4 shadow-sm ${colorClasses[color]}`} data-testid={testId}>
+    <div className={`border rounded-2xl p-4 shadow-[var(--el-1)] ${colorClasses[color]}`} data-testid={testId}>
       <div className="flex items-center gap-2">
         {icon}
         <span className="text-sm opacity-70">{label}</span>

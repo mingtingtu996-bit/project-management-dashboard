@@ -88,24 +88,24 @@ type ExtraColumnKey =
 const BASE_COLUMNS = [
   { key: 'sequence', label: '序号', width: '4rem', className: 'text-center tabular-nums' },
   { key: 'wbs', label: 'WBS', width: '6rem' },
-  { key: 'title', label: '任务名', width: 'minmax(13.75rem,1.6fr)' },
-  { key: 'start', label: '开始', width: '9rem', className: 'text-right tabular-nums' },
-  { key: 'end', label: '结束', width: '9rem', className: 'text-right tabular-nums' },
-  { key: 'duration', label: '工期', width: '5.25rem', className: 'text-right tabular-nums' },
-  { key: 'status', label: '状态', width: '8.25rem' },
-  { key: 'assignee', label: '责任人', width: '9.25rem' },
+  { key: 'title', label: '任务名', width: '24rem' },
+  { key: 'start', label: '开始', width: '10rem', className: 'text-right tabular-nums' },
+  { key: 'end', label: '结束', width: '10rem', className: 'text-right tabular-nums' },
+  { key: 'duration', label: '工期', width: '6rem', className: 'text-right tabular-nums' },
+  { key: 'status', label: '状态', width: '10rem' },
+  { key: 'assignee', label: '责任人', width: '10rem' },
 ] as const
 const EXTRA_COLUMNS: Array<{ key: ExtraColumnKey; label: string; width: string }> = [
-  { key: 'progress', label: '目标进度', width: '90px' },
-  { key: 'type', label: '类型', width: '100px' },
+  { key: 'progress', label: '目标进度', width: '5.625rem' },
+  { key: 'type', label: '类型', width: '6.25rem' },
   { key: 'mapping', label: '映射', width: '6.875rem' },
   { key: 'critical', label: '关键路径', width: '6.875rem' },
-  { key: 'milestone', label: '里程碑', width: '90px' },
+  { key: 'milestone', label: '里程碑', width: '5.625rem' },
   { key: 'parent', label: '父级', width: '8.75rem' },
   { key: 'level', label: '层级', width: '5rem' },
-  { key: 'lock', label: '锁定', width: '90px' },
+  { key: 'lock', label: '锁定', width: '5.625rem' },
   { key: 'notes', label: '备注', width: '11.25rem' },
-  { key: 'actions', label: '操作', width: '128px' },
+  { key: 'actions', label: '操作', width: '8rem' },
 ]
 
 export function PlanningTreeView({
@@ -191,7 +191,7 @@ export function PlanningTreeView({
   const visibleExtraColumns = EXTRA_COLUMNS.filter((column) => extraColumns.includes(column.key))
   const gridColumns = [...BASE_COLUMNS, ...visibleExtraColumns]
   const gridTemplateColumns = gridColumns.map((column) => column.width).join(' ')
-  const gridMinWidth = `calc(${gridColumns.map((column) => column.width.replace(/^minmax\(([^,]+),.*\)$/, '$1')).join(' + ')})`
+  const gridMinWidth = `calc(${gridColumns.map((column) => column.width).join(' + ')})`
   const extraColumnLabels = Object.fromEntries(EXTRA_COLUMNS.map((column) => [column.key, column.label])) as Record<
     ExtraColumnKey,
     string
@@ -477,7 +477,7 @@ export function PlanningTreeView({
             {emptyLabel}
           </div>
         ) : (
-          <ScrollArea className="max-h-[35rem]">
+          <ScrollArea className="max-h-[35rem] overflow-x-auto">
             <div style={{ minWidth: gridMinWidth }}>
               <div
                 className="grid items-center gap-3 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-wider text-slate-500"
@@ -569,7 +569,7 @@ export function PlanningTreeView({
 
                   <div className="min-w-0 truncate text-right text-sm text-slate-700 tabular-nums">{renderValue(row.durationLabel)}</div>
 
-                  <div className="flex min-w-0 items-center gap-2">
+                  <div className="flex min-w-0 items-center gap-2 overflow-hidden">
                     <div className="flex min-w-0 flex-wrap items-center gap-2">
                       {row.statusLabel ? <Badge variant="secondary">{row.statusLabel}</Badge> : null}
                       {row.mappingStatus ? (

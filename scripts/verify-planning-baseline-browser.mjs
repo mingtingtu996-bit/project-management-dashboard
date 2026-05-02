@@ -198,6 +198,76 @@ function json(body, status = 200) {
   }
 }
 
+async function detectBaselineEditorOverlap(page) {
+  return page.evaluate(() => {
+    function rectOf(element) {
+      const rect = element.getBoundingClientRect()
+      return {
+        left: rect.left,
+        right: rect.right,
+        top: rect.top,
+        bottom: rect.bottom,
+        width: rect.width,
+        height: rect.height,
+      }
+    }
+
+    function intersects(a, b) {
+      const horizontal = Math.min(a.right, b.right) - Math.max(a.left, b.left)
+      const vertical = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top)
+      return horizontal > 2 && vertical > 2
+    }
+
+    const inputs = Array.from(document.querySelectorAll('[data-baseline-editor-cell]'))
+      .filter((element) => element instanceof HTMLElement)
+
+    const issues = []
+    for (const input of inputs) {
+      const inputRect = rectOf(input)
+      const row = input.closest('[style*="grid-template-columns"]')
+      if (row instanceof HTMLElement) {
+        const rowRect = rectOf(row)
+        if (
+          inputRect.left < rowRect.left - 2
+          || inputRect.right > rowRect.right + 2
+          || inputRect.top < rowRect.top - 2
+          || inputRect.bottom > rowRect.bottom + 2
+        ) {
+          issues.push({
+            type: 'input-outside-row',
+            cell: input.getAttribute('data-baseline-editor-cell'),
+            inputRect,
+            rowRect,
+          })
+        }
+      }
+    }
+
+    for (let index = 0; index < inputs.length; index += 1) {
+      for (let nextIndex = index + 1; nextIndex < inputs.length; nextIndex += 1) {
+        const left = inputs[index]
+        const right = inputs[nextIndex]
+        if (left.closest('[style*="grid-template-columns"]') !== right.closest('[style*="grid-template-columns"]')) {
+          continue
+        }
+        const leftRect = rectOf(left)
+        const rightRect = rectOf(right)
+        if (intersects(leftRect, rightRect)) {
+          issues.push({
+            type: 'input-overlap',
+            left: left.getAttribute('data-baseline-editor-cell'),
+            right: right.getAttribute('data-baseline-editor-cell'),
+            leftRect,
+            rightRect,
+          })
+        }
+      }
+    }
+
+    return issues
+  })
+}
+
 async function isHttpReady(url) {
   try {
     const response = await fetch(url)
@@ -249,6 +319,18 @@ function buildMockResponse(urlString) {
 
   if (pathname === `/api/projects/${projectId}`) {
     return json({ success: true, data: mockProject })
+  }
+
+  if (pathname === `/api/members/${projectId}/me`) {
+    return json({
+      success: true,
+      data: {
+        permissionLevel: 'owner',
+        globalRole: 'company_admin',
+        canEdit: true,
+        canManageTeam: true,
+      },
+    })
   }
 
   if (
@@ -375,6 +457,23 @@ async function main() {
     await page.getByTestId('baseline-info-open-revision-pool').waitFor({ state: 'visible', timeout: 10000 })
     await page.getByTestId('baseline-open-change-log').waitFor({ state: 'visible', timeout: 10000 })
 
+    await page.getByTestId('baseline-version-chip-baseline-v7').click()
+    const draftResumeDialog = page.getByTestId('planning-draft-resume-dialog')
+    const hasDraftResumeDialog = await draftResumeDialog.waitFor({ state: 'visible', timeout: 1000 }).then(() => true).catch(() => false)
+    if (hasDraftResumeDialog) {
+      await draftResumeDialog.locator('button').first().click()
+      await draftResumeDialog.waitFor({ state: 'detached', timeout: 10000 })
+    }
+    await page.getByTestId('baseline-info-bar').getByText('可编辑态').first().waitFor({ state: 'visible', timeout: 10000 })
+    await page.locator('[data-baseline-editor-cell]').first().waitFor({ state: 'visible', timeout: 10000 })
+    await page.waitForTimeout(500)
+    await page.screenshot({ path: join(outputDir, 'planning-baseline-edit-page.png'), fullPage: true })
+    const editorOverlapIssues = await detectBaselineEditorOverlap(page)
+    assert(
+      editorOverlapIssues.length === 0,
+      `Baseline editor overlap detected: ${JSON.stringify(editorOverlapIssues.slice(0, 5))}`,
+    )
+
     assert(apiFailures.length === 0, `API proxy failures detected: ${JSON.stringify(apiFailures)}`)
     assert(pageErrors.length === 0, `Browser page errors detected: ${pageErrors.join(' | ')}`)
     assert(consoleErrors.length === 0, `Browser console errors detected: ${consoleErrors.join(' | ')}`)
@@ -384,11 +483,13 @@ async function main() {
       initialUrl,
       readonlyVersionVisible: true,
       revisionEntryVisible: true,
+      editorOverlapIssues,
       apiFailures,
       consoleErrors,
       pageErrors,
       screenshots: {
         page: join(outputDir, 'planning-baseline-page.png'),
+        edit: join(outputDir, 'planning-baseline-edit-page.png'),
       },
     }
 

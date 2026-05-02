@@ -71,7 +71,7 @@ export function TimelineScaleHeader({
             <>
               <div className="absolute inset-y-0 w-px bg-rose-400/80" style={{ left: todayX }} />
               <div
-                className="absolute top-1 -translate-x-1/2 rounded-full bg-rose-500 px-2 py-0.5 text-xs font-semibold text-white shadow-sm"
+                className="absolute top-1 -translate-x-1/2 rounded-full bg-rose-500 px-2 py-0.5 text-xs font-semibold text-white shadow-[var(--el-1)]"
                 style={{ left: todayX }}
               >
                 今天

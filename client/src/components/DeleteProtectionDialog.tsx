@@ -51,7 +51,7 @@ export function DeleteProtectionDialog({
 
   return (
     <AlertDialog open={open} onOpenChange={(nextOpen) => !loading && onOpenChange(nextOpen)}>
-      <AlertDialogContent data-testid={testId} className="max-w-md">
+      <AlertDialogContent data-testid={testId} className="max-w-[var(--dialog-sm-width)]">
         <AlertDialogHeader className="space-y-3">
           <div className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-rose-50 text-rose-600">
             <Trash2 className="h-5 w-5" />

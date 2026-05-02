@@ -73,7 +73,7 @@ export function CompanyHealthHeatmap({ items }: CompanyHealthHeatmapProps) {
             columns={['项目', '状态', '健康度', '总体进度']}
             rows={sortedItems.map((item) => [item.name, item.statusLabel, item.healthScore, `${item.progress}%`])}
           >
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
               {sortedItems.map((item) => (
                 <div
                   key={item.id}

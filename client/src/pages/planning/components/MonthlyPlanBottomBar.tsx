@@ -52,7 +52,7 @@ export function MonthlyPlanBottomBar({
     <div data-testid="planning-shared-batch-bar" className="fixed bottom-4 left-1/2 z-40 w-[calc(100%-2rem)] max-w-[var(--content-max-width)] -translate-x-1/2 px-0">
       <Card
         data-testid="monthly-plan-bottom-bar"
-        className="border-slate-700/70 bg-slate-950 px-4 py-3 text-white shadow-2xl shadow-slate-950/30"
+        className="border-slate-700/70 bg-slate-950 px-4 py-3 text-white shadow-[var(--el-4)] shadow-slate-950/30"
       >
         <div className="flex flex-col gap-3">
           <div className="grid items-center gap-3 lg:grid-cols-[minmax(16.25rem,1fr)_auto_minmax(20rem,1fr)]">

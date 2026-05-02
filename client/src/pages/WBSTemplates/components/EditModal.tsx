@@ -62,7 +62,7 @@ export function EditModal({
     }}>
       <DialogContent
         closeLabel="关闭编辑模板弹窗"
-        className="max-h-[calc(100vh-4rem)] max-w-xl overflow-y-auto border-slate-200 p-0"
+        className="max-h-[calc(100vh-4rem)] max-w-[var(--dialog-md-width)] overflow-y-auto border-slate-200 p-0"
       >
         <DialogHeader className="px-6 py-4 pr-16">
           <DialogTitle className="font-semibold text-slate-800">编辑模板</DialogTitle>
@@ -77,7 +77,7 @@ export function EditModal({
               value={name}
               onChange={e => setName(e.target.value)}
               placeholder="例：18层住宅标准施工工序"
-              className="w-full text-sm px-3 py-2 border border-slate-200 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
             />
           </div>
           <div>
@@ -86,7 +86,7 @@ export function EditModal({
               value={templateType}
               onValueChange={setTemplateType}
             >
-              <SelectTrigger className="h-10 rounded-lg border-slate-200 bg-white text-sm">
+              <SelectTrigger className="h-10 rounded-xl border-slate-200 bg-white text-sm">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -103,11 +103,11 @@ export function EditModal({
               onChange={e => setDescription(e.target.value)}
               rows={3}
               placeholder="简要描述该模板的适用场景..."
-              className="w-full text-sm px-3 py-2 border border-slate-200 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 resize-none"
+              className="w-full resize-none rounded-xl border border-slate-200 px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
             />
           </div>
           {error && (
-            <p className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">{error}</p>
+            <p className="rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>
           )}
         </div>
         <Separator />
@@ -119,7 +119,7 @@ export function EditModal({
             onClick={handleSave}
             loading={saving}
             disabled={!name.trim()}
-            className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors shadow-sm"
+            className="flex items-center gap-2 rounded-xl bg-blue-600 px-6 py-2 text-sm font-medium text-white shadow-[var(--el-1)] transition-colors hover:bg-blue-700"
           >
             保存
           </Button>

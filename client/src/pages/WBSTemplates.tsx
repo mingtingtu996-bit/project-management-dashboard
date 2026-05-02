@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowRight, FileSymlink, Layers3, Sparkles, WandSparkles } from 'lucide-react'
+import { AlertTriangle, ArrowRight, FileSymlink, Layers3, Sparkles, WandSparkles } from 'lucide-react'
 
 import { Breadcrumb } from '@/components/Breadcrumb'
 import { EmptyState } from '@/components/EmptyState'
@@ -8,6 +8,7 @@ import { PageHeader } from '@/components/PageHeader'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { LoadingState } from '@/components/ui/loading-state'
 import { safeStorageGet, safeStorageSet } from '@/lib/browserStorage'
 import { useToast } from '@/hooks/use-toast'
@@ -310,7 +311,7 @@ function TemplateCardItem({
   return (
     <Card
       data-testid={`wbs-template-card-${template.id}`}
-      className={`cursor-pointer shadow-sm transition-all hover:shadow-md ${
+      className={`cursor-pointer shadow-[var(--el-1)] transition-all hover:shadow-[var(--el-2)] ${
         selected
           ? 'border-blue-300 ring-2 ring-blue-100'
           : 'border-slate-200'
@@ -383,6 +384,7 @@ export default function WBSTemplates() {
 
   const [templates, setTemplates] = useState<TemplateRecord[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [bootstrapGuide, setBootstrapGuide] = useState<PlanningBootstrapGuide | null>(null)
   const [guideOpen, setGuideOpen] = useState(false)
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null)
@@ -416,6 +418,7 @@ export default function WBSTemplates() {
     const load = async () => {
       if (!projectId) return
       setLoading(true)
+      setLoadError(null)
 
       try {
         const [templateResponse, contextResponse] = await Promise.all([
@@ -454,6 +457,7 @@ export default function WBSTemplates() {
       } catch (error) {
         if (controller.signal.aborted) return
         console.error('Failed to load planning WBS templates', error)
+        setLoadError('计划编制模板没能加载出来，请稍后再试。')
         toast({
           title: '加载失败',
           description: '计划编制模板没能加载出来，请稍后再试。',
@@ -718,9 +722,16 @@ export default function WBSTemplates() {
         subtitle="把模板资产、历史经验和工期校准统一收口，再一键生成项目基线。"
       />
 
-      <div className="mt-6 grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+      {loadError ? (
+        <Alert variant="destructive">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertDescription>{loadError}</AlertDescription>
+        </Alert>
+      ) : null}
+
+      <div className="content-sidebar-grid mt-6">
         <Card className="surface-card">
-          <CardContent className="space-y-5 p-6">
+          <CardContent className="space-y-5 p-5">
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant="secondary" className="gap-1">
                 <Sparkles className="h-3.5 w-3.5" />
@@ -737,13 +748,13 @@ export default function WBSTemplates() {
               {guide.subtitle ? <p className="text-sm leading-6 text-slate-500">{guide.subtitle}</p> : null}
             </div>
 
-            <div className="grid gap-3 md:grid-cols-3">
+            <div className="grid gap-4 md:grid-cols-3">
               {guide.quickActions.map((action) => (
                 <Button variant="ghost"
                   key={action.path}
                   type="button"
                   onClick={() => void handleBootstrap(action.path)}
-                  className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left transition hover:border-slate-300 hover:bg-white"
+                  className="rounded-2xl border border-slate-200 bg-slate-50 p-5 text-left transition hover:border-slate-300 hover:bg-white"
                 >
                   <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-slate-900">
                     <WandSparkles className="h-4 w-4 text-slate-500" />
@@ -771,7 +782,7 @@ export default function WBSTemplates() {
             <CardTitle className="text-base">当前项目状态</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            <div className="rounded-xl border border-slate-200 bg-white p-4">
+            <div className="rounded-xl border border-slate-200 bg-white p-5">
               <div className="text-sm font-medium text-slate-900">{projectName}</div>
               <div className="mt-1 text-sm text-slate-600">状态：{projectStatusLabel}</div>
             </div>
@@ -804,7 +815,7 @@ export default function WBSTemplates() {
         </div>
       ) : null}
 
-      <div className="mt-6 grid gap-4 xl:grid-cols-[1fr_20rem]">
+      <div className="content-sidebar-grid mt-6">
         <Card className="surface-card">
           <CardHeader>
             <CardTitle className="text-base">模板列表</CardTitle>

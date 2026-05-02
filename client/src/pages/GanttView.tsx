@@ -21,6 +21,7 @@ import { useDebounce } from '@/hooks/useDebounce'
 import { usePermissions } from '@/hooks/usePermissions'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Separator } from '@/components/ui/separator'
 import { toast } from '@/hooks/use-toast'
 import { LoadingState } from '@/components/ui/loading-state'
@@ -43,6 +44,7 @@ import {
 } from '@/lib/taskBusinessStatus'
 import { ConditionWarningModal } from '@/components/ConditionWarningModal'
 import { DeleteProtectionDialog } from '@/components/DeleteProtectionDialog'
+import { Breadcrumb } from '@/components/Breadcrumb'
 import { GanttViewSkeleton } from '@/components/ui/page-skeleton'
 import { Pagination, usePagination } from '@/components/ui/Pagination'
 import { GanttViewHeader } from './GanttViewHeader'
@@ -637,6 +639,7 @@ export default function GanttView() {
     return new Set(safeJsonParse<string[]>(saved, [], `gantt collapsed ${id ?? 'unknown'}`))
   })
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [pageLoadError, setPageLoadError] = useState<string | null>(null)
   const [batchUpdating, setBatchUpdating] = useState(false)
   const { confirmDialog, setConfirmDialog, openConfirm } = useConfirmDialog()
   // 新建子任务时继承的父任务 ID
@@ -1276,10 +1279,12 @@ export default function GanttView() {
         })()
       if (!options?.signal?.aborted) {
         setTasks(data)
+        setPageLoadError(null)
       }
     } catch (error) {
       if (!isAbortError(error)) {
         console.error('加载甘特任务失败:', error)
+        setPageLoadError(getApiErrorMessage(error, '甘特任务加载失败，请刷新后重试。'))
         toast({ title: '加载任务失败，请重试', variant: 'destructive' })
       }
     }
@@ -1378,6 +1383,7 @@ export default function GanttView() {
       if (!isAbortError(error)) {
         console.error('加载项目摘要失败:', error)
         toast({ title: '加载项目摘要失败，请重试', variant: 'destructive' })
+        setPageLoadError(getApiErrorMessage(error, '项目摘要加载失败，请刷新后重试。'))
         setProjectSummary(null)
       }
     }
@@ -3623,6 +3629,13 @@ export default function GanttView() {
 
   return (
     <div className="page-shell page-enter pb-20">
+      <Breadcrumb
+        items={[
+          { label: currentProject?.name?.trim() || '当前项目', href: `/projects/${id}/dashboard` },
+          { label: '甘特图' },
+        ]}
+      />
+
       <GanttViewHeader
         projectId={id || ''}
         projectName={currentProject?.name}
@@ -3649,6 +3662,12 @@ export default function GanttView() {
           }
         }}
       />
+
+      {pageLoadError ? (
+        <Alert variant="destructive">
+          <AlertDescription>{pageLoadError}</AlertDescription>
+        </Alert>
+      ) : null}
 
       <div data-testid="task-workspace-layer-l2">
         <GanttStatsCards projectStats={projectStats} />

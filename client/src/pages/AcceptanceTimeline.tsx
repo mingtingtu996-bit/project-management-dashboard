@@ -8,6 +8,7 @@ import { EmptyState } from '@/components/EmptyState'
 import { PageHeader } from '@/components/PageHeader'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Card, CardContent } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { DisabledReasonTooltip } from '@/components/ui/disabled-reason-tooltip'
@@ -229,6 +230,7 @@ export default function AcceptanceTimeline() {
   const [customTypes, setCustomTypes] = useState<AcceptanceType[]>([])
   const [projectSummary, setProjectSummary] = useState<AcceptanceProjectSummary>(EMPTY_ACCEPTANCE_SUMMARY)
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
   const [detailLoading, setDetailLoading] = useState(false)
@@ -254,6 +256,7 @@ export default function AcceptanceTimeline() {
       return
     }
     setLoading(true)
+    setLoadError(null)
     try {
       const [snapshot, typeRows, summary] = await Promise.all([
         acceptanceApi.getFlowSnapshot(projectId),
@@ -264,7 +267,9 @@ export default function AcceptanceTimeline() {
       setCustomTypes(typeRows)
       setProjectSummary(summary)
     } catch (error) {
-      toast({ title: '加载失败', description: error instanceof Error ? error.message : '无法加载验收时间轴', variant: 'destructive' })
+      const message = error instanceof Error ? error.message : '无法加载验收时间轴'
+      setLoadError(message)
+      toast({ title: '加载失败', description: message, variant: 'destructive' })
     } finally {
       setLoading(false)
     }
@@ -554,7 +559,7 @@ export default function AcceptanceTimeline() {
   }
 
   return (
-    <div className="page-shell page-enter space-y-6">
+    <div className="page-shell page-enter">
       {currentProject && (
         <Breadcrumb
           items={[
@@ -578,6 +583,12 @@ export default function AcceptanceTimeline() {
           </Button>
         </DisabledReasonTooltip>
       </PageHeader>
+
+      {loadError ? (
+        <Alert variant="destructive">
+          <AlertDescription>{loadError}</AlertDescription>
+        </Alert>
+      ) : null}
 
       <section data-testid="acceptance-summary-panel" className="space-y-4 rounded-card border border-slate-100 bg-white p-5 shadow-[var(--el-1)]">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -607,7 +618,7 @@ export default function AcceptanceTimeline() {
               {stageSummaries.map((stage) => (
                 <div
                   key={stage.key}
-                  className={cn('h-full motion-safe:transition-[width] duration-700 ease-out', stage.progressClass)}
+                  className={cn('h-full motion-safe:transition-[width] motion-safe:duration-700 motion-safe:ease-out', stage.progressClass)}
                   style={{ width: `${totalStageCount > 0 ? (stage.passed / totalStageCount) * 100 : 0}%` }}
                   data-testid={`acceptance-progress-segment-${stage.key}`}
                 />
@@ -634,7 +645,7 @@ export default function AcceptanceTimeline() {
             <Badge variant="outline" className="rounded-full px-3 py-1">楼栋：{getBuildingLabel(buildingFilter === 'all' ? null : buildingFilter)}</Badge>
           </div>
         </div>
-        <div className="mt-4 grid gap-3 lg:grid-cols-2 2xl:grid-cols-4">
+        <div className="mt-4 grid gap-4 lg:grid-cols-2 2xl:grid-cols-4">
           <div className="space-y-1">
             <Label htmlFor="acceptance-scope-select" className="text-xs text-slate-500">范围</Label>
             <Select value={scopeFilter} onValueChange={(value) => setScopeFilter(value as 'all' | (typeof SCOPE_LEVEL_ORDER)[number])}>
@@ -686,7 +697,7 @@ export default function AcceptanceTimeline() {
         </div>
         <div className="mt-3">
           <CollapsibleSection title="更多筛选" count={3} defaultOpen={false}>
-            <div className="grid gap-3 pt-2 lg:grid-cols-3">
+            <div className="grid gap-4 pt-2 lg:grid-cols-3">
               <div className="space-y-1">
                 <Label className="text-xs text-slate-500">仅看阻塞</Label>
                 <Button variant="ghost"
@@ -849,7 +860,7 @@ function AcceptanceStageCard({ stage }: { stage: ReturnType<typeof buildAcceptan
         </div>
         <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100">
           <div
-            className={cn('h-full motion-safe:transition-[width] duration-700 ease-out', stage.progressClass)}
+            className={cn('h-full motion-safe:transition-[width] motion-safe:duration-700 motion-safe:ease-out', stage.progressClass)}
             style={{ width: `${stage.percent}%` }}
           />
         </div>
@@ -923,7 +934,7 @@ function TypeManagerDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && handleClose()}>
-      <DialogContent className="max-h-[80vh] max-w-xl overflow-y-auto">
+      <DialogContent className="max-h-[80vh] max-w-[var(--dialog-md-width)] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Palette className="h-5 w-5" />
@@ -931,7 +942,7 @@ function TypeManagerDialog({
           </DialogTitle>
           <DialogDescription className="sr-only">管理系统默认类型和自定义验收类型。</DialogDescription>
         </DialogHeader>
-        <div className="mt-4 space-y-6">
+        <div className="mt-4 space-y-8">
           <div>
             <h4 className="mb-3 text-sm font-medium text-slate-700">系统默认类型</h4>
             <div className="flex flex-wrap gap-2">
@@ -1127,7 +1138,7 @@ function AddPlanDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent className="max-w-xl">
+      <DialogContent className="max-w-[var(--dialog-md-width)]">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Plus className="h-5 w-5" />
@@ -1167,7 +1178,7 @@ function AddPlanDialog({
             <Input type="date" value={plannedDate} onChange={(event) => setPlannedDate(event.target.value)} className="mt-1" />
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid gap-4 sm:grid-cols-2">
             <div>
               <Label>范围层级</Label>
               <Select value={scopeLevel} onValueChange={(value) => setScopeLevel(value as 'project' | 'building' | 'unit' | 'specialty')}>

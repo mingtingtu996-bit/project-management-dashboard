@@ -138,7 +138,7 @@ export default function Header() {
         </div>
 
         {currentProject && isProjectPage && currentProject.primary_invitation_code ? (
-          <Button variant="outline" size="sm" onClick={copyInvitationCode} className="hidden h-10 rounded-2xl border-slate-200 bg-white px-3 text-slate-600 shadow-none hover:bg-slate-50 lg:inline-flex">
+          <Button variant="outline" size="sm" onClick={copyInvitationCode} className="hidden h-10 border-slate-200 bg-white px-3 text-slate-600 shadow-none hover:bg-slate-50 lg:inline-flex">
             {copied ? (
               <>
                 <Check className="mr-1 h-4 w-4 text-emerald-500" />
@@ -153,7 +153,7 @@ export default function Header() {
           </Button>
         ) : null}
 
-        <Button asChild variant="ghost" size="icon" className="relative hidden h-10 w-10 rounded-2xl text-slate-600 hover:bg-slate-100 sm:flex">
+        <Button asChild variant="ghost" size="icon" className="relative hidden h-10 w-10 text-slate-600 hover:bg-slate-100 sm:flex">
           <Link to="/notifications" aria-label="打开提醒中心">
             <Bell className="h-5 w-5" />
             {bellBadgeCount > 0 ? (
@@ -166,7 +166,7 @@ export default function Header() {
 
         <DropdownMenu open={accountMenuOpen} onOpenChange={setAccountMenuOpen}>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" aria-label="打开用户菜单" className="h-10 rounded-2xl px-2 text-slate-700 hover:bg-slate-100 lg:px-3">
+            <Button variant="ghost" aria-label="打开用户菜单" className="h-10 px-2 text-slate-700 hover:bg-slate-100 lg:px-3">
               <Avatar className="h-8 w-8">
                 <AvatarFallback>{userName.slice(0, 2)}</AvatarFallback>
               </Avatar>

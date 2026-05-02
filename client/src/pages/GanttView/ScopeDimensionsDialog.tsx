@@ -279,7 +279,7 @@ export function ScopeDimensionsDialog({ projectId, open, onOpenChange }: ScopeDi
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto rounded-2xl shadow-[var(--el-4)]" data-testid="gantt-scope-dimensions-dialog">
+      <DialogContent className="max-h-[90vh] max-w-[var(--dialog-lg-width)] overflow-y-auto rounded-2xl shadow-[var(--el-4)]" data-testid="gantt-scope-dimensions-dialog">
         <DialogHeader>
           <DialogTitle>范围维度</DialogTitle>
           <DialogDescription className="sr-only">维护项目的范围维度绑定</DialogDescription>
@@ -299,7 +299,7 @@ export function ScopeDimensionsDialog({ projectId, open, onOpenChange }: ScopeDi
               正在加载范围维度...
             </div>
           ) : (
-            <div className="grid gap-3 md:grid-cols-2">
+            <div className="grid gap-4 md:grid-cols-2">
               {SCOPE_KEYS.map((key) => {
                 const section = sectionMap.get(key)
                 const selected = draft[key] ?? []

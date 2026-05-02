@@ -127,19 +127,19 @@ function DailyWorkflowCard({ onDismiss, projectId }: { onDismiss: () => void; pr
             每日工作流
           </div>
           <div className="mt-3 flex flex-wrap items-center gap-2 text-xs font-medium text-blue-900">
-            <span className="rounded-lg bg-white/80 px-2.5 py-1 shadow-sm">每天</span>
+            <span className="rounded-lg bg-white/80 px-2.5 py-1 shadow-[var(--el-1)]">每天</span>
             {workflowSteps.map((step) => (
               <span key={step.label} className="inline-flex items-center gap-2">
                 <ArrowRight className="h-3.5 w-3.5 text-blue-500" />
                 {projectId ? (
                   <Link
                     to={step.path.replace(':id', projectId)}
-                    className="rounded-lg bg-white/80 px-2.5 py-1 shadow-sm transition-all hover:bg-white hover:shadow-md"
+                    className="rounded-lg bg-white/80 px-2.5 py-1 shadow-[var(--el-1)] transition-all hover:bg-white hover:shadow-[var(--el-2)]"
                   >
                     {step.label}
                   </Link>
                 ) : (
-                  <span className="rounded-lg bg-white/80 px-2.5 py-1 shadow-sm">{step.label}</span>
+                  <span className="rounded-lg bg-white/80 px-2.5 py-1 shadow-[var(--el-1)]">{step.label}</span>
                 )}
               </span>
             ))}

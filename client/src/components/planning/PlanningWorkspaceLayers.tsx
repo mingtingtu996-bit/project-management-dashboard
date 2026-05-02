@@ -35,8 +35,7 @@ export function PlanningWorkspaceLayers({
 
       <div
         className={cn(
-          'grid gap-4',
-          aside ? 'xl:grid-cols-[minmax(0,1.5fr)_minmax(20rem,26.25rem)]' : 'grid-cols-1',
+          aside ? 'content-sidebar-grid' : 'grid grid-cols-1 gap-4',
         )}
       >
         <section data-testid="planning-layer-l4" className={cn('min-w-0 space-y-4', mainClassName)}>

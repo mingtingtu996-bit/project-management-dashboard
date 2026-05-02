@@ -4,6 +4,7 @@ import { AlertTriangle, ArrowRight, FolderOpen, Plus, RefreshCw } from 'lucide-r
 import { Breadcrumb } from '@/components/Breadcrumb'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { DisabledReasonTooltip } from '@/components/ui/disabled-reason-tooltip'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
@@ -147,6 +148,7 @@ export default function PreMilestones() {
   const [ledger, setLedger] = useState<CertificateLedgerResponse | null>(null)
   const [detail, setDetail] = useState<CertificateDetailResponse | null>(null)
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const selectedCertificateId = searchParams.get('cert') || null
   const selectedCertificateIdRef = useRef<string | null>(selectedCertificateId)
 
@@ -193,6 +195,7 @@ export default function PreMilestones() {
 
     let cancelled = false
     setLoading(true)
+    setLoadError(null)
 
     const load = async () => {
       try {
@@ -221,6 +224,9 @@ export default function PreMilestones() {
         }
       } catch (error) {
         console.error('Failed to load pre-milestone board', error)
+        if (!cancelled) {
+          setLoadError('前期证照数据加载失败，请刷新后重试。')
+        }
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -683,6 +689,12 @@ export default function PreMilestones() {
         title="前期证照"
       />
 
+      {loadError ? (
+        <Alert variant="destructive">
+          <AlertDescription>{loadError}</AlertDescription>
+        </Alert>
+      ) : null}
+
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           {projectOptions.length > 1 && (
@@ -928,7 +940,7 @@ export default function PreMilestones() {
       />
 
       <Dialog open={expectedDateDialogOpen} onOpenChange={setExpectedDateDialogOpen}>
-        <DialogContent className="max-w-xl" data-testid="expected-date-dialog">
+        <DialogContent className="max-w-[var(--dialog-md-width)]" data-testid="expected-date-dialog">
           <DialogHeader>
             <DialogTitle>预计具备开工条件日期</DialogTitle>
             <DialogDescription className="sr-only">显示证件依赖关系和预计开工时间推算依据。</DialogDescription>

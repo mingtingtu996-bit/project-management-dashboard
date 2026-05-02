@@ -412,7 +412,7 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
                       'flex w-full items-center justify-between gap-4 px-5 py-4 text-left transition-colors hover:bg-slate-50',
                       node && 'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2',
                       !hasPlannedDate && 'bg-amber-50/30',
-                      isDragging && 'shadow-lg ring-1 ring-blue-300',
+                      isDragging && 'shadow-[var(--el-3)] ring-1 ring-blue-300',
                       selectedPlanIds.has(plan.id) && 'bg-blue-50/60',
                     )}
                   >
@@ -448,7 +448,7 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
   <TooltipContent>拖拽排序</TooltipContent>
 </Tooltip>
                     <div className="flex min-w-0 items-center gap-4">
-                      <div className="flex h-10 w-10 items-center justify-center rounded-xl text-white shadow-sm" style={{ backgroundColor: type?.color || CHART_SERIES.primary }}>
+                      <div className="flex h-10 w-10 items-center justify-center rounded-xl text-white shadow-[var(--el-1)]" style={{ backgroundColor: type?.color || CHART_SERIES.primary }}>
                         <span className="text-lg">{type?.icon || '验'}</span>
                       </div>
                       <div className="min-w-0">

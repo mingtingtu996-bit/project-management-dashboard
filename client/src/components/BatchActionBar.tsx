@@ -17,7 +17,6 @@
  */
 import { X } from 'lucide-react'
 import { LucideIcon } from 'lucide-react'
-import { useSidebarOpen } from '@/hooks/useStore'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 
@@ -44,25 +43,19 @@ interface BatchActionBarProps {
 
 export function BatchActionBar({ selectedCount, onClear, actions, className }: BatchActionBarProps) {
   const visible = selectedCount > 0
-  const sidebarOpen = useSidebarOpen()
 
   return (
     <div
       data-testid="batch-action-bar"
       className={cn(
-        'fixed bottom-0 left-0 right-0 z-40 transition-transform duration-300',
-        visible ? 'translate-y-0' : 'translate-y-full',
+        'fixed bottom-4 left-1/2 z-40 w-[calc(100%-2rem)] max-w-[var(--content-max-width)] -translate-x-1/2 px-0 transition-transform duration-300',
+        visible ? 'translate-y-0' : 'translate-y-[140%]',
         className
       )}
       aria-live="polite"
     >
-      <div
-        className={cn(
-          'mx-auto max-w-[var(--content-max-width)] px-4 pb-4 lg:px-6',
-          sidebarOpen ? 'lg:pl-72' : 'lg:pl-20',
-        )}
-      >
-        <div className="flex items-center justify-between gap-4 rounded-xl bg-slate-900 px-4 py-3 shadow-xl text-white">
+      <div className="mx-auto w-full">
+        <div className="flex items-center justify-between gap-4 rounded-xl bg-slate-900 px-4 py-3 text-white shadow-[var(--el-4)]">
           {/* 左侧：已选中数量 */}
           <div className="flex items-center gap-3">
             <span className="flex h-6 min-w-[1.5rem] items-center justify-center rounded-full bg-blue-600 px-1.5 text-xs font-bold">

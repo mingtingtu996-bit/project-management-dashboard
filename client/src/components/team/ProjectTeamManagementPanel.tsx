@@ -445,7 +445,7 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
             </div>
           ) : null}
         </div>
-        <div className="mt-4 grid gap-3 md:grid-cols-3">
+        <div className="mt-4 grid gap-4 md:grid-cols-3">
           <Card className="rounded-2xl border-slate-200 shadow-none"><CardHeader className="pb-2"><CardTitle className="text-sm text-slate-500">公司级角色</CardTitle></CardHeader><CardContent className="text-sm text-slate-700">{getGlobalRoleLabel(access?.globalRole)}</CardContent></Card>
           <Card className="rounded-2xl border-slate-200 shadow-none"><CardHeader className="pb-2"><CardTitle className="text-sm text-slate-500">项目级角色</CardTitle></CardHeader><CardContent className="text-sm text-slate-700">{getProjectRoleLabel(access?.permissionLevel)}</CardContent></Card>
           <Card className="rounded-2xl border-slate-200 shadow-none"><CardHeader className="pb-2"><CardTitle className="text-sm text-slate-500">当前状态</CardTitle></CardHeader><CardContent className="space-y-1 text-sm text-slate-700"><div>项目成员 {members.length} 人</div><div>有效邀请码 {activeInvitationCount} 个</div><div>密码重置 {canResetPassword ? '已启用' : '未启用'}</div></CardContent></Card>

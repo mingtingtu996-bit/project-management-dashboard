@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { apiGet, getApiErrorMessage } from '@/lib/apiClient'
+import { EmptyState } from '@/components/EmptyState'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -961,7 +962,7 @@ function PlanningWorkspaceInner() {
   )
 
   const baselineWorkspaceContent = (
-    <div className="grid gap-4 xl:grid-cols-[minmax(0,1.6fr)_22.5rem]">
+    <div className="content-sidebar-grid">
       <div className="space-y-4">
         <Card className="border-slate-200">
           <CardContent className="flex flex-wrap items-center justify-between gap-3 p-5">
@@ -1140,7 +1141,7 @@ function PlanningWorkspaceInner() {
               </div>
               <Badge variant="secondary">深链预置</Badge>
             </div>
-            <div className="grid gap-3 text-sm text-slate-700 sm:grid-cols-2">
+            <div className="grid gap-4 text-sm text-slate-700 sm:grid-cols-2">
               <div>
                 <div className="text-xs uppercase tracking-wider text-slate-500">候选</div>
                 <div className="mt-1 font-medium text-slate-900">{revisionDraftContext.candidateTitle}</div>
@@ -1359,7 +1360,7 @@ function PlanningWorkspaceInner() {
             </div>
           </div>
 
-          <div className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 sm:grid-cols-3">
+          <div className="grid gap-4 rounded-2xl border border-slate-200 bg-white p-4 sm:grid-cols-3">
             <div className="space-y-1">
               <div className="text-xs uppercase tracking-wider text-slate-500">系统建议采纳率</div>
               <div className="text-sm font-medium text-slate-900">{closeoutItems.length ? `${closeoutProcessedCount}/${closeoutItems.length}` : '暂无'}</div>
@@ -1384,7 +1385,7 @@ function PlanningWorkspaceInner() {
         onOpenChange={planningKeyboard.setOpen}
       />
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_26.25rem]">
+      <div className="content-sidebar-grid">
         <div className="space-y-4">
           <CloseoutGroupedList
             groups={closeoutGroups}
@@ -1444,7 +1445,21 @@ function PlanningWorkspaceInner() {
   )
 
   if (!params.id) {
-    return null
+    return (
+      <PlanningPageShell
+        projectName="当前项目"
+        title="计划编制"
+        description=""
+        tabs={[]}
+      >
+        <EmptyState
+          icon={AlertTriangle}
+          title="未找到当前项目"
+          description="缺少项目上下文，暂时无法加载计划编制工作台。"
+          className="max-w-none"
+        />
+      </PlanningPageShell>
+    )
   }
 
   return (

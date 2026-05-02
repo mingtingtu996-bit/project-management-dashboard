@@ -30,7 +30,7 @@ export function CertificateWorkItemDialog({
 }: CertificateWorkItemDialogProps) {
   return (
     <Dialog open={open} onOpenChange={(value) => !value && onClose()}>
-      <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
+      <DialogContent className="max-h-[90vh] max-w-[var(--dialog-lg-width)] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{mode === 'create' ? '新增办理事项' : '编辑办理事项'}</DialogTitle>
         </DialogHeader>
@@ -164,7 +164,7 @@ export function CertificateWorkItemDialog({
             />
           </label>
 
-          <div className="md:col-span-2 grid gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+          <div className="md:col-span-2 grid gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
             <div className="text-sm font-medium text-slate-700">关联证件</div>
             <div className="flex flex-wrap gap-2">
               {CERTIFICATE_ORDER.map((entry) => {

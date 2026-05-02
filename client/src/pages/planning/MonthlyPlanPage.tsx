@@ -1707,7 +1707,7 @@ export default function MonthlyPlanPage() {
 
   if (!currentProject) {
     return (
-      <div className="space-y-4 p-6">
+      <div className="page-shell">
         <Alert>
           <Clock className="h-4 w-4" />
           <AlertDescription>请先选择项目，再进入月度计划页面。</AlertDescription>
@@ -1810,7 +1810,7 @@ export default function MonthlyPlanPage() {
                 </Button>
               </div>
 
-              <div className="grid gap-3 md:grid-cols-5">
+              <div className="grid gap-4 md:grid-cols-5">
                 {monthWindow.map((month) => {
                   const versions = planVersions.filter((item) => item.month === month)
                   const version =
@@ -1838,7 +1838,7 @@ export default function MonthlyPlanPage() {
                       onClick={() => void handleMonthSwitch(month)}
                       className={`h-auto min-h-14 w-full whitespace-normal rounded-2xl border px-4 py-3 text-left transition ${
                         active
-                          ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-500 shadow-sm'
+                          ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-500 shadow-[var(--el-1)]'
                           : 'border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-white'
                       } ${isFutureMonth && !active ? 'border-slate-300 bg-white text-slate-700' : ''}`}
                     >
@@ -1872,7 +1872,7 @@ export default function MonthlyPlanPage() {
             </CardContent>
           </Card>
 
-          <div data-testid="monthly-plan-info-bar" className="grid gap-3 rounded-2xl border border-slate-100 bg-white p-4 shadow-[var(--el-1)] md:grid-cols-6">
+          <div data-testid="monthly-plan-info-bar" className="grid gap-4 rounded-2xl border border-slate-100 bg-white p-5 shadow-[var(--el-1)] md:grid-cols-6">
             <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
               <div className="text-xs text-slate-500">当前月份</div>
               <div className="mt-1 text-lg font-semibold text-slate-900">{formatMonthLabel(selectedMonth)}</div>
@@ -1915,7 +1915,7 @@ export default function MonthlyPlanPage() {
               data-testid="monthly-plan-change-summary-strip"
               className={
                 changeSummary.isLargeScale
-                  ? 'border-blue-200 bg-blue-50 shadow-sm'
+                  ? 'border-blue-200 bg-blue-50 shadow-[var(--el-1)]'
                   : 'surface-card'
               }
             >
@@ -1935,7 +1935,7 @@ export default function MonthlyPlanPage() {
                   </Badge>
                 </div>
 
-                <div className="grid gap-3 md:grid-cols-5">
+                <div className="grid gap-4 md:grid-cols-5">
                   <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
                     <div className="text-xs text-slate-500">新增承接数</div>
                     <div className="mt-1 text-lg font-semibold text-slate-900">{changeSummary.addedCount}</div>
@@ -2034,7 +2034,7 @@ export default function MonthlyPlanPage() {
           </div>
         </div>
 
-        <div className="grid gap-3 md:grid-cols-2">
+        <div className="grid gap-4 md:grid-cols-2">
           {SOURCE_OPTIONS.map((option) => {
             const active = sourceMode === option.key
             const disabled = option.key === 'baseline' && !latestConfirmedBaseline
@@ -2047,7 +2047,7 @@ export default function MonthlyPlanPage() {
                 disabled={disabled || readOnly}
                 className={`h-auto w-full rounded-2xl border px-4 py-4 text-left transition-colors duration-200 [&>span]:block [&>span]:w-full ${
                   active
-                    ? 'border-blue-500 bg-blue-50 font-semibold text-slate-900 shadow-sm'
+                    ? 'border-blue-500 bg-blue-50 font-semibold text-slate-900 shadow-[var(--el-1)]'
                     : 'border-slate-200 bg-slate-50 text-slate-500 hover:border-slate-300 hover:bg-white'
                 } ${disabled ? 'cursor-not-allowed opacity-60' : ''}`}
               >
@@ -2073,7 +2073,7 @@ export default function MonthlyPlanPage() {
 
   const main = noBaselineIntercept ? (
     <Card className="border-amber-200 bg-amber-50">
-      <CardContent className="space-y-4 p-6 text-center">
+      <CardContent className="space-y-4 p-5 text-center">
         <div className="space-y-2">
           <div className="text-lg font-semibold text-amber-900">当前项目还没有正式基线</div>
         </div>
@@ -2167,7 +2167,7 @@ export default function MonthlyPlanPage() {
                 </Button>
               </div>
             </div>
-            <div className="grid gap-3 md:grid-cols-4">
+            <div className="grid gap-4 md:grid-cols-4">
               <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
                 <div className="text-xs text-slate-500">当前来源模式</div>
                 <div className="mt-1 text-sm font-semibold text-slate-900">{sourceMode === 'baseline' ? '项目基线' : '当前任务列表'}</div>
@@ -2292,7 +2292,7 @@ export default function MonthlyPlanPage() {
       icon={CalendarDays}
       title={`${formatMonthLabel(selectedMonth)} 尚未生成月度草稿`}
       description="生成草稿后可在月度计划树中维护本月承诺与执行项。"
-      className="rounded-card empty-state-frame border-slate-300 bg-slate-50 p-6"
+      className="rounded-card empty-state-frame border-slate-300 bg-slate-50 p-5"
       action={(
         <div className="flex flex-wrap gap-2">
           <Button type="button" onClick={() => void handleGenerateDraft()} loading={actionLoading === 'generate'} disabled={readOnly}>
@@ -2328,7 +2328,7 @@ export default function MonthlyPlanPage() {
                 </div>
                 <Badge variant={quickAvailable ? 'secondary' : 'outline'}>{quickAvailable ? '快确认可用' : '建议标准确认'}</Badge>
               </div>
-              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                 {[
                   { key: 'total', label: '条目总数', value: confirmSummary.totalItemCount },
                   { key: 'new', label: '本月新增数', value: confirmSummary.newlyAddedCount },
@@ -2408,7 +2408,7 @@ export default function MonthlyPlanPage() {
                   ? `${formatMonthLabel(activePlan.month)} · ${getMonthlyPlanStatusLabel(activePlan.status)} · ${activePlan.items.length} 项`
                   : '当前月份还没有真实版本。'}
               </div>
-              <div className="grid gap-3 sm:grid-cols-2">
+              <div className="grid gap-4 sm:grid-cols-2">
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3">
                   <div className="text-xs text-slate-500">来源版本</div>
                   <div className="mt-1 text-sm font-medium text-slate-900">
@@ -2594,7 +2594,7 @@ export default function MonthlyPlanPage() {
           if (open) setRegenStep(1)
         }}
       >
-        <AlertDialogContent data-testid="monthly-plan-regenerate-dialog" className="max-w-3xl rounded-2xl shadow-[var(--el-4)]">
+        <AlertDialogContent data-testid="monthly-plan-regenerate-dialog" className="max-w-[var(--dialog-lg-width)] rounded-2xl shadow-[var(--el-4)]">
           <AlertDialogHeader>
             <AlertDialogTitle>重新生成本月草稿？</AlertDialogTitle>
             <AlertDialogDescription className="not-sr-only leading-6 text-slate-600">
@@ -2747,4 +2747,3 @@ export default function MonthlyPlanPage() {
     </PlanningPageShell>
   )
 }
-

@@ -136,7 +136,7 @@ export function CertificateDependenciesDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent className="max-h-[88vh] max-w-3xl overflow-y-auto">
+      <DialogContent className="max-h-[88vh] max-w-[var(--dialog-lg-width)] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Link2 className="h-5 w-5" />

@@ -270,7 +270,7 @@ export const GanttTaskRows = memo(function GanttTaskRows(props: GanttTaskRowsPro
           />
         ) : (
           <div className="overflow-x-auto">
-            <div className="min-w-[72.5rem] divide-y">
+            <div className="min-w-[88rem] divide-y">
             {visibleRows.map((node) => (
               <TaskRow
                 key={node.id}

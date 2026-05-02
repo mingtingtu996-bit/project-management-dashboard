@@ -243,7 +243,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
   return (
     <>
       <Dialog open={props.dialogOpen} onOpenChange={props.setDialogOpen}>
-        <DialogContent className="max-h-[90vh] max-w-xl overflow-y-auto rounded-2xl shadow-[var(--el-4)]">
+        <DialogContent className="max-h-[90vh] max-w-[var(--dialog-md-width)] overflow-y-auto rounded-2xl shadow-[var(--el-4)]">
           <DialogHeader>
             <DialogTitle>
               {props.editingTask ? '编辑任务' : props.newTaskParentId ? '添加子任务' : '新建任务'}
@@ -659,7 +659,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
       />
 
       <Dialog open={props.milestoneDialogOpen} onOpenChange={props.setMilestoneDialogOpen}>
-        <DialogContent className="max-h-[90vh] max-w-md overflow-y-auto rounded-2xl shadow-[var(--el-4)]">
+        <DialogContent className="max-h-[90vh] max-w-[var(--dialog-sm-width)] overflow-y-auto rounded-2xl shadow-[var(--el-4)]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Flag className="h-4 w-4 text-amber-500" />
@@ -710,7 +710,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
       </Dialog>
 
       <Dialog open={props.conditionDialogOpen} onOpenChange={props.setConditionDialogOpen}>
-        <DialogContent className="max-h-[90vh] max-w-xl overflow-y-auto rounded-2xl shadow-[var(--el-4)]">
+        <DialogContent className="max-h-[90vh] max-w-[var(--dialog-md-width)] overflow-y-auto rounded-2xl shadow-[var(--el-4)]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <ShieldCheck className="h-4 w-4 text-emerald-600" />
@@ -943,7 +943,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
           }
         }}
       >
-        <DialogContent className="max-h-[90vh] max-w-md overflow-y-auto rounded-2xl shadow-[var(--el-4)]" data-testid="gantt-force-satisfy-dialog">
+        <DialogContent className="max-h-[90vh] max-w-[var(--dialog-sm-width)] overflow-y-auto rounded-2xl shadow-[var(--el-4)]" data-testid="gantt-force-satisfy-dialog">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <ShieldCheck className="h-4 w-4 text-amber-600" />
@@ -993,7 +993,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
       </Dialog>
 
       <Dialog open={props.obstacleDialogOpen} onOpenChange={props.setObstacleDialogOpen}>
-        <DialogContent className="max-h-[90vh] max-w-xl overflow-y-auto rounded-2xl shadow-[var(--el-4)]">
+        <DialogContent className="max-h-[90vh] max-w-[var(--dialog-md-width)] overflow-y-auto rounded-2xl shadow-[var(--el-4)]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <AlertOctagon className="h-4 w-4 text-amber-600" />
@@ -1303,7 +1303,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
           if (!open) props.setNewTaskConditionPromptId(null)
         }}
       >
-        <DialogContent className="max-h-[90vh] max-w-md overflow-y-auto rounded-2xl shadow-[var(--el-4)]">
+        <DialogContent className="max-h-[90vh] max-w-[var(--dialog-sm-width)] overflow-y-auto rounded-2xl shadow-[var(--el-4)]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <ShieldCheck className="h-4 w-4 text-emerald-600" />
@@ -1333,7 +1333,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
         open={props.confirmDialog.open}
         onOpenChange={(open) => !open && props.setConfirmDialog((previous) => ({ ...previous, open: false }))}
       >
-        <DialogContent className="max-h-[90vh] max-w-md overflow-y-auto rounded-2xl shadow-[var(--el-4)]">
+        <DialogContent className="max-h-[90vh] max-w-[var(--dialog-sm-width)] overflow-y-auto rounded-2xl shadow-[var(--el-4)]">
           <DialogHeader>
             <DialogTitle>{props.confirmDialog.title}</DialogTitle>
             <DialogDescription className="sr-only">确认</DialogDescription>

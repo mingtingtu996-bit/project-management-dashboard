@@ -160,7 +160,7 @@ export default function Sidebar() {
         aria-label="打开导航菜单"
         aria-controls="app-sidebar"
         aria-expanded={mobileOpen}
-        className="fixed left-4 top-4 z-50 rounded-xl border border-slate-100 bg-white/95 shadow-lg backdrop-blur transition-colors duration-200 hover:bg-slate-100 hover:shadow-[var(--el-1)] lg:hidden"
+        className="fixed left-4 top-4 z-50 rounded-xl border border-slate-100 bg-white/95 shadow-[var(--el-3)] backdrop-blur transition-colors duration-200 hover:bg-slate-100 hover:shadow-[var(--el-1)] lg:hidden"
       >
         <Menu className="h-5 w-5 text-slate-700" />
       </Button>

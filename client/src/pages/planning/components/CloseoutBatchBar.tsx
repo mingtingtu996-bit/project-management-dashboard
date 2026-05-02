@@ -33,7 +33,7 @@ export function CloseoutBatchBar({
       <Card
         data-testid="closeout-batch-bar"
         className={cn(
-          'flex items-center justify-between gap-4 border-slate-700/70 bg-slate-950 px-4 py-3 text-white shadow-2xl shadow-slate-950/30 transition-all',
+          'flex items-center justify-between gap-4 border-slate-700/70 bg-slate-950 px-4 py-3 text-white shadow-[var(--el-4)] shadow-slate-950/30 transition-all',
           'w-full max-w-[var(--content-max-width)]',
           drawerOpen ? 'h-14 opacity-90' : 'h-auto'
         )}

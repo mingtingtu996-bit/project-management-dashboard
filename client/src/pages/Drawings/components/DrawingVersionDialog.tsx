@@ -143,7 +143,7 @@ export function DrawingVersionDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl border-slate-200">
+      <DialogContent className="max-w-[var(--dialog-lg-width)] border-slate-200">
         <DialogHeader>
           <DialogTitle className="text-slate-900">
             {packageCard?.packageName ? `${packageCard.packageName} 版本窗口` : '版本变更窗口'}
@@ -224,7 +224,7 @@ export function DrawingVersionDialog({
                       placeholder="例如：主体结构施工图"
                     />
                   </div>
-                  <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="grid gap-4 sm:grid-cols-2">
                     <div className="space-y-2">
                       <Label htmlFor="drawing-version-create-code">图号</Label>
                       <Input

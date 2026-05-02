@@ -64,7 +64,7 @@ export const GanttStatsCards = memo(function GanttStatsCards({ projectStats }: G
   ]
 
   return (
-    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
       {cards.map((card) => (
         <Card key={card.label} variant="metric">
           <CardContent className="space-y-2 p-5">
@@ -427,7 +427,7 @@ export const GanttFilterBar = memo(function GanttFilterBar({
           </Button>
         </div>
 
-        <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-5">
+        <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-5">
           <div className="relative xl:col-span-2">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
             <input

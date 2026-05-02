@@ -150,7 +150,7 @@ function LinkedSection({
   children: ReactNode
 }) {
   return (
-    <section className="rounded-2xl border border-slate-100 bg-white p-4 shadow-[var(--el-1)]" data-testid={testId}>
+    <section className="rounded-2xl border border-slate-100 bg-white p-5 shadow-[var(--el-1)]" data-testid={testId}>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h4 className="text-sm font-semibold text-slate-900">{title}</h4>
@@ -324,7 +324,7 @@ export function CertificateDetailDrawer({
           </div>
         ) : (
           <div className="grid gap-4">
-            <section className="rounded-xl border border-slate-100 bg-white p-4 shadow-[var(--el-1)]" data-testid="certificate-detail-basic-info">
+            <section className="rounded-xl border border-slate-100 bg-white p-5 shadow-[var(--el-1)]" data-testid="certificate-detail-basic-info">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <h3 className="text-base font-semibold text-slate-900">{detail.certificate.certificate_name}</h3>
@@ -342,7 +342,7 @@ export function CertificateDetailDrawer({
                   <div className="mt-1">更新时间：{detail.certificate.latest_record_at || '待补充'}</div>
                 </div>
               </div>
-              <div className="mt-4 grid gap-3 text-sm text-slate-600 md:grid-cols-2 xl:grid-cols-4">
+              <div className="mt-4 grid gap-4 text-sm text-slate-600 md:grid-cols-2 xl:grid-cols-4">
                 <div className="rounded-xl bg-slate-50 p-3 tabular-nums">计划完成：{detail.certificate.planned_finish_date || '待补充'}</div>
                 <div className="rounded-xl bg-slate-50 p-3 tabular-nums">实际完成：{detail.certificate.actual_finish_date || '待补充'}</div>
                 <div className="rounded-xl bg-slate-50 p-3">下一动作：{detail.certificate.next_action || '待补充'}</div>
@@ -357,7 +357,7 @@ export function CertificateDetailDrawer({
             </section>
 
             {siblingCertificates.length > 0 ? (
-              <section className="rounded-xl border border-slate-100 bg-white p-4 shadow-[var(--el-1)]">
+              <section className="rounded-xl border border-slate-100 bg-white p-5 shadow-[var(--el-1)]">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <h4 className="text-sm font-semibold text-slate-900">证照切换</h4>
@@ -385,7 +385,7 @@ export function CertificateDetailDrawer({
 
             <section className="grid gap-4 xl:grid-cols-[1.3fr_1fr]">
               <div className="grid gap-4">
-                <div ref={workItemsSectionRef} className="rounded-xl border border-slate-100 bg-white p-4 shadow-[var(--el-1)]" data-testid="certificate-detail-linked-files">
+                <div ref={workItemsSectionRef} className="rounded-xl border border-slate-100 bg-white p-5 shadow-[var(--el-1)]" data-testid="certificate-detail-linked-files">
                   <div className="mb-3 flex items-center justify-between gap-3">
                     <div>
                       <h4 className="text-sm font-semibold text-slate-900">共享事项与依赖</h4>
@@ -430,7 +430,7 @@ export function CertificateDetailDrawer({
               </div>
 
               <div className="grid gap-4">
-                <section className="rounded-xl border border-slate-100 bg-white p-4 shadow-[var(--el-1)]" data-testid="certificate-detail-conditions">
+                <section className="rounded-xl border border-slate-100 bg-white p-5 shadow-[var(--el-1)]" data-testid="certificate-detail-conditions">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <h4 className="text-sm font-semibold text-slate-900">条件清单</h4>
                     {canEdit ? (
@@ -471,7 +471,7 @@ export function CertificateDetailDrawer({
                   </div>
                 </section>
 
-                <section className="rounded-xl border border-slate-100 bg-white p-4 shadow-[var(--el-1)]">
+                <section className="rounded-xl border border-slate-100 bg-white p-5 shadow-[var(--el-1)]">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
                       <h4 className="text-sm font-semibold text-slate-900">升级处置</h4>
@@ -512,7 +512,7 @@ export function CertificateDetailDrawer({
                   </div>
                 </section>
 
-                <section className="rounded-xl border border-slate-100 bg-white p-4 shadow-[var(--el-1)]">
+                <section className="rounded-xl border border-slate-100 bg-white p-5 shadow-[var(--el-1)]">
                   <h4 className="text-sm font-semibold text-slate-900">状态记录</h4>
                   <div className="mt-3 grid gap-2">
                     {detail.records.map((record) => (

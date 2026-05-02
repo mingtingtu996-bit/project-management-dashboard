@@ -96,7 +96,7 @@ export default function FeedbackModal({ isOpen, onClose, onSubmit }: FeedbackMod
     <Dialog open={isOpen} onOpenChange={(open) => {
       if (!open) onClose()
     }}>
-      <DialogContent className="max-h-[calc(100vh-4rem)] max-w-xl overflow-y-auto">
+      <DialogContent className="max-h-[calc(100vh-4rem)] max-w-[var(--dialog-md-width)] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <MessageSquare className="h-5 w-5 text-primary" />
@@ -205,7 +205,7 @@ export function FeedbackButton() {
         onClick={() => setIsOpen(true)}
         aria-label="打开反馈"
         data-overlap-ignore="true"
-        className="fixed bottom-5 right-5 z-30 h-11 w-11 rounded-full bg-primary p-0 text-primary-foreground shadow-lg transition-all hover:shadow-[var(--el-3)] hover:bg-primary/90"
+        className="fixed bottom-5 right-5 z-30 h-11 w-11 rounded-full bg-primary p-0 text-primary-foreground shadow-[var(--el-3)] transition-all hover:shadow-[var(--el-3)] hover:bg-primary/90"
         
       >
         <MessageSquare className="h-5 w-5" />

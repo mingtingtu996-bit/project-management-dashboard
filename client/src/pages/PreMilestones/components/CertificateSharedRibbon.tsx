@@ -36,7 +36,7 @@ export function CertificateSharedRibbon({
         <h3 className="text-sm font-semibold text-slate-900">共享事项条带</h3>
         <span className="text-xs text-slate-500">用于表达跨证共享办理事项</span>
       </div>
-      <div className="grid gap-3">
+      <div className="grid gap-4">
         {items.map((item) => {
           const active = selectedWorkItemId === item.work_item_id
           const hovered = hoveredWorkItemId === item.work_item_id
@@ -55,9 +55,9 @@ export function CertificateSharedRibbon({
               style={dimmed ? { opacity: 0.4 } : undefined}
               className={`w-full rounded-xl border px-4 py-3 text-left transition-all ${
                 active
-                  ? 'border-blue-300 bg-blue-50 shadow-sm'
+                  ? 'border-blue-300 bg-blue-50 shadow-[var(--el-1)]'
                   : hovered
-                    ? 'border-indigo-200 bg-indigo-50/60 shadow-sm'
+                    ? 'border-indigo-200 bg-indigo-50/60 shadow-[var(--el-1)]'
                     : 'border-slate-200 bg-slate-50/80 hover:border-slate-300 hover:bg-slate-50'
               }`}
             >

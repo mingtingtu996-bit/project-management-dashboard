@@ -164,7 +164,7 @@ export default function DashboardHealthCard({
                   <span className={`w-20 text-sm flex-shrink-0 ${tone.textClass}`}>{dim.name}</span>
                   <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden">
                     <div
-                      className={`h-full rounded-full transition-all duration-700 ${tone.barClass}`}
+                      className={`h-full rounded-full motion-safe:transition-all motion-safe:duration-700 ${tone.barClass}`}
                       style={{ width: `${getProgressWidth(dim.score)}%` }}
                     />
                   </div>

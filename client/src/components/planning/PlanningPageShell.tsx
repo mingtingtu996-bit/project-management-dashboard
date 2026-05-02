@@ -80,7 +80,7 @@ export function PlanningPageShell({
                   onClick={tab.onClick}
                   className={cn(
                     'rounded-full px-4',
-                    tab.active ? 'shadow-md shadow-blue-500/20' : 'bg-white'
+                    tab.active ? 'shadow-[var(--el-2)] shadow-blue-500/20' : 'bg-white'
                   )}
                 >
                   {tab.label}

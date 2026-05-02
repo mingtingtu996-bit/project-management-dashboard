@@ -36,13 +36,13 @@ export function BatchActionBar({
     <div
       data-testid="planning-shared-batch-bar"
       className={cn(
-        'fixed bottom-4 left-0 right-0 z-40 px-4 transition-transform duration-300',
+        'fixed bottom-4 left-1/2 z-40 w-[calc(100%-2rem)] max-w-[var(--content-max-width)] -translate-x-1/2 px-0 transition-transform duration-300',
         visible ? 'translate-y-0' : 'translate-y-[140%]',
         className,
       )}
       aria-live="polite"
     >
-      <div className="mx-auto flex max-w-[var(--content-max-width)] items-center justify-between gap-4 rounded-2xl border border-slate-700/70 bg-slate-950 px-4 py-3 text-white shadow-2xl shadow-slate-950/30">
+      <div className="mx-auto flex w-full items-center justify-between gap-4 rounded-2xl border border-slate-700/70 bg-slate-950 px-4 py-3 text-white shadow-[var(--el-4)]">
         <div className="flex items-center gap-3">
           <span className="flex h-7 min-w-7 items-center justify-center rounded-full bg-blue-500 px-2 text-xs font-bold text-slate-950">
             {selectedCount}

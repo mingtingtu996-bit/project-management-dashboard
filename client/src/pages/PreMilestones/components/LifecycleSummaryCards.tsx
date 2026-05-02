@@ -90,7 +90,7 @@ export function LifecycleSummaryCards({ summary, onClickBlockingCertificate, onC
             key={item.label}
             type={item.onClick ? 'button' : undefined}
             onClick={item.onClick}
-            className={`${item.bg} border ${item.border} rounded-xl p-4 flex items-center gap-4 shadow-sm${item.onClick ? ' cursor-pointer hover:opacity-80 transition-opacity text-left w-full' : ''}`}
+            className={`${item.bg} border ${item.border} rounded-xl p-4 flex items-center gap-4 shadow-[var(--el-1)]${item.onClick ? ' cursor-pointer hover:opacity-80 transition-opacity text-left w-full' : ''}`}
           >
             <div className={`w-10 h-10 rounded-xl ${item.bg} flex items-center justify-center border ${item.border}`}>
               {item.icon}

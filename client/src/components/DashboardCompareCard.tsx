@@ -227,7 +227,7 @@ function DailyProgressSection({ projectId }: { projectId?: string }) {
 
   return (
     <div className="space-y-3">
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-3 gap-4">
         <div className="rounded-2xl border border-blue-100 bg-gradient-to-br from-blue-50 to-indigo-50 p-3">
           <div className="mb-1 flex items-center gap-2">
             <Activity className="h-4 w-4 text-blue-500" />
@@ -259,7 +259,7 @@ function DailyProgressSection({ projectId }: { projectId?: string }) {
             <div className="text-sm font-medium text-slate-900">状态变化指标摘要</div>
             <div className="text-xs text-slate-500">基于当日快照差值</div>
           </div>
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+          <div className="grid grid-cols-2 gap-4 md:grid-cols-5">
             <div className="rounded-lg bg-white px-3 py-2">
               <div className="text-xs text-slate-500">条件新增</div>
               <div className="mt-1 text-lg font-semibold text-slate-900">{data.snapshot_summary.conditions_added}</div>
@@ -341,7 +341,7 @@ function ComparePeriodCard({
         : 'text-slate-600 bg-slate-50 border-slate-200'
 
   return (
-    <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+    <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-[var(--el-1)]">
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="text-sm font-medium text-slate-900">{result.period_label}</div>
@@ -357,7 +357,7 @@ function ComparePeriodCard({
         </div>
       </div>
 
-      <div className="mt-4 grid grid-cols-2 gap-3 text-xs md:grid-cols-4">
+      <div className="mt-4 grid grid-cols-2 gap-4 text-xs md:grid-cols-4">
         <div className="rounded-xl bg-slate-50 px-3 py-2">
           <div className="text-slate-500">更新任务</div>
           <div className="mt-1 text-base font-semibold text-slate-900">{result.summary?.tasks_updated ?? 0}</div>
@@ -471,7 +471,7 @@ export default function DashboardCompareCard({ projectId }: DashboardCompareCard
   }, [projectId])
 
   return (
-    <Card className="border-slate-100 shadow-sm">
+    <Card className="border-slate-100 shadow-[var(--el-1)]">
       <CardHeader className="pb-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <CardTitle className="flex items-center gap-2 text-lg font-semibold">
@@ -516,7 +516,7 @@ export default function DashboardCompareCard({ projectId }: DashboardCompareCard
             {COMPARE_BLOCKS.map((block) => {
               const blockState = blocks[block.granularity]
               return (
-                <Card key={block.granularity} className="border-slate-100 bg-white shadow-sm">
+                <Card key={block.granularity} className="border-slate-100 bg-white shadow-[var(--el-1)]">
                   <CardHeader className="pb-3">
                     <div className="flex items-start justify-between gap-3">
                       <div>

@@ -382,7 +382,7 @@ export default function ProjectInfoCard({
             )}
           </div>
 
-          <div className="mt-3 grid gap-3 md:grid-cols-3">
+          <div className="mt-3 grid gap-4 md:grid-cols-3">
             {SCOPE_KEYS.map((key) => {
               const section = scopeSectionMap.get(key)
               const selected = section?.selected ?? []

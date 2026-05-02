@@ -28,7 +28,7 @@ export function BaselineSwitchMarker({
     : null
 
   return (
-    <Card data-testid="baseline-switch-marker" className="border-blue-200 shadow-sm">
+    <Card data-testid="baseline-switch-marker" className="border-blue-200 shadow-[var(--el-1)]">
       <CardHeader className="pb-3">
         <CardTitle className="text-base">基线版本切换标记</CardTitle>
       </CardHeader>

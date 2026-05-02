@@ -64,7 +64,7 @@ export function DrawingDetailDrawer({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="left-auto right-0 top-0 h-full max-h-none w-full max-w-3xl translate-x-0 translate-y-0 rounded-none border-l border-slate-200 bg-white p-0 shadow-[var(--el-4)] data-[state=open]:slide-in-from-right-0"
+        className="left-auto right-0 top-0 h-full max-h-none w-full max-w-[var(--dialog-lg-width)] translate-x-0 translate-y-0 rounded-none border-l border-slate-200 bg-white p-0 shadow-[var(--el-4)] data-[state=open]:slide-in-from-right-0"
         data-testid="drawing-detail-drawer"
       >
         <div className="flex h-full flex-col">
@@ -116,7 +116,7 @@ export function DrawingDetailDrawer({
                       )}
                     </div>
 
-                    <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="grid gap-4 sm:grid-cols-2">
                       <InfoBox label="当前有效版本" value={packageCard?.currentVersionLabel ?? '未设置'} />
                       <InfoBox label="齐套度" value={`${packageCard?.completenessRatio ?? 0}%`} />
                       <InfoBox label="缺失项" value={`${packageCard?.missingRequiredCount ?? 0} 项`} />
@@ -227,7 +227,7 @@ export function DrawingDetailDrawer({
                       <ShieldCheck className="h-4 w-4 text-emerald-600" />
                       施工 / 验收可用性
                     </div>
-                    <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="grid gap-4 sm:grid-cols-2">
                       <InfoBox label="可施工" value={readinessLabel(packageCard?.isReadyForConstruction)} />
                       <InfoBox label="可验收" value={readinessLabel(packageCard?.isReadyForAcceptance)} />
                     </div>

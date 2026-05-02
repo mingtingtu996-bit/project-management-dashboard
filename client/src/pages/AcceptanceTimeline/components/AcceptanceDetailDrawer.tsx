@@ -409,7 +409,7 @@ export default function AcceptanceDetailDrawer({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto" data-testid="acceptance-detail-drawer">
+      <DialogContent className="max-h-[90vh] max-w-[var(--dialog-lg-width)] overflow-y-auto" data-testid="acceptance-detail-drawer">
         <DialogHeader>
           <div className="flex items-start justify-between gap-4">
             <div className="space-y-2">
@@ -516,7 +516,7 @@ export default function AcceptanceDetailDrawer({
 
         <Card className="rounded-xl border border-slate-100 bg-slate-50 p-5 shadow-[var(--el-1)]" data-testid="acceptance-task-linkage">
           <h4 className="mb-2 text-sm font-semibold text-slate-900">任务联动</h4>
-          <div className="grid gap-3 md:grid-cols-3">
+          <div className="grid gap-4 md:grid-cols-3">
             <CompactMetric label="楼栋归属" value={planRow?.building_id || '项目级'} />
             <CompactMetric label="里程碑挂靠" value={planRow?.milestone_id ? '已挂靠' : '未挂靠'} />
             <CompactMetric label="前置验收项" value={String(planRow?.predecessor_plan_ids?.length ?? 0)} />
@@ -556,7 +556,7 @@ export default function AcceptanceDetailDrawer({
             subtitle=""
             data-testid="acceptance-external-prerequisites"
           >
-            <div className="grid gap-3 md:grid-cols-3">
+            <div className="grid gap-4 md:grid-cols-3">
               <CompactMetric label="前置项" value={String(predecessorPlanIds.length)} />
               <CompactMetric label="后续受影响" value={String(planRow?.downstream_block_count ?? successorPlanIds.length)} />
               <CompactMetric label="可申报" value={planRow?.can_submit ? '是' : '否'} />
@@ -568,8 +568,8 @@ export default function AcceptanceDetailDrawer({
               </div>
             ) : null}
 
-            <div className="grid gap-3 rounded-2xl empty-state-frame border-slate-200 bg-slate-50 p-5">
-              <div className="grid gap-3 md:grid-cols-2">
+            <div className="grid gap-4 rounded-2xl empty-state-frame border-slate-200 bg-slate-50 p-5">
+              <div className="grid gap-4 md:grid-cols-2">
                 <label className="grid gap-1 text-xs text-slate-500">
                   条件类型
                   <input
@@ -649,7 +649,7 @@ export default function AcceptanceDetailDrawer({
               </div>
             </div>
 
-            <div className="grid gap-3">
+            <div className="grid gap-4">
               <CompactPanel label="资料与条件" count={prerequisites.length} />
               {prerequisites.length > 0 ? prerequisites.map((item) => {
                 const isDrawing = item.source_entity_type === 'drawing' || item.source_entity_type === 'drawing_package'
@@ -739,8 +739,8 @@ export default function AcceptanceDetailDrawer({
             subtitle=""
             data-testid="acceptance-records"
           >
-            <div className="grid gap-3 rounded-2xl empty-state-frame border-slate-200 bg-slate-50 p-5">
-              <div className="grid gap-3 md:grid-cols-2">
+            <div className="grid gap-4 rounded-2xl empty-state-frame border-slate-200 bg-slate-50 p-5">
+              <div className="grid gap-4 md:grid-cols-2">
                 <label className="grid gap-1 text-xs text-slate-500">
                   记录类型
                 <input
@@ -798,7 +798,7 @@ export default function AcceptanceDetailDrawer({
               </div>
             </div>
 
-            <div className="grid gap-3">
+            <div className="grid gap-4">
               <CompactPanel label="状态记录区" count={records.length} />
               {records.length > 0 ? records.map((item) => (
                 <LinkedRow
@@ -1000,7 +1000,7 @@ export default function AcceptanceDetailDrawer({
               )}
             </div>
 
-            <div className="mt-3 grid gap-3 lg:grid-cols-[1fr_auto]">
+            <div className="mt-3 grid gap-4 lg:grid-cols-[1fr_auto]">
               <Select
                 value={parallelGroupSelectValue}
                 onValueChange={(value) => setParallelGroupTargetId(value === NO_PARALLEL_GROUP_VALUE ? '' : value)}
@@ -1036,7 +1036,7 @@ export default function AcceptanceDetailDrawer({
               </DisabledReasonTooltip>
             </div>
 
-            <div className="mt-3 grid gap-3 lg:grid-cols-[1fr_auto]">
+            <div className="mt-3 grid gap-4 lg:grid-cols-[1fr_auto]">
               <input
                 value={parallelGroupDraft}
                 onChange={(event) => setParallelGroupDraft(event.target.value)}
@@ -1288,7 +1288,7 @@ function LinkedRow({
   meta?: string | null
 }) {
   return (
-    <Card className="rounded-xl border border-slate-100 bg-white p-5 shadow-sm">
+    <Card className="rounded-xl border border-slate-100 bg-white p-5 shadow-[var(--el-1)]">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 space-y-1">
           <div className="truncate text-sm font-medium text-slate-900">{title}</div>

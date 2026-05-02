@@ -5,12 +5,12 @@ export type SharedTreeRowKind = 'structure' | 'leaf' | 'milestone' | 'edit'
 export const SHARED_TREE_LAYOUT = {
   indentPerLevelPx: 20,
   maxIndentLevel: 5,
-  firstColumnClass: 'w-[35%] max-w-[35%] min-w-80',
+  firstColumnClass: 'w-[42%] max-w-[42%] min-w-96 overflow-hidden',
   rowHeightClass: {
-    structure: 'h-9',
-    leaf: 'h-10',
-    milestone: 'h-10',
-    edit: 'h-12',
+    structure: 'min-h-12 py-2',
+    leaf: 'min-h-12 py-2',
+    milestone: 'min-h-12 py-2',
+    edit: 'min-h-16 py-2',
   } as const,
 }
 

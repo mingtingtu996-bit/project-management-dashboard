@@ -36,28 +36,95 @@ const mockProject = {
   updated_at: now,
 }
 
-const mockTask = {
-  id: 'task-1',
-  project_id: projectId,
-  title: TEXT.taskTitle,
-  description: '涓绘ゼ涓讳綋缁撴瀯鎸佺画鎺ㄨ繘',
-  status: 'in_progress',
-  priority: 'high',
-  progress: 48,
-  start_date: '2026-03-11',
-  end_date: '2026-06-30',
-  planned_start_date: '2026-03-11',
-  planned_end_date: '2026-06-30',
-  assignee_name: TEXT.taskAssignee,
-  assignee_user_id: 'user-1',
-  assignee_unit: TEXT.taskUnit,
-  responsible_unit: TEXT.taskUnit,
-  specialty_type: 'structure',
-  is_milestone: false,
-  wbs_code: '1.1',
-  created_at: now,
-  updated_at: now,
-}
+const mockTasks = [
+  {
+    id: 'task-1',
+    project_id: projectId,
+    title: `${TEXT.taskTitle} - long timeline row label for visual overlap verification`,
+    description: '涓绘ゼ涓讳綋缁撴瀯鎸佺画鎺ㄨ繘',
+    status: 'in_progress',
+    priority: 'high',
+    progress: 48,
+    start_date: '2026-03-11',
+    end_date: '2026-06-30',
+    planned_start_date: '2026-03-11',
+    planned_end_date: '2026-06-30',
+    assignee_name: TEXT.taskAssignee,
+    assignee_user_id: 'user-1',
+    assignee_unit: TEXT.taskUnit,
+    responsible_unit: TEXT.taskUnit,
+    specialty_type: 'structure',
+    is_milestone: false,
+    wbs_code: '1.1',
+    created_at: now,
+    updated_at: now,
+  },
+  {
+    id: 'task-2',
+    project_id: projectId,
+    title: 'Construction drawing review completion and handover coordination package',
+    description: 'Long label stress row',
+    status: 'todo',
+    priority: 'medium',
+    progress: 0,
+    start_date: '2026-02-22',
+    end_date: '2026-03-14',
+    planned_start_date: '2026-02-22',
+    planned_end_date: '2026-03-14',
+    assignee_name: '王工',
+    assignee_unit: '业主工程管理部',
+    responsible_unit: '业主工程管理部',
+    specialty_type: 'design',
+    is_milestone: false,
+    wbs_code: '1.2.1',
+    created_at: now,
+    updated_at: now,
+  },
+  {
+    id: 'task-3',
+    project_id: projectId,
+    title: 'Basement structure construction with extended contractor and owner labels',
+    description: 'Long label stress row',
+    status: 'in_progress',
+    priority: 'high',
+    progress: 65,
+    start_date: '2026-03-21',
+    end_date: '2026-05-30',
+    planned_start_date: '2026-03-21',
+    planned_end_date: '2026-05-30',
+    assignee_name: '王工',
+    assignee_unit: '中建一局总包项目部',
+    responsible_unit: '中建一局总包项目部',
+    specialty_type: 'structure',
+    is_milestone: false,
+    wbs_code: '2.1',
+    created_at: now,
+    updated_at: now,
+  },
+  {
+    id: 'task-4',
+    project_id: projectId,
+    title: 'Mechanical and electrical pipeline pre-embedding milestone coordination',
+    description: 'Long label stress row',
+    status: 'todo',
+    priority: 'high',
+    progress: 10,
+    start_date: '2026-04-20',
+    end_date: '2026-07-04',
+    planned_start_date: '2026-04-20',
+    planned_end_date: '2026-07-04',
+    assignee_name: '陈设总',
+    assignee_unit: '华东建筑设计院',
+    responsible_unit: '华东建筑设计院',
+    specialty_type: 'mep',
+    is_milestone: false,
+    wbs_code: '3.1',
+    created_at: now,
+    updated_at: now,
+  },
+]
+
+const mockTask = mockTasks[0]
 
 const mockCriticalPathSnapshot = {
   projectId,
@@ -101,6 +168,73 @@ function json(body, status = 200) {
     contentType: 'application/json; charset=utf-8',
     body: JSON.stringify(body),
   }
+}
+
+async function detectTimelineOverlap(page) {
+  return page.evaluate(() => {
+    function rectOf(element) {
+      const rect = element.getBoundingClientRect()
+      return {
+        left: rect.left,
+        right: rect.right,
+        top: rect.top,
+        bottom: rect.bottom,
+        width: rect.width,
+        height: rect.height,
+      }
+    }
+
+    function overlaps(a, b) {
+      const horizontal = Math.min(a.right, b.right) - Math.max(a.left, b.left)
+      const vertical = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top)
+      return horizontal > 2 && vertical > 2
+    }
+
+    const issues = []
+    const rows = Array.from(document.querySelectorAll('[id^="gantt-task-row-"]'))
+      .filter((element) => element instanceof HTMLElement)
+
+    for (const row of rows) {
+      const rowRect = rectOf(row)
+      const cells = Array.from(row.children).filter((element) => element instanceof HTMLElement)
+      for (const cell of cells) {
+        const cellRect = rectOf(cell)
+        if (
+          cellRect.left < rowRect.left - 2
+          || cellRect.right > rowRect.right + 2
+          || cellRect.top < rowRect.top - 2
+          || cellRect.bottom > rowRect.bottom + 2
+        ) {
+          issues.push({
+            type: 'timeline-cell-outside-row',
+            row: row.id,
+            text: String(cell.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 80),
+            cellRect,
+            rowRect,
+          })
+        }
+      }
+
+      for (let index = 0; index < cells.length; index += 1) {
+        for (let nextIndex = index + 1; nextIndex < cells.length; nextIndex += 1) {
+          const left = rectOf(cells[index])
+          const right = rectOf(cells[nextIndex])
+          if (overlaps(left, right)) {
+            issues.push({
+              type: 'timeline-cell-overlap',
+              row: row.id,
+              leftText: String(cells[index].textContent || '').replace(/\s+/g, ' ').trim().slice(0, 80),
+              rightText: String(cells[nextIndex].textContent || '').replace(/\s+/g, ' ').trim().slice(0, 80),
+              left,
+              right,
+            })
+          }
+        }
+      }
+    }
+
+    return issues
+  })
 }
 
 async function isHttpReady(url) {
@@ -157,7 +291,7 @@ function buildMockResponse(urlString) {
   }
 
   if (pathname === '/api/tasks') {
-    return json({ success: true, data: [mockTask] })
+    return json({ success: true, data: mockTasks })
   }
 
   if (
@@ -282,6 +416,19 @@ async function main() {
     assert(panelText.includes(TEXT.taskAssignee), `Task detail panel missing assignee: ${TEXT.taskAssignee}`)
     await page.screenshot({ path: join(outputDir, 'gantt-page-detail.png'), fullPage: true })
 
+    await page.getByTestId('gantt-task-detail-panel').locator('button').first().click()
+    await page.getByTestId('gantt-task-detail-panel').waitFor({ state: 'hidden', timeout: 10000 })
+    await page.getByTestId('gantt-switch-timeline-view').click()
+    await page.getByTestId('gantt-timeline-view').waitFor({ state: 'visible', timeout: 10000 })
+    await page.getByTestId('gantt-timeline-scale-day').click()
+    await page.waitForTimeout(300)
+    await page.screenshot({ path: join(outputDir, 'gantt-page-timeline-day.png'), fullPage: true })
+    const timelineOverlapIssues = await detectTimelineOverlap(page)
+    assert(
+      timelineOverlapIssues.length === 0,
+      `Gantt timeline overlap detected: ${JSON.stringify(timelineOverlapIssues.slice(0, 5))}`,
+    )
+
     assert(apiFailures.length === 0, `API proxy failures detected: ${JSON.stringify(apiFailures)}`)
     assert(pageErrors.length === 0, `Browser page errors detected: ${pageErrors.join(' | ')}`)
     assert(consoleErrors.length === 0, `Browser console errors detected: ${consoleErrors.join(' | ')}`)
@@ -290,12 +437,14 @@ async function main() {
       mode: shouldUseMockApi ? 'mock-api' : 'proxy-api',
       initialUrl,
       detailVisible: true,
+      timelineOverlapIssues,
       apiFailures,
       consoleErrors,
       pageErrors,
       screenshots: {
         initial: join(outputDir, 'gantt-page-initial.png'),
         detail: join(outputDir, 'gantt-page-detail.png'),
+        timelineDay: join(outputDir, 'gantt-page-timeline-day.png'),
       },
     }
 

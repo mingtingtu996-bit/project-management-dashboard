@@ -159,7 +159,7 @@ export function BaselineRevisionPoolDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent data-testid="baseline-revision-pool-dialog" className="max-w-3xl">
+      <DialogContent data-testid="baseline-revision-pool-dialog" className="max-w-[var(--dialog-lg-width)]">
         <DialogHeader className="text-left">
           <div className="flex flex-wrap items-center gap-2">
             <DialogTitle>计划修订候选</DialogTitle>
@@ -199,7 +199,7 @@ export function BaselineRevisionPoolDialog({
           </Alert>
         ) : null}
 
-        <div className="grid gap-3 md:grid-cols-4">
+        <div className="grid gap-4 md:grid-cols-4">
           <Card className="border-slate-200 bg-slate-50/70 shadow-none">
             <CardContent className="space-y-1 p-5">
               <div className="text-xs text-slate-500">高优先级候选数</div>
@@ -271,7 +271,7 @@ export function BaselineRevisionPoolDialog({
               </Button>
             ))}
           </div>
-          <div className="grid gap-3 md:grid-cols-[1fr_1fr_1fr_auto]">
+          <div className="grid gap-4 md:grid-cols-[1fr_1fr_1fr_auto]">
             <label className="block space-y-1">
               <span className="text-xs font-medium uppercase tracking-wider text-slate-500">来源</span>
               <Select

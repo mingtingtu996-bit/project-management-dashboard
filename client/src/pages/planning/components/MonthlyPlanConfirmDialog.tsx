@@ -58,7 +58,7 @@ export function MonthlyPlanConfirmDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         data-testid="monthly-plan-confirm-dialog"
-        className="max-h-[90vh] max-w-3xl overflow-y-auto rounded-2xl shadow-[var(--el-4)]"
+        className="max-h-[90vh] max-w-[var(--dialog-lg-width)] overflow-y-auto rounded-2xl shadow-[var(--el-4)]"
       >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-base">
@@ -74,7 +74,7 @@ export function MonthlyPlanConfirmDialog({
             <Badge variant={state === 'failed' ? 'destructive' : 'outline'}>{stateLabel}</Badge>
           </div>
 
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             <Card className="surface-card">
               <CardContent className="space-y-1 p-5">
                 <div className="text-xs text-slate-500">条目总数</div>

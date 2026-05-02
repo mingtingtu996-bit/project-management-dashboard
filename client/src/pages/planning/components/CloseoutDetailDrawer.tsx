@@ -310,7 +310,7 @@ export function CloseoutDetailDrawer({
                 const hasDiff = planStart !== taskStart || planEnd !== taskEnd || planProgress !== taskProgress
 
                 return (
-                  <div className="grid gap-3 md:grid-cols-2">
+                  <div className="grid gap-4 md:grid-cols-2">
                     <div
                       className={cn(
                         'space-y-2 rounded-2xl border p-3',

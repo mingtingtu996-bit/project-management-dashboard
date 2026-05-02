@@ -154,7 +154,7 @@ function TaskSummaryGroupsSection({
                               <div
                                 key={task.id}
                                 className={cn(
-                                  'grid gap-3 rounded-xl px-4 py-3 transition-colors hover:bg-blue-50/60 md:grid-cols-[minmax(0,1fr)_8.75rem_8.75rem_6rem]',
+                                  'grid gap-4 rounded-xl px-4 py-3 transition-colors hover:bg-blue-50/60 md:grid-cols-[minmax(0,1fr)_8.75rem_8.75rem_6rem]',
                                   taskIndex % 2 === 0 ? 'bg-slate-50' : 'bg-white',
                                 )}
                               >

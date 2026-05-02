@@ -69,7 +69,7 @@ export function PreviewModal({
     }}>
       <DialogContent
         closeLabel="关闭模板预览弹窗"
-        className="flex max-h-[calc(100vh-4rem)] max-w-3xl flex-col overflow-hidden border-slate-200 p-0"
+        className="flex max-h-[calc(100vh-4rem)] max-w-[var(--dialog-lg-width)] flex-col overflow-hidden border-slate-200 p-0"
       >
         <DialogHeader className="flex-shrink-0 px-6 py-4 pr-16">
           <div className="flex items-center gap-3">
@@ -252,7 +252,7 @@ export function PreviewModal({
               ) : (
                 <Button variant="ghost"
                   onClick={() => onApply(template)}
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-xl text-sm font-medium flex items-center justify-center gap-2 transition-colors shadow-sm"
+                  className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-xl text-sm font-medium flex items-center justify-center gap-2 transition-colors shadow-[var(--el-1)]"
                 >
                   <IconUpload />
                   应用到项目

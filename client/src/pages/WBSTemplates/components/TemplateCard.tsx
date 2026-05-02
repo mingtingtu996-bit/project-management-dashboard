@@ -133,7 +133,7 @@ export function TemplateCard({
                 />
                 <div
                   role="menu"
-                  className="absolute right-0 top-8 z-20 bg-white border border-slate-100 rounded-xl shadow-lg py-1 w-36 text-sm"
+                  className="absolute right-0 top-8 z-20 bg-white border border-slate-100 rounded-xl shadow-[var(--el-3)] py-1 w-36 text-sm"
                   onKeyDown={(e) => {
                     if (e.key === 'Escape') {
                       e.stopPropagation()
@@ -271,7 +271,7 @@ export function TemplateCard({
           />
           <div
             data-template-interactive="true"
-            className="fixed z-50 bg-white border border-slate-100 rounded-xl shadow-xl py-1 w-44 text-sm"
+            className="fixed z-50 bg-white border border-slate-100 rounded-xl shadow-[var(--el-4)] py-1 w-44 text-sm"
             style={{ top: ctxMenu.y, left: ctxMenu.x }}
           >
             <Button variant="ghost"

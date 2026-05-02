@@ -124,7 +124,7 @@ export function ProjectOverviewSection({
               <FolderKanban className="h-6 w-6 text-slate-500" />
             </div>
             <p className="mb-1 text-base font-semibold text-slate-900">暂无项目</p>
-            <Button onClick={onCreate} className="mt-5 gap-2 rounded-2xl px-5">
+            <Button onClick={onCreate} className="mt-5 gap-2 px-5">
               <Plus className="h-4 w-4" />
               创建项目
             </Button>
@@ -229,7 +229,7 @@ export function ProjectOverviewSection({
                         </div>
                       </div>
 
-                      <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="grid gap-4 sm:grid-cols-2">
                         <div className="rounded-xl border border-white bg-white px-4 py-3">
                           <div className="text-xs text-slate-500">完成率</div>
                           <div className="mt-1 text-xl font-semibold tabular-nums text-slate-900">{overallProgress}%</div>
@@ -259,25 +259,25 @@ export function ProjectOverviewSection({
                     </div>
 
                     <div className="flex flex-wrap gap-2">
-                      <Button asChild className="h-11 gap-2 rounded-2xl px-5">
+                      <Button asChild className="h-11 gap-2 px-5">
                         <Link to={`/projects/${project.id}/dashboard`} data-testid="company-project-dashboard-link">
                           <LayoutDashboard className="h-4 w-4" />
                           进入项目
                         </Link>
                       </Button>
-                      <Button asChild variant="outline" className="h-11 gap-2 rounded-2xl border-slate-200 bg-white px-5">
+                      <Button asChild variant="outline" className="h-11 gap-2 border-slate-200 bg-white px-5">
                         <Link to={`/projects/${project.id}/gantt`} data-testid="company-project-gantt-link">
                           <ListChecks className="h-4 w-4" />
                           任务列表
                         </Link>
                       </Button>
-                      <Button asChild variant="outline" className="h-11 gap-2 rounded-2xl border-slate-200 bg-white px-5">
+                      <Button asChild variant="outline" className="h-11 gap-2 border-slate-200 bg-white px-5">
                         <Link to={`/projects/${project.id}/risks`} data-testid="company-project-risks-link">
                           <AlertTriangle className="h-4 w-4" />
                           风险与问题
                         </Link>
                       </Button>
-                      <Button asChild variant="outline" className="h-11 gap-2 rounded-2xl border-slate-200 bg-white px-5">
+                      <Button asChild variant="outline" className="h-11 gap-2 border-slate-200 bg-white px-5">
                         <Link to={`/projects/${project.id}/milestones`} data-testid="company-project-milestones-link">
                           <Flag className="h-4 w-4" />
                           里程碑

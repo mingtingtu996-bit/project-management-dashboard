@@ -505,7 +505,7 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
         onBlur={() => setHoveredTaskId((current) => (current === taskId ? null : current))}
         
         className={cn(
-          'group flex min-w-44 flex-1 items-center justify-between gap-2 rounded-2xl border px-3 py-2 text-left shadow-sm transition-all hover:-translate-y-px hover:shadow-md',
+          'group flex min-w-44 flex-1 items-center justify-between gap-2 rounded-2xl border px-3 py-2 text-left shadow-[var(--el-1)] transition-all hover:-translate-y-px hover:shadow-[var(--el-2)]',
           getSnapshotTaskClass(snapshotTask),
           !emphasized && 'opacity-45',
           selected && 'ring-2 ring-blue-400 ring-offset-2',
@@ -575,7 +575,7 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
       </div>
 
       {props.error && (
-        <Card className="border-amber-200 bg-amber-50 shadow-sm">
+        <Card className="border-amber-200 bg-amber-50 shadow-[var(--el-1)]">
           <CardContent className="flex items-start gap-3 p-5 text-sm text-amber-900">
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
             <div>
@@ -588,7 +588,7 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
 
       {calculationBanner && (
         <Card
-          className={calculationBanner.tone === 'amber' ? 'border-amber-200 bg-amber-50 shadow-sm' : 'border-red-200 bg-red-50 shadow-sm'}
+          className={calculationBanner.tone === 'amber' ? 'border-amber-200 bg-amber-50 shadow-[var(--el-1)]' : 'border-red-200 bg-red-50 shadow-[var(--el-1)]'}
           data-testid={calculationBanner.testId}
         >
           <CardContent className={calculationBanner.tone === 'amber' ? 'flex items-start gap-3 p-5 text-sm text-amber-900' : 'flex items-start gap-3 p-5 text-sm text-red-900'}>

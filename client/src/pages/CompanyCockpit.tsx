@@ -70,10 +70,10 @@ function buildHeroSparkline(value: number, previous?: number | null) {
 
 function CompanyCockpitSkeleton() {
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <div className="shell-surface overflow-hidden">
         <div className="grid gap-px bg-slate-100 xl:grid-cols-[minmax(0,1.58fr)_25rem]">
-          <div className="space-y-6 bg-white p-6">
+          <div className="space-y-8 bg-white p-5">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
               <div className="space-y-3">
                 <Skeleton className="h-5 w-28 rounded-full" />
@@ -90,7 +90,7 @@ function CompanyCockpitSkeleton() {
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
               {[1, 2, 3, 4].map((item) => (
                 <Card key={item} variant="surface">
-                  <CardContent className="space-y-4 p-6">
+                  <CardContent className="space-y-4 p-5">
                     <div className="flex items-center justify-between">
                       <Skeleton className="h-4 w-24 rounded-full" />
                       <Skeleton className="h-10 w-10 rounded-2xl" />
@@ -103,11 +103,11 @@ function CompanyCockpitSkeleton() {
             </div>
           </div>
 
-          <div className="space-y-4 bg-slate-950 p-6">
+          <div className="space-y-4 bg-slate-950 p-5">
             <Skeleton className="h-5 w-24 rounded-full bg-slate-800" />
             <Skeleton className="h-10 w-44 rounded-2xl bg-slate-800" />
             <Skeleton className="h-4 w-full rounded-full bg-slate-800" />
-            <div className="grid gap-3">
+            <div className="grid gap-4">
               {[1, 2, 3].map((item) => (
                 <Skeleton key={item} className="h-20 rounded-2xl bg-slate-800" />
               ))}
@@ -117,7 +117,7 @@ function CompanyCockpitSkeleton() {
       </div>
 
       <Card variant="surface">
-        <CardContent className="space-y-5 p-6">
+        <CardContent className="space-y-5 p-5">
           <div className="flex items-center justify-between gap-3">
             <Skeleton className="h-6 w-32 rounded-full" />
             <Skeleton className="h-4 w-40 rounded-full" />
@@ -136,7 +136,7 @@ function CompanyCockpitSkeleton() {
       </Card>
 
       <Card variant="surface">
-        <CardContent className="space-y-5 p-6">
+        <CardContent className="space-y-5 p-5">
           <div className="flex flex-wrap gap-3">
             {[1, 2, 3, 4].map((item) => (
               <Skeleton key={item} className="h-10 w-24 rounded-full" />
@@ -518,7 +518,7 @@ export default function CompanyCockpit() {
   if (!isCompanyAdmin) {
     return (
       <div className="page-shell" data-testid="company-cockpit-page">
-        <div className="space-y-6">
+        <div className="space-y-8">
           <Breadcrumb items={[{ label: '公司驾驶舱' }]} />
           <Card data-testid="company-cockpit-access-denied" className="border border-amber-100 bg-amber-50/70 shadow-none">
             <CardContent className="space-y-3 p-5">
@@ -532,7 +532,7 @@ export default function CompanyCockpit() {
 
   return (
     <div className="page-shell" data-testid="company-cockpit-page">
-      <div className="space-y-6">
+      <div className="space-y-8">
         <Breadcrumb items={[{ label: '公司驾驶舱' }]} />
 
         {projects.length === 0 ? (

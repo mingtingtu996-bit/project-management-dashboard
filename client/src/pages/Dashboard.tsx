@@ -1102,7 +1102,7 @@ function DashboardMonthlyTrend({ projectId }: { projectId: string }) {
             </svg>
             {tooltip && (
               <div
-                className="pointer-events-none absolute z-10 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs shadow-md"
+                className="pointer-events-none absolute z-10 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs shadow-[var(--el-2)]"
                 style={{ left: tooltip.x + 8, top: tooltip.y - 60 }}
               >
                 <div className="font-medium text-slate-700">{tooltip.row.month}</div>
@@ -1121,10 +1121,10 @@ function DashboardMonthlyTrend({ projectId }: { projectId: string }) {
           </ChartAccessibleWrapper>
         )}
         <div className="flex flex-wrap gap-2">
-          <Button asChild className="rounded-2xl">
+          <Button asChild>
             <Link data-testid="dashboard-open-monthly-plan" to={monthlyLink}>进入月度计划</Link>
           </Button>
-          <Button asChild variant="outline" className="rounded-2xl border-slate-200 bg-white">
+          <Button asChild variant="outline" className="border-slate-200 bg-white">
             <Link data-testid="dashboard-open-closeout" to={closeoutLink}>进入月末关账</Link>
           </Button>
         </div>
@@ -1203,8 +1203,8 @@ function IssueRiskGrid({ summaryData, projectId }: { summaryData: ProjectSummary
           </div>
         </div>
       </CardHeader>
-      <CardContent className="space-y-3">
-        <div className="grid grid-cols-2 gap-3">
+      <CardContent className="space-y-4">
+        <div className="grid grid-cols-2 gap-4">
           {cells.map((cell) => (
             <Link
               key={cell.label}
@@ -1665,7 +1665,7 @@ export default function Dashboard() {
 
   if (!currentProject) {
     return (
-      <div className="space-y-6 p-6" data-testid="dashboard-empty-state">
+      <div className="page-shell" data-testid="dashboard-empty-state">
         <Breadcrumb
           items={[
             { label: '公司驾驶舱', href: '/company' },
@@ -1688,8 +1688,7 @@ export default function Dashboard() {
   }
 
   return (
-    <div data-testid="dashboard-page" className="page-enter bg-slate-50/80">
-      <div className="page-shell">
+    <div data-testid="dashboard-page" className="page-shell page-enter">
         <Breadcrumb
           items={[
             { label: currentProject.name || '项目', href: `/projects/${projectId}/dashboard` },
@@ -1886,7 +1885,6 @@ export default function Dashboard() {
         </section>
 
         <div className="pb-2" />
-      </div>
     </div>
   )
 }

@@ -576,7 +576,7 @@ function MaterialDetailDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl border-slate-200" data-testid="material-detail-dialog">
+      <DialogContent className="max-w-[var(--dialog-lg-width)] border-slate-200" data-testid="material-detail-dialog">
         <DialogHeader>
           <DialogTitle>{readOnly ? '材料详情' : '编辑材料详情'}</DialogTitle>
         </DialogHeader>
@@ -640,7 +640,7 @@ function MaterialDetailDialog({
           </div>
         </div>
 
-        <div className="grid gap-3 md:grid-cols-2">
+        <div className="grid gap-4 md:grid-cols-2">
           <label className="flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-3 text-sm text-slate-700">
             <input
               type="checkbox"
@@ -1341,10 +1341,12 @@ export default function Materials() {
 
   if (loading) {
     return (
-      <LoadingState
-        className="mx-auto mt-12 max-w-sm"
-        label="材料清单加载中"
-      />
+      <div className="page-shell">
+        <LoadingState
+          className="mx-auto mt-12 max-w-sm"
+          label="材料清单加载中"
+        />
+      </div>
     )
   }
 
@@ -1422,14 +1424,14 @@ export default function Materials() {
         />
       </section>
 
-      <section className="grid gap-6 xl:grid-cols-[minmax(0,7fr)_minmax(17.5rem,3fr)]">
+      <section className="content-sidebar-grid">
         <div className="space-y-4">
           <Card className="surface-card" data-testid="materials-toolbar-card">
         <CardHeader className="pb-4">
           <CardTitle className="text-base text-slate-900">材料列表工具栏</CardTitle>
         </CardHeader>
         <CardContent className="space-y-5">
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             <label className="space-y-1 text-sm text-slate-600">
               <span>搜索</span>
               <input
@@ -1522,7 +1524,7 @@ export default function Materials() {
               </div>
 
               {createMode === 'single' && (
-                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                   <label className="space-y-1 text-sm text-slate-600">
                     <span>材料名称</span>
                     <input
@@ -1591,7 +1593,7 @@ export default function Materials() {
 
               {createMode === 'template' && selectedTemplateGroup && (
                 <div className="space-y-4">
-                  <div className="grid gap-3 md:grid-cols-3">
+                  <div className="grid gap-4 md:grid-cols-3">
                     <label className="space-y-1 text-sm text-slate-600">
                       <span>专项模板</span>
                       <Select
@@ -1633,7 +1635,7 @@ export default function Materials() {
                       />
                     </label>
                   </div>
-                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
                     {selectedTemplateGroup.items.map((item) => {
                       const checked = selectedTemplateItems.includes(item.name)
                       return (
@@ -2010,7 +2012,7 @@ export default function Materials() {
             <CardHeader className="pb-3">
               <CardTitle className="text-base text-slate-900">快速统计</CardTitle>
             </CardHeader>
-            <CardContent className="grid gap-3">
+            <CardContent className="grid gap-4">
               <MiniMetric label="待定样" value={summary.pendingSample} tone="amber" />
               <MiniMetric label="逾期未到" value={summary.overdueArrival} tone="red" />
               <MiniMetric label="待送检" value={summary.pendingInspection} tone="sky" />
@@ -2027,8 +2029,8 @@ export default function Materials() {
                 周窗口 {formatWeekLabel(latestDigest?.week_start)} · 最近生成 {formatDateTimeLabel(latestDigest?.generated_at)}
               </div>
             </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="grid grid-cols-2 gap-3">
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
                 <MiniMetric label="应到总数" value={weeklySummary.totalExpectedCount} />
                 <MiniMetric label="准时到场" value={weeklySummary.onTimeCount} />
               </div>

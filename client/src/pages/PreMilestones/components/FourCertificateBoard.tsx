@@ -77,7 +77,7 @@ export function FourCertificateBoard({
               <div className="text-sm font-semibold text-slate-900">{column.stage}</div>
               <span className="rounded-full bg-white px-2.5 py-1 text-xs font-medium tabular-nums text-slate-600">{column.items.length}</span>
             </div>
-            <div className="grid gap-3">
+            <div className="grid gap-4">
               {column.items.map(({ entry, certificate }) => {
                 const Icon = certificateIcons[entry.id]
                 const relatedSharedItems = sharedItems.filter((item) =>
@@ -117,9 +117,9 @@ export function FourCertificateBoard({
                     className={cn(
                       'w-full rounded-card border p-5 text-left shadow-[var(--el-1)] transition-all duration-200',
                       active
-                        ? 'border-blue-300 bg-blue-50 shadow-md'
+                        ? 'border-blue-300 bg-blue-50 shadow-[var(--el-2)]'
                         : hoveredWorkItemBelongsHere
-                          ? 'border-indigo-300 bg-indigo-50 shadow-md'
+                          ? 'border-indigo-300 bg-indigo-50 shadow-[var(--el-2)]'
                           : 'border-slate-200 bg-white',
                     )}
                   >

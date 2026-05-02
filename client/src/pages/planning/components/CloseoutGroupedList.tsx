@@ -97,7 +97,7 @@ export function CloseoutGroupedList({
                       className={cn(
                         'flex w-full items-start justify-between gap-3 rounded-2xl border px-4 py-3 transition',
                         isActive
-                          ? 'border-blue-300 bg-blue-50/70 shadow-sm'
+                          ? 'border-blue-300 bg-blue-50/70 shadow-[var(--el-1)]'
                           : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50'
                       )}
                     >

@@ -50,7 +50,7 @@ export function BaselineDiffView({ fromVersionLabel, toVersionLabel, items }: Ba
         <Badge variant="outline">{items.length} 条变更</Badge>
       </div>
 
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
         <Card className="surface-card">
           <CardContent className="space-y-1 p-5">
             <div className="text-xs text-slate-500">版本对比</div>
@@ -98,7 +98,7 @@ export function BaselineDiffView({ fromVersionLabel, toVersionLabel, items }: Ba
                 </div>
               </div>
 
-              <div className="grid gap-3 lg:grid-cols-2">
+              <div className="grid gap-4 lg:grid-cols-2">
                 <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
                   <div className="text-xs font-medium text-slate-500">{fromVersionLabel}</div>
                   <div className="mt-1 text-sm leading-6 text-slate-700">{item.before}</div>

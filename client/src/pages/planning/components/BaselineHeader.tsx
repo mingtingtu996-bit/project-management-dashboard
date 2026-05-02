@@ -54,7 +54,7 @@ export function BaselineHeader({
           </Button>
         </div>
 
-        <div className="grid gap-3 md:grid-cols-4">
+        <div className="grid gap-4 md:grid-cols-4">
           <div className="rounded-2xl bg-slate-50 px-4 py-3">
             <div className="text-xs text-slate-500">锁剩余时间</div>
             <div className="mt-1 text-lg font-semibold text-slate-900">{lockRemainingLabel}</div>

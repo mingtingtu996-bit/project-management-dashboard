@@ -72,7 +72,7 @@ export function ParticipantUnitsDialog({
 }: ParticipantUnitsDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto rounded-2xl shadow-[var(--el-4)]" aria-describedby={undefined}>
+      <DialogContent className="max-h-[90vh] max-w-[var(--dialog-lg-width)] overflow-y-auto rounded-2xl shadow-[var(--el-4)]" aria-describedby={undefined}>
         <DialogHeader>
           <DialogTitle>参建单位台账</DialogTitle>
           <DialogDescription className="sr-only">参建单位台账</DialogDescription>
@@ -172,7 +172,7 @@ export function ParticipantUnitsDialog({
               </div>
             </div>
 
-            <div className="grid gap-3 md:grid-cols-2">
+            <div className="grid gap-4 md:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="participant-unit-contact-name">联系人</Label>
                 <Input
