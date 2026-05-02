@@ -961,10 +961,10 @@ export default function Dashboard() {
     }
 
     return {
-      completed: overview?.stats.completed ?? summaryData?.completedMilestones ?? 0,
-      total: overview?.stats.total ?? summaryData?.totalMilestones ?? recentMilestones.length,
-      upcoming: overview?.stats.upcomingSoon ?? recentMilestones.filter((item) => item.status === 'pending').length,
-      overdue: overview?.stats.overdue ?? recentMilestones.filter((item) => item.status === 'delayed').length,
+      completed: overview?.stats?.completed ?? summaryData?.completedMilestones ?? 0,
+      total: overview?.stats?.total ?? summaryData?.totalMilestones ?? recentMilestones.length,
+      upcoming: overview?.stats?.upcomingSoon ?? recentMilestones.filter((item) => item.status === 'pending').length,
+      overdue: overview?.stats?.overdue ?? recentMilestones.filter((item) => item.status === 'delayed').length,
       recentMilestones,
     }
   }, [projectId, summaryData])
