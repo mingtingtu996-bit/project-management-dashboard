@@ -104,20 +104,17 @@ export default function Header() {
   }
 
   return (
-    <header className="sticky top-0 z-20 flex h-[var(--header-height)] items-center justify-between bg-white/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-white/90 lg:px-8">
-      <div className="flex min-w-0 items-center gap-4">
-        <div className="hidden w-28 shrink-0 lg:block">
+    <header className="sticky top-0 z-20 flex h-14 items-center justify-between border-b border-slate-200 bg-white/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-white/90 lg:px-8">
+      <div className="flex min-w-0 items-center gap-6">
+        <div className="hidden w-36 shrink-0 lg:block">
           <div className="truncate whitespace-nowrap text-lg font-bold tracking-tight text-slate-900">{title}</div>
           <div className="truncate whitespace-nowrap text-xs text-slate-500">{contextLabel}</div>
         </div>
 
         {currentProject && isProjectPage ? (
-          <div className="hidden min-w-0 max-w-80 items-center gap-2 overflow-hidden rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm text-slate-700 lg:flex xl:max-w-96">
+          <div className="hidden min-w-0 max-w-80 items-center gap-2 overflow-hidden rounded-full bg-slate-100/80 px-3 py-1.5 text-sm text-slate-700 ring-1 ring-inset ring-slate-200/60 lg:flex xl:max-w-96">
             <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-500" />
             <span className="max-w-40 truncate font-medium xl:max-w-56">{currentProject.name}</span>
-            <span className="shrink-0 whitespace-nowrap rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium leading-5 text-slate-600">
-              {getProjectRoleLabel(permissionLevel)}
-            </span>
           </div>
         ) : null}
       </div>
@@ -128,11 +125,11 @@ export default function Header() {
           <Input
             aria-label="搜索项目、任务或提醒"
             placeholder="搜索项目、任务或提醒..."
-            className="h-11 w-96 rounded-2xl border-slate-200 bg-slate-50 pl-11 text-sm shadow-none placeholder:text-slate-500 focus-visible:ring-2 focus-visible:ring-blue-100"
+            className="h-10 w-96 rounded-lg border-transparent bg-slate-50 pl-11 text-sm shadow-none placeholder:text-slate-500 transition-colors hover:border-slate-200 hover:bg-white focus-visible:border-blue-300 focus-visible:ring-2 focus-visible:ring-blue-500/20"
           />
         </div>
 
-        <div className="flex items-center gap-2 rounded-full bg-slate-50 px-3 py-1.5 text-sm text-slate-600">
+        <div className="flex items-center gap-2 rounded-full bg-slate-100/80 px-3 py-1.5 text-sm text-slate-600 ring-1 ring-inset ring-slate-200/60">
           <SyncIcon className={`h-4 w-4 ${syncIndicator.iconClassName}`} />
           <span className="hidden sm:inline">{syncIndicator.label}</span>
         </div>
@@ -157,9 +154,13 @@ export default function Header() {
           <Link to="/notifications" aria-label="打开提醒中心">
             <Bell className="h-5 w-5" />
             {bellBadgeCount > 0 ? (
-              <span className="absolute -top-0.5 -right-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-700 px-1 text-xs font-bold text-white">
-                {bellBadgeCount > 99 ? '99+' : bellBadgeCount}
-              </span>
+              bellBadgeCount <= 3 ? (
+                <span className="absolute right-2 top-2 h-1.5 w-1.5 rounded-full bg-rose-500 ring-2 ring-white" />
+              ) : (
+                <span className="absolute -top-0.5 -right-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-700 px-1 text-xs font-bold text-white">
+                  {bellBadgeCount > 99 ? '99+' : bellBadgeCount}
+                </span>
+              )
             ) : null}
           </Link>
         </Button>
@@ -223,7 +224,6 @@ export default function Header() {
           <ProjectTeamManagementDrawer open={teamDrawerOpen} onOpenChange={setTeamDrawerOpen} projectId={currentProject.id} projectName={currentProject.name} />
         ) : null}
       </div>
-      <Separator className="absolute bottom-0 left-0 right-0 border-slate-200/80" />
     </header>
   )
 }

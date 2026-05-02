@@ -61,8 +61,8 @@ describe('v1.3.1 UI/UX contract', () => {
     const dashboardSource = readSource('src/pages/Dashboard.tsx')
     expect(dashboardSource).toContain('sparkline={metric.sparkline}')
     expect(readSource('src/components/ui/metric-card.tsx')).toContain('sparklineData.length > 1')
-    expect(dashboardSource).toContain('今日事项已全部处理')
-    expect(dashboardSource).toContain('需后端补充昨日待办数')
+    expect(dashboardSource).toContain('今日待办均已完成')
+    expect(dashboardSource).toContain('TodayLiveListPanel')
 
     const planningSource = readSource('src/pages/planning/PlanningWorkspace.tsx')
     expect(planningSource).toContain('快捷链接')

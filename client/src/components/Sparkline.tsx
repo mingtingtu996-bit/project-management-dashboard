@@ -28,6 +28,8 @@ function buildPath(values: number[], width: number, height: number) {
 
 export function Sparkline({ data, color = CHART_SERIES.primary, className }: SparklineProps) {
   const values = data.map((item) => item.value).filter(Number.isFinite)
+  if (values.length === 0) return null
+
   const width = 80
   const height = 32
   const path = buildPath(values, width, height)

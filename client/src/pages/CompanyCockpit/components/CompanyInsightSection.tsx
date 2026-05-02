@@ -1,4 +1,4 @@
-import type { Issue, Risk } from '@/lib/supabase'
+﻿import type { Issue, Risk } from '@/lib/supabase'
 import { EmptyState } from '@/components/EmptyState'
 import { Separator } from '@/components/ui/separator'
 import { CheckCircle } from 'lucide-react'
@@ -53,7 +53,7 @@ export function CompanyInsightSection({
   }))
 
   return (
-    <section className="shell-surface overflow-hidden">
+    <section className="surface-card overflow-hidden">
       <div className="px-6 py-5">
         <h2 className="text-2xl font-semibold tracking-tight text-slate-900">公司洞察</h2>
       </div>

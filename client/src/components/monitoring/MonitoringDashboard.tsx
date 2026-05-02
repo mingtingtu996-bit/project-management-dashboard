@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+﻿import { useState, type ReactNode } from 'react'
 import { AlertTriangle, BarChart3, Bug, Clock, Zap } from 'lucide-react'
 
 import { EmptyState } from '@/components/EmptyState'
@@ -65,7 +65,7 @@ export default function MonitoringDashboard() {
         />
       </div>
 
-      <section className="shell-surface overflow-hidden" data-testid="monitoring-dashboard-panel">
+      <section className="surface-card overflow-hidden" data-testid="monitoring-dashboard-panel">
         <div className="px-6 pt-5">
           <nav className="flex flex-wrap gap-2">
             {tabs.map((tab) => (
@@ -155,7 +155,7 @@ function PerformanceMetrics() {
 
   return (
     <div className="space-y-4">
-      <div className="shell-surface overflow-hidden" data-testid="monitoring-tabpanel-performance">
+      <div className="surface-card overflow-hidden" data-testid="monitoring-tabpanel-performance">
         <div className="px-4 py-3">
           <span className="text-sm font-medium text-slate-700">性能记录</span>
         </div>
@@ -197,7 +197,7 @@ function ErrorTracker() {
 
   return (
     <div className="space-y-4">
-      <div className="shell-surface overflow-hidden" data-testid="monitoring-tabpanel-errors">
+      <div className="surface-card overflow-hidden" data-testid="monitoring-tabpanel-errors">
         <div className="flex items-center justify-between px-4 py-3">
           <span className="text-sm font-medium text-slate-700">错误记录</span>
           <span className="text-sm text-red-500">{errorMetrics.length} 条</span>

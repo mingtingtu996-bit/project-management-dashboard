@@ -231,6 +231,25 @@ const mockDailyProgress = {
   ],
 }
 
+const mockTodayLiveItems = [
+  {
+    id: 'today-warning-1',
+    type: 'warning',
+    priority: 1,
+    title: '钢筋隐蔽验收待确认',
+    detail: '安全组 · 09:15 前处理',
+    created_at: now,
+  },
+  {
+    id: 'today-change-1',
+    type: 'change',
+    priority: 3,
+    title: 'DC-2026-015 设计变更已提交',
+    detail: '设计管理 · 待审核',
+    created_at: now,
+  },
+]
+
 const mockBaselineVersions = [
   {
     id: 'baseline-v2',
@@ -516,6 +535,10 @@ function buildMockResponse(urlString) {
     return json({ success: true, data: mockDailyProgress })
   }
 
+  if (pathname === `/api/projects/${projectId}/dashboard/today-live`) {
+    return json({ success: true, data: mockTodayLiveItems })
+  }
+
   if (pathname === '/api/planning-governance') {
     return json({ success: true, data: mockPlanningGovernanceSnapshot, timestamp: now })
   }
@@ -610,7 +633,6 @@ async function main() {
     await page.goto(targetUrl, { waitUntil: 'domcontentloaded' })
     await page.getByTestId('dashboard-page').waitFor({ state: 'visible', timeout: 20000 })
     await page.getByTestId('dashboard-hero-cards').waitFor({ state: 'visible', timeout: 20000 })
-    await page.getByTestId('dashboard-live-panel').waitFor({ state: 'visible', timeout: 20000 })
 
     const initialUrl = page.url()
     assert(initialUrl.includes('/dashboard'), `Unexpected Dashboard URL: ${initialUrl}`)
@@ -625,27 +647,16 @@ async function main() {
     await page.screenshot({ path: join(outputDir, 'dashboard-page-quality-dialog.png'), fullPage: true })
     await page.keyboard.press('Escape')
 
-    await page.getByTestId('dashboard-open-monthly-plan').click()
-    await page.waitForFunction(() => window.location.hash.includes('/planning/monthly'))
-    await page.getByTestId('monthly-plan-header').waitFor({ state: 'visible', timeout: 20000 })
-    const monthlyUrl = page.url()
-    await page.screenshot({ path: join(outputDir, 'dashboard-page-monthly-link.png'), fullPage: true })
+    const compareReportsHref = await page.getByTestId('dashboard-compare-reports-link').getAttribute('href')
+    assert(
+      compareReportsHref === `#/projects/${projectId}/reports?view=change_log`
+        || compareReportsHref === `/projects/${projectId}/reports?view=change_log`,
+      `Unexpected compare reports link: ${compareReportsHref}`,
+    )
 
-    await page.goto(targetUrl, { waitUntil: 'domcontentloaded' })
-    await page.getByTestId('dashboard-page').waitFor({ state: 'visible', timeout: 20000 })
-    await page.getByTestId('dashboard-open-gantt-quick-link').click()
-    await page.waitForFunction(() => window.location.hash.includes('/gantt'))
-    await page.getByTestId('gantt-task-rows').waitFor({ state: 'visible', timeout: 20000 })
-    const ganttUrl = page.url()
-    await page.screenshot({ path: join(outputDir, 'dashboard-page-gantt-link.png'), fullPage: true })
-
-    await page.goto(targetUrl, { waitUntil: 'domcontentloaded' })
-    await page.getByTestId('dashboard-page').waitFor({ state: 'visible', timeout: 20000 })
-    await page.getByTestId('dashboard-open-closeout').click()
-    await page.waitForFunction(() => window.location.hash.includes('/tasks/closeout'))
-    await page.getByTestId('closeout-filter-bar').waitFor({ state: 'visible', timeout: 20000 })
-    const closeoutUrl = page.url()
-    await page.screenshot({ path: join(outputDir, 'dashboard-page-closeout-link.png'), fullPage: true })
+    await page.getByRole('tab', { name: /今日动态/ }).click()
+    await page.getByTestId('dashboard-live-panel').waitFor({ state: 'visible', timeout: 10000 })
+    await page.screenshot({ path: join(outputDir, 'dashboard-page-today-tab.png'), fullPage: true })
 
     assert(apiFailures.length === 0, `API proxy failures detected: ${JSON.stringify(apiFailures)}`)
     assert(pageErrors.length === 0, `Browser page errors detected: ${pageErrors.join(' | ')}`)
@@ -656,18 +667,14 @@ async function main() {
       initialUrl,
       heroCardCount,
       qualityDialogVisible: true,
-      monthlyUrl,
-      ganttUrl,
-      closeoutUrl,
+      compareReportsHref,
       apiFailures,
       consoleErrors,
       pageErrors,
       screenshots: {
         initial: join(outputDir, 'dashboard-page-initial.png'),
         qualityDialog: join(outputDir, 'dashboard-page-quality-dialog.png'),
-        monthly: join(outputDir, 'dashboard-page-monthly-link.png'),
-        gantt: join(outputDir, 'dashboard-page-gantt-link.png'),
-        closeout: join(outputDir, 'dashboard-page-closeout-link.png'),
+        today: join(outputDir, 'dashboard-page-today-tab.png'),
       },
     }
 

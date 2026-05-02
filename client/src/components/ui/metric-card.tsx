@@ -2,46 +2,48 @@ import type { CSSProperties, ReactNode } from 'react'
 
 import { Sparkline } from '@/components/Sparkline'
 import { Card, CardContent } from '@/components/ui/card'
-import { CHART_SERIES } from '@/lib/chartPalette'
+import { useCountUp } from '@/hooks/useCountUp'
+import { CHART_NEUTRAL, CHART_SERIES } from '@/lib/chartPalette'
 import { formatMetricValue } from '@/lib/formatters'
 import { cn } from '@/lib/utils'
 
 type MetricTone = 'primary' | 'success' | 'warning' | 'danger' | 'info' | 'slate'
 
-const toneClassMap: Record<MetricTone, { rail: string; icon: string; sparkline: string }> = {
+const toneClassMap: Record<MetricTone, { accent: string; icon: string; sparkline: string }> = {
   primary: {
-    rail: 'border-l-blue-500',
-    icon: 'bg-blue-50 text-blue-700',
+    accent: CHART_SERIES.primary,
+    icon: 'text-blue-500',
     sparkline: CHART_SERIES.primary,
   },
   success: {
-    rail: 'border-l-emerald-500',
-    icon: 'bg-emerald-50 text-emerald-700',
+    accent: CHART_SERIES.success,
+    icon: 'text-emerald-500',
     sparkline: CHART_SERIES.success,
   },
   warning: {
-    rail: 'border-l-amber-500',
-    icon: 'bg-amber-50 text-amber-700',
+    accent: CHART_SERIES.warning,
+    icon: 'text-amber-500',
     sparkline: CHART_SERIES.warning,
   },
   danger: {
-    rail: 'border-l-red-500',
-    icon: 'bg-red-50 text-red-700',
+    accent: CHART_SERIES.danger,
+    icon: 'text-rose-500',
     sparkline: CHART_SERIES.danger,
   },
   info: {
-    rail: 'border-l-sky-500',
-    icon: 'bg-sky-50 text-sky-700',
+    accent: CHART_SERIES.info,
+    icon: 'text-sky-500',
     sparkline: CHART_SERIES.info,
   },
   slate: {
-    rail: 'border-l-slate-400',
-    icon: 'bg-slate-50 text-slate-600',
+    accent: CHART_NEUTRAL.muted,
+    icon: 'text-slate-400',
     sparkline: CHART_SERIES.primary,
   },
 }
 
 export interface MetricCardProps {
+  eyebrow?: string
   title: string
   value: string | number | null | undefined
   hint?: ReactNode
@@ -63,6 +65,7 @@ function normalizeSparkline(points?: Array<number | { value: number }>) {
 }
 
 export function MetricCard({
+  eyebrow,
   title,
   value,
   hint,
@@ -77,25 +80,47 @@ export function MetricCard({
 }: MetricCardProps) {
   const toneClass = toneClassMap[tone]
   const sparklineData = normalizeSparkline(sparkline)
+  const numericValue = typeof value === 'number' && Number.isFinite(value) ? value : null
+  const countValue = useCountUp(numericValue ?? 0, { duration: 900 })
+  const displayValue = numericValue !== null ? countValue : value
+  const isZero = numericValue === 0
 
   return (
-    <Card data-testid={testId} variant="metric" className={cn(toneClass.rail, className)} style={style}>
-      <CardContent padding="md" className="flex h-full flex-col gap-3">
+    <Card
+      data-testid={testId}
+      variant="surface"
+      className={cn(
+        'relative h-full cursor-pointer overflow-hidden border-slate-200/60 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[var(--el-hover)]',
+        className,
+      )}
+      style={style}
+    >
+      <svg className="absolute left-4 top-4 h-10 w-10" viewBox="0 0 44 44" aria-hidden="true">
+        <path d="M4 26a18 18 0 0 1 18-18" fill="none" stroke={toneClass.accent} strokeLinecap="round" strokeWidth="3" />
+      </svg>
+      <CardContent padding="md" className="flex min-h-[140px] h-full flex-col gap-3 pl-14">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
-            <p className="truncate text-sm font-medium text-slate-500">{title}</p>
-            <div className="mt-2 flex flex-wrap items-baseline gap-2">
-              <span className="text-2xl font-bold tabular-nums text-slate-900">{formatMetricValue(value, unit)}</span>
-              {trend ? <span className="text-sm font-medium text-slate-600">{trend}</span> : null}
+            {eyebrow ? <div className="eyebrow">{eyebrow}</div> : null}
+            <p className="mt-0.5 truncate text-sm font-medium text-slate-500">{title}</p>
+            <div className="mt-3 flex flex-wrap items-end gap-2">
+              <span className={cn('num-display text-[34px] font-semibold leading-none text-slate-900', isZero && 'text-slate-400')}>
+                {formatMetricValue(displayValue, unit)}
+              </span>
+              {trend ? <span className="pb-1 text-[11px] font-medium text-slate-400">{trend}</span> : null}
             </div>
           </div>
-          {icon ? <div className={cn('shrink-0 rounded-lg p-2', toneClass.icon)}>{icon}</div> : null}
+          {icon ? (
+            <div className={cn('flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-slate-200/60 bg-white', toneClass.icon)}>
+              {icon}
+            </div>
+          ) : null}
         </div>
         {(hint || sparklineData.length > 1) ? (
-          <div className="mt-auto flex min-w-0 items-end justify-between gap-3">
+          <div className="mt-auto min-w-0 space-y-2">
             {hint ? <div className="min-w-0 text-xs leading-5 text-slate-500">{hint}</div> : <span />}
             {sparklineData.length > 1 ? (
-              <Sparkline data={sparklineData} color={toneClass.sparkline} className="shrink-0" />
+              <Sparkline data={sparklineData} color={toneClass.sparkline} className="h-8 w-full" />
             ) : null}
           </div>
         ) : null}

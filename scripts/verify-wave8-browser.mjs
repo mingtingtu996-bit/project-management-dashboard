@@ -517,11 +517,12 @@ async function main() {
       await timedGoto(adminPage, `${BASE_URL}/#/company`, '[data-testid="company-project-card"]', { extraWaitMs: 250 })
       const newProjectVisible = await adminPage.getByText('新建项目').first().isVisible()
 
-      await timedGoto(ownerPage, `${BASE_URL}/#/projects/${manifest.projects.standard.id}/dashboard`, '[data-testid="dashboard-global-summary"]', {
+      await timedGoto(ownerPage, `${BASE_URL}/#/projects/${manifest.projects.standard.id}/dashboard`, '[data-testid="dashboard-page"]', {
         extraWaitMs: 250,
         fallbackSelectors: dashboardFallbackSelectors,
       })
-      const quickLinkVisible = await ownerPage.locator('[data-testid="dashboard-open-gantt-quick-link"]').isVisible()
+      const dashboardShellVisible = await ownerPage.locator('[data-testid="dashboard-hero-cards"]').isVisible()
+        && await ownerPage.locator('[data-testid="dashboard-snapshot-panel"]').isVisible()
 
       if (viewport.width === 375) {
         await ownerPage.locator('button[aria-label="打开导航菜单"]').click()
@@ -532,7 +533,7 @@ async function main() {
       summary.screenshots[`dashboard-${viewport.key}`] = await screenshot(ownerPage, `wave8-dashboard-${viewport.key}.png`)
 
       record(`edge-main-flow-${viewport.key}`, {
-        pass: newProjectVisible && quickLinkVisible && diagnostics.consoleErrors.length === 0 && diagnostics.pageErrors.length === 0,
+        pass: newProjectVisible && dashboardShellVisible && diagnostics.consoleErrors.length === 0 && diagnostics.pageErrors.length === 0,
         viewport,
         diagnostics,
       })
@@ -621,7 +622,7 @@ async function main() {
       const page = await context.newPage()
       const diagnostics = { consoleErrors: [], pageErrors: [], apiFailures: [] }
       attachDiagnostics(page, diagnostics)
-      const ms = await timedGoto(page, `${BASE_URL}/#/projects/${manifest.projects.standard.id}/dashboard`, '[data-testid="dashboard-global-summary"]', {
+      const ms = await timedGoto(page, `${BASE_URL}/#/projects/${manifest.projects.standard.id}/dashboard`, '[data-testid="dashboard-page"]', {
         extraWaitMs: 300,
         fallbackSelectors: dashboardFallbackSelectors,
       })

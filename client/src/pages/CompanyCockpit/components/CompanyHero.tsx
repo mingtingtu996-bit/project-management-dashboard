@@ -64,7 +64,7 @@ export function CompanyHero({
   stats,
 }: CompanyHeroProps) {
   return (
-    <section className="rounded-xl bg-gradient-to-br from-blue-50 to-slate-50 p-6 shadow-[var(--el-1)]">
+    <section data-testid="company-hero" className="surface-card p-6">
       <div className="flex flex-col gap-6">
         <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
           <div className="space-y-3">

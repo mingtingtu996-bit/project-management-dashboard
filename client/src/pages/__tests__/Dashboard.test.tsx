@@ -235,7 +235,7 @@ describe('Dashboard contract', () => {
     vi.unstubAllGlobals()
   })
 
-  it('keeps the compact header, metric cards, TodayLive list, and tabbed analysis areas visible', async () => {
+  it('keeps the v1.3.5.1 page title, metric cards, and tabbed analysis areas visible', async () => {
     act(() => {
       root?.render(
         <MemoryRouter initialEntries={[`/projects/${projectId}/dashboard`]}>
@@ -246,74 +246,53 @@ describe('Dashboard contract', () => {
       )
     })
 
-    await waitForSelector(container, '[data-testid="dashboard-compact-header"]')
+    await waitForSelector(container, '[data-testid="dashboard-page-title"]')
     await waitForSelector(container, '[data-testid="dashboard-hero-cards"]')
-    await waitForSelector(container, '[data-testid="dashboard-live-panel"]')
     await waitForSelector(container, '[data-testid="dashboard-snapshot-panel"]')
     await waitForSelector(container, '[data-testid="dashboard-monthly-trend"]')
     await waitForSelector(container, '[data-testid="dashboard-weekly-digest"]')
 
-    expect(container.querySelector('[data-testid="dashboard-compact-header"]')).toBeTruthy()
+    expect(container.querySelector('[data-testid="dashboard-page-title"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="dashboard-hero-cards"]')).toBeTruthy()
     expect(container.querySelectorAll('[data-testid^="dashboard-hero-card-"]').length).toBe(4)
-    expect(container.querySelector('[data-testid="dashboard-live-panel"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="dashboard-snapshot-panel"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="dashboard-monthly-trend"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="dashboard-weekly-digest"]')).toBeTruthy()
-    expect(container.querySelector('[data-testid="dashboard-global-summary"]')).toBeTruthy()
 
-    const compactHeader = container.querySelector('[data-testid="dashboard-compact-header"]')
+    const pageTitle = container.querySelector('[data-testid="dashboard-page-title"]')
     const metricCards = container.querySelector('[data-testid="dashboard-hero-cards"]')
-    const livePanel = container.querySelector('[data-testid="dashboard-live-panel"]')
     const snapshotPanel = container.querySelector('[data-testid="dashboard-snapshot-panel"]')
     const planningSummary = container.querySelector('[data-testid="dashboard-monthly-trend"]')
     const weeklyDigest = container.querySelector('[data-testid="dashboard-weekly-digest"]')
 
-    expect(compactHeader).toBeTruthy()
+    expect(pageTitle).toBeTruthy()
     expect(metricCards).toBeTruthy()
-    expect(livePanel).toBeTruthy()
     expect(snapshotPanel).toBeTruthy()
     expect(planningSummary).toBeTruthy()
     expect(weeklyDigest).toBeTruthy()
 
-    expect(compactHeader!.compareDocumentPosition(metricCards!) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
-    expect(metricCards!.compareDocumentPosition(livePanel!) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
-    expect(livePanel!.compareDocumentPosition(snapshotPanel!) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
+    expect(pageTitle!.compareDocumentPosition(metricCards!) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
+    expect(metricCards!.compareDocumentPosition(snapshotPanel!) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
     expect(planningSummary!.compareDocumentPosition(weeklyDigest!) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
 
-    expect(container.textContent).toContain('全局摘要')
-    expect(container.textContent).toContain('今日待处理')
+    expect(container.textContent).toContain('数据可靠性')
+    expect(container.textContent).toContain('今日动态')
     expect(container.textContent).toContain('进度趋势')
-    expect(container.textContent).toContain('里程碑')
-    expect(container.textContent).toContain('单位工程')
-    expect(container.textContent).toContain('近期任务')
-    expect(container.textContent).toContain('日 / 周 / 月固定对比')
+    expect(container.textContent).toContain('现场快照与对比')
+    expect(container.textContent).not.toContain('里程碑追踪')
+    expect(container.textContent).not.toContain('任务执行情况')
+    expect(container.textContent).not.toContain('风险与异常追踪')
+    expect(container.textContent).not.toContain('一周重点关注任务')
     expect(container.textContent).not.toContain('模块分析')
     expect(container.textContent).not.toContain('最高优先级问题')
     expect(container.textContent).not.toContain('证照管理')
     expect(container.textContent).not.toContain('项目脉冲')
+    expect(container.querySelector('[data-testid="dashboard-governance-signal"]')).toBeNull()
     expect(container.textContent).toContain('月度趋势')
 
     expect(container.querySelector('[data-testid="dashboard-compare-reports-link"]')?.getAttribute('href')).toBe('/projects/project-1/reports?view=change_log')
 
-    const clickTab = async (label: string) => {
-      const tab = Array.from(container.querySelectorAll<HTMLElement>('[role="tab"]'))
-        .find((item) => item.textContent?.includes(label))
-      expect(tab).toBeTruthy()
-      await act(async () => {
-        tab!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-        await flush()
-      })
-    }
-
-    await clickTab('里程碑')
-    expect(container.querySelector('[data-testid="dashboard-milestone-reports-link"]')?.getAttribute('href')).toBe('/projects/project-1/reports?view=progress_deviation')
-
-    await clickTab('近期任务')
-    expect(container.textContent).toContain('问题与风险快照')
-    expect(container.textContent).toContain('最近待完成任务')
-    expect(container.querySelector('[data-testid="dashboard-task-reports-link"]')?.getAttribute('href')).toBe('/projects/project-1/reports?view=progress')
-    expect(container.querySelector('[data-testid="dashboard-risk-reports-link"]')?.getAttribute('href')).toBe('/projects/project-1/reports?view=risk')
+    expect(container.querySelector('[data-testid="dashboard-milestone-reports-link"]')).toBeNull()
   })
 
   it('uses the shared dashboard label in the empty state', async () => {
@@ -335,7 +314,7 @@ describe('Dashboard contract', () => {
     expect(container.textContent).not.toContain('项目 Dashboard')
   })
 
-  it('expands weekly digest details by default when digest data exists', async () => {
+  it('renders the weekly progress panel when digest data exists', async () => {
     fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input)
 
@@ -389,14 +368,14 @@ describe('Dashboard contract', () => {
 
     await waitForSelector(container, '[data-testid="dashboard-weekly-digest"]')
 
+    expect(container.textContent).toContain('本周进度面板')
     expect(container.textContent).toContain('Top 5 偏差任务')
-    expect(container.textContent).toContain('责任主体异常')
-    expect(container.textContent).toContain('本周新增风险 2 条 / 阻碍 1 条')
-    expect(container.textContent).toContain('主体施工单位')
-    expect(container.textContent).toContain('收起')
+    expect(container.textContent).toContain('主体结构施工')
+    expect(container.textContent).toContain('关键任务')
+    expect(container.textContent).toContain('查看详情')
   })
 
-  it('opens a confidence breakdown dialog from the dashboard hero area', async () => {
+  it('opens a confidence breakdown dialog from the dashboard page title', async () => {
     act(() => {
       root?.render(
         <MemoryRouter initialEntries={[`/projects/${projectId}/dashboard`]}>
@@ -408,7 +387,7 @@ describe('Dashboard contract', () => {
     })
 
     await waitForSelector(container, '[data-testid="dashboard-data-quality-detail-trigger"]')
-    const trigger = container.querySelector('[data-testid="dashboard-data-quality-detail-trigger"]') as HTMLButtonElement
+    const trigger = container.querySelector('[data-testid="dashboard-data-quality-detail-trigger"]') as HTMLElement
 
     await act(async () => {
       trigger.dispatchEvent(new MouseEvent('click', { bubbles: true }))
@@ -421,7 +400,7 @@ describe('Dashboard contract', () => {
     expect(document.body.textContent).toContain('异常检测命中率')
   })
 
-  it('shows planning governance signals in the hero area when shared summary reports active governance states', async () => {
+  it('does not migrate planning governance signals into the v1.3.5.1 dashboard page title', async () => {
     getProjectSummarySpy.mockResolvedValue({
       id: projectId,
       name: '示例项目',
@@ -497,18 +476,13 @@ describe('Dashboard contract', () => {
       )
     })
 
-    await waitForSelector(container, '[data-testid="dashboard-governance-signal"]')
+    await waitForSelector(container, '[data-testid="dashboard-page-title"]')
 
-    const governanceSignal = container.querySelector('[data-testid="dashboard-governance-signal"]')
-    expect(governanceSignal?.textContent).toContain('计划治理信号')
-    expect(governanceSignal?.textContent).toContain('关账超期信号已触发')
-    expect(governanceSignal?.textContent).toContain('第 7 日强制发起关账权限可用')
-    expect(governanceSignal?.textContent).toContain('编辑模式摘要 1 条')
-
-    const monthlyEntry = container.querySelector('[data-testid="dashboard-governance-open-monthly"]')
-    const closeoutEntry = container.querySelector('[data-testid="dashboard-governance-open-closeout"]')
-    expect(monthlyEntry?.getAttribute('href')).toBe(`/projects/${projectId}/planning/monthly`)
-    expect(closeoutEntry?.getAttribute('href')).toBe(`/projects/${projectId}/tasks/closeout`)
+    expect(container.querySelector('[data-testid="dashboard-governance-signal"]')).toBeNull()
+    expect(container.querySelector('[data-testid="dashboard-governance-open-monthly"]')).toBeNull()
+    expect(container.querySelector('[data-testid="dashboard-governance-open-closeout"]')).toBeNull()
+    expect(container.textContent).not.toContain('计划治理信号')
+    expect(container.textContent).not.toContain('关账超期信号已触发')
   })
 
   it('reads live panel data from shared slices instead of page-local fetch truth', () => {

@@ -29,10 +29,11 @@
     --muted-foreground: 215.4 16.3% 46.9%;
     --accent: #F97316;
     --accent-foreground: #FFFFFF;
-    --el-1: 0 1px 3px rgba(0,0,0,0.04);
-    --el-2: 0 4px 12px rgba(0,0,0,0.06);
+    --el-1: 0 1px 2px rgba(15,23,42,0.04);
+    --el-2: 0 2px 8px rgba(15,23,42,0.06);
     --el-3: 0 8px 24px rgba(0,0,0,0.08);
     --el-4: 0 20px 40px rgba(0,0,0,0.12);
+    --el-hover: 0 2px 4px rgba(15,23,42,0.04), 0 12px 32px -12px rgba(15,23,42,0.12);
     --destructive: 0 72.2% 50.6%;
     --destructive-foreground: 210 40% 98%;
     --border: 214.3 31.8% 91.4%;
@@ -41,7 +42,7 @@
     /* V4 对齐：0.5rem(8px) → 0.75rem(12px)，等同于 rounded-xl */
     --radius: 0.75rem;
     --content-max-width: 1440px;
-    --header-height: 72px;
+    --header-height: 56px;
     --sidebar-collapsed-width: 72px;
     --sticky-toolbar-top: 88px;
     --dialog-sm: 440px;
@@ -63,6 +64,15 @@
 }
 
 @layer base {
+  ::selection {
+    background: #DBEAFE;
+    color: #1E40AF;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
   * {
     @apply border-border;
   }
@@ -124,11 +134,23 @@
   }
 
   .surface-card {
-    @apply rounded-card border border-slate-100 bg-white shadow-[var(--el-1)];
+    @apply rounded-2xl border border-slate-200/60 bg-white shadow-[var(--el-1)];
   }
 
   .card-hover {
     @apply cursor-pointer;
+  }
+
+  .eyebrow {
+    @apply text-[10px] font-semibold tracking-[0.08em] text-slate-400;
+  }
+
+  .num-display {
+    @apply tabular-nums tracking-[-0.03em] font-bold;
+  }
+
+  .num-mono {
+    @apply tabular-nums font-medium;
   }
 
   /* 辅助文本对比度提升（L14）slate-400 → slate-500 */
@@ -154,10 +176,6 @@
     @apply inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium;
   }
 
-  .shell-surface {
-    @apply rounded-card border border-slate-100 bg-white shadow-[var(--el-1)];
-  }
-
   .shell-section-title {
     @apply text-3xl font-bold tracking-tight text-slate-900;
   }
@@ -168,7 +186,7 @@
 
   /* 进度条容器 */
   .progress-bar {
-    @apply flex-1 h-2.5 bg-slate-100 rounded-full overflow-hidden;
+    @apply flex-1 h-[3px] bg-slate-100 rounded-full overflow-hidden;
   }
 
   /* 里程碑层级左边框 */
@@ -253,7 +271,12 @@
 }
 
 @keyframes fade-in {
-  from { opacity: 0; transform: translateY(8px); }
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes tooltip-in {
+  from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: translateY(0); }
 }
 
@@ -266,8 +289,8 @@
   .page-shell { animation: fade-in 300ms ease-out; }
   .card-hover { transition: all 200ms ease-out; }
   .card-hover:hover {
-    box-shadow: var(--el-2);
-    transform: translateY(-2px);
+    box-shadow: var(--el-hover);
+    transform: translateY(-1px);
   }
 }
 

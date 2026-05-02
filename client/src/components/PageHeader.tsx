@@ -1,4 +1,4 @@
-import { Badge } from '@/components/ui/badge'
+﻿import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 import type { ReactNode } from 'react'
 
@@ -12,7 +12,7 @@ interface PageHeaderProps {
 
 export function PageHeader({ title, subtitle, eyebrow, children, className }: PageHeaderProps) {
   return (
-    <section className={cn('shell-surface px-6 py-5 md:px-7 md:py-6', className)}>
+    <section className={cn('surface-card px-6 py-5 md:px-7 md:py-6', className)}>
       <div className="flex min-w-0 flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
         <div className="min-w-0 space-y-2 xl:min-w-56 xl:shrink-0">
           {eyebrow && (

@@ -47,8 +47,8 @@ function isArchivedProject(project: Project) {
 
 function buildProjectCardClass(attentionRequired: boolean) {
   return attentionRequired
-    ? 'card-hover rounded-xl border border-orange-200 border-l-4 border-l-orange-500 bg-orange-50/40 p-6 shadow-[var(--el-2)]'
-    : 'card-hover rounded-xl border border-slate-200 bg-white p-6 shadow-[var(--el-1)]'
+    ? 'rounded-xl border border-orange-200 border-l-4 border-l-orange-500 bg-orange-50/40 p-6 shadow-[var(--el-2)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[var(--el-hover)] cursor-pointer'
+    : 'rounded-xl border border-slate-200 bg-white p-6 shadow-[var(--el-1)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[var(--el-hover)] cursor-pointer'
 }
 
 function healthDotClass(score: number) {

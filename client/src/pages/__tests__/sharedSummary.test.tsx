@@ -153,8 +153,55 @@ describe('shared summary dashboards', () => {
         return null as never
       }
 
+      if (url === '/api/projects/project-1/dashboard/today-live') {
+        return [] as never
+      }
+
       if (url === '/api/task-summaries/projects/project-1/task-summary/trend') {
         return [] as never
+      }
+
+      if (url === '/api/monthly-plans/projects/project-1/fulfillment-trend?months=6') {
+        return [] as never
+      }
+
+      if (url.startsWith('/api/task-summaries/projects/project-1/task-summary/compare?')) {
+        return [
+          {
+            period_label: '昨天',
+            from: '2026-05-02',
+            to: '2026-05-02',
+            summary: {
+              total_progress_change: 0,
+              tasks_updated: 0,
+              tasks_progressed: 0,
+              tasks_completed: 0,
+              total: 0,
+              on_time: 0,
+              delayed: 0,
+              on_time_rate: 0,
+            },
+            task_ids: [],
+            task_details: [],
+          },
+          {
+            period_label: '今天',
+            from: '2026-05-03',
+            to: '2026-05-03',
+            summary: {
+              total_progress_change: 0,
+              tasks_updated: 0,
+              tasks_progressed: 0,
+              tasks_completed: 0,
+              total: 0,
+              on_time: 0,
+              delayed: 0,
+              on_time_rate: 0,
+            },
+            task_ids: [],
+            task_details: [],
+          },
+        ] as never
       }
 
       if (url === '/api/task-summaries/projects/project-1/task-summary?limit=1') {
@@ -462,11 +509,10 @@ describe('shared summary dashboards', () => {
       await flush()
     })
 
-    await waitForText(container, ['64%', '81', '2/5', '现场快照与对比'])
+    await waitForText(container, ['64%', '健康度 81分', '现场快照与对比'])
 
     expect(container.textContent).toContain('64%')
-    expect(container.textContent).toContain('81')
-    expect(container.textContent).toContain('2/5')
+    expect(container.textContent).toContain('健康度 81分')
     expect(container.textContent).not.toContain('专项准备度')
     expect(dashboardSummarySpy).toHaveBeenCalledWith(
       'project-1',
@@ -518,7 +564,7 @@ describe('shared summary dashboards', () => {
     expect(container.textContent).toContain('关键路径任务受阻')
     expect(container.querySelectorAll('[data-testid="company-hero-metric"]')).toHaveLength(3)
     expect(container.querySelectorAll('svg[aria-label="趋势微图"]').length).toBeGreaterThanOrEqual(3)
-    expect(container.querySelector('section.bg-gradient-to-br.from-blue-50.to-slate-50')).not.toBeNull()
+    expect(container.querySelector('[data-testid="company-hero"]')).not.toBeNull()
     expect(container.querySelector('[data-testid="company-project-grid"]')?.className).toContain('xl:grid-cols-3')
     expect(container.querySelector('[data-testid="company-project-card"]')?.className).toContain('border-l-4')
     expect(container.querySelector('[data-testid="company-project-card"]')?.className).toContain('border-l-orange-500')

@@ -1,4 +1,4 @@
-import { FileText, Link2, Plus, Search } from 'lucide-react'
+﻿import { FileText, Link2, Plus, Search } from 'lucide-react'
 import { ReadOnlyGuard } from '@/components/ReadOnlyGuard'
 import type {
   LifecycleStatusOption,
@@ -39,7 +39,7 @@ export function MilestoneToolbar({
   onCreate,
 }: MilestoneToolbarProps) {
   return (
-    <div className="shell-surface px-6 py-4 mb-6">
+    <div className="surface-card px-6 py-4 mb-6">
       <div className="flex flex-col md:flex-row gap-4">
         <Select
           value={selectedProjectId}

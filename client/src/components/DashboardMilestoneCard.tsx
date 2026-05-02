@@ -1,30 +1,59 @@
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Separator } from '@/components/ui/separator';
-import { ChevronRight, ChevronDown, ChevronUp } from 'lucide-react';
-import { Link, useParams } from 'react-router-dom';
-import { useState } from 'react';
-import { getStatusTheme } from '@/lib/statusTheme';
+import { useState } from 'react'
+import { Link, useParams } from 'react-router-dom'
+import { ChevronDown, ChevronRight, ChevronUp } from 'lucide-react'
+
+import { CardHead } from '@/components/ui/card-head'
 import { Button } from '@/components/ui/button'
+import { Separator } from '@/components/ui/separator'
+import { cn } from '@/lib/utils'
 
 interface MilestoneItem {
-  id: string;
-  name: string;
-  dueDate: string;
-  status: 'completed' | 'pending' | 'delayed';
-  progress?: number;
-  projectId: string;
-  assignee?: string;
-  relatedTasks?: number;
-  onTimeRate?: number;
+  id: string
+  name: string
+  dueDate: string
+  status: 'completed' | 'pending' | 'delayed'
+  progress?: number
+  projectId: string
+  assignee?: string
+  relatedTasks?: number
+  onTimeRate?: number
 }
 
 interface DashboardMilestoneCardProps {
-  completed: number;
-  total: number;
-  upcoming: number;
-  overdue: number;
-  recentMilestones: MilestoneItem[];
-  onViewAll?: () => void;
+  completed: number
+  total: number
+  upcoming: number
+  overdue: number
+  recentMilestones: MilestoneItem[]
+  onViewAll?: () => void
+}
+
+function getDaysRemaining(dueDate: string): { text: string; isOverdue: boolean; isUrgent: boolean } {
+  if (!dueDate || dueDate === 'Invalid Date') {
+    return { text: '--', isOverdue: false, isUrgent: false }
+  }
+
+  const due = new Date(dueDate)
+  if (Number.isNaN(due.getTime())) {
+    return { text: '--', isOverdue: false, isUrgent: false }
+  }
+
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  due.setHours(0, 0, 0, 0)
+  const diffDays = Math.ceil((due.getTime() - today.getTime()) / 86400000)
+
+  if (diffDays < 0) return { text: `延期 ${Math.abs(diffDays)}天`, isOverdue: true, isUrgent: false }
+  if (diffDays === 0) return { text: '今天', isOverdue: false, isUrgent: true }
+  if (diffDays === 1) return { text: '明天', isOverdue: false, isUrgent: true }
+  if (diffDays <= 3) return { text: `${diffDays}天后`, isOverdue: false, isUrgent: true }
+  return { text: `${diffDays}天后`, isOverdue: false, isUrgent: false }
+}
+
+function formatDate(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '--'
+  return date.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' })
 }
 
 export default function DashboardMilestoneCard({
@@ -33,188 +62,151 @@ export default function DashboardMilestoneCard({
   upcoming,
   overdue,
   recentMilestones,
-  onViewAll
+  onViewAll,
 }: DashboardMilestoneCardProps) {
-  const [expanded, setExpanded] = useState(false);
-  // 同时兼容 /projects/:id/dashboard 和 /projects/:projectId/... 两种路由格式
-  const params = useParams<{ id?: string; projectId?: string }>();
-  const urlProjectId = params.id || params.projectId || '';
-  const projectId = recentMilestones[0]?.projectId || urlProjectId || '';
-  const reportsHref = projectId ? `/projects/${projectId}/reports?view=progress_deviation` : '/reports?view=progress_deviation';
-
-  // 计算剩余天数
-  const getDaysRemaining = (dueDate: string): { text: string; isOverdue: boolean; isUrgent: boolean } => {
-    if (!dueDate || dueDate === '' || dueDate === 'Invalid Date') {
-      return { text: '未设置', isOverdue: false, isUrgent: false };
-    }
-    
-    const due = new Date(dueDate);
-    if (isNaN(due.getTime())) {
-      return { text: '日期无效', isOverdue: false, isUrgent: false };
-    }
-    
-    const today = new Date();
-    const diffTime = due.getTime() - today.getTime();
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-    
-    if (diffDays < 0) return { text: '已延期', isOverdue: true, isUrgent: false };
-    if (diffDays === 0) return { text: '今天', isOverdue: false, isUrgent: true };
-    if (diffDays === 1) return { text: '明天', isOverdue: false, isUrgent: true };
-    if (diffDays <= 3) return { text: `${diffDays}天后`, isOverdue: false, isUrgent: true };
-    return { text: `${diffDays}天后`, isOverdue: false, isUrgent: false };
-  };
-
-  // 找到最近的未完成里程碑作为"下一节点"
+  const [expanded, setExpanded] = useState(false)
+  const params = useParams<{ id?: string; projectId?: string }>()
+  const urlProjectId = params.id || params.projectId || ''
+  const projectId = recentMilestones[0]?.projectId || urlProjectId || ''
+  const reportsHref = projectId ? `/projects/${projectId}/reports?view=progress_deviation` : '/reports?view=progress_deviation'
   const nextMilestone = recentMilestones
-    .filter(m => m.status !== 'completed')
-    .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())[0];
-
-  const remaining = nextMilestone ? getDaysRemaining(nextMilestone.dueDate) : null;
+    .filter((milestone) => milestone.status !== 'completed')
+    .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())[0]
+  const remaining = nextMilestone ? getDaysRemaining(nextMilestone.dueDate) : null
+  const completionRate = total > 0 ? Math.round((completed / total) * 100) : 0
 
   return (
-    <Card variant="metric" className="h-full">
-      <CardHeader className="pb-2">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <CardTitle className="text-sm font-medium text-slate-700">里程碑追踪</CardTitle>
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm text-blue-600 font-medium">{completed}/{total}</span>
-            <span className="text-xs rounded-full bg-amber-50 px-2 py-0.5 text-amber-700">偏移 {upcoming}</span>
-            <span className="text-xs rounded-full bg-red-50 px-2 py-0.5 text-red-700">逾期 {overdue}</span>
-            <Link
-              data-testid="dashboard-milestone-reports-link"
-              to={reportsHref}
-              className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 transition-colors hover:text-blue-800 hover:underline"
-            >
-              查看详细分析
-              <ChevronRight className="h-3.5 w-3.5" />
-            </Link>
-            <Button variant="ghost" 
-              onClick={() => setExpanded(!expanded)}
-              aria-label={expanded ? '收起里程碑详情' : '展开里程碑详情'}
-              className="p-1 hover:bg-slate-100 rounded-full transition-colors"
-            >
+    <section className="surface-card p-5">
+      <CardHead
+        eyebrow="MILESTONE"
+        title="里程碑追踪"
+        pill={{ label: overdue > 0 ? `${overdue} 逾期` : `${completed}/${total}`, variant: overdue > 0 ? 'danger' : 'info' }}
+        action={
+          <Link
+            data-testid="dashboard-milestone-reports-link"
+            to={reportsHref}
+            className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 transition-colors hover:text-blue-800"
+          >
+            查看详情
+            <ChevronRight className="h-3.5 w-3.5" />
+          </Link>
+        }
+      />
+
+      <div className="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_18rem]">
+        <div className="rounded-xl border border-slate-200/60 bg-slate-50/60 p-5">
+          {nextMilestone && remaining ? (
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="eyebrow">NEXT NODE</div>
+                  <h4 className="mt-1 truncate text-base font-semibold text-slate-900">{nextMilestone.name}</h4>
+                  <p className="mt-1 text-xs text-slate-500">计划节点 {formatDate(nextMilestone.dueDate)}</p>
+                </div>
+                <span
+                  className={cn(
+                    'inline-flex h-6 items-center rounded-full px-2.5 text-xs font-medium ring-1 ring-inset',
+                    remaining.isOverdue
+                      ? 'bg-rose-50 text-rose-700 ring-rose-200/70'
+                      : remaining.isUrgent
+                        ? 'bg-amber-50 text-amber-700 ring-amber-200/70'
+                        : 'bg-blue-50 text-blue-700 ring-blue-200/70',
+                  )}
+                >
+                  {remaining.text}
+                </span>
+              </div>
+
               {expanded ? (
-                <ChevronUp className="h-4 w-4 text-slate-500" />
-              ) : (
-                <ChevronDown className="h-4 w-4 text-slate-500" />
-              )}
-            </Button>
+                <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
+                  <div className="rounded-lg bg-white px-3 py-3">
+                    <div className="text-xs text-slate-500">责任人/单位</div>
+                    <div className="mt-1 truncate font-medium text-slate-800">{nextMilestone.assignee || '未分配'}</div>
+                  </div>
+                  <div className="rounded-lg bg-white px-3 py-3">
+                    <div className="text-xs text-slate-500">关联任务</div>
+                    <div className={cn('num-mono mt-1 font-medium text-slate-800', !nextMilestone.relatedTasks && 'text-slate-400')}>
+                      {nextMilestone.relatedTasks || 0} 项
+                    </div>
+                  </div>
+                  <div className="rounded-lg bg-white px-3 py-3">
+                    <div className="text-xs text-slate-500">准时率</div>
+                    <div className={cn('num-mono mt-1 font-medium text-emerald-600', nextMilestone.onTimeRate == null && 'text-slate-400')}>
+                      {nextMilestone.onTimeRate != null ? `${nextMilestone.onTimeRate}%` : '--'}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : (
+            <div className="flex min-h-32 flex-col items-center justify-center text-center">
+              <div className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-200/60">
+                已完成
+              </div>
+              <p className="mt-3 text-sm font-medium text-slate-700">所有里程碑已完成</p>
+            </div>
+          )}
+        </div>
+
+        <div className="rounded-xl border border-slate-200/60 bg-white p-5">
+          <div className="eyebrow">SUMMARY</div>
+          <div className="mt-3 flex items-end gap-2">
+            <span className={cn('num-display text-[34px] font-semibold leading-none text-slate-900', completionRate === 0 && 'text-slate-400')}>
+              {completionRate}%
+            </span>
+            <span className="pb-1 text-xs text-slate-400">完成率</span>
+          </div>
+          <div className="mt-4 h-[3px] overflow-hidden rounded-full bg-slate-100">
+            <div className="h-full rounded-full bg-blue-600" style={{ width: `${Math.max(completionRate, 4)}%` }} />
+          </div>
+          <div className="mt-4 grid grid-cols-2 gap-3 text-xs text-slate-500">
+            <div>
+              <div>偏移</div>
+              <div className={cn('num-mono mt-1 text-sm text-slate-800', upcoming === 0 && 'text-slate-400')}>{upcoming}</div>
+            </div>
+            <div>
+              <div>逾期</div>
+              <div className={cn('num-mono mt-1 text-sm text-slate-800', overdue === 0 && 'text-slate-400')}>{overdue}</div>
+            </div>
           </div>
         </div>
-      </CardHeader>
-      <CardContent>
-        <div className="space-y-3">
-          {/* UI设计V4: 下一节点高亮卡片 - 蓝色左边框 */}
-          {nextMilestone && remaining ? (
-            <>
-              <div className="p-3 border-l-4 border-blue-500 bg-blue-50 rounded-r">
-                <div className="flex justify-between items-start mb-1">
-                  <span className="font-medium text-slate-800">下一节点</span>
-                  {remaining.isOverdue ? (
-                    <span className={`px-2 py-0.5 rounded text-xs ${getStatusTheme('overdue').className}`}>已延期</span>
-                  ) : remaining.isUrgent ? (
-                    <span className={`px-2 py-0.5 rounded text-xs ${getStatusTheme('medium').className}`}>{remaining.text}</span>
-                  ) : (
-                    <span className={`px-2 py-0.5 rounded text-xs ${getStatusTheme('info').className}`}>{remaining.text}</span>
-                  )}
+      </div>
+
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-200/60 pt-3">
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={() => setExpanded((value) => !value)}
+          className="h-8 px-2 text-xs text-slate-500 hover:text-slate-800"
+        >
+          {expanded ? <ChevronUp className="mr-1 h-3.5 w-3.5" /> : <ChevronDown className="mr-1 h-3.5 w-3.5" />}
+          {expanded ? '收起详情' : '展开详情'}
+        </Button>
+        <Button asChild variant="outline" size="sm" className="h-8 rounded-lg border-slate-200 bg-white px-2.5 text-xs">
+          <Link to={projectId ? `/projects/${projectId}/milestones` : '/milestones'} onClick={onViewAll}>
+            查看里程碑
+            <ChevronRight className="ml-1 h-3.5 w-3.5" />
+          </Link>
+        </Button>
+      </div>
+
+      {expanded && recentMilestones.length > 1 ? (
+        <div className="mt-4">
+          <Separator className="mb-3" />
+          <div className="space-y-2">
+            {recentMilestones
+              .filter((milestone) => milestone.status !== 'completed')
+              .slice(1, 4)
+              .map((milestone, index) => (
+                <div key={milestone.id} className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2 text-sm">
+                  <span className="min-w-0 truncate text-slate-700">{index + 2}. {milestone.name}</span>
+                  <span className="num-mono shrink-0 text-xs text-slate-500">{getDaysRemaining(milestone.dueDate).text}</span>
                 </div>
-                <p className="text-sm font-medium text-blue-700">{nextMilestone.name}</p>
-              </div>
-
-              {/* UI设计V4: 详细信息列表 - 仅展开时显示 */}
-              {expanded && (
-                <div className="space-y-2 text-sm">
-                  <div className="flex justify-between text-slate-600">
-                    <span>责任人/单位</span>
-                    <span className="font-medium">
-                      {nextMilestone.assignee || '未分配'} 
-                      <span className="text-slate-500"> / 待分配</span>
-                    </span>
-                  </div>
-                  <div className="flex justify-between text-slate-600">
-                    <span>关联任务</span>
-                    <span className="font-medium">{nextMilestone.relatedTasks || 0}项</span>
-                  </div>
-                  <div className="flex justify-between text-slate-600">
-                    <span>准时率</span>
-                    <span className="font-medium text-emerald-600">
-                      {nextMilestone.onTimeRate !== undefined && nextMilestone.onTimeRate !== null
-                        ? `${nextMilestone.onTimeRate}%`
-                        : '-'}
-                    </span>
-                  </div>
-                </div>
-              )}
-            </>
-          ) : (
-            /* 没有下一节点时显示完成状态 */
-            <div className="p-3 border-l-4 border-emerald-500 bg-emerald-50 rounded-r">
-              <div className="flex justify-between items-start mb-1">
-                <span className="font-medium text-slate-800">下一节点</span>
-                <span className={`px-2 py-0.5 rounded text-xs ${getStatusTheme('completed').className}`}>已完成</span>
-              </div>
-              <p className="text-sm font-medium text-emerald-700">所有里程碑已完成</p>
-            </div>
-          )}
-
-          {/* UI设计V4: 蓝色按钮 - 仅展开时显示 */}
-          {expanded && (
-            <div className="pt-2">
-              <Link 
-                to={projectId ? `/projects/${projectId}/milestones` : '/milestones'}
-                className="w-full flex items-center justify-center px-3 py-2 bg-blue-600 text-white rounded text-sm font-medium hover:bg-blue-700 transition-colors"
-                onClick={onViewAll}
-              >
-                查看里程碑详情
-                <ChevronRight className="h-4 w-4 ml-1" />
-              </Link>
-            </div>
-          )}
-
-          {/* 展开后的更多里程碑列表 */}
-          {expanded && recentMilestones.length > 1 && (
-            <div className="mt-4 pt-4">
-              <Separator className="mb-4" />
-              <h4 className="text-xs font-medium text-slate-500 mb-3">后续里程碑</h4>
-              <div className="space-y-2">
-                {recentMilestones
-                  .filter(m => m.status !== 'completed')
-                  .slice(1, 4) // 显示接下来的3个里程碑
-                  .map((milestone, idx) => {
-                    const remaining = getDaysRemaining(milestone.dueDate);
-                    return (
-                      <div 
-                        key={milestone.id} 
-                        className="flex items-center justify-between p-2 bg-slate-50 rounded text-sm"
-                      >
-                        <div className="flex items-center gap-2">
-                          <span className="w-5 h-5 flex items-center justify-center bg-slate-200 rounded-full text-xs text-slate-600">
-                            {idx + 2}
-                          </span>
-                          <span className="text-slate-700 truncate max-w-32">{milestone.name}</span>
-                        </div>
-                        {remaining && (
-                          <span className={`text-xs px-2 py-0.5 rounded ${
-                            remaining.isOverdue ? getStatusTheme('overdue').className :
-                            remaining.isUrgent ? getStatusTheme('medium').className :
-                            getStatusTheme('open').className
-                          }`}>
-                            {remaining.text}
-                          </span>
-                        )}
-                      </div>
-                    );
-                  })}
-                {recentMilestones.filter(m => m.status !== 'completed').length <= 1 && (
-                  <div className="text-center py-4 text-slate-500 text-sm">
-                    暂无更多未完成的里程碑
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
+              ))}
+          </div>
         </div>
-      </CardContent>
-    </Card>
-  );
+      ) : null}
+    </section>
+  )
 }

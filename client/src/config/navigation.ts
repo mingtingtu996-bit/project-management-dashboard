@@ -28,6 +28,7 @@ export interface NavigationItem {
   label: string
   href: string
   icon: LucideIcon
+  group?: 'core' | 'management'
   permission?: NavigationPermission
   children?: NavigationChildItem[]
 }
@@ -103,13 +104,14 @@ export const COMPANY_NAVIGATION: NavigationItem[] = [
 ]
 
 export const PROJECT_NAVIGATION: NavigationItem[] = [
-  { key: 'dashboard', label: PROJECT_NAVIGATION_LABELS.dashboard, href: '/projects/:id/dashboard', icon: LayoutDashboard, permission: 'view:project' },
-  { key: 'milestones', label: PROJECT_NAVIGATION_LABELS.milestones, href: '/projects/:id/milestones', icon: Flag, permission: 'view:milestone' },
+  { key: 'dashboard', label: PROJECT_NAVIGATION_LABELS.dashboard, href: '/projects/:id/dashboard', icon: LayoutDashboard, group: 'core', permission: 'view:project' },
+  { key: 'milestones', label: PROJECT_NAVIGATION_LABELS.milestones, href: '/projects/:id/milestones', icon: Flag, group: 'core', permission: 'view:milestone' },
   {
     key: 'planning',
     label: PROJECT_NAVIGATION_LABELS.planning,
     href: '/projects/:id/planning/baseline',
     icon: FolderKanban,
+    group: 'core',
     permission: 'view:task',
     children: [
       { key: 'planning-baseline', label: PROJECT_NAVIGATION_LABELS.baseline, href: '/projects/:id/planning/baseline', permission: 'view:task' },
@@ -122,6 +124,7 @@ export const PROJECT_NAVIGATION: NavigationItem[] = [
     label: PROJECT_NAVIGATION_LABELS.tasks,
     href: '/projects/:id/gantt',
     icon: GanttChart,
+    group: 'core',
     permission: 'view:task',
     children: [
       { key: 'gantt', label: PROJECT_NAVIGATION_LABELS.taskList, href: '/projects/:id/gantt', permission: 'view:task' },
@@ -129,13 +132,14 @@ export const PROJECT_NAVIGATION: NavigationItem[] = [
       { key: 'responsibility', label: PROJECT_NAVIGATION_LABELS.responsibility, href: '/projects/:id/responsibility', permission: 'view:task' },
     ],
   },
-  { key: 'risks', label: PROJECT_NAVIGATION_LABELS.risks, href: '/projects/:id/risks', icon: AlertTriangle, permission: 'view:risk' },
-  { key: 'reports', label: PROJECT_NAVIGATION_LABELS.reports, href: '/projects/:id/reports', icon: BarChart3, permission: 'view:reports' },
+  { key: 'risks', label: PROJECT_NAVIGATION_LABELS.risks, href: '/projects/:id/risks', icon: AlertTriangle, group: 'management', permission: 'view:risk' },
+  { key: 'reports', label: PROJECT_NAVIGATION_LABELS.reports, href: '/projects/:id/reports', icon: BarChart3, group: 'management', permission: 'view:reports' },
   {
     key: 'special-management',
     label: PROJECT_NAVIGATION_LABELS.special,
     href: '/projects/:id/pre-milestones',
     icon: Calendar,
+    group: 'management',
     permission: 'view:project',
     children: [
       { key: 'pre-milestones', label: PROJECT_NAVIGATION_LABELS.preMilestones, href: '/projects/:id/pre-milestones', permission: 'view:project' },
@@ -144,7 +148,7 @@ export const PROJECT_NAVIGATION: NavigationItem[] = [
       { key: 'acceptance', label: PROJECT_NAVIGATION_LABELS.acceptance, href: '/projects/:id/acceptance', permission: 'view:project' },
     ],
   },
-  { key: 'notifications', label: PROJECT_NAVIGATION_LABELS.notifications, href: '/notifications', icon: Bell, permission: 'view:project' },
+  { key: 'notifications', label: PROJECT_NAVIGATION_LABELS.notifications, href: '/notifications', icon: Bell, group: 'management', permission: 'view:project' },
 ]
 
 const PLANNING_TARGETS: Record<string, Pick<NotificationTarget, 'key' | 'label' | 'href'>> = {

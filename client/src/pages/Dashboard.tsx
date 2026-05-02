@@ -1,79 +1,55 @@
-import { Link, useNavigate } from 'react-router-dom'
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Link } from 'react-router-dom'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  Activity,
+  AlertTriangle,
+  CheckCircle,
+  ChevronRight,
+  Clock3,
+  LayoutDashboard,
+  RefreshCw,
+  ShieldCheck,
+  TrendingDown,
+  TrendingUp,
+} from 'lucide-react'
+import {
+  Area,
+  AreaChart,
+  CartesianGrid,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts'
 
-import { ChartAccessibleWrapper } from '@/components/ChartAccessibleWrapper'
 import { Breadcrumb } from '@/components/Breadcrumb'
+import { ChartAccessibleWrapper } from '@/components/ChartAccessibleWrapper'
 import DashboardCompareCard from '@/components/DashboardCompareCard'
 import { DataConfidenceBreakdown } from '@/components/DataConfidenceBreakdown'
-import DashboardMilestoneCard from '@/components/DashboardMilestoneCard'
 import { EmptyState } from '@/components/EmptyState'
-import { PageHeader } from '@/components/PageHeader'
-import ProjectInfoCard, { type ProjectBasicInfoDraft, type ScopeDimensionSection } from '@/components/ProjectInfoCard'
-import RecentTasksCard from '@/components/RecentTasksCard'
-import { SectionHeader } from '@/components/SectionHeader'
-import { UnitProgressCard, type UnitProgress } from '@/components/UnitProgressCard'
-import { TaskStatusCard } from '@/components/TaskStatusCard'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
+import { CardHead } from '@/components/ui/card-head'
+import { ChartTooltip, chartTooltipCursor } from '@/components/ui/chart-tooltip'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { LoadingState } from '@/components/ui/loading-state'
+import { LucideIcon } from '@/components/ui/lucide-icon'
 import { MetricCard as SharedMetricCard } from '@/components/ui/metric-card'
 import { Separator } from '@/components/ui/separator'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { PROJECT_NAVIGATION_LABELS } from '@/config/navigation'
 import { useStore } from '@/hooks/useStore'
 import { useToast } from '@/hooks/use-toast'
-import { PROJECT_NAVIGATION_LABELS } from '@/config/navigation'
-import { apiGet, apiPut, getApiErrorMessage, isAbortError } from '@/lib/apiClient'
-import { CHART_AXIS_COLORS, CHART_NEUTRAL, CHART_SERIES } from '@/lib/chartPalette'
-import { getTaskDisplayStatus, isCompletedTask, isDelayedTask } from '@/lib/taskBusinessStatus'
+import { apiGet, isAbortError } from '@/lib/apiClient'
+import { CHART_NEUTRAL, CHART_SERIES } from '@/lib/chartPalette'
+import { getTaskDisplayStatus, isCompletedTask } from '@/lib/taskBusinessStatus'
 import { cn } from '@/lib/utils'
 import { DashboardApiService, type ProjectSummary } from '@/services/dashboardApi'
 import { DataQualityApiService, type DataQualityProjectSummary } from '@/services/dataQualityApi'
-import type { Project } from '@/lib/supabase'
-import * as Collapsible from '@radix-ui/react-collapsible'
-import {
-  Activity,
-  AlertTriangle,
-  ArrowRight,
-  CheckCircle,
-  ChevronDown,
-  Flag,
-  FolderKanban,
-  LayoutDashboard,
-  RefreshCw,
-  ShieldAlert,
-  Users,
-} from 'lucide-react'
 
 type ProjectStatus = '未开始' | '进行中' | '已完成' | '已暂停'
-
-type PrepItem = {
-  label: string
-  value: string
-  hint: string
-}
-
-type ChangeItem = {
-  label: string
-  value: number
-  hint: string
-  tone: string
-}
-
-type ResponsibilityUnitSummary = {
-  key: string
-  label: string
-  total_tasks: number
-  completed_count: number
-  on_time_rate: number
-}
-
-type ResponsibilityInsightsResponse = {
-  unit_rows?: ResponsibilityUnitSummary[]
-}
+type CurrentProjectEntity = NonNullable<ReturnType<typeof useStore.getState>['currentProject']>
 
 type DashboardWarningItem = {
   id: string
@@ -138,8 +114,6 @@ function normalizeTrendRows<T extends { month: string; total: number; on_time: n
   return Array.isArray(value) ? value : []
 }
 
-type CurrentProjectEntity = NonNullable<ReturnType<typeof useStore.getState>['currentProject']>
-
 function normalizeProjectStatus(status?: string | null): ProjectStatus {
   switch (status) {
     case 'active':
@@ -189,24 +163,6 @@ function getConfidenceStatusKey(score: number): string {
   return 'warning'
 }
 
-function buildGovernanceSignalSummary(summary: ProjectSummary | null) {
-  const governance = summary?.planningGovernance
-  if (!governance || !governance.hasActiveGovernanceSignal) return null
-
-  const items: string[] = []
-  if (governance.dashboardCloseoutOverdue) {
-    items.push('关账超期信号已触发')
-  }
-  if (governance.dashboardForceUnlockAvailable) {
-    items.push('第 7 日强制发起关账权限可用')
-  }
-  if (governance.reorderSummaryCount > 0) {
-    items.push(`编辑模式摘要 ${governance.reorderSummaryCount} 条`)
-  }
-
-  return items.length > 0 ? items.join(' · ') : '治理信号已生成'
-}
-
 function getCalendarDayKey(value: Date | string) {
   const date = value instanceof Date ? value : new Date(value)
   if (Number.isNaN(date.getTime())) return ''
@@ -235,13 +191,17 @@ function formatLiveTaskDate(value?: string | null) {
   return date.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })
 }
 
-function inferUnitType(label: string): UnitProgress['type'] {
-  const normalized = label.toLowerCase()
-  if (normalized.includes('设计')) return 'design'
-  if (normalized.includes('监理')) return 'supervision'
-  if (normalized.includes('勘察')) return 'survey'
-  if (normalized.includes('分包') || normalized.includes('劳务') || normalized.includes('专业')) return 'subcontract'
-  return 'general'
+function formatProjectDate(value?: string | null) {
+  if (!value) return '--'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' })
+}
+
+function getMinutesAgo(timestamp: number) {
+  if (!timestamp) return '--'
+  const minutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60000))
+  return minutes <= 0 ? '刚刚' : `${minutes} 分钟前`
 }
 
 function normalizeWarningRows(value: unknown): DashboardWarningItem[] {
@@ -250,7 +210,7 @@ function normalizeWarningRows(value: unknown): DashboardWarningItem[] {
   for (const item of value) {
     if (!item || typeof item !== 'object') continue
     const row = item as Record<string, unknown>
-    const normalized: DashboardWarningItem = {
+    rows.push({
       id: String(row.id ?? ''),
       title: String(row.title ?? '未命名预警'),
       description: String(row.description ?? ''),
@@ -259,10 +219,9 @@ function normalizeWarningRows(value: unknown): DashboardWarningItem[] {
       is_acknowledged: Boolean(row.is_acknowledged),
       created_at: row.created_at ? String(row.created_at) : undefined,
       status: row.status ? String(row.status) : null,
-    }
-    if (normalized.id) rows.push(normalized)
+    })
   }
-  return rows
+  return rows.filter((row) => row.id)
 }
 
 function normalizeIssueRows(value: unknown): DashboardIssueItem[] {
@@ -271,19 +230,17 @@ function normalizeIssueRows(value: unknown): DashboardIssueItem[] {
   for (const item of value) {
     if (!item || typeof item !== 'object') continue
     const row = item as Record<string, unknown>
-    const normalized: DashboardIssueItem = {
+    rows.push({
       id: String(row.id ?? ''),
       title: String(row.title ?? '未命名问题'),
       description: row.description ? String(row.description) : null,
-      severity:
-        (String(row.severity ?? 'medium').trim().toLowerCase() as DashboardIssueItem['severity']) || 'medium',
-      task_id: row.task_id ? String(row.task_id) : row.taskId ? String(row.taskId) : null,
-      created_at: row.created_at ? String(row.created_at) : row.createdAt ? String(row.createdAt) : undefined,
+      severity: row.severity ? (String(row.severity) as DashboardIssueItem['severity']) : undefined,
+      task_id: row.task_id ? String(row.task_id) : null,
+      created_at: row.created_at ? String(row.created_at) : undefined,
       status: row.status ? String(row.status) : undefined,
-    }
-    if (normalized.id) rows.push(normalized)
+    })
   }
-  return rows
+  return rows.filter((row) => row.id)
 }
 
 function normalizeProblemRows(value: unknown): DashboardProblemItem[] {
@@ -292,24 +249,18 @@ function normalizeProblemRows(value: unknown): DashboardProblemItem[] {
   for (const item of value) {
     if (!item || typeof item !== 'object') continue
     const row = item as Record<string, unknown>
-    const status = row.status ? String(row.status) : undefined
-    const normalized: DashboardProblemItem = {
+    rows.push({
       id: String(row.id ?? ''),
       title: row.title ? String(row.title) : undefined,
       description: row.description ? String(row.description) : undefined,
       severity: row.severity ? String(row.severity) : undefined,
       task_id: row.task_id ? String(row.task_id) : null,
       created_at: row.created_at ? String(row.created_at) : undefined,
-      status,
-      is_resolved:
-        row.is_resolved === true ||
-        row.is_resolved === 1 ||
-        status === '已解决' ||
-        String(status ?? '').trim().toLowerCase() === 'resolved',
-    }
-    if (normalized.id) rows.push(normalized)
+      status: row.status ? String(row.status) : undefined,
+      is_resolved: typeof row.is_resolved === 'boolean' || typeof row.is_resolved === 'number' ? row.is_resolved : null,
+    })
   }
-  return rows
+  return rows.filter((row) => row.id)
 }
 
 function normalizeChangeLogRows(value: unknown): DashboardChangeLogItem[] {
@@ -318,26 +269,15 @@ function normalizeChangeLogRows(value: unknown): DashboardChangeLogItem[] {
   for (const item of value) {
     if (!item || typeof item !== 'object') continue
     const row = item as Record<string, unknown>
-    const normalized: DashboardChangeLogItem = {
+    rows.push({
       id: String(row.id ?? ''),
-      entity_type: String(row.entity_type ?? ''),
-      field_name: String(row.field_name ?? ''),
+      entity_type: String(row.entity_type ?? '记录'),
+      field_name: String(row.field_name ?? '字段'),
       change_reason: row.change_reason ? String(row.change_reason) : null,
       changed_at: row.changed_at ? String(row.changed_at) : undefined,
-    }
-    if (normalized.id) rows.push(normalized)
+    })
   }
-  return rows
-}
-
-function getHealthPill(score: number) {
-  if (score >= 80) {
-    return { label: '良好', className: 'bg-emerald-50 text-emerald-700' }
-  }
-  if (score >= 60) {
-    return { label: '一般', className: 'bg-amber-50 text-amber-700' }
-  }
-  return { label: '预警', className: 'bg-red-50 text-red-700' }
+  return rows.filter((row) => row.id)
 }
 
 function normalizeApiTodayLiveItems(value: unknown): TodayLiveItem[] {
@@ -370,70 +310,17 @@ function sortTodayLiveItems(items: TodayLiveItem[]) {
   })
 }
 
-function DashboardCompactHeader({
-  currentProject,
-  currentStatus,
-  summaryData,
-  children,
-}: {
-  currentProject: CurrentProjectEntity
-  currentStatus: ProjectStatus
-  summaryData: ProjectSummary | null
-  children: ReactNode
-}) {
-  const [open, setOpen] = useState(false)
-  const healthScore = summaryData?.healthScore ?? 0
-  const healthPill = getHealthPill(healthScore)
-  const phaseLabel = currentProject.current_phase || summaryData?.statusLabel || currentStatus
-
-  return (
-    <Collapsible.Root open={open} onOpenChange={setOpen} className="space-y-3">
-      <div
-        data-testid="dashboard-compact-header"
-        className="flex flex-col gap-4 rounded-xl border border-slate-200/60 bg-white p-5 shadow-[var(--el-1)] md:flex-row md:items-center md:justify-between"
-      >
-        <div className="min-w-0 space-y-2">
-          <div data-testid="dashboard-global-summary" className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-            全局摘要
-          </div>
-          <div className="flex flex-wrap items-center gap-3">
-            <h1 className="min-w-0 truncate text-lg font-semibold text-slate-900">
-              {currentProject.name || '项目'}
-            </h1>
-            <Badge variant="secondary">{phaseLabel}</Badge>
-            <span className={cn('rounded-full px-2.5 py-0.5 text-xs font-medium', healthPill.className)}>
-              {healthPill.label} {healthScore}分
-            </span>
-          </div>
-        </div>
-        <Collapsible.Trigger asChild>
-          <Button type="button" variant="ghost" size="sm" className="shrink-0">
-            {open ? '收起' : '展开详情'}
-            <ChevronDown className={cn('ml-1 h-4 w-4 transition-transform', open && 'rotate-180')} />
-          </Button>
-        </Collapsible.Trigger>
-      </div>
-
-      <Collapsible.Content
-        data-testid="dashboard-project-info-details"
-        className="overflow-hidden data-[state=closed]:animate-collapse-up data-[state=open]:animate-expand-down"
-      >
-        {children}
-      </Collapsible.Content>
-    </Collapsible.Root>
-  )
-}
-
 function formatMetricTrend(value: number, invertTone = false) {
   if (value === 0) {
-    return { label: '→', className: 'text-slate-600' }
+    return { label: '持平 较上周', className: 'text-slate-400', icon: null }
   }
 
   const isPositive = value > 0
   const isGood = invertTone ? !isPositive : isPositive
   return {
-    label: `${isPositive ? '↑+' : '↓'}${Math.abs(value)}`,
-    className: isGood ? 'text-emerald-700' : 'text-red-700',
+    label: `${isPositive ? '+' : '-'}${Math.abs(value)} 较上周`,
+    className: isGood ? 'text-emerald-700' : 'text-rose-700',
+    icon: isPositive ? TrendingUp : TrendingDown,
   }
 }
 
@@ -447,79 +334,90 @@ function DashboardMetricCards({
   const overallProgress = Math.round(summaryData?.overallProgress ?? 0)
   const monthDeviation = Math.round(summaryData?.scheduleVarianceDays ?? summaryData?.delayDays ?? 0)
   const activeRisks = summaryData?.activeRiskCount ?? 0
-  const completedTasks = summaryData?.completedTaskCount ?? 0
-  const progressTrend = Math.max(0, Math.round(completedTasks))
   const noVerifiedSparkline: number[] = []
 
   const metrics = [
     {
       key: 'progress',
+      eyebrow: 'PROGRESS',
       label: '整体进度',
       value: overallProgress,
       unit: '%',
-      trend: formatMetricTrend(progressTrend),
+      trend: formatMetricTrend(0),
       sparkline: noVerifiedSparkline,
       tone: 'primary' as const,
+      icon: Activity,
     },
     {
       key: 'deviation',
+      eyebrow: 'DEVIATION',
       label: '本月偏差',
       value: monthDeviation,
       unit: '天',
       trend: formatMetricTrend(monthDeviation, true),
       sparkline: noVerifiedSparkline,
       tone: monthDeviation > 0 ? 'warning' as const : 'success' as const,
+      icon: Clock3,
     },
     {
       key: 'risks',
+      eyebrow: 'RISKS',
       label: '活跃风险',
       value: activeRisks,
       unit: '',
       trend: formatMetricTrend(activeRisks, true),
       sparkline: noVerifiedSparkline,
       tone: activeRisks > 0 ? 'danger' as const : 'slate' as const,
+      icon: AlertTriangle,
     },
     {
       key: 'todos',
+      eyebrow: 'TODO',
       label: '今日待办',
       value: todayTodoCount,
       unit: '',
-      // TODO: 需后端补充昨日待办数后替换为真实趋势。
       trend: formatMetricTrend(0),
       sparkline: noVerifiedSparkline,
       tone: 'slate' as const,
+      icon: ShieldCheck,
     },
   ]
 
   return (
-    <div
-      data-testid="dashboard-hero-cards"
-      data-onboarding-target="dashboard-metrics"
-      className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4"
-    >
-      {metrics.map((metric, index) => (
-        <SharedMetricCard
-          key={metric.key}
-          testId={`dashboard-hero-card-${metric.key}`}
-          title={metric.label}
-          value={metric.value}
-          unit={metric.unit}
-          trend={<span className={metric.trend.className}>{metric.trend.label}</span>}
-          sparkline={metric.sparkline}
-          tone={metric.tone}
-          className="motion-safe:animate-fade-in"
-          style={{ animationDelay: `${index * 60}ms` }}
-        />
-      ))}
+    <div data-testid="dashboard-hero-cards" data-onboarding-target="dashboard-metrics" className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-4">
+      {metrics.map((metric, index) => {
+        const TrendIcon = metric.trend.icon
+        return (
+          <SharedMetricCard
+            key={metric.key}
+            testId={`dashboard-hero-card-${metric.key}`}
+            eyebrow={metric.eyebrow}
+            title={metric.label}
+            value={metric.value}
+            unit={metric.unit}
+            trend={
+              <span className={cn('inline-flex items-center gap-1', metric.trend.className)}>
+                {TrendIcon ? <LucideIcon icon={TrendIcon} className="h-3 w-3" /> : null}
+                {metric.trend.label}
+              </span>
+            }
+            icon={<LucideIcon icon={metric.icon} className="h-3.5 w-3.5" />}
+            sparkline={metric.sparkline}
+            tone={metric.tone}
+            className="motion-safe:animate-fade-in"
+            style={{ animationDelay: `${index * 60}ms` }}
+          />
+        )
+      })}
     </div>
   )
 }
 
-const todayLiveTypeConfig: Record<TodayLiveType, { color: string; label: string }> = {
-  warning: { color: 'border-l-red-500', label: '预警' },
-  due_task: { color: 'border-l-amber-500', label: '到期' },
-  change: { color: 'border-l-blue-500', label: '变更' },
-  new_risk: { color: 'border-l-slate-400', label: '新增' },
+const todayLiveTypeConfig: Record<TodayLiveType, { color: string; dot: string; label: string }> = {
+  warning: { color: 'border-l-rose-500', dot: 'bg-rose-500', label: '预警' },
+  due_task: { color: 'border-l-amber-500', dot: 'bg-amber-500', label: '到期' },
+  change: { color: 'border-l-blue-500', dot: 'bg-blue-500', label: '变更' },
+  new_risk: { color: 'border-l-slate-400', dot: 'bg-slate-400', label: '新增' },
 }
 
 function TodayLiveListPanel({
@@ -533,209 +431,195 @@ function TodayLiveListPanel({
   items: TodayLiveItem[]
   totalCount: number
 }) {
-  const previewItems = items.slice(0, 5)
+  const previewItems = items.slice(0, 8)
 
   return (
-    <Card data-testid="dashboard-live-panel" variant="detail">
-      <CardContent className="space-y-4 p-5">
-        <SectionHeader
-          title="今日待处理"
-          action={
-            totalCount > 5 ? (
-              <Link to={`/projects/${projectId}/notifications`} className="text-sm font-medium text-blue-600 hover:underline">
-                查看全部({totalCount})
-              </Link>
-            ) : null
-          }
-        />
+    <section data-testid="dashboard-live-panel" className="surface-card p-5">
+      <CardHead
+        eyebrow="TODAY"
+        title="今日动态"
+        action={
+          totalCount > 8 ? (
+            <Link to={`/projects/${projectId}/notifications`} className="text-xs font-medium text-blue-600 hover:text-blue-800">
+              全部
+              <ChevronRight className="ml-1 inline h-3.5 w-3.5" />
+            </Link>
+          ) : null
+        }
+      />
+      <div className="mt-5">
         {loading ? (
-          <LoadingState
-            label="今日动态加载中"
-            description=""
-            className="min-h-24 border-0 bg-transparent px-0 py-2 shadow-none"
-          />
+          <LoadingState label="今日动态加载中" description="" className="min-h-24 border-0 bg-transparent px-0 py-2 shadow-none" />
         ) : previewItems.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-8 text-center">
-            <CheckCircle className="h-10 w-10 text-emerald-400" />
-            <h3 className="mt-3 text-sm font-medium text-slate-900">今日事项已全部处理</h3>
-            <p className="mt-1 text-xs text-slate-500">干得漂亮！</p>
+          <div className="flex min-h-56 flex-col items-center justify-center text-center">
+            <div className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-50 text-emerald-500 ring-1 ring-inset ring-emerald-200/60">
+              <CheckCircle className="h-7 w-7" />
+            </div>
+            <h3 className="mt-4 text-sm font-medium text-slate-900">今日待办均已完成</h3>
+            <p className="mt-2 text-xs text-slate-500">保持节奏，继续推进剩余里程碑。</p>
           </div>
         ) : (
-          <ul className="space-y-1">
+          <ul className="space-y-2.5">
             {previewItems.map((item) => {
               const config = todayLiveTypeConfig[item.type]
               return (
                 <li
                   key={item.id}
-                  className={cn('flex items-center gap-3 rounded-lg border-l-4 bg-slate-50 px-3 py-2', config.color)}
+                  className="group grid grid-cols-[4rem_minmax(0,1fr)_auto] items-center gap-3 rounded-xl border border-slate-100 bg-white px-3.5 py-3 shadow-[var(--el-1)] transition-all duration-200 hover:border-slate-200 hover:shadow-[var(--el-2)]"
                 >
-                  <span className="w-9 shrink-0 text-xs font-medium text-slate-500">{config.label}</span>
-                  <span className="min-w-0 flex-1 truncate text-sm text-slate-700">{item.title}</span>
-                  <span className="shrink-0 text-xs tabular-nums text-slate-500">{item.meta}</span>
+                  <span className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500">
+                    <span className={cn('h-1.5 w-1.5 rounded-full', config.dot)} />
+                    {config.label}
+                  </span>
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-medium text-slate-800">{item.title}</div>
+                    {item.detail ? <div className="mt-0.5 truncate text-[11px] text-slate-400">{item.detail}</div> : null}
+                  </div>
+                  <span className="flex items-center justify-end gap-1.5">
+                    <span className="num-mono text-right text-[11px] text-slate-400">{item.meta}</span>
+                    <ChevronRight className="h-3.5 w-3.5 text-slate-300 transition-colors group-hover:text-slate-500" aria-hidden="true" />
+                  </span>
                 </li>
               )
             })}
           </ul>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </section>
   )
 }
 
-function DashboardHero({
+function DashboardPageTitle({
   currentProject,
   currentStatus,
   summaryData,
   dataQualitySummary,
-  nextMilestone,
   summaryLoading,
+  todayLiveLoading,
+  fetchCompleteTime,
+  onRefresh,
 }: {
   currentProject: CurrentProjectEntity
   currentStatus: ProjectStatus
   summaryData: ProjectSummary | null
   dataQualitySummary: DataQualityProjectSummary | null
-  nextMilestone: ProjectSummary['nextMilestone']
   summaryLoading: boolean
+  todayLiveLoading: boolean
+  fetchCompleteTime: number
+  onRefresh: () => void
 }) {
-  const confidence = dataQualitySummary?.confidence
-  const governanceSignalSummary = buildGovernanceSignalSummary(summaryData)
-  const monthlyPlanningLink = currentProject.id ? `/projects/${currentProject.id}/planning/monthly` : '/company'
-  const closeoutPlanningLink = currentProject.id ? `/projects/${currentProject.id}/tasks/closeout` : '/company'
   const [confidenceDialogOpen, setConfidenceDialogOpen] = useState(false)
-  const progressValue = summaryData?.overallProgress ?? 0
-  const progressBadgeClass =
-    progressValue >= 80
-      ? 'bg-emerald-50 text-emerald-700'
-      : progressValue >= 60
-        ? 'bg-amber-50 text-amber-700'
-        : 'bg-red-50 text-red-700'
-  const hasOverdueMilestone = (summaryData?.milestoneOverview?.stats?.overdue ?? 0) > 0
+  const confidence = dataQualitySummary?.confidence
+  const healthScore = summaryData?.healthScore ?? 0
+  const progressValue = Math.round(summaryData?.overallProgress ?? 0)
+  const plannedStart = currentProject.planned_start_date || null
+  const plannedEnd = summaryData?.plannedEndDate || currentProject.planned_end_date || null
+  const phaseLabel = currentProject.current_phase || summaryData?.statusLabel || currentStatus
 
   return (
-    <section data-testid="dashboard-support-signals" className="space-y-4">
-          {confidence ? (
-            <>
-              <div data-testid="dashboard-data-quality-breakdown" className="rounded-2xl border border-slate-200 bg-white px-5 py-5 shadow-[var(--el-1)]">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0 flex-1 space-y-1">
-                    <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">数据可靠性</div>
-                    <div className="text-sm text-slate-700">
-                      当前总分 {Math.round(confidence.score)}%，详细维度收纳在弹窗中查看。
-                    </div>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    data-testid="dashboard-data-quality-detail-trigger"
-                    onClick={() => setConfidenceDialogOpen(true)}
-                  >
-                    查看详情
-                  </Button>
-                </div>
-              </div>
-
-              <Dialog open={confidenceDialogOpen} onOpenChange={setConfidenceDialogOpen}>
-                <DialogContent
-                  className="max-w-3xl"
-                  data-testid="dashboard-data-quality-detail-dialog"
-                  aria-describedby={undefined}
-                >
-                  <DialogHeader>
-                    <DialogTitle>数据可靠性维度分解</DialogTitle>
-                  </DialogHeader>
-                  <div className="space-y-4">
-                    <DataConfidenceBreakdown confidence={confidence} title="本月各维度降分贡献" />
-                  </div>
-                </DialogContent>
-              </Dialog>
-            </>
-          ) : null}
-
-          {governanceSignalSummary ? (
-            <div
-              data-testid="dashboard-governance-signal"
-              className="rounded-2xl border border-amber-200 bg-amber-50 px-5 py-5"
-            >
-              <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-                <div className="space-y-2">
-                  <span className="inline-flex items-center rounded-full bg-white px-3 py-1 text-xs font-semibold tracking-wider text-amber-800">
-                    计划治理信号
-                  </span>
-                  <p className="text-sm leading-6 text-amber-950">{governanceSignalSummary}</p>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    asChild
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    data-testid="dashboard-governance-open-monthly"
-                    className="border-amber-300 bg-white text-amber-900 hover:bg-amber-100"
-                  >
-                    <Link to={monthlyPlanningLink}>进入月度计划</Link>
-                  </Button>
-                  <Button
-                    asChild
-                    type="button"
-                    size="sm"
-                    data-testid="dashboard-governance-open-closeout"
-                    className="bg-amber-900 text-white hover:bg-amber-800"
-                  >
-                    <Link to={closeoutPlanningLink}>进入月末关账</Link>
-                  </Button>
-                </div>
-              </div>
-            </div>
-          ) : null}
-
+    <section data-testid="dashboard-page-title" className="pb-2">
+      <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
+        <div className="min-w-0 space-y-3">
+          <Breadcrumb
+            items={[
+              { label: currentProject.name || '项目', href: `/projects/${currentProject.id}/dashboard` },
+              { label: PROJECT_NAVIGATION_LABELS.dashboard },
+            ]}
+          />
           <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
             <StatusBadge status={getProjectStatusKey(summaryData?.statusLabel || currentStatus)} fallbackLabel={summaryData?.statusLabel || currentStatus}>
               {summaryData?.statusLabel || currentStatus}
             </StatusBadge>
-            <StatusBadge status={getHealthStatusKey(summaryData?.healthScore ?? 0)} fallbackLabel={`健康度 ${summaryData?.healthScore ?? 0}`}>
-              健康度 {summaryData?.healthScore ?? 0}
-            </StatusBadge>
-            <StatusBadge
-              status={getConfidenceStatusKey(confidence?.score ?? 0)}
-              fallbackLabel={`数据可靠性 ${Math.round(confidence?.score ?? 0)}%`}
-            >
-              数据可靠性 {Math.round(confidence?.score ?? 0)}%
-            </StatusBadge>
-            <span className={cn('badge-base', progressBadgeClass)}>
-              当前进度 {progressValue}%
-            </span>
-            <span className={cn('badge-base', hasOverdueMilestone ? 'bg-red-50 text-red-700' : 'bg-slate-100 text-slate-700')}>
-              下一关键节点 {nextMilestone?.name || '暂无'}
-            </span>
-            <span className="badge-base bg-slate-100 text-slate-700">
-              计划交付 {summaryData?.plannedEndDate || currentProject.planned_end_date || '--'}
+            <span className="num-mono rounded-full bg-slate-100/80 px-2.5 py-1 text-slate-500 ring-1 ring-inset ring-slate-200/60">
+              {formatProjectDate(plannedStart)} - {formatProjectDate(plannedEnd)}
             </span>
           </div>
-      {summaryLoading && (
-        <>
-          <Separator />
-          <div className="bg-white px-6 py-3 text-xs text-slate-500">
+          <div>
+            <h1 className="truncate text-[28px] font-semibold leading-tight tracking-tight text-slate-950">
+              {currentProject.name || '项目'}
+            </h1>
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+              <span>{phaseLabel}</span>
+              <span>·</span>
+              <StatusBadge status={getHealthStatusKey(healthScore)} fallbackLabel={`健康度 ${healthScore}分`}>
+                健康度 {healthScore}分
+              </StatusBadge>
+              <StatusBadge
+                data-testid="dashboard-data-quality-detail-trigger"
+                status={getConfidenceStatusKey(confidence?.score ?? 0)}
+                fallbackLabel={confidence ? `数据可靠性 ${Math.round(confidence.score)}%` : '数据可靠性 --'}
+                className={cn(confidence && 'cursor-pointer hover:ring-2 hover:ring-blue-100')}
+                onClick={confidence ? () => setConfidenceDialogOpen(true) : undefined}
+              >
+                数据可靠性 {confidence ? `${Math.round(confidence.score)}%` : '--'}
+              </StatusBadge>
+              <span className="rounded-full bg-blue-50 px-2.5 py-1 text-blue-700 ring-1 ring-inset ring-blue-200/60">
+                进度 {progressValue}%
+              </span>
+            </div>
           </div>
-        </>
-      )}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3 xl:justify-end">
+          <span className="text-[11px] text-slate-400">更新于 {getMinutesAgo(fetchCompleteTime)}</span>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onRefresh}
+            loading={summaryLoading || todayLiveLoading}
+            className="h-8 rounded-lg border-slate-200 bg-white px-2.5 text-xs"
+          >
+            <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+            刷新
+          </Button>
+          <Button asChild variant="outline" size="sm" className="h-8 rounded-lg border-slate-200 bg-white px-2.5 text-xs">
+            <Link to="/company">
+              <LayoutDashboard className="mr-1.5 h-3.5 w-3.5" />
+              返回公司驾驶舱
+            </Link>
+          </Button>
+        </div>
+      </div>
+
+      {confidence ? (
+        <Dialog open={confidenceDialogOpen} onOpenChange={setConfidenceDialogOpen}>
+          <DialogContent className="max-w-3xl" data-testid="dashboard-data-quality-detail-dialog" aria-describedby={undefined}>
+            <DialogHeader>
+              <DialogTitle>数据可靠性维度分解</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4">
+              <DataConfidenceBreakdown confidence={confidence} title="本月各维度降分贡献" />
+            </div>
+          </DialogContent>
+        </Dialog>
+      ) : null}
     </section>
   )
 }
+
 function WeeklyDigestPanel({ projectId }: { projectId: string }) {
   type DigestData = {
-    id: string; project_id: string; week_start: string; generated_at: string
-    overall_progress?: number | null; health_score?: number | null; progress_change?: number | null
-    completed_tasks_count?: number | null; completed_milestones_count?: number | null
-    critical_tasks_count?: number | null; critical_blocked_count?: number | null
-    critical_nearest_milestone?: string | null; critical_nearest_delay_days?: number | null
+    id: string
+    project_id: string
+    week_start: string
+    generated_at: string
+    overall_progress?: number | null
+    health_score?: number | null
+    progress_change?: number | null
+    completed_tasks_count?: number | null
+    completed_milestones_count?: number | null
+    critical_tasks_count?: number | null
+    critical_blocked_count?: number | null
+    critical_nearest_milestone?: string | null
+    critical_nearest_delay_days?: number | null
     top_delayed_tasks?: Array<{ task_id: string; title: string; assignee?: string; delay_days: number }> | null
     abnormal_responsibilities?: Array<{ subject_id: string; name: string; type: string }> | null
-    new_risks_count?: number | null; new_obstacles_count?: number | null; max_risk_level?: string | null
+    new_risks_count?: number | null
+    new_obstacles_count?: number | null
+    max_risk_level?: string | null
   }
   const [digest, setDigest] = useState<DigestData | null>(null)
   const [loading, setLoading] = useState(true)
-  const [expanded, setExpanded] = useState(true)
 
   useEffect(() => {
     const controller = new AbortController()
@@ -761,143 +645,75 @@ function WeeklyDigestPanel({ projectId }: { projectId: string }) {
     }
   }, [projectId])
 
-  if (loading) {
-    return (
-      <Card data-testid="dashboard-weekly-digest" variant="surface" className="border-slate-100">
-        <CardContent className="py-6">
-          <LoadingState label="本周进度简报加载中" description="" className="min-h-24 border-0 bg-transparent px-0 py-0 shadow-none" />
-        </CardContent>
-      </Card>
-    )
-  }
-
-  if (!digest) {
-    return (
-      <Card data-testid="dashboard-weekly-digest" variant="surface" className="border-slate-100">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-xl text-slate-900">本周进度简报</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <EmptyState
-            testId="dashboard-critical-path-summary"
-            title="暂无本周进度简报"
-            description="周报将在每周一自动生成，形成后会在这里展示关键进展。"
-            className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 py-8"
-          />
-        </CardContent>
-      </Card>
-    )
-  }
-
-  const genDate = digest.generated_at ? new Date(digest.generated_at).toLocaleDateString('zh-CN') : ''
-  const progressChange = digest.progress_change
-  const changeText = progressChange !== null && progressChange !== undefined
-    ? `${progressChange >= 0 ? '+' : ''}${progressChange.toFixed(1)}%`
-    : null
-  const nearestDelayDays = typeof digest.critical_nearest_delay_days === 'number' ? digest.critical_nearest_delay_days : null
-  const isSevereDelay = nearestDelayDays !== null && nearestDelayDays >= 20
-
   return (
-    <Card data-testid="dashboard-weekly-digest" variant="surface" className="border-slate-100">
-      <CardHeader className="pb-3">
-        <div className="flex items-center justify-between gap-3">
-          <CardTitle className="text-xl text-slate-900">本周进度简报</CardTitle>
-          <Badge variant="secondary">{genDate} 生成</Badge>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="grid gap-4 xl:grid-cols-3">
-          <div className="rounded-xl bg-slate-50 p-4">
-            <div className="text-xs font-medium text-slate-500">整体状态</div>
-            <div className="mt-2 text-2xl font-semibold text-slate-900">
-              {digest.overall_progress ?? '--'}%
-              {changeText && <span className="ml-2 text-base font-normal text-emerald-600">({changeText})</span>}
-            </div>
-            <div className="mt-1 text-xs text-slate-500">健康度 {digest.health_score ?? '--'}</div>
-          </div>
-          <div className="rounded-xl bg-slate-50 p-4">
-            <div className="text-xs font-medium text-slate-500">本周完成</div>
-            <div className="mt-2 text-2xl font-semibold text-slate-900">{digest.completed_tasks_count ?? 0} 个任务</div>
-            <div className="mt-1 text-xs text-slate-500">里程碑达成 {digest.completed_milestones_count ?? 0} 个</div>
-          </div>
-          <div data-testid="dashboard-critical-path-summary" className="rounded-xl bg-slate-50 p-4">
-            <div className="text-xs font-medium text-slate-500">关键路径</div>
-            <div className="mt-2 text-2xl font-semibold text-slate-900">关键任务 {digest.critical_tasks_count ?? 0} 个</div>
-            <div className="mt-1 text-xs text-slate-500">
-              <Link to={`/projects/${projectId}/gantt?filterCritical=true`} className="text-blue-600 hover:underline">受阻 {digest.critical_blocked_count ?? 0} 个</Link>
-              {nearestDelayDays !== null ? (
-                isSevereDelay ? (
-                  <span className="ml-2 inline-flex rounded-full bg-red-50 px-2 py-0.5 text-red-700">
-                    严重延期 +{nearestDelayDays} 天
-                  </span>
-                ) : (
-                  <span className="ml-2 text-slate-500">最近节点偏差 +{nearestDelayDays} 天</span>
-                )
-              ) : null}
-            </div>
-          </div>
-        </div>
-
-        <Button variant="ghost"
-          onClick={() => setExpanded(v => !v)}
-          className="text-xs text-blue-600 hover:text-blue-800"
-        >
-          {expanded ? '收起' : '展开详情 ▾'}
-        </Button>
-
-        {expanded && (
-          <div className="space-y-4">
-            <div className="grid gap-4 xl:grid-cols-2">
-              <div>
-                <div className="mb-2 text-xs font-medium text-slate-500">Top 5 偏差任务</div>
-                {(digest.top_delayed_tasks || []).length === 0 ? (
-                  <EmptyState
-                    title="暂无偏差任务"
-                    description="当前周报未识别出需要重点跟踪的偏差任务。"
-                    className="rounded-xl empty-state-frame border-slate-200 bg-slate-50 py-5"
-                  />
-                ) : (
-                  <ul className="space-y-1">
-                    {(digest.top_delayed_tasks || []).map((t, i) => (
-                      <li key={t.task_id} className="flex items-center gap-2 text-xs">
-                        <span className="text-slate-500">{i + 1}.</span>
-                        <Link to={`/projects/${projectId}/gantt?taskId=${t.task_id}`} className="text-blue-600 hover:underline">
-                          {t.title}
-                        </Link>
-                        <span className="text-red-500">(+{t.delay_days}天)</span>
-                        {t.assignee && <span className="text-slate-500">{t.assignee}</span>}
-                      </li>
-                    ))}
-                  </ul>
-                )}
+    <section data-testid="dashboard-weekly-digest" className="surface-card p-5">
+      <CardHead eyebrow="WEEKLY" title="本周进度面板" action={<Link to={`/projects/${projectId}/reports`} className="text-xs font-medium text-blue-600 hover:text-blue-800">查看详情</Link>} />
+      {loading ? (
+        <LoadingState label="周报摘要加载中" description="" className="min-h-32 border-0 bg-transparent shadow-none" />
+      ) : !digest ? (
+        <EmptyState
+          title="暂无本周进度面板"
+          description="周报生成后会在这里展示关键指标。"
+          className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 py-8"
+        />
+      ) : (
+        <div className="mt-5 space-y-5">
+          <div className="grid grid-cols-3 gap-3">
+            {[
+              { label: '本周整体进度', value: `${digest.overall_progress ?? 0}%`, hint: '较上周持平' },
+              { label: '目标达标', value: `${digest.completed_milestones_count ?? 0}`, hint: '本周关键节点' },
+              { label: '关键任务', value: `${digest.critical_tasks_count ?? 0}`, hint: '需重点跟进' },
+            ].map((item) => (
+              <div key={item.label} className="rounded-xl border border-slate-200/60 bg-slate-50/60 p-5">
+                <div className="text-[11px] text-slate-500">{item.label}</div>
+                <div className="num-display mt-3 text-[26px] font-semibold text-slate-900">{item.value}</div>
+                <div className="mt-2 text-[11px] text-slate-400">{item.hint}</div>
               </div>
+            ))}
+          </div>
+
+          <div>
+            <div className="mb-2 flex items-center justify-between">
               <div>
-                <div className="mb-2 text-xs font-medium text-slate-500">责任主体异常</div>
-                {(digest.abnormal_responsibilities || []).length === 0 ? (
-                  <EmptyState
-                    title="暂无异常责任主体"
-                    description="当前周报未识别出需要额外跟进的责任主体。"
-                    className="rounded-xl empty-state-frame border-slate-200 bg-slate-50 py-5"
-                  />
-                ) : (
-                  <ul className="space-y-1">
-                    {(digest.abnormal_responsibilities || []).map(r => (
-                      <Link key={r.subject_id} to={`/projects/${projectId}/responsibility`} className="block text-xs text-blue-600 hover:underline">
-                        {r.name}（{r.type}）
-                      </Link>
-                    ))}
-                  </ul>
-                )}
+                <div className="eyebrow">TOP DELAY</div>
+                <h4 className="mt-0.5 text-sm font-medium text-slate-900">Top 5 偏差任务</h4>
               </div>
+              <div className="text-[11px] text-slate-400">数据截止：{formatProjectDate(digest.generated_at)}</div>
             </div>
-            <div className="rounded-xl bg-slate-50 p-5 text-xs text-slate-600">
-              本周新增风险 {digest.new_risks_count ?? 0} 条 / 阻碍 {digest.new_obstacles_count ?? 0} 条
-              {digest.max_risk_level && <span className="ml-2 font-medium text-red-600">最高级别：{digest.max_risk_level}</span>}
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[420px] border-collapse">
+                <thead>
+                  <tr className="border-b border-gray-200">
+                    {['任务名', '延期天数', '负责人'].map((label) => (
+                      <th key={label} className="py-2 pr-3 text-left text-[10.5px] font-semibold uppercase tracking-[0.08em] text-slate-400">
+                        {label}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {(digest.top_delayed_tasks ?? []).slice(0, 5).length === 0 ? (
+                    <tr>
+                      <td colSpan={3} className="py-6 text-center text-xs text-slate-400">暂无偏差任务</td>
+                    </tr>
+                  ) : (
+                    (digest.top_delayed_tasks ?? []).slice(0, 5).map((task) => (
+                      <tr key={task.task_id} className="border-b border-slate-100 hover:bg-slate-50/60">
+                        <td className="max-w-[220px] truncate py-2.5 pr-3 text-sm text-slate-700">{task.title}</td>
+                        <td className={cn('num-mono py-2.5 pr-3 text-sm text-rose-600', task.delay_days === 0 && 'text-slate-400')}>
+                          {task.delay_days}
+                        </td>
+                        <td className="py-2.5 pr-3 text-xs text-slate-500">{task.assignee || '--'}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
             </div>
           </div>
-        )}
-      </CardContent>
-    </Card>
+        </div>
+      )}
+    </section>
   )
 }
 
@@ -917,9 +733,6 @@ function DashboardMonthlyTrend({ projectId }: { projectId: string }) {
 
   const [trendData, setTrendData] = useState<CombinedTrendRow[]>([])
   const [loading, setLoading] = useState(true)
-  const [tooltip, setTooltip] = useState<{ x: number; y: number; row: CombinedTrendRow } | null>(null)
-  const monthlyLink = `/projects/${projectId}/planning/monthly`
-  const closeoutLink = `/projects/${projectId}/tasks/closeout`
 
   useEffect(() => {
     const controller = new AbortController()
@@ -969,39 +782,30 @@ function DashboardMonthlyTrend({ projectId }: { projectId: string }) {
     }
   }, [projectId])
 
-  const W = 560, H = 120, PL = 36, PR = 16, PT = 12, PB = 28
-  const innerW = W - PL - PR
-  const innerH = H - PT - PB
-
-  const points = trendData.map((row, index) => {
-    const x = PL + (trendData.length === 1 ? innerW / 2 : (index / (trendData.length - 1)) * innerW)
-    const taskY = row.taskOnTimeRate !== null ? PT + innerH * (1 - row.taskOnTimeRate / 100) : null
-    const fulfillmentY = row.fulfillmentRate !== null ? PT + innerH * (1 - row.fulfillmentRate / 100) : null
-    return { x, taskY, fulfillmentY, row }
-  })
-  const taskPoints = points.filter((point) => point.taskY !== null) as Array<{ x: number; taskY: number; fulfillmentY: number | null; row: CombinedTrendRow }>
-  const fulfillmentPoints = points.filter((point) => point.fulfillmentY !== null) as Array<{ x: number; taskY: number | null; fulfillmentY: number; row: CombinedTrendRow }>
-
-  const monthLabel = (m: string) => {
-    const [, mo] = m.split('-')
-    return `${parseInt(mo)}月`
+  const monthLabel = (value: string) => {
+    const [, month] = value.split('-')
+    return month ? `${Number(month)}月` : value
   }
 
   return (
-    <Card data-testid="dashboard-monthly-trend" variant="surface" className="border-slate-100">
-      <CardHeader className="pb-3">
-        <div className="flex items-center justify-between gap-3">
-          <CardTitle className="text-xl text-slate-900">月度趋势（近6个月）</CardTitle>
-          <Badge variant="secondary">按时完成率 / 月计划兑现率</Badge>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-4">
+    <section data-testid="dashboard-monthly-trend" className="surface-card p-5">
+      <CardHead
+        eyebrow="TREND"
+        title="月度趋势（近6个月）"
+        action={
+          <div className="flex items-center gap-4 text-[11px] text-slate-500">
+            <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-blue-600" />任务按时率</span>
+            <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-emerald-500" />月计划兑现率</span>
+          </div>
+        }
+      />
+      <div className="mt-5">
         {loading ? (
-          <LoadingState label="月度趋势加载中" description="" className="min-h-32 border-0 bg-transparent px-0 py-0 shadow-none" />
+          <LoadingState label="月度趋势加载中" description="" className="min-h-60 border-0 bg-transparent px-0 py-0 shadow-none" />
         ) : trendData.length === 0 ? (
           <EmptyState
             title="暂无月度趋势"
-            description="月度趋势将在任务完成后自动生成。"
+            description="任务完成后会自动生成趋势数据。"
             className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 py-8"
           />
         ) : (
@@ -1019,225 +823,58 @@ function DashboardMonthlyTrend({ projectId }: { projectId: string }) {
             ])}
             summary="查看月度趋势图表数据"
           >
-            <div className="relative w-full overflow-hidden rounded-2xl border border-slate-100 bg-white p-5">
-            <div className="mb-2 flex flex-wrap items-center gap-3 text-xs text-slate-500">
-              <span className="inline-flex items-center gap-1">
-                <span className="h-2.5 w-2.5 rounded-full bg-blue-600" />
-                任务按时完成率
-              </span>
-              <span className="inline-flex items-center gap-1">
-                <span className="h-2.5 w-2.5 rounded-full bg-emerald-500" />
-                月计划兑现率
-              </span>
-            </div>
-            <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: H }}>
-              {[0, 0.25, 0.5, 0.75, 1].map(v => {
-                const y = PT + innerH * (1 - v)
-                return (
-                  <g key={v}>
-                    <line x1={PL} y1={y} x2={W - PR} y2={y} stroke={CHART_NEUTRAL.softSurface} strokeWidth="1" strokeDasharray="3 3" />
-                    <text x={PL - 4} y={y + 4} fontSize="9" fill={CHART_AXIS_COLORS.axisText} textAnchor="end">{Math.round(v * 100)}%</text>
-                  </g>
-                )
-              })}
-              {taskPoints.length > 1 && (
-                <polyline
-                  points={taskPoints.map((point) => `${point.x},${point.taskY}`).join(' ')}
-                  fill="none"
-                  stroke={CHART_SERIES.primary}
-                  strokeWidth="2"
-                  strokeLinejoin="round"
-                />
-              )}
-              {fulfillmentPoints.length > 1 && (
-                <polyline
-                  points={fulfillmentPoints.map((point) => `${point.x},${point.fulfillmentY}`).join(' ')}
-                  fill="none"
-                  stroke={CHART_SERIES.success}
-                  strokeWidth="2"
-                  strokeLinejoin="round"
-                />
-              )}
-              {points.map((p, i) => (
-                <g key={i}>
-                  <text x={p.x} y={H - 4} fontSize="9" fill={CHART_AXIS_COLORS.axisText} textAnchor="middle">{monthLabel(p.row.month)}</text>
-                  {p.taskY !== null && (
-                    <circle
-                      cx={p.x}
-                      cy={p.taskY}
-                      r={4}
-                      fill="white"
-                      stroke={CHART_SERIES.primary}
-                      strokeWidth="2"
-                      onMouseEnter={(event) => {
-                        const rect = (event.target as SVGCircleElement).closest('svg')!.getBoundingClientRect()
-                        const taskY = p.taskY
-                        if (taskY === null) return
-                        setTooltip({ x: (p.x / W) * rect.width, y: (taskY / H) * rect.height, row: p.row })
-                      }}
-                      onMouseLeave={() => setTooltip(null)}
-                      style={{ cursor: 'default' }}
-                    />
-                  )}
-                  {p.fulfillmentY !== null && (
-                    <circle
-                      cx={p.x}
-                      cy={p.fulfillmentY}
-                      r={4}
-                      fill="white"
-                      stroke={CHART_SERIES.success}
-                      strokeWidth="2"
-                      onMouseEnter={(event) => {
-                        const rect = (event.target as SVGCircleElement).closest('svg')!.getBoundingClientRect()
-                        const fulfillmentY = p.fulfillmentY
-                        if (fulfillmentY === null) return
-                        setTooltip({ x: (p.x / W) * rect.width, y: (fulfillmentY / H) * rect.height, row: p.row })
-                      }}
-                      onMouseLeave={() => setTooltip(null)}
-                      style={{ cursor: 'default' }}
-                    />
-                  )}
-                </g>
-              ))}
-            </svg>
-            {tooltip && (
-              <div
-                className="pointer-events-none absolute z-10 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs shadow-[var(--el-2)]"
-                style={{ left: tooltip.x + 8, top: tooltip.y - 60 }}
-              >
-                <div className="font-medium text-slate-700">{tooltip.row.month}</div>
-                <div className="text-slate-500">
-                  任务完成 {tooltip.row.total} · 按时 {tooltip.row.on_time} · 延期 {tooltip.row.delayed}
-                </div>
-                <div className="font-semibold text-blue-600">
-                  按时率 {tooltip.row.taskOnTimeRate ?? 0}%
-                </div>
-                <div className="font-semibold text-emerald-600">
-                  月计划兑现率 {tooltip.row.fulfillmentRate ?? 0}%
-                </div>
-              </div>
-            )}
+            <div className="h-[240px] w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={trendData} margin={{ top: 8, right: 8, left: -12, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="dashboardTaskRate" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor={CHART_SERIES.primary} stopOpacity={0.2} />
+                      <stop offset="100%" stopColor={CHART_SERIES.primary} stopOpacity={0} />
+                    </linearGradient>
+                    <linearGradient id="dashboardFulfillmentRate" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor={CHART_SERIES.success} stopOpacity={0.16} />
+                      <stop offset="100%" stopColor={CHART_SERIES.success} stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid stroke={CHART_NEUTRAL.surface} strokeDasharray="4 4" vertical={false} />
+                  <XAxis dataKey="month" tickFormatter={monthLabel} axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: CHART_NEUTRAL.muted }} />
+                  <YAxis domain={[0, 100]} axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: CHART_NEUTRAL.muted }} />
+                  <Tooltip content={<ChartTooltip labelFormatter={(label) => monthLabel(String(label))} />} cursor={chartTooltipCursor} />
+                  <Area
+                    type="monotone"
+                    dataKey="taskOnTimeRate"
+                    name="任务按时率"
+                    stroke={CHART_SERIES.primary}
+                    fill="url(#dashboardTaskRate)"
+                    strokeWidth={2}
+                    connectNulls
+                    animationDuration={800}
+                    animationEasing="ease-out"
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="fulfillmentRate"
+                    name="月计划兑现率"
+                    stroke={CHART_SERIES.success}
+                    fill="url(#dashboardFulfillmentRate)"
+                    strokeWidth={2}
+                    connectNulls
+                    animationDuration={800}
+                    animationEasing="ease-out"
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
             </div>
           </ChartAccessibleWrapper>
         )}
-        <div className="flex flex-wrap gap-2">
-          <Button asChild>
-            <Link data-testid="dashboard-open-monthly-plan" to={monthlyLink}>进入月度计划</Link>
-          </Button>
-          <Button asChild variant="outline" className="border-slate-200 bg-white">
-            <Link data-testid="dashboard-open-closeout" to={closeoutLink}>进入月末关账</Link>
-          </Button>
-        </div>
-      </CardContent>
-    </Card>
-  )
-}
-
-// 问题与风险 2×2 语义色网格
-function IssueRiskGrid({ summaryData, projectId }: { summaryData: ProjectSummary | null; projectId: string }) {
-  const riskReportsHref = `/projects/${projectId}/reports?view=risk`
-  const cells = [
-    {
-      label: '活跃风险数',
-      value: summaryData?.activeRiskCount ?? 0,
-      icon: Activity,
-      bg: 'bg-red-50',
-      iconColor: 'text-red-500',
-      textColor: 'text-red-700',
-      badgeBg: 'bg-red-100 text-red-700',
-      to: `/projects/${projectId}/risks`,
-    },
-    {
-      label: '活跃问题数',
-      value: summaryData?.activeIssueCount ?? 0,
-      icon: AlertTriangle,
-      bg: 'bg-red-50',
-      iconColor: 'text-red-500',
-      textColor: 'text-red-700',
-      badgeBg: 'bg-red-100 text-red-700',
-      to: `/projects/${projectId}/risks?tab=issues`,
-    },
-    {
-      label: '活跃阻碍数',
-      value: summaryData?.activeObstacleCount ?? 0,
-      icon: ShieldAlert,
-      bg: 'bg-orange-50',
-      iconColor: 'text-orange-500',
-      textColor: 'text-orange-700',
-      badgeBg: 'bg-orange-100 text-orange-700',
-      to: `/projects/${projectId}/gantt`,
-    },
-    {
-      label: '待满足条件数',
-      value: summaryData?.pendingConditionTaskCount ?? 0,
-      icon: Flag,
-      bg: 'bg-amber-50',
-      iconColor: 'text-amber-500',
-      textColor: 'text-amber-700',
-      badgeBg: 'bg-amber-100 text-amber-700',
-      to: `/projects/${projectId}/gantt`,
-    },
-  ]
-  let totalSignals = 0
-  for (const cell of cells) {
-    totalSignals += Number(cell.value) || 0
-  }
-
-  return (
-    <Card data-testid="dashboard-risk-snapshot" variant="surface" className="border-slate-100">
-      <CardHeader className="pb-3">
-        <div className="flex items-center justify-between gap-3">
-          <CardTitle className="text-base text-slate-900">问题与风险快照</CardTitle>
-          <div className="flex items-center gap-3">
-            <Badge variant={totalSignals > 0 ? 'destructive' : 'secondary'}>
-              {totalSignals > 0 ? `${totalSignals} 条需处理信号` : '当前无活跃信号'}
-            </Badge>
-            <Link
-              data-testid="dashboard-risk-reports-link"
-              to={riskReportsHref}
-              className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 transition-colors hover:text-blue-800 hover:underline"
-            >
-              查看详细分析
-              <ArrowRight className="h-3.5 w-3.5" />
-            </Link>
-          </div>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="grid grid-cols-2 gap-4">
-          {cells.map((cell) => (
-            <Link
-              key={cell.label}
-              data-testid={cell.label === '活跃阻碍数' ? 'dashboard-open-gantt-quick-link' : undefined}
-              to={cell.to}
-              className={`rounded-2xl p-4 ${cell.bg} hover:opacity-90 transition-opacity`}
-            >
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-sm font-medium text-slate-600">{cell.label}</span>
-                <cell.icon className={`h-4 w-4 ${cell.iconColor}`} />
-              </div>
-              <div className={`text-2xl font-bold ${cell.textColor}`}>{cell.value}</div>
-              <span className={`mt-1 inline-block text-xs px-2 py-0.5 rounded-full ${cell.badgeBg}`}>
-                {cell.value > 0 ? '需关注' : '正常'}
-              </span>
-            </Link>
-          ))}
-        </div>
-      </CardContent>
-    </Card>
+      </div>
+    </section>
   )
 }
 
 export default function Dashboard() {
-  useEffect(() => {
-    document.title = '项目概览 | WorkBuddy'
-  }, [])
-
   const { toast } = useToast()
-  const navigate = useNavigate()
   const currentProject = useStore((state) => state.currentProject)
-  const updateProject = useStore((state) => state.updateProject)
-  const setCurrentProject = useStore((state) => state.setCurrentProject)
   const tasks = useStore((state) => state.tasks)
   const warnings = useStore((state) => state.warnings)
   const issueRows = useStore((state) => state.issueRows)
@@ -1248,30 +885,20 @@ export default function Dashboard() {
   const [dataQualitySummary, setDataQualitySummary] = useState<DataQualityProjectSummary | null>(null)
   const [summaryLoading, setSummaryLoading] = useState(false)
   const [summaryError, setSummaryError] = useState<string | null>(null)
-  const [scopeSections, setScopeSections] = useState<ScopeDimensionSection[]>([])
-  const [scopeLoading, setScopeLoading] = useState(false)
-  const [basicInfoSaving, setBasicInfoSaving] = useState(false)
-  const [responsibilitySummary, setResponsibilitySummary] = useState<ResponsibilityInsightsResponse | null>(null)
-  const [responsibilityLoading, setResponsibilityLoading] = useState(false)
   const [todayLiveItems, setTodayLiveItems] = useState<TodayLiveItem[]>([])
   const [todayLiveLoading, setTodayLiveLoading] = useState(false)
   const [todayLiveError, setTodayLiveError] = useState<string | null>(null)
+  const [fetchCompleteTime, setFetchCompleteTime] = useState(0)
   const summaryAbortRef = useRef<AbortController | null>(null)
   const dataQualityAbortRef = useRef<AbortController | null>(null)
-  const responsibilityAbortRef = useRef<AbortController | null>(null)
   const todayLiveAbortRef = useRef<AbortController | null>(null)
   const projectId = currentProject?.id ?? ''
 
   const currentStatus = normalizeProjectStatus(currentProject?.status)
   const summaryData = summary
-  const nextMilestone = summaryData?.nextMilestone ?? null
   const scopedTasks = useMemo(
     () => tasks.filter((task) => task.project_id === currentProject?.id),
     [currentProject?.id, tasks],
-  )
-  const recentScopedTasks = useMemo(
-    () => scopedTasks.filter((task): task is typeof task & { id: string } => typeof task.id === 'string' && task.id.length > 0),
-    [scopedTasks],
   )
   const liveWarnings = useMemo(
     () =>
@@ -1305,6 +932,7 @@ export default function Dashboard() {
       const nextSummary = await DashboardApiService.getProjectSummary(projectId, { signal: options.signal })
       if (!options.signal?.aborted) {
         setSummary(nextSummary)
+        setFetchCompleteTime(Date.now())
       }
     } catch (error) {
       if (isAbortError(error)) return
@@ -1323,38 +951,6 @@ export default function Dashboard() {
       }
     }
   }, [projectId, toast])
-
-  const loadResponsibilitySummary = useCallback(async (options?: { signal?: AbortSignal }) => {
-    if (!projectId) {
-      setResponsibilitySummary(null)
-      return
-    }
-
-    if (!options?.signal) {
-      responsibilityAbortRef.current?.abort()
-      responsibilityAbortRef.current = new AbortController()
-      options = { signal: responsibilityAbortRef.current.signal }
-    }
-
-    setResponsibilityLoading(true)
-    try {
-      const response = await apiGet<ResponsibilityInsightsResponse>(
-        `/api/projects/${projectId}/responsibility`,
-        { signal: options.signal },
-      )
-      if (!options.signal?.aborted) {
-        setResponsibilitySummary(response ?? null)
-      }
-    } catch (error) {
-      if (isAbortError(error)) return
-      console.error('Failed to load responsibility summary:', error)
-      setResponsibilitySummary(null)
-    } finally {
-      if (!options.signal?.aborted) {
-        setResponsibilityLoading(false)
-      }
-    }
-  }, [projectId])
 
   const loadTodayLive = useCallback(async (options?: { signal?: AbortSignal }) => {
     if (!projectId) {
@@ -1415,41 +1011,6 @@ export default function Dashboard() {
     }
   }, [projectId])
 
-  const loadScopeSections = useCallback(async (options?: { signal?: AbortSignal }) => {
-    if (!projectId) {
-      setScopeSections([])
-      return
-    }
-
-    if (!options?.signal) {
-      options = {}
-    }
-
-    setScopeLoading(true)
-    try {
-      const response = await apiGet<{ project_id: string | null; sections: ScopeDimensionSection[] }>(
-        `/api/scope-dimensions?projectId=${encodeURIComponent(projectId)}`,
-        options.signal ? { signal: options.signal } : undefined,
-      )
-      if (!options.signal?.aborted) {
-        setScopeSections(response.sections ?? [])
-      }
-    } catch (error) {
-      if (isAbortError(error)) return
-      console.error('Failed to load scope dimensions:', error)
-      setScopeSections([])
-      toast({
-        title: '范围维度加载失败',
-        description: getApiErrorMessage(error, '暂时无法加载楼栋、专业、阶段和区域配置。'),
-        variant: 'destructive',
-      })
-    } finally {
-      if (!options.signal?.aborted) {
-        setScopeLoading(false)
-      }
-    }
-  }, [projectId, toast])
-
   useEffect(() => {
     const controller = new AbortController()
     void loadSummary({ signal: controller.signal })
@@ -1458,15 +1019,6 @@ export default function Dashboard() {
       controller.abort()
     }
   }, [loadSummary])
-
-  useEffect(() => {
-    const controller = new AbortController()
-    void loadResponsibilitySummary({ signal: controller.signal })
-
-    return () => {
-      controller.abort()
-    }
-  }, [loadResponsibilitySummary])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -1487,88 +1039,12 @@ export default function Dashboard() {
   }, [loadDataQualitySummary])
 
   useEffect(() => {
-    const controller = new AbortController()
-    void loadScopeSections({ signal: controller.signal })
-
-    return () => {
-      controller.abort()
-    }
-  }, [loadScopeSections])
-
-  useEffect(() => {
     return () => {
       summaryAbortRef.current?.abort()
       dataQualityAbortRef.current?.abort()
-      responsibilityAbortRef.current?.abort()
       todayLiveAbortRef.current?.abort()
     }
   }, [])
-
-  const handleSaveBasicInfo = useCallback(async (draft: ProjectBasicInfoDraft) => {
-    if (!currentProject?.id) return
-
-    setBasicInfoSaving(true)
-    try {
-      const updatedProject = await apiPut<Project>(`/api/projects/${currentProject.id}`, {
-        name: draft.projectName.trim(),
-        description: draft.projectDescription.trim() || null,
-        location: draft.projectLocation.trim() || null,
-        status: draft.projectStatus,
-        current_phase: draft.projectPhase || null,
-        planned_start_date: draft.plannedStartDate.trim() || null,
-        planned_end_date: draft.plannedEndDate.trim() || null,
-        actual_start_date: draft.actualStartDate.trim() || null,
-        actual_end_date: draft.actualEndDate.trim() || null,
-        version: currentProject.version ?? 1,
-      })
-
-      updateProject(currentProject.id, updatedProject)
-      setCurrentProject(updatedProject)
-      toast({
-        title: '基础信息已更新',
-        description: updatedProject.name || currentProject.name || '项目基础信息已保存',
-      })
-    } catch (error) {
-      toast({
-        title: '基础信息保存失败',
-        description: getApiErrorMessage(error, '请稍后重试。'),
-        variant: 'destructive',
-      })
-    } finally {
-      setBasicInfoSaving(false)
-    }
-  }, [currentProject?.id, currentProject?.name, currentProject?.version, setCurrentProject, toast, updateProject])
-
-  const unitProgressItems = useMemo<UnitProgress[]>(() => {
-    const rows = responsibilitySummary?.unit_rows ?? []
-    return rows.map((row) => {
-      const taskCount = Number(row.total_tasks ?? 0)
-      const completedTasks = Number(row.completed_count ?? 0)
-      return {
-        id: row.key,
-        name: row.label,
-        type: inferUnitType(row.label),
-        progress: taskCount > 0 ? Math.round((completedTasks / taskCount) * 100) : 0,
-        taskCount,
-        completedTasks,
-      }
-    })
-  }, [responsibilitySummary])
-
-  const taskStatusSummary = useMemo(() => {
-    const summary = { completed: 0, inProgress: 0, notStarted: 0, delayed: 0 }
-
-    for (const task of scopedTasks) {
-      const displayStatus = getTaskDisplayStatus(task)
-      if (displayStatus === 'completed') summary.completed += 1
-      else if (displayStatus === 'in_progress') summary.inProgress += 1
-      else summary.notStarted += 1
-
-      if (isDelayedTask(task)) summary.delayed += 1
-    }
-
-    return summary
-  }, [scopedTasks])
 
   const todayKey = getCalendarDayKey(new Date())
   const todayDueTasks = useMemo(
@@ -1663,6 +1139,12 @@ export default function Dashboard() {
   const effectiveTodayLiveItems = todayLiveError ? localTodayLiveItems : todayLiveItems
   const todayTodoCount = effectiveTodayLiveItems.length
 
+  const refreshDashboard = useCallback(() => {
+    void loadSummary()
+    void loadTodayLive()
+    void loadDataQualitySummary()
+  }, [loadDataQualitySummary, loadSummary, loadTodayLive])
+
   if (!currentProject) {
     return (
       <div className="page-shell" data-testid="dashboard-empty-state">
@@ -1673,9 +1155,9 @@ export default function Dashboard() {
           ]}
         />
         <EmptyState
-          icon={Users}
+          icon={LayoutDashboard}
           title="未选择项目"
-          description={`请先进入一个项目，再查看项目 ${PROJECT_NAVIGATION_LABELS.dashboard}。`}
+          description={`请先进入一个项目，再查看项目${PROJECT_NAVIGATION_LABELS.dashboard}。`}
           action={
             <Button asChild>
               <Link to="/company">返回公司驾驶舱</Link>
@@ -1688,203 +1170,69 @@ export default function Dashboard() {
   }
 
   return (
-    <div data-testid="dashboard-page" className="page-shell page-enter">
-        <Breadcrumb
-          items={[
-            { label: currentProject.name || '项目', href: `/projects/${projectId}/dashboard` },
-            { label: PROJECT_NAVIGATION_LABELS.dashboard },
-          ]}
-        />
+    <div data-testid="dashboard-page" className="page-shell page-enter space-y-6">
+      <DashboardPageTitle
+        currentProject={currentProject}
+        currentStatus={currentStatus}
+        summaryData={summaryData}
+        dataQualitySummary={dataQualitySummary}
+        summaryLoading={summaryLoading}
+        todayLiveLoading={todayLiveLoading}
+        fetchCompleteTime={fetchCompleteTime}
+        onRefresh={refreshDashboard}
+      />
 
-        <PageHeader
-          eyebrow="项目工作台"
-          title={currentProject.name || '项目'}
-          subtitle=""
-        >
-          <Badge variant="secondary">{summaryData?.statusLabel || currentStatus}</Badge>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              void loadSummary()
-              void loadResponsibilitySummary()
-              void loadTodayLive()
-            }}
-            loading={summaryLoading || responsibilityLoading || todayLiveLoading}
-          >
-            <RefreshCw className="mr-2 h-4 w-4" />
-            刷新摘要
-          </Button>
-          <Button asChild variant="outline" size="sm">
-            <Link to="/company">
-              <LayoutDashboard className="mr-2 h-4 w-4" />
-              返回公司驾驶舱
-            </Link>
-          </Button>
-        </PageHeader>
+      <DashboardMetricCards summaryData={summaryData} todayTodoCount={todayTodoCount} />
 
-        <DashboardCompactHeader
-          currentProject={currentProject}
-          currentStatus={currentStatus}
-          summaryData={summaryData}
-        >
-          <ProjectInfoCard
-            projectName={currentProject.name || '项目'}
-            projectDescription={currentProject.description}
-            projectLocation={currentProject.location}
-            projectType={currentProject.project_type}
-            buildingType={currentProject.building_type}
-            structureType={currentProject.structure_type}
-            buildingCount={currentProject.building_count}
-            aboveGroundFloors={currentProject.above_ground_floors}
-            undergroundFloors={currentProject.underground_floors}
-            supportMethod={currentProject.support_method}
-            totalArea={currentProject.total_area}
-            plannedStartDate={currentProject.planned_start_date}
-            plannedEndDate={currentProject.planned_end_date}
-            actualStartDate={currentProject.actual_start_date}
-            actualEndDate={currentProject.actual_end_date}
-            totalInvestment={currentProject.total_investment}
-            healthScore={summaryData?.healthScore}
-            healthStatus={summaryData?.healthStatus === '健康' ? 'excellent' : summaryData?.healthStatus === '亚健康' ? 'good' : summaryData?.healthStatus === '预警' ? 'warning' : summaryData?.healthStatus === '危险' ? 'critical' : undefined}
-            status={currentProject.status}
-            projectPhase={currentProject.current_phase}
-            scopeSections={scopeSections}
-            scopeLoading={scopeLoading}
-            onSaveBasicInfo={handleSaveBasicInfo}
-            basicInfoSaving={basicInfoSaving}
-          />
-        </DashboardCompactHeader>
+      {summaryError ? (
+        <Alert variant="destructive">
+          <AlertDescription>{summaryError}</AlertDescription>
+        </Alert>
+      ) : null}
 
-        <DashboardMetricCards summaryData={summaryData} todayTodoCount={todayTodoCount} />
+      <Separator className="border-slate-100" />
 
-        <DashboardHero
-          currentProject={currentProject}
-          currentStatus={currentStatus}
-          summaryData={summaryData}
-          dataQualitySummary={dataQualitySummary}
-          nextMilestone={nextMilestone}
-          summaryLoading={summaryLoading}
-        />
+      <section data-testid="dashboard-snapshot-panel">
+        <Tabs defaultValue="trend">
+          <TabsList className="h-auto w-full justify-start gap-6 overflow-x-auto rounded-none border-b border-slate-100 bg-transparent p-0 text-slate-500">
+            <TabsTrigger value="trend" className="relative rounded-none bg-transparent px-0 py-3 text-sm font-medium text-slate-500 shadow-none after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-slate-900 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600">
+              进度趋势
+            </TabsTrigger>
+            <TabsTrigger value="today" className="relative rounded-none bg-transparent px-0 py-3 text-sm font-medium text-slate-500 shadow-none after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-slate-900 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600">
+              今日动态
+            </TabsTrigger>
+          </TabsList>
 
-        {summaryError && (
-          <Alert variant="destructive">
-            <AlertDescription>{summaryError}</AlertDescription>
-          </Alert>
-        )}
-
-        <TodayLiveListPanel
-          projectId={projectId}
-          loading={todayLiveLoading || (Boolean(todayLiveError) && livePanelLoading)}
-          items={effectiveTodayLiveItems}
-          totalCount={effectiveTodayLiveItems.length}
-        />
-
-        <section data-testid="dashboard-snapshot-panel" className="space-y-4">
-          <Tabs defaultValue="trend">
-            <TabsList className="w-full justify-start overflow-x-auto">
-              <TabsTrigger value="trend">进度趋势</TabsTrigger>
-              <TabsTrigger value="milestone">
-                里程碑
-                {(summaryData?.milestoneOverview?.stats?.overdue ?? 0) > 0 ? (
-                  <Badge variant="destructive" className="ml-1.5">
-                    {summaryData?.milestoneOverview?.stats?.overdue}
-                  </Badge>
-                ) : null}
-              </TabsTrigger>
-              <TabsTrigger value="unit">单位工程</TabsTrigger>
-              <TabsTrigger value="tasks">
-                近期任务
-                <Badge variant="secondary" className="ml-1.5">{recentScopedTasks.length}</Badge>
-              </TabsTrigger>
-            </TabsList>
-
-            <div className="min-h-[25rem]">
-              <TabsContent value="trend" forceMount className="mt-4 space-y-4">
-                <DashboardMonthlyTrend projectId={currentProject.id ?? ''} />
-                <WeeklyDigestPanel projectId={currentProject.id ?? ''} />
-                <DashboardCompareCard projectId={projectId} />
-              </TabsContent>
-
-              <TabsContent value="milestone" forceMount className="mt-4">
-                <DashboardMilestoneCard
-                  completed={summaryData?.completedMilestones ?? 0}
-                  total={summaryData?.totalMilestones ?? 0}
-                  upcoming={summaryData?.shiftedMilestoneCount ?? 0}
-                  overdue={summaryData?.milestoneOverview?.stats?.overdue ?? 0}
-                  recentMilestones={
-                    summaryData?.nextMilestone
-                      ? [
-                          {
-                            id: summaryData.nextMilestone.id,
-                            name: summaryData.nextMilestone.name,
-                            dueDate: summaryData.nextMilestone.targetDate,
-                            status: summaryData.nextMilestone.daysRemaining < 0 ? 'delayed' : 'pending',
-                            projectId,
-                            assignee: scopedTasks.find((t) => t.milestone_id === summaryData.nextMilestone?.id)?.assignee_name || undefined,
-                            relatedTasks: (() => {
-                              let count = 0
-                              for (const task of scopedTasks) {
-                                if (task.milestone_id === summaryData.nextMilestone?.id) {
-                                  count += 1
-                                }
-                              }
-                              return count || undefined
-                            })(),
-                            onTimeRate: summaryData.totalMilestones > 0 && summaryData.completedMilestones > 0
-                              ? Math.round((summaryData.completedMilestones / summaryData.totalMilestones) * 100)
-                              : undefined,
-                          },
-                        ]
-                      : []
-                  }
-                />
-              </TabsContent>
-
-              <TabsContent value="unit" forceMount className="mt-4">
-                {responsibilityLoading && unitProgressItems.length === 0 ? (
-                  <LoadingState label="责任单位加载中" className="min-h-80" />
-                ) : (
-                  <UnitProgressCard
-                    units={unitProgressItems}
-                    onViewAll={() => navigate(`/projects/${projectId}/responsibility?dimension=unit`)}
-                    maxItems={5}
-                  />
-                )}
-              </TabsContent>
-
-              <TabsContent value="tasks" forceMount className="mt-4 space-y-4">
-                {scopedTasks.length === 0 ? (
-                  <EmptyState
-                    icon={FolderKanban}
-                    title="还没有任务数据"
-                    description="先去任务列表创建第一个任务，再返回仪表盘查看现场摘要和趋势。"
-                    action={
-                      <Button asChild>
-                        <Link data-testid="dashboard-open-gantt-quick-link" to={`/projects/${projectId}/gantt`}>前往任务列表</Link>
-                      </Button>
-                    }
-                    className="max-w-none"
-                  />
-                ) : null}
-
-                <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
-                  <TaskStatusCard
-                    completed={taskStatusSummary.completed}
-                    inProgress={taskStatusSummary.inProgress}
-                    notStarted={taskStatusSummary.notStarted}
-                    delayed={taskStatusSummary.delayed}
-                    projectId={projectId}
-                  />
-                  <IssueRiskGrid summaryData={summaryData} projectId={projectId} />
-                  <RecentTasksCard projectId={projectId} tasks={recentScopedTasks} />
+          <div className="min-h-[25rem]">
+            <TabsContent value="trend" className="pt-5">
+              <div className="grid grid-cols-12 gap-5">
+                <div className="col-span-12 xl:col-span-8">
+                  <DashboardMonthlyTrend projectId={currentProject.id ?? ''} />
                 </div>
-              </TabsContent>
-            </div>
-          </Tabs>
-        </section>
+                <div className="col-span-12 xl:col-span-4">
+                  <WeeklyDigestPanel projectId={currentProject.id ?? ''} />
+                </div>
+                <div className="col-span-12">
+                  <DashboardCompareCard projectId={projectId} />
+                </div>
+              </div>
+            </TabsContent>
 
-        <div className="pb-2" />
+            <TabsContent value="today" className="pt-5">
+              <div className="grid grid-cols-12 gap-5">
+                <div className="col-span-12">
+                  <TodayLiveListPanel
+                    projectId={projectId}
+                    loading={todayLiveLoading || (Boolean(todayLiveError) && livePanelLoading)}
+                    items={effectiveTodayLiveItems}
+                    totalCount={effectiveTodayLiveItems.length}
+                  />
+                </div>
+              </div>
+            </TabsContent>
+          </div>
+        </Tabs>
+      </section>
     </div>
   )
 }

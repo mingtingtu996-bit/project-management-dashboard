@@ -19,6 +19,10 @@ import {
 import { usePermissions } from '@/hooks/usePermissions'
 
 type NavItem = NavigationItem
+const NAV_GROUP_LABELS: Record<NonNullable<NavigationItem['group']>, string> = {
+  core: '核心',
+  management: '管理',
+}
 
 function resolveHref(href: string, projectId?: string | null) {
   return href.replace(':id', projectId || '')
@@ -66,6 +70,16 @@ export default function Sidebar() {
   const navigation = isProjectPage ? PROJECT_NAVIGATION : COMPANY_NAVIGATION
 
   const filteredNavigation = navigation.filter((item) => !item.permission || can.check(item.permission))
+  const groupedNavigation = useMemo(() => {
+    if (!isProjectPage) return [{ key: 'company', label: '', items: filteredNavigation }]
+    return (['core', 'management'] as const)
+      .map((group) => ({
+        key: group,
+        label: NAV_GROUP_LABELS[group],
+        items: filteredNavigation.filter((item) => item.group === group),
+      }))
+      .filter((group) => group.items.length > 0)
+  }, [filteredNavigation, isProjectPage])
 
   const renderTopNavItem = (item: NavItem) => {
     const target = resolveHref(item.href, navigationProjectId)
@@ -85,33 +99,39 @@ export default function Sidebar() {
           ? attentionSnapshot.activeRiskCount
           : 0
 
+    const topLink = (
+      <Link
+        to={target}
+        data-onboarding-target={getOnboardingTarget(item.key)}
+        className={cn(
+          'group flex cursor-pointer items-center gap-3 rounded-xl border-l-2 px-3 py-2.5 text-sm font-medium outline-none transition-all duration-200 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950',
+          isCurrent
+            ? 'border-blue-500 bg-blue-500/10 text-blue-400'
+            : 'border-transparent text-slate-300 hover:bg-slate-800 hover:text-white',
+        )}
+        onClick={() => setMobileOpen(false)}
+      >
+        <item.icon className="h-5 w-5 flex-shrink-0" />
+        {sidebarOpen && <span className="flex-1">{item.label}</span>}
+        {sidebarOpen && badgeCount > 0 && (
+          <span className="min-w-5 rounded-full bg-red-700 px-1.5 py-0.5 text-center text-xs font-semibold leading-none text-white">
+            {badgeCount > 99 ? '99+' : badgeCount}
+          </span>
+        )}
+        {sidebarOpen && hasChildren && <ChevronRight className="h-4 w-4 text-slate-500" />}
+      </Link>
+    )
+
     return (
       <li key={item.key}>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Link
-              to={target}
-              data-onboarding-target={getOnboardingTarget(item.key)}
-              className={cn(
-                'group flex cursor-pointer items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium outline-none transition-all duration-200 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950',
-                isCurrent
-                  ? 'bg-blue-600 text-white shadow-[var(--el-2)]'
-                  : 'text-slate-300 hover:bg-slate-900 hover:text-white',
-              )}
-              onClick={() => setMobileOpen(false)}
-            >
-              <item.icon className="h-5 w-5 flex-shrink-0" />
-              {sidebarOpen && <span className="flex-1">{item.label}</span>}
-              {sidebarOpen && badgeCount > 0 && (
-                <span className="min-w-5 rounded-full bg-red-700 px-1.5 py-0.5 text-center text-xs font-semibold leading-none text-white">
-                  {badgeCount > 99 ? '99+' : badgeCount}
-                </span>
-              )}
-              {sidebarOpen && hasChildren && <ChevronRight className="h-4 w-4 text-slate-500" />}
-            </Link>
-          </TooltipTrigger>
-          <TooltipContent>{!sidebarOpen ? item.label : undefined}</TooltipContent>
-        </Tooltip>
+        {sidebarOpen ? (
+          topLink
+        ) : (
+          <Tooltip>
+            <TooltipTrigger asChild>{topLink}</TooltipTrigger>
+            <TooltipContent>{item.label}</TooltipContent>
+          </Tooltip>
+        )}
 
         {sidebarOpen && hasChildren && isCurrent && (
           <ul className="mt-1 space-y-1 border-l border-slate-800 pl-4">
@@ -123,25 +143,20 @@ export default function Sidebar() {
 
                 return (
                   <li key={child.key}>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Link
-                          to={childTarget}
-                          data-onboarding-target={getOnboardingTarget(child.key)}
-                          className={cn(
-                            'flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950',
-                            childActive
-                              ? 'bg-slate-900 text-white'
-                              : 'text-slate-500 hover:bg-slate-900/80 hover:text-white',
-                          )}
-                          onClick={() => setMobileOpen(false)}
-                        >
-                          <span className={cn('h-1.5 w-1.5 rounded-full', childActive ? 'bg-blue-400' : 'bg-slate-600')} />
-                          <span className="truncate">{child.label}</span>
-                        </Link>
-                      </TooltipTrigger>
-                      <TooltipContent>{!sidebarOpen ? child.label : undefined}</TooltipContent>
-                    </Tooltip>
+                    <Link
+                      to={childTarget}
+                      data-onboarding-target={getOnboardingTarget(child.key)}
+                      className={cn(
+                        'flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-[13px] font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950',
+                        childActive
+                          ? 'bg-slate-800 text-white'
+                          : 'text-slate-500 hover:bg-slate-800 hover:text-white',
+                      )}
+                      onClick={() => setMobileOpen(false)}
+                    >
+                      <span className={cn('h-2 w-2 rounded-full', childActive ? 'bg-blue-400' : 'bg-slate-600')} />
+                      <span className="truncate">{child.label}</span>
+                    </Link>
                   </li>
                 )
               })}
@@ -178,7 +193,7 @@ export default function Sidebar() {
         id="app-sidebar"
         data-onboarding-target="sidebar"
         className={cn(
-          'fixed inset-y-0 left-0 z-50 flex flex-col overflow-hidden border-r border-slate-800 bg-slate-950 text-slate-100 transition-[transform,width] duration-300 ease-out lg:relative lg:translate-x-0',
+          'fixed inset-y-0 left-0 z-50 flex flex-col overflow-hidden border-r border-slate-700/50 bg-slate-900 text-slate-100 transition-[transform,width] duration-300 ease-out lg:relative lg:translate-x-0',
           sidebarOpen ? 'w-64' : 'w-[var(--sidebar-collapsed-width)]',
           mobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0',
         )}
@@ -196,7 +211,7 @@ export default function Sidebar() {
         <div
           className={cn(
             'flex items-center px-4',
-            sidebarOpen ? 'h-16 justify-between' : 'h-16 justify-center',
+            sidebarOpen ? 'h-[var(--header-height)] justify-between' : 'h-[var(--header-height)] justify-center',
           )}
         >
           {sidebarOpen ? (
@@ -236,15 +251,24 @@ export default function Sidebar() {
             {sidebarOpen ? <ChevronLeft className="h-5 w-5" /> : <ChevronRight className="h-5 w-5" />}
           </Button>
         </div>
-        <Separator className="shrink-0 border-slate-800" />
+        <Separator className="shrink-0 border-slate-700/50" />
 
         <nav className="min-h-0 flex-1 overflow-y-auto px-3 py-4 pb-6">
-          <ul className="space-y-1.5">
-            {filteredNavigation.map(renderTopNavItem)}
-          </ul>
+          <div className="space-y-5">
+            {groupedNavigation.map((group) => (
+              <div key={group.key}>
+                {sidebarOpen && group.label ? (
+                  <div className="eyebrow mb-2 px-3 text-slate-500">{group.label}</div>
+                ) : null}
+                <ul className="space-y-1.5">
+                  {group.items.map(renderTopNavItem)}
+                </ul>
+              </div>
+            ))}
+          </div>
 
           {sidebarOpen && currentProject && isProjectPage && (
-            <div className="mt-6 rounded-xl border border-slate-800 bg-slate-900/80 p-3 [@media(max-height:820px)]:mt-4">
+            <div className="mt-6 rounded-xl border border-slate-700/50 bg-slate-800 p-3 [@media(max-height:820px)]:mt-4">
               <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-300">{'\u5f53\u524d\u9879\u76ee'}</div>
                 <div className="truncate text-sm font-semibold text-white">{currentProject.name}</div>
               <div className="mt-1 text-xs text-slate-500 [@media(max-height:820px)]:hidden">{currentProject.description || PROJECT_NAVIGATION_LABELS.projectHome}</div>
@@ -260,8 +284,8 @@ export default function Sidebar() {
 
         </nav>
 
-        <Separator className="shrink-0 border-slate-800" />
-        <div className="shrink-0 p-3">
+        <Separator className="shrink-0 border-slate-700/50" />
+        <div className="shrink-0 p-4">
           <Link
             to="/company?create=1"
             className={cn(

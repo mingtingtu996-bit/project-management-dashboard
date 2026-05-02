@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+﻿import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 
 import { Breadcrumb } from '@/components/Breadcrumb'
@@ -71,7 +71,7 @@ function buildHeroSparkline(value: number, previous?: number | null) {
 function CompanyCockpitSkeleton() {
   return (
     <div className="space-y-8">
-      <div className="shell-surface overflow-hidden">
+      <div className="surface-card overflow-hidden">
         <div className="grid gap-px bg-slate-100 xl:grid-cols-[minmax(0,1.58fr)_25rem]">
           <div className="space-y-8 bg-white p-5">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
