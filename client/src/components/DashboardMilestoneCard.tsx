@@ -1,10 +1,7 @@
-import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { ChevronDown, ChevronRight, ChevronUp } from 'lucide-react'
+import { ChevronRight } from 'lucide-react'
 
 import { CardHead } from '@/components/ui/card-head'
-import { Button } from '@/components/ui/button'
-import { Separator } from '@/components/ui/separator'
 import { cn } from '@/lib/utils'
 
 interface MilestoneItem {
@@ -26,6 +23,7 @@ interface DashboardMilestoneCardProps {
   overdue: number
   recentMilestones: MilestoneItem[]
   onViewAll?: () => void
+  embedded?: boolean
 }
 
 function getDaysRemaining(dueDate: string): { text: string; isOverdue: boolean; isUrgent: boolean } {
@@ -56,6 +54,11 @@ function formatDate(value: string) {
   return date.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' })
 }
 
+function milestoneHref(projectId: string, milestoneId?: string) {
+  if (!projectId) return '/milestones'
+  return `/projects/${projectId}/milestones${milestoneId ? `?highlight=${milestoneId}` : ''}`
+}
+
 export default function DashboardMilestoneCard({
   completed,
   total,
@@ -63,20 +66,25 @@ export default function DashboardMilestoneCard({
   overdue,
   recentMilestones,
   onViewAll,
+  embedded = false,
 }: DashboardMilestoneCardProps) {
-  const [expanded, setExpanded] = useState(false)
   const params = useParams<{ id?: string; projectId?: string }>()
   const urlProjectId = params.id || params.projectId || ''
   const projectId = recentMilestones[0]?.projectId || urlProjectId || ''
   const reportsHref = projectId ? `/projects/${projectId}/reports?view=progress_deviation` : '/reports?view=progress_deviation'
-  const nextMilestone = recentMilestones
+  const unfinishedMilestones = recentMilestones
     .filter((milestone) => milestone.status !== 'completed')
-    .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())[0]
+    .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())
+  const nextMilestone = unfinishedMilestones[0]
   const remaining = nextMilestone ? getDaysRemaining(nextMilestone.dueDate) : null
   const completionRate = total > 0 ? Math.round((completed / total) * 100) : 0
+  const panelClassName = embedded ? '' : 'surface-card p-5'
+  const timelineMilestones = unfinishedMilestones
+    .filter((milestone) => milestone.id !== nextMilestone?.id)
+    .slice(0, 5)
 
   return (
-    <section className="surface-card p-5">
+    <section className={panelClassName}>
       <CardHead
         eyebrow="MILESTONE"
         title="里程碑追踪"
@@ -94,7 +102,11 @@ export default function DashboardMilestoneCard({
       />
 
       <div className="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_18rem]">
-        <div className="rounded-xl border border-slate-200/60 bg-slate-50/60 p-5">
+        <Link
+          to={milestoneHref(projectId, nextMilestone?.id)}
+          onClick={onViewAll}
+          className="rounded-xl border border-slate-200/60 bg-slate-50/60 p-5 outline-none transition-colors hover:bg-white focus-visible:ring-2 focus-visible:ring-blue-500"
+        >
           {nextMilestone && remaining ? (
             <div className="space-y-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
@@ -117,26 +129,24 @@ export default function DashboardMilestoneCard({
                 </span>
               </div>
 
-              {expanded ? (
-                <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
-                  <div className="rounded-lg bg-white px-3 py-3">
-                    <div className="text-xs text-slate-500">责任人/单位</div>
-                    <div className="mt-1 truncate font-medium text-slate-800">{nextMilestone.assignee || '未分配'}</div>
-                  </div>
-                  <div className="rounded-lg bg-white px-3 py-3">
-                    <div className="text-xs text-slate-500">关联任务</div>
-                    <div className={cn('num-mono mt-1 font-medium text-slate-800', !nextMilestone.relatedTasks && 'text-slate-400')}>
-                      {nextMilestone.relatedTasks || 0} 项
-                    </div>
-                  </div>
-                  <div className="rounded-lg bg-white px-3 py-3">
-                    <div className="text-xs text-slate-500">准时率</div>
-                    <div className={cn('num-mono mt-1 font-medium text-emerald-600', nextMilestone.onTimeRate == null && 'text-slate-400')}>
-                      {nextMilestone.onTimeRate != null ? `${nextMilestone.onTimeRate}%` : '--'}
-                    </div>
+              <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
+                <div className="rounded-lg bg-white px-3 py-3">
+                  <div className="text-xs text-slate-500">责任人/单位</div>
+                  <div className="mt-1 truncate font-medium text-slate-800">{nextMilestone.assignee || '未分配'}</div>
+                </div>
+                <div className="rounded-lg bg-white px-3 py-3">
+                  <div className="text-xs text-slate-500">关联任务</div>
+                  <div className={cn('num-mono mt-1 font-medium text-slate-800', !nextMilestone.relatedTasks && 'text-slate-400')}>
+                    {nextMilestone.relatedTasks || 0} 项
                   </div>
                 </div>
-              ) : null}
+                <div className="rounded-lg bg-white px-3 py-3">
+                  <div className="text-xs text-slate-500">准时率</div>
+                  <div className={cn('num-mono mt-1 font-medium text-emerald-600', nextMilestone.onTimeRate == null && 'text-slate-400')}>
+                    {nextMilestone.onTimeRate != null ? `${nextMilestone.onTimeRate}%` : '--'}
+                  </div>
+                </div>
+              </div>
             </div>
           ) : (
             <div className="flex min-h-32 flex-col items-center justify-center text-center">
@@ -146,7 +156,7 @@ export default function DashboardMilestoneCard({
               <p className="mt-3 text-sm font-medium text-slate-700">所有里程碑已完成</p>
             </div>
           )}
-        </div>
+        </Link>
 
         <div className="rounded-xl border border-slate-200/60 bg-white p-5">
           <div className="eyebrow">SUMMARY</div>
@@ -172,38 +182,24 @@ export default function DashboardMilestoneCard({
         </div>
       </div>
 
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-200/60 pt-3">
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          onClick={() => setExpanded((value) => !value)}
-          className="h-8 px-2 text-xs text-slate-500 hover:text-slate-800"
-        >
-          {expanded ? <ChevronUp className="mr-1 h-3.5 w-3.5" /> : <ChevronDown className="mr-1 h-3.5 w-3.5" />}
-          {expanded ? '收起详情' : '展开详情'}
-        </Button>
-        <Button asChild variant="outline" size="sm" className="h-8 rounded-lg border-slate-200 bg-white px-2.5 text-xs">
-          <Link to={projectId ? `/projects/${projectId}/milestones` : '/milestones'} onClick={onViewAll}>
-            查看里程碑
-            <ChevronRight className="ml-1 h-3.5 w-3.5" />
-          </Link>
-        </Button>
-      </div>
-
-      {expanded && recentMilestones.length > 1 ? (
-        <div className="mt-4">
-          <Separator className="mb-3" />
+      {timelineMilestones.length > 0 ? (
+        <div className="mt-5 border-t border-slate-100 pt-4">
+          <div className="eyebrow mb-3">TIMELINE</div>
           <div className="space-y-2">
-            {recentMilestones
-              .filter((milestone) => milestone.status !== 'completed')
-              .slice(1, 4)
-              .map((milestone, index) => (
-                <div key={milestone.id} className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2 text-sm">
-                  <span className="min-w-0 truncate text-slate-700">{index + 2}. {milestone.name}</span>
-                  <span className="num-mono shrink-0 text-xs text-slate-500">{getDaysRemaining(milestone.dueDate).text}</span>
-                </div>
-              ))}
+            {timelineMilestones.map((milestone, index) => (
+              <Link
+                key={milestone.id}
+                to={milestoneHref(projectId, milestone.id)}
+                onClick={onViewAll}
+                className="group flex items-center justify-between gap-3 rounded-lg bg-slate-50 px-3 py-2 text-sm outline-none transition-colors hover:bg-white focus-visible:ring-2 focus-visible:ring-blue-500"
+              >
+                <span className="min-w-0 truncate text-slate-700">{index + 2}. {milestone.name}</span>
+                <span className="flex shrink-0 items-center gap-1.5">
+                  <span className="num-mono text-xs text-slate-500">{getDaysRemaining(milestone.dueDate).text}</span>
+                  <ChevronRight className="h-3.5 w-3.5 text-slate-200 transition-colors group-hover:text-slate-500" />
+                </span>
+              </Link>
+            ))}
           </div>
         </div>
       ) : null}

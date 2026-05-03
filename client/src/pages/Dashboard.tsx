@@ -31,7 +31,7 @@ import { DataConfidenceBreakdown } from '@/components/DataConfidenceBreakdown'
 import { EmptyState } from '@/components/EmptyState'
 import RecentTasksCard from '@/components/RecentTasksCard'
 import { CardHead } from '@/components/ui/card-head'
-import { ChartTooltip, chartTooltipCursor } from '@/components/ui/chart-tooltip'
+import { chartTooltipCursor } from '@/components/ui/chart-tooltip'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -39,6 +39,7 @@ import { LoadingState } from '@/components/ui/loading-state'
 import { LucideIcon } from '@/components/ui/lucide-icon'
 import { MetricCard as SharedMetricCard } from '@/components/ui/metric-card'
 import { Separator } from '@/components/ui/separator'
+import { SegmentedControl } from '@/components/ui/segmented-control'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { PROJECT_NAVIGATION_LABELS } from '@/config/navigation'
@@ -344,6 +345,8 @@ function formatMetricTrend(value: number, invertTone = false) {
   }
 }
 
+const FLAT_SPARKLINE = [50, 50, 50, 50, 50]
+
 function DashboardMetricCards({
   summaryData,
   todayTodoCount,
@@ -354,7 +357,7 @@ function DashboardMetricCards({
   const overallProgress = Math.round(summaryData?.overallProgress ?? 0)
   const monthDeviation = Math.round(summaryData?.scheduleVarianceDays ?? summaryData?.delayDays ?? 0)
   const activeRisks = summaryData?.activeRiskCount ?? 0
-  const noVerifiedSparkline: number[] = []
+  const emptySparkline: number[] = []
 
   const metrics = [
     {
@@ -364,7 +367,7 @@ function DashboardMetricCards({
       value: overallProgress,
       unit: '%',
       trend: formatMetricTrend(0),
-      sparkline: noVerifiedSparkline,
+      sparkline: FLAT_SPARKLINE,
       tone: 'primary' as const,
       icon: Activity,
     },
@@ -375,7 +378,7 @@ function DashboardMetricCards({
       value: monthDeviation,
       unit: '天',
       trend: formatMetricTrend(monthDeviation, true),
-      sparkline: noVerifiedSparkline,
+      sparkline: monthDeviation === 0 ? FLAT_SPARKLINE : emptySparkline,
       tone: monthDeviation > 0 ? 'warning' as const : 'success' as const,
       icon: Clock3,
     },
@@ -386,7 +389,7 @@ function DashboardMetricCards({
       value: activeRisks,
       unit: '',
       trend: formatMetricTrend(activeRisks, true),
-      sparkline: noVerifiedSparkline,
+      sparkline: activeRisks === 0 ? FLAT_SPARKLINE : emptySparkline,
       tone: activeRisks > 0 ? 'danger' as const : 'slate' as const,
       icon: AlertTriangle,
     },
@@ -397,7 +400,7 @@ function DashboardMetricCards({
       value: todayTodoCount,
       unit: '',
       trend: formatMetricTrend(0),
-      sparkline: noVerifiedSparkline,
+      sparkline: FLAT_SPARKLINE,
       tone: 'slate' as const,
       icon: ShieldCheck,
     },
@@ -445,16 +448,19 @@ function TodayLiveListPanel({
   loading,
   items,
   totalCount,
+  embedded = false,
 }: {
   projectId: string
   loading: boolean
   items: TodayLiveItem[]
   totalCount: number
+  embedded?: boolean
 }) {
   const previewItems = items.slice(0, 8)
+  const panelClassName = embedded ? '' : 'surface-card p-5'
 
   return (
-    <section data-testid="dashboard-live-panel" className="surface-card p-5">
+    <section data-testid="dashboard-live-panel" className={panelClassName}>
       <CardHead
         eyebrow="TODAY"
         title="今日动态"
@@ -497,7 +503,7 @@ function TodayLiveListPanel({
                   </div>
                   <span className="flex items-center justify-end gap-1.5">
                     <span className="num-mono text-right text-[11px] text-slate-400">{item.meta}</span>
-                    <ChevronRight className="h-3.5 w-3.5 text-slate-300 transition-colors group-hover:text-slate-500" aria-hidden="true" />
+                    <ChevronRight className="h-3.5 w-3.5 text-slate-200 transition-colors group-hover:text-slate-500" aria-hidden="true" />
                   </span>
                 </li>
               )
@@ -547,10 +553,15 @@ function DashboardPageTitle({
             ]}
           />
           <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-            <StatusBadge status={getProjectStatusKey(summaryData?.statusLabel || currentStatus)} fallbackLabel={summaryData?.statusLabel || currentStatus}>
+            <StatusBadge
+              status={getProjectStatusKey(summaryData?.statusLabel || currentStatus)}
+              fallbackLabel={summaryData?.statusLabel || currentStatus}
+              className="h-5 px-2 text-[10.5px]"
+            >
               {summaryData?.statusLabel || currentStatus}
             </StatusBadge>
-            <span className="num-mono rounded-full bg-slate-100/80 px-2.5 py-1 text-slate-500 ring-1 ring-inset ring-slate-200/60">
+            <span className="text-[11px] text-slate-400">计划工期</span>
+            <span className="num-mono inline-flex h-5 items-center rounded-full bg-slate-100/80 px-2 text-[10.5px] text-slate-500 ring-1 ring-inset ring-slate-200/60">
               {formatProjectDate(plannedStart)} - {formatProjectDate(plannedEnd)}
             </span>
           </div>
@@ -561,19 +572,19 @@ function DashboardPageTitle({
             <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
               <span>{phaseLabel}</span>
               <span>·</span>
-              <StatusBadge status={getHealthStatusKey(healthScore)} fallbackLabel={`健康度 ${healthScore}分`}>
+              <StatusBadge status={getHealthStatusKey(healthScore)} fallbackLabel={`健康度 ${healthScore}分`} className="h-5 px-2 text-[10.5px]">
                 健康度 {healthScore}分
               </StatusBadge>
               <StatusBadge
                 data-testid="dashboard-data-quality-detail-trigger"
                 status={getConfidenceStatusKey(confidence?.score ?? 0)}
                 fallbackLabel={confidence ? `数据可靠性 ${Math.round(confidence.score)}%` : '数据可靠性 --'}
-                className={cn(confidence && 'cursor-pointer hover:ring-2 hover:ring-blue-100')}
+                className={cn('h-5 px-2 text-[10.5px]', confidence && 'cursor-pointer hover:ring-2 hover:ring-blue-100')}
                 onClick={confidence ? () => setConfidenceDialogOpen(true) : undefined}
               >
                 数据可靠性 {confidence ? `${Math.round(confidence.score)}%` : '--'}
               </StatusBadge>
-              <span className="rounded-full bg-blue-50 px-2.5 py-1 text-blue-700 ring-1 ring-inset ring-blue-200/60">
+              <span className="inline-flex h-5 items-center rounded-full bg-blue-50 px-2 text-[10.5px] text-blue-700 ring-1 ring-inset ring-blue-200/60">
                 进度 {progressValue}%
               </span>
             </div>
@@ -617,7 +628,15 @@ function DashboardPageTitle({
   )
 }
 
-function WeeklyDigestPanel({ projectId }: { projectId: string }) {
+function WeeklyDigestPanel({
+  projectId,
+  milestoneItems = [],
+  embedded = false,
+}: {
+  projectId: string
+  milestoneItems?: NonNullable<ProjectSummary['milestoneOverview']>['items']
+  embedded?: boolean
+}) {
   type DigestData = {
     id: string
     project_id: string
@@ -640,6 +659,7 @@ function WeeklyDigestPanel({ projectId }: { projectId: string }) {
   }
   const [digest, setDigest] = useState<DigestData | null>(null)
   const [loading, setLoading] = useState(true)
+  const panelClassName = embedded ? 'h-full' : 'surface-card h-full p-5'
 
   useEffect(() => {
     const controller = new AbortController()
@@ -665,8 +685,31 @@ function WeeklyDigestPanel({ projectId }: { projectId: string }) {
     }
   }, [projectId])
 
+  const fallbackMilestone = milestoneItems
+    .filter((item) => item.status !== 'completed')
+    .sort((left, right) => new Date(left.targetDate || left.current_planned_date || '').getTime() - new Date(right.targetDate || right.current_planned_date || '').getTime())[0]
+  const nearestMilestoneName = digest?.critical_nearest_milestone || fallbackMilestone?.name || '--'
+  const nearestMilestoneDelta = digest?.critical_nearest_delay_days ?? (() => {
+    const dateValue = fallbackMilestone?.targetDate || fallbackMilestone?.current_planned_date
+    if (!dateValue) return null
+    const due = new Date(dateValue)
+    if (Number.isNaN(due.getTime())) return null
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+    due.setHours(0, 0, 0, 0)
+    return Math.ceil((today.getTime() - due.getTime()) / 86400000)
+  })()
+  const nearestMilestoneHint =
+    nearestMilestoneDelta == null
+      ? '等待关键节点数据'
+      : nearestMilestoneDelta > 0
+        ? `延期 ${nearestMilestoneDelta} 天`
+        : nearestMilestoneDelta === 0
+          ? '今日到期'
+          : `剩余 ${Math.abs(nearestMilestoneDelta)} 天`
+
   return (
-    <section data-testid="dashboard-weekly-digest" className="surface-card p-5">
+    <section data-testid="dashboard-weekly-digest" className={panelClassName}>
       <CardHead eyebrow="WEEKLY" title="本周进度面板" action={<Link to={`/projects/${projectId}/reports`} className="text-xs font-medium text-blue-600 hover:text-blue-800">查看详情</Link>} />
       {loading ? (
         <LoadingState label="周报摘要加载中" description="" className="min-h-32 border-0 bg-transparent shadow-none" />
@@ -677,59 +720,19 @@ function WeeklyDigestPanel({ projectId }: { projectId: string }) {
           className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 py-8"
         />
       ) : (
-        <div className="mt-5 space-y-5">
-          <div className="grid grid-cols-3 gap-3">
+        <div className="mt-5">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
             {[
-              { label: '本周整体进度', value: `${digest.overall_progress ?? 0}%`, hint: '较上周持平' },
-              { label: '目标达标', value: `${digest.completed_milestones_count ?? 0}`, hint: '本周关键节点' },
-              { label: '关键任务', value: `${digest.critical_tasks_count ?? 0}`, hint: '需重点跟进' },
+              { label: '本周新增风险', value: `${digest.new_risks_count ?? 0}`, hint: digest.max_risk_level ? `最高等级 ${digest.max_risk_level}` : '暂无新增风险' },
+              { label: '关键阻碍数', value: `${digest.critical_blocked_count ?? 0}`, hint: '关键路径未解除阻碍' },
+              { label: '最近关键里程碑', value: nearestMilestoneName, hint: nearestMilestoneHint },
             ].map((item) => (
               <div key={item.label} className="rounded-xl border border-slate-200/60 bg-slate-50/60 p-5">
-                <div className="text-[11px] text-slate-500">{item.label}</div>
-                <div className="num-display mt-3 text-[26px] font-semibold text-slate-900">{item.value}</div>
-                <div className="mt-2 text-[11px] text-slate-400">{item.hint}</div>
+                <div className="meta-text">{item.label}</div>
+                <div className="num-display mt-3 truncate text-[26px] font-semibold text-slate-900">{item.value}</div>
+                <div className="meta-muted mt-2">{item.hint}</div>
               </div>
             ))}
-          </div>
-
-          <div>
-            <div className="mb-2 flex items-center justify-between">
-              <div>
-                <div className="eyebrow">TOP DELAY</div>
-                <h4 className="mt-0.5 text-sm font-medium text-slate-900">Top 5 偏差任务</h4>
-              </div>
-              <div className="text-[11px] text-slate-400">数据截止：{formatProjectDate(digest.generated_at)}</div>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[420px] border-collapse">
-                <thead>
-                  <tr className="border-b border-gray-200">
-                    {['任务名', '延期天数', '负责人'].map((label) => (
-                      <th key={label} className="py-2 pr-3 text-left text-[10.5px] font-semibold uppercase tracking-[0.08em] text-slate-400">
-                        {label}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {(digest.top_delayed_tasks ?? []).slice(0, 5).length === 0 ? (
-                    <tr>
-                      <td colSpan={3} className="py-6 text-center text-xs text-slate-400">暂无偏差任务</td>
-                    </tr>
-                  ) : (
-                    (digest.top_delayed_tasks ?? []).slice(0, 5).map((task) => (
-                      <tr key={task.task_id} className="border-b border-slate-100 hover:bg-slate-50/60">
-                        <td className="max-w-[220px] truncate py-2.5 pr-3 text-sm text-slate-700">{task.title}</td>
-                        <td className={cn('num-mono py-2.5 pr-3 text-sm text-rose-600', task.delay_days === 0 && 'text-slate-400')}>
-                          {task.delay_days}
-                        </td>
-                        <td className="py-2.5 pr-3 text-xs text-slate-500">{task.assignee || '--'}</td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
           </div>
         </div>
       )}
@@ -737,7 +740,7 @@ function WeeklyDigestPanel({ projectId }: { projectId: string }) {
   )
 }
 
-function DashboardMonthlyTrend({ projectId }: { projectId: string }) {
+function DashboardMonthlyTrend({ projectId, embedded = false }: { projectId: string; embedded?: boolean }) {
   type TaskTrendRow = { month: string; total: number; on_time: number; delayed: number }
   type FulfillmentTrendRow = { month: string; committedCount: number; fulfilledCount: number; rate: number }
   type CombinedTrendRow = {
@@ -753,6 +756,7 @@ function DashboardMonthlyTrend({ projectId }: { projectId: string }) {
 
   const [trendData, setTrendData] = useState<CombinedTrendRow[]>([])
   const [loading, setLoading] = useState(true)
+  const panelClassName = embedded ? '' : 'surface-card p-5'
 
   useEffect(() => {
     const controller = new AbortController()
@@ -807,8 +811,25 @@ function DashboardMonthlyTrend({ projectId }: { projectId: string }) {
     return month ? `${Number(month)}月` : value
   }
 
+  function MonthlyTrendTooltip({ active, payload, label }: { active?: boolean; payload?: Array<{ payload?: CombinedTrendRow }>; label?: unknown }) {
+    if (!active || !payload?.length) return null
+
+    const row = payload[0]?.payload
+    if (!row) return null
+    const taskRate = row.taskOnTimeRate == null ? '--' : `${row.taskOnTimeRate}%`
+    const fulfillmentRate = row.fulfillmentRate == null ? '--' : `${row.fulfillmentRate}%`
+
+    return (
+      <div className="rounded-lg border border-slate-200/60 bg-white p-3 text-xs leading-5 shadow-[var(--el-2)]" style={{ animation: 'tooltip-in 160ms ease-out' }}>
+        <div className="font-medium text-slate-900">{monthLabel(String(label))} 完成率 {taskRate}</div>
+        <div className="text-slate-500">已完成 {row.on_time} · 已延期 {row.delayed}</div>
+        <div className="text-slate-500">履约率 {fulfillmentRate}</div>
+      </div>
+    )
+  }
+
   return (
-    <section data-testid="dashboard-monthly-trend" className="surface-card p-5">
+    <section data-testid="dashboard-monthly-trend" className={panelClassName}>
       <CardHead
         eyebrow="TREND"
         title="月度趋势（近6个月）"
@@ -842,6 +863,7 @@ function DashboardMonthlyTrend({ projectId }: { projectId: string }) {
               row.fulfillmentRate ?? '未设置',
             ])}
             summary="查看月度趋势图表数据"
+            detailsClassName="sr-only"
           >
             <div className="h-[240px] w-full">
               <ResponsiveContainer width="100%" height="100%">
@@ -859,7 +881,7 @@ function DashboardMonthlyTrend({ projectId }: { projectId: string }) {
                   <CartesianGrid stroke={CHART_NEUTRAL.surface} strokeDasharray="4 4" vertical={false} />
                   <XAxis dataKey="month" tickFormatter={monthLabel} axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: CHART_NEUTRAL.muted }} />
                   <YAxis domain={[0, 100]} axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: CHART_NEUTRAL.muted }} />
-                  <Tooltip content={<ChartTooltip labelFormatter={(label) => monthLabel(String(label))} />} cursor={chartTooltipCursor} />
+                  <Tooltip content={<MonthlyTrendTooltip />} cursor={chartTooltipCursor} />
                   <Area
                     type="monotone"
                     dataKey="taskOnTimeRate"
@@ -910,6 +932,7 @@ export default function Dashboard() {
   const [todayLiveLoading, setTodayLiveLoading] = useState(false)
   const [todayLiveError, setTodayLiveError] = useState<string | null>(null)
   const [fetchCompleteTime, setFetchCompleteTime] = useState(0)
+  const [attentionPanel, setAttentionPanel] = useState<'today' | 'focus'>('today')
   const summaryAbortRef = useRef<AbortController | null>(null)
   const dataQualityAbortRef = useRef<AbortController | null>(null)
   const todayLiveAbortRef = useRef<AbortController | null>(null)
@@ -1262,7 +1285,7 @@ export default function Dashboard() {
 
       <section data-testid="dashboard-snapshot-panel">
         <Tabs defaultValue="trend">
-          <TabsList className="h-auto w-full justify-start gap-6 overflow-x-auto rounded-none border-b border-slate-100 bg-transparent p-0 text-slate-500">
+          <TabsList className="h-auto w-full justify-start gap-6 rounded-none border-b border-slate-100 bg-transparent p-0 text-slate-500">
             <TabsTrigger value="trend" className="relative rounded-none bg-transparent px-0 py-3 text-sm font-medium text-slate-500 shadow-none after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-slate-900 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600">
               进度趋势
             </TabsTrigger>
@@ -1272,28 +1295,29 @@ export default function Dashboard() {
             <TabsTrigger value="execution" className="relative rounded-none bg-transparent px-0 py-3 text-sm font-medium text-slate-500 shadow-none after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-slate-900 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600">
               执行概况
             </TabsTrigger>
-            <TabsTrigger value="today" className="relative rounded-none bg-transparent px-0 py-3 text-sm font-medium text-slate-500 shadow-none after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-slate-900 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600">
-              今日动态
-            </TabsTrigger>
           </TabsList>
 
           <div className="min-h-[25rem]">
             <TabsContent value="trend" className="pt-5">
-              <div className="grid grid-cols-12 gap-5">
+              <div className="surface-card grid grid-cols-12 gap-5 p-5">
                 <div className="col-span-12 xl:col-span-8">
-                  <DashboardMonthlyTrend projectId={currentProject.id ?? ''} />
+                  <DashboardMonthlyTrend projectId={currentProject.id ?? ''} embedded />
                 </div>
                 <div className="col-span-12 xl:col-span-4">
-                  <WeeklyDigestPanel projectId={currentProject.id ?? ''} />
+                  <WeeklyDigestPanel
+                    projectId={currentProject.id ?? ''}
+                    milestoneItems={summaryData?.milestoneOverview?.items ?? []}
+                    embedded
+                  />
                 </div>
-                <div className="col-span-12">
-                  <DashboardCompareCard projectId={projectId} />
+                <div className="col-span-12 border-t border-slate-100 pt-5">
+                  <DashboardCompareCard projectId={projectId} embedded />
                 </div>
               </div>
             </TabsContent>
 
             <TabsContent value="milestone" className="pt-5">
-              <div className="grid grid-cols-12 gap-5">
+              <div className="surface-card grid grid-cols-12 gap-5 p-5">
                 <div className="col-span-12">
                   <DashboardMilestoneCard
                     completed={milestonePanelData.completed}
@@ -1301,41 +1325,56 @@ export default function Dashboard() {
                     upcoming={milestonePanelData.upcoming}
                     overdue={milestonePanelData.overdue}
                     recentMilestones={milestonePanelData.recentMilestones}
+                    embedded
                   />
                 </div>
               </div>
             </TabsContent>
 
             <TabsContent value="execution" className="pt-5">
-              <div className="grid grid-cols-12 gap-5">
+              <div className="surface-card grid grid-cols-12 gap-5 p-5">
                 <div className="col-span-12">
                   <DashboardHealthCards
                     summary={summaryData}
                     tasks={scopedTasks}
                     risks={scopedRisks}
                     projectId={projectId}
-                  />
-                </div>
-                <div className="col-span-12">
-                  <RecentTasksCard projectId={projectId} tasks={focusTasks} />
-                </div>
-              </div>
-            </TabsContent>
-
-            <TabsContent value="today" className="pt-5">
-              <div className="grid grid-cols-12 gap-5">
-                <div className="col-span-12">
-                  <TodayLiveListPanel
-                    projectId={projectId}
-                    loading={todayLiveLoading || (Boolean(todayLiveError) && livePanelLoading)}
-                    items={effectiveTodayLiveItems}
-                    totalCount={effectiveTodayLiveItems.length}
+                    embedded
                   />
                 </div>
               </div>
             </TabsContent>
           </div>
         </Tabs>
+      </section>
+
+      <section data-testid="dashboard-attention-panel" className="surface-card p-5">
+        <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="eyebrow">ATTENTION</div>
+            <h3 className="mt-0.5 text-[14px] font-medium text-slate-900">今日待处理与重点任务</h3>
+          </div>
+          <SegmentedControl
+            options={[
+              { value: 'today', label: '今日动态' },
+              { value: 'focus', label: '重点任务' },
+            ]}
+            value={attentionPanel}
+            onChange={(value) => setAttentionPanel(value as 'today' | 'focus')}
+          />
+        </div>
+
+        {attentionPanel === 'today' ? (
+          <TodayLiveListPanel
+            projectId={projectId}
+            loading={todayLiveLoading || (Boolean(todayLiveError) && livePanelLoading)}
+            items={effectiveTodayLiveItems}
+            totalCount={effectiveTodayLiveItems.length}
+            embedded
+          />
+        ) : (
+          <RecentTasksCard projectId={projectId} tasks={focusTasks} embedded />
+        )}
       </section>
     </div>
   )

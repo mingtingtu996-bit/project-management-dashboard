@@ -1,11 +1,12 @@
 import { Link } from 'react-router-dom'
-import { RadialBar, RadialBarChart, ResponsiveContainer } from 'recharts'
+import { useEffect, useMemo, useState } from 'react'
+import { RadialBar, RadialBarChart, ResponsiveContainer, Tooltip } from 'recharts'
 
 import { CardHead } from '@/components/ui/card-head'
 import { ChartTooltip } from '@/components/ui/chart-tooltip'
-import { Tooltip } from 'recharts'
+import { apiGet, isAbortError } from '@/lib/apiClient'
 import { getTaskDisplayStatus, isDelayedTask } from '@/lib/taskBusinessStatus'
-import { CHART_NEUTRAL, CHART_SERIES } from '@/lib/chartPalette'
+import { CHART_SERIES } from '@/lib/chartPalette'
 import { cn } from '@/lib/utils'
 import type { Task, Risk } from '@/lib/supabase'
 import type { ProjectSummary } from '@/services/dashboardApi'
@@ -15,6 +16,24 @@ interface DashboardHealthCardsProps {
   tasks: Task[]
   risks: Risk[]
   projectId: string
+  embedded?: boolean
+}
+
+interface BusinessHealthDetails {
+  progressDeliveryScore?: number
+  taskExecutionScore?: number
+  milestoneDeliveryScore?: number
+  riskControlScore?: number
+  dataTrustScore?: number
+  capReasons?: string[]
+  totalScore?: number
+}
+
+const RISK_LEVEL_WEIGHT: Record<string, number> = {
+  critical: 4,
+  high: 3,
+  medium: 2,
+  low: 1,
 }
 
 function clampPercent(value: number | null | undefined) {
@@ -46,24 +65,69 @@ function Donut({
 }) {
   const safeValue = clampPercent(value)
   return (
-    <div className="relative h-32 w-32 shrink-0">
+    <div className="relative h-[120px] w-[120px] shrink-0">
       <ResponsiveContainer width="100%" height="100%">
-        <RadialBarChart innerRadius="80%" outerRadius="100%" data={[{ name: label, value: safeValue }]} startAngle={90} endAngle={-270}>
-          <RadialBar dataKey="value" cornerRadius={20} fill={color} background={{ fill: CHART_NEUTRAL.softSurface }} />
+        <RadialBarChart
+          innerRadius="75%"
+          outerRadius="95%"
+          data={[{ name: label, value: safeValue }]}
+          startAngle={90}
+          endAngle={-270}
+        >
+          <RadialBar dataKey="value" cornerRadius={10} fill={color} background={{ fill: '#E2E8F0' }} animationDuration={800} />
           <Tooltip content={<ChartTooltip />} />
         </RadialBarChart>
       </ResponsiveContainer>
       <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center text-center">
-        <div className={cn('num-display text-[24px] font-semibold text-slate-900', safeValue === 0 && 'text-slate-400')}>
+        <div className={cn('num-display text-[30px] font-semibold leading-none text-slate-900', safeValue === 0 && 'text-slate-400')}>
           {safeValue}%
         </div>
-        <div className="eyebrow mt-0.5">{label}</div>
+        <div className="eyebrow mt-1">{label}</div>
       </div>
     </div>
   )
 }
 
-export function DashboardHealthCards({ summary, tasks, risks, projectId }: DashboardHealthCardsProps) {
+function isActiveRisk(risk: Risk) {
+  return !['closed', 'resolved'].includes(String(risk.status ?? '').toLowerCase())
+}
+
+function riskPriority(risk: Risk) {
+  const level = RISK_LEVEL_WEIGHT[String(risk.level ?? '').toLowerCase()] ?? 0
+  return level * 100 + Number(risk.impact ?? 0) * 10 + Number(risk.probability ?? 0)
+}
+
+export function DashboardHealthCards({ summary, tasks, risks, projectId, embedded = false }: DashboardHealthCardsProps) {
+  const [healthDetails, setHealthDetails] = useState<BusinessHealthDetails | null>(null)
+
+  useEffect(() => {
+    if (!projectId) {
+      setHealthDetails(null)
+      return
+    }
+
+    const controller = new AbortController()
+    apiGet<{ score: number; details?: BusinessHealthDetails }>(`/api/health-score/${projectId}`, {
+      signal: controller.signal,
+      runtimeCache: 'off',
+    })
+      .then((payload) => {
+        if (!controller.signal.aborted) {
+          setHealthDetails(payload?.details ?? null)
+        }
+      })
+      .catch((error) => {
+        if (!isAbortError(error) && !controller.signal.aborted) {
+          console.error('Failed to load dashboard health details:', error)
+          setHealthDetails(null)
+        }
+      })
+
+    return () => {
+      controller.abort()
+    }
+  }, [projectId])
+
   const completed = summary?.completedTaskCount ?? tasks.filter((task) => getTaskDisplayStatus(task) === 'completed').length
   const total = summary?.totalTasks ?? tasks.length
   const completedRate = total > 0 ? Math.round((completed / total) * 100) : 0
@@ -73,28 +137,71 @@ export function DashboardHealthCards({ summary, tasks, risks, projectId }: Dashb
   const onTimeCount = Math.max(0, completed - delayed)
   const onTimeRate = completed > 0 ? Math.round((onTimeCount / completed) * 100) : 0
 
-  const activeRisks = summary?.activeRiskCount ?? risks.filter((risk) => !['closed', 'resolved'].includes(String(risk.status ?? '').toLowerCase())).length
+  const activeRiskRows = useMemo(
+    () => risks.filter(isActiveRisk).sort((left, right) => riskPriority(right) - riskPriority(left)),
+    [risks],
+  )
+  const activeRisks = summary?.activeRiskCount ?? activeRiskRows.length
   const activeIssues = summary?.activeIssueCount ?? 0
   const activeObstacles = summary?.activeObstacleCount ?? 0
   const pendingConditions = summary?.pendingConditionTaskCount ?? 0
   const totalSignals = activeRisks + activeIssues + activeObstacles + pendingConditions
+  const primaryRiskName = activeRiskRows[0]?.title?.trim()
+  const riskSuggestion = primaryRiskName ? `首要关注：${primaryRiskName}` : '暂无活跃风险'
 
   const overallProgress = clampPercent(summary?.overallProgress ?? 0)
-  const healthScore = clampPercent(summary?.healthScore ?? 0)
+  const healthScore = clampPercent(healthDetails?.totalScore ?? summary?.healthScore ?? 0)
   const milestoneRate =
     (summary?.totalMilestones ?? 0) > 0
       ? Math.round(((summary?.completedMilestones ?? 0) / (summary?.totalMilestones ?? 1)) * 100)
       : 0
+  const columnClassName = embedded
+    ? 'min-w-0 border-b border-slate-100 pb-5 last:border-b-0 last:pb-0 xl:border-b-0 xl:pb-0 xl:border-r xl:border-slate-100 xl:pr-5 xl:last:border-r-0 xl:last:pr-0'
+    : 'surface-card p-5'
+  const businessScores = [
+    { label: '进度兑现', value: healthDetails?.progressDeliveryScore ?? overallProgress, tone: 'bg-blue-600' },
+    { label: '任务执行', value: healthDetails?.taskExecutionScore ?? completedRate, tone: 'bg-emerald-500' },
+    { label: '里程碑交付', value: healthDetails?.milestoneDeliveryScore ?? milestoneRate, tone: 'bg-amber-500' },
+    { label: '风险阻碍', value: healthDetails?.riskControlScore ?? Math.max(0, 100 - totalSignals * 10), tone: 'bg-rose-500' },
+    { label: '数据可信度', value: healthDetails?.dataTrustScore ?? 100, tone: 'bg-slate-500' },
+  ].map((item) => ({ ...item, value: clampPercent(item.value) }))
 
   return (
     <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
-      <section className="surface-card p-5">
+      <section className={columnClassName}>
+        <CardHead
+          eyebrow="HEALTH"
+          title="进度健康指标"
+          pill={{ label: healthScore >= 70 ? '健康' : healthScore >= 50 ? '关注' : '预警', variant: healthScore >= 70 ? 'success' : healthScore >= 50 ? 'warning' : 'danger' }}
+        />
+        <div className="mt-5 flex flex-col gap-5 sm:flex-row sm:items-center xl:flex-col xl:items-start 2xl:flex-row 2xl:items-center">
+          <Donut label="健康度" value={healthScore} color={CHART_SERIES.success} />
+          <div className="min-w-0 flex-1 space-y-3">
+            {businessScores.map((item) => (
+              <div key={item.label} className="space-y-1.5 border-b border-slate-100 pb-3 last:border-b-0 last:pb-0">
+                <div className="meta-text flex items-center justify-between">
+                  <span>{item.label}</span>
+                  <span className={valueClass(item.value)}>{item.value}%</span>
+                </div>
+                <ProgressBar value={item.value} tone={item.tone} />
+              </div>
+            ))}
+          </div>
+        </div>
+        {healthDetails?.capReasons?.length ? (
+          <div className="meta-muted mt-4 rounded-lg border border-amber-100 bg-amber-50/70 px-3 py-2 text-amber-700">
+            {healthDetails.capReasons.slice(0, 2).join(' · ')}
+          </div>
+        ) : null}
+      </section>
+
+      <section className={columnClassName}>
         <CardHead
           eyebrow="TASKS"
           title="任务执行情况"
           pill={{ label: delayed > 0 ? `${delayed} 延期` : '稳定', variant: delayed > 0 ? 'warning' : 'success' }}
         />
-        <div className="mt-5 flex flex-col gap-5 sm:flex-row sm:items-center">
+        <div className="mt-5 flex flex-col gap-5 sm:flex-row sm:items-center xl:flex-col xl:items-start 2xl:flex-row 2xl:items-center">
           <Donut label="完成率" value={completedRate} color={CHART_SERIES.primary} />
           <div className="min-w-0 flex-1">
             {[
@@ -122,7 +229,7 @@ export function DashboardHealthCards({ summary, tasks, risks, projectId }: Dashb
         </div>
       </section>
 
-      <section className="surface-card p-5">
+      <section className={columnClassName}>
         <CardHead
           eyebrow="RISKS"
           title="风险与异常追踪"
@@ -151,33 +258,7 @@ export function DashboardHealthCards({ summary, tasks, risks, projectId }: Dashb
         </div>
         <div className="mt-5 rounded-xl bg-slate-50/70 p-4 text-[11.5px] leading-5 text-slate-500">
           待满足条件 <span className={valueClass(pendingConditions)}>{pendingConditions}</span> 项。
-          {totalSignals > 0 ? ' 建议优先收敛延期、阻碍与高等级风险。' : ' 当前风险与异常信号处于可控范围。'}
-        </div>
-      </section>
-
-      <section className="surface-card p-5">
-        <CardHead
-          eyebrow="HEALTH"
-          title="进度健康指标"
-          pill={{ label: healthScore >= 70 ? '健康' : healthScore >= 50 ? '关注' : '预警', variant: healthScore >= 70 ? 'success' : healthScore >= 50 ? 'warning' : 'danger' }}
-        />
-        <div className="mt-5 flex flex-col gap-5 sm:flex-row sm:items-center">
-          <Donut label="整体进度" value={overallProgress} color={CHART_SERIES.success} />
-          <div className="min-w-0 flex-1 space-y-3">
-            {[
-              { label: '整体进度', value: overallProgress, tone: 'bg-blue-600' },
-              { label: '健康度', value: healthScore, tone: 'bg-emerald-500' },
-              { label: '里程碑完成率', value: milestoneRate, tone: 'bg-amber-500' },
-            ].map((item) => (
-              <div key={item.label} className="space-y-1.5 border-b border-slate-100 pb-3 last:border-b-0 last:pb-0">
-                <div className="flex items-center justify-between text-[11.5px] text-slate-500">
-                  <span>{item.label}</span>
-                  <span className={valueClass(item.value)}>{item.value}%</span>
-                </div>
-                <ProgressBar value={item.value} tone={item.tone} />
-              </div>
-            ))}
-          </div>
+          <span className="ml-1">{riskSuggestion}</span>
         </div>
       </section>
     </div>

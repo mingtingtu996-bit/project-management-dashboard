@@ -577,6 +577,31 @@ router.get('/projects/:id/task-summary/assignees', validateIdParam, asyncHandler
 // GET /projects/:id/task-summary/compare — N段时段对比（进度变化量对比）
 // 参数: periods (JSON数组，每个元素 {label, from, to})，granularity ("day"|"week"|"month")
 // 返回: 每个时段的进度变化统计
+function toDateOnly(value: unknown): string {
+  return String(value ?? '').slice(0, 10)
+}
+
+function getTaskPlannedEndDate(task: Record<string, unknown> | null | undefined): string {
+  return toDateOnly(task?.planned_end_date || task?.end_date)
+}
+
+function getTaskActualEndDate(task: Record<string, unknown> | null | undefined): string {
+  return toDateOnly(task?.actual_end_date || task?.updated_at)
+}
+
+function isTaskDelayedByPeriodEnd(task: Record<string, unknown> | null | undefined, periodEnd: string): boolean {
+  if (!task) return false
+  const plannedEnd = getTaskPlannedEndDate(task)
+  if (!plannedEnd || plannedEnd > periodEnd) return false
+
+  if (isCompletedTask(task)) {
+    const actualEnd = getTaskActualEndDate(task)
+    return Boolean(actualEnd && actualEnd > plannedEnd)
+  }
+
+  return plannedEnd <= periodEnd
+}
+
 router.get('/projects/:id/task-summary/compare', validateIdParam, asyncHandler(async (req, res) => {
   const { id: projectId } = req.params
   const { periods: periodsStr, granularity = 'day' } = req.query as Record<string, string>
@@ -632,8 +657,8 @@ router.get('/projects/:id/task-summary/compare', validateIdParam, asyncHandler(a
         .eq('project_id', projectId)
       return { data, error }
     },
-    'id, title, assignee, assignee_unit, participant_unit_id, status',
-    'id, title, assignee, assignee_unit, status',
+    'id, title, assignee, assignee_unit, participant_unit_id, status, progress, planned_end_date, end_date, actual_end_date, updated_at',
+    'id, title, assignee, assignee_unit, status, progress, planned_end_date, end_date, actual_end_date, updated_at',
     `task-summary-compare:${projectId}`,
   )
 
@@ -721,6 +746,7 @@ router.get('/projects/:id/task-summary/compare', validateIdParam, asyncHandler(a
     const totalProgressChange = taskDetails.reduce((sum, t) => sum + t.progress_delta, 0)
     const tasksUpdated = taskDetails.length
     const tasksCompleted = taskDetails.filter(t => t.progress_after >= 100).length
+    const delayedTasks = (projectTasks || []).filter((task: any) => isTaskDelayedByPeriodEnd(task, to)).length
 
     // 计算进度增加 > 0 的任务数（正向进展）
     const tasksProgressed = taskDetails.filter(t => t.progress_delta > 0).length
@@ -735,7 +761,7 @@ router.get('/projects/:id/task-summary/compare', validateIdParam, asyncHandler(a
         tasks_progressed: tasksProgressed,           // 有正向进展的任务数
         tasks_completed: tasksCompleted,             // 期间完成的任务数
         on_time: tasksCompleted,  // 兼容旧字段
-        delayed: 0,               // 兼容旧字段
+        delayed: delayedTasks,    // 真实延期任务数（截至该时段结束日）
         total: tasksUpdated,      // 兼容旧字段
         on_time_rate: tasksUpdated > 0 ? Math.round((tasksProgressed / tasksUpdated) * 100) : 0,
       },
@@ -747,10 +773,10 @@ router.get('/projects/:id/task-summary/compare', validateIdParam, asyncHandler(a
         progress_before: t.progress_before,
         progress_delta: t.progress_delta,
         assignee: t.assignee,
-        end_date: '',  // 兼容旧字段
-        completed_at: '',
+        end_date: getTaskPlannedEndDate(taskMap.get(t.task_id) as Record<string, unknown>),
+        completed_at: getTaskActualEndDate(taskMap.get(t.task_id) as Record<string, unknown>),
         specialty_type: '',
-        is_on_time: t.progress_delta > 0,
+        is_on_time: !isTaskDelayedByPeriodEnd(taskMap.get(t.task_id) as Record<string, unknown>, to),
       })),
     }
   })

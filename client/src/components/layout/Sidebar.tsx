@@ -106,7 +106,7 @@ export default function Sidebar() {
         className={cn(
           'group flex cursor-pointer items-center gap-3 rounded-xl border-l-2 px-3 py-2.5 text-sm font-medium outline-none transition-all duration-200 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950',
           isCurrent
-            ? 'border-blue-500 bg-blue-500/10 text-blue-400'
+            ? 'border-blue-500 bg-blue-500/15 text-blue-300'
             : 'border-transparent text-slate-300 hover:bg-slate-800 hover:text-white',
         )}
         onClick={() => setMobileOpen(false)}
@@ -193,10 +193,11 @@ export default function Sidebar() {
         id="app-sidebar"
         data-onboarding-target="sidebar"
         className={cn(
-          'fixed inset-y-0 left-0 z-50 flex flex-col overflow-hidden border-r border-slate-700/50 bg-slate-900 text-slate-100 transition-[transform,width] duration-300 ease-out lg:relative lg:translate-x-0',
+          'fixed inset-y-0 left-0 z-50 flex flex-col overflow-hidden border-r border-slate-700/50 bg-slate-900 text-slate-100 antialiased transition-[transform,width] duration-300 ease-out lg:relative lg:translate-x-0',
           sidebarOpen ? 'w-64' : 'w-[var(--sidebar-collapsed-width)]',
           mobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0',
         )}
+        style={{ fontFamily: '"Plus Jakarta Sans", "Microsoft YaHei", "PingFang SC", sans-serif' }}
       >
         <Button
           variant="ghost"
@@ -258,9 +259,9 @@ export default function Sidebar() {
             {groupedNavigation.map((group) => (
               <div key={group.key}>
                 {sidebarOpen && group.label ? (
-                  <div className="eyebrow mb-2 px-3 text-slate-500">{group.label}</div>
+                  <div className="mb-2 px-3 text-[11px] font-medium uppercase tracking-wider text-slate-500">{group.label}</div>
                 ) : null}
-                <ul className="space-y-1.5">
+                <ul className="space-y-2">
                   {group.items.map(renderTopNavItem)}
                 </ul>
               </div>

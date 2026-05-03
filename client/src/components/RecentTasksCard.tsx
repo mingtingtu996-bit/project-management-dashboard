@@ -6,6 +6,7 @@ import { CardHead } from '@/components/ui/card-head'
 import { SegmentedControl } from '@/components/ui/segmented-control'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { safeJsonParse, safeStorageGet } from '@/lib/browserStorage'
 import { getTaskDisplayStatus, isCompletedTask } from '@/lib/taskBusinessStatus'
 import { cn } from '@/lib/utils'
@@ -47,17 +48,18 @@ interface TaskStats {
   normal: number
 }
 
-type FilterType = 'all' | '7days' | 'overdue' | 'urgent'
+type FilterType = 'week' | '3days' | 'overdue' | 'urgent'
 
 interface RecentTasksCardProps {
   projectId: string
   tasks?: RawTask[]
   onViewAll?: () => void
+  embedded?: boolean
 }
 
 const FILTER_OPTIONS = [
-  { value: 'all', label: '全部' },
-  { value: '7days', label: '7天内' },
+  { value: 'week', label: '本周' },
+  { value: '3days', label: '3天内' },
   { value: 'overdue', label: '已延期' },
   { value: 'urgent', label: '紧急' },
 ] as const
@@ -178,11 +180,11 @@ function AssigneeAvatar({ name }: { name?: string }) {
   )
 }
 
-export default function RecentTasksCard({ projectId, tasks: sourceTasks, onViewAll }: RecentTasksCardProps) {
+export default function RecentTasksCard({ projectId, tasks: sourceTasks, onViewAll, embedded = false }: RecentTasksCardProps) {
   const [tasks, setTasks] = useState<TaskWithDue[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [activeFilter, setActiveFilter] = useState<FilterType>('all')
+  const [activeFilter, setActiveFilter] = useState<FilterType>('week')
 
   const fetchPendingTasks = useCallback(async (prefetchedTasks?: RawTask[]) => {
     try {
@@ -249,8 +251,10 @@ export default function RecentTasksCard({ projectId, tasks: sourceTasks, onViewA
 
   const filteredTasks = useMemo(() => {
     switch (activeFilter) {
-      case '7days':
+      case 'week':
         return tasks.filter((task) => task.days_until_due != null && task.days_until_due >= 0 && task.days_until_due <= 7)
+      case '3days':
+        return tasks.filter((task) => task.days_until_due != null && task.days_until_due >= 0 && task.days_until_due <= 3)
       case 'overdue':
         return tasks.filter((task) => task.due_status === 'overdue')
       case 'urgent':
@@ -262,9 +266,10 @@ export default function RecentTasksCard({ projectId, tasks: sourceTasks, onViewA
 
   const stats = useMemo(() => buildTaskStats(tasks), [tasks])
   const visibleTasks = filteredTasks.slice(0, 6)
+  const panelClassName = embedded ? '' : 'surface-card p-5'
 
   return (
-    <section className="surface-card p-5">
+    <section className={panelClassName}>
       <CardHead
         eyebrow="FOCUS"
         title="一周重点关注任务"
@@ -293,79 +298,79 @@ export default function RecentTasksCard({ projectId, tasks: sourceTasks, onViewA
         </div>
       </div>
 
-      <div className="mt-4 overflow-x-auto">
-        <table className="w-full min-w-[720px] border-collapse">
-          <thead>
-            <tr className="border-b border-gray-200">
+      <div className="mt-4">
+        <Table className="min-w-[720px] border-collapse">
+          <TableHeader>
+            <TableRow className="border-b border-gray-200">
               {['优先级', '任务', '负责人', '截止', '进度', ''].map((label) => (
-                <th key={label || 'action'} className="group py-2 pr-4 text-left text-[10.5px] font-semibold uppercase tracking-[0.08em] text-slate-400">
+                <TableHead key={label || 'action'} className="eyebrow group h-auto px-0 py-2 pr-4 text-left">
                   <span className="inline-flex items-center gap-1">
                     {label}
                     {label ? <ChevronsUpDown className="h-3 w-3 opacity-0 transition-opacity group-hover:opacity-100" strokeWidth={1.5} /> : null}
                   </span>
-                </th>
+                </TableHead>
               ))}
-            </tr>
-          </thead>
-          <tbody>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {loading ? (
               [0, 1, 2].map((item) => (
-                <tr key={item} className="border-b border-slate-100">
-                  <td colSpan={6} className="py-3">
+                <TableRow key={item} className="border-b border-slate-100">
+                  <TableCell colSpan={6} className="px-0 py-3">
                     <Skeleton className="h-7 w-full rounded-md bg-slate-100" />
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               ))
             ) : null}
 
             {!loading && error ? (
-              <tr>
-                <td colSpan={6} className="py-8 text-center">
+              <TableRow>
+                <TableCell colSpan={6} className="px-0 py-8 text-center">
                   <p className="text-xs text-rose-600">{error}</p>
                   <Button variant="ghost" type="button" onClick={() => void fetchPendingTasks()} className="mt-2 text-xs text-blue-600">
                     重试
                   </Button>
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ) : null}
 
             {!loading && !error && visibleTasks.length === 0 ? (
-              <tr>
-                <td colSpan={6} className="py-10 text-center">
+              <TableRow>
+                <TableCell colSpan={6} className="px-0 py-10 text-center">
                   <CheckCircle2 className="mx-auto h-9 w-9 text-emerald-400" />
                   <p className="mt-3 text-sm font-medium text-slate-700">当前筛选下没有待处理任务</p>
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ) : null}
 
             {!loading && !error
               ? visibleTasks.map((task) => {
                   const progress = Math.max(0, Math.min(task.progress, 100))
                   return (
-                    <tr
+                    <TableRow
                       key={task.id}
                       className="group border-b border-slate-100 transition-colors hover:bg-slate-50/60"
                     >
-                      <td className="py-3 pr-4">
+                      <TableCell className="px-0 py-3 pr-4">
                         <span className={cn('block h-1.5 w-1.5 rounded-full', getPriorityDotClass(task.due_status))} />
-                      </td>
-                      <td className="max-w-[240px] py-3 pr-4">
+                      </TableCell>
+                      <TableCell className="max-w-[240px] px-0 py-3 pr-4">
                         <Link
                           to={projectId ? `/projects/${projectId}/gantt?task=${task.id}` : '/company'}
                           className="block truncate text-sm font-medium text-slate-800 hover:text-blue-600"
                         >
                           {task.title}
                         </Link>
-                        <div className="mt-1 text-[11px] text-slate-400">{task.assignee_unit || task.due_label}</div>
-                      </td>
-                      <td className="py-3 pr-4">
+                        <div className="meta-muted mt-1">{task.assignee_unit || task.due_label}</div>
+                      </TableCell>
+                      <TableCell className="px-0 py-3 pr-4">
                         <div className="flex items-center gap-2 text-xs text-slate-500">
                           <AssigneeAvatar name={task.assignee} />
                           <span className="max-w-[80px] truncate">{task.assignee || '未分配'}</span>
                         </div>
-                      </td>
-                      <td className="num-mono py-3 pr-4 text-xs text-slate-500">{formatDate(task.end_date)}</td>
-                      <td className="py-3 pr-4">
+                      </TableCell>
+                      <TableCell className="num-mono px-0 py-3 pr-4 text-xs text-slate-500">{formatDate(task.end_date)}</TableCell>
+                      <TableCell className="px-0 py-3 pr-4">
                         <div className="flex items-center gap-2">
                           <div className="h-[3px] w-24 overflow-hidden rounded-full bg-slate-100">
                             <div
@@ -377,16 +382,16 @@ export default function RecentTasksCard({ projectId, tasks: sourceTasks, onViewA
                             {progress}%
                           </span>
                         </div>
-                      </td>
-                      <td className="py-3 text-right">
+                      </TableCell>
+                      <TableCell className="px-0 py-3 text-right">
                         <ChevronRight className="ml-auto h-3.5 w-3.5 text-slate-200 transition-colors group-hover:text-slate-500" />
-                      </td>
-                    </tr>
+                      </TableCell>
+                    </TableRow>
                   )
                 })
               : null}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </div>
 
       <div className="mt-4 flex items-center justify-between border-t border-slate-200/60 pt-3 text-xs text-slate-500">

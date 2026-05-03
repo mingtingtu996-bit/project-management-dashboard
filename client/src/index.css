@@ -145,6 +145,14 @@
     @apply text-[10px] font-semibold tracking-[0.08em] text-slate-400;
   }
 
+  .meta-text {
+    @apply text-[11px] leading-4 text-slate-500;
+  }
+
+  .meta-muted {
+    @apply text-[11px] leading-4 text-slate-400;
+  }
+
   .num-display {
     @apply tabular-nums tracking-[-0.03em] font-bold;
   }

@@ -369,9 +369,10 @@ describe('Dashboard contract', () => {
     await waitForSelector(container, '[data-testid="dashboard-weekly-digest"]')
 
     expect(container.textContent).toContain('本周进度面板')
-    expect(container.textContent).toContain('Top 5 偏差任务')
-    expect(container.textContent).toContain('主体结构施工')
-    expect(container.textContent).toContain('关键任务')
+    expect(container.textContent).toContain('本周新增风险')
+    expect(container.textContent).toContain('关键阻碍数')
+    expect(container.textContent).toContain('最近关键里程碑')
+    expect(container.textContent).toContain('最高等级 high')
     expect(container.textContent).toContain('查看详情')
   })
 

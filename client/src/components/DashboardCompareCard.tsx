@@ -4,6 +4,7 @@ import { ArrowRight, ChevronsUpDown } from 'lucide-react'
 
 import { CardHead } from '@/components/ui/card-head'
 import { SegmentedControl } from '@/components/ui/segmented-control'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { EmptyState } from '@/components/EmptyState'
 import { LoadingState } from '@/components/ui/loading-state'
 import { apiGet, isAbortError } from '@/lib/apiClient'
@@ -48,6 +49,7 @@ interface CompareResult {
 
 interface DashboardCompareCardProps {
   projectId?: string
+  embedded?: boolean
 }
 
 const GRANULARITY_OPTIONS = [
@@ -124,7 +126,24 @@ function progressTone(value: number) {
   return 'text-slate-400'
 }
 
-export default function DashboardCompareCard({ projectId }: DashboardCompareCardProps) {
+function deltaTone(value: number | null, inverse = false) {
+  if (value == null || value === 0) return 'text-slate-400'
+  const isPositive = value > 0
+  const isGood = inverse ? !isPositive : isPositive
+  return isGood ? 'text-emerald-600' : 'text-rose-600'
+}
+
+function formatNumberDelta(value: number | null, suffix = '') {
+  if (value == null) return '--'
+  if (value === 0) return '持平'
+  return `${value > 0 ? '+' : ''}${value}${suffix}`
+}
+
+function formatProgressValue(value: number) {
+  return `${value > 0 ? '+' : ''}${value.toFixed(1)}%`
+}
+
+export default function DashboardCompareCard({ projectId, embedded = false }: DashboardCompareCardProps) {
   const [granularity, setGranularity] = useState<CompareGranularity>('day')
   const [resultsByGranularity, setResultsByGranularity] = useState<Record<CompareGranularity, CompareResult[]>>({
     day: [],
@@ -175,21 +194,40 @@ export default function DashboardCompareCard({ projectId }: DashboardCompareCard
 
   const rows = resultsByGranularity[granularity]
   const loading = loadingByGranularity[granularity]
-  const totals = useMemo(
-    () => rows.reduce(
-      (acc, item) => {
-        acc.tasksUpdated += item.summary?.tasks_updated ?? 0
-        acc.tasksCompleted += item.summary?.tasks_completed ?? 0
-        acc.delayed += item.summary?.delayed ?? 0
-        return acc
+  const currentRow = rows[rows.length - 1] ?? null
+  const previousRow = rows.length > 1 ? rows[rows.length - 2] : null
+  const compareMetrics = useMemo(() => {
+    const current = currentRow?.summary
+    const previous = previousRow?.summary
+    return [
+      {
+        label: '总进度变化',
+        value: current ? formatProgressValue(current.total_progress_change ?? 0) : '--',
+        delta: current && previous ? current.total_progress_change - previous.total_progress_change : null,
+        suffix: '%',
       },
-      { tasksUpdated: 0, tasksCompleted: 0, delayed: 0 },
-    ),
-    [rows],
-  )
+      {
+        label: '更新任务数',
+        value: current?.tasks_updated ?? '--',
+        delta: current && previous ? current.tasks_updated - previous.tasks_updated : null,
+      },
+      {
+        label: '完成任务数',
+        value: current?.tasks_completed ?? '--',
+        delta: current && previous ? current.tasks_completed - previous.tasks_completed : null,
+      },
+      {
+        label: '延期任务数',
+        value: current?.delayed ?? '--',
+        delta: current && previous ? current.delayed - previous.delayed : null,
+        inverse: true,
+      },
+    ]
+  }, [currentRow, previousRow])
+  const panelClassName = embedded ? '' : 'surface-card p-5'
 
   return (
-    <section className="surface-card p-5">
+    <section className={panelClassName}>
       <CardHead
         eyebrow="COMPARE"
         title="现场快照与对比"
@@ -212,16 +250,15 @@ export default function DashboardCompareCard({ projectId }: DashboardCompareCard
         }
       />
 
-      <div className="mt-5 grid grid-cols-3 gap-3">
-        {[
-          { label: '更新任务', value: totals.tasksUpdated },
-          { label: '完成任务', value: totals.tasksCompleted },
-          { label: '延期任务', value: totals.delayed },
-        ].map((item) => (
+      <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {compareMetrics.map((item) => (
           <div key={item.label} className="rounded-xl border border-slate-200/60 bg-slate-50/60 px-4 py-3">
-            <div className="text-[11px] text-slate-500">{item.label}</div>
+            <div className="meta-text">{item.label}</div>
             <div className={cn('num-mono mt-1 text-lg font-semibold text-slate-900', item.value === 0 && 'text-slate-400')}>
               {item.value}
+            </div>
+            <div className={cn('meta-muted mt-1', deltaTone(item.delta, item.inverse))}>
+              较上一周期 {formatNumberDelta(item.delta, item.suffix)}
             </div>
           </div>
         ))}
@@ -237,48 +274,46 @@ export default function DashboardCompareCard({ projectId }: DashboardCompareCard
             className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 py-8"
           />
         ) : (
-          <table className="w-full min-w-[760px] border-collapse">
-            <thead>
-              <tr className="border-b border-gray-200">
-                {['周期', '范围', '进度变化', '更新任务', '完成任务', '按时率', '延期'].map((label) => (
-                  <th key={label} className="group py-2 pr-4 text-left text-[10.5px] font-semibold uppercase tracking-[0.08em] text-slate-400">
+          <Table className="min-w-[620px] border-collapse">
+            <TableHeader>
+              <TableRow className="border-b border-gray-200">
+                {['周期', '总进度变化', '更新任务数', '完成任务数', '延期任务数'].map((label) => (
+                  <TableHead key={label} className="eyebrow group h-auto px-0 py-2 pr-4 text-left">
                     <span className="inline-flex items-center gap-1">
                       {label}
                       <ChevronsUpDown className="h-3 w-3 opacity-0 transition-opacity group-hover:opacity-100" strokeWidth={1.5} />
                     </span>
-                  </th>
+                  </TableHead>
                 ))}
-              </tr>
-            </thead>
-            <tbody>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {rows.map((result, index) => {
                 const change = result.summary?.total_progress_change ?? 0
-                const onTimeRate = result.summary?.on_time_rate ?? 0
                 const delayed = result.summary?.delayed ?? 0
                 return (
-                  <tr key={`${result.period_label}-${index}`} className="border-b border-slate-100 transition-colors hover:bg-slate-50/60">
-                    <td className="py-3 pr-4 text-sm font-medium text-slate-800">{result.period_label}</td>
-                    <td className="num-mono py-3 pr-4 text-xs text-slate-500">{formatRange(result)}</td>
-                    <td className={cn('num-mono py-3 pr-4 text-sm font-semibold', progressTone(change))}>
+                  <TableRow key={`${result.period_label}-${index}`} className="border-b border-slate-100 transition-colors hover:bg-slate-50/60">
+                    <TableCell className="px-0 py-3 pr-4 text-sm font-medium text-slate-800">
+                      <div>{result.period_label}</div>
+                      <div className="num-mono mt-0.5 text-[11px] text-slate-400">{formatRange(result)}</div>
+                    </TableCell>
+                    <TableCell className={cn('num-mono px-0 py-3 pr-4 text-sm font-semibold', progressTone(change))}>
                       {change > 0 ? '+' : ''}{change.toFixed(1)}%
-                    </td>
-                    <td className={cn('num-mono py-3 pr-4 text-sm text-slate-700', (result.summary?.tasks_updated ?? 0) === 0 && 'text-slate-400')}>
+                    </TableCell>
+                    <TableCell className={cn('num-mono px-0 py-3 pr-4 text-sm text-slate-700', (result.summary?.tasks_updated ?? 0) === 0 && 'text-slate-400')}>
                       {result.summary?.tasks_updated ?? 0}
-                    </td>
-                    <td className={cn('num-mono py-3 pr-4 text-sm text-slate-700', (result.summary?.tasks_completed ?? 0) === 0 && 'text-slate-400')}>
+                    </TableCell>
+                    <TableCell className={cn('num-mono px-0 py-3 pr-4 text-sm text-slate-700', (result.summary?.tasks_completed ?? 0) === 0 && 'text-slate-400')}>
                       {result.summary?.tasks_completed ?? 0}
-                    </td>
-                    <td className={cn('num-mono py-3 pr-4 text-sm text-slate-700', onTimeRate === 0 && 'text-slate-400')}>
-                      {onTimeRate}%
-                    </td>
-                    <td className={cn('num-mono py-3 pr-4 text-sm text-slate-700', delayed === 0 && 'text-slate-400')}>
+                    </TableCell>
+                    <TableCell className={cn('num-mono px-0 py-3 pr-4 text-sm text-slate-700', delayed === 0 && 'text-slate-400')}>
                       {delayed}
-                    </td>
-                  </tr>
+                    </TableCell>
+                  </TableRow>
                 )
               })}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         )}
       </div>
     </section>

@@ -64,6 +64,10 @@ function normalizeSparkline(points?: Array<number | { value: number }>) {
     .filter((point) => Number.isFinite(point.value))
 }
 
+function isFlatSparkline(points: Array<{ value: number }>) {
+  return points.length > 1 && points.every((point) => point.value === points[0].value)
+}
+
 export function MetricCard({
   eyebrow,
   title,
@@ -80,6 +84,7 @@ export function MetricCard({
 }: MetricCardProps) {
   const toneClass = toneClassMap[tone]
   const sparklineData = normalizeSparkline(sparkline)
+  const sparklineColor = isFlatSparkline(sparklineData) ? CHART_NEUTRAL.border : toneClass.sparkline
   const numericValue = typeof value === 'number' && Number.isFinite(value) ? value : null
   const countValue = useCountUp(numericValue ?? 0, { duration: 900 })
   const displayValue = numericValue !== null ? countValue : value
@@ -95,10 +100,7 @@ export function MetricCard({
       )}
       style={style}
     >
-      <svg className="absolute left-4 top-4 h-10 w-10" viewBox="0 0 44 44" aria-hidden="true">
-        <path d="M4 26a18 18 0 0 1 18-18" fill="none" stroke={toneClass.accent} strokeLinecap="round" strokeWidth="3" />
-      </svg>
-      <CardContent padding="md" className="flex min-h-[140px] h-full flex-col gap-3 pl-14">
+      <CardContent padding="md" className="flex min-h-[140px] h-full flex-col gap-3">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
             {eyebrow ? <div className="eyebrow">{eyebrow}</div> : null}
@@ -120,7 +122,7 @@ export function MetricCard({
           <div className="mt-auto min-w-0 space-y-2">
             {hint ? <div className="min-w-0 text-xs leading-5 text-slate-500">{hint}</div> : <span />}
             {sparklineData.length > 1 ? (
-              <Sparkline data={sparklineData} color={toneClass.sparkline} className="h-8 w-full" />
+              <Sparkline data={sparklineData} color={sparklineColor} className="h-8 w-full" />
             ) : null}
           </div>
         ) : null}
