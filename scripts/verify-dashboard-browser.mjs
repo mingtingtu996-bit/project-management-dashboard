@@ -654,7 +654,9 @@ async function main() {
       `Unexpected compare reports link: ${compareReportsHref}`,
     )
 
-    await page.getByRole('tab', { name: /今日动态/ }).click()
+    const attentionPanel = page.getByTestId('dashboard-attention-panel')
+    await attentionPanel.waitFor({ state: 'visible', timeout: 10000 })
+    await attentionPanel.getByRole('button', { name: /今日动态/ }).click()
     await page.getByTestId('dashboard-live-panel').waitFor({ state: 'visible', timeout: 10000 })
     await page.screenshot({ path: join(outputDir, 'dashboard-page-today-tab.png'), fullPage: true })
 
