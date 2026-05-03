@@ -5,7 +5,7 @@ import { PolarAngleAxis, RadialBar, RadialBarChart, ResponsiveContainer } from '
 import { CardHead } from '@/components/ui/card-head'
 import { apiGet, isAbortError } from '@/lib/apiClient'
 import { getTaskDisplayStatus, isDelayedTask } from '@/lib/taskBusinessStatus'
-import { CHART_SERIES } from '@/lib/chartPalette'
+import { CHART_NEUTRAL, CHART_SERIES } from '@/lib/chartPalette'
 import { cn } from '@/lib/utils'
 import type { Task, Risk } from '@/lib/supabase'
 import type { ProjectSummary } from '@/services/dashboardApi'
@@ -75,7 +75,7 @@ function Donut({
           endAngle={-270}
         >
           <PolarAngleAxis angleAxisId={0} type="number" domain={[0, 100]} tick={false} />
-          <RadialBar angleAxisId={0} dataKey="value" cornerRadius={10} fill={color} background={{ fill: '#E2E8F0' }} animationDuration={800} />
+          <RadialBar angleAxisId={0} dataKey="value" cornerRadius={10} fill={color} background={{ fill: CHART_NEUTRAL.softSurface }} animationDuration={800} />
         </RadialBarChart>
       </ResponsiveContainer>
       <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center text-center">
