@@ -6,7 +6,7 @@ import { CardHead } from '@/components/ui/card-head'
 import { ChartTooltip } from '@/components/ui/chart-tooltip'
 import { apiGet, isAbortError } from '@/lib/apiClient'
 import { getTaskDisplayStatus, isDelayedTask } from '@/lib/taskBusinessStatus'
-import { CHART_SERIES } from '@/lib/chartPalette'
+import { CHART_NEUTRAL, CHART_SERIES } from '@/lib/chartPalette'
 import { cn } from '@/lib/utils'
 import type { Task, Risk } from '@/lib/supabase'
 import type { ProjectSummary } from '@/services/dashboardApi'
@@ -74,7 +74,7 @@ function Donut({
           startAngle={90}
           endAngle={-270}
         >
-          <RadialBar dataKey="value" cornerRadius={10} fill={color} background={{ fill: '#E2E8F0' }} animationDuration={800} />
+          <RadialBar dataKey="value" cornerRadius={10} fill={color} background={{ fill: CHART_NEUTRAL.softSurface }} animationDuration={800} />
           <Tooltip content={<ChartTooltip />} />
         </RadialBarChart>
       </ResponsiveContainer>
