@@ -1,12 +1,11 @@
 import { Link } from 'react-router-dom'
 import { useEffect, useMemo, useState } from 'react'
-import { RadialBar, RadialBarChart, ResponsiveContainer, Tooltip } from 'recharts'
+import { PolarAngleAxis, RadialBar, RadialBarChart, ResponsiveContainer } from 'recharts'
 
 import { CardHead } from '@/components/ui/card-head'
-import { ChartTooltip } from '@/components/ui/chart-tooltip'
 import { apiGet, isAbortError } from '@/lib/apiClient'
 import { getTaskDisplayStatus, isDelayedTask } from '@/lib/taskBusinessStatus'
-import { CHART_NEUTRAL, CHART_SERIES } from '@/lib/chartPalette'
+import { CHART_SERIES } from '@/lib/chartPalette'
 import { cn } from '@/lib/utils'
 import type { Task, Risk } from '@/lib/supabase'
 import type { ProjectSummary } from '@/services/dashboardApi'
@@ -70,12 +69,13 @@ function Donut({
         <RadialBarChart
           innerRadius="75%"
           outerRadius="95%"
+          barSize={10}
           data={[{ name: label, value: safeValue }]}
           startAngle={90}
           endAngle={-270}
         >
-          <RadialBar dataKey="value" cornerRadius={10} fill={color} background={{ fill: CHART_NEUTRAL.softSurface }} animationDuration={800} />
-          <Tooltip content={<ChartTooltip />} />
+          <PolarAngleAxis angleAxisId={0} type="number" domain={[0, 100]} tick={false} />
+          <RadialBar angleAxisId={0} dataKey="value" cornerRadius={10} fill={color} background={{ fill: '#E2E8F0' }} animationDuration={800} />
         </RadialBarChart>
       </ResponsiveContainer>
       <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center text-center">
@@ -134,8 +134,6 @@ export function DashboardHealthCards({ summary, tasks, risks, projectId, embedde
   const inProgress = tasks.filter((task) => getTaskDisplayStatus(task) === 'in_progress').length
   const delayed = summary?.delayedTaskCount ?? tasks.filter((task) => isDelayedTask(task)).length
   const notStarted = Math.max(0, total - completed - inProgress)
-  const onTimeCount = Math.max(0, completed - delayed)
-  const onTimeRate = completed > 0 ? Math.round((onTimeCount / completed) * 100) : 0
 
   const activeRiskRows = useMemo(
     () => risks.filter(isActiveRisk).sort((left, right) => riskPriority(right) - riskPriority(left)),
@@ -158,6 +156,7 @@ export function DashboardHealthCards({ summary, tasks, risks, projectId, embedde
   const columnClassName = embedded
     ? 'flex h-full min-w-0 flex-col border-b border-slate-100 pb-5 last:border-b-0 last:pb-0 md:border-b-0 md:pb-0 md:border-r md:border-slate-100 md:pr-5 md:last:border-r-0 md:last:pr-0'
     : 'surface-card flex h-full flex-col p-5'
+  const donutContentClassName = 'mt-5 grid gap-5 lg:grid-cols-[120px_minmax(0,1fr)] lg:items-center xl:grid-cols-1 2xl:grid-cols-[120px_minmax(0,1fr)]'
   const businessScores = [
     { label: '进度兑现', value: healthDetails?.progressDeliveryScore ?? overallProgress, tone: 'bg-blue-600' },
     { label: '任务执行', value: healthDetails?.taskExecutionScore ?? completedRate, tone: 'bg-emerald-500' },
@@ -174,11 +173,11 @@ export function DashboardHealthCards({ summary, tasks, risks, projectId, embedde
           title="进度健康指标"
           pill={{ label: healthScore >= 70 ? '健康' : healthScore >= 50 ? '关注' : '预警', variant: healthScore >= 70 ? 'success' : healthScore >= 50 ? 'warning' : 'danger' }}
         />
-        <div className="mt-5 flex flex-col gap-5 sm:flex-row sm:items-center xl:flex-col xl:items-start 2xl:flex-row 2xl:items-center">
+        <div className={donutContentClassName}>
           <Donut label="健康度" value={healthScore} color={CHART_SERIES.success} />
-          <div className="min-w-0 flex-1 space-y-3">
+          <div className="min-w-0 space-y-2.5">
             {businessScores.map((item) => (
-              <div key={item.label} className="space-y-1.5 border-b border-slate-100 pb-3 last:border-b-0 last:pb-0">
+              <div key={item.label} className="space-y-1.5">
                 <div className="meta-text flex items-center justify-between">
                   <span>{item.label}</span>
                   <span className={valueClass(item.value)}>{item.value}%</span>
@@ -188,11 +187,6 @@ export function DashboardHealthCards({ summary, tasks, risks, projectId, embedde
             ))}
           </div>
         </div>
-        {healthDetails?.capReasons?.length ? (
-          <div className="meta-muted mt-4 rounded-lg border border-amber-100 bg-amber-50/70 px-3 py-2 text-amber-700">
-            {healthDetails.capReasons.slice(0, 2).join(' · ')}
-          </div>
-        ) : null}
       </section>
 
       <section className={columnClassName}>
@@ -201,9 +195,9 @@ export function DashboardHealthCards({ summary, tasks, risks, projectId, embedde
           title="任务执行情况"
           pill={{ label: delayed > 0 ? `${delayed} 延期` : '稳定', variant: delayed > 0 ? 'warning' : 'success' }}
         />
-        <div className="mt-5 flex flex-col gap-5 sm:flex-row sm:items-center xl:flex-col xl:items-start 2xl:flex-row 2xl:items-center">
+        <div className={donutContentClassName}>
           <Donut label="完成率" value={completedRate} color={CHART_SERIES.primary} />
-          <div className="min-w-0 flex-1">
+          <div className="min-w-0">
             {[
               { label: '已完成', value: completed, dot: 'bg-emerald-500' },
               { label: '进行中', value: inProgress, dot: 'bg-blue-500' },
@@ -219,13 +213,6 @@ export function DashboardHealthCards({ summary, tasks, risks, projectId, embedde
               </div>
             ))}
           </div>
-        </div>
-        <div className="mt-5 space-y-2">
-          <div className="flex items-center justify-between text-[11.5px] text-slate-500">
-            <span>按时完成率</span>
-            <span className={valueClass(onTimeRate)}>{onTimeRate}%</span>
-          </div>
-          <ProgressBar value={onTimeRate} tone="bg-emerald-500" />
         </div>
       </section>
 

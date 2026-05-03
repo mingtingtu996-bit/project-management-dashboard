@@ -153,22 +153,24 @@ function normalizeProjectStatus(status?: string | null): ProjectStatus {
   }
 }
 
-function getProjectStatusKey(status: ProjectStatus | string): string {
-  switch (status) {
-    case '已完成':
-    case 'completed':
-      return 'completed'
-    case '进行中':
-    case 'in_progress':
-    case 'active':
-      return 'in_progress'
-    case '已暂停':
-    case 'paused':
-    case 'archived':
-      return 'warning'
-    default:
-      return 'pending'
-  }
+function getDashboardProjectStatusLabel(summaryData: ProjectSummary | null, currentStatus: ProjectStatus) {
+  const rawStatus = summaryData?.statusLabel || currentStatus
+  if (rawStatus !== '已完成') return rawStatus
+
+  const progress = summaryData?.overallProgress
+  const tasksComplete =
+    summaryData?.totalTasks == null ||
+    summaryData.totalTasks <= 0 ||
+    (summaryData.completedTaskCount ?? 0) >= summaryData.totalTasks
+  const milestonesComplete =
+    summaryData?.totalMilestones == null ||
+    summaryData.totalMilestones <= 0 ||
+    (summaryData.completedMilestones ?? 0) >= summaryData.totalMilestones
+  const progressComplete = progress == null || progress >= 99.5
+
+  if (progressComplete && tasksComplete && milestonesComplete) return '已完成'
+  if ((progress ?? 0) <= 0) return '未开始'
+  return '进行中'
 }
 
 function getHealthStatusKey(score: number): string {
@@ -461,19 +463,21 @@ function TodayLiveListPanel({
 
   return (
     <section data-testid="dashboard-live-panel" className={panelClassName}>
-      <CardHead
-        eyebrow="TODAY"
-        title="今日动态"
-        action={
-          totalCount > 8 ? (
-            <Link to={`/projects/${projectId}/notifications`} className="text-xs font-medium text-blue-600 hover:text-blue-800">
-              全部
-              <ChevronRight className="ml-1 inline h-3.5 w-3.5" />
-            </Link>
-          ) : null
-        }
-      />
-      <div className="mt-5">
+      {!embedded ? (
+        <CardHead
+          eyebrow="TODAY"
+          title="今日动态"
+          action={
+            totalCount > 8 ? (
+              <Link to={`/projects/${projectId}/notifications`} className="text-xs font-medium text-blue-600 hover:text-blue-800">
+                全部
+                <ChevronRight className="ml-1 inline h-3.5 w-3.5" />
+              </Link>
+            ) : null
+          }
+        />
+      ) : null}
+      <div className={cn(!embedded && 'mt-5')}>
         {loading ? (
           <LoadingState label="今日动态加载中" description="" className="min-h-24 border-0 bg-transparent px-0 py-2 shadow-none" />
         ) : previewItems.length === 0 ? (
@@ -540,6 +544,7 @@ function DashboardPageTitle({
   const progressValue = Math.round(summaryData?.overallProgress ?? 0)
   const plannedStart = currentProject.planned_start_date || null
   const plannedEnd = summaryData?.plannedEndDate || currentProject.planned_end_date || null
+  const projectStatusLabel = getDashboardProjectStatusLabel(summaryData, currentStatus)
 
   return (
     <section data-testid="dashboard-page-title" className="pb-2">
@@ -552,13 +557,9 @@ function DashboardPageTitle({
             ]}
           />
           <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-            <StatusBadge
-              status={getProjectStatusKey(summaryData?.statusLabel || currentStatus)}
-              fallbackLabel={summaryData?.statusLabel || currentStatus}
-              className="h-5 px-2 text-[10.5px]"
-            >
-              {summaryData?.statusLabel || currentStatus}
-            </StatusBadge>
+            <span className="inline-flex h-5 items-center rounded-full bg-slate-100/80 px-2 text-[10.5px] font-medium text-slate-500 ring-1 ring-inset ring-slate-200/60">
+              {projectStatusLabel}
+            </span>
             <span className="text-[11px] text-slate-400">计划工期</span>
             <span className="num-mono inline-flex h-5 items-center rounded-full bg-slate-100/80 px-2 text-[10.5px] text-slate-500 ring-1 ring-inset ring-slate-200/60">
               {formatProjectDate(plannedStart)} - {formatProjectDate(plannedEnd)}
@@ -1279,28 +1280,34 @@ export default function Dashboard() {
       ) : null}
 
       <section data-testid="dashboard-attention-panel" className="surface-card p-5">
-        <div className="mb-5 flex justify-end">
-          <SegmentedControl
-            options={[
-              { value: 'today', label: '今日动态' },
-              { value: 'focus', label: '重点任务' },
-            ]}
-            value={attentionPanel}
-            onChange={(value) => setAttentionPanel(value as 'today' | 'focus')}
-          />
-        </div>
+        <CardHead
+          eyebrow="ATTENTION"
+          title="今日待处理与重点任务"
+          action={
+            <SegmentedControl
+              options={[
+                { value: 'today', label: '今日动态' },
+                { value: 'focus', label: '重点任务' },
+              ]}
+              value={attentionPanel}
+              onChange={(value) => setAttentionPanel(value as 'today' | 'focus')}
+            />
+          }
+        />
 
-        {attentionPanel === 'today' ? (
-          <TodayLiveListPanel
-            projectId={projectId}
-            loading={todayLiveLoading || (Boolean(todayLiveError) && livePanelLoading)}
-            items={effectiveTodayLiveItems}
-            totalCount={effectiveTodayLiveItems.length}
-            embedded
-          />
-        ) : (
-          <RecentTasksCard projectId={projectId} tasks={focusTasks} embedded />
-        )}
+        <div className="mt-5">
+          {attentionPanel === 'today' ? (
+            <TodayLiveListPanel
+              projectId={projectId}
+              loading={todayLiveLoading || (Boolean(todayLiveError) && livePanelLoading)}
+              items={effectiveTodayLiveItems}
+              totalCount={effectiveTodayLiveItems.length}
+              embedded
+            />
+          ) : (
+            <RecentTasksCard projectId={projectId} tasks={focusTasks} embedded />
+          )}
+        </div>
       </section>
 
       <Separator className="border-slate-100" />

@@ -270,22 +270,24 @@ export default function RecentTasksCard({ projectId, tasks: sourceTasks, onViewA
 
   return (
     <section className={panelClassName}>
-      <CardHead
-        eyebrow="FOCUS"
-        title="一周重点关注任务"
-        action={
-          <Link
-            to={projectId ? `/projects/${projectId}/gantt` : '/company'}
-            className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 transition-colors hover:text-blue-800"
-            onClick={onViewAll}
-          >
-            全部任务
-            <ChevronRight className="h-3.5 w-3.5" />
-          </Link>
-        }
-      />
+      {!embedded ? (
+        <CardHead
+          eyebrow="FOCUS"
+          title="一周重点关注任务"
+          action={
+            <Link
+              to={projectId ? `/projects/${projectId}/gantt` : '/company'}
+              className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 transition-colors hover:text-blue-800"
+              onClick={onViewAll}
+            >
+              全部任务
+              <ChevronRight className="h-3.5 w-3.5" />
+            </Link>
+          }
+        />
+      ) : null}
 
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+      <div className={cn('flex flex-wrap items-center justify-between gap-3', !embedded && 'mt-4')}>
         <SegmentedControl
           options={FILTER_OPTIONS.map((option) => ({ value: option.value, label: option.label }))}
           value={activeFilter}

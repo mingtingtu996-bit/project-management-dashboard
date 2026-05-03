@@ -70,7 +70,14 @@
   }
 
   html {
+    height: 100%;
+    overflow: hidden;
     scroll-behavior: smooth;
+  }
+
+  #root {
+    height: 100%;
+    overflow: hidden;
   }
 
   * {
@@ -78,6 +85,8 @@
   }
   body {
     @apply bg-background text-foreground antialiased;
+    height: 100%;
+    overflow: hidden;
     overscroll-behavior: contain;
   }
 

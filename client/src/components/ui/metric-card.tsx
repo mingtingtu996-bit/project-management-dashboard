@@ -105,11 +105,11 @@ export function MetricCard({
           <div className="min-w-0">
             {eyebrow ? <div className="eyebrow">{eyebrow}</div> : null}
             <p className="mt-0.5 truncate text-sm font-medium text-slate-500">{title}</p>
-            <div className="mt-3 flex flex-wrap items-end gap-2">
+            <div className="mt-3">
               <span className={cn('num-display text-[34px] font-semibold leading-none text-slate-900', isZero && 'text-slate-400')}>
                 {formatMetricValue(displayValue, unit)}
               </span>
-              {trend ? <span className="pb-1 text-[11px] font-medium text-slate-400">{trend}</span> : null}
+              {trend ? <div className="mt-3 min-h-[16px] text-[11px] font-medium text-slate-400">{trend}</div> : null}
             </div>
           </div>
           {icon ? (
