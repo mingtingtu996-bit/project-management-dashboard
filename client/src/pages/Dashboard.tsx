@@ -477,7 +477,7 @@ function TodayLiveListPanel({
         {loading ? (
           <LoadingState label="今日动态加载中" description="" className="min-h-24 border-0 bg-transparent px-0 py-2 shadow-none" />
         ) : previewItems.length === 0 ? (
-          <div className="flex min-h-56 flex-col items-center justify-center text-center">
+          <div className={cn('flex flex-col items-center justify-center text-center', embedded ? 'min-h-32' : 'min-h-56')}>
             <div className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-50 text-emerald-500 ring-1 ring-inset ring-emerald-200/60">
               <CheckCircle className="h-7 w-7" />
             </div>
@@ -540,7 +540,6 @@ function DashboardPageTitle({
   const progressValue = Math.round(summaryData?.overallProgress ?? 0)
   const plannedStart = currentProject.planned_start_date || null
   const plannedEnd = summaryData?.plannedEndDate || currentProject.planned_end_date || null
-  const phaseLabel = currentProject.current_phase || summaryData?.statusLabel || currentStatus
 
   return (
     <section data-testid="dashboard-page-title" className="pb-2">
@@ -570,8 +569,6 @@ function DashboardPageTitle({
               {currentProject.name || '项目'}
             </h1>
             <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
-              <span>{phaseLabel}</span>
-              <span>·</span>
               <StatusBadge status={getHealthStatusKey(healthScore)} fallbackLabel={`健康度 ${healthScore}分`} className="h-5 px-2 text-[10.5px]">
                 健康度 {healthScore}分
               </StatusBadge>
@@ -1281,79 +1278,8 @@ export default function Dashboard() {
         </Alert>
       ) : null}
 
-      <Separator className="border-slate-100" />
-
-      <section data-testid="dashboard-snapshot-panel">
-        <Tabs defaultValue="trend">
-          <TabsList className="h-auto w-full justify-start gap-6 rounded-none border-b border-slate-100 bg-transparent p-0 text-slate-500">
-            <TabsTrigger value="trend" className="relative rounded-none bg-transparent px-0 py-3 text-sm font-medium text-slate-500 shadow-none after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-slate-900 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600">
-              进度趋势
-            </TabsTrigger>
-            <TabsTrigger value="milestone" className="relative rounded-none bg-transparent px-0 py-3 text-sm font-medium text-slate-500 shadow-none after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-slate-900 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600">
-              里程碑
-            </TabsTrigger>
-            <TabsTrigger value="execution" className="relative rounded-none bg-transparent px-0 py-3 text-sm font-medium text-slate-500 shadow-none after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-slate-900 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600">
-              执行概况
-            </TabsTrigger>
-          </TabsList>
-
-          <div className="min-h-[25rem]">
-            <TabsContent value="trend" className="pt-5">
-              <div className="surface-card grid grid-cols-12 gap-5 p-5">
-                <div className="col-span-12 xl:col-span-8">
-                  <DashboardMonthlyTrend projectId={currentProject.id ?? ''} embedded />
-                </div>
-                <div className="col-span-12 xl:col-span-4">
-                  <WeeklyDigestPanel
-                    projectId={currentProject.id ?? ''}
-                    milestoneItems={summaryData?.milestoneOverview?.items ?? []}
-                    embedded
-                  />
-                </div>
-                <div className="col-span-12 border-t border-slate-100 pt-5">
-                  <DashboardCompareCard projectId={projectId} embedded />
-                </div>
-              </div>
-            </TabsContent>
-
-            <TabsContent value="milestone" className="pt-5">
-              <div className="surface-card grid grid-cols-12 gap-5 p-5">
-                <div className="col-span-12">
-                  <DashboardMilestoneCard
-                    completed={milestonePanelData.completed}
-                    total={milestonePanelData.total}
-                    upcoming={milestonePanelData.upcoming}
-                    overdue={milestonePanelData.overdue}
-                    recentMilestones={milestonePanelData.recentMilestones}
-                    embedded
-                  />
-                </div>
-              </div>
-            </TabsContent>
-
-            <TabsContent value="execution" className="pt-5">
-              <div className="surface-card grid grid-cols-12 gap-5 p-5">
-                <div className="col-span-12">
-                  <DashboardHealthCards
-                    summary={summaryData}
-                    tasks={scopedTasks}
-                    risks={scopedRisks}
-                    projectId={projectId}
-                    embedded
-                  />
-                </div>
-              </div>
-            </TabsContent>
-          </div>
-        </Tabs>
-      </section>
-
       <section data-testid="dashboard-attention-panel" className="surface-card p-5">
-        <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <div className="eyebrow">ATTENTION</div>
-            <h3 className="mt-0.5 text-[14px] font-medium text-slate-900">今日待处理与重点任务</h3>
-          </div>
+        <div className="mb-5 flex justify-end">
           <SegmentedControl
             options={[
               { value: 'today', label: '今日动态' },
@@ -1376,6 +1302,72 @@ export default function Dashboard() {
           <RecentTasksCard projectId={projectId} tasks={focusTasks} embedded />
         )}
       </section>
+
+      <Separator className="border-slate-100" />
+
+      <section data-testid="dashboard-snapshot-panel">
+        <Tabs defaultValue="trend">
+          <TabsList className="h-auto w-full justify-start gap-6 rounded-none border-b border-slate-100 bg-transparent p-0 text-slate-500">
+            <TabsTrigger value="trend" className="relative rounded-none bg-transparent px-0 py-3 text-sm font-medium text-slate-500 shadow-none after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-slate-900 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600">
+              进度趋势
+            </TabsTrigger>
+            <TabsTrigger value="milestone" className="relative rounded-none bg-transparent px-0 py-3 text-sm font-medium text-slate-500 shadow-none after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-slate-900 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600">
+              里程碑
+            </TabsTrigger>
+            <TabsTrigger value="execution" className="relative rounded-none bg-transparent px-0 py-3 text-sm font-medium text-slate-500 shadow-none after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-slate-900 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600">
+              执行概况
+            </TabsTrigger>
+          </TabsList>
+
+          <div className="min-h-[25rem]">
+            <TabsContent value="trend" className="pt-5">
+              <div className="surface-card p-5">
+                <div className="grid grid-cols-12 gap-5 border-b border-slate-100 pb-5">
+                  <div className="col-span-12 h-full xl:col-span-8">
+                    <DashboardMonthlyTrend projectId={currentProject.id ?? ''} embedded />
+                  </div>
+                  <div className="col-span-12 h-full xl:col-span-4">
+                    <WeeklyDigestPanel
+                      projectId={currentProject.id ?? ''}
+                      milestoneItems={summaryData?.milestoneOverview?.items ?? []}
+                      embedded
+                    />
+                  </div>
+                </div>
+                <div className="pt-5">
+                  <DashboardCompareCard projectId={projectId} embedded />
+                </div>
+              </div>
+            </TabsContent>
+
+            <TabsContent value="milestone" className="pt-5">
+              <div className="surface-card p-5">
+                <DashboardMilestoneCard
+                  completed={milestonePanelData.completed}
+                  total={milestonePanelData.total}
+                  upcoming={milestonePanelData.upcoming}
+                  overdue={milestonePanelData.overdue}
+                  recentMilestones={milestonePanelData.recentMilestones}
+                  embedded
+                />
+              </div>
+            </TabsContent>
+
+            <TabsContent value="execution" className="pt-5">
+              <div className="surface-card p-5">
+                <DashboardHealthCards
+                  summary={summaryData}
+                  tasks={scopedTasks}
+                  risks={scopedRisks}
+                  projectId={projectId}
+                  embedded
+                />
+              </div>
+            </TabsContent>
+          </div>
+        </Tabs>
+      </section>
+
     </div>
   )
 }

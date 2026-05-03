@@ -156,8 +156,8 @@ export function DashboardHealthCards({ summary, tasks, risks, projectId, embedde
       ? Math.round(((summary?.completedMilestones ?? 0) / (summary?.totalMilestones ?? 1)) * 100)
       : 0
   const columnClassName = embedded
-    ? 'min-w-0 border-b border-slate-100 pb-5 last:border-b-0 last:pb-0 xl:border-b-0 xl:pb-0 xl:border-r xl:border-slate-100 xl:pr-5 xl:last:border-r-0 xl:last:pr-0'
-    : 'surface-card p-5'
+    ? 'flex h-full min-w-0 flex-col border-b border-slate-100 pb-5 last:border-b-0 last:pb-0 md:border-b-0 md:pb-0 md:border-r md:border-slate-100 md:pr-5 md:last:border-r-0 md:last:pr-0'
+    : 'surface-card flex h-full flex-col p-5'
   const businessScores = [
     { label: '进度兑现', value: healthDetails?.progressDeliveryScore ?? overallProgress, tone: 'bg-blue-600' },
     { label: '任务执行', value: healthDetails?.taskExecutionScore ?? completedRate, tone: 'bg-emerald-500' },
@@ -167,7 +167,7 @@ export function DashboardHealthCards({ summary, tasks, risks, projectId, embedde
   ].map((item) => ({ ...item, value: clampPercent(item.value) }))
 
   return (
-    <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
+    <div className={cn('grid grid-cols-1 gap-5', embedded ? 'md:grid-cols-3' : 'xl:grid-cols-3')}>
       <section className={columnClassName}>
         <CardHead
           eyebrow="HEALTH"

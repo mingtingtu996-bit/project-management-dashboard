@@ -125,7 +125,7 @@ describe('DashboardCompareCard', () => {
     vi.unstubAllGlobals()
   })
 
-  it('renders the segmented compare table and loads each granularity on demand', async () => {
+  it('renders the segmented compare metrics and loads each granularity on demand', async () => {
     await act(async () => {
       root?.render(
         <MemoryRouter initialEntries={['/projects/project-1/dashboard']}>
@@ -146,8 +146,11 @@ describe('DashboardCompareCard', () => {
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/daily-progress'))).toBe(false)
 
     expect(container.textContent).toContain('现场快照与对比')
-    expect(container.textContent).toContain('昨天')
-    expect(container.textContent).toContain('今天')
+    expect(container.textContent).toContain('总进度变化')
+    expect(container.textContent).toContain('延期任务数')
+    expect(container.textContent).toContain('较昨日')
+    expect(container.textContent).not.toContain('昨天')
+    expect(container.textContent).not.toContain('今天')
     expect(container.textContent).toContain('查看详情')
 
     const clickSegment = async (label: string) => {
@@ -161,9 +164,9 @@ describe('DashboardCompareCard', () => {
     }
 
     await clickSegment('周')
-    await waitForText(container, ['上周', '本周'])
+    await waitForText(container, ['较上周'])
     await clickSegment('月')
-    await waitForText(container, ['上月', '本月'])
+    await waitForText(container, ['较上月'])
 
     compareCalls = fetchMock.mock.calls
       .map(([url]) => String(url))

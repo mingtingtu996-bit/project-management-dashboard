@@ -248,6 +248,7 @@ describe('Dashboard contract', () => {
 
     await waitForSelector(container, '[data-testid="dashboard-page-title"]')
     await waitForSelector(container, '[data-testid="dashboard-hero-cards"]')
+    await waitForSelector(container, '[data-testid="dashboard-attention-panel"]')
     await waitForSelector(container, '[data-testid="dashboard-snapshot-panel"]')
     await waitForSelector(container, '[data-testid="dashboard-monthly-trend"]')
     await waitForSelector(container, '[data-testid="dashboard-weekly-digest"]')
@@ -255,24 +256,28 @@ describe('Dashboard contract', () => {
     expect(container.querySelector('[data-testid="dashboard-page-title"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="dashboard-hero-cards"]')).toBeTruthy()
     expect(container.querySelectorAll('[data-testid^="dashboard-hero-card-"]').length).toBe(4)
+    expect(container.querySelectorAll('[data-testid="dashboard-attention-panel"]').length).toBe(1)
     expect(container.querySelector('[data-testid="dashboard-snapshot-panel"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="dashboard-monthly-trend"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="dashboard-weekly-digest"]')).toBeTruthy()
 
     const pageTitle = container.querySelector('[data-testid="dashboard-page-title"]')
     const metricCards = container.querySelector('[data-testid="dashboard-hero-cards"]')
+    const attentionPanel = container.querySelector('[data-testid="dashboard-attention-panel"]')
     const snapshotPanel = container.querySelector('[data-testid="dashboard-snapshot-panel"]')
     const planningSummary = container.querySelector('[data-testid="dashboard-monthly-trend"]')
     const weeklyDigest = container.querySelector('[data-testid="dashboard-weekly-digest"]')
 
     expect(pageTitle).toBeTruthy()
     expect(metricCards).toBeTruthy()
+    expect(attentionPanel).toBeTruthy()
     expect(snapshotPanel).toBeTruthy()
     expect(planningSummary).toBeTruthy()
     expect(weeklyDigest).toBeTruthy()
 
     expect(pageTitle!.compareDocumentPosition(metricCards!) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
-    expect(metricCards!.compareDocumentPosition(snapshotPanel!) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
+    expect(metricCards!.compareDocumentPosition(attentionPanel!) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
+    expect(attentionPanel!.compareDocumentPosition(snapshotPanel!) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
     expect(planningSummary!.compareDocumentPosition(weeklyDigest!) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
 
     expect(container.textContent).toContain('数据可靠性')

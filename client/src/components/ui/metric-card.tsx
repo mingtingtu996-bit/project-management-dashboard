@@ -100,7 +100,7 @@ export function MetricCard({
       )}
       style={style}
     >
-      <CardContent padding="md" className="flex min-h-[140px] h-full flex-col gap-3">
+      <CardContent padding="md" className="flex h-full min-h-[132px] flex-col justify-between gap-3">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
             {eyebrow ? <div className="eyebrow">{eyebrow}</div> : null}
@@ -119,7 +119,7 @@ export function MetricCard({
           ) : null}
         </div>
         {(hint || sparklineData.length > 1) ? (
-          <div className="mt-auto min-w-0 space-y-2">
+          <div className="min-w-0 space-y-2">
             {hint ? <div className="min-w-0 text-xs leading-5 text-slate-500">{hint}</div> : <span />}
             {sparklineData.length > 1 ? (
               <Sparkline data={sparklineData} color={sparklineColor} className="h-8 w-full" />

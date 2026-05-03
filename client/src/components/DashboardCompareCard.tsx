@@ -1,12 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ArrowRight, ChevronsUpDown } from 'lucide-react'
+import { ArrowRight } from 'lucide-react'
 
 import { CardHead } from '@/components/ui/card-head'
 import { SegmentedControl } from '@/components/ui/segmented-control'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { EmptyState } from '@/components/EmptyState'
-import { LoadingState } from '@/components/ui/loading-state'
 import { apiGet, isAbortError } from '@/lib/apiClient'
 import { cn } from '@/lib/utils'
 
@@ -115,17 +112,6 @@ function normalizeCompareResults(payload: CompareResult[] | null | undefined): C
   return Array.isArray(payload) ? payload : []
 }
 
-function formatRange(result: CompareResult) {
-  if (result.from.length === 7) return result.from
-  return result.from === result.to ? result.from.slice(5) : `${result.from.slice(5)} - ${result.to.slice(5)}`
-}
-
-function progressTone(value: number) {
-  if (value > 0) return 'text-emerald-600'
-  if (value < 0) return 'text-rose-600'
-  return 'text-slate-400'
-}
-
 function deltaTone(value: number | null, inverse = false) {
   if (value == null || value === 0) return 'text-slate-400'
   const isPositive = value > 0
@@ -225,9 +211,10 @@ export default function DashboardCompareCard({ projectId, embedded = false }: Da
     ]
   }, [currentRow, previousRow])
   const panelClassName = embedded ? '' : 'surface-card p-5'
+  const previousPeriodLabel = granularity === 'day' ? '较昨日' : granularity === 'week' ? '较上周' : '较上月'
 
   return (
-    <section className={panelClassName}>
+    <section className={panelClassName} aria-busy={loading}>
       <CardHead
         eyebrow="COMPARE"
         title="现场快照与对比"
@@ -258,64 +245,15 @@ export default function DashboardCompareCard({ projectId, embedded = false }: Da
               {item.value}
             </div>
             <div className={cn('meta-muted mt-1', deltaTone(item.delta, item.inverse))}>
-              较上一周期 {formatNumberDelta(item.delta, item.suffix)}
+              {previousPeriodLabel} {formatNumberDelta(item.delta, item.suffix)}
             </div>
           </div>
         ))}
       </div>
 
-      <div className="mt-5 overflow-x-auto">
-        {loading ? (
-          <LoadingState label="对比数据加载中" description="" className="min-h-32 border-0 bg-transparent shadow-none" />
-        ) : rows.length === 0 ? (
-          <EmptyState
-            title="暂无对比数据"
-            description="有任务快照后会自动补齐对比结果。"
-            className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 py-8"
-          />
-        ) : (
-          <Table className="min-w-[620px] border-collapse">
-            <TableHeader>
-              <TableRow className="border-b border-gray-200">
-                {['周期', '总进度变化', '更新任务数', '完成任务数', '延期任务数'].map((label) => (
-                  <TableHead key={label} className="eyebrow group h-auto px-0 py-2 pr-4 text-left">
-                    <span className="inline-flex items-center gap-1">
-                      {label}
-                      <ChevronsUpDown className="h-3 w-3 opacity-0 transition-opacity group-hover:opacity-100" strokeWidth={1.5} />
-                    </span>
-                  </TableHead>
-                ))}
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.map((result, index) => {
-                const change = result.summary?.total_progress_change ?? 0
-                const delayed = result.summary?.delayed ?? 0
-                return (
-                  <TableRow key={`${result.period_label}-${index}`} className="border-b border-slate-100 transition-colors hover:bg-slate-50/60">
-                    <TableCell className="px-0 py-3 pr-4 text-sm font-medium text-slate-800">
-                      <div>{result.period_label}</div>
-                      <div className="num-mono mt-0.5 text-[11px] text-slate-400">{formatRange(result)}</div>
-                    </TableCell>
-                    <TableCell className={cn('num-mono px-0 py-3 pr-4 text-sm font-semibold', progressTone(change))}>
-                      {change > 0 ? '+' : ''}{change.toFixed(1)}%
-                    </TableCell>
-                    <TableCell className={cn('num-mono px-0 py-3 pr-4 text-sm text-slate-700', (result.summary?.tasks_updated ?? 0) === 0 && 'text-slate-400')}>
-                      {result.summary?.tasks_updated ?? 0}
-                    </TableCell>
-                    <TableCell className={cn('num-mono px-0 py-3 pr-4 text-sm text-slate-700', (result.summary?.tasks_completed ?? 0) === 0 && 'text-slate-400')}>
-                      {result.summary?.tasks_completed ?? 0}
-                    </TableCell>
-                    <TableCell className={cn('num-mono px-0 py-3 pr-4 text-sm text-slate-700', delayed === 0 && 'text-slate-400')}>
-                      {delayed}
-                    </TableCell>
-                  </TableRow>
-                )
-              })}
-            </TableBody>
-          </Table>
-        )}
-      </div>
+      <span className="sr-only" aria-live="polite">
+        {loading ? '对比数据加载中' : ''}
+      </span>
     </section>
   )
 }
