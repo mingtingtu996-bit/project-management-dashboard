@@ -224,8 +224,8 @@ describe('Milestones page story coverage', () => {
     expect(container.querySelector('[data-testid="milestone-health-summary"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="milestone-health-top3"]')?.textContent).toContain('更多(4)')
     expect(container.querySelector('[data-testid="milestone-child-group"]')).toBeTruthy()
-    expect(container.querySelector('[data-testid="milestone-card-m1"]')?.className).toContain('ring-emerald-200')
-    expect(container.querySelector('[data-testid="milestone-card-m2"]')?.className).toContain('ring-blue-200')
+    expect(container.querySelector('[data-testid="milestone-card-m1"] .badge-micro')?.className).toContain('ring-emerald-200')
+    expect(container.querySelector('[data-testid="milestone-card-m2"] .badge-micro')?.className).toContain('ring-amber-200')
     expect(container.querySelector('[data-testid="milestone-progress-m1"]')?.innerHTML).toContain('duration-700')
 
     const milestoneButton = findButton(container, '地下室施工')
