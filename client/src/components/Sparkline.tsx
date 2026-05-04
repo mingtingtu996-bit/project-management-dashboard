@@ -14,6 +14,8 @@ function buildPath(values: number[], width: number, height: number) {
 
   const min = Math.min(...values)
   const max = Math.max(...values)
+  if (max === min) return `M 0 ${height / 2} L ${width} ${height / 2}`
+
   const span = max - min || 1
   const step = width / (values.length - 1)
 

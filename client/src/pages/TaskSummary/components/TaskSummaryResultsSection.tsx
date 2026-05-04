@@ -71,7 +71,7 @@ export function TaskSummaryResultsSection({ stats, totalTasks }: TaskSummaryResu
         <EmptyState
           title="暂无结果摘要数据"
           description="完成任务汇总后会展示总任务数、完成率和延期情况。"
-          className="rounded-card empty-state-frame border-slate-100 bg-slate-50 py-10 shadow-[var(--el-1)]"
+          className="rounded-2xl empty-state-frame border-slate-100 bg-slate-50 py-10 shadow-[var(--el-1)]"
         />
       )}
     </section>

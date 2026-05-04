@@ -25,13 +25,13 @@ export function CardHead({ eyebrow, title, pill, action, className }: CardHeadPr
     <div className={cn('flex items-start justify-between gap-3', className)}>
       <div className="min-w-0">
         <div className="eyebrow">{eyebrow}</div>
-        <h3 className="mt-0.5 truncate text-[14px] font-medium text-slate-900">{title}</h3>
+        <h3 className="card-title-compact mt-0.5 truncate font-medium text-slate-900">{title}</h3>
       </div>
       <div className="flex shrink-0 items-center gap-2">
         {pill ? (
           <span
             className={cn(
-              'inline-flex h-5 items-center gap-1.5 rounded-full px-2 text-[10.5px] font-medium ring-1 ring-inset ring-slate-200/60',
+              'badge-micro inline-flex h-5 items-center gap-1.5 rounded-full px-2 font-medium ring-1 ring-inset ring-slate-200/60',
               pillClass[pill.variant].text,
             )}
           >

@@ -14,7 +14,7 @@ export function LoadingState({ label, description, className }: LoadingStateProp
   return (
     <div
       className={cn(
-        'flex min-h-32 flex-col items-center justify-center rounded-card empty-state-frame border-slate-200 bg-slate-50/70 px-4 py-6 text-center text-sm text-slate-500',
+        'flex min-h-32 flex-col items-center justify-center rounded-2xl empty-state-frame border-slate-200 bg-slate-50/70 px-4 py-6 text-center text-sm text-slate-500',
         className,
       )}
     >

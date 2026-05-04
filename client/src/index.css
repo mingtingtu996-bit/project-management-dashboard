@@ -163,6 +163,78 @@
     @apply text-[11px] leading-4 text-slate-400 tabular-nums;
   }
 
+  .meta-caption {
+    @apply text-[11.5px] leading-5 text-slate-500;
+  }
+
+  .badge-micro {
+    @apply text-[10.5px] leading-none;
+  }
+
+  .field-hint {
+    @apply text-[12.5px] leading-5;
+  }
+
+  .dashboard-title {
+    @apply text-[28px] leading-tight;
+  }
+
+  .nav-item-text {
+    @apply text-[13px];
+  }
+
+  .card-title-compact {
+    @apply text-sm;
+  }
+
+  .metric-value-md {
+    @apply text-[22px];
+  }
+
+  .metric-value-lg {
+    @apply text-[26px];
+  }
+
+  .metric-value-xl {
+    @apply text-[30px];
+  }
+
+  .metric-value-2xl {
+    @apply text-[34px];
+  }
+
+  .command-input-text {
+    @apply text-[13.5px];
+  }
+
+  .command-item-text {
+    @apply text-[12.5px];
+  }
+
+  .shell-avatar-text {
+    @apply text-[10px] font-semibold leading-none;
+  }
+
+  .shell-identity-text {
+    @apply text-[12.5px] font-semibold;
+  }
+
+  .topbar-control-text {
+    @apply text-[12.5px];
+  }
+
+  .kbd-hint {
+    @apply text-[10.5px];
+  }
+
+  .timeline-scale-label-narrow {
+    @apply text-[0.6875rem] leading-4;
+  }
+
+  .timeline-scale-hint-narrow {
+    @apply text-[0.625rem] leading-3;
+  }
+
   .num-display {
     @apply tabular-nums tracking-[-0.03em];
     font-feature-settings: "tnum" 1, "cv11" 1, "ss01" 1, "ss03" 1;

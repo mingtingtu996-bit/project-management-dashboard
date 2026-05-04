@@ -139,15 +139,15 @@ function ReasonCascader({
             disabled={readOnly}
             onClick={() => onSelectLeaf(item)}
             className={cn(
-              'justify-between rounded-xl',
+              'w-full min-w-0 justify-between gap-2 rounded-xl px-3',
               leaf === item
                 ? 'border-blue-500 bg-blue-50 text-blue-900 hover:bg-blue-50'
                 : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50',
             )}
             data-testid={`closeout-reason-leaf-${item}`}
           >
-            <span>{item}</span>
-            <Badge variant="outline" className="bg-white text-slate-500">
+            <span className="min-w-0 truncate">{item}</span>
+            <Badge variant="outline" className="shrink-0 bg-white text-slate-500">
               0
             </Badge>
           </Button>
@@ -203,7 +203,7 @@ export function CloseoutDetailDrawer({
       data-testid="closeout-detail-drawer"
       aria-disabled={batchLayerOpen ? 'true' : undefined}
       className={cn(
-        'sticky top-4 flex h-[calc(100vh-11.25rem)] flex-col overflow-hidden rounded-2xl border surface-card transition-all',
+        'surface-card sticky top-4 flex h-[calc(100vh-11.25rem)] flex-col overflow-hidden transition-all',
         open ? 'translate-x-0 opacity-100' : 'translate-x-2 opacity-90',
         batchLayerOpen ? 'pointer-events-none opacity-70' : ''
       )}

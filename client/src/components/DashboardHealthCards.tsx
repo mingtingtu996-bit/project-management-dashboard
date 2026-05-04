@@ -1,6 +1,5 @@
 import { Link } from 'react-router-dom'
 import { useEffect, useMemo, useState } from 'react'
-import { PolarAngleAxis, RadialBar, RadialBarChart, ResponsiveContainer } from 'recharts'
 
 import { CardHead } from '@/components/ui/card-head'
 import { apiGet, isAbortError } from '@/lib/apiClient'
@@ -64,44 +63,50 @@ function Donut({
   color: string
 }) {
   const safeValue = clampPercent(value)
+  const radius = 50
+  const circumference = 2 * Math.PI * radius
+  const progressLength = (safeValue / 100) * circumference
+
   return (
-    <div className="relative grid h-[120px] w-[120px] shrink-0 place-items-center rounded-full bg-slate-50/80 ring-1 ring-inset ring-slate-100">
-      <div className="absolute inset-[18px] rounded-full bg-white shadow-[0_10px_24px_rgba(15,23,42,0.06)] ring-1 ring-inset ring-slate-100" />
-      <ResponsiveContainer width="100%" height="100%">
-        <RadialBarChart
-          innerRadius="75%"
-          outerRadius="95%"
-          barSize={10}
-          data={[{ name: label, value: safeValue }]}
-          startAngle={90}
-          endAngle={-270}
-        >
-          <PolarAngleAxis angleAxisId={0} type="number" domain={[0, 100]} tick={false} />
-          <RadialBar
-            angleAxisId={0}
-            dataKey="value"
-            cornerRadius={10}
-            fill={color}
-            background={{ fill: CHART_NEUTRAL.softSurface }}
-            animationDuration={800}
-            animationEasing="ease-out"
+    <div className="relative h-[120px] w-[120px] shrink-0">
+      <svg viewBox="0 0 120 120" className="h-full w-full" role="img" aria-label={`${label} ${safeValue}%`}>
+        <circle
+          cx="60"
+          cy="60"
+          r={radius}
+          fill="none"
+          stroke={CHART_NEUTRAL.softSurface}
+          strokeWidth="10"
+        />
+        {safeValue > 0 ? (
+          <circle
+            cx="60"
+            cy="60"
+            r={radius}
+            fill="none"
+            stroke={color}
+            strokeWidth="10"
+            strokeLinecap="round"
+            strokeDasharray={`${progressLength} ${circumference}`}
+            transform="rotate(-90 60 60)"
+            className="motion-safe:transition-[stroke-dasharray] motion-safe:duration-700 motion-safe:ease-out"
           />
-        </RadialBarChart>
-      </ResponsiveContainer>
+        ) : null}
+      </svg>
       <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center text-center">
-        <div className={cn('num-display text-[30px] font-semibold leading-none text-slate-900 drop-shadow-sm', safeValue === 0 && 'text-slate-400')}>
+        <div className={cn('metric-value-lg num-display font-semibold leading-none text-slate-900', safeValue === 0 && 'text-slate-400')}>
           {safeValue}%
         </div>
-        <div className="meta-muted mt-1 font-semibold text-slate-400">{label}</div>
+        <div className="eyebrow mt-1 text-slate-400">{label}</div>
       </div>
     </div>
   )
 }
 
-function ScoreRow({ label, value, tone }: { label: string; value: number; tone: string }) {
+function ScoreRow({ label, value, tone, isLast = false }: { label: string; value: number; tone: string; isLast?: boolean }) {
   return (
-    <div className="space-y-1.5">
-      <div className="meta-text flex items-center justify-between gap-3">
+    <div className={cn('py-2', !isLast && 'border-b border-slate-100')}>
+      <div className="meta-text mb-1.5 flex items-center justify-between gap-3">
         <span className="truncate text-slate-500">{label}</span>
         <span className={valueClass(value)}>{value}%</span>
       </div>
@@ -110,10 +115,22 @@ function ScoreRow({ label, value, tone }: { label: string; value: number; tone: 
   )
 }
 
-function StatusRow({ label, value, dot, progressValue }: { label: string; value: number; dot: string; progressValue: number }) {
+function StatusRow({
+  label,
+  value,
+  dot,
+  progressValue,
+  isLast = false,
+}: {
+  label: string
+  value: number
+  dot: string
+  progressValue: number
+  isLast?: boolean
+}) {
   return (
-    <div className="space-y-1.5">
-      <div className="meta-text flex items-center justify-between gap-3">
+    <div className={cn('py-2', !isLast && 'border-b border-slate-100')}>
+      <div className="meta-text mb-1.5 flex items-center justify-between gap-3">
         <span className="inline-flex min-w-0 items-center gap-2 text-slate-500">
           <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', dot)} />
           <span className="truncate">{label}</span>
@@ -193,7 +210,7 @@ export function DashboardHealthCards({ summary, tasks, risks, projectId, embedde
   const columnClassName = embedded
     ? 'flex h-full min-w-0 flex-col border-b border-slate-100 pb-5 last:border-b-0 last:pb-0 md:border-b-0 md:pb-0 md:border-r md:border-slate-100 md:pr-5 md:last:border-r-0 md:last:pr-0'
     : 'surface-card flex h-full flex-col p-5'
-  const donutContentClassName = 'mt-5 grid gap-4 lg:grid-cols-[120px_minmax(0,1fr)] lg:items-center'
+  const donutContentClassName = 'mt-4 grid gap-5 lg:grid-cols-[120px_minmax(0,1fr)] lg:items-start'
   const businessScores = [
     { label: '进度兑现', value: healthDetails?.progressDeliveryScore ?? overallProgress, tone: 'bg-blue-600' },
     { label: '任务执行', value: healthDetails?.taskExecutionScore ?? completedRate, tone: 'bg-emerald-500' },
@@ -218,9 +235,9 @@ export function DashboardHealthCards({ summary, tasks, risks, projectId, embedde
         />
         <div className={donutContentClassName}>
           <Donut label="健康度" value={healthScore} color={CHART_SERIES.success} />
-          <div className="min-w-0 space-y-2.5 rounded-xl bg-slate-50/40 p-3 ring-1 ring-inset ring-slate-100/70">
-            {businessScores.map((item) => (
-              <ScoreRow key={item.label} label={item.label} value={item.value} tone={item.tone} />
+          <div className="min-w-0">
+            {businessScores.map((item, index) => (
+              <ScoreRow key={item.label} label={item.label} value={item.value} tone={item.tone} isLast={index === businessScores.length - 1} />
             ))}
           </div>
         </div>
@@ -234,9 +251,16 @@ export function DashboardHealthCards({ summary, tasks, risks, projectId, embedde
         />
         <div className={donutContentClassName}>
           <Donut label="完成率" value={completedRate} color={CHART_SERIES.primary} />
-          <div className="min-w-0 space-y-2.5 rounded-xl bg-slate-50/40 p-3 ring-1 ring-inset ring-slate-100/70">
-            {taskStatusRows.map((item) => (
-              <StatusRow key={item.label} label={item.label} value={item.value} dot={item.dot} progressValue={item.progressValue} />
+          <div className="min-w-0">
+            {taskStatusRows.map((item, index) => (
+              <StatusRow
+                key={item.label}
+                label={item.label}
+                value={item.value}
+                dot={item.dot}
+                progressValue={item.progressValue}
+                isLast={index === taskStatusRows.length - 1}
+              />
             ))}
           </div>
         </div>
@@ -259,17 +283,17 @@ export function DashboardHealthCards({ summary, tasks, risks, projectId, embedde
               to={item.href}
               className="rounded-xl border border-slate-200/60 bg-slate-50/60 px-3 py-3 transition-colors hover:bg-white"
             >
-              <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
+              <div className="meta-text flex items-center gap-1.5">
                 <span className={cn('h-1.5 w-1.5 rounded-full', item.dot)} />
                 {item.label}
               </div>
-              <div className={cn('num-display mt-2 text-[22px] font-semibold', item.value === 0 ? 'text-slate-400' : 'text-slate-900')}>
+              <div className={cn('metric-value-md num-display mt-1 font-semibold leading-none', item.value === 0 ? 'text-slate-400' : 'text-slate-900')}>
                 {item.value}
               </div>
             </Link>
           ))}
         </div>
-        <div className="mt-5 rounded-xl bg-slate-50/70 p-4 text-[11.5px] leading-5 text-slate-500">
+        <div className="meta-caption mt-4 leading-relaxed text-slate-500">
           待满足条件 <span className={valueClass(pendingConditions)}>{pendingConditions}</span> 项。
           <span className="ml-1">{riskSuggestion}</span>
         </div>

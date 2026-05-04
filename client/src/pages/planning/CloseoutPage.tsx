@@ -780,7 +780,7 @@ export default function CloseoutPage() {
         title="当前筛选下没有匹配条目"
         description="调整办理状态、分组或搜索关键词后再查看。"
         testId="closeout-empty-state"
-        className="rounded-card empty-state-frame border-slate-300 bg-slate-50 p-6"
+        className="rounded-2xl empty-state-frame border-slate-300 bg-slate-50 p-6"
         action={(
           <div className="flex flex-wrap gap-2">
             <Button type="button" variant="outline" onClick={() => setActiveFilter('all')}>
@@ -798,7 +798,7 @@ export default function CloseoutPage() {
       icon={Clock}
       title="当前没有可关账的已确认月份"
       description="请先确认月度计划，再进入关账办理。"
-      className="rounded-card empty-state-frame border-slate-300 bg-slate-50 p-6"
+      className="rounded-2xl empty-state-frame border-slate-300 bg-slate-50 p-6"
       action={(
         <Button type="button" onClick={() => navigate(`/projects/${projectId}/planning/monthly`)}>
           去月度计划

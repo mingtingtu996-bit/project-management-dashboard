@@ -70,7 +70,7 @@ export function DrawingPackageBoard({
           icon={FileWarning}
           title={emptyTitle}
           description={emptyDescription || '当前筛选范围内没有可展示的图纸包。'}
-          className="rounded-card empty-state-frame border-slate-100 bg-white px-6 py-14 shadow-[var(--el-1)]"
+          className="rounded-2xl empty-state-frame border-slate-100 bg-white px-6 py-14 shadow-[var(--el-1)]"
         />
       ) : (
         <div className="space-y-5">

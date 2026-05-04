@@ -295,16 +295,15 @@ export function PlanningTreeView({
   }
 
   return (
-    <Card className="overflow-hidden border-slate-200">
-      <CardContent padding="md" className="space-y-3 bg-slate-50/80">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <CardHead eyebrow="TREE VIEW" title={title} />
-          </div>
-          <Badge variant="outline" className="shrink-0">
-            {selectedCount} 已选
-          </Badge>
-        </div>
+    <section className="space-y-4">
+      <div className="flex items-start justify-between gap-3">
+        <CardHead eyebrow="TREE VIEW" title={title} />
+        <Badge variant="outline" className="shrink-0">
+          {selectedCount} 已选
+        </Badge>
+      </div>
+
+      <div className="surface-card space-y-3 bg-slate-50/80 p-5">
 
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative flex-1 min-w-52">
@@ -469,9 +468,9 @@ export function PlanningTreeView({
           <span className="text-slate-500">·</span>
           <span>当前视图 {filteredAndSortedRows.length} 项</span>
         </div>
-      </CardContent>
-      <Separator />
+      </div>
 
+      <Card className="overflow-hidden surface-card">
       <CardContent className="p-0">
         {rows.length === 0 ? (
           <div className="flex min-h-72 items-center justify-center px-6 py-12 text-sm text-slate-500">
@@ -603,6 +602,7 @@ export function PlanningTreeView({
           </ScrollArea>
         )}
       </CardContent>
-    </Card>
+      </Card>
+    </section>
   )
 }

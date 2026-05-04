@@ -898,7 +898,7 @@ export default function ResponsibilityView() {
                   key={rowActionKey}
                   variant="detail"
                   data-testid="responsibility-row"
-                  className={cn('surface-card', row.state_level === 'abnormal' ? 'border-l-4 border-red-500 ring-1 ring-inset ring-red-200' : 'border border-slate-200')}
+                  className={cn('surface-card', row.state_level === 'abnormal' ? 'ring-1 ring-inset ring-red-200' : 'border border-slate-200')}
                 >
                   <CardContent padding="md" className="space-y-4">
                     <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">

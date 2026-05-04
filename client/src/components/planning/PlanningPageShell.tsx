@@ -36,15 +36,15 @@ export function PlanningPageShell({
 }: PlanningPageShellProps) {
   const titleParts = title.split('/').map((item) => item.trim()).filter(Boolean)
   const displayTitle = titleParts[titleParts.length - 1] ?? title
+  const breadcrumbItems = [
+    { label: projectName },
+    ...(eyebrow && eyebrow !== displayTitle ? [{ label: eyebrow }] : []),
+    { label: displayTitle },
+  ]
 
   return (
     <div data-testid="planning-shared-shell" className={cn('page-shell', className)}>
-      <Breadcrumb
-        items={[
-          { label: projectName },
-          ...titleParts.map((item) => ({ label: item })),
-        ]}
-      />
+      <Breadcrumb items={breadcrumbItems} />
 
       <section className="surface-card overflow-hidden">
         <div className="space-y-8 p-5 sm:p-6">

@@ -7,7 +7,6 @@ import { Card, CardContent } from '@/components/ui/card'
 import { CardHead } from '@/components/ui/card-head'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { Separator } from '@/components/ui/separator'
 import {
   Table,
   TableBody,
@@ -118,10 +117,8 @@ export function DrawingLedger({
     : drawings
   return (
     <section className="space-y-4" data-testid="drawing-ledger">
-      <div className="flex items-end justify-between gap-4">
-        <div>
-          <h2 className="text-lg font-semibold text-slate-900">图纸台账</h2>
-        </div>
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+        <CardHead eyebrow="LEDGER" title="单图台账明细" />
         <div className="hidden items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500 md:flex">
           <Layers3 className="h-3.5 w-3.5" />
           单图记录仅作为明细承载
@@ -186,10 +183,6 @@ export function DrawingLedger({
       </div>
 
       <Card className="overflow-hidden surface-card">
-        <CardContent padding="md" className="pb-0">
-          <CardHead eyebrow="LEDGER" title="单图台账明细" />
-        </CardContent>
-        <Separator />
         <CardContent className="p-0">
           {drawings.length === 0 ? (
             <EmptyState

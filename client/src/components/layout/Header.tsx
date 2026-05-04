@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { Bell, Check, Copy, KeyRound, LogIn, LogOut, Search, Settings, User, Wifi, WifiOff } from 'lucide-react'
+import { Bell, Check, Command, Copy, KeyRound, LogIn, LogOut, Search, Settings, User, Wifi, WifiOff } from 'lucide-react'
 
 import { EditProfileDialog } from '@/components/EditProfileDialog'
 import { ChangePasswordDialog } from '@/components/ChangePasswordDialog'
@@ -9,7 +9,6 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
-import { Separator } from '@/components/ui/separator'
 import { useAuth } from '@/hooks/useAuth'
 import { useAuthDialog } from '@/hooks/useAuthDialog'
 import { usePermissions } from '@/hooks/usePermissions'
@@ -53,10 +52,37 @@ export default function Header({ onOpenCommandPalette }: HeaderProps) {
   const { title, contextLabel } = getShellNavigationMeta(location.pathname)
   const isProjectPage = location.pathname.startsWith('/projects/')
   const userName = user?.display_name || currentUser?.display_name || '未命名用户'
-  const shortcutLabel = useMemo(
-    () => (typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/i.test(navigator.platform) ? '⌘K' : 'Ctrl+K'),
+  const isMacPlatform = useMemo(
+    () => typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/i.test(navigator.platform),
     [],
   )
+  const shellIdentity = useMemo(() => {
+    if (currentProject && isProjectPage) {
+      const projectName = currentProject.name?.trim() || '当前项目'
+      const parts = projectName.split('-').filter(Boolean)
+      const primary = parts.length >= 3 && /^[A-Z0-9]+$/i.test(parts[0]) ? parts.slice(0, 2).join('-') : projectName
+      const secondary = primary === projectName ? contextLabel || '项目工作台' : parts.slice(2).join('-') || contextLabel || '项目工作台'
+      const initials = primary
+        .split(/[\s_-]+/)
+        .filter(Boolean)
+        .slice(0, 2)
+        .map((part) => part[0])
+        .join('')
+        .toUpperCase()
+
+      return { primary, secondary, initials: initials || 'P' }
+    }
+
+    const initials = title
+      .split(/[\s/_-]+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0])
+      .join('')
+      .toUpperCase()
+
+    return { primary: title, secondary: contextLabel, initials: initials || 'W' }
+  }, [contextLabel, currentProject, isProjectPage, title])
   const avatarClassName = useMemo(() => {
     const palette = ['bg-blue-600', 'bg-emerald-600', 'bg-sky-600', 'bg-slate-700', 'bg-rose-600', 'bg-amber-600']
     const seed = userName.charCodeAt(0) || 0
@@ -117,61 +143,68 @@ export default function Header({ onOpenCommandPalette }: HeaderProps) {
   }
 
   return (
-    <header className="sticky top-0 z-20 flex h-14 items-center justify-between border-b border-slate-200 bg-white/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-white/90 lg:px-8">
-      <div className="flex min-w-0 items-center gap-6">
-        <div className="hidden w-36 shrink-0 lg:block">
-          <div className="truncate whitespace-nowrap text-lg font-bold tracking-tight text-slate-900">{title}</div>
-          <div className="truncate whitespace-nowrap text-xs text-slate-500">{contextLabel}</div>
+    <header className="sticky top-0 z-20 flex h-14 items-center gap-4 border-b border-slate-200 bg-white/80 px-4 backdrop-blur-xl lg:px-8">
+      <div className="flex min-w-0 shrink-0 items-center gap-2.5">
+        <div className="shell-avatar-text flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-slate-900 text-white">
+          {shellIdentity.initials.slice(0, 2)}
         </div>
-
-        {currentProject && isProjectPage ? (
-          <div className="hidden min-w-0 max-w-80 items-center gap-2 overflow-hidden rounded-full bg-slate-100/80 px-2.5 py-1 text-xs text-slate-700 ring-1 ring-inset ring-slate-200/60 lg:flex xl:max-w-96">
-            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
-            <span className="max-w-40 truncate font-semibold xl:max-w-56">{currentProject.name}</span>
-          </div>
-        ) : null}
+        <div className="hidden min-w-0 flex-col leading-tight sm:flex">
+          <span className="shell-identity-text max-w-40 truncate text-slate-900 xl:max-w-56">{shellIdentity.primary}</span>
+          <span className="meta-muted max-w-40 truncate xl:max-w-64">{shellIdentity.secondary}</span>
+        </div>
       </div>
 
-      <div className="flex flex-1 items-center justify-end gap-3 lg:gap-5">
+      <div className="ml-auto flex min-w-0 flex-1 items-center justify-end gap-2">
         <div className="relative hidden lg:block">
-          <Search className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+          <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" strokeWidth={1.5} />
           <Input
             aria-label="打开命令面板"
             placeholder="搜索项目、任务或提醒..."
             readOnly
             onClick={onOpenCommandPalette}
             onFocus={onOpenCommandPalette}
-            className="h-10 w-96 rounded-lg border-transparent bg-slate-50 pl-11 pr-20 text-sm shadow-none placeholder:text-slate-500 transition-colors hover:border-slate-200 hover:bg-white focus-visible:border-blue-300 focus-visible:ring-2 focus-visible:ring-blue-500/20"
+            className="command-input-text h-9 w-72 rounded-lg border-transparent bg-slate-50 pl-9 pr-20 text-slate-600 shadow-none placeholder:text-slate-400 transition-colors hover:border-slate-200 hover:bg-white focus-visible:border-blue-300 focus-visible:ring-2 focus-visible:ring-blue-500/20 xl:w-80"
           />
-          <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 rounded border border-slate-200 px-1 text-[10px] leading-4 text-slate-300">
-            {shortcutLabel}
+          <span className="pointer-events-none absolute right-2 top-1/2 flex -translate-y-1/2 items-center gap-0.5 text-slate-400">
+            {isMacPlatform ? (
+              <kbd className="kbd-hint num-mono flex h-5 min-w-5 items-center justify-center rounded border border-slate-200 bg-white px-1">
+                <Command className="h-2.5 w-2.5" strokeWidth={1.75} />
+              </kbd>
+            ) : (
+              <kbd className="kbd-hint num-mono flex h-5 min-w-8 items-center justify-center rounded border border-slate-200 bg-white px-1">
+                Ctrl
+              </kbd>
+            )}
+            <kbd className="kbd-hint num-mono flex h-5 min-w-5 items-center justify-center rounded border border-slate-200 bg-white px-1">
+              K
+            </kbd>
           </span>
         </div>
 
-        <div className="flex items-center gap-2 rounded-full bg-slate-100/80 px-3 py-1.5 text-sm text-slate-600 ring-1 ring-inset ring-slate-200/60">
-          <SyncIcon className={`h-4 w-4 ${syncIndicator.iconClassName}`} />
+        <div className="topbar-control-text flex h-9 items-center gap-2 rounded-lg bg-slate-50 px-3 text-slate-600 ring-1 ring-inset ring-slate-200/60">
+          <SyncIcon className={`h-3.5 w-3.5 ${syncIndicator.iconClassName}`} strokeWidth={1.5} />
           <span className="hidden sm:inline">{syncIndicator.label}</span>
         </div>
 
         {currentProject && isProjectPage && currentProject.primary_invitation_code ? (
-          <Button variant="outline" size="sm" onClick={copyInvitationCode} className="hidden h-10 border-slate-200 bg-white px-3 text-slate-600 shadow-none hover:bg-slate-50 lg:inline-flex">
+          <Button variant="outline" size="sm" onClick={copyInvitationCode} className="topbar-control-text hidden h-9 rounded-lg border-slate-200 bg-white px-3 text-slate-600 shadow-none hover:bg-slate-50 xl:inline-flex">
             {copied ? (
               <>
-                <Check className="mr-1 h-4 w-4 text-emerald-500" />
+                <Check className="mr-1 h-3.5 w-3.5 text-emerald-500" strokeWidth={1.5} />
                 <span className="text-emerald-600">已复制</span>
               </>
             ) : (
               <>
-                <Copy className="mr-1 h-4 w-4" />
-                复制邀请链接
+                <Copy className="mr-1 h-3.5 w-3.5" strokeWidth={1.5} />
+                复制邀请
               </>
             )}
           </Button>
         ) : null}
 
-        <Button asChild variant="ghost" size="icon" className="relative hidden h-10 w-10 text-slate-600 hover:bg-slate-100 sm:flex">
+        <Button asChild variant="ghost" size="icon" className="relative hidden h-9 w-9 rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-900 sm:flex">
           <Link to="/notifications" aria-label="打开提醒中心">
-            <Bell className="h-5 w-5" />
+            <Bell className="h-4 w-4" strokeWidth={1.5} />
             {bellBadgeCount > 0 ? (
               bellBadgeCount <= 3 ? (
                 <span className="absolute right-2 top-2 h-1.5 w-1.5 rounded-full bg-rose-500 ring-2 ring-white" />
@@ -186,9 +219,9 @@ export default function Header({ onOpenCommandPalette }: HeaderProps) {
 
         <DropdownMenu open={accountMenuOpen} onOpenChange={setAccountMenuOpen}>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" aria-label="打开用户菜单" className="h-10 px-2 text-slate-700 hover:bg-slate-100 lg:px-3">
-              <Avatar className="h-7 w-7">
-                <AvatarFallback className={`${avatarClassName} text-[11px] font-medium text-white`}>
+            <Button variant="ghost" aria-label="打开用户菜单" className="topbar-control-text h-9 rounded-lg px-1.5 text-slate-700 hover:bg-slate-100 lg:px-2">
+              <Avatar className="h-8 w-8 ring-1 ring-white">
+                <AvatarFallback className={`${avatarClassName} meta-text font-medium text-white`}>
                   {userName.slice(0, 2)}
                 </AvatarFallback>
               </Avatar>

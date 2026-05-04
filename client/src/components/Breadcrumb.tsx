@@ -39,7 +39,7 @@ export function Breadcrumb({ items, className, showHome = false }: BreadcrumbPro
   return (
     <nav
       aria-label="breadcrumb"
-      className={cn('flex flex-wrap items-center gap-1.5 text-[11.5px] text-slate-400', className)}
+      className={cn('meta-caption flex flex-wrap items-center gap-1.5 text-slate-400', className)}
     >
       {showHome ? (
         <>

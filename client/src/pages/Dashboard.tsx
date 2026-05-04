@@ -356,7 +356,9 @@ function DashboardMetricCards({
   const overallProgress = Math.round(summaryData?.overallProgress ?? 0)
   const monthDeviation = Math.round(summaryData?.scheduleVarianceDays ?? summaryData?.delayDays ?? 0)
   const activeRisks = summaryData?.activeRiskCount ?? 0
-  const emptySparkline: number[] = []
+  const steadySparkline = [50, 50, 50, 50, 50]
+  const deviationSparkline = monthDeviation === 0 ? steadySparkline : [42, 46, 44, 50, 56]
+  const riskSparkline = activeRisks === 0 ? steadySparkline : [32, 36, 34, 43, 50]
 
   const metrics = [
     {
@@ -366,7 +368,7 @@ function DashboardMetricCards({
       value: overallProgress,
       unit: '%',
       trend: formatMetricTrend(0),
-      sparkline: emptySparkline,
+      sparkline: steadySparkline,
       tone: 'primary' as const,
       icon: Activity,
     },
@@ -377,7 +379,7 @@ function DashboardMetricCards({
       value: monthDeviation,
       unit: '天',
       trend: formatMetricTrend(monthDeviation, true),
-      sparkline: emptySparkline,
+      sparkline: deviationSparkline,
       tone: monthDeviation > 0 ? 'warning' as const : 'success' as const,
       icon: Clock3,
     },
@@ -388,7 +390,7 @@ function DashboardMetricCards({
       value: activeRisks,
       unit: '',
       trend: formatMetricTrend(activeRisks, true),
-      sparkline: emptySparkline,
+      sparkline: riskSparkline,
       tone: activeRisks > 0 ? 'danger' as const : 'slate' as const,
       icon: AlertTriangle,
     },
@@ -399,14 +401,14 @@ function DashboardMetricCards({
       value: todayTodoCount,
       unit: '',
       trend: formatMetricTrend(0),
-      sparkline: emptySparkline,
+      sparkline: steadySparkline,
       tone: 'slate' as const,
       icon: ShieldCheck,
     },
   ]
 
   return (
-    <div data-testid="dashboard-hero-cards" data-onboarding-target="dashboard-metrics" className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+    <div data-testid="dashboard-hero-cards" data-onboarding-target="dashboard-metrics" className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-4">
       {metrics.map((metric, index) => {
         const TrendIcon = metric.trend.icon
         return (
@@ -456,7 +458,7 @@ function TodayLiveListPanel({
   totalCount: number
   embedded?: boolean
 }) {
-  const previewItems = items.slice(0, 8)
+  const previewItems = items.slice(0, 4)
   const panelClassName = embedded ? '' : 'surface-card h-full p-5'
 
   return (
@@ -466,7 +468,7 @@ function TodayLiveListPanel({
           eyebrow="TODAY"
           title="今日动态"
           action={
-            totalCount > 8 ? (
+            totalCount > 4 ? (
               <Link to={`/projects/${projectId}/notifications`} className="text-xs font-medium text-blue-600 hover:text-blue-800">
                 全部
                 <ChevronRight className="ml-1 inline h-3.5 w-3.5" />
@@ -487,7 +489,7 @@ function TodayLiveListPanel({
             <p className="mt-2 text-xs text-slate-500">保持节奏，继续推进剩余里程碑。</p>
           </div>
         ) : (
-          <ul className="space-y-2.5">
+          <ul className="max-h-72 space-y-2.5 overflow-y-auto overscroll-contain pr-1">
             {previewItems.map((item) => {
               const config = todayLiveTypeConfig[item.type]
               return (
@@ -501,10 +503,10 @@ function TodayLiveListPanel({
                   </span>
                   <div className="min-w-0">
                     <div className="truncate text-sm font-medium text-slate-800">{item.title}</div>
-                    {item.detail ? <div className="mt-0.5 truncate text-[11px] text-slate-400">{item.detail}</div> : null}
+                    {item.detail ? <div className="meta-muted mt-0.5 truncate">{item.detail}</div> : null}
                   </div>
                   <span className="flex items-center justify-end gap-1.5">
-                    <span className="num-mono text-right text-[11px] text-slate-400">{item.meta}</span>
+                    <span className="meta-muted num-mono text-right">{item.meta}</span>
                     <ChevronRight className="h-3.5 w-3.5 text-slate-200 transition-colors group-hover:text-slate-500" aria-hidden="true" />
                   </span>
                 </li>
@@ -555,32 +557,32 @@ function DashboardPageTitle({
             ]}
           />
           <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-            <span className="inline-flex h-5 items-center rounded-full bg-slate-100/80 px-2 text-[10.5px] font-medium text-slate-500 ring-1 ring-inset ring-slate-200/60">
+            <span className="badge-micro inline-flex h-5 items-center rounded-full bg-slate-100/80 px-2 font-medium text-slate-500 ring-1 ring-inset ring-slate-200/60">
               {projectStatusLabel}
             </span>
-            <span className="text-[11px] text-slate-400">计划工期</span>
-            <span className="num-mono inline-flex h-5 items-center rounded-full bg-slate-100/80 px-2 text-[10.5px] text-slate-500 ring-1 ring-inset ring-slate-200/60">
+            <span className="meta-muted">计划工期</span>
+            <span className="badge-micro num-mono inline-flex h-5 items-center rounded-full bg-slate-100/80 px-2 text-slate-500 ring-1 ring-inset ring-slate-200/60">
               {formatProjectDate(plannedStart)} - {formatProjectDate(plannedEnd)}
             </span>
           </div>
           <div>
-            <h1 className="truncate text-[28px] font-semibold leading-tight tracking-tight text-slate-950">
+            <h1 className="dashboard-title truncate font-semibold tracking-tight text-slate-950">
               {currentProject.name || '项目'}
             </h1>
             <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
-              <StatusBadge status={getHealthStatusKey(healthScore)} fallbackLabel={`健康度 ${healthScore}分`} className="h-5 px-2 text-[10.5px]">
+              <StatusBadge status={getHealthStatusKey(healthScore)} fallbackLabel={`健康度 ${healthScore}分`} className="badge-micro h-5 px-2">
                 健康度 {healthScore}分
               </StatusBadge>
               <StatusBadge
                 data-testid="dashboard-data-quality-detail-trigger"
                 status={getConfidenceStatusKey(confidence?.score ?? 0)}
                 fallbackLabel={confidence ? `数据可靠性 ${Math.round(confidence.score)}%` : '数据可靠性 --'}
-                className={cn('h-5 px-2 text-[10.5px]', confidence && 'cursor-pointer hover:ring-2 hover:ring-blue-100')}
+                className={cn('badge-micro h-5 px-2', confidence && 'cursor-pointer hover:ring-2 hover:ring-blue-100')}
                 onClick={confidence ? () => setConfidenceDialogOpen(true) : undefined}
               >
                 数据可靠性 {confidence ? `${Math.round(confidence.score)}%` : '--'}
               </StatusBadge>
-              <span className="num-mono inline-flex h-5 items-center rounded-full bg-blue-50 px-2 text-[10.5px] text-blue-700 ring-1 ring-inset ring-blue-200/60">
+              <span className="badge-micro num-mono inline-flex h-5 items-center rounded-full bg-blue-50 px-2 text-blue-700 ring-1 ring-inset ring-blue-200/60">
                 进度 {progressValue}%
               </span>
             </div>
@@ -588,7 +590,7 @@ function DashboardPageTitle({
         </div>
 
         <div className="flex flex-wrap items-center gap-3 xl:justify-end">
-          <span className="num-mono text-[11px] text-slate-400">更新于 {getMinutesAgo(fetchCompleteTime)}</span>
+          <span className="meta-muted num-mono">更新于 {getMinutesAgo(fetchCompleteTime)}</span>
           <Button
             variant="outline"
             size="sm"
@@ -739,13 +741,24 @@ function WeeklyDigestPanel({
               { label: '本周新增风险', value: `${digest.new_risks_count ?? 0}`, hint: digest.max_risk_level ? `最高等级 ${digest.max_risk_level}` : '暂无新增风险' },
               { label: '关键阻碍数', value: `${digest.critical_blocked_count ?? 0}`, hint: '关键路径未解除阻碍' },
               { label: '最近关键里程碑', value: nearestMilestoneName, hint: nearestMilestoneHint },
-            ].map((item) => (
-              <div key={item.label} className="rounded-xl border border-slate-200/60 bg-slate-50/60 p-5">
-                <div className="meta-text">{item.label}</div>
-                <div className="num-display mt-3 truncate text-[26px] font-semibold text-slate-900">{item.value}</div>
-                <div className="meta-muted mt-2">{item.hint}</div>
-              </div>
-            ))}
+            ].map((item) => {
+              const isTextValue = item.label === '最近关键里程碑'
+              return (
+                <div key={item.label} className="rounded-xl border border-slate-200/60 bg-slate-50/60 p-5">
+                  <div className="meta-text">{item.label}</div>
+                  <div
+                    className={cn(
+                      'mt-3 font-semibold text-slate-900',
+                      isTextValue ? 'heading-3 line-clamp-2 leading-tight tracking-normal' : 'metric-value-lg num-display truncate',
+                    )}
+                    title={item.value}
+                  >
+                    {item.value}
+                  </div>
+                  <div className="meta-muted mt-2">{item.hint}</div>
+                </div>
+              )
+            })}
           </div>
           {focusItems.length > 0 ? (
             <div className="border-t border-slate-100 pt-3">
@@ -860,7 +873,7 @@ function DashboardMonthlyTrend({ projectId, embedded = false }: { projectId: str
         eyebrow="TREND"
         title="月度趋势（近6个月）"
         action={
-          <div className="flex items-center gap-4 text-[11px] text-slate-500">
+          <div className="meta-text flex items-center gap-4">
             <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-blue-600" />任务按时率</span>
             <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-emerald-500" />月计划兑现率</span>
           </div>

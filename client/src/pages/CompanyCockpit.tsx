@@ -540,7 +540,7 @@ export default function CompanyCockpit() {
             icon={FolderKanban}
             title="暂无项目"
             description="创建第一个项目开始使用 WorkBuddy"
-            className="rounded-card empty-state-frame border-slate-200 bg-white px-6 py-12 shadow-[var(--el-1)]"
+            className="rounded-2xl empty-state-frame border-slate-200 bg-white px-6 py-12 shadow-[var(--el-1)]"
             action={(
               <Button
                 type="button"

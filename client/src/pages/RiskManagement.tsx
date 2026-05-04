@@ -1884,9 +1884,9 @@ export default function RiskManagement() {
               </div>
             </div>
             <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
-              <SharedMetricCard title="近 7 天新增" value={recentWarningCount + recentRiskCount + recentIssueCount} hint={`预警 ${recentWarningCount} / 风险 ${recentRiskCount} / 问题 ${recentIssueCount}`} icon={<Clock3 className="h-4 w-4" />} sparkline={[recentWarningCount, recentRiskCount, recentIssueCount, recentWarningCount + recentRiskCount + recentIssueCount]} tone="primary" />
-              <SharedMetricCard title="待人工关闭" value={pendingManualCloseCount} hint="来源已解除但仍需要人工确认关闭" icon={<TriangleAlert className="h-4 w-4" />} sparkline={[0, pendingManualCloseCount, pendingManualCloseCount]} tone={pendingManualCloseCount > 0 ? 'warning' : 'slate'} />
-              <SharedMetricCard title="高位事项" value={highAttentionCount} hint="严重预警 + 高/严重风险问题总量" icon={<Activity className="h-4 w-4" />} sparkline={[activeWarnings.length, activeRisks.length, activeIssues.length, highAttentionCount]} tone={highAttentionCount > 0 ? 'danger' : 'slate'} />
+              <SharedMetricCard eyebrow="RECENT" title="近 7 天新增" value={recentWarningCount + recentRiskCount + recentIssueCount} hint={`预警 ${recentWarningCount} / 风险 ${recentRiskCount} / 问题 ${recentIssueCount}`} icon={<Clock3 className="h-4 w-4" />} sparkline={[recentWarningCount, recentRiskCount, recentIssueCount, recentWarningCount + recentRiskCount + recentIssueCount]} tone="primary" />
+              <SharedMetricCard eyebrow="CLOSE" title="待人工关闭" value={pendingManualCloseCount} hint="来源已解除但仍需要人工确认关闭" icon={<TriangleAlert className="h-4 w-4" />} sparkline={[0, pendingManualCloseCount, pendingManualCloseCount]} tone={pendingManualCloseCount > 0 ? 'warning' : 'slate'} />
+              <SharedMetricCard eyebrow="HIGH" title="高位事项" value={highAttentionCount} hint="严重预警 + 高/严重风险问题总量" icon={<Activity className="h-4 w-4" />} sparkline={[activeWarnings.length, activeRisks.length, activeIssues.length, highAttentionCount]} tone={highAttentionCount > 0 ? 'danger' : 'slate'} />
               <SharedMetricCard eyebrow="LINKED" title="链路来源占比" value={`${chainLinkedCount}/${riskRows.length + issueRows.length || 0}`} hint="来源于预警、阻碍、条件或风险升级链的记录" icon={<GitBranch className="h-4 w-4" />} sparkline={[chainLinkedCount, riskRows.length, issueRows.length, chainLinkedCount]} tone="info" />
             </div>
           </CardContent>
@@ -1934,8 +1934,7 @@ export default function RiskManagement() {
           onToggleSeries={(key) => setHiddenTrendSeries((current) => ({ ...current, [key]: !current[key] }))}
         />
 
-        <Card data-testid="risk-chain-workspace" className="surface-card">
-          <CardContent padding="md" className="space-y-4">
+        <section data-testid="risk-chain-workspace" className="space-y-4">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
               <div className="space-y-1">
                 <CardHead eyebrow="WORKSPACE" title="链路双视图工作区" />
@@ -2121,8 +2120,7 @@ export default function RiskManagement() {
                 />
               </div>
             ) : null}
-          </CardContent>
-        </Card>
+        </section>
 
       <Dialog open={dialogState !== null} onOpenChange={(open) => !open && setDialogState(null)}>
         {dialogState?.type === 'convert-risk' ? <DialogContent className="max-w-[var(--dialog-md-width)]"><DialogHeader><DialogTitle>转为问题</DialogTitle><DialogDescription className="sr-only">转为问题</DialogDescription></DialogHeader><div className="space-y-3 text-sm text-slate-600"><div><span className="font-medium text-slate-900">标题：</span>{dialogState.row.title}</div>{dialogState.row.description ? <div>{dialogState.row.description}</div> : null}</div><DialogFooter><Button variant="outline" onClick={() => setDialogState(null)} disabled={saving}>取消</Button><Button onClick={() => void handleConvertRiskToIssue()} loading={saving}>确认转入</Button></DialogFooter></DialogContent> : null}
@@ -2548,7 +2546,7 @@ function OverviewCard({
   onViewAll: () => void
 }) {
   return (
-    <div className={cn('space-y-4 rounded-card border border-slate-100 bg-white p-5 shadow-[var(--el-1)] transition-all duration-200 motion-safe:hover:-translate-y-0.5 motion-safe:hover:shadow-[var(--el-3)]', accentClassName)}>
+    <div className={cn('surface-card space-y-4 p-5 transition-all duration-200 motion-safe:hover:-translate-y-0.5 motion-safe:hover:shadow-[var(--el-3)]', accentClassName)}>
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="text-xs uppercase tracking-wider text-slate-500">{title}</div>
@@ -2588,7 +2586,7 @@ function RiskMultiLineChart({
   onToggleSeries: (key: TrendSeriesKey) => void
 }) {
   return (
-    <div data-testid="risk-trend-summary" className="space-y-5 rounded-card border border-slate-100 bg-white p-5 shadow-[var(--el-1)]">
+    <div data-testid="risk-trend-summary" className="surface-card space-y-5 p-5">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div className="space-y-1">
           <div className="flex items-center gap-2 text-base font-semibold text-slate-900">

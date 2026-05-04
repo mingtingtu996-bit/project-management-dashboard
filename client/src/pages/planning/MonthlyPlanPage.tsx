@@ -2293,7 +2293,7 @@ export default function MonthlyPlanPage() {
       icon={CalendarDays}
       title={`${formatMonthLabel(selectedMonth)} 尚未生成月度草稿`}
       description="生成草稿后可在月度计划树中维护本月承诺与执行项。"
-      className="rounded-card empty-state-frame border-slate-300 bg-slate-50 p-5"
+      className="rounded-2xl empty-state-frame border-slate-300 bg-slate-50 p-5"
       action={(
         <div className="flex flex-wrap gap-2">
           <Button type="button" onClick={() => void handleGenerateDraft()} loading={actionLoading === 'generate'} disabled={readOnly}>
@@ -2485,7 +2485,7 @@ export default function MonthlyPlanPage() {
   return (
     <PlanningPageShell
       projectName={currentProject.name ?? '项目'}
-      title="计划编制 / 月度计划"
+      title="月度计划"
       description=""
       tabs={tabs}
       metrics={monthlyShellMetrics}

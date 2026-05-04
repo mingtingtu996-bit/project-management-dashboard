@@ -1428,9 +1428,9 @@ export default function Materials() {
 
       <section className="content-sidebar-grid">
         <div className="space-y-4">
+          <CardHead eyebrow="MATERIALS" title="材料列表工具栏" />
           <Card className="surface-card" data-testid="materials-toolbar-card">
         <CardContent padding="md" className="space-y-5">
-          <CardHead eyebrow="MATERIALS" title="材料列表工具栏" />
           <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
             <label className="space-y-1 text-sm text-slate-600">
               <span>搜索</span>
@@ -1676,7 +1676,7 @@ export default function Materials() {
 
               {createMode === 'batch' && (
                 <div className="space-y-4">
-                  <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
+                  <div className="overflow-x-auto rounded-xl border border-slate-100 bg-white">
                     <Table className="w-full table-fixed text-sm" style={{ minWidth: MATERIAL_BATCH_TABLE_MIN_WIDTH }}>
                       <TableHeader className="sticky top-0 z-10 bg-white text-left text-slate-500">
                         <TableRow className="py-3">
@@ -1865,7 +1865,7 @@ export default function Materials() {
                       </div>
                     )}
 
-                    <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+                    <div className="overflow-x-auto rounded-xl border border-slate-100 bg-white">
                       <Table className="w-full table-fixed text-left text-sm" style={{ minWidth: MATERIAL_TABLE_MIN_WIDTH }} data-testid="materials-table">
                         <TableHeader className="sticky top-0 z-10 bg-white text-xs text-slate-500">
                           <TableRow className="py-3">

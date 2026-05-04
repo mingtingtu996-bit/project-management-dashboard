@@ -52,14 +52,14 @@ export function TimelineScaleHeader({
               >
                 <div className={cn(
                   'truncate font-semibold text-slate-900',
-                  isNarrow ? 'text-[0.6875rem] leading-4' : 'text-xs',
+                  isNarrow ? 'timeline-scale-label-narrow' : 'text-xs',
                 )}>
                   {compactLabel}
                 </div>
                 {segment.hint ? (
                   <div className={cn(
                     'truncate text-slate-500',
-                    isNarrow ? 'pt-0 text-[0.625rem] leading-3' : 'pt-1 text-xs',
+                    isNarrow ? 'timeline-scale-hint-narrow pt-0' : 'pt-1 text-xs',
                   )}>
                     {segment.hint}
                   </div>

@@ -580,7 +580,7 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
       {compareMode === 'baseline' && baselineOptions.length === 0 ? (
         <div className="rounded-2xl border border-amber-200 bg-amber-50 px-5 py-6" />
       ) : (
-        <div className="overflow-hidden rounded-2xl border surface-card">
+        <div className="surface-card overflow-hidden">
           <div className="grid" style={{ gridTemplateColumns: `${leftPaneWidth}px minmax(0, 1fr)` }}>
             <div className="border-r border-slate-200">
               <div className="grid h-14 grid-cols-[minmax(16rem,1fr)_8rem_7rem] items-center gap-3 bg-slate-50 px-4 text-xs font-semibold uppercase tracking-wide text-slate-500">

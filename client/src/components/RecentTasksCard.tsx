@@ -174,7 +174,7 @@ function formatDate(value?: string) {
 function AssigneeAvatar({ name }: { name?: string }) {
   const initial = name?.trim().slice(0, 1) || '—'
   return (
-    <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-slate-100 text-[11px] font-medium text-slate-500">
+    <span className="meta-text inline-flex h-6 w-6 items-center justify-center rounded-full bg-slate-100 font-medium">
       {initial}
     </span>
   )
@@ -293,7 +293,7 @@ export default function RecentTasksCard({ projectId, tasks: sourceTasks, onViewA
           value={activeFilter}
           onChange={(value) => setActiveFilter(value as FilterType)}
         />
-        <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-500">
+        <div className="meta-text flex flex-wrap items-center gap-3">
           {stats.overdue > 0 ? <span className="inline-flex items-center gap-1.5 text-rose-600"><span className="h-1.5 w-1.5 rounded-full bg-rose-500" />延期 {stats.overdue}</span> : null}
           {stats.urgent > 0 ? <span className="inline-flex items-center gap-1.5 text-amber-600"><span className="h-1.5 w-1.5 rounded-full bg-amber-500" />紧急 {stats.urgent}</span> : null}
           {stats.approaching > 0 ? <span className="inline-flex items-center gap-1.5 text-blue-600"><span className="h-1.5 w-1.5 rounded-full bg-blue-500" />7天内 {stats.approaching}</span> : null}

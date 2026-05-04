@@ -161,7 +161,7 @@ export default function DashboardMilestoneCard({
         <div className="rounded-xl border border-slate-200/60 bg-white p-5">
           <div className="eyebrow">SUMMARY</div>
           <div className="mt-3 flex items-end gap-2">
-            <span className={cn('num-display text-[34px] font-semibold leading-none text-slate-900', completionRate === 0 && 'text-slate-400')}>
+            <span className={cn('metric-value-2xl num-display font-semibold leading-none text-slate-900', completionRate === 0 && 'text-slate-400')}>
               {completionRate}%
             </span>
             <span className="pb-1 text-xs text-slate-400">完成率</span>

@@ -80,7 +80,7 @@ export default function AcceptanceFlowBoard({
         </div>
       </div>
 
-      <div className="rounded-xl border surface-card">
+      <div className="surface-card overflow-hidden">
         <div className="flex flex-wrap items-center gap-2 bg-slate-50 px-4 py-3 text-xs text-slate-500">
           <Badge variant="outline" className="gap-1.5 rounded-full bg-white">
             <Network className="h-3.5 w-3.5" />

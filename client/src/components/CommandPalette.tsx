@@ -250,16 +250,16 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="搜索任务、项目、成员..."
-            className="h-full min-w-0 flex-1 border-0 bg-transparent text-[13.5px] text-slate-800 outline-none placeholder:text-slate-400"
+            className="command-input-text h-full min-w-0 flex-1 border-0 bg-transparent text-slate-800 outline-none placeholder:text-slate-400"
           />
-          <kbd className="num-mono rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10.5px] leading-none text-slate-400">
+          <kbd className="badge-micro num-mono rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-slate-400">
             ESC
           </kbd>
         </div>
 
         <div className="max-h-[360px] overflow-y-auto py-1.5">
           {filteredCommands.length === 0 ? (
-            <div className="px-4 py-8 text-center text-[12.5px] text-slate-400">没有匹配项</div>
+            <div className="command-item-text px-4 py-8 text-center text-slate-400">没有匹配项</div>
           ) : (
             groupedCommands.map(({ group, items }) => (
               <div key={group} className="px-1.5 pb-1">
@@ -278,14 +278,14 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                         onOpenChange(false)
                       }}
                       className={cn(
-                        'group flex h-9 w-full items-center gap-2.5 rounded-lg px-3 text-[12.5px] transition-colors duration-150',
+                        'command-item-text group flex h-9 w-full items-center gap-2.5 rounded-lg px-3 transition-colors duration-150',
                         isActive ? 'bg-slate-100 text-slate-900' : 'text-slate-600 hover:bg-slate-50',
                       )}
                     >
                       <Icon className="h-3.5 w-3.5 shrink-0 text-slate-500" strokeWidth={1.7} />
                       <span className="min-w-0 flex-1 truncate text-left font-medium">{item.label}</span>
                       {isCurrent ? <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" aria-label="当前页面" /> : null}
-                      <span className="num-mono text-[10px] text-slate-400">{item.hint}</span>
+                      <span className="eyebrow num-mono">{item.hint}</span>
                       <CornerDownLeft
                         className={cn('h-3 w-3 transition-opacity duration-150', isActive ? 'text-slate-500 opacity-100' : 'text-slate-300 opacity-0')}
                         strokeWidth={1.7}
@@ -298,7 +298,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
           )}
         </div>
 
-        <div className="flex h-9 items-center justify-between border-t border-slate-100 bg-slate-50/70 px-4 text-[10.5px] text-slate-400">
+        <div className="badge-micro flex h-9 items-center justify-between border-t border-slate-100 bg-slate-50/70 px-4 text-slate-400">
           <div className="flex items-center gap-3">
             <span className="flex items-center gap-1">
               <kbd className="num-mono rounded border border-slate-200 bg-white px-1">↑</kbd>

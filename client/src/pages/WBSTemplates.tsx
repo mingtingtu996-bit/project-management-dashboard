@@ -813,9 +813,10 @@ export default function WBSTemplates() {
       ) : null}
 
       <div className="content-sidebar-grid">
-        <Card className="surface-card">
-          <CardContent padding="md" className="space-y-5" data-testid="wbs-template-list">
+        <section className="space-y-4" data-testid="wbs-template-list">
             <CardHead eyebrow="TEMPLATES" title="模板列表" />
+          <Card className="surface-card">
+            <CardContent padding="md" className="space-y-5">
             {loading ? (
               <LoadingState
                 label="模板列表加载中"
@@ -841,8 +842,9 @@ export default function WBSTemplates() {
                 ))}
               </div>
             )}
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+        </section>
       </div>
 
       <OnboardingDialog

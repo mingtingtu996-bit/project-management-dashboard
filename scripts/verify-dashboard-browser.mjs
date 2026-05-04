@@ -593,6 +593,10 @@ async function main() {
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1800 } })
     page.setDefaultTimeout(30000)
+    await page.addInitScript(() => {
+      window.localStorage.setItem('onboarding_completed', 'true')
+      window.localStorage.setItem('onboarding_daily_workflow_dismissed', 'true')
+    })
 
     page.on('console', (message) => {
       if (message.type() === 'error') {

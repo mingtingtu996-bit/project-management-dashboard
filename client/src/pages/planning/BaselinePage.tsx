@@ -17,8 +17,8 @@ import { Input } from '@/components/ui/input'
 import { LoadingState } from '@/components/ui/loading-state'
 import { MetricCard } from '@/components/ui/metric-card'
 import { Separator } from '@/components/ui/separator'
+import { SegmentedControl } from '@/components/ui/segmented-control'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { usePlanningStore } from '@/hooks/usePlanningStore'
 import { usePermissions } from '@/hooks/usePermissions'
@@ -1929,7 +1929,7 @@ export default function BaselinePage() {
     return (
       <PlanningPageShell
         projectName={currentProject?.name ?? '项目'}
-        title="计划编制 / 项目基线"
+        title="项目基线"
         description="从空白基线、当前排期或导入文件建立项目基线，并在树表里继续校核。"
         tabs={tabs}
         metrics={baselineShellMetrics}
@@ -2168,7 +2168,7 @@ export default function BaselinePage() {
   return (
     <PlanningPageShell
       projectName={currentProject?.name ?? '项目'}
-      title="计划编制 / 项目基线"
+      title="项目基线"
       description="继续对比、修订和确认当前项目基线。"
       tabs={tabs}
       metrics={baselineShellMetrics}
@@ -2437,28 +2437,21 @@ export default function BaselinePage() {
                 <CardHead eyebrow="VERSION" title="历史版本对比" />
               </CardContent>
               <CardContent className="space-y-3">
-                <Tabs
+                <SegmentedControl
                   value={activeBaseline.id}
-                  onValueChange={(value) => {
+                  onChange={(value) => {
                     if (value && value !== activeBaseline.id) {
                       void loadBaselineContext({ preferredId: value })
                     }
                   }}
-                >
-                  <TabsList className="flex h-auto w-full flex-wrap justify-start gap-2 bg-transparent p-0">
-                    {versions.map((version) => (
-                      <TabsTrigger
-                        key={version.id}
-                        value={version.id}
-                        data-testid={`baseline-version-chip-${version.id}`}
-                        className="rounded-lg border border-transparent bg-slate-100 px-3 py-1.5 text-sm text-slate-600 data-[state=active]:bg-blue-600 data-[state=active]:text-white"
-                        disabled={actionLoading !== null && activeBaseline.id === version.id}
-                      >
-                        v{version.version} · {formatStatusLabel(version.status)}
-                      </TabsTrigger>
-                    ))}
-                  </TabsList>
-                </Tabs>
+                  options={versions.map((version) => ({
+                    value: version.id,
+                    label: `v${version.version} · ${formatStatusLabel(version.status)}`,
+                    testId: `baseline-version-chip-${version.id}`,
+                    disabled: actionLoading !== null && activeBaseline.id === version.id,
+                  }))}
+                  className="flex h-auto w-full flex-wrap justify-start gap-1 bg-slate-100/70"
+                />
                 <label className="block space-y-2">
                   <span className="text-xs font-medium uppercase tracking-wider text-slate-500">对比版本</span>
                   <Select

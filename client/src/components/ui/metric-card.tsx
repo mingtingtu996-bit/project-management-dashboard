@@ -120,7 +120,7 @@ export function MetricCard({
       style={style}
       {...interactiveProps}
     >
-      <CardContent padding="md" className={cn('flex h-full flex-col', isCompact ? 'gap-3' : 'min-h-[148px] gap-4')}>
+      <CardContent padding="md" className={cn('flex h-full flex-col gap-4', isCompact ? 'min-h-[132px]' : 'min-h-[148px]')}>
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0 pr-2">
             {eyebrow ? <div className="eyebrow">{eyebrow}</div> : null}
@@ -133,19 +133,22 @@ export function MetricCard({
           ) : null}
         </div>
 
-        <div className={cn('min-w-0', isCompact && 'flex flex-wrap items-baseline gap-x-2 gap-y-1')}>
+        <div className="min-w-0">
           <div>
-            <span className={cn('num-display font-semibold leading-none text-slate-900', isCompact ? 'text-3xl' : 'text-[34px]', isZero && 'text-slate-400')}>
+            <span className={cn('metric-value-2xl num-display font-semibold leading-none text-slate-900', isZero && 'text-slate-400')}>
               {formatMetricValue(displayValue, unit)}
             </span>
           </div>
-          {trend ? <div className={cn('meta-muted min-h-[16px] font-medium', isCompact ? 'text-xs' : 'mt-2')}>{trend}</div> : null}
         </div>
-        {(hint || sparklineData.length > 1) ? (
-          <div className={cn('min-w-0 space-y-2 pt-1', isCompact ? 'mt-0' : 'mt-auto')}>
-            {hint ? <div className="min-w-0 text-xs leading-5 text-slate-500">{hint}</div> : <span />}
+
+        {(trend || hint || sparklineData.length > 1) ? (
+          <div className={cn('mt-auto flex min-w-0 items-end justify-between gap-3 pt-1', isCompact ? 'min-h-7' : 'min-h-8')}>
+            <div className="min-w-0">
+              {trend ? <div className="meta-muted truncate text-xs font-medium leading-4">{trend}</div> : null}
+              {hint ? <div className="min-w-0 truncate text-xs leading-5 text-slate-500">{hint}</div> : null}
+            </div>
             {sparklineData.length > 1 ? (
-              <Sparkline data={sparklineData} color={sparklineColor} className={cn('w-full', isCompact ? 'h-6' : 'h-8')} />
+              <Sparkline data={sparklineData} color={sparklineColor} className={cn('shrink-0', isCompact ? 'h-6 w-20' : 'h-8 w-24')} />
             ) : null}
           </div>
         ) : null}

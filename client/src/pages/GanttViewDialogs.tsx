@@ -35,7 +35,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { SegmentedControl } from '@/components/ui/segmented-control'
 import { ConflictDialog } from '@/components/ConflictDialog'
 import { EmptyState } from '@/components/EmptyState'
 import { LoadingState } from '@/components/ui/loading-state'
@@ -255,12 +255,15 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
               <p className="text-xs text-muted-foreground">上级任务：{parentTaskName}</p>
             )}
           </DialogHeader>
-          <Tabs value={taskFormTab} onValueChange={(value) => setTaskFormTab(value as 'basic' | 'advanced')}>
-            <TabsList className="grid w-full grid-cols-2 bg-slate-100">
-              <TabsTrigger value="basic">基础信息</TabsTrigger>
-              <TabsTrigger value="advanced">高级选项</TabsTrigger>
-            </TabsList>
-          </Tabs>
+          <SegmentedControl
+            value={taskFormTab}
+            onChange={(value) => setTaskFormTab(value as 'basic' | 'advanced')}
+            className="grid w-full grid-cols-2"
+            options={[
+              { value: 'basic', label: '基础信息' },
+              { value: 'advanced', label: '高级选项' },
+            ]}
+          />
           <div className="space-y-4 py-4">
             <div className="space-y-2">
               <Label>任务名称 <span className="text-red-500">*</span></Label>

@@ -3737,11 +3737,11 @@ export default function GanttView() {
             title={zhCN.gantt.structureTitle}
             action={
               <div className="flex flex-wrap items-center justify-end gap-2">
-                <span className={`inline-flex h-5 items-center rounded-full px-2 text-[10.5px] font-medium ring-1 ring-inset ${viewMode === 'timeline' ? 'bg-slate-900 text-white ring-slate-900' : 'bg-slate-100 text-slate-600 ring-slate-200/60'}`}>
+                <span className={`badge-micro inline-flex h-5 items-center rounded-full px-2 font-medium ring-1 ring-inset ${viewMode === 'timeline' ? 'bg-slate-900 text-white ring-slate-900' : 'bg-slate-100 text-slate-600 ring-slate-200/60'}`}>
                   {viewMode === 'timeline' ? '横道图视图' : '列表视图'}
                 </span>
                 {activeFilterCount > 0 && (
-                  <span className="inline-flex h-5 items-center rounded-full px-2 text-[10.5px] font-medium text-blue-700 ring-1 ring-inset ring-blue-200">
+                  <span className="badge-micro inline-flex h-5 items-center rounded-full px-2 font-medium text-blue-700 ring-1 ring-inset ring-blue-200">
                     {filteredFlatList.length}/{flatList.length} {zhCN.gantt.structureCount}
                   </span>
                 )}

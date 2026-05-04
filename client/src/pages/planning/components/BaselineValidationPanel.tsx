@@ -88,22 +88,17 @@ export function BaselineValidationPanel({ issues, emptyLabel = '当前没有待�
   const infoCount = groups[2]?.issues.length ?? 0
 
   return (
-    <Card className="surface-card">
-      <CardContent padding="md" className="space-y-3 bg-slate-50/80">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="space-y-1">
-            <CardHead eyebrow="VALIDATION" title="异常校核区" />
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Badge variant="destructive">{blockingCount} 阻断</Badge>
-            <Badge variant="secondary">{warningCount} 建议</Badge>
-            <Badge variant="outline">{infoCount} 信息</Badge>
-          </div>
+    <section className="space-y-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <CardHead eyebrow="VALIDATION" title="异常校核区" />
+        <div className="flex flex-wrap gap-2">
+          <Badge variant="destructive">{blockingCount} 阻断</Badge>
+          <Badge variant="secondary">{warningCount} 建议</Badge>
+          <Badge variant="outline">{infoCount} 信息</Badge>
         </div>
+      </div>
 
-      </CardContent>
-      <Separator />
-
+      <Card className="surface-card">
       <CardContent className="space-y-4 p-5">
         {totalCount === 0 ? (
           <EmptyState
@@ -119,7 +114,7 @@ export function BaselineValidationPanel({ issues, emptyLabel = '当前没有待�
               <section
                 key={group.level}
                 data-testid={`baseline-validation-group-${group.level}`}
-                className="rounded-2xl border surface-card"
+                className="rounded-xl border border-slate-100 bg-white"
               >
                 <div className="flex flex-wrap items-start justify-between gap-3 px-4 py-3">
                   <div className="space-y-1">
@@ -186,7 +181,8 @@ export function BaselineValidationPanel({ issues, emptyLabel = '当前没有待�
           })
         )}
       </CardContent>
-    </Card>
+      </Card>
+    </section>
   )
 }
 

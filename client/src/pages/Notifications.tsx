@@ -1354,38 +1354,34 @@ export default function Notifications() {
         />
       </div>
 
-      <Card className="surface-card overflow-hidden">
-        <CardContent className="space-y-5 p-0">
-          <div className="px-6 pt-5">
-            <CardHead eyebrow="NOTIFICATIONS" title="通知分组" />
+      <section className="space-y-4">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+          <CardHead eyebrow="NOTIFICATIONS" title="通知分组" />
+          <div className="flex items-center gap-2 text-sm text-slate-500">
+            <Badge variant="secondary">{currentTabCount} {'\u6761'}</Badge>
+            <span>{'\u5f53\u524d\u7b5b\u9009\u7ed3\u679c'}</span>
           </div>
-          <div className="flex flex-col gap-4 px-6 py-5 lg:flex-row lg:items-center lg:justify-between">
-            <Tabs
-              value={tab}
-              onValueChange={(value) => setTab(value as ReminderTab)}
-              className="w-full"
-            >
-              <TabsList className="flex h-auto w-full flex-wrap justify-start gap-6 rounded-none border-b border-slate-100 bg-transparent p-0 text-slate-500">
-                {TAB_OPTIONS.map((option) => (
-                  <TabsTrigger
-                    key={option.value}
-                    value={option.value}
-                    className="relative rounded-none border-0 bg-transparent px-0 pb-3 pt-0 text-sm text-slate-500 shadow-none transition-colors after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-blue-700 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600"
-                  >
-                    {option.label}({tabCounts[option.value]})
-                  </TabsTrigger>
-                ))}
-              </TabsList>
-            </Tabs>
+        </div>
 
-            <div className="flex items-center gap-2 text-sm text-slate-500">
-              <Badge variant="secondary">{currentTabCount} {'\u6761'}</Badge>
-              <span>{'\u5f53\u524d\u7b5b\u9009\u7ed3\u679c'}</span>
-            </div>
-          </div>
-          <Separator />
+        <Tabs
+          value={tab}
+          onValueChange={(value) => setTab(value as ReminderTab)}
+          className="w-full"
+        >
+          <TabsList className="flex h-auto w-full flex-wrap justify-start gap-6 rounded-none border-b border-slate-100 bg-transparent p-0 text-slate-500">
+            {TAB_OPTIONS.map((option) => (
+              <TabsTrigger
+                key={option.value}
+                value={option.value}
+                className="relative rounded-none border-0 bg-transparent px-0 pb-3 pt-0 text-sm text-slate-500 shadow-none transition-colors after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-blue-700 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600"
+              >
+                {option.label}({tabCounts[option.value]})
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </Tabs>
 
-          <div className="flex flex-wrap items-center gap-2 px-6 pb-4 pt-0" data-testid="notifications-type-chips">
+        <div className="flex flex-wrap items-center gap-2" data-testid="notifications-type-chips">
             {TYPE_FILTER_OPTIONS.map((option) => (
               <Button
                 key={option.value}
@@ -1405,9 +1401,7 @@ export default function Notifications() {
           </div>
 
           {typeFilter === 'system-exception' ? (
-            <>
-            <Separator />
-            <div className="flex flex-wrap items-center gap-2 px-6 pb-4 pt-0">
+            <div className="flex flex-wrap items-center gap-2">
               <Button
                 type="button"
                 size="sm"
@@ -1418,9 +1412,9 @@ export default function Notifications() {
               </Button>
               <span className="text-xs text-slate-500">系统异常中的规划映射孤立提醒可直接收窄查看</span>
             </div>
-            </>
           ) : null}
 
+        <div className="surface-card overflow-hidden">
           {groupedNotifications.length === 0 ? (
             <div className="px-6 py-8">
               <EmptyState
@@ -1634,18 +1628,15 @@ export default function Notifications() {
               })}
             </div>
           )}
+        </div>
 
-          {groupedNotifications.length > 0 && (
-            <>
-              <Separator />
-              <div className="flex flex-col gap-2 px-6 py-4 text-sm text-slate-500 sm:flex-row sm:items-center sm:justify-between">
-                <span>{`\u5171 ${currentTabCount} \u6761\u63d0\u9192`}</span>
-                <span>{`${scopeLabel} · ${connectionLabel}`}</span>
-              </div>
-            </>
-          )}
-        </CardContent>
-      </Card>
+        {groupedNotifications.length > 0 && (
+          <div className="flex flex-col gap-2 text-sm text-slate-500 sm:flex-row sm:items-center sm:justify-between">
+            <span>{`\u5171 ${currentTabCount} \u6761\u63d0\u9192`}</span>
+            <span>{`${scopeLabel} · ${connectionLabel}`}</span>
+          </div>
+        )}
+      </section>
 
       <DeleteProtectionDialog
         open={Boolean(deleteTarget)}

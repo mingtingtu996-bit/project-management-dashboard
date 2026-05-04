@@ -10,7 +10,8 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { LoadingState } from '@/components/ui/loading-state'
 import { Separator } from '@/components/ui/separator'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { SegmentedControl } from '@/components/ui/segmented-control'
+import { Tabs, TabsContent } from '@/components/ui/tabs'
 import { ToastAction } from '@/components/ui/toast'
 import { ConfirmActionDialog } from '@/components/ConfirmActionDialog'
 import { EmptyState } from '@/components/EmptyState'
@@ -460,11 +461,16 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
       ) : null}
 
       <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as typeof activeTab)} className="space-y-4">
-        <TabsList className="grid h-auto w-full grid-cols-1 gap-2 rounded-2xl bg-slate-100 p-2 sm:grid-cols-3">
-          <TabsTrigger value="members" data-testid="team-management-tab-members">团队成员</TabsTrigger>
-          <TabsTrigger value="pending-links" data-testid="team-management-tab-pending-links">待关联责任人</TabsTrigger>
-          <TabsTrigger value="invitations" disabled={!canManageTeam} data-testid="team-management-tab-invitations">邀请码</TabsTrigger>
-        </TabsList>
+        <SegmentedControl
+          value={activeTab}
+          onChange={(value) => setActiveTab(value as typeof activeTab)}
+          className="grid w-full grid-cols-1 gap-1 sm:grid-cols-3"
+          options={[
+            { value: 'members', label: '团队成员' },
+            { value: 'pending-links', label: '待关联责任人' },
+            { value: 'invitations', label: '邀请码', disabled: !canManageTeam },
+          ]}
+        />
 
         <TabsContent value="members" className="mt-0">
           <Card className="rounded-2xl border-slate-200 shadow-none">
