@@ -56,6 +56,7 @@ export interface MetricCardProps {
   className?: string
   style?: CSSProperties
   onClick?: () => void
+  density?: 'regular' | 'compact'
 }
 
 function normalizeSparkline(points?: Array<number | { value: number }>) {
@@ -83,7 +84,9 @@ export function MetricCard({
   className,
   style,
   onClick,
+  density = 'regular',
 }: MetricCardProps) {
+  const isCompact = density === 'compact'
   const toneClass = toneClassMap[tone]
   const sparklineData = normalizeSparkline(sparkline)
   const sparklineColor = isFlatSparkline(sparklineData) ? CHART_NEUTRAL.border : toneClass.sparkline
@@ -117,7 +120,7 @@ export function MetricCard({
       style={style}
       {...interactiveProps}
     >
-      <CardContent padding="md" className="flex h-full min-h-[148px] flex-col gap-4">
+      <CardContent padding="md" className={cn('flex h-full flex-col', isCompact ? 'gap-3' : 'min-h-[148px] gap-4')}>
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0 pr-2">
             {eyebrow ? <div className="eyebrow">{eyebrow}</div> : null}
@@ -130,19 +133,19 @@ export function MetricCard({
           ) : null}
         </div>
 
-        <div className="min-w-0">
+        <div className={cn('min-w-0', isCompact && 'flex flex-wrap items-baseline gap-x-2 gap-y-1')}>
           <div>
-            <span className={cn('num-display text-[34px] font-semibold leading-none text-slate-900', isZero && 'text-slate-400')}>
+            <span className={cn('num-display font-semibold leading-none text-slate-900', isCompact ? 'text-3xl' : 'text-[34px]', isZero && 'text-slate-400')}>
               {formatMetricValue(displayValue, unit)}
             </span>
           </div>
-          {trend ? <div className="meta-muted mt-2 min-h-[16px] font-medium">{trend}</div> : null}
+          {trend ? <div className={cn('meta-muted min-h-[16px] font-medium', isCompact ? 'text-xs' : 'mt-2')}>{trend}</div> : null}
         </div>
         {(hint || sparklineData.length > 1) ? (
-          <div className="mt-auto min-w-0 space-y-2 pt-1">
+          <div className={cn('min-w-0 space-y-2 pt-1', isCompact ? 'mt-0' : 'mt-auto')}>
             {hint ? <div className="min-w-0 text-xs leading-5 text-slate-500">{hint}</div> : <span />}
             {sparklineData.length > 1 ? (
-              <Sparkline data={sparklineData} color={sparklineColor} className="h-8 w-full" />
+              <Sparkline data={sparklineData} color={sparklineColor} className={cn('w-full', isCompact ? 'h-6' : 'h-8')} />
             ) : null}
           </div>
         ) : null}

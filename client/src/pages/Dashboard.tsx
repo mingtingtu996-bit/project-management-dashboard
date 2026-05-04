@@ -346,8 +346,6 @@ function formatMetricTrend(value: number, invertTone = false) {
   }
 }
 
-const FLAT_SPARKLINE = [50, 50, 50, 50, 50]
-
 function DashboardMetricCards({
   summaryData,
   todayTodoCount,
@@ -368,7 +366,7 @@ function DashboardMetricCards({
       value: overallProgress,
       unit: '%',
       trend: formatMetricTrend(0),
-      sparkline: FLAT_SPARKLINE,
+      sparkline: emptySparkline,
       tone: 'primary' as const,
       icon: Activity,
     },
@@ -379,7 +377,7 @@ function DashboardMetricCards({
       value: monthDeviation,
       unit: '天',
       trend: formatMetricTrend(monthDeviation, true),
-      sparkline: monthDeviation === 0 ? FLAT_SPARKLINE : emptySparkline,
+      sparkline: emptySparkline,
       tone: monthDeviation > 0 ? 'warning' as const : 'success' as const,
       icon: Clock3,
     },
@@ -390,7 +388,7 @@ function DashboardMetricCards({
       value: activeRisks,
       unit: '',
       trend: formatMetricTrend(activeRisks, true),
-      sparkline: activeRisks === 0 ? FLAT_SPARKLINE : emptySparkline,
+      sparkline: emptySparkline,
       tone: activeRisks > 0 ? 'danger' as const : 'slate' as const,
       icon: AlertTriangle,
     },
@@ -401,14 +399,14 @@ function DashboardMetricCards({
       value: todayTodoCount,
       unit: '',
       trend: formatMetricTrend(0),
-      sparkline: FLAT_SPARKLINE,
+      sparkline: emptySparkline,
       tone: 'slate' as const,
       icon: ShieldCheck,
     },
   ]
 
   return (
-    <div data-testid="dashboard-hero-cards" data-onboarding-target="dashboard-metrics" className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-4">
+    <div data-testid="dashboard-hero-cards" data-onboarding-target="dashboard-metrics" className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
       {metrics.map((metric, index) => {
         const TrendIcon = metric.trend.icon
         return (
@@ -428,6 +426,7 @@ function DashboardMetricCards({
             icon={<LucideIcon icon={metric.icon} className="h-3.5 w-3.5" />}
             sparkline={metric.sparkline}
             tone={metric.tone}
+            density="compact"
             className="motion-safe:animate-fade-in"
             style={{ animationDelay: `${index * 60}ms` }}
           />
