@@ -726,7 +726,7 @@ async function main() {
 
     await page.getByTestId('analysis-entry-risk').click()
     await page.waitForFunction(() => window.location.hash.includes('/reports?view=risk'))
-    await page.getByRole('heading', { name: '风险与问题分析' }).waitFor({ state: 'visible', timeout: 10000 })
+    await page.getByTestId('reports-risk-matrix').waitFor({ state: 'visible', timeout: 10000 })
     await page.getByTestId('analysis-entry-risk').waitFor({ state: 'visible', timeout: 10000 })
     await page.getByText('活跃风险').first().waitFor({ state: 'visible', timeout: 10000 })
     await page.getByTestId('reports-material-arrival-summary').waitFor({ state: 'visible', timeout: 10000 })

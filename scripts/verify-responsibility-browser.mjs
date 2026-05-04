@@ -22,7 +22,7 @@ const projectId = process.env.PROJECT_ID || '422ba093-7a94-4e91-a47a-c1b865185e8
 const now = new Date().toISOString()
 
 const TEXT = {
-  responsibilityPageTitle: '\u4efb\u52a1\u7ba1\u7406 / \u8d23\u4efb\u4e3b\u4f53',
+  responsibilityPageTitle: '\u8d23\u4efb\u4e3b\u4f53',
   searchLabel: '\u8d23\u4efb\u4e3b\u4f53\u641c\u7d22',
   linkedFilterLabel: '\u4ea4\u53c9\u7b5b\u9009',
   allAssignees: '\u5168\u90e8\u8d23\u4efb\u4eba',
@@ -555,7 +555,7 @@ async function main() {
     const targetUrl = `${baseUrl}/#/projects/${projectId}/responsibility?dimension=unit`
     await page.goto(targetUrl, { waitUntil: 'domcontentloaded' })
     await page.getByTestId('responsibility-page').waitFor({ state: 'visible', timeout: 20000 })
-    await page.getByRole('heading', { name: TEXT.responsibilityPageTitle }).waitFor({ state: 'visible', timeout: 20000 })
+    await page.getByRole('heading', { name: TEXT.responsibilityPageTitle, exact: true }).waitFor({ state: 'visible', timeout: 20000 })
 
     const currentUrl = page.url()
     assert(currentUrl.includes('/responsibility'), `Unexpected browser URL after navigation: ${currentUrl}`)
