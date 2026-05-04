@@ -347,14 +347,33 @@
       "Bash(rg 'console\\\\.error' client/src/pages/GanttView*.tsx --glob '*.tsx' -c)",
       "Bash(rg 'console\\\\.error' client/src/pages/GanttView/ --glob '*.tsx' -c)",
       "Bash(rg 'console\\\\.error' client/src/pages/ --glob 'GanttView*' -c)",
-      "Read(//dev/**)"
+      "Read(//dev/**)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:github.com)",
+      "Bash(lsof -ti:3055)",
+      "Bash(findstr \":3055\")",
+      "Bash(taskkill /PID 44796 /F)",
+      "Bash(Start-Process -NoNewWindow -FilePath \"npx\" -ArgumentList \"@ufira/vibma-tunnel\")",
+      "Bash(mkdir -p /tmp/figma-export)",
+      "Bash(rm -rf *)",
+      "Bash(unzip -o \"C:\\\\Users\\\\jjj64\\\\Desktop\\\\网页页面优化.zip\")",
+      "Bash(mkdir -p \"c:/Users/jjj64/WorkBuddy/20260318232610/artifacts/mockups\")",
+      "Bash(cp \"C:/Users/jjj64/.codex/generated_images/019de3dd-30aa-7ff0-9d6b-2beb691d605b/ig_005050de01cf29450169f60dc46bd08191a1320f3ffe8bdfde.png\" \"c:/Users/jjj64/WorkBuddy/20260318232610/artifacts/mockups/dashboard-mockup-01.png\")",
+      "Bash(cp \"C:/Users/jjj64/.codex/generated_images/019de3dd-30aa-7ff0-9d6b-2beb691d605b/ig_04a4b73cb39e75320169f60b68d90c8191a3e0f33917ba02d1.png\" \"c:/Users/jjj64/WorkBuddy/20260318232610/artifacts/mockups/dashboard-mockup-02.png\")",
+      "Bash(code \"c:\\\\Users\\\\jjj64\\\\WorkBuddy\\\\20260318232610\\\\WorkBuddy系统全面分析报告.md\")",
+      "Bash(head -n 337 \"c:/Users/jjj64/WorkBuddy/20260318232610/WorkBuddy系统全面分析报告.md\")",
+      "Bash(cp /tmp/report_temp.md \"c:/Users/jjj64/WorkBuddy/20260318232610/WorkBuddy系统全面分析报告.md\")"
     ],
     "additionalDirectories": [
       "C:\\Users\\jjj64\\WorkBuddy\\20260318232610\\.claude",
       "C:\\Users\\jjj64\\.codex",
       "c:\\c\\Users\\jjj64\\WorkBuddy\\20260318232610\\docs\\plans",
       "\\tmp",
-      "c:\\Users\\jjj64\\WorkBuddy\\20260318232610\\docs\\plans"
+      "c:\\Users\\jjj64\\WorkBuddy\\20260318232610\\docs\\plans",
+      "C:\\Users\\jjj64",
+      "c:\\Users\\jjj64\\WorkBuddy\\20260318232610\\artifacts\\mockups",
+      "c:\\Users\\jjj64\\WorkBuddy\\20260318232610\\artifacts",
+      "c:\\Users\\jjj64\\WorkBuddy\\20260318232610"
     ]
   }
 }

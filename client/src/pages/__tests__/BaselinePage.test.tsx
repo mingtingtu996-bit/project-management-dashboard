@@ -175,6 +175,7 @@ async function selectBaselineVersion(container: HTMLElement, baselineId: string)
 async function openDraftBaseline(container: HTMLElement) {
   await selectBaselineVersion(container, 'baseline-v7')
   await waitForText(container, ['可编辑态', '当前草稿基于 v6 继续整理'])
+  await waitForCondition(() => Boolean(container.querySelector('[aria-label="toggle-baseline-v7-l5"]')))
   if ((container.textContent || '').includes('全选当前视图')) {
     const draftIds = currentDetails['baseline-v7'].items.map((item) => item.id)
     await act(async () => {
@@ -631,7 +632,8 @@ describe('BaselinePage planning workflow', () => {
     )
 
     await waitForText(container, [
-      '计划编制 / 项目基线',
+      '计划编制',
+      '项目基线',
       '只读查看态',
       '当前展示的是已确认版本',
       'v7 → v6',

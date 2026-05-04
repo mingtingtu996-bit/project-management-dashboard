@@ -1,5 +1,6 @@
 import { Badge } from '@/components/ui/badge'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
 import { Separator } from '@/components/ui/separator'
 import type { PlanningDraftStatus, PlanningValidationIssue } from '@/hooks/usePlanningStore'
 import MonthlyPlanExceptionSummary from './MonthlyPlanExceptionSummary'
@@ -27,17 +28,17 @@ export function MonthlyPlanDraftPanel({
 }: MonthlyPlanDraftPanelProps) {
   return (
     <Card data-testid="monthly-plan-draft-panel" className="surface-card">
-      <CardHeader className="space-y-2 bg-slate-50/80">
+      <CardContent padding="md" className="space-y-3 bg-slate-50/80">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="space-y-1">
-            <CardTitle className="text-lg">草稿编辑区</CardTitle>
+            <CardHead eyebrow="MONTHLY DRAFT" title="草稿编辑区" />
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant="outline">草稿状态 {draftStatus}</Badge>
             <Badge variant="secondary">已选 {selectedCount} 项</Badge>
           </div>
         </div>
-      </CardHeader>
+      </CardContent>
       <Separator />
 
       <CardContent className="space-y-4 p-5">

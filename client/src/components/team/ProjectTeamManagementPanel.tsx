@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -428,7 +429,7 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
 
   return (
     <div className="space-y-6" data-testid="team-management-panel">
-      <div className="rounded-2xl border border-slate-200 bg-gradient-to-br from-white via-slate-50 to-blue-50 p-5">
+      <div className="surface-card p-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="space-y-2">
             <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">团队管理</div>
@@ -446,9 +447,9 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
           ) : null}
         </div>
         <div className="mt-4 grid gap-4 md:grid-cols-3">
-          <Card className="rounded-2xl border-slate-200 shadow-none"><CardHeader className="pb-2"><CardTitle className="text-sm text-slate-500">公司级角色</CardTitle></CardHeader><CardContent className="text-sm text-slate-700">{getGlobalRoleLabel(access?.globalRole)}</CardContent></Card>
-          <Card className="rounded-2xl border-slate-200 shadow-none"><CardHeader className="pb-2"><CardTitle className="text-sm text-slate-500">项目级角色</CardTitle></CardHeader><CardContent className="text-sm text-slate-700">{getProjectRoleLabel(access?.permissionLevel)}</CardContent></Card>
-          <Card className="rounded-2xl border-slate-200 shadow-none"><CardHeader className="pb-2"><CardTitle className="text-sm text-slate-500">当前状态</CardTitle></CardHeader><CardContent className="space-y-1 text-sm text-slate-700"><div>项目成员 {members.length} 人</div><div>有效邀请码 {activeInvitationCount} 个</div><div>密码重置 {canResetPassword ? '已启用' : '未启用'}</div></CardContent></Card>
+          <Card className="rounded-2xl border-slate-200 shadow-none"><CardContent padding="md"><CardHead eyebrow="ROLE" title="公司级角色" /></CardContent><CardContent className="text-sm text-slate-700">{getGlobalRoleLabel(access?.globalRole)}</CardContent></Card>
+          <Card className="rounded-2xl border-slate-200 shadow-none"><CardContent padding="md"><CardHead eyebrow="ROLE" title="项目级角色" /></CardContent><CardContent className="text-sm text-slate-700">{getProjectRoleLabel(access?.permissionLevel)}</CardContent></Card>
+          <Card className="rounded-2xl border-slate-200 shadow-none"><CardContent padding="md"><CardHead eyebrow="STATUS" title="当前状态" /></CardContent><CardContent className="space-y-1 text-sm text-slate-700"><div>项目成员 {members.length} 人</div><div>有效邀请码 {activeInvitationCount} 个</div><div>密码重置 {canResetPassword ? '已启用' : '未启用'}</div></CardContent></Card>
         </div>
       </div>
 
@@ -467,9 +468,9 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
 
         <TabsContent value="members" className="mt-0">
           <Card className="rounded-2xl border-slate-200 shadow-none">
-            <CardHeader className="pb-4">
-              <CardTitle className="text-base text-slate-900">成员列表</CardTitle>
-            </CardHeader>
+            <CardContent padding="md">
+              <CardHead eyebrow="MEMBERS" title="成员列表" />
+            </CardContent>
             <Separator />
             <CardContent className="space-y-3 pt-6">
               {members.length === 0 ? (
@@ -544,9 +545,9 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
 
         <TabsContent value="pending-links" className="mt-0">
           <Card className="rounded-2xl border-slate-200 shadow-none">
-            <CardHeader className="pb-4">
-              <CardTitle className="text-base text-slate-900">待关联责任人</CardTitle>
-            </CardHeader>
+            <CardContent padding="md">
+              <CardHead eyebrow="ASSIGNEE LINK" title="待关联责任人" />
+            </CardContent>
             <Separator />
             <CardContent className="space-y-3 pt-6">
               {unlinkedAssignees.length === 0 ? (
@@ -611,9 +612,9 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
         <TabsContent value="invitations" className="mt-0">
           {canManageTeam ? (
             <Card className="rounded-2xl border-slate-200 shadow-none">
-              <CardHeader className="pb-4">
-                <CardTitle className="text-base text-slate-900">邀请码管理</CardTitle>
-              </CardHeader>
+              <CardContent padding="md">
+                <CardHead eyebrow="INVITATION" title="邀请码管理" />
+              </CardContent>
               <Separator />
               <CardContent className="space-y-3 pt-6">
                 {invitations.length === 0 ? (

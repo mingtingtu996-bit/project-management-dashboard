@@ -1,6 +1,7 @@
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import { MetricCard } from '@/components/ui/metric-card'
 import { Separator } from '@/components/ui/separator'
 import { memo, useEffect, useState } from 'react'
 import { safeStorageSet } from '@/lib/browserStorage'
@@ -19,7 +20,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
 import { SPECIALTY_TYPES } from './GanttViewTypes'
 
@@ -34,65 +34,55 @@ export interface ProjectStatsData {
   criticalPathSummary: string
 }
 
-export interface GanttStatsCardsProps {
+export interface GanttMetricCardsProps {
   projectStats: ProjectStatsData
 }
 
-export const GanttStatsCards = memo(function GanttStatsCards({ projectStats }: GanttStatsCardsProps) {
+export const GanttMetricCards = memo(function GanttMetricCards({ projectStats }: GanttMetricCardsProps) {
   const exceptionCount = projectStats.overdueTask + projectStats.laggedTaskCount + projectStats.pendingStartTasks
   const cards = [
-    { label: '总任务数', value: projectStats.totalTasks, tone: 'text-slate-900', helper: '全部' },
+    { eyebrow: 'TASKS', label: '总任务数', value: projectStats.totalTasks, tone: 'slate' as const, helper: '全部' },
     {
+      eyebrow: 'ACTIVE',
       label: '进行中',
       value: projectStats.inProgressTasks,
-      tone: 'text-blue-600',
+      tone: 'primary' as const,
       helper: projectStats.inProgressTasks > 0 ? '持续推进' : '暂无',
     },
     {
+      eyebrow: 'DONE',
       label: '已完成',
       value: projectStats.completedTasks,
-      tone: 'text-emerald-600',
+      tone: 'success' as const,
       helper: projectStats.totalTasks > 0 ? `${Math.round((projectStats.completedTasks / projectStats.totalTasks) * 100)}%` : '0%',
     },
     {
+      eyebrow: 'RISK',
       label: '异常',
       value: exceptionCount,
-      tone: exceptionCount > 0 ? 'text-amber-600' : 'text-slate-500',
+      tone: exceptionCount > 0 ? 'warning' as const : 'slate' as const,
       helper: exceptionCount > 0 ? `逾期 ${projectStats.overdueTask} / 进度落后 ${projectStats.laggedTaskCount}` : '暂无',
       tooltip: `逾期：已超过计划完成日期。异常（进度落后）：进度落后但未超期的任务。条件未满足：${projectStats.pendingStartTasks} 项。`,
     },
   ]
 
   return (
-    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+    <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
       {cards.map((card) => (
-        <Card key={card.label} variant="metric">
-          <CardContent className="space-y-2 p-5">
-            <div className="flex items-center gap-1.5">
-              <p className="text-xs font-medium text-slate-500">{card.label}</p>
-              {'tooltip' in card && card.tooltip ? (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span className="inline-flex h-4 w-4 cursor-help items-center justify-center rounded-full border border-amber-200 text-xs font-semibold text-amber-600">
-                      ?
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent className="max-w-xs">{card.tooltip}</TooltipContent>
-                </Tooltip>
-              ) : null}
-            </div>
-            <div className="flex items-end justify-between gap-3">
-              <p className={`text-2xl font-semibold tracking-tight ${card.tone}`}>{card.value}</p>
-              {card.helper && <span className="text-xs text-slate-500">{card.helper}</span>}
-            </div>
-          </CardContent>
-        </Card>
+        <MetricCard
+          key={card.label}
+          eyebrow={card.eyebrow}
+          title={card.label}
+          value={card.value}
+          hint={'tooltip' in card && card.tooltip ? `${card.helper} · ${card.tooltip}` : card.helper}
+          tone={card.tone}
+        />
       ))}
     </div>
   )
 })
 
-GanttStatsCards.displayName = 'GanttStatsCards'
+GanttMetricCards.displayName = 'GanttMetricCards'
 
 export interface GanttBatchBarProps {
   allSelected: boolean
@@ -427,7 +417,7 @@ export const GanttFilterBar = memo(function GanttFilterBar({
           </Button>
         </div>
 
-        <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-5">
+        <div className="grid gap-5 lg:grid-cols-2 xl:grid-cols-5">
           <div className="relative xl:col-span-2">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
             <input

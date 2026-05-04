@@ -5,6 +5,7 @@ import { EmptyState } from '@/components/EmptyState'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import { MetricCard } from '@/components/ui/metric-card'
 import { CollapsibleSection } from '@/components/CollapsibleSection'
 import { PlanningPageShell } from '@/components/planning/PlanningPageShell'
 import { PlanningTreeView, type PlanningTreeRow } from '@/components/planning/PlanningTreeView'
@@ -1141,7 +1142,7 @@ function PlanningWorkspaceInner() {
               </div>
               <Badge variant="secondary">深链预置</Badge>
             </div>
-            <div className="grid gap-4 text-sm text-slate-700 sm:grid-cols-2">
+            <div className="grid gap-5 text-sm text-slate-700 sm:grid-cols-2">
               <div>
                 <div className="text-xs uppercase tracking-wider text-slate-500">候选</div>
                 <div className="mt-1 font-medium text-slate-900">{revisionDraftContext.candidateTitle}</div>
@@ -1234,7 +1235,7 @@ function PlanningWorkspaceInner() {
       ) : null}
 
       <CollapsibleSection title={governanceSummaryTitle} defaultOpen={false}>
-        <div className="grid gap-4 xl:grid-cols-3">
+        <div className="grid gap-5 xl:grid-cols-3">
           <PlanningHealthPanel
             status={governanceStatus}
             score={governanceHealthScore}
@@ -1360,7 +1361,7 @@ function PlanningWorkspaceInner() {
             </div>
           </div>
 
-          <div className="grid gap-4 rounded-2xl border border-slate-200 bg-white p-4 sm:grid-cols-3">
+          <div className="grid gap-5 rounded-2xl border border-slate-200 bg-white p-4 sm:grid-cols-3">
             <div className="space-y-1">
               <div className="text-xs uppercase tracking-wider text-slate-500">系统建议采纳率</div>
               <div className="text-sm font-medium text-slate-900">{closeoutItems.length ? `${closeoutProcessedCount}/${closeoutItems.length}` : '暂无'}</div>
@@ -1468,6 +1469,14 @@ function PlanningWorkspaceInner() {
       title="计划编制"
       description=""
       tabs={tabsWithHandlers}
+      metrics={
+        <>
+          <MetricCard eyebrow="BASELINE" title="基线状态" value={hasConfirmedBaseline ? '已确认' : '待建立'} hint="项目基线入口" tone={hasConfirmedBaseline ? 'success' : 'warning'} />
+          <MetricCard eyebrow="MAP" title="映射异常" value={governanceIntegritySummary.mappingIssues} hint="基线/月度映射待处理" tone={governanceIntegritySummary.mappingIssues > 0 ? 'warning' : 'slate'} />
+          <MetricCard eyebrow="CHECK" title="校核异常" value={validationIssues.length} hint={`${selectedCount} 项已选`} tone={validationIssues.length > 0 ? 'danger' : 'success'} />
+          <MetricCard eyebrow="SIGNAL" title="治理信号" value={governanceAlerts.length} hint={governanceHealthLabel} tone={governanceAlerts.length > 0 ? 'warning' : 'slate'} />
+        </>
+      }
       actions={
         planningSurface === 'closeout'
           ? closeoutShellActions

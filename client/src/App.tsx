@@ -2,6 +2,7 @@ import { useState, useEffect, lazy, Suspense, useCallback, type ReactElement } f
 import { HashRouter, Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom'
 
 import { ConditionWarningModal } from '@/components/ConditionWarningModal'
+import { CommandPalette } from '@/components/CommandPalette'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { LoginDialog } from '@/components/LoginDialog'
 import { NotFoundPage } from '@/components/NotFoundPage'
@@ -122,6 +123,7 @@ function AppContent() {
   const setProjects = useSetProjects()
   const [loading, setLoading] = useState(() => !Boolean(getAuthToken()))
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const { isOpen: showLoginDialog, closeLoginDialog, openLoginDialog } = useAuthDialog()
   const location = useLocation()
   const navigate = useNavigate()
@@ -162,6 +164,12 @@ function AppContent() {
         shiftKey: true,
         action: () => setShortcutsOpen(true),
         description: 'Show keyboard shortcuts',
+      },
+      {
+        key: 'k',
+        ctrlKey: true,
+        action: () => setCommandPaletteOpen((open) => !open),
+        description: 'Open command palette',
       },
       ...navShortcuts(),
     ],
@@ -311,7 +319,7 @@ function AppContent() {
       <SkipLink targetId="main-content" />
       <Sidebar />
       <div className="flex flex-1 flex-col overflow-hidden">
-        <Header />
+        <Header onOpenCommandPalette={() => setCommandPaletteOpen(true)} />
         <OfflineBanner />
         <main
           id="main-content"
@@ -366,6 +374,7 @@ function AppContent() {
       </div>
       <Toaster />
       <OnboardingGuide />
+      <CommandPalette open={commandPaletteOpen} onOpenChange={setCommandPaletteOpen} />
       <ShortcutsHelp open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
       <FeedbackButton />
       <LoginDialog isOpen={showLoginDialog} onClose={closeLoginDialog} />

@@ -9,6 +9,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
 import { Checkbox } from '@/components/ui/checkbox'
 import { DisabledReasonTooltip } from '@/components/ui/disabled-reason-tooltip'
 import {
@@ -47,7 +48,7 @@ import {
 import { DrawingDetailDrawer } from './components/DrawingDetailDrawer'
 import { DrawingLedger } from './components/DrawingLedger'
 import { DrawingPackageBoard, type DrawingPackageGroup } from './components/DrawingPackageBoard'
-import { DrawingReadinessSummary, type DrawingReadinessMetrics } from './components/DrawingReadinessSummary'
+import { DrawingReadinessMetricGrid, type DrawingReadinessMetrics } from './components/DrawingReadinessMetricGrid'
 import { DrawingVersionDialog } from './components/DrawingVersionDialog'
 import type {
   DrawingBoardSummary,
@@ -1198,7 +1199,7 @@ export default function Drawings() {
 
   const loadingSkeleton = (
     <div className="space-y-8">
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
         {[1, 2, 3, 4].map((item) => (
           <Card key={item} className="surface-card">
             <CardContent className="space-y-3 p-5">
@@ -1280,10 +1281,12 @@ export default function Drawings() {
         loadingSkeleton
       ) : (
         <div className="space-y-8">
-          <DrawingReadinessSummary summary={summary} projectName={projectName} metrics={readinessMetrics} />
+          <DrawingReadinessMetricGrid summary={summary} projectName={projectName} metrics={readinessMetrics} />
 
             <Card variant="surface">
-              <CardContent className="grid gap-4 p-5 lg:grid-cols-[minmax(16.25rem,1.6fr)_repeat(4,minmax(10rem,0.8fr))]">
+              <CardContent className="space-y-5 p-5">
+                <CardHead eyebrow="FILTER" title="图纸筛选" />
+                <div className="grid gap-5 lg:grid-cols-[minmax(16.25rem,1.6fr)_repeat(4,minmax(10rem,0.8fr))]">
                 <div className="space-y-2">
                   <Label htmlFor="drawing-search" className="text-xs text-slate-500">
                     搜索
@@ -1420,6 +1423,7 @@ export default function Drawings() {
                     </div>
                   </div>
                 </div>
+                </div>
               </CardContent>
             </Card>
 
@@ -1508,14 +1512,11 @@ export default function Drawings() {
             </DialogDescription>
           </DialogHeader>
 
-          <div className="grid gap-4 lg:grid-cols-[0.92fr_1.08fr]">
+          <div className="grid gap-5 lg:grid-cols-[0.92fr_1.08fr]">
             <Card className="surface-card">
               <CardContent className="space-y-3 p-5">
                 <div className="flex items-center justify-between gap-2">
-                  <div>
-                    <div className="text-sm font-semibold text-slate-900">规则列表</div>
-                    <div className="text-xs text-slate-500">当前项目下的可用规则</div>
-                  </div>
+                  <CardHead eyebrow="RULES" title="审图规则列表" />
                   <DisabledReasonTooltip reason={!canEdit ? READ_ONLY_ACTION_REASON : null}>
                     <Button
                       variant="outline"
@@ -1616,14 +1617,7 @@ export default function Drawings() {
             <Card className="surface-card">
               <CardContent className="space-y-4 p-5">
                 <div className="flex items-center justify-between gap-2">
-                  <div>
-                    <div className="text-sm font-semibold text-slate-900">
-                      {selectedReviewRuleId ? '编辑审图规则' : '新增审图规则'}
-                    </div>
-                    <div className="text-xs text-slate-500">
-                      {selectedReviewRuleId ? '修改后会立即覆盖当前规则。' : '先填一条规则，再按需调整。'}
-                    </div>
-                  </div>
+                  <CardHead eyebrow="RULE EDITOR" title={selectedReviewRuleId ? '编辑审图规则' : '新增审图规则'} />
                   {selectedReviewRuleId ? (
                     <Button variant="ghost" size="sm" onClick={beginCreateReviewRule}>
                       取消编辑
@@ -1631,7 +1625,7 @@ export default function Drawings() {
                   ) : null}
                 </div>
 
-                <div className="grid gap-4 md:grid-cols-2">
+                <div className="grid gap-5 md:grid-cols-2">
                   <div className="space-y-2">
                     <Label htmlFor="review-rule-package-code">图纸包编号</Label>
                     <Input
@@ -1769,7 +1763,7 @@ export default function Drawings() {
             <DialogDescription className="sr-only">新建图纸包</DialogDescription>
           </DialogHeader>
 
-          <div className="grid gap-4 py-2">
+          <div className="grid gap-5 py-2">
             <div className="space-y-2">
               <Label htmlFor="templateCode">模板</Label>
               <Select
@@ -1799,7 +1793,7 @@ export default function Drawings() {
               </Select>
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-5 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="packageName">图纸包名称</Label>
                 <Input
@@ -1828,7 +1822,7 @@ export default function Drawings() {
               </div>
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-5 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="disciplineType">专业</Label>
                 <Input

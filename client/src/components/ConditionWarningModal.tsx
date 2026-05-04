@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { AlertTriangle, Bell } from 'lucide-react'
 
 interface ConditionWarningModalProps {
@@ -50,6 +50,9 @@ export function ConditionWarningModal({
             </span>
             <span>提醒汇总</span>
           </DialogTitle>
+          <DialogDescription className="sr-only">
+            查看当前任务的提醒，并跳转到问题与风险页面处理。
+          </DialogDescription>
         </DialogHeader>
 
         <div className="flex flex-col items-center justify-center gap-2 py-8">

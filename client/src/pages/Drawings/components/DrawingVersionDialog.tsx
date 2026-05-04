@@ -148,6 +148,9 @@ export function DrawingVersionDialog({
           <DialogTitle className="text-slate-900">
             {packageCard?.packageName ? `${packageCard.packageName} 版本窗口` : '版本变更窗口'}
           </DialogTitle>
+          <DialogDescription className="sr-only">
+            查看图纸包版本记录，新增版本或设置当前有效版本。
+          </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-3">

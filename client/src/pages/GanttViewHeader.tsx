@@ -91,7 +91,7 @@ export function GanttViewHeader({
   return (
     <div data-testid="task-workspace-layer-l1" className="space-y-4">
       <PageHeader
-        eyebrow={PROJECT_NAVIGATION_LABELS.tasks}
+        eyebrow="任务管控"
         title="甘特图"
       >
         <div className="inline-flex rounded-xl border border-slate-200 bg-white p-1">

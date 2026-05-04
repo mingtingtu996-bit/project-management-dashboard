@@ -1,5 +1,6 @@
 import { EmptyState } from '@/components/EmptyState'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
 import {
   Table,
   TableBody,
@@ -57,9 +58,9 @@ export function DeviationDetailTable({
 }) {
   return (
     <Card data-testid="deviation-detail-table" variant="surface">
-      <CardHeader className="pb-3">
-        <CardTitle className="text-base">{mainlineLabel} · 详情表</CardTitle>
-      </CardHeader>
+      <CardContent padding="md" className="pb-0">
+        <CardHead eyebrow="DETAIL" title={`${mainlineLabel} · 详情表`} />
+      </CardContent>
       <CardContent className="space-y-4">
         {rows.length === 0 ? (
           <EmptyState
@@ -75,7 +76,7 @@ export function DeviationDetailTable({
               <TableRow className="py-3">
                 <TableHead scope="col" className="px-4 py-3 font-medium" style={{ width: DEVIATION_DETAIL_COLUMN_WIDTHS.title }}>条目</TableHead>
                 <TableHead scope="col" className="px-4 py-3 font-medium" style={{ width: DEVIATION_DETAIL_COLUMN_WIDTHS.status }}>状态</TableHead>
-                <TableHead scope="col" className="px-4 py-3 text-right font-medium tabular-nums" style={{ width: DEVIATION_DETAIL_COLUMN_WIDTHS.deviation }}>偏差</TableHead>
+                <TableHead scope="col" className="px-4 py-3 text-right font-medium num-mono" style={{ width: DEVIATION_DETAIL_COLUMN_WIDTHS.deviation }}>偏差</TableHead>
                 <TableHead scope="col" className="px-4 py-3 font-medium" style={{ width: DEVIATION_DETAIL_COLUMN_WIDTHS.relation }}>关系</TableHead>
               </TableRow>
             </TableHeader>
@@ -96,7 +97,7 @@ export function DeviationDetailTable({
                 >
                   <TableCell className="max-w-0 px-4 py-3" style={{ width: DEVIATION_DETAIL_COLUMN_WIDTHS.title }}>
                     <div className="truncate font-medium text-slate-900" title={row.title}>{row.title}</div>
-                    <div className="mt-1 text-xs text-slate-500 tabular-nums">
+                    <div className="mt-1 text-xs text-slate-500 num-mono">
                       计划 {row.planned_progress ?? 0}% · 实际 {row.actual_progress ?? 0}% · {row.actual_date || '无实际日期'}
                     </div>
                     {row.reason ? <div className="mt-2 line-clamp-2 text-xs leading-5 text-slate-500" title={row.reason}>{row.reason}</div> : null}
@@ -105,7 +106,7 @@ export function DeviationDetailTable({
                     <div className="truncate" title={row.mainline}>{row.mainline}</div>
                     <div className="mt-1 truncate text-xs text-slate-500" title={row.status}>{row.status}</div>
                   </TableCell>
-                  <TableCell className="px-4 py-3 text-right text-slate-700 tabular-nums" style={{ width: DEVIATION_DETAIL_COLUMN_WIDTHS.deviation }}>
+                  <TableCell className="px-4 py-3 text-right text-slate-700 num-mono" style={{ width: DEVIATION_DETAIL_COLUMN_WIDTHS.deviation }}>
                     <div>{row.deviation_days} 天</div>
                     <div className="mt-1 text-xs text-slate-500">{row.deviation_rate}%</div>
                   </TableCell>

@@ -195,7 +195,6 @@ export function BaselineConfirmDialog({
             基线确认弹窗
           </DialogTitle>
           <DialogDescription className="sr-only">
-            查看当前基线版本摘要、变更分类计数和完整差异视图，再决定是否确认发布。
           </DialogDescription>
         </DialogHeader>
 
@@ -276,7 +275,6 @@ export function BaselineConfirmDialog({
                           onClick={onOpenRevisionPool}
                         >
                           <FolderGit2 className="h-4 w-4" />
-                          打开计划修订候选
                         </Button>
                       ) : null}
                       {canQueueRealignment && onQueueRealignment ? (
@@ -307,7 +305,7 @@ export function BaselineConfirmDialog({
 
           <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-2xl font-bold text-slate-900 tabular-nums">{counts.total}</span>
+              <span className="num-display text-2xl font-semibold text-slate-900">{counts.total}</span>
               <span className="text-sm text-slate-500">项变更</span>
               <span className={cn('rounded-full px-2 py-0.5 text-xs font-medium', impactClass)}>
                 {impactLabel}
@@ -325,7 +323,7 @@ export function BaselineConfirmDialog({
               {(['新增', '修改', '里程碑变动'] as BaselineDiffKind[]).map((kind) => (
                 <div key={kind} className="rounded-xl border border-white bg-white px-3 py-2">
                   <div className="text-xs text-slate-500">{kindMeta[kind].label}</div>
-                  <div className="mt-1 text-lg font-semibold text-slate-900 tabular-nums">{counts[kind]}</div>
+                  <div className="num-display mt-1 text-lg font-semibold text-slate-900">{counts[kind]}</div>
                 </div>
               ))}
             </div>

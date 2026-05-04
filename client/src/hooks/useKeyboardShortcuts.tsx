@@ -17,7 +17,7 @@ export function useKeyboardShortcuts(shortcuts: Shortcut[], enabled = true) {
     if (typeof event.key !== 'string' || event.key.length === 0) return
 
     // 如果用户正在输入，不触发导航/非搜索快捷键
-    // 但 Ctrl+K / Ctrl+F 应该仍可触发（聚焦搜索框）
+    // 但 Ctrl+K / Ctrl+F 应该仍可触发（命令面板 / 搜索）
     const target = event.target as HTMLElement
     const isTyping = (
       target.tagName === 'INPUT' ||
@@ -40,7 +40,7 @@ export function useKeyboardShortcuts(shortcuts: Shortcut[], enabled = true) {
       const altMatch = shortcut.altKey ? event.altKey : !event.altKey
 
       if (keyMatch && ctrlMatch && shiftMatch && altMatch) {
-        // Ctrl 组合键在输入框中也允许（比如 Ctrl+K 聚焦搜索）
+        // Ctrl 组合键在输入框中也允许（比如 Ctrl+K 打开命令面板）
         // 非 Ctrl 组合键在输入状态下跳过
         if (isTyping && !shortcut.ctrlKey) continue
 
@@ -76,7 +76,7 @@ interface ShortcutsHelpProps {
 
 export function ShortcutsHelp({ open, onOpenChange }: ShortcutsHelpProps) {
   const shortcuts = [
-    { key: 'Ctrl + K', description: '聚焦搜索框' },
+    { key: 'Ctrl + K', description: '打开命令面板' },
     { key: 'Ctrl + F', description: '聚焦搜索框' },
     { key: 'Ctrl + 1', description: `跳转：${PROJECT_NAVIGATION_LABELS.dashboard}` },
     { key: 'Ctrl + 2', description: `跳转：${PROJECT_NAVIGATION_LABELS.milestones}` },
@@ -114,4 +114,3 @@ export function ShortcutsHelp({ open, onOpenChange }: ShortcutsHelpProps) {
     </Dialog>
   )
 }
-

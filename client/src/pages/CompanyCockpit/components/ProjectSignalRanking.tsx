@@ -1,7 +1,8 @@
 import { Button } from '@/components/ui/button'
 import { ChartAccessibleWrapper } from '@/components/ChartAccessibleWrapper'
 import { EmptyState } from '@/components/EmptyState'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
 import { BellDot, ChevronRight, Route, ShieldAlert, TimerReset, TriangleAlert } from 'lucide-react'
 
 import type { ProjectRow } from '../types'
@@ -52,22 +53,19 @@ export function ProjectSignalRanking({ projectRows, onNavigate }: ProjectSignalR
   const totalDelayRequests = rankedRows.reduce((sum, row) => sum + (row.summary?.activeDelayRequests ?? 0), 0)
 
   return (
-    <Card className="rounded-2xl border border-slate-100 bg-slate-50 shadow-none" data-testid="company-signal-ranking">
-      <CardHeader className="space-y-1 pb-3">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <CardTitle className="text-base font-semibold text-slate-900" data-testid="company-signal-ranking-title">
-              项目信号排行
-            </CardTitle>
-          </div>
+    <Card className="surface-card" data-testid="company-signal-ranking">
+      <CardContent padding="md" className="space-y-4">
+        <CardHead
+          eyebrow="SIGNALS"
+          title="项目信号排行"
+          action={
           <div className="flex flex-wrap justify-end gap-2 text-xs">
             <span className="rounded-full bg-red-50 px-3 py-1 text-red-700">需关注 {attentionProjectCount}</span>
             <span className="rounded-full bg-amber-50 px-3 py-1 text-amber-700">未读预警 {totalUnreadWarnings}</span>
             <span className="rounded-full bg-blue-50 px-3 py-1 text-blue-700">延期审批 {totalDelayRequests}</span>
           </div>
-        </div>
-      </CardHeader>
-      <CardContent>
+          }
+        />
         {rankedRows.length === 0 ? (
           <EmptyState
             title="暂无项目信号数据"
@@ -149,15 +147,15 @@ export function ProjectSignalRanking({ projectRows, onNavigate }: ProjectSignalR
                   </div>
 
                   <div className="flex flex-wrap gap-2 text-xs">
-                    <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-700">
+                    <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-700 ring-1 ring-inset ring-slate-200/60">
                       <TimerReset className="mr-1 inline h-3.5 w-3.5" />
                       延期审批 {summary?.activeDelayRequests ?? 0}
                     </span>
-                    <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-700">
+                    <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-700 ring-1 ring-inset ring-slate-200/60">
                       <ShieldAlert className="mr-1 inline h-3.5 w-3.5" />
                       活跃阻碍 {summary?.activeObstacles ?? summary?.activeObstacleCount ?? 0}
                     </span>
-                    <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-700">
+                    <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-700 ring-1 ring-inset ring-slate-200/60">
                       <Route className="mr-1 inline h-3.5 w-3.5" />
                       关键路径受影响 {summary?.criticalPathAffectedTasks ?? 0}
                     </span>
@@ -167,7 +165,7 @@ export function ProjectSignalRanking({ projectRows, onNavigate }: ProjectSignalR
                         ? `关账超期 ${closeoutOverdueDays} 天`
                         : `关账 ${summary?.monthlyCloseStatus ?? '未开始'}`}
                     </span>
-                    <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-700">
+                    <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-700 ring-1 ring-inset ring-slate-200/60">
                       未读预警 {summary?.unreadWarningCount ?? 0}
                     </span>
                   </div>

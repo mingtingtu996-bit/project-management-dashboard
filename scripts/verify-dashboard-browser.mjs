@@ -645,7 +645,8 @@ async function main() {
     const dialogText = await page.getByTestId('dashboard-data-quality-detail-dialog').innerText()
     assert(dialogText.includes('数据可靠性维度分解'), 'Dashboard data quality dialog did not render expected title')
     await page.screenshot({ path: join(outputDir, 'dashboard-page-quality-dialog.png'), fullPage: true })
-    await page.keyboard.press('Escape')
+    await page.getByTestId('dashboard-data-quality-detail-dialog').locator('button').first().click()
+    await page.getByTestId('dashboard-data-quality-detail-dialog').waitFor({ state: 'hidden', timeout: 10000 })
 
     const compareReportsHref = await page.getByTestId('dashboard-compare-reports-link').getAttribute('href')
     assert(
@@ -654,11 +655,14 @@ async function main() {
       `Unexpected compare reports link: ${compareReportsHref}`,
     )
 
-    const attentionPanel = page.getByTestId('dashboard-attention-panel')
-    await attentionPanel.waitFor({ state: 'visible', timeout: 10000 })
-    await attentionPanel.getByRole('button', { name: /今日动态/ }).click()
+    await page.getByTestId('dashboard-focus-tasks-panel').waitFor({ state: 'visible', timeout: 10000 })
     await page.getByTestId('dashboard-live-panel').waitFor({ state: 'visible', timeout: 10000 })
-    await page.screenshot({ path: join(outputDir, 'dashboard-page-today-tab.png'), fullPage: true })
+    await page.screenshot({ path: join(outputDir, 'dashboard-page-row3-split.png'), fullPage: true })
+
+    await page.getByRole('tab', { name: /执行概况/ }).click()
+    await page.getByText('进度健康指标').first().waitFor({ state: 'visible', timeout: 10000 })
+    await page.getByText('任务执行情况').first().waitFor({ state: 'visible', timeout: 10000 })
+    await page.screenshot({ path: join(outputDir, 'dashboard-page-execution-health.png'), fullPage: true })
 
     assert(apiFailures.length === 0, `API proxy failures detected: ${JSON.stringify(apiFailures)}`)
     assert(pageErrors.length === 0, `Browser page errors detected: ${pageErrors.join(' | ')}`)
@@ -676,7 +680,8 @@ async function main() {
       screenshots: {
         initial: join(outputDir, 'dashboard-page-initial.png'),
         qualityDialog: join(outputDir, 'dashboard-page-quality-dialog.png'),
-        today: join(outputDir, 'dashboard-page-today-tab.png'),
+        row3Split: join(outputDir, 'dashboard-page-row3-split.png'),
+        executionHealth: join(outputDir, 'dashboard-page-execution-health.png'),
       },
     }
 

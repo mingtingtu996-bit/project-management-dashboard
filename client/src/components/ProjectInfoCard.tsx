@@ -3,7 +3,8 @@ import { Building2, Calendar, ChevronDown, ChevronUp, Plus, Timer } from 'lucide
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
 import { Input } from '@/components/ui/input'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { Textarea } from '@/components/ui/textarea'
@@ -351,17 +352,12 @@ export default function ProjectInfoCard({
 
   return (
     <Card variant="detail">
-      <CardHeader className="space-y-3 pb-3">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0 flex-1">
-            <CardTitle className="mb-1 flex items-center gap-1.5 text-sm font-medium text-slate-500">
-              <Building2 className="h-3.5 w-3.5 flex-shrink-0 text-blue-500" />
-              项目信息
-            </CardTitle>
-            <h3 className="truncate text-base font-semibold text-slate-900">{projectName}</h3>
-          </div>
-          <StatusBadge status={status} className="text-xs" fallbackLabel="进行中" />
-        </div>
+      <CardContent padding="md" className="space-y-3">
+        <CardHead
+          eyebrow="PROJECT INFO"
+          title={projectName}
+          action={<StatusBadge status={status} className="text-xs" fallbackLabel="进行中" />}
+        />
 
         <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
           <div className="flex items-center justify-between gap-3">
@@ -471,7 +467,7 @@ export default function ProjectInfoCard({
             </Card>
           )}
         </div>
-      </CardHeader>
+      </CardContent>
 
       <CardContent className="space-y-4">
         {onSaveBasicInfo && (

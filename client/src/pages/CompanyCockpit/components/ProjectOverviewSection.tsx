@@ -2,7 +2,8 @@ import { Link } from 'react-router-dom'
 
 import { Button } from '@/components/ui/button'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
 import { Separator } from '@/components/ui/separator'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import type { Project } from '@/lib/localDb'
@@ -47,8 +48,8 @@ function isArchivedProject(project: Project) {
 
 function buildProjectCardClass(attentionRequired: boolean) {
   return attentionRequired
-    ? 'rounded-xl border border-orange-200 border-l-4 border-l-orange-500 bg-orange-50/40 p-6 shadow-[var(--el-2)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[var(--el-hover)] cursor-pointer'
-    : 'rounded-xl border border-slate-200 bg-white p-6 shadow-[var(--el-1)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[var(--el-hover)] cursor-pointer'
+    ? 'rounded-xl border border-orange-200 bg-orange-50/40 p-5 shadow-[var(--el-2)] ring-1 ring-inset ring-orange-200 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[var(--el-hover)] cursor-pointer'
+    : 'rounded-xl border border-slate-200 bg-white p-5 shadow-[var(--el-1)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[var(--el-hover)] cursor-pointer'
 }
 
 function healthDotClass(score: number) {
@@ -76,14 +77,12 @@ export function ProjectOverviewSection({
 
   return (
     <Card variant="surface" className="border-slate-100" data-testid="company-project-overview">
-      <CardHeader className="space-y-4 pb-0">
+      <CardContent padding="md" className="space-y-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <CardTitle className="text-2xl font-semibold tracking-tight text-slate-900" data-testid="company-project-overview-title">
-              项目概览
-            </CardTitle>
+          <div data-testid="company-project-overview-title">
+            <CardHead eyebrow="PROJECTS" title="项目概览" />
           </div>
-          <div className="rounded-full border border-slate-200 bg-slate-50 px-4 py-2 text-xs text-slate-500">
+          <div className="rounded-full bg-slate-50 px-4 py-2 text-xs text-slate-500 ring-1 ring-inset ring-slate-200/60">
             {projectRows.length === totalProjects ? `共 ${totalProjects} 个项目` : `当前筛出 ${projectRows.length} / ${totalProjects} 个项目`}
           </div>
         </div>
@@ -115,9 +114,7 @@ export function ProjectOverviewSection({
           <div className="text-xs text-slate-500" />
         </div>
         <Separator />
-      </CardHeader>
 
-      <CardContent className="pt-6">
         {projectRows.length === 0 ? (
           <div className="rounded-2xl border border-slate-100 bg-white px-8 py-20 text-center">
             <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-slate-100">
@@ -153,7 +150,7 @@ export function ProjectOverviewSection({
                           <div className="flex flex-wrap items-center gap-2">
                             <h3 className="truncate text-base font-medium text-slate-900">{project.name}</h3>
                             <span
-                              className={cn('h-2.5 w-2.5 rounded-full', healthDotClass(row.healthScore))}
+                              className={cn('h-2 w-2 rounded-full', healthDotClass(row.healthScore))}
                               aria-label={`健康度 ${row.healthScore}`}
                             />
                             <span className={`badge-base ${statusBadgeClass(summaryStatus)}`}>{summaryStatus}</span>
@@ -217,7 +214,7 @@ export function ProjectOverviewSection({
                       <div>
                         <div className="flex items-center justify-between gap-3">
                           <div className="text-xs text-slate-500">总体进度</div>
-                          <div className="text-2xl font-semibold tabular-nums text-slate-900">
+                          <div className="num-display text-2xl font-semibold text-slate-900">
                             {overallProgress}%
                           </div>
                         </div>
@@ -232,11 +229,11 @@ export function ProjectOverviewSection({
                       <div className="grid gap-4 sm:grid-cols-2">
                         <div className="rounded-xl border border-white bg-white px-4 py-3">
                           <div className="text-xs text-slate-500">完成率</div>
-                          <div className="mt-1 text-xl font-semibold tabular-nums text-slate-900">{overallProgress}%</div>
+                          <div className="num-display mt-1 text-xl font-semibold text-slate-900">{overallProgress}%</div>
                         </div>
                         <div className="rounded-xl border border-white bg-white px-4 py-3">
                           <div className="text-xs text-slate-500">风险数</div>
-                          <div className="mt-1 text-xl font-semibold tabular-nums text-slate-900">{activeRiskCount}</div>
+                          <div className="num-display mt-1 text-xl font-semibold text-slate-900">{activeRiskCount}</div>
                         </div>
                       </div>
                     </div>

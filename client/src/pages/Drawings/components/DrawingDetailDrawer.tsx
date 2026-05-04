@@ -74,9 +74,13 @@ export function DrawingDetailDrawer({
                 <DialogTitle className="text-xl text-slate-900">
                   {packageCard?.packageName ?? '图纸包详情'}
                 </DialogTitle>
+                <DialogDescription className="sr-only">
+                  查看图纸包应有项、版本记录、关联承载和自动识别结果。
+                </DialogDescription>
               </div>
               {packageCard && (
-                <Badge variant="secondary" className="rounded-full px-3 py-1 text-xs">
+                <Badge variant="secondary" className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs">
+                  <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" aria-hidden="true" />
                   {DRAWING_REVIEW_MODE_LABELS[packageCard.reviewMode]}
                 </Badge>
               )}
@@ -535,7 +539,7 @@ function InfoBox({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3">
       <div className="text-xs text-slate-500">{label}</div>
-      <div className="mt-1 font-medium text-slate-900">{value}</div>
+      <div className="num-display mt-1 font-medium text-slate-900">{value}</div>
     </div>
   )
 }

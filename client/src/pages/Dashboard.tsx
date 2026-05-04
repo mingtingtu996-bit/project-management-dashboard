@@ -39,7 +39,6 @@ import { LoadingState } from '@/components/ui/loading-state'
 import { LucideIcon } from '@/components/ui/lucide-icon'
 import { MetricCard as SharedMetricCard } from '@/components/ui/metric-card'
 import { Separator } from '@/components/ui/separator'
-import { SegmentedControl } from '@/components/ui/segmented-control'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { PROJECT_NAVIGATION_LABELS } from '@/config/navigation'
@@ -438,11 +437,11 @@ function DashboardMetricCards({
   )
 }
 
-const todayLiveTypeConfig: Record<TodayLiveType, { color: string; dot: string; label: string }> = {
-  warning: { color: 'border-l-rose-500', dot: 'bg-rose-500', label: '预警' },
-  due_task: { color: 'border-l-amber-500', dot: 'bg-amber-500', label: '到期' },
-  change: { color: 'border-l-blue-500', dot: 'bg-blue-500', label: '变更' },
-  new_risk: { color: 'border-l-slate-400', dot: 'bg-slate-400', label: '新增' },
+const todayLiveTypeConfig: Record<TodayLiveType, { dot: string; label: string }> = {
+  warning: { dot: 'bg-rose-500', label: '预警' },
+  due_task: { dot: 'bg-amber-500', label: '到期' },
+  change: { dot: 'bg-blue-500', label: '变更' },
+  new_risk: { dot: 'bg-slate-400', label: '新增' },
 }
 
 function TodayLiveListPanel({
@@ -459,7 +458,7 @@ function TodayLiveListPanel({
   embedded?: boolean
 }) {
   const previewItems = items.slice(0, 8)
-  const panelClassName = embedded ? '' : 'surface-card p-5'
+  const panelClassName = embedded ? '' : 'surface-card h-full p-5'
 
   return (
     <section data-testid="dashboard-live-panel" className={panelClassName}>
@@ -582,7 +581,7 @@ function DashboardPageTitle({
               >
                 数据可靠性 {confidence ? `${Math.round(confidence.score)}%` : '--'}
               </StatusBadge>
-              <span className="inline-flex h-5 items-center rounded-full bg-blue-50 px-2 text-[10.5px] text-blue-700 ring-1 ring-inset ring-blue-200/60">
+              <span className="num-mono inline-flex h-5 items-center rounded-full bg-blue-50 px-2 text-[10.5px] text-blue-700 ring-1 ring-inset ring-blue-200/60">
                 进度 {progressValue}%
               </span>
             </div>
@@ -590,7 +589,7 @@ function DashboardPageTitle({
         </div>
 
         <div className="flex flex-wrap items-center gap-3 xl:justify-end">
-          <span className="text-[11px] text-slate-400">更新于 {getMinutesAgo(fetchCompleteTime)}</span>
+          <span className="num-mono text-[11px] text-slate-400">更新于 {getMinutesAgo(fetchCompleteTime)}</span>
           <Button
             variant="outline"
             size="sm"
@@ -705,6 +704,23 @@ function WeeklyDigestPanel({
         : nearestMilestoneDelta === 0
           ? '今日到期'
           : `剩余 ${Math.abs(nearestMilestoneDelta)} 天`
+  const focusItems = digest
+    ? [
+        ...(digest.top_delayed_tasks ?? []).slice(0, 3).map((task) => ({
+          title: task.title,
+          meta: `${task.delay_days} 天延期${task.assignee ? ` · ${task.assignee}` : ''}`,
+        })),
+        (digest.critical_blocked_count ?? 0) > 0
+          ? { title: '关键阻碍待解除', meta: `${digest.critical_blocked_count} 个阻碍影响关键路径` }
+          : null,
+        (digest.new_risks_count ?? 0) > 0
+          ? { title: '本周新增风险', meta: `${digest.new_risks_count} 个新增${digest.max_risk_level ? ` · 最高 ${digest.max_risk_level}` : ''}` }
+          : null,
+        digest.abnormal_responsibilities?.[0]
+          ? { title: '责任主体需关注', meta: digest.abnormal_responsibilities[0].name }
+          : null,
+      ].filter((item): item is { title: string; meta: string } => Boolean(item)).slice(0, 3)
+    : []
 
   return (
     <section data-testid="dashboard-weekly-digest" className={panelClassName}>
@@ -718,7 +734,7 @@ function WeeklyDigestPanel({
           className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 py-8"
         />
       ) : (
-        <div className="mt-5">
+        <div className="mt-5 space-y-4">
           <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
             {[
               { label: '本周新增风险', value: `${digest.new_risks_count ?? 0}`, hint: digest.max_risk_level ? `最高等级 ${digest.max_risk_level}` : '暂无新增风险' },
@@ -732,6 +748,19 @@ function WeeklyDigestPanel({
               </div>
             ))}
           </div>
+          {focusItems.length > 0 ? (
+            <div className="border-t border-slate-100 pt-3">
+              <div className="meta-text mb-2 font-medium text-slate-500">重点关注事项</div>
+              <div className="space-y-2">
+                {focusItems.map((item) => (
+                  <div key={`${item.title}-${item.meta}`} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-lg bg-slate-50/60 px-3 py-2">
+                    <span className="truncate text-xs font-medium text-slate-700">{item.title}</span>
+                    <span className="meta-muted max-w-[10rem] truncate text-right">{item.meta}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </div>
       )}
     </section>
@@ -930,7 +959,6 @@ export default function Dashboard() {
   const [todayLiveLoading, setTodayLiveLoading] = useState(false)
   const [todayLiveError, setTodayLiveError] = useState<string | null>(null)
   const [fetchCompleteTime, setFetchCompleteTime] = useState(0)
-  const [attentionPanel, setAttentionPanel] = useState<'today' | 'focus'>('today')
   const summaryAbortRef = useRef<AbortController | null>(null)
   const dataQualityAbortRef = useRef<AbortController | null>(null)
   const todayLiveAbortRef = useRef<AbortController | null>(null)
@@ -1259,7 +1287,7 @@ export default function Dashboard() {
   }
 
   return (
-    <div data-testid="dashboard-page" className="page-shell page-enter space-y-6">
+    <div data-testid="dashboard-page" className="page-shell page-enter">
       <DashboardPageTitle
         currentProject={currentProject}
         currentStatus={currentStatus}
@@ -1279,34 +1307,17 @@ export default function Dashboard() {
         </Alert>
       ) : null}
 
-      <section data-testid="dashboard-attention-panel" className="surface-card p-5">
-        <CardHead
-          eyebrow="ATTENTION"
-          title="今日待处理与重点任务"
-          action={
-            <SegmentedControl
-              options={[
-                { value: 'today', label: '今日动态' },
-                { value: 'focus', label: '重点任务' },
-              ]}
-              value={attentionPanel}
-              onChange={(value) => setAttentionPanel(value as 'today' | 'focus')}
-            />
-          }
-        />
-
-        <div className="mt-5">
-          {attentionPanel === 'today' ? (
-            <TodayLiveListPanel
-              projectId={projectId}
-              loading={todayLiveLoading || (Boolean(todayLiveError) && livePanelLoading)}
-              items={effectiveTodayLiveItems}
-              totalCount={effectiveTodayLiveItems.length}
-              embedded
-            />
-          ) : (
-            <RecentTasksCard projectId={projectId} tasks={focusTasks} embedded />
-          )}
+      <section data-testid="dashboard-attention-panel" className="grid grid-cols-1 gap-5 xl:grid-cols-12">
+        <div className="xl:col-span-8">
+          <RecentTasksCard projectId={projectId} tasks={focusTasks} />
+        </div>
+        <div className="xl:col-span-4">
+          <TodayLiveListPanel
+            projectId={projectId}
+            loading={todayLiveLoading || (Boolean(todayLiveError) && livePanelLoading)}
+            items={effectiveTodayLiveItems}
+            totalCount={effectiveTodayLiveItems.length}
+          />
         </div>
       </section>
 

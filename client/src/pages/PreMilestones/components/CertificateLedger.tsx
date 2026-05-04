@@ -269,8 +269,8 @@ export function CertificateLedger({
                 <TableHead scope="col" className="px-3 py-2 font-medium" style={{ width: CERTIFICATE_LEDGER_COLUMN_WIDTHS.certificates }}>所属证件</TableHead>
                 <TableHead scope="col" className="px-3 py-2 font-medium" style={{ width: CERTIFICATE_LEDGER_COLUMN_WIDTHS.stage }}>当前阶段</TableHead>
                 <TableHead scope="col" className="px-3 py-2 font-medium" style={{ width: CERTIFICATE_LEDGER_COLUMN_WIDTHS.status }}>当前状态</TableHead>
-                <TableHead scope="col" className="px-3 py-2 text-right font-medium tabular-nums" style={{ width: CERTIFICATE_LEDGER_COLUMN_WIDTHS.plannedDate }}>计划完成</TableHead>
-                <TableHead scope="col" className="px-3 py-2 text-right font-medium tabular-nums" style={{ width: CERTIFICATE_LEDGER_COLUMN_WIDTHS.actualDate }}>实际完成</TableHead>
+                <TableHead scope="col" className="px-3 py-2 text-right font-medium num-mono" style={{ width: CERTIFICATE_LEDGER_COLUMN_WIDTHS.plannedDate }}>计划完成</TableHead>
+                <TableHead scope="col" className="px-3 py-2 text-right font-medium num-mono" style={{ width: CERTIFICATE_LEDGER_COLUMN_WIDTHS.actualDate }}>实际完成</TableHead>
                 <TableHead scope="col" className="px-3 py-2 font-medium" style={{ width: CERTIFICATE_LEDGER_COLUMN_WIDTHS.authority }}>审批部门</TableHead>
                 <TableHead scope="col" className="px-3 py-2 text-center font-medium" style={{ width: CERTIFICATE_LEDGER_COLUMN_WIDTHS.supplement }}>补正</TableHead>
                 <TableHead scope="col" className="px-3 py-2 text-center font-medium" style={{ width: CERTIFICATE_LEDGER_COLUMN_WIDTHS.blocked }}>阻塞</TableHead>
@@ -282,7 +282,7 @@ export function CertificateLedger({
                 <Fragment key={group.stage}>
                   <TableRow className="bg-slate-100/80">
                     <TableCell colSpan={10} className="px-3 py-2 text-xs font-semibold text-slate-700">
-                      {group.stage} <span className="ml-2 font-normal tabular-nums text-slate-500">{group.items.length} 项</span>
+                      {group.stage} <span className="ml-2 font-normal num-mono text-slate-500">{group.items.length} 项</span>
                     </TableCell>
                   </TableRow>
                   {group.items.map((item, index) => {
@@ -356,8 +356,8 @@ export function CertificateLedger({
                         </div>
                       </div>
                     </TableCell>
-                    <TableCell className="px-3 py-4 text-right text-sm tabular-nums text-slate-600" style={{ width: CERTIFICATE_LEDGER_COLUMN_WIDTHS.plannedDate }}>{item.planned_finish_date || '待补充'}</TableCell>
-                    <TableCell className="px-3 py-4 text-right text-sm tabular-nums text-slate-600" style={{ width: CERTIFICATE_LEDGER_COLUMN_WIDTHS.actualDate }}>{item.actual_finish_date || '—'}</TableCell>
+                    <TableCell className="px-3 py-4 text-right text-sm num-mono text-slate-600" style={{ width: CERTIFICATE_LEDGER_COLUMN_WIDTHS.plannedDate }}>{item.planned_finish_date || '待补充'}</TableCell>
+                    <TableCell className="px-3 py-4 text-right text-sm num-mono text-slate-600" style={{ width: CERTIFICATE_LEDGER_COLUMN_WIDTHS.actualDate }}>{item.actual_finish_date || '—'}</TableCell>
                     <TableCell className="truncate px-3 py-4 text-sm text-slate-600" style={{ width: CERTIFICATE_LEDGER_COLUMN_WIDTHS.authority }} title={item.approving_authority || '待补充'}>{item.approving_authority || '待补充'}</TableCell>
                     <TableCell className="px-3 py-4 text-center text-sm text-slate-600" style={{ width: CERTIFICATE_LEDGER_COLUMN_WIDTHS.supplement }}>{item.status === 'supplement_required' ? '是' : '否'}</TableCell>
                     <TableCell className="px-3 py-4 text-center text-sm text-slate-600" style={{ width: CERTIFICATE_LEDGER_COLUMN_WIDTHS.blocked }}>{item.is_blocked ? '是' : '否'}</TableCell>

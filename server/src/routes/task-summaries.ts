@@ -668,32 +668,41 @@ router.get('/projects/:id/task-summary/compare', validateIdParam, asyncHandler(a
     (projectTasks || []).map((task: any) => task.participant_unit_id).filter(Boolean),
   )
 
-  // 2. 从 task_progress_snapshots 获取所有快照
-  const { data: snapshots, error: snapErr } = await supabase
-    .from('task_progress_snapshots')
-    .select('task_id, progress, snapshot_date, notes')
-    .in('task_id', taskIds)
-    .gte('snapshot_date', globalFrom)
-    .lte('snapshot_date', globalTo)
-    .order('snapshot_date', { ascending: true })
+  // 2. 从 task_progress_snapshots 获取所有可作为周期基线/周期内变化的快照。
+  // 注意：这里不能从 globalFrom 开始查，否则首个周期 from 之前的基线快照会丢失。
+  const snapshotResult = taskIds.length === 0
+    ? { data: [], error: null }
+    : await supabase
+        .from('task_progress_snapshots')
+        .select('task_id, progress, snapshot_date, notes')
+        .in('task_id', taskIds)
+        .lte('snapshot_date', globalTo)
+        .order('snapshot_date', { ascending: true })
+
+  const { data: snapshots, error: snapErr } = snapshotResult
 
   if (snapErr) {
     logger.warn('task_progress_snapshots query failed', { error: snapErr.message })
   }
 
-  // 3. 获取每个任务在时段开始前的进度（作为基准）
-  const taskBaselineProgress = new Map<string, number>()
-  
-  // 对于每个任务，找到时段开始前最后一条快照
+  const snapshotsByTask = new Map<string, Array<{ progress: number; snapshot_date: string }>>()
   for (const snap of (snapshots || [])) {
     const taskId = snap.task_id as string
-    const snapDate = snap.snapshot_date as string
-    const progress = snap.progress as number
-    
-    // 如果快照日期在第一个时段开始之前，记录为基准进度
-    if (snapDate < globalFrom) {
-      taskBaselineProgress.set(taskId, progress)
+    if (!snapshotsByTask.has(taskId)) snapshotsByTask.set(taskId, [])
+    snapshotsByTask.get(taskId)!.push({
+      progress: Number(snap.progress ?? 0),
+      snapshot_date: String(snap.snapshot_date ?? ''),
+    })
+  }
+
+  const getBaselineProgress = (taskId: string, from: string) => {
+    const rows = snapshotsByTask.get(taskId) ?? []
+    let baseline = 0
+    for (const row of rows) {
+      if (row.snapshot_date >= from) break
+      baseline = row.progress
     }
+    return baseline
   }
 
   // 4. 对每个时段计算进度变化
@@ -723,7 +732,7 @@ router.get('/projects/:id/task-summary/compare', validateIdParam, asyncHandler(a
 
       if (!taskChanges.has(taskId)) {
         // 第一次遇到这个任务，记录初始进度
-        const baselineProgress = taskBaselineProgress.get(taskId) || 0
+        const baselineProgress = getBaselineProgress(taskId, from)
         taskChanges.set(taskId, {
           task_id: taskId,
           task_title: task?.title || '未命名任务',

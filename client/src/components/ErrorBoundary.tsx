@@ -1,6 +1,6 @@
 // 错误边界组件 - 捕获子组件树中的 JavaScript 错误
 import { Component, ReactNode } from 'react'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { AlertTriangle, RefreshCw, Home } from 'lucide-react'
 import { reportRuntimeError } from '@/lib/runtimeErrorReporter'
@@ -64,12 +64,12 @@ export class ErrorBoundary extends Component<Props, State> {
       return (
         <div className="min-h-[25rem] flex items-center justify-center p-6">
           <Card className="w-full max-w-md">
-            <CardHeader className="text-center">
+            <CardContent padding="md" className="text-center">
               <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-destructive/10">
                 <AlertTriangle className="h-6 w-6 text-destructive" />
               </div>
-              <CardTitle className="text-xl">出现了一些问题</CardTitle>
-            </CardHeader>
+              <h2 className="text-xl font-semibold text-slate-900">出现了一些问题</h2>
+            </CardContent>
             <CardContent className="space-y-4">
               <div className="flex gap-2 justify-center pt-4">
                 <Button variant="outline" onClick={this.handleReset}>

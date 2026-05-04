@@ -39,7 +39,7 @@ export function PlanningDraftResumeDialog({
             {snapshot ? (
               <>
                 {snapshot.workspaceLabel} 的 {snapshot.versionLabel} 留下了本地工作区状态。
-                <span className="mt-1 block tabular-nums text-slate-500">
+                <span className="mt-1 block num-mono text-slate-500">
                   保存于 {formatDateTime(snapshot.updatedAt)}
                 </span>
               </>

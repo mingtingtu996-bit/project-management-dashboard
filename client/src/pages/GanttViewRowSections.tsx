@@ -175,7 +175,7 @@ export function TaskRowIdentityCell({
             <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
           </svg>
         )}
-        {task.wbs_code && <span className="flex-shrink-0 text-xs tabular-nums text-slate-500 font-mono min-w-6">{task.wbs_code}</span>}
+        {task.wbs_code && <span className="flex-shrink-0 text-xs num-mono text-slate-500 font-mono min-w-6">{task.wbs_code}</span>}
         {inlineTitleTaskId === task.id ? (
           <input
             type="text"
@@ -447,7 +447,7 @@ export function TaskRowDetailCells({
         {isMilestoneLeaf ? (
           <div className="flex items-center justify-between text-xs text-amber-700">
             <span className="font-medium">关键节点</span>
-            <span className="tabular-nums">{milestoneProgressLabel}</span>
+            <span className="num-mono">{milestoneProgressLabel}</span>
           </div>
         ) : (
           <Tooltip>
@@ -460,7 +460,7 @@ export function TaskRowDetailCells({
             <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden">
               <div className={'h-full rounded-full transition-all ' + criticalProgressClass} style={{ width: actualProgress + '%' }} />
             </div>
-            <span className="text-xs font-medium w-7 text-right tabular-nums text-slate-600">
+            <span className="text-xs font-medium w-7 text-right num-mono text-slate-600">
               {actualProgress}%
             </span>
             {hasChildren && (
@@ -493,7 +493,7 @@ export function TaskRowDetailCells({
   <TooltipContent>{task.assignee_name || ''}</TooltipContent>
 </Tooltip>
 
-      <div className="flex-shrink-0 w-28 text-xs text-slate-500 tabular-nums">
+      <div className="flex-shrink-0 w-28 text-xs text-slate-500 num-mono">
         <Tooltip>
   <TooltipTrigger asChild>
     <span className="text-muted-foreground/40 italic" >

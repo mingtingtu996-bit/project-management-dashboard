@@ -81,8 +81,8 @@ export function CertificateDependencyMatrix({
       <div className="mb-3">
         <h4 className="text-sm font-semibold text-slate-900">轻量依赖矩阵</h4>
         <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">
-          <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-amber-700">强依赖</span>
-          <span className="rounded-full border border-sky-200 bg-sky-50 px-2 py-1 text-sky-700">软依赖</span>
+          <span className="rounded-full bg-amber-50 px-2 py-1 text-amber-700 ring-1 ring-inset ring-amber-200/60">强依赖</span>
+          <span className="rounded-full bg-sky-50 px-2 py-1 text-sky-700 ring-1 ring-inset ring-sky-200/60">软依赖</span>
         </div>
       </div>
       <div className="overflow-auto">

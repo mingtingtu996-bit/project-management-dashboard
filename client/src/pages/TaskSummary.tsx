@@ -9,6 +9,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
 import { LoadingState } from '@/components/ui/loading-state'
 import { PROJECT_NAVIGATION_LABELS } from '@/config/navigation'
 import { useCurrentProject } from '@/hooks/useStore'
@@ -94,12 +95,9 @@ function TaskSummaryGroupsSection({
   const hiddenGroupCount = Math.max(groups.length - visibleGroups.length, 0)
 
   return (
-    <section data-testid="task-summary-summary-list-section" className="space-y-4">
+    <section data-testid="task-summary-summary-list-section" className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">总结列表区</div>
-          <h2 className="mt-2 text-lg font-semibold tracking-tight text-slate-900">总结列表</h2>
-        </div>
+        <CardHead eyebrow="SUMMARY" title="总结列表" />
         <Button
           asChild
           variant="outline"
@@ -113,7 +111,7 @@ function TaskSummaryGroupsSection({
       </div>
 
       {hasGroups ? (
-        <div className="grid gap-4">
+        <div className="grid gap-5">
           {visibleGroups.map((group, groupIndex) => {
             const defaultOpen = groupIndex < 3
 
@@ -154,13 +152,13 @@ function TaskSummaryGroupsSection({
                               <div
                                 key={task.id}
                                 className={cn(
-                                  'grid gap-4 rounded-xl px-4 py-3 transition-colors hover:bg-blue-50/60 md:grid-cols-[minmax(0,1fr)_8.75rem_8.75rem_6rem]',
+                                  'grid gap-5 rounded-xl px-4 py-3 transition-colors hover:bg-blue-50/60 md:grid-cols-[minmax(0,1fr)_8.75rem_8.75rem_6rem]',
                                   taskIndex % 2 === 0 ? 'bg-slate-50' : 'bg-white',
                                 )}
                               >
                                 <div className="min-w-0">
                                   <div className="flex min-w-0 items-center gap-2">
-                                    <span className={cn('h-2.5 w-2.5 shrink-0 rounded-full', getTaskStatusTone(task))} />
+                                    <span className={cn('h-2 w-2 shrink-0 rounded-full', getTaskStatusTone(task))} />
                                     <div className="truncate text-sm font-medium text-slate-900">{task.title}</div>
                                   </div>
                                   <div className="mt-1 text-xs text-slate-500">{task.status_label || '状态待补充'}</div>
@@ -169,7 +167,7 @@ function TaskSummaryGroupsSection({
                                   <div className="font-medium text-slate-700">责任人</div>
                                   <div className="mt-1">{task.assignee || '未分配'}</div>
                                 </div>
-                                <div className={cn('text-xs tabular-nums', isDelayed ? 'text-red-600' : 'text-slate-500')}>
+                                <div className={cn('text-xs num-mono', isDelayed ? 'text-red-600' : 'text-slate-500')}>
                                   <div className="font-medium text-slate-700">截止日期</div>
                                   <div className="mt-1">{task.planned_end_date ? formatDate(task.planned_end_date) : '未设置'}</div>
                                   {isDelayed ? <div className="mt-1">逾期 {delayDays} 天</div> : null}
@@ -228,11 +226,8 @@ function TaskSummaryFulfillmentSection({
   const hasData = monthlyFulfillment.length > 0
 
   return (
-    <section data-testid="task-summary-monthly-fulfillment-section" className="space-y-4">
-      <div>
-        <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">月度兑现区</div>
-        <h2 className="mt-2 text-lg font-semibold tracking-tight text-slate-900">月度兑现</h2>
-      </div>
+    <section data-testid="task-summary-monthly-fulfillment-section" className="space-y-5">
+      <CardHead eyebrow="FULFILLMENT" title="月度兑现" />
 
       {hasData ? (
         <div className="space-y-3">
@@ -250,7 +245,7 @@ function TaskSummaryFulfillmentSection({
                     {item.rate}%
                   </Badge>
                 </div>
-                <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+                <div className="h-[3px] overflow-hidden rounded-full bg-slate-100">
                   <div
                     className="h-full rounded-full bg-blue-600"
                     style={{ width: `${Math.max(0, Math.min(100, item.rate))}%` }}
@@ -407,7 +402,7 @@ export default function TaskSummary() {
         ]}
       />
 
-      <PageHeader title="任务管理 / 任务总结">
+      <PageHeader eyebrow="任务管控" title="任务总结">
         <div data-testid="task-summary-header-actions" className="flex flex-wrap items-center gap-2">
           <Button
             variant="outline"

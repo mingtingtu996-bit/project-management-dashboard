@@ -3,7 +3,8 @@ import { useMemo } from 'react'
 import { PlanningTreeView, type PlanningTreeRow } from '@/components/planning/PlanningTreeView'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
 import { DisabledReasonTooltip } from '@/components/ui/disabled-reason-tooltip'
 import { Separator } from '@/components/ui/separator'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -68,10 +69,10 @@ export function BaselineTreeEditor({
 
   return (
     <Card className="surface-card" data-testid={testId}>
-      <CardHeader className="space-y-3 bg-slate-50/80">
+      <CardContent padding="md" className="space-y-3 bg-slate-50/80">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="space-y-1">
-            <CardTitle className="text-xl">{title}</CardTitle>
+            <CardHead eyebrow="BASELINE TREE" title={title} />
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant="outline">{summaryLabel}</Badge>
@@ -127,7 +128,7 @@ export function BaselineTreeEditor({
             </DisabledReasonTooltip>
           ) : null}
         </div>
-      </CardHeader>
+      </CardContent>
       <Separator />
 
       <CardContent className="p-0">

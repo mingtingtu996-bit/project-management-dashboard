@@ -11,6 +11,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
 import { cn } from '@/lib/utils'
 
 interface FourCertificateBoardProps {
@@ -63,19 +64,17 @@ export function FourCertificateBoard({
   }))
 
   return (
-    <div data-testid="pre-milestones-board" className="rounded-xl border border-slate-100 bg-white p-4 shadow-[var(--el-1)]">
+    <div data-testid="pre-milestones-board" className="surface-card p-5">
       <div className="flex items-center justify-between gap-3 mb-4">
-        <div>
-          <h3 className="text-sm font-semibold text-slate-900">四证推进看板</h3>
-        </div>
+        <CardHead eyebrow="CERTIFICATES" title="四证推进看板" />
       </div>
 
       <div className="grid gap-4 xl:grid-cols-4">
         {stageColumns.map((column) => (
-          <section key={column.stage} className="rounded-xl border border-slate-200 bg-slate-50/70 p-3" data-testid={`pre-milestones-board-stage-${column.stage}`}>
+          <section key={column.stage} className="rounded-xl bg-slate-50/70 p-3 ring-1 ring-inset ring-slate-200/60" data-testid={`pre-milestones-board-stage-${column.stage}`}>
             <div className="mb-3 flex items-center justify-between gap-3">
               <div className="text-sm font-semibold text-slate-900">{column.stage}</div>
-              <span className="rounded-full bg-white px-2.5 py-1 text-xs font-medium tabular-nums text-slate-600">{column.items.length}</span>
+              <span className="rounded-full bg-white px-2.5 py-1 text-xs font-medium num-mono text-slate-600 ring-1 ring-inset ring-slate-200/60">{column.items.length}</span>
             </div>
             <div className="grid gap-4">
               {column.items.map(({ entry, certificate }) => {
@@ -115,12 +114,12 @@ export function FourCertificateBoard({
                     }}
                     style={dimmedByHover ? { opacity: 0.4 } : undefined}
                     className={cn(
-                      'w-full rounded-card border p-5 text-left shadow-[var(--el-1)] transition-all duration-200',
+                      'surface-card w-full p-5 text-left transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[var(--el-hover)]',
                       active
                         ? 'border-blue-300 bg-blue-50 shadow-[var(--el-2)]'
                         : hoveredWorkItemBelongsHere
                           ? 'border-indigo-300 bg-indigo-50 shadow-[var(--el-2)]'
-                          : 'border-slate-200 bg-white',
+                          : 'bg-white',
                     )}
                   >
               <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -140,7 +139,7 @@ export function FourCertificateBoard({
     <Button variant="ghost"
                           type="button"
                           onClick={(e) => { e.stopPropagation(); onClickBlockedTag?.() }}
-                          className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 hover:bg-amber-200"
+                          className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 ring-1 ring-inset ring-amber-200 hover:bg-amber-200"
                           
                           data-testid="certificate-blocked-tag"
                         >
@@ -157,7 +156,7 @@ export function FourCertificateBoard({
     <Button variant="ghost"
                           type="button"
                           onClick={(e) => { e.stopPropagation(); onClickBlockedTag?.() }}
-                          className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-0.5 text-xs font-medium text-rose-700 hover:bg-rose-200"
+                          className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-0.5 text-xs font-medium text-rose-700 ring-1 ring-inset ring-rose-200 hover:bg-rose-200"
                           
                         >
                           <AlertTriangle className="h-3.5 w-3.5" />
@@ -203,7 +202,7 @@ export function FourCertificateBoard({
               <div className="mt-4 grid gap-2 text-xs text-slate-500">
                 <div className="flex items-center justify-between gap-3">
                   <span>到期日</span>
-                  <span className="font-medium tabular-nums text-slate-700">{dueDate}</span>
+                  <span className="font-medium num-mono text-slate-700">{dueDate}</span>
                 </div>
                 <div className="flex items-center justify-between gap-3">
                   <span>责任人</span>
@@ -222,12 +221,12 @@ export function FourCertificateBoard({
                   return (
                     <div
                       key={stage}
-                      className={`rounded-xl border px-3 py-2 text-xs ${
+                      className={`rounded-xl px-3 py-2 text-xs ring-1 ring-inset ${
                         isCurrent
                           ? 'border-blue-300 bg-blue-50 text-blue-800'
                           : isDone
                             ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                            : 'border-slate-200 bg-slate-50 text-slate-500'
+                            : 'bg-slate-50 text-slate-500 ring-slate-200/60'
                       }`}
                     >
                       <div className="font-medium">{stage}</div>
@@ -251,12 +250,12 @@ export function FourCertificateBoard({
                           event.stopPropagation()
                           onSelectWorkItem(item.work_item_id)
                         }}
-                        className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
+                        className={`rounded-full px-3 py-1 text-xs font-medium ring-1 ring-inset transition-colors ${
                           isActive
                             ? 'border-blue-300 bg-blue-100 text-blue-700'
                             : isHovered
                               ? 'border-indigo-300 bg-indigo-100 text-indigo-700'
-                              : 'border-slate-200 bg-slate-50 text-slate-600 hover:border-slate-300'
+                              : 'bg-slate-50 text-slate-600 ring-slate-200/60 hover:ring-slate-300'
                         }`}
                       >
                         {item.item_name}

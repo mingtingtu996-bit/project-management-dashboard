@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useState, useMemo, useCallback } from 'react'
+import React, { useEffect, useState, useMemo, useCallback } from 'react'
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { Suspense, lazy, useRef } from 'react'
 import {
@@ -19,7 +19,8 @@ import {
 import { useConfirmDialog } from '@/hooks/useConfirmDialog'
 import { useDebounce } from '@/hooks/useDebounce'
 import { usePermissions } from '@/hooks/usePermissions'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
 import { Button } from '@/components/ui/button'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Separator } from '@/components/ui/separator'
@@ -49,7 +50,7 @@ import { GanttViewSkeleton } from '@/components/ui/page-skeleton'
 import { Pagination, usePagination } from '@/components/ui/Pagination'
 import { GanttViewHeader } from './GanttViewHeader'
 import { useGanttCriticalPath } from './useGanttCriticalPath'
-import { GanttBatchBar, GanttFilterBar, GanttStatsCards } from './GanttViewFilters'
+import { GanttBatchBar, GanttFilterBar, GanttMetricCards } from './GanttViewFilters'
 import { GanttTaskRows } from './GanttViewRows'
 import { ScopeDimensionsDialog } from './GanttView/ScopeDimensionsDialog'
 import { CriticalPathInsertDialog } from './GanttView/CriticalPathInsertDialog'
@@ -576,9 +577,9 @@ export default function GanttView() {
       const el = document.getElementById(`gantt-task-row-${highlightTaskId}`)
       if (el) {
         el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-        el.classList.add('!bg-orange-50', 'ring-1', 'ring-orange-300')
+        el.classList.add('!bg-amber-50/60', 'ring-1', 'ring-inset', 'ring-amber-300')
         highlightClearTimerRef.current = window.setTimeout(() => {
-          el.classList.remove('!bg-orange-50', 'ring-1', 'ring-orange-300')
+          el.classList.remove('!bg-amber-50/60', 'ring-1', 'ring-inset', 'ring-amber-300')
           highlightClearTimerRef.current = null
         }, 3000)
       }
@@ -594,42 +595,34 @@ export default function GanttView() {
         highlightClearTimerRef.current = null
       }
       const el = document.getElementById(`gantt-task-row-${highlightTaskId}`)
-      el?.classList.remove('!bg-orange-50', 'ring-1', 'ring-orange-300')
+      el?.classList.remove('!bg-amber-50/60', 'ring-1', 'ring-inset', 'ring-amber-300')
     }
   }, [highlightTaskId, loading])
 
   useEffect(() => {
     const nextViewMode = normalizeGanttViewMode(searchParams.get('view'))
-    if (nextViewMode && nextViewMode !== viewMode) {
-      setViewMode(nextViewMode)
+    if (nextViewMode) {
+      setViewMode((current) => (nextViewMode === current ? current : nextViewMode))
     }
 
     const nextScale = normalizeTimelineScale(searchParams.get('scale'))
-    if (nextScale && nextScale !== timelineScale) {
-      setTimelineScale(nextScale)
+    if (nextScale) {
+      setTimelineScale((current) => (nextScale === current ? current : nextScale))
     }
 
     const nextCompareMode = normalizeTimelineCompareMode(searchParams.get('compare'))
-    if (nextCompareMode && nextCompareMode !== timelineCompareMode) {
-      setTimelineCompareMode(nextCompareMode)
+    if (nextCompareMode) {
+      setTimelineCompareMode((current) => (nextCompareMode === current ? current : nextCompareMode))
     }
 
     const nextBaselineVersionId = searchParams.get('baselineVersionId')
     if (
       nextBaselineVersionId &&
-      nextBaselineVersionId !== timelineBaselineVersionId &&
       validBaselineOptionIds.has(nextBaselineVersionId)
     ) {
-      setTimelineBaselineVersionId(nextBaselineVersionId)
+      setTimelineBaselineVersionId((current) => (nextBaselineVersionId === current ? current : nextBaselineVersionId))
     }
-  }, [
-    searchParams,
-    timelineBaselineVersionId,
-    timelineCompareMode,
-    timelineScale,
-    validBaselineOptionIds,
-    viewMode,
-  ])
+  }, [searchParams, validBaselineOptionIds])
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingTask, setEditingTask] = useState<Task | null>(null)
   
@@ -3670,7 +3663,7 @@ export default function GanttView() {
       ) : null}
 
       <div data-testid="task-workspace-layer-l2">
-        <GanttStatsCards projectStats={projectStats} />
+        <GanttMetricCards projectStats={projectStats} />
       </div>
 
       {/* 閹靛綊鍣洪幙宥勭稊閺?*/}
@@ -3692,7 +3685,7 @@ export default function GanttView() {
       {dataQualitySummary?.prompt && dataQualitySummary.prompt.count > 0 ? (
         <details
           data-testid="gantt-data-quality-prompt-bar"
-          className="rounded-2xl border border-sky-200 bg-sky-50 px-5 py-4 text-sm text-sky-950"
+          className="rounded-2xl bg-sky-50 px-5 py-4 text-sm text-sky-950 ring-1 ring-inset ring-sky-200"
         >
           <summary className="cursor-pointer list-none space-y-2">
             <div className="flex flex-wrap items-center gap-2">
@@ -3734,37 +3727,40 @@ export default function GanttView() {
         </details>
       ) : null}
 
-      <div data-testid="task-workspace-body" className={`grid gap-4 transition-all duration-300 ${selectedTask ? 'xl:grid-cols-[minmax(0,1fr)_20rem]' : 'grid-cols-1'}`}>
+      <div data-testid="task-workspace-body" className={`grid gap-5 transition-all duration-300 ${selectedTask ? 'xl:grid-cols-[minmax(0,1fr)_20rem]' : 'grid-cols-1'}`}>
         {/* 任务工作区主内容层 */}
         <div data-testid="task-workspace-layer-l4" className="min-w-0 transition-all duration-300">
       <Card variant="detail">
-        <CardHeader data-testid="task-workspace-layer-l3" className="flex flex-row items-center justify-between space-y-0 pb-3">
-          <div className="flex items-center gap-3">
-            <CardTitle className="text-base">{zhCN.gantt.structureTitle}</CardTitle>
-            <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${viewMode === 'timeline' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600'}`}>
-              {viewMode === 'timeline' ? '横道图视图' : '列表视图'}
-            </span>
-            {activeFilterCount > 0 && (
-              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
-                {filteredFlatList.length}/{flatList.length} {zhCN.gantt.structureCount}
-              </span>
-            )}
-          </div>
-          <div className="flex items-center gap-2">
-            {projectStats.criticalPathSummary && (
-              <p className="text-xs text-muted-foreground">
-                {zhCN.gantt.criticalPath}: {projectStats.criticalPathSummary}
-              </p>
-            )}
-            <Button variant="ghost"
-              onClick={() => setShowFilterBar(v => !v)}
-              className={`flex items-center gap-1 px-2.5 py-1 text-xs rounded-md border transition-colors ${showFilterBar || activeFilterCount > 0 ? 'bg-blue-50 border-blue-200 text-blue-700' : 'border-slate-200 text-slate-500 hover:bg-slate-50'}`}
-            >
-              <SlidersHorizontal className="h-3.5 w-3.5" />
-              筛选{activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}
-            </Button>
-          </div>
-        </CardHeader>
+        <div data-testid="task-workspace-layer-l3" className="p-5 pb-3">
+          <CardHead
+            eyebrow="TASKS"
+            title={zhCN.gantt.structureTitle}
+            action={
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <span className={`inline-flex h-5 items-center rounded-full px-2 text-[10.5px] font-medium ring-1 ring-inset ${viewMode === 'timeline' ? 'bg-slate-900 text-white ring-slate-900' : 'bg-slate-100 text-slate-600 ring-slate-200/60'}`}>
+                  {viewMode === 'timeline' ? '横道图视图' : '列表视图'}
+                </span>
+                {activeFilterCount > 0 && (
+                  <span className="inline-flex h-5 items-center rounded-full px-2 text-[10.5px] font-medium text-blue-700 ring-1 ring-inset ring-blue-200">
+                    {filteredFlatList.length}/{flatList.length} {zhCN.gantt.structureCount}
+                  </span>
+                )}
+                {projectStats.criticalPathSummary && (
+                  <p className="text-xs text-muted-foreground">
+                    {zhCN.gantt.criticalPath}: {projectStats.criticalPathSummary}
+                  </p>
+                )}
+                <Button variant="ghost"
+                  onClick={() => setShowFilterBar(v => !v)}
+                  className={`flex items-center gap-1 px-2.5 py-1 text-xs rounded-md border transition-colors ${showFilterBar || activeFilterCount > 0 ? 'bg-blue-50 border-blue-200 text-blue-700' : 'border-slate-200 text-slate-500 hover:bg-slate-50'}`}
+                >
+                  <SlidersHorizontal className="h-3.5 w-3.5" />
+                  筛选{activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}
+                </Button>
+              </div>
+            }
+          />
+        </div>
         <Separator />
 
         {!showFilterBar ? (
@@ -3807,7 +3803,7 @@ export default function GanttView() {
         {criticalPathSnapshot?.hasCycleDetected && (
           <div
             data-testid="gantt-cycle-detection-banner"
-            className="mx-4 mb-3 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"
+            className="mx-4 mb-3 flex items-start gap-3 rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-800 ring-1 ring-inset ring-amber-200"
           >
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
             <div className="min-w-0">

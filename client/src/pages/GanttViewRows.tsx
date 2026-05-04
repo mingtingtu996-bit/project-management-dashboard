@@ -108,11 +108,11 @@ const TaskRow = memo(function TaskRow(
   const isInDependencyChain = props.dependencyChainIds?.has(task.id) ?? false
   const criticalSourceClass = criticalTask
     ? criticalTask.isManualInserted
-      ? 'border-l-4 border-l-orange-500 bg-orange-50/30'
+      ? 'ring-1 ring-inset ring-orange-200 bg-orange-50/60'
       : criticalTask.isManualAttention
-        ? 'border-l-4 border-l-amber-400 bg-amber-50/30'
+        ? 'ring-1 ring-inset ring-amber-200 bg-amber-50/60'
         : criticalTask.isAutoCritical
-          ? 'border-l-4 border-l-red-400 bg-red-50/30'
+          ? 'ring-1 ring-inset ring-red-200 bg-red-50/30'
           : ''
     : ''
 
@@ -126,19 +126,19 @@ const TaskRow = memo(function TaskRow(
         className={`group flex items-center px-4 transition-colors hover:bg-accent/30 ${getTreeRowHeightClass(rowKind)} ${
           criticalSourceClass ||
           (isInDependencyChain
-            ? 'border-l-4 border-l-indigo-400 bg-indigo-50/30'
+            ? 'ring-1 ring-inset ring-indigo-200 bg-indigo-50/30'
             : isActiveToday
-            ? 'border-l-4 border-l-blue-400 bg-blue-50/30'
+            ? 'ring-1 ring-inset ring-blue-200 bg-blue-50/30'
             : isMilestoneLeaf
-            ? 'border-l-2 border-l-amber-400 bg-amber-50/30'
+            ? 'ring-1 ring-inset ring-amber-200 bg-amber-50/60'
             : isOverdue
-              ? 'border-l-4 border-l-red-400 bg-red-50/30'
+              ? 'ring-1 ring-inset ring-red-200 bg-red-50/30'
               : lagLevel === 'severe'
-              ? 'border-l-4 border-l-orange-500 bg-orange-50/40'
+              ? 'ring-1 ring-inset ring-orange-200 bg-orange-50/40'
               : lagLevel === 'moderate'
-              ? 'border-l-4 border-l-amber-400 bg-amber-50/40'
+              ? 'ring-1 ring-inset ring-amber-200 bg-amber-50/40'
               : lagLevel === 'mild'
-              ? 'border-l-2 border-l-yellow-300 bg-yellow-50/40'
+              ? 'ring-1 ring-inset ring-yellow-200 bg-yellow-50/40'
               : '')
         }`}
         onContextMenu={(event) => props.onOpenContextMenu(event, task)}

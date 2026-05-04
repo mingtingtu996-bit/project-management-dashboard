@@ -24,7 +24,9 @@ import { PageHeader } from '@/components/PageHeader'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { SegmentedControl } from '@/components/ui/segmented-control'
+import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
 import { Input } from '@/components/ui/input'
 import { LoadingState } from '@/components/ui/loading-state'
 import { MetricCard as SharedMetricCard } from '@/components/ui/metric-card'
@@ -732,8 +734,8 @@ export default function ResponsibilityView() {
       />
 
       <PageHeader
-        eyebrow="责任主体"
-        title="任务管理 / 责任主体"
+        eyebrow="组织管理"
+        title="责任主体"
       >
         <Button
           variant="outline"
@@ -742,40 +744,17 @@ export default function ResponsibilityView() {
         >
           返回任务总结
         </Button>
-        <div className="flex flex-wrap items-center gap-2">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => handleDimensionChange('person')}
-                className={cn(
-                  'transition-colors duration-200',
-                  dimension === 'person' ? 'bg-blue-600 text-white hover:bg-blue-600 hover:text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200',
-                )}
-              >
-                责任人维度
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>按个人查看</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => handleDimensionChange('unit')}
-                className={cn(
-                  'transition-colors duration-200',
-                  dimension === 'unit' ? 'bg-blue-600 text-white hover:bg-blue-600 hover:text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200',
-                )}
-              >
-                责任单位维度
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>按参建单位查看</TooltipContent>
-          </Tooltip>
-        </div>
+        <SegmentedControl
+          options={[
+            { value: 'person', label: '责任人维度' },
+            { value: 'unit', label: '责任单位维度' },
+          ]}
+          value={dimension}
+          onChange={(value) => handleDimensionChange(value as ResponsibilityDimension)}
+          className="h-9 items-center"
+          activeClassName="bg-blue-600 text-white shadow-[var(--el-1)] hover:bg-blue-600 hover:text-white"
+          inactiveClassName="bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-slate-900"
+        />
         <Button
           variant="outline"
           size="sm"
@@ -795,7 +774,7 @@ export default function ResponsibilityView() {
         </Button>
       </PageHeader>
 
-      <div className="sticky top-[var(--sticky-toolbar-top)] z-20 flex flex-wrap gap-2 rounded-2xl border border-slate-100 bg-white/95 px-3 py-2 shadow-[var(--el-1)] backdrop-blur">
+      <div className="surface-card sticky top-[var(--sticky-toolbar-top)] z-20 flex flex-wrap gap-2 bg-white/95 px-3 py-2 backdrop-blur">
         <Button
           size="sm"
           variant={activePanel === 'monitoring' ? 'default' : 'ghost'}
@@ -837,8 +816,9 @@ export default function ResponsibilityView() {
           <h2 className="text-2xl font-semibold tracking-tight text-slate-900">责任主体监控</h2>
         </div>
 
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
           <SharedMetricCard
+            eyebrow="TOTAL"
             title={dimension === 'person' ? '责任人对象数' : '责任单位对象数'}
             value={summary.total}
             icon={dimension === 'person' ? <Users className="h-5 w-5" /> : <Building2 className="h-5 w-5" />}
@@ -846,6 +826,7 @@ export default function ResponsibilityView() {
             tone="primary"
           />
           <SharedMetricCard
+            eyebrow="RISK"
             title="异常主体"
             value={summary.abnormal}
             icon={<AlertTriangle className="h-5 w-5" />}
@@ -853,6 +834,7 @@ export default function ResponsibilityView() {
             tone={summary.abnormal > 0 ? 'danger' : 'slate'}
           />
           <SharedMetricCard
+            eyebrow="WATCH"
             title="关注名单"
             value={summary.watched}
             hint={`${data?.watchlist.filter((item) => item.status === 'active').length ?? 0} 条`}
@@ -861,6 +843,7 @@ export default function ResponsibilityView() {
             tone={summary.watched > 0 ? 'warning' : 'slate'}
           />
           <SharedMetricCard
+            eyebrow="RECOVER"
             title="待确认恢复正常"
             value={summary.recoveryPending}
             icon={<CheckCheck className="h-5 w-5" />}
@@ -869,8 +852,8 @@ export default function ResponsibilityView() {
           />
         </div>
 
-        <Card variant="detail">
-          <CardContent className="grid gap-4 pt-6 lg:grid-cols-[1fr,16.25rem]">
+        <Card variant="detail" className="surface-card">
+          <CardContent className="grid gap-5 pt-6 lg:grid-cols-[1fr,16.25rem]">
             <Input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
@@ -915,13 +898,16 @@ export default function ResponsibilityView() {
                   key={rowActionKey}
                   variant="detail"
                   data-testid="responsibility-row"
-                  className={cn(row.state_level === 'abnormal' ? 'border-l-4 border-red-500' : 'border border-slate-200')}
+                  className={cn('surface-card', row.state_level === 'abnormal' ? 'border-l-4 border-red-500 ring-1 ring-inset ring-red-200' : 'border border-slate-200')}
                 >
-                  <CardHeader className="gap-4">
+                  <CardContent padding="md" className="space-y-4">
                     <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                       <div className="space-y-2">
+                        <CardHead
+                          eyebrow={dimension === 'person' ? 'PERSON' : 'UNIT'}
+                          title={row.label}
+                        />
                         <div className="flex flex-wrap items-center gap-2">
-                          <CardTitle className="text-lg text-slate-900">{row.label}</CardTitle>
                           <Badge variant={stateBadgeVariant(row.state_level)}>{stateLabel(row.state_level)}</Badge>
                           {row.watch_status && row.watch_status !== 'cleared' && (
                             <Badge variant="secondary">{watchLabel(row.watch_status)}</Badge>
@@ -940,7 +926,7 @@ export default function ResponsibilityView() {
                                   </TooltipTrigger>
                                   <TooltipContent>该主体关联的活跃风险数量</TooltipContent>
                                 </Tooltip>
-                                {` · 重点承诺缺口 ${row.key_commitment_gap_count}`}
+                                {` 路 閲嶇偣鎵胯缂哄彛 ${row.key_commitment_gap_count}`}
                               </>
                             )}
                         </p>
@@ -979,10 +965,7 @@ export default function ResponsibilityView() {
                         </Button>
                       </div>
                     </div>
-                  </CardHeader>
-
-                  <CardContent className="space-y-4">
-                    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+                    <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-6">
                       <div className="rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3">
                         <div className="text-xs text-slate-500">总任务</div>
                         <div className="mt-1 text-xl font-semibold text-slate-900">{row.total_tasks}</div>
@@ -1000,7 +983,7 @@ export default function ResponsibilityView() {
                         <div className="mt-1 text-xl font-semibold text-slate-900">{row.active_delayed_count}</div>
                       </div>
                       <div className="rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3">
-                        <div className="text-xs text-slate-500">风险/障碍</div>
+                        <div className="text-xs text-slate-500">椋庨櫓/闅滅</div>
                         <div className="mt-1 text-xl font-semibold text-slate-900">
                           {row.open_risk_count}/{row.open_obstacle_count}
                         </div>
@@ -1041,7 +1024,7 @@ export default function ResponsibilityView() {
                                 <span>{task.unit}</span>
                                 <span>{task.status_label}</span>
                                 <span>
-                                  计划完成 <span className="tabular-nums">{formatDate(task.planned_end_date)}</span>
+                                  计划完成 <span className="num-mono">{formatDate(task.planned_end_date)}</span>
                                 </span>
                               </div>
                             </div>
@@ -1089,8 +1072,9 @@ export default function ResponsibilityView() {
           />
         ) : (
           <div className="space-y-4">
-            <div className="grid gap-4 md:grid-cols-3">
+            <div className="grid gap-5 md:grid-cols-3">
               <SharedMetricCard
+                eyebrow="TREND"
                 title="趋势对象数"
                 value={trendSummary.seriesCount}
                 icon={<BarChart3 className="h-5 w-5" />}
@@ -1098,6 +1082,7 @@ export default function ResponsibilityView() {
                 tone="primary"
               />
               <SharedMetricCard
+                eyebrow="ONTIME"
                 title="平均按时率"
                 value={formatPercent(trendSummary.avgCompletionRate)}
                 icon={<CheckCheck className="h-5 w-5" />}
@@ -1105,6 +1090,7 @@ export default function ResponsibilityView() {
                 tone="success"
               />
               <SharedMetricCard
+                eyebrow="DELAY"
                 title="平均逾期率"
                 value={formatPercent(trendSummary.avgDelayRate)}
                 icon={<AlertTriangle className="h-5 w-5" />}
@@ -1117,7 +1103,7 @@ export default function ResponsibilityView() {
               最近一次更新：{trendSummary.latestLabel} · 分组方式：{dimension === 'person' ? '责任人' : '责任单位'}
             </div>
 
-            <div className="grid gap-4 lg:grid-cols-2">
+            <div className="grid gap-5 lg:grid-cols-2">
               {trendSeries.slice(0, 6).map((row) => (
                 <TrendSeriesCard key={row.key} row={row} />
               ))}

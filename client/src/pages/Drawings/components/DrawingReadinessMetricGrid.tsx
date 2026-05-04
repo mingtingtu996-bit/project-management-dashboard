@@ -3,6 +3,7 @@ import { ArrowUpRight, AlertTriangle, ChevronDown, CircleCheckBig, Clock3, Layer
 
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import { MetricCard } from '@/components/ui/metric-card'
 import { cn } from '@/lib/utils'
 
 import type { DrawingBoardSummary } from '../types'
@@ -39,35 +40,23 @@ function SummaryTile({
   tone: 'blue' | 'amber' | 'red' | 'emerald' | 'slate'
   icon: ElementType
 }) {
-  const toneClasses = {
-    blue: 'border-blue-200 bg-blue-50 text-blue-700',
-    amber: 'border-amber-200 bg-amber-50 text-amber-700',
-    red: 'border-red-200 bg-red-50 text-red-700',
-    emerald: 'border-emerald-200 bg-emerald-50 text-emerald-700',
-    slate: 'border-slate-200 bg-slate-50 text-slate-700',
-  } as const
-
-  const valueClasses = {
-    blue: 'text-blue-700',
-    amber: 'text-amber-700',
-    red: 'text-red-700',
-    emerald: 'text-emerald-700',
-    slate: 'text-slate-800',
+  const toneMap = {
+    blue: 'primary',
+    amber: 'warning',
+    red: 'danger',
+    emerald: 'success',
+    slate: 'slate',
   } as const
 
   return (
-    <Card variant="surface">
-      <CardContent className="space-y-3 p-5">
-        <div className="flex items-center justify-between gap-3">
-          <div className="text-sm font-medium text-slate-500">{label}</div>
-          <div className={`rounded-full border px-2.5 py-1 text-xs ${toneClasses[tone]}`}>
-            <Icon className="h-3.5 w-3.5" />
-          </div>
-        </div>
-        <div className={`text-3xl font-semibold tabular-nums ${valueClasses[tone]}`}>{value}</div>
-        <p className="text-xs leading-5 text-slate-500">{hint}</p>
-      </CardContent>
-    </Card>
+    <MetricCard
+      eyebrow="DRAWING"
+      title={label}
+      value={value}
+      hint={hint}
+      tone={toneMap[tone]}
+      icon={<Icon className="h-5 w-5" />}
+    />
   )
 }
 
@@ -89,7 +78,7 @@ function ProgressBar({ value, tone = 'blue' }: { value: number; tone?: 'blue' | 
   )
 }
 
-export function DrawingReadinessSummary({
+export function DrawingReadinessMetricGrid({
   summary,
   projectName,
   metrics,
@@ -129,7 +118,7 @@ export function DrawingReadinessSummary({
         </div>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
         <SummaryTile
           label="总图纸数"
           value={displayMetrics.totalDrawings}
@@ -145,7 +134,7 @@ export function DrawingReadinessSummary({
           icon={CircleCheckBig}
         />
         <SummaryTile
-          label="待审批"
+          label="待审图"
           value={displayMetrics.pendingReviewDrawings}
           hint="仍需审图确认的图纸。"
           tone="amber"
@@ -169,16 +158,16 @@ export function DrawingReadinessSummary({
                 {readinessRatio}% 就绪，已审批 {displayMetrics.approvedDrawings} / {displayMetrics.totalDrawings}
               </div>
             </div>
-            <div className="text-2xl font-semibold tabular-nums text-slate-900">{readinessRatio}%</div>
+            <div className="num-display text-2xl font-semibold text-slate-900">{readinessRatio}%</div>
           </div>
           <ProgressBar value={readinessRatio} tone={readinessRatio >= 80 ? 'emerald' : readinessRatio >= 60 ? 'blue' : 'amber'} />
           {displayMetrics.disciplineReadiness.length > 0 ? (
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
               {displayMetrics.disciplineReadiness.map((item) => (
                 <div key={item.disciplineType} className="rounded-xl border border-slate-100 bg-slate-50/70 p-3">
                   <div className="flex items-center justify-between gap-2 text-xs">
                     <span className="font-medium text-slate-700">{item.disciplineType}</span>
-                    <span className="tabular-nums text-slate-500">{item.ratio}%</span>
+                    <span className="num-mono text-slate-500">{item.ratio}%</span>
                   </div>
                   <div className="mt-2">
                     <ProgressBar value={item.ratio} tone={item.overdue > 0 ? 'red' : item.ratio >= 80 ? 'emerald' : 'blue'} />
@@ -206,7 +195,7 @@ export function DrawingReadinessSummary({
           <ChevronDown className={cn('h-4 w-4 transition-transform duration-200', showDetails ? 'rotate-180' : '')} />
         </Button>
         {showDetails ? (
-          <div className="grid gap-4 motion-safe:animate-expand-down md:grid-cols-3" data-testid="drawing-detailed-stats">
+          <div className="grid gap-5 motion-safe:animate-expand-down md:grid-cols-3" data-testid="drawing-detailed-stats">
             <SummaryTile
               label="本月计划送审"
               value={displayMetrics.plannedSubmitThisMonthCount}
@@ -222,7 +211,7 @@ export function DrawingReadinessSummary({
               icon={ShieldCheck}
             />
             <SummaryTile
-              label="工期影响包"
+              label="工期影响项"
               value={displayMetrics.scheduleImpactCount}
               hint="图纸状态已经影响任务推进。"
               tone="red"

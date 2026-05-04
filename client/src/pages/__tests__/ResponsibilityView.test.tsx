@@ -170,7 +170,7 @@ describe('ResponsibilityView', () => {
     expect(container.textContent).toContain('计划完成')
 
     const responsibilityRow = container.querySelector('[data-testid="responsibility-row"]') as HTMLElement | null
-    expect(responsibilityRow?.className).toContain('border-l-4')
+    expect(responsibilityRow?.className).toContain('ring-red-200')
 
     const unitDimensionButton = Array.from(container.querySelectorAll('button')).find((button) =>
       button.textContent?.includes('责任单位维度'),

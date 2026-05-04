@@ -10,6 +10,8 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
+import { MetricCard } from '@/components/ui/metric-card'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { DisabledReasonTooltip } from '@/components/ui/disabled-reason-tooltip'
 import { Input } from '@/components/ui/input'
@@ -66,35 +68,30 @@ const ACCEPTANCE_STAGE_DEFINITIONS: Array<{
   key: AcceptanceStageKey
   label: string
   description: string
-  accentClass: string
   progressClass: string
 }> = [
   {
     key: 'foundation',
     label: '基础验收',
     description: '地基、基础与预验收',
-    accentClass: 'border-l-emerald-500',
     progressClass: 'bg-emerald-500',
   },
   {
     key: 'main',
     label: '主体验收',
     description: '主体、单位工程与四方验收',
-    accentClass: 'border-l-blue-500',
     progressClass: 'bg-blue-600',
   },
   {
     key: 'completion',
     label: '竣工验收',
     description: '备案、归档与交付收口',
-    accentClass: 'border-l-slate-500',
     progressClass: 'bg-slate-600',
   },
   {
     key: 'special',
     label: '专项验收',
     description: '消防、规划、人防、电梯、防雷等',
-    accentClass: 'border-l-blue-500',
     progressClass: 'bg-blue-600',
   },
 ]
@@ -550,7 +547,7 @@ export default function AcceptanceTimeline() {
               <Skeleton className="h-9 w-24 rounded-full" />
             </div>
           </div>
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
             {[1, 2, 3, 4].map((item) => <div key={item} className="rounded-xl border border-slate-100 bg-slate-50 p-4"><Skeleton className="h-4 w-20" /><Skeleton className="mt-3 h-8 w-16" /></div>)}
           </div>
         </div>
@@ -590,12 +587,13 @@ export default function AcceptanceTimeline() {
         </Alert>
       ) : null}
 
-      <section data-testid="acceptance-summary-panel" className="space-y-4 rounded-card border border-slate-100 bg-white p-5 shadow-[var(--el-1)]">
+      <section data-testid="acceptance-summary-panel" className="surface-card space-y-5 p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <div className="text-sm font-semibold text-slate-900">摘要区</div>
-            <div className="text-xs text-slate-500">当前视图 {visiblePlans.length} / 全部 {projectSummary.totalCount || plans.length}</div>
-          </div>
+          <CardHead
+            eyebrow="SUMMARY"
+            title="验收摘要"
+            pill={{ label: `${visiblePlans.length}/${projectSummary.totalCount || plans.length}`, variant: 'neutral' }}
+          />
           <div className="flex flex-wrap gap-2">
             <Badge variant="outline" className="rounded-full px-3 py-1">项目：{projectName}</Badge>
             <Badge variant="outline" className="rounded-full px-3 py-1">楼栋：{getBuildingLabel(buildingFilter === 'all' ? null : buildingFilter)}</Badge>
@@ -603,17 +601,31 @@ export default function AcceptanceTimeline() {
             <Badge variant="outline" className="rounded-full px-3 py-1">阶段：{getAcceptancePhaseLabel(phaseFilter)}</Badge>
           </div>
         </div>
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
           {stageSummaries.map((stage) => (
-            <AcceptanceStageCard key={stage.key} stage={stage} />
+            <MetricCard
+              key={stage.key}
+              eyebrow="ACCEPT"
+              title={stage.label}
+              value={`${stage.percent}%`}
+              hint={`${stage.description} · ${stage.passed}/${stage.total}`}
+              tone={
+                stage.key === 'foundation'
+                  ? 'success'
+                  : stage.key === 'completion'
+                    ? 'slate'
+                    : 'primary'
+              }
+              testId={`acceptance-stage-card-${stage.key}`}
+            />
           ))}
         </div>
         <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-5" data-testid="acceptance-progress-overview">
           <div className="mb-3 flex items-center justify-between gap-3">
             <span className="text-lg font-semibold text-slate-900">验收总进度</span>
-            <span className="text-2xl font-bold tabular-nums text-slate-900">{totalPercent}%</span>
+            <span className="num-display text-2xl font-semibold text-slate-900">{totalPercent}%</span>
           </div>
-          <div className="h-3 w-full overflow-hidden rounded-full bg-slate-100" aria-label={`验收总进度 ${totalPercent}%`}>
+          <div className="h-[3px] w-full overflow-hidden rounded-full bg-slate-100" aria-label={`验收总进度 ${totalPercent}%`}>
             <div className="flex h-full w-full">
               {stageSummaries.map((stage) => (
                 <div
@@ -627,7 +639,7 @@ export default function AcceptanceTimeline() {
           </div>
           <div className="mt-2 flex flex-wrap gap-4 text-xs text-slate-500">
             {stageSummaries.map((stage) => (
-              <span key={stage.key} className="tabular-nums">
+              <span key={stage.key} className="num-mono">
                 {stage.label} {stage.percent}% ({stage.passed}/{stage.total})
               </span>
             ))}
@@ -635,17 +647,15 @@ export default function AcceptanceTimeline() {
         </div>
       </section>
 
-      <section data-testid="acceptance-filter-panel" className="rounded-xl border border-slate-100 bg-white p-4 shadow-[var(--el-1)]">
+      <section data-testid="acceptance-filter-panel" className="surface-card p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <div className="text-sm font-semibold text-slate-900">筛选区</div>
-          </div>
+          <CardHead eyebrow="FILTER" title="筛选区" />
           <div className="flex flex-wrap gap-2">
             <Badge variant="outline" className="rounded-full px-3 py-1">项目：{projectName}</Badge>
             <Badge variant="outline" className="rounded-full px-3 py-1">楼栋：{getBuildingLabel(buildingFilter === 'all' ? null : buildingFilter)}</Badge>
           </div>
         </div>
-        <div className="mt-4 grid gap-4 lg:grid-cols-2 2xl:grid-cols-4">
+        <div className="mt-4 grid gap-5 lg:grid-cols-2 2xl:grid-cols-4">
           <div className="space-y-1">
             <Label htmlFor="acceptance-scope-select" className="text-xs text-slate-500">范围</Label>
             <Select value={scopeFilter} onValueChange={(value) => setScopeFilter(value as 'all' | (typeof SCOPE_LEVEL_ORDER)[number])}>
@@ -697,7 +707,7 @@ export default function AcceptanceTimeline() {
         </div>
         <div className="mt-3">
           <CollapsibleSection title="更多筛选" count={3} defaultOpen={false}>
-            <div className="grid gap-4 pt-2 lg:grid-cols-3">
+            <div className="grid gap-5 pt-2 lg:grid-cols-3">
               <div className="space-y-1">
                 <Label className="text-xs text-slate-500">仅看阻塞</Label>
                 <Button variant="ghost"
@@ -749,13 +759,23 @@ export default function AcceptanceTimeline() {
         </div>
       )}
 
-      <Tabs value={viewMode} onValueChange={(value) => setViewMode(value as AcceptanceTimelineViewMode)} className="space-y-4">
-        <TabsList className="grid h-auto w-full max-w-md grid-cols-2 rounded-xl bg-slate-100 p-1">
-          <TabsTrigger value="graph" className="gap-2 rounded-lg" onClick={() => setViewMode('graph')} data-testid="acceptance-view-graph">
+      <Tabs value={viewMode} onValueChange={(value) => setViewMode(value as AcceptanceTimelineViewMode)} className="space-y-5">
+        <TabsList className="flex h-auto w-full max-w-md justify-start gap-6 rounded-none border-b border-slate-100 bg-transparent p-0 text-slate-500">
+          <TabsTrigger
+            value="graph"
+            className="relative gap-2 rounded-none bg-transparent px-0 pb-3 pt-0 text-sm text-slate-500 shadow-none transition-colors after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-blue-700 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600"
+            onClick={() => setViewMode('graph')}
+            data-testid="acceptance-view-graph"
+          >
             <Network className="h-4 w-4" />
             流程图({visiblePlans.length})
           </TabsTrigger>
-          <TabsTrigger value="list" className="gap-2 rounded-lg" onClick={() => setViewMode('list')} data-testid="acceptance-view-list">
+          <TabsTrigger
+            value="list"
+            className="relative gap-2 rounded-none bg-transparent px-0 pb-3 pt-0 text-sm text-slate-500 shadow-none transition-colors after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-blue-700 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600"
+            onClick={() => setViewMode('list')}
+            data-testid="acceptance-view-list"
+          >
             <List className="h-4 w-4" />
             台账({visiblePlans.length})
           </TabsTrigger>
@@ -838,34 +858,6 @@ export default function AcceptanceTimeline() {
       <TypeManagerDialog open={typeManagerOpen} customTypes={customTypes} canEdit={canEdit} onClose={() => setTypeManagerOpen(false)} onAddType={handleAddType} onDeleteType={handleDeleteType} />
       <AddPlanDialog open={addPlanOpen} acceptanceTypes={allTypes} canEdit={canEdit} onClose={() => setAddPlanOpen(false)} onSubmit={handleAddPlan} />
     </div>
-  )
-}
-
-function AcceptanceStageCard({ stage }: { stage: ReturnType<typeof buildAcceptanceStageSummaries>[number] }) {
-  return (
-    <Card variant="metric" className={cn('rounded-xl bg-white', stage.accentClass)} data-testid={`acceptance-stage-card-${stage.key}`}>
-      <CardContent className="p-5">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <div className="text-sm font-semibold text-slate-900">{stage.label}</div>
-            <div className="mt-1 text-xs text-slate-500">{stage.description}</div>
-          </div>
-          <Badge variant="outline" className="rounded-full bg-white tabular-nums">
-            {stage.passed}/{stage.total}
-          </Badge>
-        </div>
-        <div className="mt-4 flex items-end justify-between gap-3">
-          <div className="text-3xl font-semibold tabular-nums text-slate-900">{stage.percent}%</div>
-          <div className="text-xs text-slate-500">通过率</div>
-        </div>
-        <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100">
-          <div
-            className={cn('h-full motion-safe:transition-[width] motion-safe:duration-700 motion-safe:ease-out', stage.progressClass)}
-            style={{ width: `${stage.percent}%` }}
-          />
-        </div>
-      </CardContent>
-    </Card>
   )
 }
 
@@ -1178,7 +1170,7 @@ function AddPlanDialog({
             <Input type="date" value={plannedDate} onChange={(event) => setPlannedDate(event.target.value)} className="mt-1" />
           </div>
 
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid gap-5 sm:grid-cols-2">
             <div>
               <Label>范围层级</Label>
               <Select value={scopeLevel} onValueChange={(value) => setScopeLevel(value as 'project' | 'building' | 'unit' | 'specialty')}>

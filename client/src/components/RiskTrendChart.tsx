@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { CHART_SERIES } from '@/lib/chartPalette'
 import { ChartAccessibleWrapper } from '@/components/ChartAccessibleWrapper'
 import { EmptyState } from '@/components/EmptyState'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
 import { Button } from '@/components/ui/button'
 import { LoadingState } from '@/components/ui/loading-state'
 import { AlertTriangle, ChevronDown, ChevronUp, CircleAlert, Minus, ShieldAlert, TrendingDown, TrendingUp } from 'lucide-react'
@@ -122,22 +123,22 @@ export default function RiskTrendChart({ defaultExpanded = true }: RiskTrendChar
 
   return (
     <Card className="mb-6">
-      <CardHeader className="pb-3">
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <CardTitle className="text-base font-semibold">风险趋势分析</CardTitle>
+      <CardContent padding="md">
+        <CardHead
+          eyebrow="RISK TREND"
+          title="风险趋势分析"
+          action={
+          <div className="flex items-center gap-2">
             {data ? (
               <div className="flex items-center gap-1 text-sm">
                 {getTrendIcon(data.summary.riskChangeRate)}
                 <span className={getTrendColor(data.summary.riskChangeRate)}>
-                  {data.summary.riskChangeRate > 0 ? '+' : ''}{data.summary.riskChangeRate}%
+                  {data.summary.riskChangeRate > 0 ? '+' : ''}
+                  {data.summary.riskChangeRate}%
                 </span>
                 <span className="text-xs text-slate-500">({days}天)</span>
               </div>
             ) : null}
-          </div>
-
-          <div className="flex items-center gap-2">
             {isExpanded ? (
               <div className="flex items-center gap-1 rounded-lg bg-slate-100 p-1">
                 {[7, 14, 30].map((d) => (
@@ -163,8 +164,9 @@ export default function RiskTrendChart({ defaultExpanded = true }: RiskTrendChar
               {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
             </Button>
           </div>
-        </div>
-      </CardHeader>
+          }
+        />
+      </CardContent>
 
       {isExpanded ? (
         <CardContent>
@@ -373,9 +375,9 @@ export default function RiskTrendChart({ defaultExpanded = true }: RiskTrendChar
 
                 <div className="space-y-4">
                   <Card className="border-slate-200 shadow-none">
-                    <CardHeader className="pb-3">
-                      <CardTitle className="text-sm">来源结构</CardTitle>
-                    </CardHeader>
+                    <CardContent padding="md">
+                      <CardHead eyebrow="SOURCE" title="来源结构" />
+                    </CardContent>
                     <CardContent className="space-y-2">
                       {(data?.sourceTypeBreakdown ?? []).length > 0 ? (
                         (data?.sourceTypeBreakdown ?? []).map((item) => (
@@ -395,9 +397,9 @@ export default function RiskTrendChart({ defaultExpanded = true }: RiskTrendChar
                   </Card>
 
                   <Card className="border-slate-200 shadow-none">
-                    <CardHeader className="pb-3">
-                      <CardTitle className="text-sm">最新趋势摘要</CardTitle>
-                    </CardHeader>
+                    <CardContent padding="md">
+                      <CardHead eyebrow="SUMMARY" title="最新趋势摘要" />
+                    </CardContent>
                     <CardContent className="space-y-3 text-sm text-slate-600">
                       <div className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2">
                         <span>最近新增风险</span>
@@ -415,12 +417,13 @@ export default function RiskTrendChart({ defaultExpanded = true }: RiskTrendChar
                   </Card>
 
                   <Card className="border-slate-200 shadow-none">
-                    <CardHeader className="pb-3">
-                      <CardTitle className="text-sm flex items-center gap-2">
-                        <AlertTriangle className="h-4 w-4 text-amber-500" />
-                        风险提示
-                      </CardTitle>
-                    </CardHeader>
+                    <CardContent padding="md">
+                      <CardHead
+                        eyebrow="NOTICE"
+                        title="风险提示"
+                        action={<AlertTriangle className="h-4 w-4 text-amber-500" />}
+                      />
+                    </CardContent>
                     <CardContent className="space-y-2 text-sm text-slate-600">
                       <div className="flex items-start gap-2 rounded-xl bg-amber-50 px-3 py-2 text-amber-900">
                         <CircleAlert className="mt-0.5 h-4 w-4 shrink-0" />

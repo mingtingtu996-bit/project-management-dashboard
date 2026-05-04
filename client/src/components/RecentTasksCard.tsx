@@ -266,10 +266,10 @@ export default function RecentTasksCard({ projectId, tasks: sourceTasks, onViewA
 
   const stats = useMemo(() => buildTaskStats(tasks), [tasks])
   const visibleTasks = filteredTasks.slice(0, 6)
-  const panelClassName = embedded ? '' : 'surface-card p-5'
+  const panelClassName = embedded ? '' : 'surface-card h-full p-5'
 
   return (
-    <section className={panelClassName}>
+    <section data-testid="dashboard-focus-tasks-panel" className={panelClassName}>
       {!embedded ? (
         <CardHead
           eyebrow="FOCUS"
@@ -300,7 +300,7 @@ export default function RecentTasksCard({ projectId, tasks: sourceTasks, onViewA
         </div>
       </div>
 
-      <div className="mt-4">
+      <div className="mt-4 overflow-x-auto">
         <Table className="min-w-[720px] border-collapse">
           <TableHeader>
             <TableRow className="border-b border-gray-200">

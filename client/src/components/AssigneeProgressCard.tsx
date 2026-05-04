@@ -18,7 +18,8 @@
  * @module
  */
 
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
 import { EmptyState } from '@/components/EmptyState'
 import { Separator } from '@/components/ui/separator'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
@@ -99,9 +100,9 @@ export function AssigneeProgressCard({
   if (assignees.length === 0) {
     return (
       <Card variant="metric">
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base font-semibold">责任人完成情况</CardTitle>
-        </CardHeader>
+        <CardContent padding="md">
+          <CardHead eyebrow="ASSIGNEE" title="责任人完成情况" />
+        </CardContent>
         <CardContent>
           <EmptyState
             title="暂无责任人数据"
@@ -115,15 +116,12 @@ export function AssigneeProgressCard({
 
   return (
     <Card variant="metric">
-      <CardHeader className="pb-3">
-        <div className="flex items-center justify-between">
-          <div>
-            <CardTitle className="text-base font-semibold">责任人完成情况</CardTitle>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              各责任人负责任务的完成进度
-            </p>
-          </div>
-          {onViewAll && (
+      <CardContent padding="md">
+        <CardHead
+          eyebrow="ASSIGNEE"
+          title="责任人完成情况"
+          action={
+            onViewAll ? (
             <Button variant="ghost" 
               onClick={onViewAll}
               className="text-blue-600 hover:text-blue-700 text-sm font-medium flex items-center gap-0.5 transition-colors"
@@ -131,9 +129,10 @@ export function AssigneeProgressCard({
               查看全部
               <ChevronRight className="h-4 w-4" />
             </Button>
-          )}
-        </div>
-      </CardHeader>
+            ) : null
+          }
+        />
+      </CardContent>
       <CardContent className="pt-0">
         {/* 列表头部 */}
         <div className="flex items-center text-xs text-slate-500 mb-2 px-2">

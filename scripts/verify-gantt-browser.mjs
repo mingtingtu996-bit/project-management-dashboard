@@ -429,6 +429,13 @@ async function main() {
       `Gantt timeline overlap detected: ${JSON.stringify(timelineOverlapIssues.slice(0, 5))}`,
     )
 
+    await page.getByTestId('gantt-switch-list-view').click()
+    await page.getByTestId('gantt-task-rows').waitFor({ state: 'visible', timeout: 10000 })
+    await page.getByTestId('gantt-timeline-view').waitFor({ state: 'hidden', timeout: 10000 })
+    const listUrl = page.url()
+    assert(!listUrl.includes('view=timeline'), `Gantt list switch kept stale timeline query: ${listUrl}`)
+    await page.screenshot({ path: join(outputDir, 'gantt-page-back-to-list.png'), fullPage: true })
+
     assert(apiFailures.length === 0, `API proxy failures detected: ${JSON.stringify(apiFailures)}`)
     assert(pageErrors.length === 0, `Browser page errors detected: ${pageErrors.join(' | ')}`)
     assert(consoleErrors.length === 0, `Browser console errors detected: ${consoleErrors.join(' | ')}`)
@@ -438,6 +445,7 @@ async function main() {
       initialUrl,
       detailVisible: true,
       timelineOverlapIssues,
+      listUrl,
       apiFailures,
       consoleErrors,
       pageErrors,
@@ -445,6 +453,7 @@ async function main() {
         initial: join(outputDir, 'gantt-page-initial.png'),
         detail: join(outputDir, 'gantt-page-detail.png'),
         timelineDay: join(outputDir, 'gantt-page-timeline-day.png'),
+        backToList: join(outputDir, 'gantt-page-back-to-list.png'),
       },
     }
 

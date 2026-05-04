@@ -9,9 +9,11 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
 import { Input } from '@/components/ui/input'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { LoadingState } from '@/components/ui/loading-state'
+import { MetricCard } from '@/components/ui/metric-card'
 import { usePlanningStore } from '@/hooks/usePlanningStore'
 import { usePermissions } from '@/hooks/usePermissions'
 import { useStore } from '@/hooks/useStore'
@@ -558,7 +560,7 @@ export default function CloseoutPage() {
       : null
 
   const summary = (
-    <Card variant="detail">
+    <Card className="surface-card">
       <CardContent className="space-y-4 p-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="space-y-1">
@@ -566,7 +568,7 @@ export default function CloseoutPage() {
               <Badge variant="secondary">月末关账工作台</Badge>
               <Badge variant="outline">{activePlan ? getMonthlyPlanStatusLabel(activePlan.status) : '暂无可关账月份'}</Badge>
             </div>
-            <h2 className="text-lg font-semibold text-slate-900">月末待处理事项</h2>
+            <CardHead eyebrow="CLOSEOUT" title="月末待处理事项" />
           </div>
           <div className="flex flex-wrap items-center gap-2">
             {forceCloseUnlocked ? <Badge variant="secondary">已到第 7 日，可强制发起关账</Badge> : null}
@@ -588,9 +590,9 @@ export default function CloseoutPage() {
 
         <div
           data-testid="closeout-escalation-ladder"
-          className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-3"
+          className="space-y-3 rounded-2xl bg-slate-50 p-3 ring-1 ring-inset ring-slate-200"
         >
-          <div className="grid gap-4 lg:grid-cols-3">
+          <div className="grid gap-5 lg:grid-cols-3">
             {[
               {
                 day: 3,
@@ -609,8 +611,8 @@ export default function CloseoutPage() {
               return (
                 <div
                   key={step.day}
-                  className={`rounded-2xl border px-4 py-3 ${
-                    active ? 'border-amber-200 bg-amber-50 text-amber-900' : 'border-white/80 bg-white text-slate-600'
+                  className={`rounded-2xl px-4 py-3 ring-1 ring-inset ${
+                    active ? 'bg-amber-50 text-amber-900 ring-amber-200' : 'bg-white text-slate-600 ring-white/80'
                   }`}
                 >
                   <div className="flex items-center justify-between gap-3">
@@ -630,35 +632,13 @@ export default function CloseoutPage() {
           </div>
         </div>
 
-        <div className="grid gap-4 md:grid-cols-5">
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-            <div className="text-xs text-slate-500">关账月份</div>
-            <div className="mt-1 text-lg font-semibold text-slate-900">{activePlan ? formatMonthLabel(activePlan.month) : '暂无'}</div>
-          </div>
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-            <div className="text-xs text-slate-500">总待处理数</div>
-            <div className="mt-1 text-lg font-semibold text-slate-900">{totalCount}</div>
-          </div>
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-            <div className="text-xs text-slate-500">已处理</div>
-            <div className="mt-1 text-lg font-semibold text-slate-900">{processedCount}</div>
-          </div>
-          <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
-            <div className="text-xs text-amber-700">剩余未处理</div>
-            <div className="mt-1 text-lg font-semibold text-amber-900">{remainingCount}</div>
-          </div>
-          <div className="rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3">
-            <div className="text-xs text-blue-700">建议可一键采纳数</div>
-            <div className="mt-1 text-lg font-semibold text-blue-900">{autoAdoptableCount}</div>
-          </div>
-        </div>
         {dataQualitySummary ? (
           <div
             data-testid="closeout-data-quality-card"
-            className={`rounded-2xl border px-4 py-4 ${
+            className={`surface-card px-5 py-5 ring-1 ring-inset ${
               dataQualitySummary.confidence.flag === 'low'
-                ? 'border-amber-200 bg-amber-50'
-                : 'border-sky-200 bg-sky-50'
+                ? 'bg-amber-50 ring-amber-200'
+                : 'bg-sky-50 ring-sky-200'
             }`}
           >
             <div className="flex flex-wrap items-start justify-between gap-3">
@@ -689,7 +669,7 @@ export default function CloseoutPage() {
         ) : null}
         <div
           data-testid="closeout-filter-bar"
-          className="grid gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-3 lg:grid-cols-[minmax(0,1fr)_auto]"
+          className="surface-card grid gap-5 p-5 lg:grid-cols-[minmax(0,1fr)_auto]"
         >
           <div className="space-y-2">
             <div className="text-xs font-medium uppercase tracking-wider text-slate-500">筛选与搜索</div>
@@ -737,11 +717,11 @@ export default function CloseoutPage() {
   )
 
   const sectionHeader = (
-    <Card variant="detail">
+    <Card className="surface-card">
       <CardContent className="space-y-4 p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="space-y-1">
-            <div className="text-sm font-medium text-slate-900">关账分组与状态</div>
+            <CardHead eyebrow="CLOSEOUT" title="关账分组与状态" />
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant="outline">{processedCount}/{items.length} 已处理</Badge>
@@ -883,9 +863,17 @@ export default function CloseoutPage() {
   return (
     <PlanningPageShell
       projectName={currentProject.name ?? '项目'}
-      title="计划编制 / 关闭管理"
+      title="关闭管理"
       description="收口当月待处理事项，并把结果带回月度计划。"
       tabs={tabs}
+      metrics={
+        <>
+          <MetricCard eyebrow="TOTAL" title="总待处理" value={totalCount} hint={activePlan ? formatMonthLabel(activePlan.month) : '暂无可关账月份'} tone="primary" />
+          <MetricCard eyebrow="DONE" title="已处理" value={processedCount} hint={`${selectedItemIds.length} 项已选`} tone="success" />
+          <MetricCard eyebrow="LEFT" title="剩余未处理" value={remainingCount} hint={`逾期 ${overdueDays} 天`} tone={remainingCount > 0 ? 'warning' : 'slate'} />
+          <MetricCard eyebrow="AUTO" title="可一键采纳" value={autoAdoptableCount} hint="建议可自动收口" tone={autoAdoptableCount > 0 ? 'info' : 'slate'} />
+        </>
+      }
       className="pb-20"
       actions={
         <>

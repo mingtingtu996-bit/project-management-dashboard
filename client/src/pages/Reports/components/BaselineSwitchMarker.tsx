@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { EmptyState } from '@/components/EmptyState'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
 
 export interface BaselineSwitchEvent {
   switch_date: string
@@ -29,9 +30,9 @@ export function BaselineSwitchMarker({
 
   return (
     <Card data-testid="baseline-switch-marker" className="border-blue-200 shadow-[var(--el-1)]">
-      <CardHeader className="pb-3">
-        <CardTitle className="text-base">基线版本切换标记</CardTitle>
-      </CardHeader>
+      <CardContent padding="md" className="pb-0">
+        <CardHead eyebrow="BASELINE" title="基线版本切换标记" />
+      </CardContent>
       <CardContent className="space-y-3">
         {selectedEvent ? (
           <div data-testid="deviation-version-note" className="rounded-2xl border border-blue-100 bg-blue-50 p-4 text-sm leading-6 text-blue-900">

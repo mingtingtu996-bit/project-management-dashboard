@@ -3,7 +3,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { DrawingPackageBoard } from '../Drawings/components/DrawingPackageBoard'
-import { DrawingReadinessSummary } from '../Drawings/components/DrawingReadinessSummary'
+import { DrawingReadinessMetricGrid } from '../Drawings/components/DrawingReadinessMetricGrid'
 import type { DrawingBoardSummary, DrawingPackageCard } from '../Drawings/types'
 
 describe('Drawings board contracts', () => {
@@ -66,7 +66,7 @@ describe('Drawings board contracts', () => {
   })
 
   it('renders the readiness summary', () => {
-    render(<DrawingReadinessSummary summary={summary} projectName="示例项目" />)
+    render(<DrawingReadinessMetricGrid summary={summary} projectName="示例项目" />)
 
     expect(container.textContent).toContain('图纸准备度总览')
     expect(container.textContent).toContain('总图纸数')

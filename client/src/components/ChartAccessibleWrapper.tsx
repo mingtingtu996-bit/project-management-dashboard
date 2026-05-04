@@ -45,7 +45,7 @@ export function ChartAccessibleWrapper({
                   {row.map((cell, cellIndex) => (
                     <td
                       key={cellIndex}
-                      className={cn('max-w-0 px-3 py-2 text-slate-600', typeof cell === 'number' && 'text-right tabular-nums')}
+                      className={cn('max-w-0 px-3 py-2 text-slate-600', typeof cell === 'number' && 'text-right num-mono')}
                       title={typeof cell === 'string' || typeof cell === 'number' ? String(cell) : undefined}
                     >
                       <span className="block truncate">{cell}</span>

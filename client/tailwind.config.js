@@ -75,7 +75,7 @@ export default {
       // shadcn 默认 rounded-lg = var(--radius) = 8px → 已在 index.css 改为 0.75rem
       // -----------------------------------------------------------------------
       fontFamily: {
-        sans: ['"Plus Jakarta Sans"', 'Inter', ...defaultTheme.fontFamily.sans],
+        sans: ['"Plus Jakarta Sans"', 'Inter', '"Noto Sans SC"', '"Microsoft YaHei"', '"PingFang SC"', '"Hiragino Sans GB"', ...defaultTheme.fontFamily.sans],
       },
 
       borderRadius: {

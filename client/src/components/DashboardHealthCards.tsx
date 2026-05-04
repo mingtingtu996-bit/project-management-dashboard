@@ -44,10 +44,11 @@ function valueClass(value: number) {
   return cn('num-mono text-slate-900', value === 0 && 'text-slate-400')
 }
 
-function ProgressBar({ value, tone = 'bg-blue-600' }: { value: number; tone?: string }) {
-  const width = Math.max(clampPercent(value), 4)
+function ProgressBar({ value, tone = 'bg-blue-600', minVisible = true }: { value: number; tone?: string; minVisible?: boolean }) {
+  const percent = clampPercent(value)
+  const width = minVisible ? Math.max(percent, 4) : percent
   return (
-    <div className="h-[3px] overflow-hidden rounded-full bg-slate-100">
+    <div className="h-[3px] overflow-hidden rounded-full bg-slate-100/90">
       <div className={cn('h-full rounded-full', tone)} style={{ width: `${width}%` }} />
     </div>
   )
@@ -64,7 +65,8 @@ function Donut({
 }) {
   const safeValue = clampPercent(value)
   return (
-    <div className="relative h-[120px] w-[120px] shrink-0">
+    <div className="relative grid h-[120px] w-[120px] shrink-0 place-items-center rounded-full bg-slate-50/80 ring-1 ring-inset ring-slate-100">
+      <div className="absolute inset-[18px] rounded-full bg-white shadow-[0_10px_24px_rgba(15,23,42,0.06)] ring-1 ring-inset ring-slate-100" />
       <ResponsiveContainer width="100%" height="100%">
         <RadialBarChart
           innerRadius="75%"
@@ -75,15 +77,50 @@ function Donut({
           endAngle={-270}
         >
           <PolarAngleAxis angleAxisId={0} type="number" domain={[0, 100]} tick={false} />
-          <RadialBar angleAxisId={0} dataKey="value" cornerRadius={10} fill={color} background={{ fill: CHART_NEUTRAL.softSurface }} animationDuration={800} />
+          <RadialBar
+            angleAxisId={0}
+            dataKey="value"
+            cornerRadius={10}
+            fill={color}
+            background={{ fill: CHART_NEUTRAL.softSurface }}
+            animationDuration={800}
+            animationEasing="ease-out"
+          />
         </RadialBarChart>
       </ResponsiveContainer>
       <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center text-center">
-        <div className={cn('num-display text-[30px] font-semibold leading-none text-slate-900', safeValue === 0 && 'text-slate-400')}>
+        <div className={cn('num-display text-[30px] font-semibold leading-none text-slate-900 drop-shadow-sm', safeValue === 0 && 'text-slate-400')}>
           {safeValue}%
         </div>
-        <div className="eyebrow mt-1">{label}</div>
+        <div className="meta-muted mt-1 font-semibold text-slate-400">{label}</div>
       </div>
+    </div>
+  )
+}
+
+function ScoreRow({ label, value, tone }: { label: string; value: number; tone: string }) {
+  return (
+    <div className="space-y-1.5">
+      <div className="meta-text flex items-center justify-between gap-3">
+        <span className="truncate text-slate-500">{label}</span>
+        <span className={valueClass(value)}>{value}%</span>
+      </div>
+      <ProgressBar value={value} tone={tone} />
+    </div>
+  )
+}
+
+function StatusRow({ label, value, dot, progressValue }: { label: string; value: number; dot: string; progressValue: number }) {
+  return (
+    <div className="space-y-1.5">
+      <div className="meta-text flex items-center justify-between gap-3">
+        <span className="inline-flex min-w-0 items-center gap-2 text-slate-500">
+          <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', dot)} />
+          <span className="truncate">{label}</span>
+        </span>
+        <span className={valueClass(value)}>{value}</span>
+      </div>
+      <ProgressBar value={progressValue} tone={dot} minVisible={value > 0} />
     </div>
   )
 }
@@ -156,7 +193,7 @@ export function DashboardHealthCards({ summary, tasks, risks, projectId, embedde
   const columnClassName = embedded
     ? 'flex h-full min-w-0 flex-col border-b border-slate-100 pb-5 last:border-b-0 last:pb-0 md:border-b-0 md:pb-0 md:border-r md:border-slate-100 md:pr-5 md:last:border-r-0 md:last:pr-0'
     : 'surface-card flex h-full flex-col p-5'
-  const donutContentClassName = 'mt-5 grid gap-5 lg:grid-cols-[120px_minmax(0,1fr)] lg:items-center xl:grid-cols-1 2xl:grid-cols-[120px_minmax(0,1fr)]'
+  const donutContentClassName = 'mt-5 grid gap-4 lg:grid-cols-[120px_minmax(0,1fr)] lg:items-center'
   const businessScores = [
     { label: '进度兑现', value: healthDetails?.progressDeliveryScore ?? overallProgress, tone: 'bg-blue-600' },
     { label: '任务执行', value: healthDetails?.taskExecutionScore ?? completedRate, tone: 'bg-emerald-500' },
@@ -164,6 +201,12 @@ export function DashboardHealthCards({ summary, tasks, risks, projectId, embedde
     { label: '风险阻碍', value: healthDetails?.riskControlScore ?? Math.max(0, 100 - totalSignals * 10), tone: 'bg-rose-500' },
     { label: '数据可信度', value: healthDetails?.dataTrustScore ?? 100, tone: 'bg-slate-500' },
   ].map((item) => ({ ...item, value: clampPercent(item.value) }))
+  const taskStatusRows = [
+    { label: '已完成', value: completed, dot: 'bg-emerald-500', progressValue: completedRate },
+    { label: '进行中', value: inProgress, dot: 'bg-blue-500', progressValue: total > 0 ? Math.round((inProgress / total) * 100) : 0 },
+    { label: '未开始', value: notStarted, dot: 'bg-slate-400', progressValue: total > 0 ? Math.round((notStarted / total) * 100) : 0 },
+    { label: '已延期', value: delayed, dot: 'bg-rose-500', progressValue: total > 0 ? Math.round((delayed / total) * 100) : 0 },
+  ]
 
   return (
     <div className={cn('grid grid-cols-1 gap-5', embedded ? 'md:grid-cols-3' : 'xl:grid-cols-3')}>
@@ -175,15 +218,9 @@ export function DashboardHealthCards({ summary, tasks, risks, projectId, embedde
         />
         <div className={donutContentClassName}>
           <Donut label="健康度" value={healthScore} color={CHART_SERIES.success} />
-          <div className="min-w-0 space-y-2.5">
+          <div className="min-w-0 space-y-2.5 rounded-xl bg-slate-50/40 p-3 ring-1 ring-inset ring-slate-100/70">
             {businessScores.map((item) => (
-              <div key={item.label} className="space-y-1.5">
-                <div className="meta-text flex items-center justify-between">
-                  <span>{item.label}</span>
-                  <span className={valueClass(item.value)}>{item.value}%</span>
-                </div>
-                <ProgressBar value={item.value} tone={item.tone} />
-              </div>
+              <ScoreRow key={item.label} label={item.label} value={item.value} tone={item.tone} />
             ))}
           </div>
         </div>
@@ -197,20 +234,9 @@ export function DashboardHealthCards({ summary, tasks, risks, projectId, embedde
         />
         <div className={donutContentClassName}>
           <Donut label="完成率" value={completedRate} color={CHART_SERIES.primary} />
-          <div className="min-w-0">
-            {[
-              { label: '已完成', value: completed, dot: 'bg-emerald-500' },
-              { label: '进行中', value: inProgress, dot: 'bg-blue-500' },
-              { label: '未开始', value: notStarted, dot: 'bg-slate-400' },
-              { label: '已延期', value: delayed, dot: 'bg-rose-500' },
-            ].map((item) => (
-              <div key={item.label} className="flex items-center justify-between border-b border-slate-100 py-2 text-sm last:border-b-0">
-                <span className="inline-flex items-center gap-2 text-slate-500">
-                  <span className={cn('h-1.5 w-1.5 rounded-full', item.dot)} />
-                  {item.label}
-                </span>
-                <span className={valueClass(item.value)}>{item.value}</span>
-              </div>
+          <div className="min-w-0 space-y-2.5 rounded-xl bg-slate-50/40 p-3 ring-1 ring-inset ring-slate-100/70">
+            {taskStatusRows.map((item) => (
+              <StatusRow key={item.label} label={item.label} value={item.value} dot={item.dot} progressValue={item.progressValue} />
             ))}
           </div>
         </div>
@@ -237,7 +263,7 @@ export function DashboardHealthCards({ summary, tasks, risks, projectId, embedde
                 <span className={cn('h-1.5 w-1.5 rounded-full', item.dot)} />
                 {item.label}
               </div>
-              <div className={cn('mt-2 text-[22px] font-semibold tabular-nums', item.value === 0 ? 'text-slate-400' : 'text-slate-900')}>
+              <div className={cn('num-display mt-2 text-[22px] font-semibold', item.value === 0 ? 'text-slate-400' : 'text-slate-900')}>
                 {item.value}
               </div>
             </Link>

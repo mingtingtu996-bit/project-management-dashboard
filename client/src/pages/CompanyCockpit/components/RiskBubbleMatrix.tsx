@@ -1,4 +1,5 @@
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
 import { ChartAccessibleWrapper } from '@/components/ChartAccessibleWrapper'
 import { EmptyState } from '@/components/EmptyState'
 import { Separator } from '@/components/ui/separator'
@@ -137,22 +138,21 @@ export function RiskBubbleMatrix({ risks, issues, projectRows }: RiskBubbleMatri
   const totalSignals = signals.length
 
   return (
-    <Card className="rounded-2xl border border-slate-100 bg-slate-50 shadow-none">
-      <CardHeader className="space-y-1 pb-3">
-        <CardTitle className="flex items-center justify-between text-base font-semibold text-slate-900">
-          <span>风险 / 问题 / 阻碍分布</span>
-          {totalSignals > 0 && (
+    <Card className="surface-card">
+      <CardContent padding="md" className="space-y-4">
+        <CardHead
+          eyebrow="MATRIX"
+          title="风险 / 问题 / 阻碍分布"
+          action={totalSignals > 0 ? (
             <span className="text-xs font-normal text-slate-500">
               共 {totalSignals} 个活跃信号
             </span>
-          )}
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="pt-0">
+          ) : null}
+        />
         <div className="mb-4 flex items-center justify-center gap-3 text-xs">
           {SIGNAL_LEVELS.map((level) => (
             <span key={level.key} className="flex items-center gap-1">
-              <span className={`h-3.5 w-3.5 rounded-full ${level.color}`} />
+              <span className={`h-2 w-2 rounded-full ${level.color}`} />
               <span className="text-slate-500">{level.label}</span>
             </span>
           ))}

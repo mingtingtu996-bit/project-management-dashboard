@@ -95,7 +95,7 @@ export function CloseoutGroupedList({
                     <div
                       key={item.id}
                       className={cn(
-                        'flex w-full items-start justify-between gap-3 rounded-2xl border px-4 py-3 transition',
+                        'flex w-full cursor-pointer items-start justify-between gap-3 rounded-2xl border px-4 py-3 transition',
                         isActive
                           ? 'border-blue-300 bg-blue-50/70 shadow-[var(--el-1)]'
                           : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50'

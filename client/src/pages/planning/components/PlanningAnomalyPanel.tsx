@@ -1,6 +1,7 @@
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
 import { Separator } from '@/components/ui/separator'
 import { AlertCircle } from 'lucide-react'
 
@@ -28,14 +29,14 @@ export function PlanningAnomalyPanel({
 
   return (
     <Card data-testid="planning-anomaly-panel" className="surface-card">
-      <CardHeader className="space-y-3 bg-slate-50/80">
+      <CardContent padding="md" className="space-y-3 bg-slate-50/80">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <CardTitle className="text-base">异常治理</CardTitle>
+            <CardHead eyebrow="ANOMALY" title="异常治理" />
           </div>
           <Badge variant={status === 'error' ? 'destructive' : empty ? 'outline' : 'secondary'}>{statusLabel}</Badge>
         </div>
-      </CardHeader>
+      </CardContent>
       <Separator />
       <CardContent className="space-y-3 p-5">
         {status === 'loading' ? (

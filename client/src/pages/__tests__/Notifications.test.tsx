@@ -156,7 +156,7 @@ describe('Notifications', () => {
     await waitForCondition(() => container.textContent?.includes('提醒中心') && container.textContent?.includes('风险预警'))
 
     expect(container.textContent).toContain('提醒中心')
-    expect(container.textContent).toContain('公司级第二入口')
+    expect(container.textContent).toContain('系统通知')
     expect(container.textContent).toContain('提醒设置')
     expect(container.textContent).toContain('业务预警')
     expect(container.textContent).toContain('流程催办')

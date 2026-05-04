@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode } from 'react'
+import type { CSSProperties, KeyboardEvent, ReactNode } from 'react'
 
 import { Sparkline } from '@/components/Sparkline'
 import { Card, CardContent } from '@/components/ui/card'
@@ -55,6 +55,7 @@ export interface MetricCardProps {
   testId?: string
   className?: string
   style?: CSSProperties
+  onClick?: () => void
 }
 
 function normalizeSparkline(points?: Array<number | { value: number }>) {
@@ -81,6 +82,7 @@ export function MetricCard({
   testId,
   className,
   style,
+  onClick,
 }: MetricCardProps) {
   const toneClass = toneClassMap[tone]
   const sparklineData = normalizeSparkline(sparkline)
@@ -89,28 +91,37 @@ export function MetricCard({
   const countValue = useCountUp(numericValue ?? 0, { duration: 900 })
   const displayValue = numericValue !== null ? countValue : value
   const isZero = numericValue === 0
+  const interactiveProps = onClick
+    ? {
+        role: 'button',
+        tabIndex: 0,
+        onClick,
+        onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault()
+            onClick()
+          }
+        },
+      }
+    : {}
 
   return (
     <Card
       data-testid={testId}
       variant="surface"
       className={cn(
-        'relative h-full cursor-pointer overflow-hidden border-slate-200/60 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[var(--el-hover)]',
+        'relative h-full overflow-hidden border-slate-200/60 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[var(--el-hover)]',
+        onClick && 'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-200 focus-visible:ring-offset-2',
         className,
       )}
       style={style}
+      {...interactiveProps}
     >
-      <CardContent padding="md" className="flex h-full min-h-[132px] flex-col justify-between gap-3">
+      <CardContent padding="md" className="flex h-full min-h-[148px] flex-col justify-between gap-4">
         <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0">
+          <div className="min-w-0 pr-2">
             {eyebrow ? <div className="eyebrow">{eyebrow}</div> : null}
             <p className="mt-0.5 truncate text-sm font-medium text-slate-500">{title}</p>
-            <div className="mt-3">
-              <span className={cn('num-display text-[34px] font-semibold leading-none text-slate-900', isZero && 'text-slate-400')}>
-                {formatMetricValue(displayValue, unit)}
-              </span>
-              {trend ? <div className="mt-3 min-h-[16px] text-[11px] font-medium text-slate-400">{trend}</div> : null}
-            </div>
           </div>
           {icon ? (
             <div className={cn('flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-slate-200/60 bg-white', toneClass.icon)}>
@@ -118,8 +129,17 @@ export function MetricCard({
             </div>
           ) : null}
         </div>
+
+        <div className="min-w-0">
+          <div>
+            <span className={cn('num-display text-[34px] font-semibold leading-none text-slate-900', isZero && 'text-slate-400')}>
+              {formatMetricValue(displayValue, unit)}
+            </span>
+          </div>
+          {trend ? <div className="meta-muted mt-2 min-h-[16px] font-medium">{trend}</div> : null}
+        </div>
         {(hint || sparklineData.length > 1) ? (
-          <div className="min-w-0 space-y-2">
+          <div className="mt-auto min-w-0 space-y-2 pt-1">
             {hint ? <div className="min-w-0 text-xs leading-5 text-slate-500">{hint}</div> : <span />}
             {sparklineData.length > 1 ? (
               <Sparkline data={sparklineData} color={sparklineColor} className="h-8 w-full" />

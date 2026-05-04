@@ -274,7 +274,7 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
               'rounded-full px-3 py-1 font-medium transition-colors',
               groupMode === mode
                 ? 'bg-blue-100 text-blue-700'
-                : 'border border-slate-200 bg-white text-slate-500 hover:bg-slate-50',
+                : 'bg-white text-slate-500 ring-1 ring-inset ring-slate-200/60 hover:bg-slate-50',
             )}
           >
             {{ phase: '按阶段', building: '按楼栋', specialty: '按范围层级' }[mode]}
@@ -282,13 +282,13 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
         ))}
         <div className="ml-auto flex items-center gap-2">
           <DisabledReasonTooltip reason={readOnlyActionReason}>
-            <Button variant="ghost" type="button" onClick={selectAll} disabled={!editable} className="flex items-center gap-1 rounded-full border border-slate-200 bg-white px-3 py-1 text-slate-500 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50" data-testid="acceptance-select-all">
+            <Button variant="ghost" type="button" onClick={selectAll} disabled={!editable} className="flex items-center gap-1 rounded-full bg-white px-3 py-1 text-slate-500 ring-1 ring-inset ring-slate-200/60 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50" data-testid="acceptance-select-all">
               <CheckSquare className="h-3.5 w-3.5" />全选
             </Button>
           </DisabledReasonTooltip>
           {selectedPlanIds.size > 0 && (
             <DisabledReasonTooltip reason={readOnlyActionReason}>
-              <Button variant="ghost" type="button" onClick={clearSelection} disabled={!editable} className="flex items-center gap-1 rounded-full border border-slate-200 bg-white px-3 py-1 text-slate-500 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50" data-testid="acceptance-clear-selection">
+              <Button variant="ghost" type="button" onClick={clearSelection} disabled={!editable} className="flex items-center gap-1 rounded-full bg-white px-3 py-1 text-slate-500 ring-1 ring-inset ring-slate-200/60 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50" data-testid="acceptance-clear-selection">
                 <X className="h-3.5 w-3.5" />清除({selectedPlanIds.size})
               </Button>
             </DisabledReasonTooltip>
@@ -297,7 +297,7 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
       </div>
 
       {selectedPlanIds.size > 0 && (
-        <div className="rounded-xl border border-blue-200 bg-blue-50 p-3" data-testid="acceptance-batch-toolbar">
+        <div className="rounded-xl bg-blue-50 p-3 ring-1 ring-inset ring-blue-200" data-testid="acceptance-batch-toolbar">
           <div className="mb-2 text-xs font-medium text-blue-800">已选 {selectedPlanIds.size} 项 — 批量操作：</div>
           <div className="flex flex-wrap items-center gap-3">
             {onBatchStatusChange && (
@@ -411,8 +411,8 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
                     className={cn(
                       'flex w-full items-center justify-between gap-4 px-5 py-4 text-left transition-colors hover:bg-slate-50',
                       node && 'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2',
-                      !hasPlannedDate && 'bg-amber-50/30',
-                      isDragging && 'shadow-[var(--el-3)] ring-1 ring-blue-300',
+                      !hasPlannedDate && 'bg-amber-50/60',
+                      isDragging && 'shadow-[var(--el-3)] ring-1 ring-inset ring-blue-300',
                       selectedPlanIds.has(plan.id) && 'bg-blue-50/60',
                     )}
                   >
@@ -464,7 +464,7 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
                         <div className="text-xs text-slate-500">责任单位</div>
                         <Tooltip>
   <TooltipTrigger asChild>
-    <div className="mt-0.5 truncate text-xs font-medium text-slate-700 tabular-nums" >
+    <div className="mt-0.5 truncate text-xs font-medium text-slate-700 num-mono" >
                           {plan.responsible_unit || (plan.responsible_user_id ? plan.responsible_user_id.slice(-6) : '—')}
                         </div>
   </TooltipTrigger>
@@ -473,15 +473,15 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
                       </div>
                       <div className="w-20 flex-shrink-0 text-center">
                         <div className="text-xs text-slate-500">并行组</div>
-                        <div className="mt-0.5 text-xs font-medium text-slate-700 tabular-nums">
+                        <div className="mt-0.5 text-xs font-medium text-slate-700 num-mono">
                           {plan.parallel_group_id ? (
-                            <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-indigo-700">{plan.parallel_group_id.slice(-4)}</span>
+                            <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-indigo-700 ring-1 ring-inset ring-indigo-200">{plan.parallel_group_id.slice(-4)}</span>
                           ) : '—'}
                         </div>
                       </div>
                       <div className="w-16 flex-shrink-0 text-center">
                         <div className="text-xs text-slate-500">阻塞数</div>
-                        <div className="mt-0.5 text-xs font-medium tabular-nums">
+                        <div className="mt-0.5 text-xs font-medium num-mono">
                           {plan.is_blocked ? (
                             <span className="rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-red-700">{plan.predecessor_plan_ids?.length || 1}</span>
                           ) : (
@@ -507,27 +507,27 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
                         {plan.is_custom ? '自定义项' : '系统项'}
                       </Badge>
                       {plan.scope_level && (
-                        <Badge variant="outline" className="rounded-full border-slate-200 bg-slate-50 px-3 py-1 text-slate-500">
+                        <Badge variant="outline" className="rounded-full bg-slate-50 px-3 py-1 text-slate-500 ring-slate-200/60">
                           {{ project: '项目级', building: '楼栋', unit: '单体', specialty: '专项' }[plan.scope_level] || plan.scope_level}
                         </Badge>
                       )}
                       {plan.building_id && (
-                        <Badge variant="outline" className="rounded-full border-sky-100 bg-sky-50 px-3 py-1 text-sky-700">
+                        <Badge variant="outline" className="rounded-full bg-sky-50 px-3 py-1 text-sky-700 ring-sky-100">
                           {plan.building_id}
                         </Badge>
                       )}
                       {plan.actual_date && (
-                        <Badge variant="outline" className="rounded-full border-emerald-200 bg-emerald-50 px-3 py-1 text-emerald-700">
-                          <span className="tabular-nums">实际 {plan.actual_date}</span>
+                        <Badge variant="outline" className="rounded-full bg-emerald-50 px-3 py-1 text-emerald-700 ring-emerald-200">
+                          <span className="num-mono">实际 {plan.actual_date}</span>
                         </Badge>
                       )}
                       {plan.predecessor_plan_ids?.length > 0 && (
-                        <Badge variant="outline" className="rounded-full border-amber-200 bg-amber-50 px-3 py-1 text-amber-700">
+                        <Badge variant="outline" className="rounded-full bg-amber-50 px-3 py-1 text-amber-700 ring-amber-200">
                           前置 {plan.predecessor_plan_ids.length}
                         </Badge>
                       )}
                       {plan.phase_code && (
-                        <Badge variant="outline" className="rounded-full border-slate-200 bg-slate-50 px-3 py-1 text-slate-500 text-xs">
+                        <Badge variant="outline" className="rounded-full bg-slate-50 px-3 py-1 text-xs text-slate-500 ring-slate-200/60">
                           {plan.phase_code}
                         </Badge>
                       )}
@@ -535,7 +535,7 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
                         <Badge
                           key={badge}
                           variant="outline"
-                          className="rounded-full border-slate-200 bg-slate-50 px-3 py-1 text-slate-700"
+                          className="rounded-full bg-slate-50 px-3 py-1 text-slate-700 ring-slate-200/60"
                         >
                           {badge}
                         </Badge>
@@ -545,7 +545,7 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
                           type="button"
                           onClick={(e) => { e.stopPropagation(); onStatusChange(node.id, 'passed') }}
                           disabled={!editable}
-                          className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
+                          className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-200 hover:bg-emerald-100"
                           data-testid={`acceptance-quick-pass-${plan.id}`}
                         >
                           标记通过

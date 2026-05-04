@@ -6,11 +6,16 @@ import { cn } from '@/lib/utils'
 const cardVariants = cva('text-card-foreground transition-all duration-200', {
   variants: {
     variant: {
-      default: 'rounded-card border border-slate-100 bg-white shadow-[var(--el-1)] hover:shadow-[var(--el-2)] hover:ring-1 hover:ring-blue-100/50',
-      surface: 'rounded-card border border-slate-100 bg-white/95 shadow-[var(--el-1)] backdrop-blur-sm hover:shadow-[var(--el-2)] hover:ring-1 hover:ring-blue-100/50',
-      metric: 'rounded-card border border-l-4 border-slate-100 border-l-blue-500 bg-white shadow-[var(--el-1)] hover:shadow-[var(--el-2)] hover:ring-1 hover:ring-blue-100/50',
-      detail: 'rounded-card border border-slate-100 bg-white shadow-[var(--el-2)] hover:shadow-[var(--el-3)] hover:ring-1 hover:ring-blue-100/50',
-      ghost: 'rounded-card empty-state-frame border-slate-200 bg-slate-50/80 shadow-none hover:shadow-[var(--el-1)] hover:ring-1 hover:ring-blue-100/40',
+      default:
+        'rounded-2xl border border-slate-200/60 bg-white shadow-[var(--el-1)] hover:shadow-[var(--el-2)] hover:ring-1 hover:ring-blue-100/50',
+      surface:
+        'rounded-2xl border border-slate-200/60 bg-white/95 shadow-[var(--el-1)] backdrop-blur-sm hover:shadow-[var(--el-2)] hover:ring-1 hover:ring-blue-100/50',
+      metric:
+        'rounded-2xl border border-slate-200/60 bg-white shadow-[var(--el-1)] hover:shadow-[var(--el-2)] hover:ring-1 hover:ring-blue-100/50',
+      detail:
+        'rounded-2xl border border-slate-200/60 bg-white shadow-[var(--el-2)] hover:shadow-[var(--el-3)] hover:ring-1 hover:ring-blue-100/50',
+      ghost:
+        'rounded-2xl empty-state-frame border-slate-200 bg-slate-50/80 shadow-none hover:shadow-[var(--el-1)] hover:ring-1 hover:ring-blue-100/40',
     },
   },
   defaultVariants: {

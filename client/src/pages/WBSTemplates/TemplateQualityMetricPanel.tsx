@@ -1,8 +1,9 @@
-import { ArrowRight, CheckCircle2, Layers3, Sparkles } from 'lucide-react'
+import { ArrowRight, CheckCircle2, Layers3 } from 'lucide-react'
 
 import { EmptyState } from '@/components/EmptyState'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
 import { LoadingState } from '@/components/ui/loading-state'
 import { MetricCard } from '@/components/ui/metric-card'
 
@@ -30,7 +31,7 @@ export interface TemplateQualitySnapshot {
   suggestions: TemplateQualitySuggestion[]
 }
 
-export interface TemplateQualityPanelProps {
+export interface TemplateQualityMetricPanelProps {
   templateName: string
   templateType?: string | null
   quality: TemplateQualitySnapshot | null
@@ -53,7 +54,7 @@ function formatNumber(value: number): string {
   return Number.isFinite(value) ? String(value) : '0'
 }
 
-export function TemplateQualityPanel({
+export function TemplateQualityMetricPanel({
   templateName,
   templateType,
   quality,
@@ -66,7 +67,7 @@ export function TemplateQualityPanel({
   onClearSuggestionSelection,
   onGenerateFromCompleted,
   onApplyFeedback,
-}: TemplateQualityPanelProps) {
+}: TemplateQualityMetricPanelProps) {
   const suggestions = quality?.suggestions ?? []
   const suggestionCount = suggestions.length
   const hasCompletedSamples = Number(quality?.sample_task_count ?? 0) > 0
@@ -74,17 +75,14 @@ export function TemplateQualityPanel({
 
   return (
     <Card data-testid="wbs-template-quality-panel" className="surface-card">
-      <CardHeader className="space-y-2">
-        <div className="flex flex-wrap items-center gap-2">
-          <Sparkles className="h-4 w-4 text-amber-500" />
-          <CardTitle className="text-base">模板质量面板</CardTitle>
+      <CardContent padding="md" className="space-y-5">
+        <div>
+          <CardHead eyebrow="QUALITY" title="模板质量面板" />
+          <p className="mt-1 text-sm text-slate-500">
+            {templateName}
+            {templateType ? ` · ${templateType}` : ''}
+          </p>
         </div>
-        <CardDescription>
-          {templateName}
-          {templateType ? ` · ${templateType}` : ''}
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-5">
         {loading && !quality ? (
           <LoadingState
             label="模板质量加载中"
@@ -93,8 +91,9 @@ export function TemplateQualityPanel({
           />
         ) : quality ? (
           <>
-            <div className="grid gap-4 md:grid-cols-3">
+            <div className="grid gap-5 md:grid-cols-3">
               <MetricCard
+                eyebrow="QUALITY"
                 testId="wbs-template-quality-missing-reference-days"
                 title="缺少 reference_days"
                 value={`${formatNumber(quality.missing_reference_days_leaf_count)} / ${formatNumber(
@@ -104,12 +103,14 @@ export function TemplateQualityPanel({
                 tone="warning"
               />
               <MetricCard
+                eyebrow="PROCESS"
                 testId="wbs-template-quality-missing-standard-steps"
                 title="缺少标准工序节点"
                 value={formatNumber(quality.missing_standard_step_count)}
                 tone="success"
               />
               <MetricCard
+                eyebrow="STRUCT"
                 testId="wbs-template-quality-structure-anomalies"
                 title="结构异常"
                 value={formatNumber(quality.structure_anomaly_count)}
@@ -122,7 +123,7 @@ export function TemplateQualityPanel({
                 <Layers3 className="h-4 w-4 text-slate-500" />
                 已完成项目反馈摘要
               </div>
-              <div className="mt-3 grid gap-4 sm:grid-cols-3">
+              <div className="mt-3 grid gap-5 sm:grid-cols-3">
                 <Card className="rounded-xl border border-white bg-white p-5">
                   <div className="text-xs text-slate-500">已完成项目</div>
                   <div className="mt-1 text-lg font-semibold text-slate-900">{formatNumber(quality.completed_project_count)}</div>
@@ -138,7 +139,7 @@ export function TemplateQualityPanel({
               </div>
             </div>
 
-            <div className="grid gap-4 lg:grid-cols-[1fr_13.75rem]">
+            <div className="grid gap-5 lg:grid-cols-[1fr_13.75rem]">
               <div className="space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="text-sm font-semibold text-slate-900">模板校正建议</div>

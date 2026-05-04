@@ -1,4 +1,5 @@
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -191,31 +192,31 @@ export function TaskDetailPanel({
   return (
     <div className="w-full xl:w-80 xl:flex-shrink-0 xl:sticky xl:top-4" data-testid="gantt-task-detail-panel">
       <Card variant="detail" className="max-h-[calc(100vh-2rem)] overflow-y-auto">
-        <CardHeader className="flex flex-row items-start justify-between space-y-0 pb-3">
-          <div className="min-w-0 flex-1">
-            <div className="mb-1 flex items-center gap-1.5">
-              {selectedTask.is_milestone && (
-                <Flag
+        <CardContent padding="md" className="space-y-2">
+          <CardHead
+            eyebrow="TASK DETAIL"
+            title={selectedTask.title || selectedTask.name || '未命名任务'}
+            action={
+              <Button
+                variant="ghost"
+                type="button"
+                onClick={onClose}
+                className="ml-2 flex-shrink-0 rounded-lg p-1 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-600"
+              >
+                <X className="h-3.5 w-3.5" />
+              </Button>
+            }
+          />
+          <div className="flex items-center gap-1.5">
+            {selectedTask.is_milestone && (
+              <Flag
                   className={`h-3.5 w-3.5 flex-shrink-0 ${MILESTONE_LEVEL_CONFIG[selectedTask.milestone_level ?? 1]?.color}`}
-                  fill="currentColor"
-                />
-              )}
-              <CardTitle className="truncate text-sm font-semibold">
-                {selectedTask.title || selectedTask.name}
-              </CardTitle>
-            </div>
-            {selectedTask.wbs_code && (
-              <span className="font-mono text-xs text-slate-500">{selectedTask.wbs_code}</span>
+                fill="currentColor"
+              />
             )}
+            {selectedTask.wbs_code && <span className="font-mono text-xs text-slate-500">{selectedTask.wbs_code}</span>}
           </div>
-          <Button variant="ghost"
-            type="button"
-            onClick={onClose}
-            className="ml-2 flex-shrink-0 rounded-lg p-1 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-600"
-          >
-            <X className="h-3.5 w-3.5" />
-          </Button>
-        </CardHeader>
+        </CardContent>
         <Separator />
 
         <CardContent className="space-y-3 pt-3 text-sm">
@@ -378,7 +379,7 @@ export function TaskDetailPanel({
           {(selectedTask.start_date || selectedTask.end_date) && (
             <div className="flex items-center justify-between text-xs">
               <span className="text-slate-500">时间区间</span>
-              <span className="tabular-nums text-slate-700">
+              <span className="num-mono text-slate-700">
                 {formatDateRange(selectedTask.start_date, selectedTask.end_date)}
               </span>
             </div>
@@ -417,7 +418,7 @@ export function TaskDetailPanel({
           {selectedTask.first_progress_at && (
             <div className="flex items-center justify-between text-xs">
               <span className="text-slate-500">首次填报</span>
-              <span className="tabular-nums text-slate-600">
+              <span className="num-mono text-slate-600">
                 {formatDateTime(selectedTask.first_progress_at)}
               </span>
             </div>

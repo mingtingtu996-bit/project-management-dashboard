@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { AlertTriangle, ArrowRight, FolderOpen, Plus, RefreshCw } from 'lucide-react'
 import { Breadcrumb } from '@/components/Breadcrumb'
@@ -38,13 +38,14 @@ import {
   getCertificateTypeLabel,
   mapCertificateStatusLabel,
 } from './PreMilestones/constants'
-import { LifecycleSummaryCards } from './PreMilestones/components/LifecycleSummaryCards'
+import { LifecycleMetricGrid } from './PreMilestones/components/LifecycleMetricGrid'
 import { CertificateSharedRibbon } from './PreMilestones/components/CertificateSharedRibbon'
 import { FourCertificateBoard } from './PreMilestones/components/FourCertificateBoard'
 import { CertificateLedger } from './PreMilestones/components/CertificateLedger'
 import { CertificateDetailDrawer } from './PreMilestones/components/CertificateDetailDrawer'
 import { CertificateWorkItemDialog } from './PreMilestones/components/CertificateWorkItemDialog'
 import { Card } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
 
 const API_BASE = ''
 const READ_ONLY_ACTION_REASON = '只读成员无编辑权限。'
@@ -742,7 +743,7 @@ export default function PreMilestones() {
               }
             }}
             variant="outline"
-            className="border-amber-200 bg-amber-50 text-amber-700 hover:border-amber-300 hover:bg-amber-100 hover:text-amber-800"
+            className="border-amber-200 bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200 hover:border-amber-300 hover:bg-amber-100 hover:text-amber-800"
           >
             <AlertTriangle className="h-4 w-4" />
             查看全部逾期
@@ -764,7 +765,7 @@ export default function PreMilestones() {
       {loading && !board ? (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {[1, 2, 3].map((index) => (
-            <div key={index} className="rounded-card border border-slate-200 bg-white p-4">
+            <div key={index} className="surface-card p-5">
               <Skeleton className="h-4 w-24 rounded-full" />
               <Skeleton className="mt-4 h-8 w-16 rounded-full" />
               <Skeleton className="mt-4 h-3 w-2/3 rounded-full" />
@@ -780,7 +781,7 @@ export default function PreMilestones() {
         />
       ) : (
         <div className="grid gap-5">
-          <LifecycleSummaryCards summary={summary || {
+          <LifecycleMetricGrid summary={summary || {
             completedCount: 0,
             totalCount: 0,
             blockingCertificateType: null,
@@ -807,10 +808,10 @@ export default function PreMilestones() {
           }}
           />
 
-          <div data-testid="pre-milestones-overview" className="rounded-2xl border border-slate-100 bg-white p-4 shadow-[var(--el-1)]">
+          <div data-testid="pre-milestones-overview" className="surface-card p-5">
             <div className="flex items-center justify-between gap-3 mb-4">
               <div>
-                <h3 className="text-sm font-semibold text-slate-900">开工准入总览</h3>
+                <CardHead eyebrow="ACCESS" title="开工准入总览" />
                 <p className="mt-1 text-xs text-slate-500">
                   {selectedCertificate
                     ? `当前卡点：${selectedCertificate.certificate_name} · ${mapCertificateStatusLabel(selectedCertificate.status)}`
@@ -829,12 +830,12 @@ export default function PreMilestones() {
             />
           </div>
 
-          <Tabs value={viewMode} onValueChange={(value) => setViewMode(value as 'board' | 'ledger')} className="space-y-4">
-            <TabsList className="grid h-auto w-full max-w-md grid-cols-2 rounded-xl bg-slate-100 p-1">
-              <TabsTrigger value="board" className="rounded-lg" onClick={() => setViewMode('board')} data-testid="pre-milestones-tab-board">
+          <Tabs value={viewMode} onValueChange={(value) => setViewMode(value as 'board' | 'ledger')} className="space-y-5">
+            <TabsList className="flex h-auto w-full max-w-md justify-start gap-6 rounded-none border-b border-slate-100 bg-transparent p-0 text-slate-500">
+              <TabsTrigger value="board" className="relative rounded-none bg-transparent px-0 pb-3 pt-0 text-sm text-slate-500 shadow-none transition-colors after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-blue-700 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600" onClick={() => setViewMode('board')} data-testid="pre-milestones-tab-board">
                 看板({certificates.length})
               </TabsTrigger>
-              <TabsTrigger value="ledger" className="rounded-lg" onClick={() => setViewMode('ledger')} data-testid="pre-milestones-tab-ledger">
+              <TabsTrigger value="ledger" className="relative rounded-none bg-transparent px-0 pb-3 pt-0 text-sm text-slate-500 shadow-none transition-colors after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-blue-700 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600" onClick={() => setViewMode('ledger')} data-testid="pre-milestones-tab-ledger">
                 台账({workItems.length})
               </TabsTrigger>
             </TabsList>
@@ -964,8 +965,8 @@ export default function PreMilestones() {
               </ul>
             </div>
             {criticalItems.length > 0 ? (
-              <Card className="rounded-xl border border-slate-200 bg-white p-5">
-                <div className="mb-2 text-xs font-medium text-slate-900">关键项</div>
+              <Card className="surface-card p-5">
+                <CardHead eyebrow="KEY ITEMS" title="关键项" />
                 <div className="space-y-2">
                   {criticalItems.slice(0, 6).map((item) => (
                     <div key={`${item.itemType}:${item.itemId}`} className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-xs text-slate-600">

@@ -1,11 +1,19 @@
-import { useEffect, useRef } from 'react'
-import { Chart, registerables } from 'chart.js'
+import {
+  Bar,
+  CartesianGrid,
+  ComposedChart,
+  Legend,
+  Line,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts'
 
 import { ChartAccessibleWrapper } from '@/components/ChartAccessibleWrapper'
 import { EmptyState } from '@/components/EmptyState'
-import { CHART_AXIS_COLORS, CHART_NEUTRAL, CHART_SERIES, getProgressThresholdColor, hexToRgba } from '@/lib/chartPalette'
-
-Chart.register(...registerables)
+import { ChartTooltip, chartTooltipCursor } from '@/components/ui/chart-tooltip'
+import { CHART_AXIS_COLORS, CHART_SERIES, getProgressThresholdColor, hexToRgba } from '@/lib/chartPalette'
 
 type MilestoneChartProject = {
   id: string
@@ -14,149 +22,20 @@ type MilestoneChartProject = {
   shiftedMilestoneCount: number
 }
 
+type MilestoneChartRow = MilestoneChartProject & {
+  progressFill: string
+}
+
+function buildChartRows(projects: MilestoneChartProject[]): MilestoneChartRow[] {
+  return projects.map((project) => ({
+    ...project,
+    progressFill: getProgressThresholdColor(project.milestoneProgress).background,
+  }))
+}
+
 export function MilestoneAchievementChart({ projects }: { projects: MilestoneChartProject[] }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const chartRef = useRef<Chart | null>(null)
   const hasMilestoneSignal = projects.some((project) => project.milestoneProgress > 0 || project.shiftedMilestoneCount > 0)
-
-  useEffect(() => {
-    if (!canvasRef.current || projects.length === 0 || !hasMilestoneSignal) {
-      if (chartRef.current) {
-        chartRef.current.destroy()
-        chartRef.current = null
-      }
-      return
-    }
-
-    if (chartRef.current) {
-      chartRef.current.destroy()
-      chartRef.current = null
-    }
-
-    const ctx = canvasRef.current.getContext('2d')
-    if (!ctx) return
-
-    const labels = projects.map((project) => project.name)
-    const values = projects.map((project) => project.milestoneProgress)
-    const shiftedValues = projects.map((project) => project.shiftedMilestoneCount)
-    const backgroundColors = projects.map((project) => getProgressThresholdColor(project.milestoneProgress).background)
-    const borderColors = projects.map((project) => getProgressThresholdColor(project.milestoneProgress).border)
-
-    chartRef.current = new Chart(ctx, {
-      type: 'bar',
-      data: {
-        labels,
-        datasets: [
-          {
-            label: '里程碑达成率',
-            data: values,
-            backgroundColor: backgroundColors,
-            borderColor: borderColors,
-            borderWidth: 2,
-            borderRadius: 8,
-            maxBarThickness: 42,
-            yAxisID: 'yPercent',
-          },
-          {
-            label: '已偏移里程碑数',
-            data: shiftedValues,
-            type: 'line',
-            borderColor: CHART_SERIES.warning,
-            backgroundColor: hexToRgba(CHART_SERIES.warning, 0.16),
-            pointBackgroundColor: CHART_SERIES.warning,
-            pointBorderColor: CHART_NEUTRAL.white,
-            pointBorderWidth: 2,
-            pointRadius: 4,
-            tension: 0.28,
-            yAxisID: 'yCount',
-          },
-        ],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: {
-            position: 'bottom',
-            labels: {
-              boxWidth: 10,
-              color: CHART_AXIS_COLORS.axisText,
-            },
-          },
-          tooltip: {
-            callbacks: {
-              label(context) {
-                if (context.dataset.yAxisID === 'yCount') {
-                  return `${context.parsed.y} 个`
-                }
-                return `${context.parsed.y}%`
-              },
-            },
-          },
-        },
-        scales: {
-          yPercent: {
-            beginAtZero: true,
-            max: 120,
-            ticks: {
-              callback(value) {
-                return `${value}%`
-              },
-            },
-            grid: {
-              color(context) {
-                if (context.tick.value === 100) {
-                  return CHART_AXIS_COLORS.emphasisGrid
-                }
-                return CHART_AXIS_COLORS.neutralGrid
-              },
-            },
-            border: {
-              display: false,
-            },
-          },
-          yCount: {
-            position: 'right',
-            beginAtZero: true,
-            ticks: {
-              precision: 0,
-              callback(value) {
-                return `${value} 个`
-              },
-            },
-            grid: {
-              display: false,
-            },
-            border: {
-              display: false,
-            },
-          },
-          x: {
-            grid: {
-              display: false,
-            },
-            ticks: {
-              color: CHART_AXIS_COLORS.axisText,
-              font: {
-                size: 11,
-              },
-            },
-          },
-        },
-        animation: {
-          duration: 700,
-          easing: 'easeOutQuart',
-        },
-      },
-    })
-
-    return () => {
-      if (chartRef.current) {
-        chartRef.current.destroy()
-        chartRef.current = null
-      }
-    }
-  }, [hasMilestoneSignal, projects])
+  const rows = buildChartRows(projects)
 
   if (projects.length === 0) {
     return (
@@ -181,11 +60,66 @@ export function MilestoneAchievementChart({ projects }: { projects: MilestoneCha
   return (
     <ChartAccessibleWrapper
       columns={['项目', '里程碑达成率(%)', '已偏移里程碑数']}
-      rows={projects.map((project) => [project.name, project.milestoneProgress, project.shiftedMilestoneCount])}
+      rows={rows.map((project) => [project.name, project.milestoneProgress, project.shiftedMilestoneCount])}
       summary="查看里程碑达成图表数据"
     >
-      <div className="relative h-72 rounded-2xl border border-slate-100 bg-white p-4">
-        <canvas ref={canvasRef} />
+      <div className="relative h-72 rounded-2xl bg-white p-4 ring-1 ring-inset ring-slate-100">
+        <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1} initialDimension={{ width: 640, height: 288 }}>
+          <ComposedChart data={rows} margin={{ top: 12, right: 16, bottom: 8, left: 0 }}>
+            <defs>
+              <linearGradient id="milestoneProgressFill" x1="0" x2="0" y1="0" y2="1">
+                <stop offset="0%" stopColor={CHART_SERIES.primary} stopOpacity={0.82} />
+                <stop offset="100%" stopColor={CHART_SERIES.primary} stopOpacity={0.28} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid stroke={CHART_AXIS_COLORS.neutralGrid} vertical={false} />
+            <XAxis
+              dataKey="name"
+              tickLine={false}
+              axisLine={false}
+              tick={{ fill: CHART_AXIS_COLORS.axisText, fontSize: 11 }}
+              interval={0}
+            />
+            <YAxis
+              yAxisId="progress"
+              domain={[0, 120]}
+              tickLine={false}
+              axisLine={false}
+              tick={{ fill: CHART_AXIS_COLORS.axisText, fontSize: 11 }}
+              tickFormatter={(value) => `${value}%`}
+            />
+            <YAxis
+              yAxisId="shifted"
+              orientation="right"
+              allowDecimals={false}
+              tickLine={false}
+              axisLine={false}
+              tick={{ fill: CHART_AXIS_COLORS.axisText, fontSize: 11 }}
+            />
+            <Tooltip content={<ChartTooltip />} cursor={chartTooltipCursor} />
+            <Legend wrapperStyle={{ fontSize: 12 }} />
+            <Bar
+              yAxisId="progress"
+              dataKey="milestoneProgress"
+              name="里程碑达成率"
+              fill="url(#milestoneProgressFill)"
+              radius={[8, 8, 0, 0]}
+              maxBarSize={42}
+              animationDuration={800}
+            />
+            <Line
+              yAxisId="shifted"
+              type="monotone"
+              dataKey="shiftedMilestoneCount"
+              name="已偏移里程碑数"
+              stroke={CHART_SERIES.warning}
+              strokeWidth={2}
+              dot={{ r: 4, fill: CHART_SERIES.warning, stroke: hexToRgba(CHART_SERIES.warning, 0.18), strokeWidth: 6 }}
+              activeDot={{ r: 5 }}
+              animationDuration={800}
+            />
+          </ComposedChart>
+        </ResponsiveContainer>
       </div>
     </ChartAccessibleWrapper>
   )

@@ -1,6 +1,6 @@
 import { EmptyState } from '@/components/EmptyState'
 import { Badge } from '@/components/ui/badge'
-import { MetricCard } from '@/components/ui/metric-card'
+import { MetricCard as SharedMetricCard } from '@/components/ui/metric-card'
 
 type SummaryStats = {
   total_completed: number
@@ -21,16 +21,32 @@ export function TaskSummaryResultsSection({ stats, totalTasks }: TaskSummaryResu
   const cards = stats
     ? [
         {
+          eyebrow: 'TOTAL',
           label: '总任务数',
           value: String(totalTasks),
           hint: `已完成 ${completedTasks} 个任务`,
           tone: 'primary' as const,
         },
         {
+          eyebrow: 'RATE',
           label: '完成率',
           value: `${completionRate}%`,
           hint: `按时 ${stats.on_time_count} · 延期 ${stats.delayed_count}`,
           tone: 'success' as const,
+        },
+        {
+          eyebrow: 'DELAY',
+          label: '延期任务',
+          value: String(stats.delayed_count),
+          hint: `平均延期 ${stats.avg_delay_days ?? 0} 天`,
+          tone: stats.delayed_count > 0 ? 'warning' as const : 'slate' as const,
+        },
+        {
+          eyebrow: 'MILESTONE',
+          label: '完成里程碑',
+          value: String(stats.completed_milestone_count),
+          hint: '已纳入任务总结',
+          tone: stats.completed_milestone_count > 0 ? 'info' as const : 'slate' as const,
         },
       ]
     : []
@@ -46,9 +62,9 @@ export function TaskSummaryResultsSection({ stats, totalTasks }: TaskSummaryResu
       </div>
 
       {cards.length > 0 ? (
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-4">
           {cards.map((card) => (
-            <MetricCard key={card.label} title={card.label} value={card.value} hint={card.hint} tone={card.tone} />
+            <SharedMetricCard key={card.label} eyebrow={card.eyebrow} title={card.label} value={card.value} hint={card.hint} tone={card.tone} />
           ))}
         </div>
       ) : (

@@ -310,7 +310,6 @@ export function CertificateDetailDrawer({
               ) : null}
             </div>
             <p className="mt-0.5 text-xs text-slate-500">
-              查看证照当前阶段、条件清单、共享事项，以及关联的预警、风险和问题。
             </p>
             <DialogDescription>查看证照当前阶段、条件清单、共享事项，以及关联的预警、风险和问题。</DialogDescription>
           </div>
@@ -320,7 +319,6 @@ export function CertificateDetailDrawer({
         <div className="flex-1 overflow-y-auto px-6 py-4" data-testid="certificate-detail-body">
         {!detail ? (
           <div className="rounded-xl empty-state-frame border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">
-            暂无详情数据。
           </div>
         ) : (
           <div className="grid gap-4">
@@ -343,8 +341,8 @@ export function CertificateDetailDrawer({
                 </div>
               </div>
               <div className="mt-4 grid gap-4 text-sm text-slate-600 md:grid-cols-2 xl:grid-cols-4">
-                <div className="rounded-xl bg-slate-50 p-3 tabular-nums">计划完成：{detail.certificate.planned_finish_date || '待补充'}</div>
-                <div className="rounded-xl bg-slate-50 p-3 tabular-nums">实际完成：{detail.certificate.actual_finish_date || '待补充'}</div>
+                <div className="rounded-xl bg-slate-50 p-3 num-mono">计划完成：{detail.certificate.planned_finish_date || '待补充'}</div>
+                <div className="rounded-xl bg-slate-50 p-3 num-mono">实际完成：{detail.certificate.actual_finish_date || '待补充'}</div>
                 <div className="rounded-xl bg-slate-50 p-3">下一动作：{detail.certificate.next_action || '待补充'}</div>
                 <div className="rounded-xl bg-slate-50 p-3">阻塞原因：{detail.certificate.block_reason || '无'}</div>
                 {detail.certificate.document_no && (
@@ -669,7 +667,6 @@ export function CertificateDetailDrawer({
                   编辑条件
                 </Button>
                 <Button variant="outline" size="sm" onClick={() => setCertificateDependenciesOpen(true)} disabled={!detail}>
-                  状态维护
                 </Button>
               </>
             ) : null}

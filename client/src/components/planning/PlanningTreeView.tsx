@@ -2,7 +2,8 @@ import { useState, useMemo, type ReactNode } from 'react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
@@ -86,12 +87,12 @@ type ExtraColumnKey =
   | 'actions'
 
 const BASE_COLUMNS = [
-  { key: 'sequence', label: '序号', width: '4rem', className: 'text-center tabular-nums' },
+  { key: 'sequence', label: '序号', width: '4rem', className: 'text-center num-mono' },
   { key: 'wbs', label: 'WBS', width: '6rem' },
   { key: 'title', label: '任务名', width: '24rem' },
-  { key: 'start', label: '开始', width: '10rem', className: 'text-right tabular-nums' },
-  { key: 'end', label: '结束', width: '10rem', className: 'text-right tabular-nums' },
-  { key: 'duration', label: '工期', width: '6rem', className: 'text-right tabular-nums' },
+  { key: 'start', label: '开始', width: '10rem', className: 'text-right num-mono' },
+  { key: 'end', label: '结束', width: '10rem', className: 'text-right num-mono' },
+  { key: 'duration', label: '工期', width: '6rem', className: 'text-right num-mono' },
   { key: 'status', label: '状态', width: '10rem' },
   { key: 'assignee', label: '责任人', width: '10rem' },
 ] as const
@@ -258,7 +259,7 @@ export function PlanningTreeView({
     const rowKind: SharedTreeRowKind = row.rowType ?? (row.isMilestone ? 'milestone' : 'leaf')
 
     if (key === 'progress') {
-      return <div className="truncate text-right text-sm text-slate-700 tabular-nums">{row.progressCell ?? renderValue(row.progressLabel)}</div>
+      return <div className="truncate text-right text-sm text-slate-700 num-mono">{row.progressCell ?? renderValue(row.progressLabel)}</div>
     }
     if (key === 'type') {
       return <Badge variant="outline">{rowKind === 'structure' ? '结构层' : rowKind === 'milestone' ? '里程碑' : '执行项'}</Badge>
@@ -282,7 +283,7 @@ export function PlanningTreeView({
       return <span className="truncate text-sm text-slate-600">{renderValue(row.parentLabel)}</span>
     }
     if (key === 'level') {
-      return <span className="text-sm text-slate-600 tabular-nums">L{row.depth}</span>
+      return <span className="text-sm text-slate-600 num-mono">L{row.depth}</span>
     }
     if (key === 'lock') {
       return <span className="text-sm text-slate-600">{row.locked ? '锁定' : readOnly ? '只读' : '可编辑'}</span>
@@ -295,10 +296,10 @@ export function PlanningTreeView({
 
   return (
     <Card className="overflow-hidden border-slate-200">
-      <CardHeader className="space-y-3 bg-slate-50/80">
+      <CardContent padding="md" className="space-y-3 bg-slate-50/80">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <CardTitle className="text-xl">{title}</CardTitle>
+            <CardHead eyebrow="TREE VIEW" title={title} />
           </div>
           <Badge variant="outline" className="shrink-0">
             {selectedCount} 已选
@@ -468,7 +469,7 @@ export function PlanningTreeView({
           <span className="text-slate-500">·</span>
           <span>当前视图 {filteredAndSortedRows.length} 项</span>
         </div>
-      </CardHeader>
+      </CardContent>
       <Separator />
 
       <CardContent className="p-0">
@@ -489,7 +490,7 @@ export function PlanningTreeView({
                   </div>
                 ))}
                 {visibleExtraColumns.map((column) => (
-                  <div key={column.key} className={cn('min-w-0', column.key === 'progress' && 'text-right tabular-nums')}>
+                  <div key={column.key} className={cn('min-w-0', column.key === 'progress' && 'text-right num-mono')}>
                     {extraColumnLabels[column.key]}
                   </div>
                 ))}
@@ -510,12 +511,12 @@ export function PlanningTreeView({
                       'group grid items-center gap-3 px-4 transition-colors hover:bg-slate-50',
                       getTreeRowHeightClass(rowHeightKind),
                       row.selected && 'bg-blue-50/60',
-                      row.isCritical && rowKind !== 'milestone' && 'border-l-2 border-l-sky-400',
-                      rowKind === 'milestone' && 'border-l-2 border-l-amber-400 bg-amber-50/30',
+                      row.isCritical && rowKind !== 'milestone' && 'ring-1 ring-inset ring-sky-200',
+                      rowKind === 'milestone' && 'ring-1 ring-inset ring-amber-200 bg-amber-50/60',
                     )}
                     style={{ gridTemplateColumns }}
                   >
-                  <div className="flex items-center justify-center gap-1 text-sm text-slate-500 tabular-nums">
+                  <div className="flex items-center justify-center gap-1 text-sm text-slate-500 num-mono">
                     <Button variant="ghost"
                       type="button"
                       aria-label={`toggle-${row.id}`}
@@ -536,7 +537,7 @@ export function PlanningTreeView({
                     <span>{row.sequenceLabel ?? '—'}</span>
                   </div>
 
-                  <div className="truncate text-sm font-medium text-slate-600 tabular-nums">
+                  <div className="truncate text-sm font-medium text-slate-600 num-mono">
                     {renderValue(row.wbsCode)}
                   </div>
 
@@ -563,11 +564,11 @@ export function PlanningTreeView({
                     )}
                   </div>
 
-                  <div className="min-w-0 truncate text-right text-sm text-slate-700 tabular-nums">{row.startCell ?? renderValue(row.startDateLabel)}</div>
+                  <div className="min-w-0 truncate text-right text-sm text-slate-700 num-mono">{row.startCell ?? renderValue(row.startDateLabel)}</div>
 
-                  <div className="min-w-0 truncate text-right text-sm text-slate-700 tabular-nums">{row.endCell ?? renderValue(row.endDateLabel)}</div>
+                  <div className="min-w-0 truncate text-right text-sm text-slate-700 num-mono">{row.endCell ?? renderValue(row.endDateLabel)}</div>
 
-                  <div className="min-w-0 truncate text-right text-sm text-slate-700 tabular-nums">{renderValue(row.durationLabel)}</div>
+                  <div className="min-w-0 truncate text-right text-sm text-slate-700 num-mono">{renderValue(row.durationLabel)}</div>
 
                   <div className="flex min-w-0 items-center gap-2 overflow-hidden">
                     <div className="flex min-w-0 flex-wrap items-center gap-2">

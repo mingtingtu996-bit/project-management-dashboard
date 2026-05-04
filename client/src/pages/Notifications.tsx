@@ -11,6 +11,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
   DropdownMenu,
@@ -22,6 +23,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { LoadingState } from '@/components/ui/loading-state'
+import { MetricCard } from '@/components/ui/metric-card'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Separator } from '@/components/ui/separator'
 import {
@@ -61,6 +63,7 @@ import {
   Bell,
   CheckCircle2,
   ChevronDown,
+  ChevronRight,
   Clock,
   GanttChart,
   Info,
@@ -1030,8 +1033,8 @@ export default function Notifications() {
       <div className="page-shell" data-testid="notifications-login-required">
         <Breadcrumb items={[{ label: PROJECT_NAVIGATION_LABELS.notifications }]} />
         <PageHeader
-          eyebrow={'公司级第二入口'}
-          title={PROJECT_NAVIGATION_LABELS.notifications}
+          eyebrow="系统通知"
+          title="通知提醒"
           subtitle=""
         >
           <Badge variant="secondary">登录后可用</Badge>
@@ -1072,8 +1075,8 @@ export default function Notifications() {
     <div className="page-shell" data-testid="notifications-page">
       <Breadcrumb items={[{ label: PROJECT_NAVIGATION_LABELS.notifications }]} />
       <PageHeader
-        eyebrow={'\u516c\u53f8\u7ea7\u7b2c\u4e8c\u5165\u53e3'}
-        title={PROJECT_NAVIGATION_LABELS.notifications}
+        eyebrow="系统通知"
+        title="通知提醒"
         subtitle=""
       >
         <div className="relative w-full min-w-56 lg:w-72">
@@ -1159,7 +1162,7 @@ export default function Notifications() {
             </Button>
           </PopoverTrigger>
 
-          <PopoverContent align="end" side="bottom" className="w-80 rounded-xl border-slate-200 bg-white p-4 shadow-[var(--el-3)]">
+          <PopoverContent align="end" side="bottom" className="w-80 rounded-xl border-slate-200 bg-white p-4 shadow-[var(--el-2)]">
               <div className="space-y-4">
                 <div>
                   <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">
@@ -1315,74 +1318,59 @@ export default function Notifications() {
         </Alert>
       ) : null}
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <Card className="rounded-xl border border-slate-200 bg-white p-5" data-testid="notifications-summary-total">
-          <CardContent className="space-y-3 p-5">
-            <div className="flex items-center justify-between">
-              <span className="text-sm font-medium text-slate-500">{'\u63d0\u9192\u603b\u6570'}</span>
-              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-100">
-                <Info className="h-5 w-5 text-slate-600" />
-              </div>
-            </div>
-            <div className="text-3xl font-semibold tracking-tight text-slate-900">{allCount}</div>
-          </CardContent>
-        </Card>
-
-        <Card className="rounded-xl border border-slate-200 bg-white p-5">
-          <CardContent className="space-y-3 p-5">
-            <div className="flex items-center justify-between">
-              <span className="text-sm font-medium text-slate-500">{'\u672a\u8bfb'}</span>
-              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-amber-50">
-                <Bell className="h-5 w-5 text-amber-600" />
-              </div>
-            </div>
-            <div className="text-3xl font-semibold tracking-tight text-amber-600">{pendingCount}</div>
-          </CardContent>
-        </Card>
-
-        <Card className="rounded-xl border border-slate-200 bg-white p-5">
-          <CardContent className="space-y-3 p-5">
-            <div className="flex items-center justify-between">
-              <span className="text-sm font-medium text-slate-500">{'\u4e1a\u52a1\u9884\u8b66'}</span>
-              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-rose-50">
-                <AlertTriangle className="h-5 w-5 text-rose-600" />
-              </div>
-            </div>
-            <div className="text-3xl font-semibold tracking-tight text-rose-600">{businessWarningCount}</div>
-            <p className="text-xs text-slate-500">系统异常 {systemExceptionCount} 条</p>
-          </CardContent>
-        </Card>
-
-        <Card className="rounded-xl border border-slate-200 bg-white p-5">
-          <CardContent className="space-y-3 p-5">
-            <div className="flex items-center justify-between">
-              <span className="text-sm font-medium text-slate-500">{'\u6d41\u7a0b\u50ac\u529e'}</span>
-              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-blue-50">
-                <LayoutDashboard className="h-5 w-5 text-blue-600" />
-              </div>
-            </div>
-            <div className="text-3xl font-semibold tracking-tight text-blue-600">{flowReminderCount}</div>
-            <p className="text-xs text-slate-500">
-              {linkedProjectCount > 0 ? `${linkedProjectCount} 条 · 已处理 ${processedCount}` : ''}
-            </p>
-          </CardContent>
-        </Card>
+      <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-4">
+        <MetricCard
+          eyebrow="TOTAL"
+          title="提醒总数"
+          value={allCount}
+          hint={`${currentTabCount} 条当前筛选结果`}
+          tone="slate"
+          icon={<Info className="h-4 w-4" />}
+          testId="notifications-summary-total"
+        />
+        <MetricCard
+          eyebrow="UNREAD"
+          title="未读"
+          value={pendingCount}
+          hint="需要优先确认"
+          tone={pendingCount > 0 ? 'warning' : 'slate'}
+          icon={<Bell className="h-4 w-4" />}
+        />
+        <MetricCard
+          eyebrow="WARNING"
+          title="业务预警"
+          value={businessWarningCount}
+          hint={`系统异常 ${systemExceptionCount} 条`}
+          tone={businessWarningCount > 0 ? 'danger' : 'slate'}
+          icon={<AlertTriangle className="h-4 w-4" />}
+        />
+        <MetricCard
+          eyebrow="FLOW"
+          title="流程催办"
+          value={flowReminderCount}
+          hint={linkedProjectCount > 0 ? `${linkedProjectCount} 条 · 已处理 ${processedCount}` : '暂无关联项目催办'}
+          tone={flowReminderCount > 0 ? 'primary' : 'slate'}
+          icon={<LayoutDashboard className="h-4 w-4" />}
+        />
       </div>
 
-      <Card className="overflow-hidden">
+      <Card className="surface-card overflow-hidden">
         <CardContent className="space-y-5 p-0">
+          <div className="px-6 pt-5">
+            <CardHead eyebrow="NOTIFICATIONS" title="通知分组" />
+          </div>
           <div className="flex flex-col gap-4 px-6 py-5 lg:flex-row lg:items-center lg:justify-between">
             <Tabs
               value={tab}
               onValueChange={(value) => setTab(value as ReminderTab)}
               className="w-full"
             >
-              <TabsList className="flex h-auto flex-wrap justify-start gap-2 bg-transparent p-0">
+              <TabsList className="flex h-auto w-full flex-wrap justify-start gap-6 rounded-none border-b border-slate-100 bg-transparent p-0 text-slate-500">
                 {TAB_OPTIONS.map((option) => (
                   <TabsTrigger
                     key={option.value}
                     value={option.value}
-                    className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm text-slate-600 data-[state=active]:border-blue-600 data-[state=active]:bg-blue-600 data-[state=active]:text-white"
+                    className="relative rounded-none border-0 bg-transparent px-0 pb-3 pt-0 text-sm text-slate-500 shadow-none transition-colors after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-blue-700 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600"
                   >
                     {option.label}({tabCounts[option.value]})
                   </TabsTrigger>
@@ -1478,7 +1466,7 @@ export default function Notifications() {
 
                         <div className="min-w-0 flex-1 space-y-2">
                           <div className="flex flex-wrap items-center gap-2">
-                            <h3 className="text-sm font-semibold text-slate-900">{group.label}</h3>
+                            <h3 className="eyebrow">{group.label}</h3>
                             <span className="text-xs text-slate-500">{groupDate}</span>
                             <Badge variant={group.unreadCount > 0 ? 'default' : 'secondary'}>{`未读 ${group.unreadCount}`}</Badge>
                           </div>
@@ -1529,10 +1517,10 @@ export default function Notifications() {
                           <div
                             key={item.id}
                             className={cn(
-                              'flex flex-col gap-4 rounded-xl border px-4 py-4 transition-colors hover:border-slate-200',
+                              'group flex flex-col gap-4 rounded-xl border px-4 py-4 transition-colors hover:bg-slate-50/60',
                               item.isRead || item.isMuted
                                 ? 'border-slate-100 bg-white'
-                                : 'border-blue-500 border-l-4 bg-blue-50/50',
+                                : 'border-blue-200 bg-blue-50/50 ring-1 ring-inset ring-blue-200',
                               item.isMuted && 'opacity-85',
                             )}
                           >
@@ -1548,6 +1536,7 @@ export default function Notifications() {
                                   <h4 className="text-sm font-semibold text-slate-900">{item.title}</h4>
                                   <Badge variant={tone.badge}>{typeLabel}</Badge>
                                   <Badge variant={item.isRead ? 'secondary' : 'default'}>{getNotificationStateLabel(item)}</Badge>
+                                  <ChevronRight className="ml-auto h-4 w-4 text-slate-300 transition-colors group-hover:text-slate-500" aria-hidden="true" />
                                 </div>
 
                                 <p className="text-sm leading-6 text-slate-600">{item.content}</p>
@@ -1557,7 +1546,7 @@ export default function Notifications() {
                                   </div>
                                 ) : null}
 
-                                <div className="grid gap-4 rounded-xl border border-slate-100 bg-white/70 px-5 py-5 text-xs text-slate-500 sm:grid-cols-2 lg:grid-cols-4">
+                                <div className="grid gap-5 rounded-xl border border-slate-100 bg-white/70 px-5 py-5 text-xs text-slate-500 sm:grid-cols-2 lg:grid-cols-4">
                                   <div>
                                     <div className="font-medium text-slate-700">入口</div>
                                     <div className="mt-1">{target.label}</div>

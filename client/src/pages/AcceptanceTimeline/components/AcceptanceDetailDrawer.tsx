@@ -514,7 +514,7 @@ export default function AcceptanceDetailDrawer({
           </div>
         </Card>
 
-        <Card className="rounded-xl border border-slate-100 bg-slate-50 p-5 shadow-[var(--el-1)]" data-testid="acceptance-task-linkage">
+        <Card className="surface-card p-5" data-testid="acceptance-task-linkage">
           <h4 className="mb-2 text-sm font-semibold text-slate-900">任务联动</h4>
           <div className="grid gap-4 md:grid-cols-3">
             <CompactMetric label="楼栋归属" value={planRow?.building_id || '项目级'} />
@@ -544,7 +544,7 @@ export default function AcceptanceDetailDrawer({
         </Card>
 
         {node.description ? (
-          <Card className="rounded-xl border border-slate-100 bg-slate-50 p-5 shadow-[var(--el-1)]">
+          <Card className="surface-card p-5">
             <div className="mb-1 text-sm font-medium text-slate-700">备注</div>
             <p className="text-sm text-slate-600">{node.description}</p>
           </Card>

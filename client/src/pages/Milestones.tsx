@@ -6,9 +6,10 @@ import { EmptyState } from '@/components/EmptyState'
 import { PageHeader } from '@/components/PageHeader'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
+import { MetricCard } from '@/components/ui/metric-card'
 import { Input } from '@/components/ui/input'
-import { Separator } from '@/components/ui/separator'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useAsyncData } from '@/hooks/useAsyncData'
 import { PROJECT_NAVIGATION_LABELS } from '@/config/navigation'
@@ -197,45 +198,20 @@ function getLinkedTaskBadgeVariant(status?: string | null) {
 }
 
 function getMilestoneListAccent(milestone: MilestoneItem) {
-  if (milestone.status === 'completed') return 'border-l-4 border-emerald-500'
-  if (milestone.status === 'overdue') return 'border-l-4 border-red-500'
-  return 'border-l-4 border-blue-500'
+  if (milestone.status === 'completed') return 'ring-1 ring-inset ring-emerald-200'
+  if (milestone.status === 'overdue') return 'ring-1 ring-inset ring-red-200'
+  return 'ring-1 ring-inset ring-blue-200'
+}
+
+function getMilestoneDotClass(milestone: MilestoneItem) {
+  if (milestone.status === 'completed') return 'bg-emerald-500'
+  if (milestone.status === 'overdue') return 'bg-red-500'
+  return 'bg-blue-500'
 }
 
 function getVarianceTone(value: number | null) {
   if (value === null || value === 0) return 'text-slate-600'
   return value > 0 ? 'text-red-700' : 'text-emerald-700'
-}
-
-function StatCard({
-  title,
-  value,
-  hint,
-  tone,
-}: {
-  title: string
-  value: string | number
-  hint: string
-  tone: 'slate' | 'green' | 'amber' | 'red' | 'blue' | 'orange'
-}) {
-  const textColorMap = {
-    slate: 'text-slate-900',
-    green: 'text-emerald-700',
-    amber: 'text-amber-700',
-    red: 'text-red-700',
-    blue: 'text-blue-700',
-    orange: 'text-orange-700',
-  } as const
-
-  return (
-    <Card variant="surface" data-testid={`milestone-summary-card-${title}`}>
-      <CardContent className="space-y-2 p-5">
-        <p className="text-sm font-medium text-slate-500">{title}</p>
-        <div className={`text-3xl font-semibold ${textColorMap[tone]}`}>{value}</div>
-        <div className="text-xs leading-5 text-slate-500">{hint}</div>
-      </CardContent>
-    </Card>
-  )
 }
 
 function MilestoneDetailCard({
@@ -367,10 +343,11 @@ function MilestoneNodeCard({
       <div className="flex w-full min-w-0 items-start justify-between gap-3">
         <div className="min-w-0 space-y-1">
           <div className="flex flex-wrap items-center gap-2">
+            <span className={`h-2 w-2 shrink-0 rounded-full ${getMilestoneDotClass(milestone)}`} aria-hidden="true" />
             <span className={`text-sm font-medium text-slate-900 ${completed ? 'line-through' : ''}`}>{milestone.name}</span>
             <Badge className={`text-xs ${statusTone}`}>{milestone.statusLabel}</Badge>
             {milestone.mapping_pending && (
-              <span data-testid="milestone-mapping-pending" className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700">
+              <span data-testid="milestone-mapping-pending" className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 ring-1 ring-inset ring-amber-200">
                 映射待确认
               </span>
             )}
@@ -393,17 +370,17 @@ function MilestoneNodeCard({
             </div>
           )}
           <div data-testid="milestones-three-time" className="grid gap-2 pt-2 text-xs text-slate-500 sm:grid-cols-3">
-            <div className="rounded-lg bg-slate-50 px-2 py-1.5">
+            <div className="rounded-lg bg-slate-50 px-3 py-5">
               <div className="text-xs uppercase tracking-wide text-slate-500">基线</div>
-              <div className="mt-0.5 font-medium tabular-nums text-slate-700">{formatMilestoneDate(baselineDate)}</div>
+              <div className="mt-0.5 font-medium num-mono text-slate-700">{formatMilestoneDate(baselineDate)}</div>
             </div>
-            <div className="rounded-lg bg-slate-50 px-2 py-1.5">
+            <div className="rounded-lg bg-slate-50 px-3 py-5">
               <div className="text-xs uppercase tracking-wide text-slate-500">当前计划</div>
-              <div className="mt-0.5 font-medium tabular-nums text-slate-700">{formatMilestoneDate(currentPlanDate)}</div>
+              <div className="mt-0.5 font-medium num-mono text-slate-700">{formatMilestoneDate(currentPlanDate)}</div>
             </div>
-            <div className="rounded-lg bg-slate-50 px-2 py-1.5">
+            <div className="rounded-lg bg-slate-50 px-3 py-5">
               <div className="text-xs uppercase tracking-wide text-slate-500">实际</div>
-              <div className="mt-0.5 font-medium tabular-nums text-slate-700">{formatMilestoneDate(actualDate)}</div>
+              <div className="mt-0.5 font-medium num-mono text-slate-700">{formatMilestoneDate(actualDate)}</div>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
@@ -415,7 +392,7 @@ function MilestoneNodeCard({
             </span>
           </div>
           <div className="pt-1" data-testid={`milestone-progress-${milestone.id}`}>
-            <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+            <div className="h-[3px] overflow-hidden rounded-full bg-slate-100">
               <div
                 className="h-full rounded-full bg-blue-600 motion-safe:transition-[width] motion-safe:duration-700 motion-safe:ease-out"
                 style={{ width: `${progressValue}%` }}
@@ -657,7 +634,7 @@ export default function Milestones() {
     return (
       <div className="page-shell page-enter">
         <PageHeader
-          eyebrow="关键节点偏差与兑现"
+          eyebrow="进度管控"
           title="关键节点偏差与兑现页"
           subtitle=""
         >
@@ -740,7 +717,7 @@ export default function Milestones() {
         />
 
         <PageHeader
-          eyebrow="关键节点偏差与兑现"
+          eyebrow="进度管控"
           title="关键节点偏差与兑现页"
           subtitle=""
         >
@@ -768,14 +745,32 @@ export default function Milestones() {
           </Button>
         </PageHeader>
 
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4" data-testid="milestones-summary-grid">
+        <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4" data-testid="milestones-summary-grid">
           {summaryCards.map((card) => (
-            <StatCard key={card.title} {...card} />
+            <MetricCard
+              key={card.title}
+              eyebrow="MILESTONE"
+              title={card.title}
+              value={card.value}
+              hint={card.hint}
+              tone={
+                card.tone === 'green'
+                  ? 'success'
+                  : card.tone === 'red'
+                    ? 'danger'
+                    : card.tone === 'orange'
+                      ? 'warning'
+                      : card.tone === 'blue'
+                        ? 'primary'
+                        : 'slate'
+              }
+              testId={`milestone-summary-card-${card.title}`}
+            />
           ))}
         </div>
 
         <Card data-testid="milestone-health-summary" className={`border shadow-[var(--el-1)] ${healthTone.container}`}>
-          <CardContent className="grid gap-4 p-5 xl:grid-cols-[1fr_auto] xl:items-center">
+          <CardContent className="grid gap-5 p-5 xl:grid-cols-[1fr_auto] xl:items-center">
             <div className="space-y-3">
               <div className="flex flex-wrap items-center gap-2">
                 <span className={`rounded-full border px-3 py-1 text-xs font-medium ${healthTone.badge}`}>里程碑健康状态</span>
@@ -836,25 +831,23 @@ export default function Milestones() {
             </Card>
 
             <Tabs value={filter} onValueChange={(value) => setFilter(value as MilestoneFilter)}>
-              <TabsList className="grid w-full grid-cols-5 bg-slate-100 p-1">
-                <TabsTrigger value="all">全部 {totalItems}</TabsTrigger>
-                <TabsTrigger value="pending">待完成 {milestoneOverview.stats.pending}</TabsTrigger>
-                <TabsTrigger value="soon">7天内 {milestoneOverview.stats.upcomingSoon}</TabsTrigger>
-                <TabsTrigger value="overdue">已逾期 {milestoneOverview.stats.overdue}</TabsTrigger>
-                <TabsTrigger value="completed">已完成 {milestoneOverview.stats.completed}</TabsTrigger>
+              <TabsList className="flex h-auto w-full flex-wrap justify-start gap-6 rounded-none border-b border-slate-100 bg-transparent p-0 text-slate-500">
+                <TabsTrigger value="all" className="relative rounded-none bg-transparent px-0 pb-3 pt-0 text-sm text-slate-500 shadow-none transition-colors after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-blue-700 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600">全部 {totalItems}</TabsTrigger>
+                <TabsTrigger value="pending" className="relative rounded-none bg-transparent px-0 pb-3 pt-0 text-sm text-slate-500 shadow-none transition-colors after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-blue-700 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600">待完成 {milestoneOverview.stats.pending}</TabsTrigger>
+                <TabsTrigger value="soon" className="relative rounded-none bg-transparent px-0 pb-3 pt-0 text-sm text-slate-500 shadow-none transition-colors after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-blue-700 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600">7天内 {milestoneOverview.stats.upcomingSoon}</TabsTrigger>
+                <TabsTrigger value="overdue" className="relative rounded-none bg-transparent px-0 pb-3 pt-0 text-sm text-slate-500 shadow-none transition-colors after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-blue-700 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600">已逾期 {milestoneOverview.stats.overdue}</TabsTrigger>
+                <TabsTrigger value="completed" className="relative rounded-none bg-transparent px-0 pb-3 pt-0 text-sm text-slate-500 shadow-none transition-colors after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-blue-700 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600">已完成 {milestoneOverview.stats.completed}</TabsTrigger>
               </TabsList>
 
-              <TabsContent value={filter} className="mt-6 space-y-8">
+              <TabsContent value={filter} className="mt-0 pt-5">
                 <div className={`grid gap-6 ${selectedMilestone ? 'xl:grid-cols-[minmax(0,1.5fr)_minmax(20rem,0.85fr)]' : ''}`}>
                   <Card className="surface-card">
-                    <CardHeader className="pb-4">
-                      <CardTitle className="flex items-center gap-2 text-base">
-                        <Flag className="h-4 w-4" />
-                        节点偏差表
-                      </CardTitle>
-                    </CardHeader>
-                    <Separator />
-                    <CardContent className="space-y-3 pt-4">
+                    <CardContent padding="md" className="space-y-3">
+                      <CardHead
+                        eyebrow="DEVIATION"
+                        title="节点偏差表"
+                        action={<Flag className="h-4 w-4 text-slate-400" />}
+                      />
                       {filteredMilestoneGroups.length === 0 ? (
                         <EmptyState
                           variant="filter"
@@ -885,15 +878,14 @@ export default function Milestones() {
 
                   {selectedMilestone && (
                     <Card className="surface-card">
-                      <CardHeader className="pb-4">
-                        <div className="flex items-start justify-between gap-2">
-                          <CardTitle className="text-base">{selectedMilestone.name}</CardTitle>
-                          <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => setSelectedMilestone(null)}>
+                      <CardContent padding="md" className="space-y-4">
+                        <CardHead
+                          eyebrow="DETAIL"
+                          title={selectedMilestone.name}
+                          action={<Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => setSelectedMilestone(null)}>
                             收起
-                          </Button>
-                        </div>
-                      </CardHeader>
-                      <CardContent className="space-y-4">
+                          </Button>}
+                        />
                         {(() => {
                           const { baselineDate, currentPlanDate, actualDate } = getMilestoneTimeline(selectedMilestone)
                           const anomalyLabel = selectedMilestone.mapping_pending

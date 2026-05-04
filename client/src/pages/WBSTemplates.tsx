@@ -7,7 +7,8 @@ import { EmptyState } from '@/components/EmptyState'
 import { PageHeader } from '@/components/PageHeader'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardDescription } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { LoadingState } from '@/components/ui/loading-state'
 import { safeStorageGet, safeStorageSet } from '@/lib/browserStorage'
@@ -15,7 +16,7 @@ import { useToast } from '@/hooks/use-toast'
 import { useStore } from '@/hooks/useStore'
 
 import OnboardingDialog from './planning/OnboardingDialog'
-import { TemplateQualityPanel, type WbsTemplateQualitySnapshot } from './WBSTemplates/TemplateQualityPanel'
+import { TemplateQualityMetricPanel, type WbsTemplateQualitySnapshot } from './WBSTemplates/TemplateQualityMetricPanel'
 import { TemplateIcon } from './WBSTemplates/components/TemplateIcon'
 import { getTypeColor } from './WBSTemplates/utils'
 
@@ -258,8 +259,8 @@ function buildFallbackGuide(params: {
     project_name: params.projectName,
     status_label: params.statusLabel,
     mode: params.mode,
-    title: '结构资产与行业经验工期管理',
-    subtitle: '把模板资产、历史项目经验和工期校准统一收口，再一键生成基线或沉淀模板。',
+    title: '结构模板',
+    subtitle: '把模板资产、历史项目经验和工期校准统一收口。',
     quickActions: [
       {
         path: 'template_to_baseline',
@@ -311,21 +312,21 @@ function TemplateCardItem({
   return (
     <Card
       data-testid={`wbs-template-card-${template.id}`}
-      className={`cursor-pointer shadow-[var(--el-1)] transition-all hover:shadow-[var(--el-2)] ${
+      className={`surface-card cursor-pointer transition-all hover:-translate-y-0.5 hover:shadow-[var(--el-2)] ${
         selected
           ? 'border-blue-300 ring-2 ring-blue-100'
           : 'border-slate-200'
       }`}
       onClick={onSelect}
     >
-      <CardHeader className="space-y-3">
+      <CardContent padding="md" className="space-y-3">
         <div className="flex items-start justify-between gap-3">
           <div className="flex min-w-0 items-start gap-3">
             <div className={`mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${color.bg}`}>
               <TemplateIcon type={displayType} className={`h-5 w-5 ${color.text}`} />
             </div>
             <div className="min-w-0">
-              <CardTitle className="text-base">{template.name || '未命名模板'}</CardTitle>
+              <h3 className="truncate text-base font-semibold text-slate-900">{template.name || '未命名模板'}</h3>
               <CardDescription className="mt-1 line-clamp-2">
                 {template.description || '把成熟结构整理成后续能直接复用的模板。'}
               </CardDescription>
@@ -336,8 +337,6 @@ function TemplateCardItem({
           </div>
           <Badge className={`${color.tagBg} ${color.tagText} border-0`}>{displayType}</Badge>
         </div>
-      </CardHeader>
-      <CardContent className="space-y-3">
         <div className="flex items-center gap-3 text-sm text-slate-600">
           <span>节点 {template.node_count ?? 0}</span>
           <span>·</span>
@@ -395,7 +394,7 @@ export default function WBSTemplates() {
   const isCompletedProject = projectStatusLabel === '已完成'
 
   useEffect(() => {
-    document.title = '结构资产与行业经验工期管理 | WorkBuddy'
+    document.title = '结构模板 | WorkBuddy'
   }, [])
 
   const selectedTemplate = useMemo(
@@ -718,8 +717,8 @@ export default function WBSTemplates() {
 
       <PageHeader
         eyebrow="计划编制"
-        title="结构资产与行业经验工期管理"
-        subtitle="把模板资产、历史经验和工期校准统一收口，再一键生成项目基线。"
+        title="结构模板"
+        subtitle=""
       />
 
       {loadError ? (
@@ -729,15 +728,15 @@ export default function WBSTemplates() {
         </Alert>
       ) : null}
 
-      <div className="content-sidebar-grid mt-6">
+      <div className="content-sidebar-grid">
         <Card className="surface-card">
           <CardContent className="space-y-5 p-5">
             <div className="flex flex-wrap items-center gap-2">
-              <Badge variant="secondary" className="gap-1">
+              <Badge variant="secondary" className="gap-1 ring-1 ring-inset ring-slate-200/60">
                 <Sparkles className="h-3.5 w-3.5" />
                 {guide.status_label}
               </Badge>
-              <Badge variant="outline" className="gap-1">
+              <Badge variant="outline" className="gap-1 ring-1 ring-inset ring-slate-200/60">
                 <Layers3 className="h-3.5 w-3.5" />
                 {guide.mode}
               </Badge>
@@ -748,7 +747,7 @@ export default function WBSTemplates() {
               {guide.subtitle ? <p className="text-sm leading-6 text-slate-500">{guide.subtitle}</p> : null}
             </div>
 
-            <div className="grid gap-4 md:grid-cols-3">
+            <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
               {guide.quickActions.map((action) => (
                 <Button variant="ghost"
                   key={action.path}
@@ -777,11 +776,9 @@ export default function WBSTemplates() {
           </CardContent>
         </Card>
 
-        <Card className="border-slate-100 bg-gradient-to-br from-white to-slate-50 shadow-[var(--el-1)]">
-          <CardHeader>
-            <CardTitle className="text-base">当前项目状态</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
+        <Card className="surface-card">
+          <CardContent padding="md" className="space-y-3">
+            <CardHead eyebrow="PROJECT" title="当前项目状态" />
             <div className="rounded-xl border border-slate-200 bg-white p-5">
               <div className="text-sm font-medium text-slate-900">{projectName}</div>
               <div className="mt-1 text-sm text-slate-600">状态：{projectStatusLabel}</div>
@@ -791,8 +788,8 @@ export default function WBSTemplates() {
       </div>
 
       {selectedTemplate ? (
-        <div className="mt-6">
-          <TemplateQualityPanel
+        <div>
+          <TemplateQualityMetricPanel
             templateName={selectedTemplate.name || '未命名模板'}
             templateType={selectedTemplate.template_type || selectedTemplate.category || null}
             quality={qualitySnapshot}
@@ -815,12 +812,10 @@ export default function WBSTemplates() {
         </div>
       ) : null}
 
-      <div className="content-sidebar-grid mt-6">
+      <div className="content-sidebar-grid">
         <Card className="surface-card">
-          <CardHeader>
-            <CardTitle className="text-base">模板列表</CardTitle>
-          </CardHeader>
-          <CardContent data-testid="wbs-template-list">
+          <CardContent padding="md" className="space-y-5" data-testid="wbs-template-list">
+            <CardHead eyebrow="TEMPLATES" title="模板列表" />
             {loading ? (
               <LoadingState
                 label="模板列表加载中"

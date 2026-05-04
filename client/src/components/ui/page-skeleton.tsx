@@ -1,4 +1,4 @@
-import { Card, CardContent, CardHeader } from './card'
+import { Card, CardContent } from './card'
 import { Skeleton } from './skeleton'
 
 function ShellSkeletonHeader() {
@@ -24,13 +24,13 @@ function ShellCardGrid() {
     <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
       {[1, 2, 3, 4, 5, 6].map((item) => (
         <Card key={item} variant="metric">
-          <CardHeader className="space-y-3">
+          <CardContent padding="md" className="space-y-3">
             <div className="flex items-center justify-between">
               <Skeleton className="h-5 w-40 rounded-full" />
               <Skeleton className="h-8 w-8 rounded-2xl" />
             </div>
             <Skeleton className="h-4 w-2/3 rounded-full" />
-          </CardHeader>
+          </CardContent>
           <CardContent className="space-y-3">
             <Skeleton className="h-4 w-full rounded-full" />
             <Skeleton className="h-4 w-5/6 rounded-full" />
@@ -100,10 +100,10 @@ export function RiskManagementSkeleton() {
         <div className="grid gap-4 lg:grid-cols-3">
           {[1, 2, 3].map((item) => (
             <Card key={item} className="surface-card">
-              <CardHeader className="space-y-2">
+              <CardContent padding="md" className="space-y-2">
                 <Skeleton className="h-5 w-24 rounded-full" />
                 <Skeleton className="h-4 w-40 rounded-full" />
-              </CardHeader>
+              </CardContent>
               <CardContent className="space-y-3">
                 {[1, 2, 3].map((row) => (
                   <div key={row} className="rounded-2xl border border-slate-200 p-5">
@@ -140,10 +140,10 @@ export function GanttViewSkeleton() {
       </div>
 
       <Card variant="detail">
-        <CardHeader className="space-y-3">
+        <CardContent padding="md" className="space-y-3">
           <Skeleton className="h-5 w-48 rounded-full" />
           <Skeleton className="h-4 w-80 rounded-full" />
-        </CardHeader>
+        </CardContent>
         <CardContent className="space-y-4">
           <Skeleton className="h-12 w-full rounded-2xl" />
           <div className="space-y-3">
@@ -214,10 +214,10 @@ export function TaskListSkeleton() {
 export function StatsCardSkeleton() {
   return (
     <Card variant="surface">
-      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+      <CardContent padding="md" className="flex flex-row items-center justify-between space-y-0">
         <Skeleton className="h-4 w-24 rounded-full" />
         <Skeleton className="h-4 w-4 rounded-full" />
-      </CardHeader>
+      </CardContent>
       <CardContent>
         <Skeleton className="h-8 w-16 rounded-full" />
         <Skeleton className="mt-1 h-3 w-20 rounded-full" />
@@ -237,17 +237,17 @@ export function ReportsSkeleton() {
 
       <div className="grid gap-4 md:grid-cols-2">
         <Card variant="surface">
-          <CardHeader>
+          <CardContent padding="md">
             <Skeleton className="h-6 w-32 rounded-full" />
-          </CardHeader>
+          </CardContent>
           <CardContent>
             <Skeleton className="h-64 w-full rounded-2xl" />
           </CardContent>
         </Card>
         <Card variant="surface">
-          <CardHeader>
+          <CardContent padding="md">
             <Skeleton className="h-6 w-32 rounded-full" />
-          </CardHeader>
+          </CardContent>
           <CardContent>
             <Skeleton className="h-64 w-full rounded-2xl" />
           </CardContent>
@@ -320,10 +320,10 @@ export function SettingsSkeleton() {
       <Skeleton className="h-8 w-32 rounded-full" />
 
       <Card variant="surface">
-        <CardHeader>
+        <CardContent padding="md">
           <Skeleton className="h-6 w-40 rounded-full" />
           <Skeleton className="h-4 w-60 rounded-full" />
-        </CardHeader>
+        </CardContent>
         <CardContent className="space-y-4">
           <Skeleton className="h-10 w-full rounded-2xl" />
           <Skeleton className="h-10 w-full rounded-2xl" />

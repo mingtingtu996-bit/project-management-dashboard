@@ -3,7 +3,8 @@ import { useMemo } from 'react'
 import { EmptyState } from '@/components/EmptyState'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
 import { Separator } from '@/components/ui/separator'
 import { cn } from '@/lib/utils'
 import { AlertTriangle, Info, ShieldAlert, LocateFixed } from 'lucide-react'
@@ -88,10 +89,10 @@ export function BaselineValidationPanel({ issues, emptyLabel = '当前没有待�
 
   return (
     <Card className="surface-card">
-      <CardHeader className="space-y-3 bg-slate-50/80">
+      <CardContent padding="md" className="space-y-3 bg-slate-50/80">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="space-y-1">
-            <CardTitle className="text-lg">异常校核区</CardTitle>
+            <CardHead eyebrow="VALIDATION" title="异常校核区" />
           </div>
           <div className="flex flex-wrap gap-2">
             <Badge variant="destructive">{blockingCount} 阻断</Badge>
@@ -100,7 +101,7 @@ export function BaselineValidationPanel({ issues, emptyLabel = '当前没有待�
           </div>
         </div>
 
-      </CardHeader>
+      </CardContent>
       <Separator />
 
       <CardContent className="space-y-4 p-5">

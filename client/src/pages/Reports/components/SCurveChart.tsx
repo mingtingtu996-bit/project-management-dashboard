@@ -1,7 +1,20 @@
 import { ChartAccessibleWrapper } from '@/components/ChartAccessibleWrapper'
 import { EmptyState } from '@/components/EmptyState'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
+import { ChartTooltip, chartTooltipCursor } from '@/components/ui/chart-tooltip'
 import { CHART_AXIS_COLORS, CHART_SERIES } from '@/lib/chartPalette'
+import {
+  Area,
+  AreaChart,
+  CartesianGrid,
+  Line,
+  ReferenceLine,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts'
 
 type SCurvePoint = {
   date: string
@@ -67,11 +80,6 @@ function buildSCurvePoints(tasks: SCurveTask[]): SCurvePoint[] {
   return points
 }
 
-function toSvgPath(points: { x: number; y: number }[]): string {
-  if (points.length === 0) return ''
-  return points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ')
-}
-
 function normalizeApiPoints(points?: SCurveApiPoint[]): SCurvePoint[] {
   if (!points?.length) return []
   return points.map((point) => ({
@@ -86,42 +94,27 @@ function normalizeApiPoints(points?: SCurveApiPoint[]): SCurvePoint[] {
 export function SCurveChart({ tasks = [], points: apiPoints }: { tasks?: SCurveTask[]; points?: SCurveApiPoint[] }) {
   const points = normalizeApiPoints(apiPoints)
   const displayPoints = points.length > 0 ? points : buildSCurvePoints(tasks)
-
-  const W = 560
-  const H = 220
-  const PAD = { top: 16, right: 24, bottom: 36, left: 44 }
-  const chartW = W - PAD.left - PAD.right
-  const chartH = H - PAD.top - PAD.bottom
-
-  const svgPlanned = displayPoints.map((p, i) => ({
-    x: PAD.left + (i / Math.max(displayPoints.length - 1, 1)) * chartW,
-    y: PAD.top + (1 - p.planned / 100) * chartH,
-  }))
-  const svgActual = displayPoints
-    .filter((p) => p.actual != null)
-    .map((p, i) => ({
-      x: PAD.left + (i / Math.max(displayPoints.length - 1, 1)) * chartW,
-      y: PAD.top + (1 - (p.actual ?? 0) / 100) * chartH,
-    }))
-
-  const yTicks = [0, 25, 50, 75, 100]
   const today = new Date().toISOString().slice(0, 10)
   const todayIdx = displayPoints.findIndex((p) => p.date >= today)
-  const todayX = todayIdx >= 0
-    ? PAD.left + (todayIdx / Math.max(displayPoints.length - 1, 1)) * chartW
-    : null
+  const chartRows = displayPoints.map((point) => ({
+    ...point,
+    actual: point.actual ?? null,
+  }))
 
   return (
     <Card data-testid="reports-s-curve-chart" variant="surface">
-      <CardHeader className="pb-2">
-        <CardTitle className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-          S 曲线 — 计划 vs 实际累计进度
-          <div className="ml-auto flex items-center gap-3 text-xs font-normal text-slate-500">
-            <span className="flex items-center gap-1"><span className="inline-block h-0.5 w-5" style={{ backgroundColor: CHART_SERIES.primary }} />计划</span>
-            <span className="flex items-center gap-1"><span className="inline-block h-0.5 w-5 border-b-2" style={{ borderColor: CHART_SERIES.success, borderBottomStyle: 'dashed' }} />实际</span>
-          </div>
-        </CardTitle>
-      </CardHeader>
+      <CardContent padding="md" className="pb-0">
+        <CardHead
+          eyebrow="S-CURVE"
+          title="S 曲线 · 计划 vs 实际累计进度"
+          action={
+            <div className="flex items-center gap-3 text-xs font-normal text-slate-500">
+              <span className="flex items-center gap-1"><span className="inline-block h-0.5 w-5" style={{ backgroundColor: CHART_SERIES.primary }} />计划</span>
+              <span className="flex items-center gap-1"><span className="inline-block h-0.5 w-5 border-b-2" style={{ borderColor: CHART_SERIES.success, borderBottomStyle: 'dashed' }} />实际</span>
+            </div>
+          }
+        />
+      </CardContent>
       <CardContent className="px-4 pb-4">
         {displayPoints.length === 0 ? (
           <EmptyState
@@ -135,46 +128,63 @@ export function SCurveChart({ tasks = [], points: apiPoints }: { tasks?: SCurveT
             rows={displayPoints.map((point) => [point.date, point.planned, point.actual ?? '未设置'])}
             summary="查看 S 曲线数据"
           >
-            <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label="S 曲线图">
-              {/* Y axis grid & labels */}
-              {yTicks.map((tick) => {
-                const y = PAD.top + (1 - tick / 100) * chartH
-                return (
-                  <g key={tick}>
-                    <line x1={PAD.left} x2={PAD.left + chartW} y1={y} y2={y} stroke={CHART_AXIS_COLORS.neutralStroke} strokeWidth="1" />
-                    <text x={PAD.left - 6} y={y + 4} textAnchor="end" className="fill-slate-400" fontSize="10">{tick}%</text>
-                  </g>
-                )
-              })}
-
-              {/* X axis date labels */}
-              {displayPoints.filter((_, i) => i % 3 === 0 || i === displayPoints.length - 1).map((p) => {
-                const origIdx = displayPoints.indexOf(p)
-                const x = PAD.left + (origIdx / Math.max(displayPoints.length - 1, 1)) * chartW
-                return (
-                  <text key={p.date} x={x} y={H - 8} textAnchor="middle" className="fill-slate-400" fontSize="9">
-                    {p.date.slice(5)}
-                  </text>
-                )
-              })}
-
-              {/* Today line */}
-              {todayX != null && (
-                <line x1={todayX} x2={todayX} y1={PAD.top} y2={PAD.top + chartH} stroke={CHART_SERIES.warning} strokeWidth="1.5" strokeDasharray="4 3" opacity="0.7" />
-              )}
-
-              {/* Planned curve */}
-              <path d={toSvgPath(svgPlanned)} fill="none" stroke={CHART_SERIES.primary} strokeWidth="2" strokeLinejoin="round" />
-
-              {/* Actual curve */}
-              {svgActual.length > 1 && (
-                <path d={toSvgPath(svgActual)} fill="none" stroke={CHART_SERIES.success} strokeWidth="2" strokeDasharray="6 3" strokeLinejoin="round" />
-              )}
-
-              {/* Axes */}
-              <line x1={PAD.left} x2={PAD.left} y1={PAD.top} y2={PAD.top + chartH} stroke={CHART_AXIS_COLORS.neutralStroke} strokeWidth="1" />
-              <line x1={PAD.left} x2={PAD.left + chartW} y1={PAD.top + chartH} y2={PAD.top + chartH} stroke={CHART_AXIS_COLORS.neutralStroke} strokeWidth="1" />
-            </svg>
+            <div className="h-72 rounded-2xl bg-white p-3 ring-1 ring-inset ring-slate-100">
+              <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1} initialDimension={{ width: 640, height: 288 }}>
+                <AreaChart data={chartRows} margin={{ top: 12, right: 16, bottom: 8, left: 0 }}>
+                  <defs>
+                    <linearGradient id="reportsSCurvePlanned" x1="0" x2="0" y1="0" y2="1">
+                      <stop offset="0%" stopColor={CHART_SERIES.primary} stopOpacity={0.2} />
+                      <stop offset="100%" stopColor={CHART_SERIES.primary} stopOpacity={0.04} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid stroke={CHART_AXIS_COLORS.neutralGrid} vertical={false} />
+                  <XAxis
+                    dataKey="date"
+                    tickLine={false}
+                    axisLine={false}
+                    tick={{ fill: CHART_AXIS_COLORS.axisText, fontSize: 11 }}
+                    interval="preserveStartEnd"
+                    tickFormatter={(value) => String(value).slice(5)}
+                  />
+                  <YAxis
+                    domain={[0, 100]}
+                    tickLine={false}
+                    axisLine={false}
+                    tick={{ fill: CHART_AXIS_COLORS.axisText, fontSize: 11 }}
+                    tickFormatter={(value) => `${value}%`}
+                  />
+                  <Tooltip content={<ChartTooltip />} cursor={chartTooltipCursor} />
+                  {todayIdx >= 0 ? (
+                    <ReferenceLine
+                      x={displayPoints[todayIdx].date}
+                      stroke={CHART_SERIES.warning}
+                      strokeDasharray="4 3"
+                      label={{ value: '今天', fill: CHART_SERIES.warning, fontSize: 11, position: 'top' }}
+                    />
+                  ) : null}
+                  <Area
+                    type="monotone"
+                    dataKey="planned"
+                    name="计划累计"
+                    stroke={CHART_SERIES.primary}
+                    fill="url(#reportsSCurvePlanned)"
+                    strokeWidth={2}
+                    animationDuration={800}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="actual"
+                    name="实际累计"
+                    stroke={CHART_SERIES.success}
+                    strokeDasharray="6 3"
+                    strokeWidth={2}
+                    dot={false}
+                    connectNulls
+                    animationDuration={800}
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
           </ChartAccessibleWrapper>
         )}
       </CardContent>

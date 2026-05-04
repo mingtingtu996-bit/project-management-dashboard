@@ -88,6 +88,7 @@
     height: 100%;
     overflow: hidden;
     overscroll-behavior: contain;
+    font-family: "Plus Jakarta Sans", "Microsoft YaHei", "PingFang SC", sans-serif;
   }
 
   /* heading 全局基础样式（L18/L19） */
@@ -114,11 +115,11 @@
   }
 
   .page-stack {
-    @apply space-y-6;
+    @apply space-y-8;
   }
 
   .page-section-grid {
-    @apply grid gap-4;
+    @apply grid gap-5;
   }
 
   .content-sidebar-grid {
@@ -126,7 +127,7 @@
   }
 
   .section-stack {
-    @apply space-y-4;
+    @apply space-y-5;
   }
 
   .form-stack {
@@ -159,15 +160,27 @@
   }
 
   .meta-muted {
-    @apply text-[11px] leading-4 text-slate-400;
+    @apply text-[11px] leading-4 text-slate-400 tabular-nums;
   }
 
   .num-display {
-    @apply tabular-nums tracking-[-0.03em] font-bold;
+    @apply tabular-nums tracking-[-0.03em];
+    font-feature-settings: "tnum" 1, "cv11" 1, "ss01" 1, "ss03" 1;
+    font-variation-settings: "opsz" 32;
   }
 
   .num-mono {
     @apply tabular-nums font-medium;
+    font-feature-settings: "tnum" 1, "cv11" 1;
+    font-variation-settings: "opsz" 14;
+  }
+
+  .command-palette-overlay-in {
+    animation: command-palette-overlay-in 180ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+
+  .command-palette-panel-in {
+    animation: command-palette-panel-in 180ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
   }
 
   /* 辅助文本对比度提升（L14）slate-400 → slate-500 */
@@ -190,7 +203,7 @@
 
   /* 状态徽章 — 通用基础 */
   .badge-base {
-    @apply inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium;
+    @apply inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset ring-slate-200/60;
   }
 
   .shell-section-title {
@@ -208,24 +221,24 @@
 
   /* 里程碑层级左边框 */
   .ms-lv1 {
-    @apply border-l-4 border-amber-500;
+    @apply ring-1 ring-inset ring-amber-200;
   }
   .ms-lv2 {
-    @apply border-l-[3px] border-blue-500;
+    @apply ring-1 ring-inset ring-blue-200;
   }
   .ms-lv3 {
-    @apply border-l-2 border-slate-400;
+    @apply ring-1 ring-inset ring-slate-200;
   }
 
   /* 风险等级卡片 */
   .risk-high {
-    @apply bg-red-50 border-l-4 border-red-500;
+    @apply bg-red-50 ring-1 ring-inset ring-red-200;
   }
   .risk-mid {
-    @apply bg-orange-50 border-l-4 border-orange-500;
+    @apply bg-orange-50 ring-1 ring-inset ring-orange-200;
   }
   .risk-low {
-    @apply bg-blue-50 border-l-4 border-blue-500;
+    @apply bg-blue-50 ring-1 ring-inset ring-blue-200;
   }
 
   /* ── 进度条颜色统一（L13）─────────────────────────────────── */
@@ -295,6 +308,16 @@
 @keyframes tooltip-in {
   from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes command-palette-overlay-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes command-palette-panel-in {
+  from { opacity: 0; transform: translateY(-8px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
 @keyframes expand-down {

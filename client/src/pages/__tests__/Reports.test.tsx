@@ -610,7 +610,7 @@ describe('Reports story coverage', () => {
   it('keeps the shell stable while switching all three deviation views', async () => {
     await renderReports(root, `/projects/${projectId}/reports?view=execution`)
 
-    await waitForText(container, ['进度偏差分析', '基线版本切换标记', '下钻明细区'])
+    await waitForText(container, ['进度偏差', '基线版本切换标记', '下钻明细区'])
     expect(container.querySelector('[data-testid="deviation-shell"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="reports-module-tabs"]')).toBeTruthy()
     expect(container.textContent).toContain('返回项目总览')
@@ -704,7 +704,7 @@ describe('Reports story coverage', () => {
   it('keeps WBS content folded into the canonical progress analysis route', async () => {
     await renderReports(root, `/projects/${projectId}/reports?view=progress`)
 
-    await waitForText(container, ['项目进度总览分析', '工期偏差与执行判断', '关键路径摘要'])
+    await waitForText(container, ['进度总览', '工期偏差与执行判断', '关键路径摘要'])
 
     expect(container.textContent).not.toContain('前期证照状态分析')
     expect(container.textContent).not.toContain('验收进度分析')
@@ -720,7 +720,7 @@ describe('Reports story coverage', () => {
   it('links report summaries and deviation rows to downstream project pages', async () => {
     await renderReports(root, `/projects/${projectId}/reports?view=progress`)
 
-    await waitForText(container, ['项目进度总览分析', '验收通过'])
+    await waitForText(container, ['进度总览', '验收通过'])
 
     const acceptanceLink = container.querySelector('[data-testid="reports-acceptance-summary-link"]') as HTMLAnchorElement | null
     expect(acceptanceLink).toBeTruthy()
@@ -730,7 +730,7 @@ describe('Reports story coverage', () => {
     expect(acceptanceUrl.searchParams.get('phase')).toBe('all')
 
     await renderReports(root, `/projects/${projectId}/reports?view=risk`)
-    await waitForText(container, ['风险与问题分析', '重点风险与问题清单'])
+    await waitForText(container, ['风险矩阵热力图', '重点风险与问题清单'])
 
     const riskLink = container.querySelector('[data-testid="reports-risk-drilldown-risk-1"]') as HTMLAnchorElement | null
     expect(riskLink).toBeTruthy()
@@ -795,7 +795,7 @@ describe('Reports story coverage', () => {
   it('renders the risk analysis deep link with its own summary header and detail blocks', async () => {
     await renderReports(root, `/projects/${projectId}/reports?view=risk`)
 
-    await waitForText(container, ['风险与问题分析', '返回风险与问题', '风险压力结构', '重点风险与问题清单'])
+    await waitForText(container, ['返回风险与问题', '风险压力结构', '重点风险与问题清单'])
 
     expect(container.querySelector('[data-testid="reports-current-metrics"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="analysis-entry-progress"]')).toBeTruthy()
@@ -817,6 +817,7 @@ describe('Reports story coverage', () => {
   })
   it('renders material arrival summary in the risk module', async () => {
     await renderReports(root, `/projects/${projectId}/reports?view=risk`)
+    await waitForText(container, ['材料到场率分析'])
     expect(container.querySelector('[data-testid="reports-material-arrival-summary"]')).toBeTruthy()
   })
 })

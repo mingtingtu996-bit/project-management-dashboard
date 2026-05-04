@@ -19,7 +19,11 @@ import { getShellNavigationMeta } from '@/config/navigation'
 import { buildProjectAttentionSnapshot } from '@/lib/projectAttention'
 import { getGlobalRoleLabel, getProjectRoleLabel } from '@/lib/roleLabels'
 
-export default function Header() {
+interface HeaderProps {
+  onOpenCommandPalette?: () => void
+}
+
+export default function Header({ onOpenCommandPalette }: HeaderProps) {
   const location = useLocation()
   const navigate = useNavigate()
   const { currentUser, currentProject, connectionMode, tasks, risks, conditions, obstacles, acceptancePlans } = useStore()
@@ -49,6 +53,15 @@ export default function Header() {
   const { title, contextLabel } = getShellNavigationMeta(location.pathname)
   const isProjectPage = location.pathname.startsWith('/projects/')
   const userName = user?.display_name || currentUser?.display_name || '未命名用户'
+  const shortcutLabel = useMemo(
+    () => (typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/i.test(navigator.platform) ? '⌘K' : 'Ctrl+K'),
+    [],
+  )
+  const avatarClassName = useMemo(() => {
+    const palette = ['bg-blue-600', 'bg-emerald-600', 'bg-sky-600', 'bg-slate-700', 'bg-rose-600', 'bg-amber-600']
+    const seed = userName.charCodeAt(0) || 0
+    return palette[seed % palette.length]
+  }, [userName])
 
   useEffect(() => {
     const titleParts = [title]
@@ -112,9 +125,9 @@ export default function Header() {
         </div>
 
         {currentProject && isProjectPage ? (
-          <div className="hidden min-w-0 max-w-80 items-center gap-2 overflow-hidden rounded-full bg-slate-100/80 px-3 py-1.5 text-sm text-slate-700 ring-1 ring-inset ring-slate-200/60 lg:flex xl:max-w-96">
-            <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-500" />
-            <span className="max-w-40 truncate font-medium xl:max-w-56">{currentProject.name}</span>
+          <div className="hidden min-w-0 max-w-80 items-center gap-2 overflow-hidden rounded-full bg-slate-100/80 px-2.5 py-1 text-xs text-slate-700 ring-1 ring-inset ring-slate-200/60 lg:flex xl:max-w-96">
+            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
+            <span className="max-w-40 truncate font-semibold xl:max-w-56">{currentProject.name}</span>
           </div>
         ) : null}
       </div>
@@ -123,10 +136,16 @@ export default function Header() {
         <div className="relative hidden lg:block">
           <Search className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
           <Input
-            aria-label="搜索项目、任务或提醒"
+            aria-label="打开命令面板"
             placeholder="搜索项目、任务或提醒..."
-            className="h-10 w-96 rounded-lg border-transparent bg-slate-50 pl-11 text-sm shadow-none placeholder:text-slate-500 transition-colors hover:border-slate-200 hover:bg-white focus-visible:border-blue-300 focus-visible:ring-2 focus-visible:ring-blue-500/20"
+            readOnly
+            onClick={onOpenCommandPalette}
+            onFocus={onOpenCommandPalette}
+            className="h-10 w-96 rounded-lg border-transparent bg-slate-50 pl-11 pr-20 text-sm shadow-none placeholder:text-slate-500 transition-colors hover:border-slate-200 hover:bg-white focus-visible:border-blue-300 focus-visible:ring-2 focus-visible:ring-blue-500/20"
           />
+          <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 rounded border border-slate-200 px-1 text-[10px] leading-4 text-slate-300">
+            {shortcutLabel}
+          </span>
         </div>
 
         <div className="flex items-center gap-2 rounded-full bg-slate-100/80 px-3 py-1.5 text-sm text-slate-600 ring-1 ring-inset ring-slate-200/60">
@@ -168,8 +187,10 @@ export default function Header() {
         <DropdownMenu open={accountMenuOpen} onOpenChange={setAccountMenuOpen}>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" aria-label="打开用户菜单" className="h-10 px-2 text-slate-700 hover:bg-slate-100 lg:px-3">
-              <Avatar className="h-8 w-8">
-                <AvatarFallback>{userName.slice(0, 2)}</AvatarFallback>
+              <Avatar className="h-7 w-7">
+                <AvatarFallback className={`${avatarClassName} text-[11px] font-medium text-white`}>
+                  {userName.slice(0, 2)}
+                </AvatarFallback>
               </Avatar>
               <span className="hidden max-w-32 truncate sm:inline">{userName}</span>
             </Button>

@@ -3,7 +3,8 @@
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
 import { AlertCircle, RefreshCw, ArrowRight, User } from 'lucide-react'
 import type { Task, Project, Risk, Milestone } from '@/types'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -89,15 +90,13 @@ export function ConflictDialog({
           <div className="grid grid-cols-2 gap-4">
             {/* 本地版本 */}
             <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm flex items-center gap-2">
-                  <User className="h-4 w-4" />
-                  您的修改
-                  <span className="text-xs text-muted-foreground ml-auto">
-                    v{localVersion.version || 1}
-                  </span>
-                </CardTitle>
-              </CardHeader>
+              <CardContent padding="md">
+                <CardHead
+                  eyebrow="LOCAL"
+                  title="您的修改"
+                  action={<span className="text-xs text-muted-foreground">v{localVersion.version || 1}</span>}
+                />
+              </CardContent>
               <CardContent className="space-y-2 text-sm">
                 {differences.slice(0, 5).map((field) => (
                   <div key={field} className="flex justify-between">
@@ -122,15 +121,13 @@ export function ConflictDialog({
             
             {/* 服务器版本 */}
             <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm flex items-center gap-2">
-                  <RefreshCw className="h-4 w-4" />
-                  服务器版本
-                  <span className="text-xs text-muted-foreground ml-auto">
-                    v{serverVersion.version || 1}
-                  </span>
-                </CardTitle>
-              </CardHeader>
+              <CardContent padding="md">
+                <CardHead
+                  eyebrow="SERVER"
+                  title="服务器版本"
+                  action={<span className="text-xs text-muted-foreground">v{serverVersion.version || 1}</span>}
+                />
+              </CardContent>
               <CardContent className="space-y-2 text-sm">
                 {differences.slice(0, 5).map((field) => (
                   <div key={field} className="flex justify-between">

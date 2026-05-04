@@ -15,9 +15,9 @@ import {
 
 function healthPillClass(value: string) {
   const score = Number(value)
-  if (score >= 80) return 'bg-emerald-50 text-emerald-700'
-  if (score >= 60) return 'bg-amber-50 text-amber-700'
-  return 'bg-red-50 text-red-700'
+  if (score >= 80) return 'bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200/60'
+  if (score >= 60) return 'bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200/60'
+  return 'bg-red-50 text-red-700 ring-1 ring-inset ring-red-200/60'
 }
 
 function healthPillLabel(value: string) {
@@ -64,7 +64,7 @@ export function CompanyHero({
   stats,
 }: CompanyHeroProps) {
   return (
-    <section data-testid="company-hero" className="surface-card p-6">
+    <section data-testid="company-hero" className="surface-card p-5">
       <div className="flex flex-col gap-6">
         <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
           <div className="space-y-3">
@@ -135,10 +135,10 @@ export function CompanyHero({
                 <span>本月健康均值</span>
                 <span>{healthHistory.change !== null ? formatDelta(healthHistory.change) : '暂无对比'}</span>
               </div>
-              <div className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">
+              <div className="num-display mt-2 text-3xl font-semibold text-slate-900">
                 {healthHistory.thisMonth ?? '--'}
               </div>
-              <div className="mt-3 h-2 rounded-full bg-slate-100">
+              <div className="mt-3 h-[3px] rounded-full bg-slate-100">
                 <div
                   className="h-full rounded-full bg-emerald-500"
                   style={{ width: `${healthHistory.thisMonth ?? 0}%` }}
@@ -152,11 +152,11 @@ export function CompanyHero({
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="rounded-2xl border border-white bg-white px-4 py-4">
                 <div className="text-xs text-slate-500">已暂停</div>
-                <div className="mt-2 text-2xl font-semibold text-slate-900">{stats.paused}</div>
+                <div className="num-display mt-2 text-2xl font-semibold text-slate-900">{stats.paused}</div>
               </div>
               <div className="rounded-2xl border border-white bg-white px-4 py-4">
                 <div className="text-xs text-slate-500">进行中</div>
-                <div className="mt-2 text-2xl font-semibold text-slate-900">{stats.inProgress}</div>
+                <div className="num-display mt-2 text-2xl font-semibold text-slate-900">{stats.inProgress}</div>
               </div>
             </div>
           </div>

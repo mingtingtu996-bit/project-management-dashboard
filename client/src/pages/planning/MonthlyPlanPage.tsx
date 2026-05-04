@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 
@@ -24,6 +24,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { LoadingState } from '@/components/ui/loading-state'
+import { MetricCard } from '@/components/ui/metric-card'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { usePlanningStore, type PlanningValidationIssue } from '@/hooks/usePlanningStore'
 import { usePermissions } from '@/hooks/usePermissions'
@@ -1277,7 +1278,7 @@ export default function MonthlyPlanPage() {
               onKeyDown={(event) => handleInputKeyDown(event, item.id, 'start')}
               disabled={readOnly}
               data-monthly-editor-cell={`${item.id}:start`}
-              className="h-9 border-slate-200 bg-white text-right text-sm tabular-nums"
+              className="h-9 border-slate-200 bg-white text-right text-sm num-mono"
             />
           ),
           endCell: (
@@ -1289,7 +1290,7 @@ export default function MonthlyPlanPage() {
               onKeyDown={(event) => handleInputKeyDown(event, item.id, 'end')}
               disabled={readOnly}
               data-monthly-editor-cell={`${item.id}:end`}
-              className="h-9 border-slate-200 bg-white text-right text-sm tabular-nums"
+              className="h-9 border-slate-200 bg-white text-right text-sm num-mono"
             />
           ),
           progressCell: (
@@ -1303,7 +1304,7 @@ export default function MonthlyPlanPage() {
               onKeyDown={(event) => handleInputKeyDown(event, item.id, 'progress')}
               disabled={readOnly}
               data-monthly-editor-cell={`${item.id}:progress`}
-              className="h-9 border-slate-200 bg-white text-right text-sm tabular-nums"
+              className="h-9 border-slate-200 bg-white text-right text-sm num-mono"
             />
           ),
         }
@@ -1741,10 +1742,10 @@ export default function MonthlyPlanPage() {
           data-testid="monthly-plan-priority-banner"
           className={
             priorityBanner.tone === 'emerald'
-              ? 'border-emerald-200 bg-emerald-50'
+              ? 'border-emerald-200 bg-emerald-50 ring-1 ring-inset ring-emerald-200'
               : priorityBanner.tone === 'amber'
-                ? 'border-amber-200 bg-amber-50'
-                : 'border-slate-200 bg-slate-50'
+                ? 'border-amber-200 bg-amber-50 ring-1 ring-inset ring-amber-200'
+                : 'border-slate-200 bg-slate-50 ring-1 ring-inset ring-slate-200'
           }
         >
           <CardContent className="flex flex-wrap items-center justify-between gap-3 p-5">
@@ -1762,10 +1763,10 @@ export default function MonthlyPlanPage() {
           data-testid="monthly-plan-reminder-banner"
           className={
             confirmReminder.tone === 'emerald'
-              ? 'border-emerald-200 bg-emerald-50'
+              ? 'border-emerald-200 bg-emerald-50 ring-1 ring-inset ring-emerald-200'
               : confirmReminder.tone === 'amber'
-                ? 'border-amber-200 bg-amber-50'
-                : 'border-slate-200 bg-slate-50'
+                ? 'border-amber-200 bg-amber-50 ring-1 ring-inset ring-amber-200'
+                : 'border-slate-200 bg-slate-50 ring-1 ring-inset ring-slate-200'
           }
         >
           <CardContent className="flex flex-wrap items-center justify-between gap-3 p-5">
@@ -1787,12 +1788,10 @@ export default function MonthlyPlanPage() {
                   <div className="flex flex-wrap items-center gap-2">
                     <Badge variant="secondary" className="gap-1">
                       <CalendarDays className="h-3.5 w-3.5" />
-                      月度计划工作区
                     </Badge>
                     <Badge variant={readOnly ? 'outline' : 'secondary'}>{readOnly ? '查看态' : '草稿编辑态'}</Badge>
                     {isDirty ? (
-                      <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700">
-                        ● 未保存草稿
+                      <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200">
                       </Badge>
                     ) : null}
                   </div>
@@ -1803,14 +1802,13 @@ export default function MonthlyPlanPage() {
 
               <div className="flex flex-wrap items-center gap-2">
                 <Button type="button" variant="outline" size="sm" onClick={() => void handleMonthSwitch(shiftMonth(selectedMonth, -1))}>
-                  &lt; 上一月
                 </Button>
                 <Button type="button" variant="outline" size="sm" onClick={() => void handleMonthSwitch(shiftMonth(selectedMonth, 1))}>
                   下一月 &gt;
                 </Button>
               </div>
 
-              <div className="grid gap-4 md:grid-cols-5">
+              <div className="grid gap-5 md:grid-cols-5">
                 {monthWindow.map((month) => {
                   const versions = planVersions.filter((item) => item.month === month)
                   const version =
@@ -1858,7 +1856,7 @@ export default function MonthlyPlanPage() {
                       <div className="mt-2 flex w-full flex-wrap items-center gap-2 text-xs text-slate-700">
                         <span>{version ? `v${version.version}` : '等待草稿'}</span>
                         {version ? (
-                          <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700">
+                          <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200">
                             待关账 {version.pending_closeout_count ?? 0}
                           </Badge>
                         ) : null}
@@ -1872,7 +1870,7 @@ export default function MonthlyPlanPage() {
             </CardContent>
           </Card>
 
-          <div data-testid="monthly-plan-info-bar" className="grid gap-4 rounded-2xl border border-slate-100 bg-white p-5 shadow-[var(--el-1)] md:grid-cols-6">
+          <div data-testid="monthly-plan-info-bar" className="grid gap-5 rounded-2xl border border-slate-100 bg-white p-5 shadow-[var(--el-1)] md:grid-cols-6">
             <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
               <div className="text-xs text-slate-500">当前月份</div>
               <div className="mt-1 text-lg font-semibold text-slate-900">{formatMonthLabel(selectedMonth)}</div>
@@ -1889,7 +1887,7 @@ export default function MonthlyPlanPage() {
               <div className="text-xs text-slate-500">执行条目</div>
               <div className="mt-1 text-lg font-semibold text-slate-900">{activePlan?.items.length ?? 0}</div>
             </div>
-            <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 ring-1 ring-inset ring-amber-200">
               <div className="text-xs text-amber-700">异常摘要</div>
               <div className="mt-1 text-lg font-semibold text-amber-900">
                 {conditionIssues.length + obstacleIssues.length + delayIssues.length}
@@ -1927,15 +1925,15 @@ export default function MonthlyPlanPage() {
                       <Badge variant="outline">阈值 {changeSummary.threshold}</Badge>
                     </div>
                     <div className="text-sm font-medium text-slate-900">
-                      当前月计划存在 {changeSummary.totalChangeCount} 项可见变化
+                      ??????? {changeSummary.totalChangeCount} ?????
                     </div>
                   </div>
-                  <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700">
-                    从工具栏打开计划变更对比
+                  <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200">
+                    ????????????
                   </Badge>
                 </div>
 
-                <div className="grid gap-4 md:grid-cols-5">
+                <div className="grid gap-5 md:grid-cols-5">
                   <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
                     <div className="text-xs text-slate-500">新增承接数</div>
                     <div className="mt-1 text-lg font-semibold text-slate-900">{changeSummary.addedCount}</div>
@@ -1973,7 +1971,6 @@ export default function MonthlyPlanPage() {
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant="secondary" className="gap-1">
                 <Layers3 className="h-3.5 w-3.5" />
-                L3 草稿来源区
               </Badge>
               {activePlan ? <Badge variant="outline">{getMonthlyPlanStatusLabel(activePlan.status)}</Badge> : null}
             </div>
@@ -1982,7 +1979,6 @@ export default function MonthlyPlanPage() {
           <div className="flex flex-wrap items-center gap-2">
             <Button type="button" variant="outline" size="sm" className="gap-2" onClick={() => void handleForceUnlock()} disabled={readOnly || !activePlan || !canManagePlanning} loading={actionLoading === 'unlock'}>
               {actionLoading !== 'unlock' ? <RefreshCw className="h-4 w-4" /> : null}
-              重新获取编辑锁
             </Button>
             {canQueueRealignment ? (
               <Button
@@ -2034,7 +2030,7 @@ export default function MonthlyPlanPage() {
           </div>
         </div>
 
-        <div className="grid gap-4 md:grid-cols-2">
+        <div className="grid gap-5 md:grid-cols-2">
           {SOURCE_OPTIONS.map((option) => {
             const active = sourceMode === option.key
             const disabled = option.key === 'baseline' && !latestConfirmedBaseline
@@ -2072,14 +2068,13 @@ export default function MonthlyPlanPage() {
   )
 
   const main = noBaselineIntercept ? (
-    <Card className="border-amber-200 bg-amber-50">
+    <Card className="border-amber-200 bg-amber-50 ring-1 ring-inset ring-amber-200">
       <CardContent className="space-y-4 p-5 text-center">
         <div className="space-y-2">
           <div className="text-lg font-semibold text-amber-900">当前项目还没有正式基线</div>
         </div>
         <div className="flex flex-wrap justify-center gap-2">
           <Button type="button" onClick={() => navigateWithGuard(`/projects/${projectId}/planning/baseline`)}>
-            去建立项目基线
           </Button>
         </div>
       </CardContent>
@@ -2093,7 +2088,7 @@ export default function MonthlyPlanPage() {
   ) : activePlan ? (
     <div className="space-y-4">
       {activePlan.status !== 'draft' ? (
-        <Card className="border-emerald-200 bg-emerald-50">
+        <Card className="border-emerald-200 bg-emerald-50 ring-1 ring-inset ring-emerald-200">
           <CardContent className="flex flex-wrap items-center justify-between gap-3 p-5">
             <div className="space-y-1">
               <div className="text-sm font-medium text-emerald-900">
@@ -2158,7 +2153,7 @@ export default function MonthlyPlanPage() {
                   type="button"
                   variant="outline"
                   size="sm"
-                  className="gap-2 rounded-lg border-amber-200 bg-amber-50 text-amber-900 hover:bg-amber-100"
+                  className="gap-2 rounded-lg border-amber-200 bg-amber-50 text-amber-900 ring-1 ring-inset ring-amber-200 hover:bg-amber-100"
                   data-testid="monthly-plan-change-compare-toolbar-inline"
                   onClick={() => setSkeletonDiffOpen(true)}
                 >
@@ -2167,7 +2162,7 @@ export default function MonthlyPlanPage() {
                 </Button>
               </div>
             </div>
-            <div className="grid gap-4 md:grid-cols-4">
+            <div className="grid gap-5 md:grid-cols-4">
               <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
                 <div className="text-xs text-slate-500">当前来源模式</div>
                 <div className="mt-1 text-sm font-semibold text-slate-900">{sourceMode === 'baseline' ? '项目基线' : '当前任务列表'}</div>
@@ -2328,7 +2323,7 @@ export default function MonthlyPlanPage() {
                 </div>
                 <Badge variant={quickAvailable ? 'secondary' : 'outline'}>{quickAvailable ? '快确认可用' : '建议标准确认'}</Badge>
               </div>
-              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
                 {[
                   { key: 'total', label: '条目总数', value: confirmSummary.totalItemCount },
                   { key: 'new', label: '本月新增数', value: confirmSummary.newlyAddedCount },
@@ -2408,7 +2403,7 @@ export default function MonthlyPlanPage() {
                   ? `${formatMonthLabel(activePlan.month)} · ${getMonthlyPlanStatusLabel(activePlan.status)} · ${activePlan.items.length} 项`
                   : '当前月份还没有真实版本。'}
               </div>
-              <div className="grid gap-4 sm:grid-cols-2">
+              <div className="grid gap-5 sm:grid-cols-2">
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3">
                   <div className="text-xs text-slate-500">来源版本</div>
                   <div className="mt-1 text-sm font-medium text-slate-900">
@@ -2472,6 +2467,14 @@ export default function MonthlyPlanPage() {
   ]
   const selectedRegenerationOption = regenerationOptions.find((option) => option.key === regenSource) ?? regenerationOptions[2]
   const canRunRegeneration = !selectedRegenerationOption.disabled
+  const monthlyShellMetrics = (
+    <>
+      <MetricCard eyebrow="TASKS" title="本月任务" value={editorItems.length} hint={formatMonthLabel(activePlan?.month ?? selectedMonth)} tone="primary" />
+      <MetricCard eyebrow="DONE" title="已完成" value={editorItems.filter((item) => (item.target_progress ?? 0) >= 100).length} hint="目标进度 100%" tone="success" />
+      <MetricCard eyebrow="ACTIVE" title="进行中" value={editorItems.filter((item) => (item.target_progress ?? 0) > 0 && (item.target_progress ?? 0) < 100).length} hint={currentSourceLabel} tone="info" />
+      <MetricCard eyebrow="RISK" title="逾期项" value={confirmSummary.blockingIssueCount} hint="确认阻断项" tone={confirmSummary.blockingIssueCount > 0 ? 'danger' : 'slate'} />
+    </>
+  )
 
   return (
     <PlanningPageShell
@@ -2479,6 +2482,7 @@ export default function MonthlyPlanPage() {
       title="计划编制 / 月度计划"
       description=""
       tabs={tabs}
+      metrics={monthlyShellMetrics}
       className="pb-20"
       actions={
         <>
@@ -2624,7 +2628,7 @@ export default function MonthlyPlanPage() {
               </div>
             ))}
           </div>
-          <div className="space-y-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">
+          <div className="space-y-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900 ring-1 ring-inset ring-amber-200">
             {regenStep === 1 ? (
               <>
                 <div className="font-medium">Step 1 选择重新生成范围</div>
@@ -2658,11 +2662,11 @@ export default function MonthlyPlanPage() {
                 <div className="grid gap-2 md:grid-cols-3">
                   <div className="rounded-xl border border-amber-200 bg-white px-3 py-2">
                     <div className="text-xs text-slate-500">覆盖条目</div>
-                    <div className="mt-1 font-semibold tabular-nums">{editedEntryCount}</div>
+                    <div className="mt-1 font-semibold num-mono">{editedEntryCount}</div>
                   </div>
                   <div className="rounded-xl border border-amber-200 bg-white px-3 py-2">
                     <div className="text-xs text-slate-500">当前范围</div>
-                    <div className="mt-1 font-semibold tabular-nums">{activePlan?.items.length ?? 0}</div>
+                    <div className="mt-1 font-semibold num-mono">{activePlan?.items.length ?? 0}</div>
                   </div>
                   <div className="rounded-xl border border-amber-200 bg-white px-3 py-2">
                     <div className="text-xs text-slate-500">目标月份</div>

@@ -1,6 +1,7 @@
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
 import { LoadingState } from '@/components/ui/loading-state'
 import { Separator } from '@/components/ui/separator'
 
@@ -35,15 +36,15 @@ export function PlanningHealthPanel({
 
   return (
     <Card data-testid="planning-health-panel" className="surface-card">
-      <CardHeader className="space-y-3 bg-slate-50/80">
+      <CardContent padding="md" className="space-y-3 bg-slate-50/80">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <CardTitle className="text-base">健康评分</CardTitle>
+            <CardHead eyebrow="HEALTH" title="健康评分" />
           </div>
           <Badge variant={status === 'error' ? 'outline' : 'secondary'}>{statusCopy}</Badge>
         </div>
         <div className="text-3xl font-semibold text-slate-900">{status === 'loading' || status === 'error' ? '--' : score}</div>
-      </CardHeader>
+      </CardContent>
       <Separator />
       <CardContent className="space-y-3 p-5">
         {status === 'loading' ? (

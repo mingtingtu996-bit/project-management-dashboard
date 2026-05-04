@@ -19,7 +19,8 @@
  * @module
  */
 
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
 import { EmptyState } from '@/components/EmptyState'
 import { Separator } from '@/components/ui/separator'
 import { ChevronRight, Building2, Palette, ClipboardCheck, Compass, Zap } from 'lucide-react'
@@ -138,9 +139,9 @@ export function UnitProgressCard({
   if (units.length === 0) {
     return (
       <Card variant="metric">
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base font-semibold">责任单位完成情况</CardTitle>
-        </CardHeader>
+        <CardContent padding="md">
+          <CardHead eyebrow="RESPONSIBLE UNIT" title="责任单位完成情况" />
+        </CardContent>
         <CardContent>
           <EmptyState
             title="暂无责任单位数据"
@@ -154,12 +155,12 @@ export function UnitProgressCard({
 
   return (
     <Card variant="metric">
-      <CardHeader className="pb-3">
-        <div className="flex items-center justify-between">
-          <div>
-            <CardTitle className="text-base font-semibold">责任单位完成情况</CardTitle>
-          </div>
-          {onViewAll && (
+      <CardContent padding="md">
+        <CardHead
+          eyebrow="RESPONSIBLE UNIT"
+          title="责任单位完成情况"
+          action={
+            onViewAll ? (
             <Button variant="ghost" 
               onClick={onViewAll}
               className="text-blue-600 hover:text-blue-700 text-sm font-medium flex items-center gap-0.5 transition-colors"
@@ -167,9 +168,10 @@ export function UnitProgressCard({
               查看全部
               <ChevronRight className="h-4 w-4" />
             </Button>
-          )}
-        </div>
-      </CardHeader>
+            ) : null
+          }
+        />
+      </CardContent>
       <CardContent className="pt-0">
         {/* 列表头部 */}
         <div className="flex items-center text-xs text-slate-500 mb-2 px-2">

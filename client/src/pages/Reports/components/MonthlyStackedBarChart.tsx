@@ -2,8 +2,19 @@ import { useMemo } from 'react'
 
 import { ChartAccessibleWrapper } from '@/components/ChartAccessibleWrapper'
 import { EmptyState } from '@/components/EmptyState'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
+import { ChartTooltip, chartTooltipCursor } from '@/components/ui/chart-tooltip'
+import { CHART_AXIS_COLORS, CHART_NEUTRAL, CHART_SERIES } from '@/lib/chartPalette'
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts'
 
 type DeviationRowLike = {
   id: string
@@ -82,27 +93,27 @@ export function MonthlyStackedBarChart({
   }, [buckets, rows])
 
   const legend = [
-    { key: 'onTrack', label: '正常', className: 'bg-emerald-400' },
-    { key: 'delayed', label: '延期', className: 'bg-amber-400' },
-    { key: 'carriedOver', label: '滚入', className: 'bg-blue-400' },
-    { key: 'revised', label: '修订', className: 'bg-slate-500' },
-    { key: 'unresolved', label: '未闭环', className: 'bg-rose-400' },
+    { key: 'onTrack', label: '正常', color: CHART_SERIES.success },
+    { key: 'delayed', label: '延期', color: CHART_SERIES.warning },
+    { key: 'carriedOver', label: '滚入', color: CHART_SERIES.primary },
+    { key: 'revised', label: '修订', color: CHART_NEUTRAL.text },
+    { key: 'unresolved', label: '未闭环', color: CHART_SERIES.danger },
   ]
   const chartRows = normalizedBuckets.map((bucket) => {
     const total = bucket.onTrack + bucket.delayed + bucket.carriedOver + bucket.revised + bucket.unresolved
-    return [bucket.month, bucket.onTrack, bucket.delayed, bucket.carriedOver, bucket.revised, bucket.unresolved, total]
+    return { ...bucket, total }
   })
 
   return (
     <Card data-testid="monthly-stacked-bar-chart" variant="surface">
-      <CardHeader className="pb-3">
-        <CardTitle className="text-base">{mainlineLabel} · 月度堆叠柱</CardTitle>
-      </CardHeader>
+      <CardContent padding="md" className="pb-0">
+        <CardHead eyebrow="MONTHLY" title={`${mainlineLabel} · 月度堆叠柱`} />
+      </CardContent>
       <CardContent className="space-y-4">
         <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
           {legend.map((item) => (
             <span key={item.key} className="flex items-center gap-1">
-              <span className={`h-2 w-2 rounded-full ${item.className}`} />
+              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: item.color }} />
               {item.label}
             </span>
           ))}
@@ -110,50 +121,39 @@ export function MonthlyStackedBarChart({
         {normalizedBuckets.length > 0 ? (
           <ChartAccessibleWrapper
             columns={['月份', '正常', '延期', '滚入', '修订', '未闭环', '合计']}
-            rows={chartRows}
+            rows={chartRows.map((bucket) => [bucket.month, bucket.onTrack, bucket.delayed, bucket.carriedOver, bucket.revised, bucket.unresolved, bucket.total])}
             summary="查看月度堆叠柱图表数据"
           >
-            <div className="space-y-3">
-              {normalizedBuckets.map((bucket) => {
-                const total = bucket.onTrack + bucket.delayed + bucket.carriedOver + bucket.revised + bucket.unresolved
-                const safeTotal = Math.max(total, 1)
-                const segments = [
-                  { label: '正常', value: bucket.onTrack, className: 'bg-emerald-400' },
-                  { label: '延期', value: bucket.delayed, className: 'bg-amber-400' },
-                  { label: '滚入', value: bucket.carriedOver, className: 'bg-blue-400' },
-                  { label: '修订', value: bucket.revised, className: 'bg-slate-500' },
-                  { label: '未闭环', value: bucket.unresolved, className: 'bg-rose-400' },
-                ].filter((segment) => segment.value > 0)
-
-                return (
-                  <div key={bucket.month} className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="text-sm font-medium text-slate-900">{bucket.month}</div>
-                      <div className="text-xs text-slate-500">{total} 条</div>
-                    </div>
-                    <div className="mt-3 flex h-4 overflow-hidden rounded-full bg-white">
-                      {segments.map((segment) => (
-                        <Tooltip key={`${bucket.month}-${segment.label}`}>
-                          <TooltipTrigger asChild>
-                            <div
-                              className={segment.className}
-                              style={{ width: `${(segment.value / safeTotal) * 100}%` }}
-                            />
-                          </TooltipTrigger>
-                          <TooltipContent>{`${segment.label} ${segment.value}`}</TooltipContent>
-                        </Tooltip>
-                      ))}
-                    </div>
-                    <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">
-                      {segments.map((segment) => (
-                        <span key={`${bucket.month}-${segment.label}`} className="rounded-full bg-white px-2 py-0.5">
-                          {segment.label} {segment.value}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )
-              })}
+            <div className="h-72 rounded-2xl bg-white p-3 ring-1 ring-inset ring-slate-100">
+              <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1} initialDimension={{ width: 640, height: 288 }}>
+                <BarChart data={chartRows} margin={{ top: 12, right: 16, bottom: 8, left: 0 }}>
+                  <CartesianGrid stroke={CHART_AXIS_COLORS.neutralGrid} vertical={false} />
+                  <XAxis
+                    dataKey="month"
+                    tickLine={false}
+                    axisLine={false}
+                    tick={{ fill: CHART_AXIS_COLORS.axisText, fontSize: 11 }}
+                  />
+                  <YAxis
+                    allowDecimals={false}
+                    tickLine={false}
+                    axisLine={false}
+                    tick={{ fill: CHART_AXIS_COLORS.axisText, fontSize: 11 }}
+                  />
+                  <Tooltip content={<ChartTooltip />} cursor={chartTooltipCursor} />
+                  {legend.map((item) => (
+                    <Bar
+                      key={item.key}
+                      dataKey={item.key}
+                      name={item.label}
+                      stackId="monthly"
+                      fill={item.color}
+                      radius={item.key === 'unresolved' ? [8, 8, 0, 0] : [0, 0, 0, 0]}
+                      animationDuration={800}
+                    />
+                  ))}
+                </BarChart>
+              </ResponsiveContainer>
             </div>
           </ChartAccessibleWrapper>
         ) : (

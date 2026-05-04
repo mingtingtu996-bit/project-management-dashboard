@@ -15,7 +15,8 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/EmptyState'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
 import { Separator } from '@/components/ui/separator'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
@@ -610,12 +611,13 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
       <div className="grid gap-4 lg:grid-cols-[1.35fr_0.95fr]">
         <div className="space-y-4">
           <Card variant="detail">
-            <CardHeader className="space-y-2 pb-4">
-              <div className="flex items-center justify-between gap-3">
-                <CardTitle className="text-sm">DAG 图谱</CardTitle>
-                {primaryChain && <Badge variant="outline">{primaryChain.displayLabel}</Badge>}
-              </div>
-            </CardHeader>
+            <CardContent padding="md">
+              <CardHead
+                eyebrow="CRITICAL PATH"
+                title="DAG 图谱"
+                action={primaryChain ? <Badge variant="outline">{primaryChain.displayLabel}</Badge> : null}
+              />
+            </CardContent>
             <Separator />
             <CardContent className="space-y-4 p-5">
               {layout.nodes.length ? (
@@ -968,12 +970,9 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
           </Card>
 
           <Card variant="detail">
-            <CardHeader className="space-y-2 pb-4">
-              <div className="flex items-center justify-between gap-3">
-                <CardTitle className="text-sm">关系边</CardTitle>
-                <Badge variant="outline">{snapshotEdges.length} 条</Badge>
-              </div>
-            </CardHeader>
+            <CardContent padding="md">
+              <CardHead eyebrow="DEPENDENCY" title="关系边" action={<Badge variant="outline">{snapshotEdges.length} 条</Badge>} />
+            </CardContent>
             <Separator />
             <CardContent className="space-y-3 p-5" data-testid="critical-path-edge-list">
               {snapshotEdges.length ? (
@@ -1010,9 +1009,9 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
 
           <div className="grid gap-4 md:grid-cols-2">
             <Card variant="detail">
-              <CardHeader className="pb-4">
-                <CardTitle className="text-sm">备选链</CardTitle>
-              </CardHeader>
+              <CardContent padding="md">
+                <CardHead eyebrow="ALTERNATE" title="备选链" />
+              </CardContent>
               <Separator />
               <CardContent className="space-y-3 p-5">
                 {props.snapshot?.alternateChains.length ? (
@@ -1075,9 +1074,9 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
             </Card>
 
             <Card variant="detail">
-              <CardHeader className="pb-4">
-                <CardTitle className="text-sm">手动关注</CardTitle>
-              </CardHeader>
+              <CardContent padding="md">
+                <CardHead eyebrow="MANUAL" title="手动关注" />
+              </CardContent>
               <Separator />
               <CardContent className="space-y-3 p-5">
                 {props.snapshot?.manualAttentionTaskIds.length ? (
@@ -1096,9 +1095,9 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
           </div>
 
           <Card variant="detail">
-            <CardHeader className="pb-4">
-              <CardTitle className="text-sm">覆盖记录</CardTitle>
-            </CardHeader>
+            <CardContent padding="md">
+              <CardHead eyebrow="OVERRIDE" title="覆盖记录" />
+            </CardContent>
             <Separator />
             <CardContent className="space-y-3 p-5" data-testid="critical-path-override-list">
               {props.overrides.length ? (
@@ -1140,12 +1139,13 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
 
         <div className="space-y-4">
           <Card variant="detail">
-            <CardHeader className="pb-4">
-              <div className="flex items-center justify-between gap-3">
-                <CardTitle className="text-sm">操作区</CardTitle>
-                <Badge variant="outline">{selectedTask ? '已选中任务' : '待选择'}</Badge>
-              </div>
-            </CardHeader>
+            <CardContent padding="md">
+              <CardHead
+                eyebrow="ACTIONS"
+                title="操作区"
+                action={<Badge variant="outline">{selectedTask ? '已选中任务' : '待选择'}</Badge>}
+              />
+            </CardContent>
             <Separator />
             <CardContent className="space-y-4 p-5" data-testid="critical-path-action-panel">
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">

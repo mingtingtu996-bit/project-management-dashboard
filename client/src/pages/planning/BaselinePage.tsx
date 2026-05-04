@@ -9,11 +9,13 @@ import { PlanningWorkspaceLayers } from '@/components/planning/PlanningWorkspace
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
 import { DisabledReasonTooltip } from '@/components/ui/disabled-reason-tooltip'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { LoadingState } from '@/components/ui/loading-state'
+import { MetricCard } from '@/components/ui/metric-card'
 import { Separator } from '@/components/ui/separator'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -187,24 +189,24 @@ function BaselineItemDetailDrawer({
       </DialogHeader>
       <Separator />
       <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid gap-5 sm:grid-cols-2">
           <div className="space-y-1">
             <div className="text-xs uppercase tracking-wider text-slate-500">计划开始</div>
-            <div className="text-sm font-medium text-slate-900 tabular-nums">{item.planned_start_date ?? '—'}</div>
+            <div className="text-sm font-medium text-slate-900 num-mono">{item.planned_start_date ?? '—'}</div>
           </div>
           <div className="space-y-1">
             <div className="text-xs uppercase tracking-wider text-slate-500">计划结束</div>
-            <div className="text-sm font-medium text-slate-900 tabular-nums">{item.planned_end_date ?? '—'}</div>
+            <div className="text-sm font-medium text-slate-900 num-mono">{item.planned_end_date ?? '—'}</div>
           </div>
           <div className="space-y-1">
             <div className="text-xs uppercase tracking-wider text-slate-500">工期</div>
-            <div className="text-sm font-medium text-slate-900 tabular-nums">
+            <div className="text-sm font-medium text-slate-900 num-mono">
               {getBaselineDurationLabel(item.planned_start_date, item.planned_end_date)}
             </div>
           </div>
           <div className="space-y-1">
             <div className="text-xs uppercase tracking-wider text-slate-500">目标进度</div>
-            <div className="text-sm font-medium text-slate-900 tabular-nums">
+            <div className="text-sm font-medium text-slate-900 num-mono">
               {item.target_progress == null ? '—' : `${item.target_progress}%`}
             </div>
           </div>
@@ -1564,7 +1566,7 @@ export default function BaselinePage() {
                 onKeyDown={(event) => handleInputKeyDown(event, item.id, 'start')}
                 disabled={readOnly}
                 data-baseline-editor-cell={`${item.id}:start`}
-                className="h-9 border-slate-200 bg-white text-right text-sm tabular-nums"
+                className="h-9 border-slate-200 bg-white text-right text-sm num-mono"
               />
             </BaselineEditableCellFrame>
           ),
@@ -1579,7 +1581,7 @@ export default function BaselinePage() {
                 onKeyDown={(event) => handleInputKeyDown(event, item.id, 'end')}
                 disabled={readOnly}
                 data-baseline-editor-cell={`${item.id}:end`}
-                className="h-9 border-slate-200 bg-white text-right text-sm tabular-nums"
+                className="h-9 border-slate-200 bg-white text-right text-sm num-mono"
               />
             </BaselineEditableCellFrame>
           ),
@@ -1596,7 +1598,7 @@ export default function BaselinePage() {
                 onKeyDown={(event) => handleInputKeyDown(event, item.id, 'progress')}
                 disabled={readOnly}
                 data-baseline-editor-cell={`${item.id}:progress`}
-                className="h-9 border-slate-200 bg-white text-right text-sm tabular-nums"
+                className="h-9 border-slate-200 bg-white text-right text-sm num-mono"
               />
             </BaselineEditableCellFrame>
           ),
@@ -1892,6 +1894,15 @@ export default function BaselinePage() {
       navigateWithGuard(`/projects/${projectId}/planning/${tab.key}`)
     },
   }))
+  const baselineItemCount = editorItems.length || activeBaseline?.items?.length || 0
+  const baselineShellMetrics = (
+    <>
+      <MetricCard eyebrow="ITEMS" title="条目总数" value={baselineItemCount} hint="当前基线树条目" tone="primary" />
+      <MetricCard eyebrow="MAPPED" title="已映射" value={Math.max(baselineItemCount - mappingAffectedCount, 0)} hint={`待关注 ${mappingAffectedCount}`} tone={mappingAffectedCount > 0 ? 'warning' : 'success'} />
+      <MetricCard eyebrow="MILESTONE" title="里程碑数" value={milestoneChangeCount} hint="涉及里程碑变动" tone="info" />
+      <MetricCard eyebrow="VERSION" title="版本数" value={versions.length} hint={currentLabel} tone="slate" />
+    </>
+  )
 
   if (loading) {
     return (
@@ -1921,6 +1932,7 @@ export default function BaselinePage() {
         title="计划编制 / 项目基线"
         description="从空白基线、当前排期或导入文件建立项目基线，并在树表里继续校核。"
         tabs={tabs}
+        metrics={baselineShellMetrics}
       >
         {statusNotice ? (
           <Alert className="mb-4" data-testid="baseline-status-notice">
@@ -1930,10 +1942,10 @@ export default function BaselinePage() {
 
         <div className="space-y-4">
           <Card data-testid="baseline-entry-selector" className="surface-card">
-            <CardHeader>
-              <CardTitle className="text-base">首版基线创建入口</CardTitle>
-            </CardHeader>
-            <CardContent className="grid gap-4 md:grid-cols-3">
+            <CardContent padding="md">
+              <CardHead eyebrow="BASELINE ENTRY" title="首版基线创建入口" />
+            </CardContent>
+            <CardContent className="grid gap-5 md:grid-cols-3">
               <Button variant="ghost"
                 type="button"
                 data-testid="baseline-entry-blank"
@@ -1945,12 +1957,11 @@ export default function BaselinePage() {
                   <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white/15 text-white transition group-hover:bg-white/25">
                     <FilePlus2 className="h-5 w-5" />
                   </div>
-                  <Badge variant="secondary" className="bg-white text-blue-700">推荐</Badge>
+                  <Badge variant="secondary" className="bg-white text-blue-700 ring-1 ring-inset ring-blue-200">推荐</Badge>
                 </div>
                 <div className="space-y-2">
                   <div className="text-base font-semibold text-white">新建空白基线</div>
                   <p className="text-sm leading-6 text-blue-50">
-                    从零开始搭建项目基线骨架，适合先手工整理再校核。
                   </p>
                 </div>
               </Button>
@@ -1970,7 +1981,6 @@ export default function BaselinePage() {
                 <div className="space-y-2">
                   <div className="text-base font-semibold text-slate-900">从当前排期生成</div>
                   <p className="text-sm leading-6 text-slate-500">
-                    直接把当前排期整理成初始化基线，保留待确认映射再继续校核。
                   </p>
                   <p className="text-xs leading-5 text-slate-500">适合已有任务排期、需要快速生成首版基线的项目。</p>
                 </div>
@@ -1991,15 +2001,14 @@ export default function BaselinePage() {
                 <div className="space-y-2">
                   <div className="text-base font-semibold text-slate-900">导入计划文件</div>
                   <p className="text-sm leading-6 text-slate-500">
-                    按表头映射导入计划文件，先预览 10 行再生成导入基线草稿。
+                    ??????????????? 10 ???????????
                   </p>
-                  <p className="text-xs leading-5 text-slate-500">适合从 Excel / CSV 迁移外部计划，导入后再逐项校核。</p>
+                  <p className="text-xs leading-5 text-slate-500">??? Excel / CSV ????????????????</p>
                 </div>
               </Button>
             </CardContent>
           </Card>
           <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-600">
-            只保留空白基线、当前排期和导入三种入口；进入基线后再在页内继续编辑、校核和确认。
           </div>
         </div>
 
@@ -2027,14 +2036,15 @@ export default function BaselinePage() {
 
         {importPreview ? (
           <Card data-testid="baseline-import-preview" className="border-amber-200 bg-amber-50 shadow-[var(--el-1)]">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-base">
-                <FileSpreadsheet className="h-4 w-4 text-amber-700" />
-                导入预览
-              </CardTitle>
-            </CardHeader>
+            <CardContent padding="md">
+              <CardHead
+                eyebrow="IMPORT"
+                title="导入预览"
+                action={<FileSpreadsheet className="h-4 w-4 text-amber-700" />}
+              />
+            </CardContent>
             <CardContent className="space-y-4 text-sm text-slate-700">
-              <div className="grid gap-4 md:grid-cols-4">
+              <div className="grid gap-5 md:grid-cols-4">
                 <div className="rounded-2xl border border-white/80 bg-white px-4 py-3">
                   <div className="text-xs text-slate-500">文件</div>
                   <div className="mt-1 font-medium text-slate-900">{importPreview.fileName}</div>
@@ -2064,13 +2074,13 @@ export default function BaselinePage() {
                   <div>
                     <div className="text-sm font-medium text-slate-900">列映射</div>
                     <div className="text-xs text-slate-500">把 Excel 表头对应到基线字段，再确认导入。</div>
-                  </div>
                   <Badge variant="outline">
                     {BASELINE_IMPORT_FIELD_CONFIG.filter((field) => Boolean(importPreview.mapping[field.key])).length}/
-                    {BASELINE_IMPORT_FIELD_CONFIG.length} 已匹配
+                    {BASELINE_IMPORT_FIELD_CONFIG.length} ???
                   </Badge>
                 </div>
-                <div className="grid gap-4 md:grid-cols-2">
+                </div>
+                <div className="grid gap-5 md:grid-cols-2">
                   {BASELINE_IMPORT_FIELD_CONFIG.map((field) => (
                     <label key={field.key} className="block space-y-1">
                       <span className="text-xs font-medium text-slate-500">
@@ -2110,7 +2120,6 @@ export default function BaselinePage() {
                   className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600"
                 />
                 <span className="text-sm leading-6 text-slate-700">
-                  已确认列映射与字段对应关系，再生成导入基线草稿
                 </span>
               </label>
               <div className="space-y-2">
@@ -2162,6 +2171,7 @@ export default function BaselinePage() {
       title="计划编制 / 项目基线"
       description="继续对比、修订和确认当前项目基线。"
       tabs={tabs}
+      metrics={baselineShellMetrics}
       className="pb-20"
       actions={
         <div className="flex flex-wrap items-center gap-2">
@@ -2219,7 +2229,7 @@ export default function BaselinePage() {
             data-testid="baseline-info-bar"
             className="rounded-2xl border border-slate-100 bg-white px-5 py-4 shadow-[var(--el-1)]"
           >
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1fr)]">
+            <div className="grid gap-5 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1fr)]">
               <div className="space-y-2">
                 <div className="text-sm font-medium text-slate-500">版本对照</div>
                 <div className="text-lg font-semibold text-slate-900">
@@ -2255,12 +2265,10 @@ export default function BaselinePage() {
                     data-testid="baseline-realignment-hint"
                     className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800"
                   >
-                    该版本正在编辑模式窗口中，完成调整后请结束编辑模式，让版本重新回到已确认态。
                   </div>
                 ) : null}
                 {activeBaseline.status === 'archived' ? (
                   <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
-                    该版本已归档，适合作为修订前后的历史参照，不再参与当前编制动作。
                   </div>
                 ) : null}
               </div>
@@ -2289,7 +2297,7 @@ export default function BaselinePage() {
               </div>
               <div className="space-y-3">
                 <div className="text-sm font-medium text-slate-500">修订与留痕</div>
-                <div className="text-lg font-semibold text-slate-900 tabular-nums">{baselineLastSavedLabel}</div>
+                <div className="text-lg font-semibold text-slate-900 num-mono">{baselineLastSavedLabel}</div>
                 <div className="flex flex-wrap gap-2">
                   <Badge variant="outline">版本 {versions.length}</Badge>
                   <Badge variant="secondary">{revisionCandidates.length} 项候选</Badge>
@@ -2307,7 +2315,6 @@ export default function BaselinePage() {
                   >
                     <span className="flex items-center gap-2">
                       <FolderGit2 className="h-4 w-4" />
-                      计划修订候选
                     </span>
                     <span className="flex items-center gap-2">
                       <Badge variant="secondary">{revisionPriorityLabel}</Badge>
@@ -2359,7 +2366,6 @@ export default function BaselinePage() {
                 variant={filterMode === 'milestone' ? 'default' : 'outline'}
                 onClick={() => setFilterMode('milestone')}
               >
-                里程碑
               </Button>
               <Button
                 type="button"
@@ -2367,7 +2373,6 @@ export default function BaselinePage() {
                 variant={filterMode === 'mapping_attention' ? 'default' : 'outline'}
                 onClick={() => setFilterMode('mapping_attention')}
               >
-                映射待确认
               </Button>
               <Button
                 type="button"
@@ -2428,9 +2433,9 @@ export default function BaselinePage() {
         aside={
           <div className="space-y-4">
             <Card data-testid="baseline-version-switcher">
-              <CardHeader>
-                <CardTitle className="text-base">历史版本对比</CardTitle>
-              </CardHeader>
+              <CardContent padding="md">
+                <CardHead eyebrow="VERSION" title="历史版本对比" />
+              </CardContent>
               <CardContent className="space-y-3">
                 <Tabs
                   value={activeBaseline.id}
@@ -2483,9 +2488,9 @@ export default function BaselinePage() {
               </CardContent>
             </Card>
             <Card data-testid="baseline-diff-preview">
-              <CardHeader>
-                <CardTitle className="text-base">版本差异总览</CardTitle>
-              </CardHeader>
+              <CardContent padding="md">
+                <CardHead eyebrow="DIFF" title="版本差异总览" />
+              </CardContent>
               <CardContent className="space-y-3">
                 <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
                   <Badge variant="outline">{compareLabel} → {currentLabel}</Badge>
