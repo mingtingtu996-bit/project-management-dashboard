@@ -117,7 +117,7 @@ export function MetricCard({
       style={style}
       {...interactiveProps}
     >
-      <CardContent padding="md" className="flex h-full min-h-[148px] flex-col justify-between gap-4">
+      <CardContent padding="md" className="flex h-full min-h-[148px] flex-col gap-4">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0 pr-2">
             {eyebrow ? <div className="eyebrow">{eyebrow}</div> : null}
