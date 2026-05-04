@@ -134,7 +134,7 @@ export function DrawingReadinessMetricGrid({
           icon={CircleCheckBig}
         />
         <SummaryTile
-          label="待审图"
+          label="待审批"
           value={displayMetrics.pendingReviewDrawings}
           hint="仍需审图确认的图纸。"
           tone="amber"

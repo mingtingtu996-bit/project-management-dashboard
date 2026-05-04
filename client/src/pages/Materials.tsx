@@ -1858,9 +1858,10 @@ export default function Materials() {
                     </div>
                     {group.participantUnitId === null && (
                       <div
-                        className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"
+                        className="rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-800 ring-1 ring-inset ring-amber-200"
                         data-testid="materials-unassigned-banner"
                       >
+                        以下材料所属分包商已删除，请重新关联后再继续跟踪。
                       </div>
                     )}
 

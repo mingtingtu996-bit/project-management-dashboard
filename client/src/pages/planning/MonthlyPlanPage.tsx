@@ -2074,7 +2074,13 @@ export default function MonthlyPlanPage() {
           <div className="text-lg font-semibold text-amber-900">当前项目还没有正式基线</div>
         </div>
         <div className="flex flex-wrap justify-center gap-2">
-          <Button type="button" onClick={() => navigateWithGuard(`/projects/${projectId}/planning/baseline`)}>
+          <Button
+            type="button"
+            className="gap-2"
+            onClick={() => navigateWithGuard(`/projects/${projectId}/planning/baseline`)}
+          >
+            <FileDiff className="h-4 w-4" />
+            去建立项目基线
           </Button>
         </div>
       </CardContent>

@@ -275,6 +275,7 @@ export function BaselineConfirmDialog({
                           onClick={onOpenRevisionPool}
                         >
                           <FolderGit2 className="h-4 w-4" />
+                          打开计划修订候选
                         </Button>
                       ) : null}
                       {canQueueRealignment && onQueueRealignment ? (
