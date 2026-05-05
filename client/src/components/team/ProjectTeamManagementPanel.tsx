@@ -466,9 +466,9 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
           onChange={(value) => setActiveTab(value as typeof activeTab)}
           className="grid w-full grid-cols-1 gap-1 sm:grid-cols-3"
           options={[
-            { value: 'members', label: '团队成员' },
-            { value: 'pending-links', label: '待关联责任人' },
-            { value: 'invitations', label: '邀请码', disabled: !canManageTeam },
+            { value: 'members', label: '团队成员', testId: 'team-management-tab-members' },
+            { value: 'pending-links', label: '待关联责任人', testId: 'team-management-tab-pending-links' },
+            { value: 'invitations', label: '邀请码', testId: 'team-management-tab-invitations', disabled: !canManageTeam },
           ]}
         />
 
