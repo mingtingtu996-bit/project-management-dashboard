@@ -160,6 +160,54 @@ describe('durationRuntimeConsumerObservationService', () => {
     expect(sql).not.toContain('monthly_plan_items')
   })
 
+  it('records declared consumer artifacts with surfaces resolved from the integration contract', async () => {
+    const {
+      recordDurationRuntimeConsumerObservedContractArtifacts,
+    } = await import('../services/durationRuntimeConsumerObservationService.js')
+    const { calls, queryExec } = createRecordingQueryExec()
+
+    const result = await recordDurationRuntimeConsumerObservedContractArtifacts({
+      queryExec,
+      consumerKey: 'projectRemainingDurationForecastService.ts',
+      observedAt: '2026-06-15T04:00:00.000Z',
+      artifacts: [
+        {
+          assetKey: 'forecast_residual_overlay',
+          publicationKey: 'forecast_residual_overlay_runtime:overlay-v3',
+          publicationStatus: 'published',
+          observationContext: { projectId: 'project-a' },
+        },
+        {
+          assetKey: 'wbs_reference_days',
+          publicationKey: 'wbs_reference_days_runtime:reference-v3',
+          publicationStatus: 'runtime_published',
+          observationContext: { projectId: 'project-a' },
+        },
+      ],
+    })
+
+    expect(result).toEqual(expect.objectContaining({
+      status: 'runtime_consumer_observations_recorded',
+      recordedCount: 2,
+      blockedCount: 0,
+      reasons: [],
+    }))
+    expect(calls.map((call) => call.params.slice(0, 4))).toEqual([
+      [
+        'forecast_residual_overlay',
+        'forecast_residual_overlay_runtime:overlay-v3',
+        'projectRemainingDurationForecastService',
+        'remaining_duration_forecast',
+      ],
+      [
+        'wbs_reference_days',
+        'wbs_reference_days_runtime:reference-v3',
+        'projectRemainingDurationForecastService',
+        'remaining_duration_forecast',
+      ],
+    ])
+  })
+
   it('blocks batch observations for artifacts that are not published or canary', async () => {
     const {
       recordDurationRuntimeConsumerObservedArtifacts,

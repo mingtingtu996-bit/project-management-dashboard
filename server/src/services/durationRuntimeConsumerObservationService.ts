@@ -56,6 +56,15 @@ export interface RecordDurationRuntimeConsumerObservedArtifactsInput {
   writesFactDirectly?: boolean
 }
 
+export interface RecordDurationRuntimeConsumerObservedContractArtifactsInput {
+  queryExec: DurationRuntimeConsumerObservationQueryExec
+  consumerKey: string
+  artifacts: readonly DurationRuntimeConsumerObservedArtifact[]
+  observedAt?: string
+  writesRuntimeDirectly?: boolean
+  writesFactDirectly?: boolean
+}
+
 export interface DurationRuntimeConsumerObservationResult {
   status:
     | 'runtime_consumer_observation_recorded'
@@ -120,6 +129,14 @@ function isPublishedOrCanaryArtifact(status: string | null | undefined) {
     .some((contract) => contract.acceptedPublicationStatuses.includes(
       normalized as DurationRuntimeConsumerPublicationStatus,
     ))
+}
+
+function findRuntimeConsumerContract(assetKey: unknown, consumerKey: unknown) {
+  const normalizedAssetKey = normalizeText(assetKey)
+  const normalizedConsumerKey = normalizeConsumerKey(consumerKey)
+  return listDurationRuntimeConsumerObservationIntegrationContracts()
+    .find((contract) => contract.assetKey === normalizedAssetKey
+      && contract.consumerKey === normalizedConsumerKey)
 }
 
 function validateInput(input: RecordDurationRuntimeConsumerObservationInput) {
@@ -190,6 +207,41 @@ export async function recordDurationRuntimeConsumerObservedArtifacts(
       publicationKey: artifact.publicationKey,
       consumerKey: input.consumerKey,
       consumerSurface: input.consumerSurface,
+      observationContext: artifact.observationContext,
+      sourceEvidenceRefs: artifact.sourceEvidenceRefs,
+      observedAt: input.observedAt,
+      writesRuntimeDirectly: input.writesRuntimeDirectly,
+      writesFactDirectly: input.writesFactDirectly,
+    }))
+  }
+
+  return summarizeObservedArtifactResults(results)
+}
+
+export async function recordDurationRuntimeConsumerObservedContractArtifacts(
+  input: RecordDurationRuntimeConsumerObservedContractArtifactsInput,
+): Promise<DurationRuntimeConsumerObservedArtifactsResult> {
+  const results: DurationRuntimeConsumerObservationResult[] = []
+
+  for (const artifact of input.artifacts) {
+    const contract = findRuntimeConsumerContract(artifact.assetKey, input.consumerKey)
+    if (!contract) {
+      results.push(buildBlockResult(['runtime_consumer_observation_contract_not_found']))
+      continue
+    }
+
+    const publicationStatus = normalizeText(artifact.publicationStatus) as DurationRuntimeConsumerPublicationStatus
+    if (!contract.acceptedPublicationStatuses.includes(publicationStatus)) {
+      results.push(buildBlockResult(['runtime_consumer_observation_published_or_canary_artifact_required']))
+      continue
+    }
+
+    results.push(await recordDurationRuntimeConsumerObservation({
+      queryExec: input.queryExec,
+      assetKey: artifact.assetKey,
+      publicationKey: artifact.publicationKey,
+      consumerKey: contract.consumerKey,
+      consumerSurface: contract.consumerSurface,
       observationContext: artifact.observationContext,
       sourceEvidenceRefs: artifact.sourceEvidenceRefs,
       observedAt: input.observedAt,
