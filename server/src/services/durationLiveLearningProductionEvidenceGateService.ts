@@ -79,6 +79,13 @@ export interface DurationLiveLearningProductionEvidenceRowCollectionInput {
   rows?: readonly DurationLiveLearningProductionEvidenceSourceRow[]
 }
 
+export interface DurationLiveLearningProductionEvidenceSourcePlan {
+  assetKey: DurationLiveLearningAssetKey
+  requiredEvidenceKinds: DurationLiveLearningProductionEvidenceKind[]
+  sourceTables: DurationLiveLearningProductionEvidenceSourceTable[]
+  requiredFieldsBySourceTable: Record<DurationLiveLearningProductionEvidenceSourceTable, string[]>
+}
+
 export interface DurationLiveLearningProductionEvidenceRowCollection {
   records: DurationLiveLearningProductionEvidenceRecord[]
   rejectedRows: DurationLiveLearningRejectedProductionEvidenceSourceRow[]
@@ -126,6 +133,92 @@ export interface DurationLiveLearningProductionClaimAudit {
   evidenceRowCollection: DurationLiveLearningProductionEvidenceRowCollection
   evidenceCollection: DurationLiveLearningProductionEvidenceCollection
   productionGate: DurationLiveLearningProductionEvidenceGate
+}
+
+const LEARNABLE_DURATION_LIVE_LEARNING_ASSET_KEYS: DurationLiveLearningAssetKey[] = [
+  'base_duration_benchmark',
+  'duration_cold_start_baseline',
+  'forecast_residual_overlay',
+  'forecast_confidence_weight',
+  'standard_work_duration_seed',
+  'special_work_duration_seed',
+  'wbs_reference_days',
+  'dependency_rule_candidate',
+  'critical_path_rule_candidate',
+]
+
+const REQUIRED_PRODUCTION_EVIDENCE_KINDS: DurationLiveLearningProductionEvidenceKind[] = [
+  'production_sample',
+  'publication_execution',
+  'runtime_consumer_observation',
+  'impact_monitoring',
+  'rollback_drill',
+  'accuracy',
+]
+
+const CANONICAL_PRODUCTION_EVIDENCE_SOURCE_TABLES: DurationLiveLearningProductionEvidenceSourceTable[] = [
+  'duration_experience_samples',
+  'algorithm_learnable_parameter_runtime_publications',
+  'algorithm_learnable_parameter_release_events',
+  'duration_algorithm_accuracy_events',
+  'runtime_consumer_observations',
+]
+
+const REQUIRED_FIELDS_BY_SOURCE_TABLE: Record<DurationLiveLearningProductionEvidenceSourceTable, string[]> = {
+  duration_experience_samples: [
+    'id',
+    'sample_status',
+    'included_in_benchmark',
+    'actual_duration',
+    'completed_at',
+    'metadata.liveLearningAssetKey',
+  ],
+  algorithm_learnable_parameter_runtime_publications: [
+    'publication_key',
+    'asset_key',
+    'publication_status',
+    'impact_monitoring.status',
+    'impact_monitoring.eventRef',
+    'rollback_execution.status',
+    'rollback_execution.eventRef',
+  ],
+  algorithm_learnable_parameter_release_events: [
+    'source_publication_key',
+    'event_type',
+    'event_status',
+    'event_payload.assetKey',
+  ],
+  duration_algorithm_accuracy_events: [
+    'id',
+    'absolute_error_days',
+    'prediction_context.assetKey',
+    'actual_context.assetKey',
+    'actual_context.accuracyGateStatus',
+  ],
+  runtime_consumer_observations: [
+    'id',
+    'asset_key',
+    'publication_key',
+    'observation_status',
+  ],
+}
+
+function cloneRequiredFieldsBySourceTable() {
+  return Object.fromEntries(
+    Object.entries(REQUIRED_FIELDS_BY_SOURCE_TABLE).map(([sourceTable, fields]) => [
+      sourceTable,
+      [...fields],
+    ]),
+  ) as Record<DurationLiveLearningProductionEvidenceSourceTable, string[]>
+}
+
+export function listDurationLiveLearningProductionEvidenceSourcePlan(): DurationLiveLearningProductionEvidenceSourcePlan[] {
+  return LEARNABLE_DURATION_LIVE_LEARNING_ASSET_KEYS.map((assetKey) => ({
+    assetKey,
+    requiredEvidenceKinds: [...REQUIRED_PRODUCTION_EVIDENCE_KINDS],
+    sourceTables: [...CANONICAL_PRODUCTION_EVIDENCE_SOURCE_TABLES],
+    requiredFieldsBySourceTable: cloneRequiredFieldsBySourceTable(),
+  }))
 }
 
 function hasRef(value: string | null | undefined) {

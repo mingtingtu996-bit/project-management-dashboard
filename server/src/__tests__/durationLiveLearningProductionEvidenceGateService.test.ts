@@ -13,6 +13,7 @@ import {
   collectDurationLiveLearningProductionEvidenceRecordsFromRows,
   collectDurationLiveLearningProductionEvidenceRefs,
   evaluateDurationLiveLearningProductionEvidenceGate,
+  listDurationLiveLearningProductionEvidenceSourcePlan,
 } from '../services/durationLiveLearningProductionEvidenceGateService.js'
 
 const readyEvidence: DurationLiveLearningEvidence = {
@@ -147,6 +148,60 @@ function buildAllProductionSourceRows() {
 }
 
 describe('durationLiveLearningProductionEvidenceGateService', () => {
+  it('lists the canonical production evidence source plan for every learnable asset', () => {
+    const sourcePlan = listDurationLiveLearningProductionEvidenceSourcePlan()
+
+    expect(sourcePlan.map((entry) => entry.assetKey)).toEqual(learnableAssetKeys)
+    for (const entry of sourcePlan) {
+      expect(entry.requiredEvidenceKinds).toEqual([
+        'production_sample',
+        'publication_execution',
+        'runtime_consumer_observation',
+        'impact_monitoring',
+        'rollback_drill',
+        'accuracy',
+      ])
+      expect(entry.sourceTables).toEqual([
+        'duration_experience_samples',
+        'algorithm_learnable_parameter_runtime_publications',
+        'algorithm_learnable_parameter_release_events',
+        'duration_algorithm_accuracy_events',
+        'runtime_consumer_observations',
+      ])
+      expect(entry.requiredFieldsBySourceTable.duration_experience_samples).toEqual(expect.arrayContaining([
+        'id',
+        'sample_status',
+        'included_in_benchmark',
+        'actual_duration',
+        'metadata.liveLearningAssetKey',
+      ]))
+      expect(entry.requiredFieldsBySourceTable.algorithm_learnable_parameter_runtime_publications).toEqual(expect.arrayContaining([
+        'publication_key',
+        'asset_key',
+        'publication_status',
+        'impact_monitoring.status',
+        'rollback_execution.status',
+      ]))
+      expect(entry.requiredFieldsBySourceTable.algorithm_learnable_parameter_release_events).toEqual(expect.arrayContaining([
+        'source_publication_key',
+        'event_type',
+        'event_status',
+        'event_payload.assetKey',
+      ]))
+      expect(entry.requiredFieldsBySourceTable.duration_algorithm_accuracy_events).toEqual(expect.arrayContaining([
+        'id',
+        'absolute_error_days',
+        'prediction_context.assetKey',
+        'actual_context.accuracyGateStatus',
+      ]))
+      expect(entry.requiredFieldsBySourceTable.runtime_consumer_observations).toEqual(expect.arrayContaining([
+        'id',
+        'asset_key',
+        'observation_status',
+      ]))
+    }
+  })
+
   it('keeps the production claim blocked when completion audit is ready but production refs are missing', () => {
     const gate = evaluateDurationLiveLearningProductionEvidenceGate({
       completionAudit: buildReadyCompletionAudit(),
