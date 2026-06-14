@@ -139,6 +139,36 @@ export interface WbsReferenceDaysLiveLearningEvidenceDecision {
   missingReasons: string[]
 }
 
+export interface WbsReferenceDaysPublicationReadinessInput {
+  runtimeGate: WbsTemplateGoldenBenchmarkRunGateResult
+  templateReferenceDaysOutcomeRecorded: boolean
+  approvedCandidateEventIds: readonly string[]
+  referenceDaysVersionId?: string | null
+  runtimePublicationKey?: string | null
+  rollbackTarget?: string | null
+  enabledLearningScopes: readonly WbsReferenceDaysLearningScopeEvidence[]
+  releaseExitApproved: boolean
+  impactMonitoringReady: boolean
+  accuracyMetricsAvailable: boolean
+}
+
+export interface WbsReferenceDaysLineage {
+  assetType: 'wbs_reference_days'
+  referenceDaysVersionId: string | null
+  runtimePublicationKey: string | null
+  rollbackTarget: string | null
+  approvedCandidateEventIds: string[]
+  benchmarkGateVersion: string
+  benchmarkScenarioCount: number
+}
+
+export interface WbsReferenceDaysPublicationReadiness {
+  status: 'wbs_reference_days_publication_ready' | 'wbs_reference_days_publication_not_ready'
+  liveLearningEvidence: WbsReferenceDaysLiveLearningEvidence
+  referenceDaysLineage: WbsReferenceDaysLineage
+  missingReasons: string[]
+}
+
 function makeFinding(
   code: string,
   message: string,
@@ -154,6 +184,11 @@ function makeFinding(
 
 function uniqueStrings(values: readonly unknown[]) {
   return [...new Set(values.map((value) => String(value ?? '').trim()).filter(Boolean))]
+}
+
+function normalizeText(value: unknown): string | null {
+  const normalized = String(value ?? '').trim()
+  return normalized || null
 }
 
 function uniqueValues<T extends string>(values: T[]): T[] {
@@ -486,5 +521,49 @@ export function evaluateWbsReferenceDaysLiveLearningEvidence(
       : 'wbs_reference_days_live_learning_not_ready',
     liveLearningEvidence,
     missingReasons: uniqueValues(missingReasons),
+  }
+}
+
+export function buildWbsReferenceDaysPublicationReadiness(
+  input: WbsReferenceDaysPublicationReadinessInput,
+): WbsReferenceDaysPublicationReadiness {
+  const approvedCandidateEventIds = uniqueStrings(input.approvedCandidateEventIds)
+  const referenceDaysVersionId = normalizeText(input.referenceDaysVersionId)
+  const runtimePublicationKey = normalizeText(input.runtimePublicationKey)
+  const rollbackTarget = normalizeText(input.rollbackTarget)
+  const referenceDaysPublicationWriterReady = Boolean(referenceDaysVersionId && runtimePublicationKey)
+  const referenceDaysLineageRecorded = Boolean(referenceDaysVersionId)
+    && approvedCandidateEventIds.length > 0
+    && input.runtimeGate.resultCount > 0
+
+  const readiness = evaluateWbsReferenceDaysLiveLearningEvidence({
+    runtimeGate: input.runtimeGate,
+    templateReferenceDaysOutcomeRecorded: input.templateReferenceDaysOutcomeRecorded,
+    approvedReferenceDaysCandidateRecorded: approvedCandidateEventIds.length > 0,
+    enabledLearningScopes: input.enabledLearningScopes,
+    runtimeConsumerUsesPublishedArtifact: Boolean(runtimePublicationKey),
+    referenceDaysPublicationWriterReady,
+    referenceDaysLineageRecorded,
+    releaseExitApproved: input.releaseExitApproved,
+    impactMonitoringReady: input.impactMonitoringReady,
+    rollbackTargetReady: Boolean(rollbackTarget),
+    accuracyMetricsAvailable: input.accuracyMetricsAvailable,
+  })
+
+  return {
+    status: readiness.status === 'wbs_reference_days_live_learning_ready'
+      ? 'wbs_reference_days_publication_ready'
+      : 'wbs_reference_days_publication_not_ready',
+    liveLearningEvidence: readiness.liveLearningEvidence,
+    referenceDaysLineage: {
+      assetType: 'wbs_reference_days',
+      referenceDaysVersionId,
+      runtimePublicationKey,
+      rollbackTarget,
+      approvedCandidateEventIds,
+      benchmarkGateVersion: input.runtimeGate.version,
+      benchmarkScenarioCount: input.runtimeGate.resultCount,
+    },
+    missingReasons: readiness.missingReasons,
   }
 }

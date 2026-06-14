@@ -3,6 +3,7 @@ import { WBS_TEMPLATE_REAL_PROJECT_COVERAGE_MATRIX } from '../seeds/wbsTemplateR
 import {
   WBS_TEMPLATE_GOLDEN_BENCHMARK_GATE_THRESHOLDS,
   assertWbsTemplateGoldenBenchmarkGate,
+  buildWbsReferenceDaysPublicationReadiness,
   evaluateWbsReferenceDaysLiveLearningEvidence,
   evaluateWbsTemplateGoldenBenchmarkRunGate,
   evaluateWbsTemplateGoldenBenchmarkStaticGate,
@@ -183,6 +184,89 @@ describe('wbsTemplateGoldenBenchmarkGateService', () => {
       },
       missingReasons: [],
     })
+  })
+
+  it('builds a WBS reference-days publication readiness package from a passing benchmark and approved candidates', () => {
+    const runtimeGate = evaluateWbsTemplateGoldenBenchmarkRunGate(buildPassingRuntimeResults())
+
+    const readiness = buildWbsReferenceDaysPublicationReadiness({
+      runtimeGate,
+      templateReferenceDaysOutcomeRecorded: true,
+      approvedCandidateEventIds: ['reference-candidate-1', 'reference-candidate-1'],
+      referenceDaysVersionId: 'wbs-reference-days-v2',
+      runtimePublicationKey: 'wbs_reference_days_runtime:wbs-reference-days-v2',
+      rollbackTarget: 'wbs_reference_days_runtime:wbs-reference-days-v1',
+      enabledLearningScopes: ['system', 'industry_baseline', 'company', 'project'],
+      releaseExitApproved: true,
+      impactMonitoringReady: true,
+      accuracyMetricsAvailable: true,
+    })
+
+    expect(readiness.status).toBe('wbs_reference_days_publication_ready')
+    expect(readiness.liveLearningEvidence).toEqual(expect.objectContaining({
+      predictionEventRecorded: true,
+      actualOutcomeEventRecorded: true,
+      benchmarkReplayGatePassed: true,
+      approvedReferenceDaysCandidateRecorded: true,
+      referenceDaysPublicationWriterReady: true,
+      referenceDaysLineageRecorded: true,
+      runtimeConsumerUsesPublishedArtifact: true,
+      releaseExitApproved: true,
+      impactMonitoringReady: true,
+      rollbackTargetReady: true,
+      accuracyMetricsAvailable: true,
+      benchmarkScenarioCount: 13,
+    }))
+    expect(readiness.referenceDaysLineage).toEqual({
+      assetType: 'wbs_reference_days',
+      referenceDaysVersionId: 'wbs-reference-days-v2',
+      runtimePublicationKey: 'wbs_reference_days_runtime:wbs-reference-days-v2',
+      rollbackTarget: 'wbs_reference_days_runtime:wbs-reference-days-v1',
+      approvedCandidateEventIds: ['reference-candidate-1'],
+      benchmarkGateVersion: runtimeGate.version,
+      benchmarkScenarioCount: 13,
+    })
+    expect(readiness.missingReasons).toEqual([])
+  })
+
+  it('keeps WBS reference-days publication readiness closed without benchmark, approvals, lineage, and release evidence', () => {
+    const runtimeGate = evaluateWbsTemplateGoldenBenchmarkRunGate([])
+
+    const readiness = buildWbsReferenceDaysPublicationReadiness({
+      runtimeGate,
+      templateReferenceDaysOutcomeRecorded: false,
+      approvedCandidateEventIds: [],
+      referenceDaysVersionId: '',
+      runtimePublicationKey: '',
+      rollbackTarget: '',
+      enabledLearningScopes: ['system'],
+      releaseExitApproved: false,
+      impactMonitoringReady: false,
+      accuracyMetricsAvailable: false,
+    })
+
+    expect(readiness.status).toBe('wbs_reference_days_publication_not_ready')
+    expect(readiness.referenceDaysLineage).toEqual(expect.objectContaining({
+      assetType: 'wbs_reference_days',
+      referenceDaysVersionId: null,
+      runtimePublicationKey: null,
+      rollbackTarget: null,
+      approvedCandidateEventIds: [],
+      benchmarkScenarioCount: 0,
+    }))
+    expect(readiness.missingReasons).toEqual(expect.arrayContaining([
+      'wbs_reference_days_benchmark_gate_required',
+      'template_reference_days_outcome_required',
+      'approved_reference_days_candidate_required',
+      'wbs_reference_days_publication_writer_required',
+      'wbs_reference_days_lineage_required',
+      'runtime_consumer_publication_required',
+      'global_industry_company_project_learning_scopes_required',
+      'release_exit_required',
+      'impact_monitoring_required',
+      'rollback_target_required',
+      'accuracy_metrics_required',
+    ]))
   })
 
   it('keeps WBS reference days not ready when benchmark replay or publication evidence is missing', () => {
