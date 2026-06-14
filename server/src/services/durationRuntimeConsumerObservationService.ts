@@ -1,4 +1,7 @@
-import type { DurationLiveLearningAssetKey } from './durationLiveLearningClosureService.js'
+import {
+  listDurationLiveLearningManifests,
+  type DurationLiveLearningAssetKey,
+} from './durationLiveLearningClosureService.js'
 
 export type DurationRuntimeConsumerObservationQueryExec = <T = Record<string, unknown>>(
   sql: string,
@@ -49,10 +52,25 @@ function normalizeText(value: unknown) {
   return String(value ?? '').trim()
 }
 
+function normalizeConsumerKey(value: unknown) {
+  return normalizeText(value).replace(/\.ts$/i, '')
+}
+
 function normalizeEvidenceRefs(value: string[] | null | undefined) {
   return Array.from(new Set((value ?? [])
     .map((item) => normalizeText(item))
     .filter(Boolean)))
+}
+
+function isDeclaredRuntimeConsumerForAsset(assetKey: unknown, consumerKey: unknown) {
+  const normalizedAssetKey = normalizeText(assetKey)
+  const normalizedConsumerKey = normalizeConsumerKey(consumerKey)
+  if (!normalizedAssetKey || !normalizedConsumerKey) return true
+  return listDurationLiveLearningManifests()
+    .filter((manifest) => manifest.assetKey === normalizedAssetKey)
+    .some((manifest) => manifest.implementationAnchors.runtimeConsumers
+      .map(normalizeConsumerKey)
+      .includes(normalizedConsumerKey))
 }
 
 function buildBlockResult(reasons: string[]): DurationRuntimeConsumerObservationResult {
@@ -74,6 +92,9 @@ function validateInput(input: RecordDurationRuntimeConsumerObservationInput) {
   if (!normalizeText(input.consumerSurface)) reasons.push('runtime_consumer_observation_consumer_surface_required')
   if (input.writesRuntimeDirectly) reasons.push('runtime_consumer_observation_must_not_write_runtime_directly')
   if (input.writesFactDirectly) reasons.push('runtime_consumer_observation_must_not_write_fact_directly')
+  if (!isDeclaredRuntimeConsumerForAsset(input.assetKey, input.consumerKey)) {
+    reasons.push('runtime_consumer_observation_consumer_not_declared_for_asset')
+  }
   return reasons
 }
 
@@ -81,7 +102,7 @@ function buildObservation(input: RecordDurationRuntimeConsumerObservationInput):
   return {
     assetKey: normalizeText(input.assetKey) as DurationLiveLearningAssetKey,
     publicationKey: normalizeText(input.publicationKey),
-    consumerKey: normalizeText(input.consumerKey),
+    consumerKey: normalizeConsumerKey(input.consumerKey),
     consumerSurface: normalizeText(input.consumerSurface),
     observationStatus: input.observationStatus ?? 'observed',
     observationContext: input.observationContext ?? {},

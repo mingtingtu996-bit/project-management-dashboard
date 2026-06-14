@@ -85,4 +85,27 @@ describe('durationRuntimeConsumerObservationService', () => {
     }))
     expect(calls).toEqual([])
   })
+
+  it('blocks observations from consumers that are not declared for the asset', async () => {
+    const {
+      recordDurationRuntimeConsumerObservation,
+    } = await import('../services/durationRuntimeConsumerObservationService.js')
+    const { calls, queryExec } = createRecordingQueryExec()
+
+    const result = await recordDurationRuntimeConsumerObservation({
+      queryExec,
+      assetKey: 'forecast_confidence_weight',
+      publicationKey: 'learnable-parameter-runtime:confidence:project_override',
+      consumerKey: 'projectRemainingDurationForecastService',
+      consumerSurface: 'remaining_duration_forecast',
+    })
+
+    expect(result).toEqual(expect.objectContaining({
+      status: 'runtime_consumer_observation_blocked',
+      canPersist: false,
+      observation: null,
+      reasons: ['runtime_consumer_observation_consumer_not_declared_for_asset'],
+    }))
+    expect(calls).toEqual([])
+  })
 })
