@@ -1,0 +1,98 @@
+import { describe, expect, it } from 'vitest'
+
+describe('durationRuntimeConsumerObservationIntegrationService', () => {
+  it('lists every declared duration runtime consumer with a stable observation surface', async () => {
+    const {
+      listDurationRuntimeConsumerObservationIntegrationContracts,
+    } = await import('../services/durationRuntimeConsumerObservationIntegrationService.js')
+
+    const contracts = listDurationRuntimeConsumerObservationIntegrationContracts()
+
+    expect(contracts).toEqual([
+      {
+        assetKey: 'base_duration_benchmark',
+        consumerKey: 'durationSuggestionService',
+        consumerSurface: 'duration_suggestion',
+        acceptedPublicationStatuses: ['published', 'canary', 'runtime_published'],
+      },
+      {
+        assetKey: 'duration_cold_start_baseline',
+        consumerKey: 'durationSuggestionService',
+        consumerSurface: 'duration_suggestion',
+        acceptedPublicationStatuses: ['published', 'canary', 'runtime_published'],
+      },
+      {
+        assetKey: 'forecast_residual_overlay',
+        consumerKey: 'taskDurationForecastService',
+        consumerSurface: 'task_duration_forecast',
+        acceptedPublicationStatuses: ['published', 'canary', 'runtime_published'],
+      },
+      {
+        assetKey: 'forecast_residual_overlay',
+        consumerKey: 'projectRemainingDurationForecastService',
+        consumerSurface: 'remaining_duration_forecast',
+        acceptedPublicationStatuses: ['published', 'canary', 'runtime_published'],
+      },
+      {
+        assetKey: 'forecast_confidence_weight',
+        consumerKey: 'taskDurationForecastService',
+        consumerSurface: 'task_duration_forecast',
+        acceptedPublicationStatuses: ['published', 'canary', 'runtime_published'],
+      },
+      {
+        assetKey: 'standard_work_duration_seed',
+        consumerKey: 'durationSuggestionService',
+        consumerSurface: 'duration_suggestion',
+        acceptedPublicationStatuses: ['published', 'canary', 'runtime_published'],
+      },
+      {
+        assetKey: 'special_work_duration_seed',
+        consumerKey: 'wbsTemplateGenerationService',
+        consumerSurface: 'wbs_template_generation',
+        acceptedPublicationStatuses: ['published', 'canary', 'runtime_published'],
+      },
+      {
+        assetKey: 'special_work_duration_seed',
+        consumerKey: 'durationSuggestionService',
+        consumerSurface: 'duration_suggestion',
+        acceptedPublicationStatuses: ['published', 'canary', 'runtime_published'],
+      },
+      {
+        assetKey: 'wbs_reference_days',
+        consumerKey: 'wbsTemplateGenerationService',
+        consumerSurface: 'wbs_template_generation',
+        acceptedPublicationStatuses: ['published', 'canary', 'runtime_published'],
+      },
+      {
+        assetKey: 'wbs_reference_days',
+        consumerKey: 'projectRemainingDurationForecastService',
+        consumerSurface: 'remaining_duration_forecast',
+        acceptedPublicationStatuses: ['published', 'canary', 'runtime_published'],
+      },
+      {
+        assetKey: 'dependency_rule_candidate',
+        consumerKey: 'wbsTemplateGenerationService',
+        consumerSurface: 'wbs_template_generation',
+        acceptedPublicationStatuses: ['published', 'canary', 'runtime_published'],
+      },
+      {
+        assetKey: 'dependency_rule_candidate',
+        consumerKey: 'scheduleAccelerationService',
+        consumerSurface: 'schedule_acceleration',
+        acceptedPublicationStatuses: ['published', 'canary', 'runtime_published'],
+      },
+      {
+        assetKey: 'critical_path_rule_candidate',
+        consumerKey: 'projectRemainingDurationForecastService',
+        consumerSurface: 'remaining_duration_forecast',
+        acceptedPublicationStatuses: ['published', 'canary', 'runtime_published'],
+      },
+      {
+        assetKey: 'critical_path_rule_candidate',
+        consumerKey: 'scheduleAccelerationRuntimeService',
+        consumerSurface: 'schedule_acceleration_runtime',
+        acceptedPublicationStatuses: ['published', 'canary', 'runtime_published'],
+      },
+    ])
+  })
+})

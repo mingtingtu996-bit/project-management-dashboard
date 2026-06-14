@@ -1,7 +1,8 @@
+import type { DurationLiveLearningAssetKey } from './durationLiveLearningClosureService.js'
 import {
-  listDurationLiveLearningManifests,
-  type DurationLiveLearningAssetKey,
-} from './durationLiveLearningClosureService.js'
+  listDurationRuntimeConsumerObservationIntegrationContracts,
+  type DurationRuntimeConsumerPublicationStatus,
+} from './durationRuntimeConsumerObservationIntegrationService.js'
 
 export type DurationRuntimeConsumerObservationQueryExec = <T = Record<string, unknown>>(
   sql: string,
@@ -97,11 +98,9 @@ function isDeclaredRuntimeConsumerForAsset(assetKey: unknown, consumerKey: unkno
   const normalizedAssetKey = normalizeText(assetKey)
   const normalizedConsumerKey = normalizeConsumerKey(consumerKey)
   if (!normalizedAssetKey || !normalizedConsumerKey) return true
-  return listDurationLiveLearningManifests()
-    .filter((manifest) => manifest.assetKey === normalizedAssetKey)
-    .some((manifest) => manifest.implementationAnchors.runtimeConsumers
-      .map(normalizeConsumerKey)
-      .includes(normalizedConsumerKey))
+  return listDurationRuntimeConsumerObservationIntegrationContracts()
+    .some((contract) => contract.assetKey === normalizedAssetKey
+      && contract.consumerKey === normalizedConsumerKey)
 }
 
 function buildBlockResult(reasons: string[]): DurationRuntimeConsumerObservationResult {
@@ -117,9 +116,10 @@ function buildBlockResult(reasons: string[]): DurationRuntimeConsumerObservation
 
 function isPublishedOrCanaryArtifact(status: string | null | undefined) {
   const normalized = normalizeText(status)
-  return normalized === 'published'
-    || normalized === 'canary'
-    || normalized === 'runtime_published'
+  return listDurationRuntimeConsumerObservationIntegrationContracts()
+    .some((contract) => contract.acceptedPublicationStatuses.includes(
+      normalized as DurationRuntimeConsumerPublicationStatus,
+    ))
 }
 
 function validateInput(input: RecordDurationRuntimeConsumerObservationInput) {
