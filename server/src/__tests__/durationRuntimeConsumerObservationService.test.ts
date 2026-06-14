@@ -108,4 +108,81 @@ describe('durationRuntimeConsumerObservationService', () => {
     }))
     expect(calls).toEqual([])
   })
+
+  it('records multiple published artifacts observed by one declared runtime consumer', async () => {
+    const {
+      recordDurationRuntimeConsumerObservedArtifacts,
+    } = await import('../services/durationRuntimeConsumerObservationService.js')
+    const { calls, queryExec } = createRecordingQueryExec()
+
+    const result = await recordDurationRuntimeConsumerObservedArtifacts({
+      queryExec,
+      consumerKey: 'taskDurationForecastService',
+      consumerSurface: 'task_duration_forecast',
+      observedAt: '2026-06-15T03:00:00.000Z',
+      artifacts: [
+        {
+          assetKey: 'forecast_confidence_weight',
+          publicationKey: 'forecast_confidence_weight_runtime:weight-v2',
+          publicationStatus: 'canary',
+          observationContext: { projectId: 'project-a' },
+          sourceEvidenceRefs: ['runtime_consumption:task-duration-forecast:confidence'],
+        },
+        {
+          assetKey: 'forecast_residual_overlay',
+          publicationKey: 'forecast_residual_overlay_runtime:overlay-v2',
+          publicationStatus: 'published',
+          observationContext: { projectId: 'project-a' },
+          sourceEvidenceRefs: ['runtime_consumption:task-duration-forecast:overlay'],
+        },
+      ],
+    })
+
+    expect(result).toEqual(expect.objectContaining({
+      status: 'runtime_consumer_observations_recorded',
+      recordedCount: 2,
+      blockedCount: 0,
+      writesRuntimeDirectly: false,
+      writesFactDirectly: false,
+      reasons: [],
+    }))
+    expect(result.results.map((item) => item.status)).toEqual([
+      'runtime_consumer_observation_recorded',
+      'runtime_consumer_observation_recorded',
+    ])
+    expect(calls).toHaveLength(2)
+
+    const sql = joinedSql(calls)
+    expect(sql).toContain('insert into public.runtime_consumer_observations')
+    expect(sql).not.toContain('algorithm_learnable_parameter_runtime_publications')
+    expect(sql).not.toContain('tasks ')
+    expect(sql).not.toContain('task_baseline_items')
+    expect(sql).not.toContain('monthly_plan_items')
+  })
+
+  it('blocks batch observations for artifacts that are not published or canary', async () => {
+    const {
+      recordDurationRuntimeConsumerObservedArtifacts,
+    } = await import('../services/durationRuntimeConsumerObservationService.js')
+    const { calls, queryExec } = createRecordingQueryExec()
+
+    const result = await recordDurationRuntimeConsumerObservedArtifacts({
+      queryExec,
+      consumerKey: 'taskDurationForecastService',
+      consumerSurface: 'task_duration_forecast',
+      artifacts: [{
+        assetKey: 'forecast_confidence_weight',
+        publicationKey: 'forecast_confidence_weight_runtime:weight-candidate',
+        publicationStatus: 'candidate',
+      }],
+    })
+
+    expect(result).toEqual(expect.objectContaining({
+      status: 'runtime_consumer_observations_blocked',
+      recordedCount: 0,
+      blockedCount: 1,
+      reasons: ['runtime_consumer_observation_published_or_canary_artifact_required'],
+    }))
+    expect(calls).toEqual([])
+  })
 })

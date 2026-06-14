@@ -37,12 +37,43 @@ export interface RecordDurationRuntimeConsumerObservationInput {
   writesFactDirectly?: boolean
 }
 
+export interface DurationRuntimeConsumerObservedArtifact {
+  assetKey: DurationLiveLearningAssetKey
+  publicationKey: string
+  publicationStatus?: string | null
+  observationContext?: Record<string, unknown> | null
+  sourceEvidenceRefs?: string[] | null
+}
+
+export interface RecordDurationRuntimeConsumerObservedArtifactsInput {
+  queryExec: DurationRuntimeConsumerObservationQueryExec
+  consumerKey: string
+  consumerSurface: string
+  artifacts: readonly DurationRuntimeConsumerObservedArtifact[]
+  observedAt?: string
+  writesRuntimeDirectly?: boolean
+  writesFactDirectly?: boolean
+}
+
 export interface DurationRuntimeConsumerObservationResult {
   status:
     | 'runtime_consumer_observation_recorded'
     | 'runtime_consumer_observation_blocked'
   canPersist: boolean
   observation: DurationRuntimeConsumerObservation | null
+  writesRuntimeDirectly: false
+  writesFactDirectly: false
+  reasons: string[]
+}
+
+export interface DurationRuntimeConsumerObservedArtifactsResult {
+  status:
+    | 'runtime_consumer_observations_recorded'
+    | 'runtime_consumer_observations_partially_recorded'
+    | 'runtime_consumer_observations_blocked'
+  recordedCount: number
+  blockedCount: number
+  results: DurationRuntimeConsumerObservationResult[]
   writesRuntimeDirectly: false
   writesFactDirectly: false
   reasons: string[]
@@ -84,6 +115,13 @@ function buildBlockResult(reasons: string[]): DurationRuntimeConsumerObservation
   }
 }
 
+function isPublishedOrCanaryArtifact(status: string | null | undefined) {
+  const normalized = normalizeText(status)
+  return normalized === 'published'
+    || normalized === 'canary'
+    || normalized === 'runtime_published'
+}
+
 function validateInput(input: RecordDurationRuntimeConsumerObservationInput) {
   const reasons: string[] = []
   if (!normalizeText(input.assetKey)) reasons.push('runtime_consumer_observation_asset_key_required')
@@ -111,6 +149,56 @@ function buildObservation(input: RecordDurationRuntimeConsumerObservationInput):
     writesFactDirectly: false,
     observedAt: input.observedAt ?? new Date().toISOString(),
   }
+}
+
+function summarizeObservedArtifactResults(
+  results: DurationRuntimeConsumerObservationResult[],
+): DurationRuntimeConsumerObservedArtifactsResult {
+  const recordedCount = results.filter((result) => result.status === 'runtime_consumer_observation_recorded').length
+  const blockedCount = results.length - recordedCount
+  const status: DurationRuntimeConsumerObservedArtifactsResult['status'] = blockedCount === 0
+    ? 'runtime_consumer_observations_recorded'
+    : recordedCount === 0
+      ? 'runtime_consumer_observations_blocked'
+      : 'runtime_consumer_observations_partially_recorded'
+
+  return {
+    status,
+    recordedCount,
+    blockedCount,
+    results,
+    writesRuntimeDirectly: false,
+    writesFactDirectly: false,
+    reasons: Array.from(new Set(results.flatMap((result) => result.reasons))),
+  }
+}
+
+export async function recordDurationRuntimeConsumerObservedArtifacts(
+  input: RecordDurationRuntimeConsumerObservedArtifactsInput,
+): Promise<DurationRuntimeConsumerObservedArtifactsResult> {
+  const results: DurationRuntimeConsumerObservationResult[] = []
+
+  for (const artifact of input.artifacts) {
+    if (!isPublishedOrCanaryArtifact(artifact.publicationStatus)) {
+      results.push(buildBlockResult(['runtime_consumer_observation_published_or_canary_artifact_required']))
+      continue
+    }
+
+    results.push(await recordDurationRuntimeConsumerObservation({
+      queryExec: input.queryExec,
+      assetKey: artifact.assetKey,
+      publicationKey: artifact.publicationKey,
+      consumerKey: input.consumerKey,
+      consumerSurface: input.consumerSurface,
+      observationContext: artifact.observationContext,
+      sourceEvidenceRefs: artifact.sourceEvidenceRefs,
+      observedAt: input.observedAt,
+      writesRuntimeDirectly: input.writesRuntimeDirectly,
+      writesFactDirectly: input.writesFactDirectly,
+    }))
+  }
+
+  return summarizeObservedArtifactResults(results)
 }
 
 export async function recordDurationRuntimeConsumerObservation(
