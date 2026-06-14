@@ -77,6 +77,22 @@ export interface DurationLiveLearningProductionEvidenceGate {
   missingEvidenceByAsset: DurationLiveLearningProductionEvidenceGap[]
 }
 
+export interface DurationLiveLearningProductionClaimAuditInput {
+  completionAudit: DurationLiveLearningCompletionAudit
+  records?: readonly DurationLiveLearningProductionEvidenceRecord[]
+}
+
+export interface DurationLiveLearningProductionClaimAudit {
+  status:
+    | 'duration_live_learning_production_claim_ready'
+    | 'duration_live_learning_production_claim_not_ready'
+  allowedClaim: DurationLiveLearningCompletionAudit['allowedClaim']
+  prohibitedClaim: DurationLiveLearningCompletionAudit['prohibitedClaim']
+  completionAudit: DurationLiveLearningCompletionAudit
+  evidenceCollection: DurationLiveLearningProductionEvidenceCollection
+  productionGate: DurationLiveLearningProductionEvidenceGate
+}
+
 function hasRef(value: string | null | undefined) {
   return typeof value === 'string' && value.trim().length > 0
 }
@@ -207,5 +223,29 @@ export function evaluateDurationLiveLearningProductionEvidenceGate(
     productionEvidenceAssetKeys: input.completionAudit.learnableAssetKeys.filter((assetKey) =>
       productionEvidenceMap.has(assetKey)),
     missingEvidenceByAsset,
+  }
+}
+
+export function buildDurationLiveLearningProductionClaimAudit(
+  input: DurationLiveLearningProductionClaimAuditInput,
+): DurationLiveLearningProductionClaimAudit {
+  const evidenceCollection = collectDurationLiveLearningProductionEvidenceRefs({
+    records: input.records,
+  })
+  const productionGate = evaluateDurationLiveLearningProductionEvidenceGate({
+    completionAudit: input.completionAudit,
+    productionEvidence: evidenceCollection.productionEvidence,
+  })
+  const ready = productionGate.status === 'duration_live_learning_production_evidence_ready'
+
+  return {
+    status: ready
+      ? 'duration_live_learning_production_claim_ready'
+      : 'duration_live_learning_production_claim_not_ready',
+    allowedClaim: productionGate.allowedClaim,
+    prohibitedClaim: productionGate.prohibitedClaim,
+    completionAudit: input.completionAudit,
+    evidenceCollection,
+    productionGate,
   }
 }

@@ -9,6 +9,7 @@ import type {
   DurationLiveLearningEvidenceOverride,
 } from '../services/durationLiveLearningClosureService.js'
 import {
+  buildDurationLiveLearningProductionClaimAudit,
   collectDurationLiveLearningProductionEvidenceRefs,
   evaluateDurationLiveLearningProductionEvidenceGate,
 } from '../services/durationLiveLearningProductionEvidenceGateService.js'
@@ -56,6 +57,47 @@ function buildReadyCompletionAudit() {
   return buildDurationLiveLearningCompletionAudit({
     evidenceOverrides: buildReadyOverrides(),
   })
+}
+
+function buildAllProductionEvidenceRecords() {
+  return learnableAssetKeys.flatMap((assetKey) => [
+    {
+      assetKey,
+      evidenceKind: 'production_sample' as const,
+      evidenceRef: `duration_samples:${assetKey}:accepted`,
+      evidenceStatus: 'accepted',
+    },
+    {
+      assetKey,
+      evidenceKind: 'publication_execution' as const,
+      evidenceRef: `release_execution:${assetKey}:published`,
+      evidenceStatus: 'published',
+    },
+    {
+      assetKey,
+      evidenceKind: 'runtime_consumer_observation' as const,
+      evidenceRef: `runtime_consumer:${assetKey}:observed`,
+      evidenceStatus: 'observed',
+    },
+    {
+      assetKey,
+      evidenceKind: 'impact_monitoring' as const,
+      evidenceRef: `impact_monitoring:${assetKey}:armed`,
+      evidenceStatus: 'monitoring_armed',
+    },
+    {
+      assetKey,
+      evidenceKind: 'rollback_drill' as const,
+      evidenceRef: `rollback:${assetKey}:verified`,
+      evidenceStatus: 'rollback_verified',
+    },
+    {
+      assetKey,
+      evidenceKind: 'accuracy' as const,
+      evidenceRef: `accuracy:${assetKey}:mae-bias-ok`,
+      evidenceStatus: 'accuracy_passed',
+    },
+  ])
 }
 
 describe('durationLiveLearningProductionEvidenceGateService', () => {
@@ -183,5 +225,20 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
         reason: 'production_evidence_ref_required',
       },
     ])
+  })
+
+  it('builds the final production claim audit from completion audit plus typed production records', () => {
+    const audit = buildDurationLiveLearningProductionClaimAudit({
+      completionAudit: buildReadyCompletionAudit(),
+      records: buildAllProductionEvidenceRecords(),
+    })
+
+    expect(audit.status).toBe('duration_live_learning_production_claim_ready')
+    expect(audit.evidenceCollection.rejectedRecords).toEqual([])
+    expect(audit.productionGate.status).toBe('duration_live_learning_production_evidence_ready')
+    expect(audit.productionGate.productionEvidenceAssetKeys).toEqual(learnableAssetKeys)
+    expect(audit.allowedClaim).toBe(
+      'all_learnable_duration_prediction_and_network_assets_are_live_self_learning;facts_and_commitments_remain_locked',
+    )
   })
 })
