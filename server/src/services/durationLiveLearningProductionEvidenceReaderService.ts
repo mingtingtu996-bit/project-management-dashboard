@@ -95,6 +95,48 @@ function queryForSourceTable(sourceTable: DurationLiveLearningProductionEvidence
     `
   }
 
+  if (sourceTable === 'wbs_template_runtime_publications') {
+    return `
+      select *
+      from public.wbs_template_runtime_publications
+      where runtime_publication_status = 'runtime_published'
+      order by published_at desc
+      limit $1
+    `
+  }
+
+  if (sourceTable === 'wbs_template_runtime_events') {
+    return `
+      select *
+      from public.wbs_template_runtime_events
+      where event_type in ('impact_monitoring', 'rollback_execution')
+        and event_status in ('monitoring_passed', 'rollback_executed')
+      order by executed_at desc
+      limit $1
+    `
+  }
+
+  if (sourceTable === 'construction_dependency_rule_runtime_publications') {
+    return `
+      select *
+      from public.construction_dependency_rule_runtime_publications
+      where runtime_publication_status = 'runtime_published'
+      order by published_at desc
+      limit $1
+    `
+  }
+
+  if (sourceTable === 'construction_dependency_rule_runtime_events') {
+    return `
+      select *
+      from public.construction_dependency_rule_runtime_events
+      where event_type in ('impact_monitoring', 'rollback_execution')
+        and event_status in ('monitoring_passed', 'rollback_executed')
+      order by executed_at desc
+      limit $1
+    `
+  }
+
   if (sourceTable === 'duration_algorithm_accuracy_events') {
     return `
       select *

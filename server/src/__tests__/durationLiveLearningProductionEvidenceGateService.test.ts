@@ -165,6 +165,10 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
         'duration_experience_samples',
         'algorithm_learnable_parameter_runtime_publications',
         'algorithm_learnable_parameter_release_events',
+        'wbs_template_runtime_publications',
+        'wbs_template_runtime_events',
+        'construction_dependency_rule_runtime_publications',
+        'construction_dependency_rule_runtime_events',
         'duration_algorithm_accuracy_events',
         'runtime_consumer_observations',
       ])
@@ -187,6 +191,22 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
         'event_type',
         'event_status',
         'event_payload.assetKey',
+      ]))
+      expect(entry.requiredFieldsBySourceTable.wbs_template_runtime_publications).toEqual(expect.arrayContaining([
+        'publication_key',
+        'asset_kind',
+        'asset_version_id',
+        'runtime_publication_status',
+        'impact_monitoring.status',
+        'rollback_execution.status',
+      ]))
+      expect(entry.requiredFieldsBySourceTable.construction_dependency_rule_runtime_publications).toEqual(expect.arrayContaining([
+        'publication_key',
+        'dependency_rule_version_id',
+        'runtime_publication_status',
+        'dependency_rule_lineage.assetType',
+        'impact_monitoring.status',
+        'rollback_execution.status',
       ]))
       expect(entry.requiredFieldsBySourceTable.duration_algorithm_accuracy_events).toEqual(expect.arrayContaining([
         'id',
@@ -447,6 +467,113 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
         evidenceKind: 'runtime_consumer_observation',
         evidenceRef: 'runtime_consumer:consumer-1',
         evidenceStatus: 'observed',
+      },
+    ])
+    expect(adapted.rejectedRows).toEqual([])
+  })
+
+  it('adapts plan-network runtime publication rows into production publication records', () => {
+    const adapted = collectDurationLiveLearningProductionEvidenceRecordsFromRows({
+      rows: [
+        {
+          sourceTable: 'wbs_template_runtime_publications',
+          row: {
+            publication_key: 'wbs_template_runtime:special-seed-version-v2',
+            asset_kind: 'special_work_duration_seed',
+            asset_version_id: 'special-seed-version-v2',
+            runtime_publication_status: 'runtime_published',
+            impact_monitoring: { status: 'monitoring_armed' },
+            rollback_execution: { status: 'rollback_verified' },
+          },
+        },
+        {
+          sourceTable: 'wbs_template_runtime_events',
+          row: {
+            source_publication_key: 'wbs_reference_days_runtime:wbs-reference-days-v2',
+            event_type: 'impact_monitoring',
+            event_status: 'monitoring_passed',
+            event_payload: {
+              runtimePublication: {
+                assetKind: 'wbs_reference_days',
+              },
+            },
+          },
+        },
+        {
+          sourceTable: 'construction_dependency_rule_runtime_publications',
+          row: {
+            publication_key: 'dependency_rule_runtime:dependency-rule-version-v2',
+            dependency_rule_version_id: 'dependency-rule-version-v2',
+            runtime_publication_status: 'runtime_published',
+            dependency_rule_lineage: { assetType: 'dependency_rule_candidate' },
+            impact_monitoring: { status: 'monitoring_armed' },
+            rollback_execution: { status: 'rollback_verified' },
+          },
+        },
+        {
+          sourceTable: 'construction_dependency_rule_runtime_events',
+          row: {
+            source_publication_key: 'critical_path_rule_runtime:critical-path-rule-version-v2',
+            event_type: 'rollback_execution',
+            event_status: 'rollback_executed',
+            event_payload: {
+              runtimePublication: {
+                assetType: 'critical_path_rule_candidate',
+              },
+            },
+          },
+        },
+      ],
+    })
+
+    expect(adapted.records).toEqual([
+      {
+        assetKey: 'special_work_duration_seed',
+        evidenceKind: 'publication_execution',
+        evidenceRef: 'wbs_template_runtime:special-seed-version-v2',
+        evidenceStatus: 'published',
+      },
+      {
+        assetKey: 'special_work_duration_seed',
+        evidenceKind: 'impact_monitoring',
+        evidenceRef: 'impact_monitoring:wbs_template_runtime:special-seed-version-v2:monitoring_armed',
+        evidenceStatus: 'monitoring_armed',
+      },
+      {
+        assetKey: 'special_work_duration_seed',
+        evidenceKind: 'rollback_drill',
+        evidenceRef: 'rollback:wbs_template_runtime:special-seed-version-v2:rollback_verified',
+        evidenceStatus: 'rollback_verified',
+      },
+      {
+        assetKey: 'wbs_reference_days',
+        evidenceKind: 'impact_monitoring',
+        evidenceRef: 'impact_monitoring:wbs_reference_days_runtime:wbs-reference-days-v2:monitoring_passed',
+        evidenceStatus: 'monitoring_passed',
+      },
+      {
+        assetKey: 'dependency_rule_candidate',
+        evidenceKind: 'publication_execution',
+        evidenceRef: 'dependency_rule_runtime:dependency-rule-version-v2',
+        evidenceStatus: 'published',
+      },
+      {
+        assetKey: 'dependency_rule_candidate',
+        evidenceKind: 'impact_monitoring',
+        evidenceRef: 'impact_monitoring:dependency_rule_runtime:dependency-rule-version-v2:monitoring_armed',
+        evidenceStatus: 'monitoring_armed',
+      },
+      {
+        assetKey: 'dependency_rule_candidate',
+        evidenceKind: 'rollback_drill',
+        evidenceRef: 'rollback:dependency_rule_runtime:dependency-rule-version-v2:rollback_verified',
+        evidenceStatus: 'rollback_verified',
+      },
+      {
+        assetKey: 'critical_path_rule_candidate',
+        evidenceKind: 'rollback_drill',
+        evidenceRef: 'rollback:critical_path_rule_runtime:critical-path-rule-version-v2:rollback_executed',
+        evidenceStatus: 'rollback_executed',
       },
     ])
     expect(adapted.rejectedRows).toEqual([])

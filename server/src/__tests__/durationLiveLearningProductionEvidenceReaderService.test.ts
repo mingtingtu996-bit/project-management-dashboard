@@ -89,6 +89,10 @@ function rowsForSql(sql: string) {
       writes_fact_directly: false,
     }))
   }
+  if (normalized.includes('from public.wbs_template_runtime_publications')) return []
+  if (normalized.includes('from public.wbs_template_runtime_events')) return []
+  if (normalized.includes('from public.construction_dependency_rule_runtime_publications')) return []
+  if (normalized.includes('from public.construction_dependency_rule_runtime_events')) return []
   if (normalized.includes('from public.algorithm_learnable_parameter_release_events')) return []
   throw new Error(`unexpected query: ${sql}`)
 }
@@ -115,6 +119,10 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
       'duration_experience_samples',
       'algorithm_learnable_parameter_runtime_publications',
       'algorithm_learnable_parameter_release_events',
+      'wbs_template_runtime_publications',
+      'wbs_template_runtime_events',
+      'construction_dependency_rule_runtime_publications',
+      'construction_dependency_rule_runtime_events',
       'duration_algorithm_accuracy_events',
       'runtime_consumer_observations',
     ])
@@ -125,6 +133,10 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
     expect(joinedSql).toContain('from public.duration_experience_samples')
     expect(joinedSql).toContain('from public.algorithm_learnable_parameter_runtime_publications')
     expect(joinedSql).toContain('from public.algorithm_learnable_parameter_release_events')
+    expect(joinedSql).toContain('from public.wbs_template_runtime_publications')
+    expect(joinedSql).toContain('from public.wbs_template_runtime_events')
+    expect(joinedSql).toContain('from public.construction_dependency_rule_runtime_publications')
+    expect(joinedSql).toContain('from public.construction_dependency_rule_runtime_events')
     expect(joinedSql).toContain('from public.duration_algorithm_accuracy_events')
     expect(joinedSql).toContain('from public.runtime_consumer_observations')
     expect(joinedSql).not.toMatch(/\binsert\b|\bupdate\b|\bdelete\b/)

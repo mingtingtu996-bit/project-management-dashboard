@@ -59,6 +59,10 @@ export type DurationLiveLearningProductionEvidenceSourceTable =
   | 'duration_algorithm_accuracy_events'
   | 'algorithm_learnable_parameter_runtime_publications'
   | 'algorithm_learnable_parameter_release_events'
+  | 'wbs_template_runtime_publications'
+  | 'wbs_template_runtime_events'
+  | 'construction_dependency_rule_runtime_publications'
+  | 'construction_dependency_rule_runtime_events'
   | 'runtime_consumer_observations'
 
 export interface DurationLiveLearningProductionEvidenceSourceRow {
@@ -160,6 +164,10 @@ const CANONICAL_PRODUCTION_EVIDENCE_SOURCE_TABLES: DurationLiveLearningProductio
   'duration_experience_samples',
   'algorithm_learnable_parameter_runtime_publications',
   'algorithm_learnable_parameter_release_events',
+  'wbs_template_runtime_publications',
+  'wbs_template_runtime_events',
+  'construction_dependency_rule_runtime_publications',
+  'construction_dependency_rule_runtime_events',
   'duration_algorithm_accuracy_events',
   'runtime_consumer_observations',
 ]
@@ -187,6 +195,34 @@ const REQUIRED_FIELDS_BY_SOURCE_TABLE: Record<DurationLiveLearningProductionEvid
     'event_type',
     'event_status',
     'event_payload.assetKey',
+  ],
+  wbs_template_runtime_publications: [
+    'publication_key',
+    'asset_kind',
+    'asset_version_id',
+    'runtime_publication_status',
+    'impact_monitoring.status',
+    'rollback_execution.status',
+  ],
+  wbs_template_runtime_events: [
+    'source_publication_key',
+    'event_type',
+    'event_status',
+    'event_payload.runtimePublication.assetKind',
+  ],
+  construction_dependency_rule_runtime_publications: [
+    'publication_key',
+    'dependency_rule_version_id',
+    'runtime_publication_status',
+    'dependency_rule_lineage.assetType',
+    'impact_monitoring.status',
+    'rollback_execution.status',
+  ],
+  construction_dependency_rule_runtime_events: [
+    'source_publication_key',
+    'event_type',
+    'event_status',
+    'event_payload.runtimePublication.assetType',
   ],
   duration_algorithm_accuracy_events: [
     'id',
@@ -243,6 +279,18 @@ function readRecord(value: unknown): Record<string, unknown> {
     : {}
 }
 
+function readRuntimePublicationFromPayload(row: Record<string, unknown>) {
+  const payload = readRecord(row.event_payload ?? row.eventPayload)
+  return readRecord(payload.runtimePublication ?? payload.runtime_publication)
+}
+
+function inferPlanNetworkAssetKeyFromPublicationKey(publicationKey: string): DurationLiveLearningAssetKey | null {
+  if (publicationKey.startsWith('wbs_reference_days_runtime:')) return 'wbs_reference_days'
+  if (publicationKey.startsWith('dependency_rule_runtime:')) return 'dependency_rule_candidate'
+  if (publicationKey.startsWith('critical_path_rule_runtime:')) return 'critical_path_rule_candidate'
+  return null
+}
+
 function readBoolean(row: Record<string, unknown>, key: string) {
   return row[key] === true
 }
@@ -265,6 +313,36 @@ function assetKeyFromRow(row: Record<string, unknown>): DurationLiveLearningAsse
   return nested ? nested as DurationLiveLearningAssetKey : null
 }
 
+function assetKeyFromSourceRow(source: DurationLiveLearningProductionEvidenceSourceRow): DurationLiveLearningAssetKey | null {
+  const row = source.row
+  if (source.sourceTable === 'wbs_template_runtime_publications') {
+    const assetKind = readText(row, 'asset_kind', 'assetKind')
+    return assetKind ? assetKind as DurationLiveLearningAssetKey : null
+  }
+  if (source.sourceTable === 'wbs_template_runtime_events') {
+    const runtimePublication = readRuntimePublicationFromPayload(row)
+    const assetKind = readText(runtimePublication, 'assetKind', 'asset_kind')
+    return assetKind
+      ? assetKind as DurationLiveLearningAssetKey
+      : inferPlanNetworkAssetKeyFromPublicationKey(readText(row, 'source_publication_key', 'sourcePublicationKey'))
+  }
+  if (source.sourceTable === 'construction_dependency_rule_runtime_publications') {
+    const lineage = readRecord(row.dependency_rule_lineage ?? row.dependencyRuleLineage)
+    const assetType = readText(lineage, 'assetType', 'asset_type')
+    return assetType
+      ? assetType as DurationLiveLearningAssetKey
+      : inferPlanNetworkAssetKeyFromPublicationKey(readText(row, 'publication_key', 'publicationKey'))
+  }
+  if (source.sourceTable === 'construction_dependency_rule_runtime_events') {
+    const runtimePublication = readRuntimePublicationFromPayload(row)
+    const assetType = readText(runtimePublication, 'assetType', 'asset_type')
+    return assetType
+      ? assetType as DurationLiveLearningAssetKey
+      : inferPlanNetworkAssetKeyFromPublicationKey(readText(row, 'source_publication_key', 'sourcePublicationKey'))
+  }
+  return assetKeyFromRow(row)
+}
+
 function isActiveBenchmarkSample(row: Record<string, unknown>) {
   return readText(row, 'sample_status', 'sampleStatus') === 'active'
     && readBoolean(row, 'included_in_benchmark')
@@ -284,6 +362,11 @@ function accuracyGateStatus(row: Record<string, unknown>) {
 function publicationEvidenceStatus(row: Record<string, unknown>) {
   const status = readText(row, 'publication_status', 'publicationStatus')
   return status === 'published' || status === 'canary' ? status : ''
+}
+
+function runtimePublicationEvidenceStatus(row: Record<string, unknown>) {
+  const status = readText(row, 'runtime_publication_status', 'runtimePublicationStatus')
+  return status === 'runtime_published' ? 'published' : ''
 }
 
 function impactMonitoringStatus(value: unknown) {
@@ -334,6 +417,7 @@ function acceptedRefPrefixesFor(kind: DurationLiveLearningProductionEvidenceKind
       'release_execution:',
       'algorithm_seed_versions:',
       'algorithm_learnable_parameter_runtime_publications:',
+      'wbs_template_runtime:',
       'wbs_reference_days_runtime:',
       'dependency_rule_runtime:',
       'critical_path_rule_runtime:',
@@ -405,7 +489,7 @@ export function collectDurationLiveLearningProductionEvidenceRecordsFromRows(
 
   for (const source of input.rows ?? []) {
     const row = source.row
-    const assetKey = assetKeyFromRow(row)
+    const assetKey = assetKeyFromSourceRow(source)
     if (!assetKey) {
       pushRejectedRow(rejectedRows, source, 'production_source_asset_key_required')
       continue
@@ -458,6 +542,70 @@ export function collectDurationLiveLearningProductionEvidenceRecordsFromRows(
     }
 
     if (source.sourceTable === 'algorithm_learnable_parameter_release_events') {
+      const sourcePublicationKey = readText(row, 'source_publication_key', 'sourcePublicationKey')
+      const eventType = readText(row, 'event_type', 'eventType')
+      const eventStatus = readText(row, 'event_status', 'eventStatus')
+      if (!sourcePublicationKey) {
+        pushRejectedRow(rejectedRows, source, 'production_source_row_id_required')
+        continue
+      }
+      if (eventType === 'impact_monitoring' && eventStatus === 'monitoring_passed') {
+        pushRecord(
+          records,
+          assetKey,
+          'impact_monitoring',
+          `impact_monitoring:${sourcePublicationKey}:monitoring_passed`,
+          'monitoring_passed',
+        )
+        continue
+      }
+      if (eventType === 'rollback_execution' && eventStatus === 'rollback_executed') {
+        pushRecord(
+          records,
+          assetKey,
+          'rollback_drill',
+          `rollback:${sourcePublicationKey}:rollback_executed`,
+          'rollback_executed',
+        )
+        continue
+      }
+      pushRejectedRow(rejectedRows, source, 'production_source_row_not_evidence_ready')
+      continue
+    }
+
+    if (
+      source.sourceTable === 'wbs_template_runtime_publications'
+      || source.sourceTable === 'construction_dependency_rule_runtime_publications'
+    ) {
+      const publicationKey = readText(row, 'publication_key', 'publicationKey')
+      const publicationStatus = runtimePublicationEvidenceStatus(row)
+      if (!publicationKey) {
+        pushRejectedRow(rejectedRows, source, 'production_source_row_id_required')
+        continue
+      }
+      if (!publicationStatus) {
+        pushRejectedRow(rejectedRows, source, 'production_source_row_not_evidence_ready')
+        continue
+      }
+      pushRecord(records, assetKey, 'publication_execution', publicationKey, publicationStatus)
+
+      const monitoringStatus = impactMonitoringStatus(row.impact_monitoring ?? row.impactMonitoring)
+      if (monitoringStatus) {
+        const eventRef = readText(readRecord(row.impact_monitoring ?? row.impactMonitoring), 'eventRef', 'event_ref')
+        pushRecord(records, assetKey, 'impact_monitoring', eventRef || `impact_monitoring:${publicationKey}:${monitoringStatus}`, monitoringStatus)
+      }
+      const rollbackStatus = rollbackExecutionStatus(row.rollback_execution ?? row.rollbackExecution)
+      if (rollbackStatus) {
+        const eventRef = readText(readRecord(row.rollback_execution ?? row.rollbackExecution), 'eventRef', 'event_ref')
+        pushRecord(records, assetKey, 'rollback_drill', eventRef || `rollback:${publicationKey}:${rollbackStatus}`, rollbackStatus)
+      }
+      continue
+    }
+
+    if (
+      source.sourceTable === 'wbs_template_runtime_events'
+      || source.sourceTable === 'construction_dependency_rule_runtime_events'
+    ) {
       const sourcePublicationKey = readText(row, 'source_publication_key', 'sourcePublicationKey')
       const eventType = readText(row, 'event_type', 'eventType')
       const eventStatus = readText(row, 'event_status', 'eventStatus')
