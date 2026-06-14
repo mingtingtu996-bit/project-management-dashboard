@@ -49,6 +49,7 @@ export type DurationLiveLearningAssetContract = {
   runtimeWriterRequired: boolean
   publishGateRequired: boolean
   requiredLearningScopes: DurationLearningScope[]
+  allowLearningScopeException?: boolean
   boundaryPolicy: string[]
 }
 
@@ -58,6 +59,7 @@ export type DurationLiveLearningEvidence = {
   actualOutcomeEventRecorded?: boolean
   tieredLearningPolicyRegistered?: boolean
   enabledLearningScopes?: readonly DurationLearningScopeEvidence[]
+  scopeExceptionApproved?: boolean
   runtimeConsumerUsesPublishedArtifact?: boolean
   releaseExitApproved?: boolean
   impactMonitoringReady?: boolean
@@ -277,9 +279,11 @@ const DURATION_LIVE_LEARNING_ASSET_CONTRACTS: DurationLiveLearningAssetContract[
     runtimeWriterRequired: true,
     publishGateRequired: true,
     requiredLearningScopes: ALL_LEARNING_SCOPES,
+    allowLearningScopeException: true,
     boundaryPolicy: [
       'residual_overlay_can_adjust_runtime_forecast_only_after_publication',
       'shadow_or_candidate_overlay_is_evidence_only',
+      'company_project_scope_exception_requires_explicit_approval',
     ],
   },
   {
@@ -291,9 +295,11 @@ const DURATION_LIVE_LEARNING_ASSET_CONTRACTS: DurationLiveLearningAssetContract[
     runtimeWriterRequired: true,
     publishGateRequired: true,
     requiredLearningScopes: ALL_LEARNING_SCOPES,
+    allowLearningScopeException: true,
     boundaryPolicy: [
       'confidence_weight_learning_requires_runtime_consumption_evidence',
       'high_risk_structure_parameters_require_guarded_release',
+      'company_project_scope_exception_requires_explicit_approval',
     ],
   },
   {
@@ -750,6 +756,15 @@ function hasAllRequiredScopes(
   return requiredScopes.every((scope) => enabled.has(scope))
 }
 
+function hasApprovedLearningScopeException(
+  contract: DurationLiveLearningAssetContract,
+  evidence: DurationLiveLearningEvidence | undefined,
+): boolean {
+  if (!contract.allowLearningScopeException || !evidence?.scopeExceptionApproved) return false
+  const enabled = new Set(resolveDurationLearningScopeCoverage(evidence.enabledLearningScopes).normalizedScopes)
+  return enabled.has('company') && enabled.has('project')
+}
+
 function evaluateLearnableAssetMissingConditions(
   contract: DurationLiveLearningAssetContract,
   evidence: DurationLiveLearningEvidence | undefined,
@@ -759,7 +774,10 @@ function evaluateLearnableAssetMissingConditions(
   if (!evidence?.predictionEventRecorded) missing.push('prediction_event_required')
   if (!evidence?.actualOutcomeEventRecorded) missing.push('actual_outcome_event_required')
   if (!evidence?.tieredLearningPolicyRegistered) missing.push('tiered_learning_policy_required')
-  if (!hasAllRequiredScopes(contract.requiredLearningScopes, evidence?.enabledLearningScopes)) {
+  if (
+    !hasAllRequiredScopes(contract.requiredLearningScopes, evidence?.enabledLearningScopes)
+    && !hasApprovedLearningScopeException(contract, evidence)
+  ) {
     missing.push('global_industry_company_project_learning_scopes_required')
   }
   if (!evidence?.runtimeConsumerUsesPublishedArtifact) {

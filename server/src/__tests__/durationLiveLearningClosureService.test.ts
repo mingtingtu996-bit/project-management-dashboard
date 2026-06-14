@@ -236,6 +236,46 @@ describe('durationLiveLearningClosureService', () => {
     ]))
   })
 
+  it('allows explicit company-project scope exceptions only for residual overlay and confidence weight assets', () => {
+    const companyProjectScopedEvidence = {
+      assetClassificationRegistered: true,
+      predictionEventRecorded: true,
+      actualOutcomeEventRecorded: true,
+      tieredLearningPolicyRegistered: true,
+      enabledLearningScopes: ['company', 'project'],
+      scopeExceptionApproved: true,
+      runtimeConsumerUsesPublishedArtifact: true,
+      releaseExitApproved: true,
+      impactMonitoringReady: true,
+      rollbackTargetReady: true,
+      accuracyMetricsAvailable: true,
+    }
+
+    expect(evaluateDurationLiveLearningAsset({
+      assetKey: 'forecast_residual_overlay',
+      evidence: companyProjectScopedEvidence,
+    })).toEqual(expect.objectContaining({
+      status: 'live_self_learning_ready',
+      missingClosureConditions: [],
+    }))
+    expect(evaluateDurationLiveLearningAsset({
+      assetKey: 'forecast_confidence_weight',
+      evidence: companyProjectScopedEvidence,
+    })).toEqual(expect.objectContaining({
+      status: 'live_self_learning_ready',
+      missingClosureConditions: [],
+    }))
+    expect(evaluateDurationLiveLearningAsset({
+      assetKey: 'base_duration_benchmark',
+      evidence: companyProjectScopedEvidence,
+    })).toEqual(expect.objectContaining({
+      status: 'not_ready',
+      missingClosureConditions: expect.arrayContaining([
+        'global_industry_company_project_learning_scopes_required',
+      ]),
+    }))
+  })
+
   it('publishes a second-batch manifest for standard seeds and plan-network assets', () => {
     const manifests = listDurationLiveLearningManifests('plan_network_core_b')
 
