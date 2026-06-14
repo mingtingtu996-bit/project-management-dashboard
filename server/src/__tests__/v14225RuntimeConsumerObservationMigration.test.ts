@@ -5,14 +5,27 @@ import { describe, expect, it } from 'vitest'
 const serverRoot = process.cwd().endsWith('\\server') ? process.cwd() : resolve(process.cwd(), 'server')
 const migrationsRoot = resolve(serverRoot, 'migrations')
 
-function allMigrationSource() {
+function migrationFileNames() {
   return readdirSync(migrationsRoot)
     .filter((name) => name.endsWith('.sql'))
+}
+
+function allMigrationSource() {
+  return migrationFileNames()
     .map((name) => readFileSync(resolve(migrationsRoot, name), 'utf8'))
     .join('\n')
 }
 
 describe('v1.4.22.5 runtime consumer observation migration', () => {
+  it('uses a dedicated migration number after the v1.4.22.3 runtime publication migrations', () => {
+    const fileNames = migrationFileNames()
+
+    expect(fileNames).toContain('204_v14225_runtime_consumer_observations.sql')
+    expect(fileNames).not.toContain('202_v14225_runtime_consumer_observations.sql')
+    expect(fileNames).toContain('202_v14223_dependency_rule_runtime_publications.sql')
+    expect(fileNames).toContain('203_v14223_wbs_template_runtime_publications.sql')
+  })
+
   it('creates a read-only production evidence source for runtime consumer observations', () => {
     const source = allMigrationSource()
 
