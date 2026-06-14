@@ -199,11 +199,48 @@ export interface ConstructionDependencyRuleCandidateLiveLearningEvidenceDecision
   missingReasons: string[]
 }
 
+export interface ConstructionDependencyRulePublicationReadinessInput {
+  replayReport: ConstructionDependencyReplayCalibrationReport
+  dependencyOutcomeEventRecorded: boolean
+  approvedCandidateEventIds: readonly string[]
+  dependencyRuleVersionId?: string | null
+  runtimePublicationKey?: string | null
+  rollbackTarget?: string | null
+  enabledLearningScopes: readonly ConstructionDependencyRuleLearningScopeEvidence[]
+  releaseExitApproved: boolean
+  impactMonitoringReady: boolean
+  accuracyMetricsAvailable: boolean
+}
+
+export interface ConstructionDependencyRuleLineage {
+  assetType: 'dependency_rule_candidate'
+  dependencyRuleVersionId: string | null
+  runtimePublicationKey: string | null
+  rollbackTarget: string | null
+  approvedCandidateEventIds: string[]
+  sourceDependencyIds: string[]
+  matchedSeedCodes: string[]
+  replayReportCode: ConstructionDependencyReplayCalibrationReport['reportCode']
+  comparableActualDateCount: number
+}
+
+export interface ConstructionDependencyRulePublicationReadiness {
+  status: 'dependency_rule_publication_ready' | 'dependency_rule_publication_not_ready'
+  liveLearningEvidence: ConstructionDependencyRuleCandidateLiveLearningEvidence
+  dependencyRuleLineage: ConstructionDependencyRuleLineage
+  missingReasons: string[]
+}
+
 const DEFAULT_MAX_SAMPLES = 200
 const DEFAULT_ZERO_LAG_REVIEW_THRESHOLD_DAYS = 2
 
 function normalizeText(value: unknown) {
   return String(value ?? '').trim()
+}
+
+function normalizeNullableText(value: unknown): string | null {
+  const normalized = normalizeText(value)
+  return normalized || null
 }
 
 function normalizeUpper(value: unknown) {
@@ -216,6 +253,10 @@ function normalizeLower(value: unknown) {
 
 function uniqueValues<T extends string>(values: T[]): T[] {
   return [...new Set(values.filter(Boolean))]
+}
+
+function normalizeStringList(values: readonly unknown[] | undefined): string[] {
+  return uniqueValues((values ?? []).map((value) => normalizeText(value)).filter(Boolean))
 }
 
 const CONSTRUCTION_DEPENDENCY_RULE_LEARNING_SCOPE_ORDER = ['global', 'industry', 'company', 'project'] as const
@@ -777,5 +818,57 @@ export function evaluateConstructionDependencyRuleCandidateLiveLearningEvidence(
       : 'dependency_rule_candidate_live_learning_not_ready',
     liveLearningEvidence,
     missingReasons: uniqueValues(missingReasons),
+  }
+}
+
+export function buildConstructionDependencyRulePublicationReadiness(
+  input: ConstructionDependencyRulePublicationReadinessInput,
+): ConstructionDependencyRulePublicationReadiness {
+  const candidateQueues = [
+    ...input.replayReport.calibrationQueues.l3LagCalibrationCandidates,
+    ...input.replayReport.calibrationQueues.l4ConflictQuarantineCandidates,
+  ]
+  const approvedCandidateEventIds = normalizeStringList(input.approvedCandidateEventIds)
+  const sourceDependencyIds = normalizeStringList(candidateQueues.flatMap((candidate) => candidate.sampleDependencyIds))
+  const matchedSeedCodes = normalizeStringList(candidateQueues.map((candidate) => candidate.matchedSeedCode))
+  const dependencyRuleVersionId = normalizeNullableText(input.dependencyRuleVersionId)
+  const runtimePublicationKey = normalizeNullableText(input.runtimePublicationKey)
+  const rollbackTarget = normalizeNullableText(input.rollbackTarget)
+  const dependencyRulePublicationWriterReady = Boolean(dependencyRuleVersionId && runtimePublicationKey)
+  const dependencyRuleLineageRecorded = Boolean(dependencyRuleVersionId)
+    && approvedCandidateEventIds.length > 0
+    && sourceDependencyIds.length > 0
+
+  const readiness = evaluateConstructionDependencyRuleCandidateLiveLearningEvidence({
+    replayReport: input.replayReport,
+    dependencyOutcomeEventRecorded: input.dependencyOutcomeEventRecorded,
+    approvedDependencyRuleCandidateRecorded: approvedCandidateEventIds.length > 0,
+    enabledLearningScopes: input.enabledLearningScopes,
+    runtimeConsumerUsesPublishedArtifact: Boolean(runtimePublicationKey),
+    dependencyRulePublicationWriterReady,
+    dependencyRuleLineageRecorded,
+    releaseExitApproved: input.releaseExitApproved,
+    impactMonitoringReady: input.impactMonitoringReady,
+    rollbackTargetReady: Boolean(rollbackTarget),
+    accuracyMetricsAvailable: input.accuracyMetricsAvailable,
+  })
+
+  return {
+    status: readiness.status === 'dependency_rule_candidate_live_learning_ready'
+      ? 'dependency_rule_publication_ready'
+      : 'dependency_rule_publication_not_ready',
+    liveLearningEvidence: readiness.liveLearningEvidence,
+    dependencyRuleLineage: {
+      assetType: 'dependency_rule_candidate',
+      dependencyRuleVersionId,
+      runtimePublicationKey,
+      rollbackTarget,
+      approvedCandidateEventIds,
+      sourceDependencyIds,
+      matchedSeedCodes,
+      replayReportCode: input.replayReport.reportCode,
+      comparableActualDateCount: input.replayReport.summary.comparableActualDateCount,
+    },
+    missingReasons: readiness.missingReasons,
   }
 }

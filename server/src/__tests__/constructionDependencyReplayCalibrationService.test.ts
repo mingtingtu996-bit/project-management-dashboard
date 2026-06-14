@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { V1475_EXPLICIT_BUSINESS_GATE_SOURCE_ID } from '../seeds/v1475DependencyIntentTemplates.js'
 import {
+  buildConstructionDependencyRulePublicationReadiness,
   collectConstructionDependencyReplayCalibrationReport,
   evaluateConstructionDependencyRuleCandidateLiveLearningEvidence,
 } from '../services/constructionDependencyReplayCalibrationService.js'
@@ -249,6 +250,161 @@ describe('construction dependency replay calibration service', () => {
       },
       missingReasons: [],
     })
+  })
+
+  it('builds a dependency rule publication readiness package from approved replay candidates', () => {
+    const report = {
+      reportCode: 'construction_dependency_replay_calibration' as const,
+      generatedAt: '2026-06-14T00:00:00.000Z',
+      governancePolicy: {
+        replayMode: 'report_only' as const,
+        seedWritePolicy: 'never_write_seed_from_replay' as const,
+        taskDependencyWritePolicy: 'never_write_task_dependencies_from_replay' as const,
+        promotionPolicy: 'manual_seed_review_required' as const,
+      },
+      summary: {
+        inputDependencyCount: 4,
+        matchedDependencyCount: 4,
+        comparableActualDateCount: 4,
+        l3MatchedDependencyCount: 2,
+        l4MatchedDependencyCount: 2,
+        validatedDependencyCount: 2,
+        reviewRequiredDependencyCount: 1,
+        conflictDependencyCount: 0,
+        insufficientActualDateCount: 0,
+        unmatchedSeedCount: 0,
+      },
+      calibrationQueues: {
+        l3LagCalibrationCandidates: [{
+          matchedLayer: 'cross_item_workflow' as const,
+          matchedSeedCode: 'prefab_factory_to_site_hoist_handoff',
+          sampleCount: 3,
+          projectCount: 2,
+          conflictCount: 0,
+          seedLagDays: 2,
+          medianObservedWaitDays: 4,
+          suggestedLagDays: 4,
+          queueStatus: 'manual_review_required' as const,
+          recommendation: 'review_nonzero_lag_or_condition_profile' as const,
+          promotionPolicy: 'Manual seed review required before changing L3 lagDays.',
+          sampleDependencyIds: ['dep-1', 'dep-2', 'dep-3'],
+          projectIds: ['project-1', 'project-2'],
+        }],
+        l4ConflictQuarantineCandidates: [],
+        evidenceCollectionCandidates: [],
+      },
+      items: [],
+    }
+
+    const readiness = buildConstructionDependencyRulePublicationReadiness({
+      replayReport: report,
+      dependencyOutcomeEventRecorded: true,
+      approvedCandidateEventIds: ['dependency-candidate-1', 'dependency-candidate-1'],
+      dependencyRuleVersionId: 'dependency-rule-version-v2',
+      runtimePublicationKey: 'dependency_rule_runtime:dependency-rule-version-v2',
+      rollbackTarget: 'dependency_rule_runtime:dependency-rule-version-v1',
+      enabledLearningScopes: ['system', 'industry_baseline', 'company', 'project'],
+      releaseExitApproved: true,
+      impactMonitoringReady: true,
+      accuracyMetricsAvailable: true,
+    })
+
+    expect(readiness.status).toBe('dependency_rule_publication_ready')
+    expect(readiness.liveLearningEvidence).toEqual(expect.objectContaining({
+      predictionEventRecorded: true,
+      actualOutcomeEventRecorded: true,
+      dependencyRuleCandidatePresent: true,
+      approvedDependencyRuleCandidateRecorded: true,
+      dependencyRulePublicationWriterReady: true,
+      dependencyRuleLineageRecorded: true,
+      runtimeConsumerUsesPublishedArtifact: true,
+      releaseExitApproved: true,
+      impactMonitoringReady: true,
+      rollbackTargetReady: true,
+      accuracyMetricsAvailable: true,
+      comparableActualDateCount: 4,
+    }))
+    expect(readiness.dependencyRuleLineage).toEqual({
+      assetType: 'dependency_rule_candidate',
+      dependencyRuleVersionId: 'dependency-rule-version-v2',
+      runtimePublicationKey: 'dependency_rule_runtime:dependency-rule-version-v2',
+      rollbackTarget: 'dependency_rule_runtime:dependency-rule-version-v1',
+      approvedCandidateEventIds: ['dependency-candidate-1'],
+      sourceDependencyIds: ['dep-1', 'dep-2', 'dep-3'],
+      matchedSeedCodes: ['prefab_factory_to_site_hoist_handoff'],
+      replayReportCode: 'construction_dependency_replay_calibration',
+      comparableActualDateCount: 4,
+    })
+    expect(readiness.missingReasons).toEqual([])
+  })
+
+  it('keeps dependency rule publication readiness closed without approved lineage, publication, and release evidence', () => {
+    const report = {
+      reportCode: 'construction_dependency_replay_calibration' as const,
+      generatedAt: '2026-06-14T00:00:00.000Z',
+      governancePolicy: {
+        replayMode: 'report_only' as const,
+        seedWritePolicy: 'never_write_seed_from_replay' as const,
+        taskDependencyWritePolicy: 'never_write_task_dependencies_from_replay' as const,
+        promotionPolicy: 'manual_seed_review_required' as const,
+      },
+      summary: {
+        inputDependencyCount: 0,
+        matchedDependencyCount: 0,
+        comparableActualDateCount: 0,
+        l3MatchedDependencyCount: 0,
+        l4MatchedDependencyCount: 0,
+        validatedDependencyCount: 0,
+        reviewRequiredDependencyCount: 0,
+        conflictDependencyCount: 0,
+        insufficientActualDateCount: 0,
+        unmatchedSeedCount: 0,
+      },
+      calibrationQueues: {
+        l3LagCalibrationCandidates: [],
+        l4ConflictQuarantineCandidates: [],
+        evidenceCollectionCandidates: [],
+      },
+      items: [],
+    }
+
+    const readiness = buildConstructionDependencyRulePublicationReadiness({
+      replayReport: report,
+      dependencyOutcomeEventRecorded: false,
+      approvedCandidateEventIds: [],
+      dependencyRuleVersionId: '',
+      runtimePublicationKey: '',
+      rollbackTarget: '',
+      enabledLearningScopes: ['system'],
+      releaseExitApproved: false,
+      impactMonitoringReady: false,
+      accuracyMetricsAvailable: false,
+    })
+
+    expect(readiness.status).toBe('dependency_rule_publication_not_ready')
+    expect(readiness.dependencyRuleLineage).toEqual(expect.objectContaining({
+      assetType: 'dependency_rule_candidate',
+      dependencyRuleVersionId: null,
+      runtimePublicationKey: null,
+      rollbackTarget: null,
+      approvedCandidateEventIds: [],
+      sourceDependencyIds: [],
+      matchedSeedCodes: [],
+    }))
+    expect(readiness.missingReasons).toEqual(expect.arrayContaining([
+      'dependency_replay_report_required',
+      'dependency_actual_outcome_required',
+      'dependency_replay_candidate_required',
+      'approved_dependency_rule_candidate_required',
+      'dependency_rule_publication_writer_required',
+      'dependency_rule_lineage_required',
+      'runtime_consumer_publication_required',
+      'global_industry_company_project_learning_scopes_required',
+      'release_exit_required',
+      'impact_monitoring_required',
+      'rollback_target_required',
+      'accuracy_metrics_required',
+    ]))
   })
 
   it('keeps dependency rule candidate live learning not ready without replay outcome or publication evidence', () => {
