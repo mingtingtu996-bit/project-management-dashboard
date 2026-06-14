@@ -95,4 +95,62 @@ describe('durationRuntimeConsumerObservationIntegrationService', () => {
       },
     ])
   })
+
+  it('audits which declared consumers have been wired to the contract adapter', async () => {
+    const {
+      evaluateDurationRuntimeConsumerObservationIntegrationCoverage,
+    } = await import('../services/durationRuntimeConsumerObservationIntegrationService.js')
+
+    const emptyAudit = evaluateDurationRuntimeConsumerObservationIntegrationCoverage()
+
+    expect(emptyAudit.status).toBe('runtime_consumer_observation_integration_not_ready')
+    expect(emptyAudit.requiredContracts).toHaveLength(14)
+    expect(emptyAudit.integratedContracts).toEqual([])
+    expect(emptyAudit.missingContracts).toHaveLength(14)
+
+    const partialAudit = evaluateDurationRuntimeConsumerObservationIntegrationCoverage({
+      adapterRegistrations: [
+        {
+          consumerKey: 'projectRemainingDurationForecastService.ts',
+          assetKeys: [
+            'forecast_residual_overlay',
+            'wbs_reference_days',
+          ],
+        },
+        {
+          consumerKey: 'projectRemainingDurationForecastService',
+          assetKeys: ['forecast_confidence_weight'],
+        },
+      ],
+    })
+
+    expect(partialAudit.status).toBe('runtime_consumer_observation_integration_not_ready')
+    expect(partialAudit.integratedContracts).toEqual([
+      {
+        assetKey: 'forecast_residual_overlay',
+        consumerKey: 'projectRemainingDurationForecastService',
+        consumerSurface: 'remaining_duration_forecast',
+      },
+      {
+        assetKey: 'wbs_reference_days',
+        consumerKey: 'projectRemainingDurationForecastService',
+        consumerSurface: 'remaining_duration_forecast',
+      },
+    ])
+    expect(partialAudit.rejectedRegistrations).toEqual([{
+      assetKey: 'forecast_confidence_weight',
+      consumerKey: 'projectRemainingDurationForecastService',
+      reason: 'runtime_consumer_observation_integration_contract_not_declared',
+    }])
+    expect(partialAudit.missingContracts).toContainEqual({
+      assetKey: 'forecast_confidence_weight',
+      consumerKey: 'taskDurationForecastService',
+      consumerSurface: 'task_duration_forecast',
+    })
+    expect(partialAudit.missingContracts).not.toContainEqual({
+      assetKey: 'wbs_reference_days',
+      consumerKey: 'projectRemainingDurationForecastService',
+      consumerSurface: 'remaining_duration_forecast',
+    })
+  })
 })
