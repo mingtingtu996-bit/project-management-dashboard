@@ -227,6 +227,28 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
     ])
   })
 
+  it('rejects accepted production evidence records when their refs do not match the evidence source allowlist', () => {
+    const collected = collectDurationLiveLearningProductionEvidenceRefs({
+      records: [
+        {
+          assetKey: 'base_duration_benchmark',
+          evidenceKind: 'accuracy',
+          evidenceRef: 'spreadsheet-upload:base:mae-ok',
+          evidenceStatus: 'accuracy_passed',
+        },
+      ],
+    })
+
+    expect(collected.productionEvidence).toEqual([])
+    expect(collected.rejectedRecords).toEqual([{
+      assetKey: 'base_duration_benchmark',
+      evidenceKind: 'accuracy',
+      evidenceRef: 'spreadsheet-upload:base:mae-ok',
+      evidenceStatus: 'accuracy_passed',
+      reason: 'production_evidence_ref_source_not_allowed',
+    }])
+  })
+
   it('builds the final production claim audit from completion audit plus typed production records', () => {
     const audit = buildDurationLiveLearningProductionClaimAudit({
       completionAudit: buildReadyCompletionAudit(),

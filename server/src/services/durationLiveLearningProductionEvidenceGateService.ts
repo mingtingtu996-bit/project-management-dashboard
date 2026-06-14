@@ -44,7 +44,10 @@ export interface DurationLiveLearningRejectedProductionEvidenceRecord {
   evidenceKind: DurationLiveLearningProductionEvidenceKind
   evidenceRef?: string | null
   evidenceStatus?: string | null
-  reason: 'production_evidence_ref_required' | 'production_evidence_status_not_accepted'
+  reason:
+    | 'production_evidence_ref_required'
+    | 'production_evidence_status_not_accepted'
+    | 'production_evidence_ref_source_not_allowed'
 }
 
 export interface DurationLiveLearningProductionEvidenceCollectionInput {
@@ -110,6 +113,29 @@ function acceptedStatusesFor(kind: DurationLiveLearningProductionEvidenceKind) {
   return new Set(['accuracy_passed'])
 }
 
+function acceptedRefPrefixesFor(kind: DurationLiveLearningProductionEvidenceKind) {
+  if (kind === 'production_sample') return ['duration_samples:', 'duration_outcomes:', 'network_outcomes:']
+  if (kind === 'publication_execution') {
+    return [
+      'release_execution:',
+      'algorithm_seed_versions:',
+      'algorithm_learnable_parameter_runtime_publications:',
+      'wbs_reference_days_runtime:',
+      'dependency_rule_runtime:',
+      'critical_path_rule_runtime:',
+      'duration_benchmark_runtime:',
+    ]
+  }
+  if (kind === 'runtime_consumer_observation') return ['runtime_consumer:', 'runtime_consumption:']
+  if (kind === 'impact_monitoring') return ['impact_monitoring:']
+  if (kind === 'rollback_drill') return ['rollback:']
+  return ['accuracy:', 'duration_algorithm_accuracy_events:', 'duration_accuracy_replay:']
+}
+
+function hasAcceptedRefSource(kind: DurationLiveLearningProductionEvidenceKind, evidenceRef: string) {
+  return acceptedRefPrefixesFor(kind).some((prefix) => evidenceRef.startsWith(prefix))
+}
+
 function assignEvidenceRef(
   target: DurationLiveLearningProductionEvidenceRef,
   kind: DurationLiveLearningProductionEvidenceKind,
@@ -139,6 +165,10 @@ export function collectDurationLiveLearningProductionEvidenceRefs(
     const acceptedStatuses = acceptedStatusesFor(record.evidenceKind)
     if (!acceptedStatuses.has(normalizeText(record.evidenceStatus))) {
       rejectedRecords.push({ ...record, reason: 'production_evidence_status_not_accepted' })
+      continue
+    }
+    if (!hasAcceptedRefSource(record.evidenceKind, evidenceRef)) {
+      rejectedRecords.push({ ...record, reason: 'production_evidence_ref_source_not_allowed' })
       continue
     }
 
