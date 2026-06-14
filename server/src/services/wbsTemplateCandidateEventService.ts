@@ -84,6 +84,39 @@ export interface SpecialWorkDurationSeedLiveLearningEvidenceDecision {
   missingReasons: string[]
 }
 
+export interface SpecialWorkDurationSeedPublicationReadinessInput {
+  candidateOutcome: SpecialWorkDurationSeedCandidateOutcomeEvidence
+  approvedCandidateEventIds: readonly string[]
+  seedVersionId?: string | null
+  runtimePublicationKey?: string | null
+  rollbackTarget?: string | null
+  generatedEntityIds?: readonly string[]
+  enabledLearningScopes: readonly SpecialWorkDurationSeedLearningScopeEvidence[]
+  releaseExitApproved: boolean
+  impactMonitoringReady: boolean
+  accuracyMetricsAvailable: boolean
+}
+
+export interface SpecialWorkDurationSeedVersionLineage {
+  seedType: 'special_work_duration'
+  seedVersionId: string | null
+  runtimePublicationKey: string | null
+  rollbackTarget: string | null
+  approvedCandidateEventIds: string[]
+  generatedEntityIds: string[]
+  generatedRowCount: number
+  retainedRowCount: number
+  rejectedRowCount: number
+  pendingRowCount: number
+}
+
+export interface SpecialWorkDurationSeedPublicationReadiness {
+  status: 'special_work_seed_publication_ready' | 'special_work_seed_publication_not_ready'
+  liveLearningEvidence: SpecialWorkDurationSeedLiveLearningEvidence
+  seedVersionLineage: SpecialWorkDurationSeedVersionLineage
+  missingReasons: string[]
+}
+
 function normalizeString(value: unknown): string | null {
   const normalized = String(value ?? '').trim()
   return normalized || null
@@ -111,6 +144,12 @@ function readBoundedInteger(value: unknown, fallback: number, max: number) {
 
 function uniqueValues<T extends string>(values: T[]): T[] {
   return [...new Set(values.filter(Boolean))]
+}
+
+function normalizeStringList(values: readonly unknown[] | undefined): string[] {
+  return uniqueValues((values ?? [])
+    .map((value) => normalizeString(value))
+    .filter((value): value is string => Boolean(value)))
 }
 
 const SPECIAL_WORK_DURATION_LEARNING_SCOPE_ORDER = ['global', 'industry', 'company', 'project'] as const
@@ -440,5 +479,63 @@ export function evaluateSpecialWorkDurationSeedLiveLearningEvidence(
       : 'special_work_seed_live_learning_not_ready',
     liveLearningEvidence,
     missingReasons: uniqueValues(missingReasons),
+  }
+}
+
+export function buildSpecialWorkDurationSeedPublicationReadiness(
+  input: SpecialWorkDurationSeedPublicationReadinessInput,
+): SpecialWorkDurationSeedPublicationReadiness {
+  const generatedRowCount = readPositiveInteger(input.candidateOutcome.generatedRowCount)
+  const retainedRowCount = readBoundedInteger(input.candidateOutcome.retainedRowCount, 0, generatedRowCount)
+  const rejectedRowCount = readBoundedInteger(input.candidateOutcome.rejectedRowCount, 0, generatedRowCount)
+  const pendingRowCount = readBoundedInteger(input.candidateOutcome.pendingRowCount, 0, generatedRowCount)
+  const approvedCandidateEventIds = normalizeStringList(input.approvedCandidateEventIds)
+  const generatedEntityIds = normalizeStringList(input.generatedEntityIds)
+  const seedVersionId = normalizeString(input.seedVersionId)
+  const runtimePublicationKey = normalizeString(input.runtimePublicationKey)
+  const rollbackTarget = normalizeString(input.rollbackTarget)
+  const specialSeedPublicationWriterReady = Boolean(seedVersionId && runtimePublicationKey)
+  const seedVersionLineageRecorded = Boolean(seedVersionId)
+    && approvedCandidateEventIds.length > 0
+    && generatedRowCount > 0
+
+  const readiness = evaluateSpecialWorkDurationSeedLiveLearningEvidence({
+    candidateOutcome: {
+      generatedRowCount,
+      retainedRowCount,
+      rejectedRowCount,
+      pendingRowCount,
+    },
+    networkPredictionEventRecorded: generatedRowCount > 0,
+    templateFeedbackOutcomeRecorded: generatedRowCount > 0,
+    approvedSpecialSeedCandidateRecorded: approvedCandidateEventIds.length > 0,
+    enabledLearningScopes: input.enabledLearningScopes,
+    runtimeConsumerUsesPublishedArtifact: Boolean(runtimePublicationKey),
+    specialSeedPublicationWriterReady,
+    seedVersionLineageRecorded,
+    releaseExitApproved: input.releaseExitApproved,
+    impactMonitoringReady: input.impactMonitoringReady,
+    rollbackTargetReady: Boolean(rollbackTarget),
+    accuracyMetricsAvailable: input.accuracyMetricsAvailable,
+  })
+
+  return {
+    status: readiness.status === 'special_work_seed_live_learning_ready'
+      ? 'special_work_seed_publication_ready'
+      : 'special_work_seed_publication_not_ready',
+    liveLearningEvidence: readiness.liveLearningEvidence,
+    seedVersionLineage: {
+      seedType: 'special_work_duration',
+      seedVersionId,
+      runtimePublicationKey,
+      rollbackTarget,
+      approvedCandidateEventIds,
+      generatedEntityIds,
+      generatedRowCount,
+      retainedRowCount,
+      rejectedRowCount,
+      pendingRowCount,
+    },
+    missingReasons: readiness.missingReasons,
   }
 }

@@ -38,6 +38,7 @@ vi.mock('../database.js', () => ({
 }))
 
 const {
+  buildSpecialWorkDurationSeedPublicationReadiness,
   evaluateSpecialWorkDurationSeedLiveLearningEvidence,
   recordWbsTemplateCandidateEvent,
 } = await import('../services/wbsTemplateCandidateEventService.js')
@@ -243,6 +244,101 @@ describe('wbsTemplateCandidateEventService', () => {
       },
       missingReasons: [],
     })
+  })
+
+  it('builds a special seed publication readiness package from approved template candidates', () => {
+    const readiness = buildSpecialWorkDurationSeedPublicationReadiness({
+      candidateOutcome: {
+        generatedRowCount: 10,
+        retainedRowCount: 7,
+        rejectedRowCount: 3,
+        pendingRowCount: 0,
+      },
+      approvedCandidateEventIds: ['algorithm-candidate-event-id', 'algorithm-candidate-event-id'],
+      seedVersionId: 'special-seed-version-v2',
+      runtimePublicationKey: 'wbs_template_runtime:special-seed-version-v2',
+      rollbackTarget: 'wbs_template_runtime:special-seed-version-v1',
+      generatedEntityIds: ['task-1', 'task-2'],
+      enabledLearningScopes: ['system', 'segment_baseline', 'company', 'project'],
+      releaseExitApproved: true,
+      impactMonitoringReady: true,
+      accuracyMetricsAvailable: true,
+    })
+
+    expect(readiness.status).toBe('special_work_seed_publication_ready')
+    expect(readiness.liveLearningEvidence).toEqual(expect.objectContaining({
+      predictionEventRecorded: true,
+      actualOutcomeEventRecorded: true,
+      tieredLearningPolicyRegistered: true,
+      enabledLearningScopes: ['global', 'industry', 'company', 'project'],
+      approvedSpecialSeedCandidateRecorded: true,
+      specialSeedPublicationWriterReady: true,
+      seedVersionLineageRecorded: true,
+      runtimeConsumerUsesPublishedArtifact: true,
+      releaseExitApproved: true,
+      impactMonitoringReady: true,
+      rollbackTargetReady: true,
+      accuracyMetricsAvailable: true,
+      generatedRowCount: 10,
+      retainedRowCount: 7,
+      rejectedRowCount: 3,
+      pendingRowCount: 0,
+    }))
+    expect(readiness.seedVersionLineage).toEqual({
+      seedType: 'special_work_duration',
+      seedVersionId: 'special-seed-version-v2',
+      runtimePublicationKey: 'wbs_template_runtime:special-seed-version-v2',
+      rollbackTarget: 'wbs_template_runtime:special-seed-version-v1',
+      approvedCandidateEventIds: ['algorithm-candidate-event-id'],
+      generatedEntityIds: ['task-1', 'task-2'],
+      generatedRowCount: 10,
+      retainedRowCount: 7,
+      rejectedRowCount: 3,
+      pendingRowCount: 0,
+    })
+    expect(readiness.missingReasons).toEqual([])
+  })
+
+  it('keeps special seed publication readiness closed without approvals, lineage, publication, and release evidence', () => {
+    const readiness = buildSpecialWorkDurationSeedPublicationReadiness({
+      candidateOutcome: {
+        generatedRowCount: 4,
+        retainedRowCount: 1,
+        rejectedRowCount: 0,
+        pendingRowCount: 3,
+      },
+      approvedCandidateEventIds: [],
+      seedVersionId: '',
+      runtimePublicationKey: '',
+      rollbackTarget: '',
+      generatedEntityIds: [],
+      enabledLearningScopes: ['system'],
+      releaseExitApproved: false,
+      impactMonitoringReady: false,
+      accuracyMetricsAvailable: false,
+    })
+
+    expect(readiness.status).toBe('special_work_seed_publication_not_ready')
+    expect(readiness.seedVersionLineage).toEqual(expect.objectContaining({
+      seedType: 'special_work_duration',
+      seedVersionId: null,
+      runtimePublicationKey: null,
+      rollbackTarget: null,
+      approvedCandidateEventIds: [],
+      generatedEntityIds: [],
+    }))
+    expect(readiness.missingReasons).toEqual(expect.arrayContaining([
+      'all_candidate_rows_must_have_user_outcome',
+      'approved_special_seed_candidate_required',
+      'special_seed_publication_writer_required',
+      'seed_version_lineage_required',
+      'runtime_consumer_publication_required',
+      'global_industry_company_project_learning_scopes_required',
+      'release_exit_required',
+      'impact_monitoring_required',
+      'rollback_target_required',
+      'accuracy_metrics_required',
+    ]))
   })
 
   it('keeps special seed live learning not ready when candidate outcomes are pending or publication evidence is missing', () => {
