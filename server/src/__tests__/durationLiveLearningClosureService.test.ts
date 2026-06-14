@@ -9,6 +9,10 @@ import {
   listDurationLiveLearningManifests,
   resolveDurationLearningScopeCoverage,
 } from '../services/durationLiveLearningClosureService.js'
+import {
+  decideAlgorithmAssetColdStartRuntime,
+  evaluateAlgorithmAssetColdStartLiveLearningEvidence,
+} from '../services/algorithmAssetColdStartBaselineService.js'
 
 const completeLiveEvidence = {
   assetClassificationRegistered: true,
@@ -328,5 +332,77 @@ describe('durationLiveLearningClosureService', () => {
         'wire_runtime_consumer_to_published_or_canary_artifact',
       ]),
     }))
+  })
+
+  it('uses runtime evidence overrides to remove cold-start baseline from the next blocked assets', () => {
+    const coldStartRuntimeDecision = decideAlgorithmAssetColdStartRuntime({
+      companyId: 'company-a',
+      projectId: 'project-a1',
+      workCode: 'WBS-001',
+      scenarioKeys: ['residential'],
+      systemSeedValue: 12,
+      companyAcceptedSampleCount: 2,
+      minCompanySamplesForOverride: 5,
+      baselines: [{
+        baselineId: 'segment-residential',
+        baselineScope: 'segment_baseline',
+        value: 10,
+        applicableScenarioKeys: ['residential'],
+        disabledScenarioKeys: [],
+        anonymizationPolicy: 'k_anonymous_multi_company',
+        contributingCompanyCount: 5,
+        minCompanyCount: 3,
+        contributingProjectCount: 18,
+        minProjectCount: 10,
+        singleCompanyShare: 0.28,
+        maxSingleCompanyShare: 0.4,
+        sourceAggregation: 'aggregate_summary_only',
+        rollbackTarget: 'cold-start-baseline:v1',
+        runtimePublicationStatus: 'published',
+      }],
+    })
+    const coldStartEvidence = evaluateAlgorithmAssetColdStartLiveLearningEvidence({
+      runtimeDecision: coldStartRuntimeDecision,
+      actualOutcomeRecorded: true,
+      actualSampleHealth: 'accepted',
+      companyAcceptedSampleCount: 6,
+      minCompanySamplesForOverride: 5,
+      projectAcceptedSampleCount: 3,
+      minProjectSamplesForOverlay: 3,
+      releaseExitApproved: true,
+      impactMonitoringReady: true,
+      rollbackTargetReady: true,
+      accuracyMetricsAvailable: true,
+    }).liveLearningEvidence
+
+    const manifest = evaluateDurationLiveLearningManifest('duration_prediction_core_a', [{
+      assetKey: 'duration_cold_start_baseline',
+      evidence: coldStartEvidence,
+    }])
+
+    expect(manifest.readyAssets).toBe(1)
+    expect(manifest.assetEvaluations.find((asset) => asset.assetKey === 'duration_cold_start_baseline')).toEqual(expect.objectContaining({
+      status: 'live_self_learning_ready',
+      missingClosureConditions: [],
+      allowedLiveLearningClaim: true,
+    }))
+
+    const plan = evaluateDurationLiveLearningExecutionPlan([
+      'duration_prediction_core_a',
+      'plan_network_core_b',
+    ], [{
+      assetKey: 'duration_cold_start_baseline',
+      evidence: coldStartEvidence,
+    }])
+
+    expect(plan.nextRecommendedAssetKeys).toEqual([
+      'standard_work_duration_seed',
+      'special_work_duration_seed',
+      'wbs_reference_days',
+    ])
+    expect(plan.gates.find((gate) => gate.gateKey === 'prediction_and_outcome_events')?.assetKeys)
+      .not.toContain('duration_cold_start_baseline')
+    expect(plan.gates.find((gate) => gate.gateKey === 'release_monitoring_rollback')?.assetKeys)
+      .not.toContain('duration_cold_start_baseline')
   })
 })

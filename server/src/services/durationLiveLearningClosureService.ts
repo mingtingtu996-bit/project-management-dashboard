@@ -92,6 +92,11 @@ export type DurationLiveLearningAssetEvaluation = {
 
 export type DurationLiveLearningPortfolioItem = DurationLiveLearningAssetEvaluationInput
 
+export type DurationLiveLearningEvidenceOverride = {
+  assetKey: DurationLiveLearningAssetKey
+  evidence: DurationLiveLearningEvidence
+}
+
 export type DurationLiveLearningPortfolioEvaluation = {
   status: 'portfolio_live_self_learning_ready' | 'portfolio_not_ready'
   allowedClaim:
@@ -863,6 +868,34 @@ function cloneManifest(manifest: DurationLiveLearningManifest): DurationLiveLear
   }
 }
 
+function buildEvidenceOverrideMap(
+  evidenceOverrides: readonly DurationLiveLearningEvidenceOverride[] | undefined,
+): Map<DurationLiveLearningAssetKey, DurationLiveLearningEvidence> {
+  const overrides = new Map<DurationLiveLearningAssetKey, DurationLiveLearningEvidence>()
+  for (const override of evidenceOverrides ?? []) {
+    overrides.set(override.assetKey, {
+      ...override.evidence,
+      enabledLearningScopes: override.evidence.enabledLearningScopes
+        ? [...override.evidence.enabledLearningScopes]
+        : undefined,
+    })
+  }
+  return overrides
+}
+
+function resolveManifestEvidence(
+  manifest: DurationLiveLearningManifest,
+  evidenceOverrides: Map<DurationLiveLearningAssetKey, DurationLiveLearningEvidence>,
+): DurationLiveLearningEvidence {
+  const override = evidenceOverrides.get(manifest.assetKey)
+  return {
+    ...manifest.currentEvidence,
+    ...override,
+    enabledLearningScopes: override?.enabledLearningScopes
+      ?? manifest.currentEvidence.enabledLearningScopes,
+  }
+}
+
 export function listDurationLiveLearningManifests(
   rolloutBatch?: DurationLiveLearningRolloutBatch,
 ): DurationLiveLearningManifest[] {
@@ -873,11 +906,13 @@ export function listDurationLiveLearningManifests(
 
 export function evaluateDurationLiveLearningManifest(
   rolloutBatch: DurationLiveLearningRolloutBatch,
+  evidenceOverrides?: readonly DurationLiveLearningEvidenceOverride[],
 ): DurationLiveLearningManifestEvaluation {
+  const overrideMap = buildEvidenceOverrideMap(evidenceOverrides)
   const manifests = listDurationLiveLearningManifests(rolloutBatch)
   const assetEvaluations = manifests.map((manifest) => evaluateDurationLiveLearningAsset({
     assetKey: manifest.assetKey,
-    evidence: manifest.currentEvidence,
+    evidence: resolveManifestEvidence(manifest, overrideMap),
   }))
   const missingClosureConditions = uniqueConditions(
     assetEvaluations.flatMap((evaluation) => evaluation.missingClosureConditions),
@@ -905,14 +940,16 @@ export function evaluateDurationLiveLearningManifest(
 
 export function evaluateDurationLiveLearningExecutionPlan(
   rolloutBatches: DurationLiveLearningRolloutBatch[],
+  evidenceOverrides?: readonly DurationLiveLearningEvidenceOverride[],
 ): DurationLiveLearningExecutionPlanEvaluation {
+  const overrideMap = buildEvidenceOverrideMap(evidenceOverrides)
   const manifests = rolloutBatches.flatMap((batch) => listDurationLiveLearningManifests(batch))
   const evaluationsByAssetKey = new Map(
     manifests.map((manifest) => [
       manifest.assetKey,
       evaluateDurationLiveLearningAsset({
         assetKey: manifest.assetKey,
-        evidence: manifest.currentEvidence,
+        evidence: resolveManifestEvidence(manifest, overrideMap),
       }),
     ]),
   )
