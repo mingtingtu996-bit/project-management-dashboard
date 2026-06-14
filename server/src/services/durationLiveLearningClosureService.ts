@@ -137,6 +137,29 @@ export type DurationLiveLearningManifestEvaluation = {
   missingClosureConditions: DurationLiveLearningClosureCondition[]
 }
 
+export type DurationLiveLearningExecutionGateKey =
+  | 'prediction_and_outcome_events'
+  | 'tiered_learning_scope'
+  | 'runtime_consumer_publication'
+  | 'release_monitoring_rollback'
+  | 'accuracy_metrics'
+
+export type DurationLiveLearningExecutionGate = {
+  gateKey: DurationLiveLearningExecutionGateKey
+  status: 'passed' | 'blocked'
+  assetKeys: DurationLiveLearningAssetKey[]
+  missingClosureConditions: DurationLiveLearningClosureCondition[]
+  requiredActions: string[]
+}
+
+export type DurationLiveLearningExecutionPlanEvaluation = {
+  status: 'execution_plan_ready' | 'execution_plan_not_ready'
+  prohibitedClaim: 'all_duration_assets_are_live_self_learning'
+  rolloutBatches: DurationLiveLearningRolloutBatch[]
+  gates: DurationLiveLearningExecutionGate[]
+  nextRecommendedAssetKeys: DurationLiveLearningAssetKey[]
+}
+
 export type DurationLearningScopeCoverage = {
   normalizedScopes: DurationLearningScope[]
   unknownScopes: string[]
@@ -145,6 +168,71 @@ export type DurationLearningScopeCoverage = {
 }
 
 const ALL_LEARNING_SCOPES: DurationLearningScope[] = ['global', 'industry', 'company', 'project']
+
+const EXECUTION_GATE_DEFINITIONS: Array<{
+  gateKey: DurationLiveLearningExecutionGateKey
+  conditions: DurationLiveLearningClosureCondition[]
+  requiredActions: string[]
+}> = [
+  {
+    gateKey: 'prediction_and_outcome_events',
+    conditions: ['prediction_event_required', 'actual_outcome_event_required'],
+    requiredActions: [
+      'record_prediction_event_for_each_runtime_prediction',
+      'record_actual_outcome_or_network_outcome_before_live_claim',
+    ],
+  },
+  {
+    gateKey: 'tiered_learning_scope',
+    conditions: [
+      'tiered_learning_policy_required',
+      'global_industry_company_project_learning_scopes_required',
+    ],
+    requiredActions: [
+      'register_global_industry_company_project_learning_policy_or_explicit_scope_exception',
+      'keep_low_sample_scopes_shrunk_to_upper_level_baselines',
+    ],
+  },
+  {
+    gateKey: 'runtime_consumer_publication',
+    conditions: ['runtime_consumer_must_use_published_or_canary_artifact'],
+    requiredActions: [
+      'wire_runtime_consumer_to_published_or_canary_artifact',
+      'keep_shadow_and_candidate_artifacts_evidence_only',
+    ],
+  },
+  {
+    gateKey: 'release_monitoring_rollback',
+    conditions: [
+      'release_exit_required',
+      'impact_monitoring_required',
+      'rollback_target_required',
+    ],
+    requiredActions: [
+      'pass_v14223_release_exit_before_runtime_consumption',
+      'bind_impact_monitoring_and_rollback_target_to_publication',
+    ],
+  },
+  {
+    gateKey: 'accuracy_metrics',
+    conditions: ['accuracy_metrics_required'],
+    requiredActions: [
+      'bind_mae_bias_and_overcompensation_metrics_to_runtime_consumed_artifact',
+    ],
+  },
+]
+
+const NEXT_ASSET_RECOMMENDATION_ORDER: DurationLiveLearningAssetKey[] = [
+  'duration_cold_start_baseline',
+  'standard_work_duration_seed',
+  'special_work_duration_seed',
+  'wbs_reference_days',
+  'dependency_rule_candidate',
+  'critical_path_rule_candidate',
+  'base_duration_benchmark',
+  'forecast_residual_overlay',
+  'forecast_confidence_weight',
+]
 
 const DURATION_LIVE_LEARNING_ASSET_CONTRACTS: DurationLiveLearningAssetContract[] = [
   {
@@ -812,5 +900,59 @@ export function evaluateDurationLiveLearningManifest(
     readyAssets,
     assetEvaluations,
     missingClosureConditions,
+  }
+}
+
+export function evaluateDurationLiveLearningExecutionPlan(
+  rolloutBatches: DurationLiveLearningRolloutBatch[],
+): DurationLiveLearningExecutionPlanEvaluation {
+  const manifests = rolloutBatches.flatMap((batch) => listDurationLiveLearningManifests(batch))
+  const evaluationsByAssetKey = new Map(
+    manifests.map((manifest) => [
+      manifest.assetKey,
+      evaluateDurationLiveLearningAsset({
+        assetKey: manifest.assetKey,
+        evidence: manifest.currentEvidence,
+      }),
+    ]),
+  )
+
+  const gates = EXECUTION_GATE_DEFINITIONS.map((definition): DurationLiveLearningExecutionGate => {
+    const assetKeys: DurationLiveLearningAssetKey[] = []
+    const missingClosureConditions: DurationLiveLearningClosureCondition[] = []
+    for (const [assetKey, evaluation] of evaluationsByAssetKey) {
+      const matchedConditions = evaluation.missingClosureConditions.filter((condition) => (
+        definition.conditions.includes(condition)
+      ))
+      if (matchedConditions.length === 0) continue
+      assetKeys.push(assetKey)
+      missingClosureConditions.push(...matchedConditions)
+    }
+    return {
+      gateKey: definition.gateKey,
+      status: assetKeys.length > 0 ? 'blocked' : 'passed',
+      assetKeys,
+      missingClosureConditions: uniqueConditions(missingClosureConditions),
+      requiredActions: [...definition.requiredActions],
+    }
+  })
+
+  const blockedAssetKeys = new Set<DurationLiveLearningAssetKey>()
+  for (const gate of gates) {
+    for (const assetKey of gate.assetKeys) blockedAssetKeys.add(assetKey)
+  }
+
+  const nextRecommendedAssetKeys = NEXT_ASSET_RECOMMENDATION_ORDER
+    .filter((assetKey) => blockedAssetKeys.has(assetKey))
+    .slice(0, 3)
+
+  return {
+    status: gates.some((gate) => gate.status === 'blocked')
+      ? 'execution_plan_not_ready'
+      : 'execution_plan_ready',
+    prohibitedClaim: 'all_duration_assets_are_live_self_learning',
+    rolloutBatches: [...rolloutBatches],
+    gates,
+    nextRecommendedAssetKeys,
   }
 }

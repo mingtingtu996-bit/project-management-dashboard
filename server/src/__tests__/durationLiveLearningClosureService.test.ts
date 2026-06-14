@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   evaluateDurationLiveLearningAsset,
+  evaluateDurationLiveLearningExecutionPlan,
   evaluateDurationLiveLearningManifest,
   evaluateDurationLiveLearningPortfolio,
   listDurationLiveLearningAssetContracts,
@@ -278,5 +279,54 @@ describe('durationLiveLearningClosureService', () => {
       'release_exit_required',
       'rollback_target_required',
     ]))
+  })
+
+  it('groups manifest gaps into executable gates and recommends the next assets to unblock', () => {
+    const plan = evaluateDurationLiveLearningExecutionPlan([
+      'duration_prediction_core_a',
+      'plan_network_core_b',
+    ])
+
+    expect(plan).toEqual(expect.objectContaining({
+      status: 'execution_plan_not_ready',
+      prohibitedClaim: 'all_duration_assets_are_live_self_learning',
+      nextRecommendedAssetKeys: [
+        'duration_cold_start_baseline',
+        'standard_work_duration_seed',
+        'special_work_duration_seed',
+      ],
+    }))
+    expect(plan.gates.map((gate) => gate.gateKey)).toEqual([
+      'prediction_and_outcome_events',
+      'tiered_learning_scope',
+      'runtime_consumer_publication',
+      'release_monitoring_rollback',
+      'accuracy_metrics',
+    ])
+    expect(plan.gates.find((gate) => gate.gateKey === 'prediction_and_outcome_events')).toEqual(expect.objectContaining({
+      status: 'blocked',
+      assetKeys: expect.arrayContaining([
+        'duration_cold_start_baseline',
+        'special_work_duration_seed',
+        'wbs_reference_days',
+        'dependency_rule_candidate',
+        'critical_path_rule_candidate',
+      ]),
+      requiredActions: expect.arrayContaining([
+        'record_prediction_event_for_each_runtime_prediction',
+        'record_actual_outcome_or_network_outcome_before_live_claim',
+      ]),
+    }))
+    expect(plan.gates.find((gate) => gate.gateKey === 'runtime_consumer_publication')).toEqual(expect.objectContaining({
+      status: 'blocked',
+      assetKeys: expect.arrayContaining([
+        'standard_work_duration_seed',
+        'dependency_rule_candidate',
+        'critical_path_rule_candidate',
+      ]),
+      requiredActions: expect.arrayContaining([
+        'wire_runtime_consumer_to_published_or_canary_artifact',
+      ]),
+    }))
   })
 })
