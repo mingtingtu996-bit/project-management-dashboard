@@ -9,6 +9,7 @@ import type {
   DurationLiveLearningEvidenceOverride,
 } from '../services/durationLiveLearningClosureService.js'
 import {
+  collectDurationLiveLearningProductionEvidenceRefs,
   evaluateDurationLiveLearningProductionEvidenceGate,
 } from '../services/durationLiveLearningProductionEvidenceGateService.js'
 
@@ -101,5 +102,86 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
     )
     expect(gate.missingEvidenceByAsset).toEqual([])
     expect(gate.productionEvidenceAssetKeys).toEqual(learnableAssetKeys)
+  })
+
+  it('collects gate-ready production refs from typed evidence records and ignores non-production states', () => {
+    const collected = collectDurationLiveLearningProductionEvidenceRefs({
+      records: [
+        {
+          assetKey: 'base_duration_benchmark',
+          evidenceKind: 'production_sample',
+          evidenceRef: 'duration_samples:base:accepted',
+          evidenceStatus: 'accepted',
+        },
+        {
+          assetKey: 'base_duration_benchmark',
+          evidenceKind: 'publication_execution',
+          evidenceRef: 'release_execution:base:published',
+          evidenceStatus: 'published',
+        },
+        {
+          assetKey: 'base_duration_benchmark',
+          evidenceKind: 'runtime_consumer_observation',
+          evidenceRef: 'runtime_consumer:base:observed',
+          evidenceStatus: 'observed',
+        },
+        {
+          assetKey: 'base_duration_benchmark',
+          evidenceKind: 'impact_monitoring',
+          evidenceRef: 'impact_monitoring:base:armed',
+          evidenceStatus: 'monitoring_armed',
+        },
+        {
+          assetKey: 'base_duration_benchmark',
+          evidenceKind: 'rollback_drill',
+          evidenceRef: 'rollback:base:verified',
+          evidenceStatus: 'rollback_verified',
+        },
+        {
+          assetKey: 'base_duration_benchmark',
+          evidenceKind: 'accuracy',
+          evidenceRef: 'accuracy:base:mae-bias-ok',
+          evidenceStatus: 'accuracy_passed',
+        },
+        {
+          assetKey: 'duration_cold_start_baseline',
+          evidenceKind: 'publication_execution',
+          evidenceRef: 'release_execution:cold:candidate',
+          evidenceStatus: 'candidate',
+        },
+        {
+          assetKey: 'duration_cold_start_baseline',
+          evidenceKind: 'accuracy',
+          evidenceRef: '   ',
+          evidenceStatus: 'accuracy_passed',
+        },
+      ],
+    })
+
+    expect(collected.productionEvidence).toEqual([{
+      assetKey: 'base_duration_benchmark',
+      productionSampleEvidenceRef: 'duration_samples:base:accepted',
+      publicationExecutionRef: 'release_execution:base:published',
+      runtimeConsumerObservationRef: 'runtime_consumer:base:observed',
+      impactMonitoringEvidenceRef: 'impact_monitoring:base:armed',
+      rollbackDrillEvidenceRef: 'rollback:base:verified',
+      accuracyEvidenceRef: 'accuracy:base:mae-bias-ok',
+    }])
+    expect(collected.rejectedRecords).toEqual([
+      {
+        assetKey: 'duration_cold_start_baseline',
+        evidenceKind: 'publication_execution',
+        evidenceRef: 'release_execution:cold:candidate',
+        evidenceStatus: 'candidate',
+        reason: 'production_evidence_status_not_accepted',
+      },
+      {
+        assetKey: 'duration_cold_start_baseline',
+        evidenceKind: 'accuracy',
+        evidenceRef: '   ',
+        evidenceStatus: 'accuracy_passed',
+        reason: 'production_evidence_ref_required',
+      },
+    ])
   })
 })

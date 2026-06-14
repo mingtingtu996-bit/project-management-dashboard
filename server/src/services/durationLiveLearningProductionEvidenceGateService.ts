@@ -24,6 +24,38 @@ export interface DurationLiveLearningProductionEvidenceRef {
   accuracyEvidenceRef?: string | null
 }
 
+export type DurationLiveLearningProductionEvidenceKind =
+  | 'production_sample'
+  | 'publication_execution'
+  | 'runtime_consumer_observation'
+  | 'impact_monitoring'
+  | 'rollback_drill'
+  | 'accuracy'
+
+export interface DurationLiveLearningProductionEvidenceRecord {
+  assetKey: DurationLiveLearningAssetKey
+  evidenceKind: DurationLiveLearningProductionEvidenceKind
+  evidenceRef?: string | null
+  evidenceStatus?: string | null
+}
+
+export interface DurationLiveLearningRejectedProductionEvidenceRecord {
+  assetKey: DurationLiveLearningAssetKey
+  evidenceKind: DurationLiveLearningProductionEvidenceKind
+  evidenceRef?: string | null
+  evidenceStatus?: string | null
+  reason: 'production_evidence_ref_required' | 'production_evidence_status_not_accepted'
+}
+
+export interface DurationLiveLearningProductionEvidenceCollectionInput {
+  records?: readonly DurationLiveLearningProductionEvidenceRecord[]
+}
+
+export interface DurationLiveLearningProductionEvidenceCollection {
+  productionEvidence: DurationLiveLearningProductionEvidenceRef[]
+  rejectedRecords: DurationLiveLearningRejectedProductionEvidenceRecord[]
+}
+
 export interface DurationLiveLearningProductionEvidenceGateInput {
   completionAudit: DurationLiveLearningCompletionAudit
   productionEvidence?: readonly DurationLiveLearningProductionEvidenceRef[]
@@ -47,6 +79,62 @@ export interface DurationLiveLearningProductionEvidenceGate {
 
 function hasRef(value: string | null | undefined) {
   return typeof value === 'string' && value.trim().length > 0
+}
+
+function normalizeText(value: string | null | undefined) {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function acceptedStatusesFor(kind: DurationLiveLearningProductionEvidenceKind) {
+  if (kind === 'production_sample') return new Set(['accepted', 'weak'])
+  if (kind === 'publication_execution') return new Set(['published', 'canary'])
+  if (kind === 'runtime_consumer_observation') return new Set(['observed'])
+  if (kind === 'impact_monitoring') return new Set(['monitoring_armed', 'monitoring_running', 'monitoring_passed'])
+  if (kind === 'rollback_drill') return new Set(['rollback_verified', 'rollback_executed'])
+  return new Set(['accuracy_passed'])
+}
+
+function assignEvidenceRef(
+  target: DurationLiveLearningProductionEvidenceRef,
+  kind: DurationLiveLearningProductionEvidenceKind,
+  evidenceRef: string,
+) {
+  if (kind === 'production_sample') target.productionSampleEvidenceRef ??= evidenceRef
+  if (kind === 'publication_execution') target.publicationExecutionRef ??= evidenceRef
+  if (kind === 'runtime_consumer_observation') target.runtimeConsumerObservationRef ??= evidenceRef
+  if (kind === 'impact_monitoring') target.impactMonitoringEvidenceRef ??= evidenceRef
+  if (kind === 'rollback_drill') target.rollbackDrillEvidenceRef ??= evidenceRef
+  if (kind === 'accuracy') target.accuracyEvidenceRef ??= evidenceRef
+}
+
+export function collectDurationLiveLearningProductionEvidenceRefs(
+  input: DurationLiveLearningProductionEvidenceCollectionInput,
+): DurationLiveLearningProductionEvidenceCollection {
+  const evidenceByAssetKey = new Map<DurationLiveLearningAssetKey, DurationLiveLearningProductionEvidenceRef>()
+  const rejectedRecords: DurationLiveLearningRejectedProductionEvidenceRecord[] = []
+
+  for (const record of input.records ?? []) {
+    const evidenceRef = normalizeText(record.evidenceRef)
+    if (!evidenceRef) {
+      rejectedRecords.push({ ...record, reason: 'production_evidence_ref_required' })
+      continue
+    }
+
+    const acceptedStatuses = acceptedStatusesFor(record.evidenceKind)
+    if (!acceptedStatuses.has(normalizeText(record.evidenceStatus))) {
+      rejectedRecords.push({ ...record, reason: 'production_evidence_status_not_accepted' })
+      continue
+    }
+
+    const current = evidenceByAssetKey.get(record.assetKey) ?? { assetKey: record.assetKey }
+    assignEvidenceRef(current, record.evidenceKind, evidenceRef)
+    evidenceByAssetKey.set(record.assetKey, current)
+  }
+
+  return {
+    productionEvidence: [...evidenceByAssetKey.values()],
+    rejectedRecords,
+  }
 }
 
 function buildProductionEvidenceMap(
