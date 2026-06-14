@@ -1,8 +1,9 @@
 import type {
   DurationLiveLearningCompletionAudit,
 } from './durationLiveLearningCompletionAuditService.js'
-import type {
-  DurationLiveLearningAssetKey,
+import {
+  listDurationLiveLearningManifests,
+  type DurationLiveLearningAssetKey,
 } from './durationLiveLearningClosureService.js'
 
 export type DurationLiveLearningProductionEvidenceReasonCode =
@@ -37,6 +38,21 @@ export interface DurationLiveLearningProductionEvidenceRecord {
   evidenceKind: DurationLiveLearningProductionEvidenceKind
   evidenceRef?: string | null
   evidenceStatus?: string | null
+  consumerKey?: string | null
+}
+
+export interface DurationRuntimeConsumerObservationIdentity {
+  assetKey: DurationLiveLearningAssetKey
+  consumerKey: string
+}
+
+export interface DurationRuntimeConsumerObservationCoverage {
+  status:
+    | 'runtime_consumer_observation_coverage_ready'
+    | 'runtime_consumer_observation_coverage_not_ready'
+  requiredConsumerObservations: DurationRuntimeConsumerObservationIdentity[]
+  observedConsumerObservations: DurationRuntimeConsumerObservationIdentity[]
+  missingConsumerObservations: DurationRuntimeConsumerObservationIdentity[]
 }
 
 export interface DurationLiveLearningRejectedProductionEvidenceRecord {
@@ -137,6 +153,7 @@ export interface DurationLiveLearningProductionClaimAudit {
   evidenceRowCollection: DurationLiveLearningProductionEvidenceRowCollection
   evidenceCollection: DurationLiveLearningProductionEvidenceCollection
   productionGate: DurationLiveLearningProductionEvidenceGate
+  runtimeConsumerObservationCoverage: DurationRuntimeConsumerObservationCoverage
 }
 
 const LEARNABLE_DURATION_LIVE_LEARNING_ASSET_KEYS: DurationLiveLearningAssetKey[] = [
@@ -235,6 +252,7 @@ const REQUIRED_FIELDS_BY_SOURCE_TABLE: Record<DurationLiveLearningProductionEvid
     'id',
     'asset_key',
     'publication_key',
+    'consumer_key',
     'observation_status',
   ],
 }
@@ -297,6 +315,31 @@ function readBoolean(row: Record<string, unknown>, key: string) {
 
 function hasNumber(row: Record<string, unknown>, key: string) {
   return typeof row[key] === 'number' && Number.isFinite(row[key])
+}
+
+function readTrue(row: Record<string, unknown>, ...keys: string[]) {
+  return keys.some((key) => row[key] === true)
+}
+
+function normalizeConsumerKey(value: string | null | undefined) {
+  return normalizeText(value).replace(/\.ts$/i, '')
+}
+
+function consumerObservationKey(item: DurationRuntimeConsumerObservationIdentity) {
+  return `${item.assetKey}::${item.consumerKey}`
+}
+
+function uniqueConsumerObservations(
+  values: DurationRuntimeConsumerObservationIdentity[],
+): DurationRuntimeConsumerObservationIdentity[] {
+  const map = new Map<string, DurationRuntimeConsumerObservationIdentity>()
+  for (const value of values) {
+    const consumerKey = normalizeConsumerKey(value.consumerKey)
+    if (!consumerKey) continue
+    const normalized = { assetKey: value.assetKey, consumerKey }
+    map.set(consumerObservationKey(normalized), normalized)
+  }
+  return [...map.values()]
 }
 
 function assetKeyFromRow(row: Record<string, unknown>): DurationLiveLearningAssetKey | null {
@@ -432,6 +475,74 @@ function acceptedRefPrefixesFor(kind: DurationLiveLearningProductionEvidenceKind
 
 function hasAcceptedRefSource(kind: DurationLiveLearningProductionEvidenceKind, evidenceRef: string) {
   return acceptedRefPrefixesFor(kind).some((prefix) => evidenceRef.startsWith(prefix))
+}
+
+export function listDurationLiveLearningExpectedRuntimeConsumerObservations(): DurationRuntimeConsumerObservationIdentity[] {
+  return uniqueConsumerObservations(
+    listDurationLiveLearningManifests().flatMap((manifest) =>
+      manifest.implementationAnchors.runtimeConsumers.map((consumerKey) => ({
+        assetKey: manifest.assetKey,
+        consumerKey,
+      }))),
+  )
+}
+
+function observedRuntimeConsumerObservationsFromRecords(
+  records: readonly DurationLiveLearningProductionEvidenceRecord[] | undefined,
+): DurationRuntimeConsumerObservationIdentity[] {
+  const observed: DurationRuntimeConsumerObservationIdentity[] = []
+  for (const record of records ?? []) {
+    if (record.evidenceKind !== 'runtime_consumer_observation') continue
+    const evidenceRef = normalizeText(record.evidenceRef)
+    const consumerKey = normalizeConsumerKey(record.consumerKey)
+    if (!consumerKey) continue
+    if (!acceptedStatusesFor(record.evidenceKind).has(normalizeText(record.evidenceStatus))) continue
+    if (!evidenceRef || !hasAcceptedRefSource(record.evidenceKind, evidenceRef)) continue
+    observed.push({ assetKey: record.assetKey, consumerKey })
+  }
+  return observed
+}
+
+function observedRuntimeConsumerObservationsFromSourceRows(
+  sourceRows: readonly DurationLiveLearningProductionEvidenceSourceRow[] | undefined,
+): DurationRuntimeConsumerObservationIdentity[] {
+  const observed: DurationRuntimeConsumerObservationIdentity[] = []
+  for (const source of sourceRows ?? []) {
+    if (source.sourceTable !== 'runtime_consumer_observations') continue
+    const row = source.row
+    const assetKey = assetKeyFromSourceRow(source)
+    const consumerKey = normalizeConsumerKey(readText(row, 'consumer_key', 'consumerKey'))
+    if (!assetKey || !consumerKey) continue
+    if (readText(row, 'observation_status', 'observationStatus') !== 'observed') continue
+    if (!readText(row, 'publication_key', 'publicationKey')) continue
+    if (readTrue(row, 'writes_runtime_directly', 'writesRuntimeDirectly')) continue
+    if (readTrue(row, 'writes_fact_directly', 'writesFactDirectly')) continue
+    observed.push({ assetKey, consumerKey })
+  }
+  return observed
+}
+
+export function evaluateDurationRuntimeConsumerObservationCoverage(input: {
+  records?: readonly DurationLiveLearningProductionEvidenceRecord[]
+  sourceRows?: readonly DurationLiveLearningProductionEvidenceSourceRow[]
+} = {}): DurationRuntimeConsumerObservationCoverage {
+  const requiredConsumerObservations = listDurationLiveLearningExpectedRuntimeConsumerObservations()
+  const observedConsumerObservations = uniqueConsumerObservations([
+    ...observedRuntimeConsumerObservationsFromRecords(input.records),
+    ...observedRuntimeConsumerObservationsFromSourceRows(input.sourceRows),
+  ])
+  const observedKeys = new Set(observedConsumerObservations.map(consumerObservationKey))
+  const missingConsumerObservations = requiredConsumerObservations
+    .filter((item) => !observedKeys.has(consumerObservationKey(item)))
+
+  return {
+    status: missingConsumerObservations.length === 0
+      ? 'runtime_consumer_observation_coverage_ready'
+      : 'runtime_consumer_observation_coverage_not_ready',
+    requiredConsumerObservations,
+    observedConsumerObservations,
+    missingConsumerObservations,
+  }
 }
 
 function assignEvidenceRef(
@@ -755,17 +866,26 @@ export function buildDurationLiveLearningProductionClaimAudit(
     completionAudit: input.completionAudit,
     productionEvidence: evidenceCollection.productionEvidence,
   })
+  const runtimeConsumerObservationCoverage = evaluateDurationRuntimeConsumerObservationCoverage({
+    records: [
+      ...evidenceRowCollection.records,
+      ...(input.records ?? []),
+    ],
+    sourceRows: input.sourceRows,
+  })
   const ready = productionGate.status === 'duration_live_learning_production_evidence_ready'
+    && runtimeConsumerObservationCoverage.status === 'runtime_consumer_observation_coverage_ready'
 
   return {
     status: ready
       ? 'duration_live_learning_production_claim_ready'
       : 'duration_live_learning_production_claim_not_ready',
-    allowedClaim: productionGate.allowedClaim,
+    allowedClaim: ready ? productionGate.allowedClaim : 'not_ready_for_live_self_learning_claim',
     prohibitedClaim: productionGate.prohibitedClaim,
     completionAudit: input.completionAudit,
     evidenceRowCollection,
     evidenceCollection,
     productionGate,
+    runtimeConsumerObservationCoverage,
   }
 }

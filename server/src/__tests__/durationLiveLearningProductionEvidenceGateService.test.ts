@@ -41,6 +41,23 @@ const learnableAssetKeys: DurationLiveLearningAssetKey[] = [
   'critical_path_rule_candidate',
 ]
 
+const expectedRuntimeConsumerObservations = [
+  { assetKey: 'base_duration_benchmark' as const, consumerKey: 'durationSuggestionService' },
+  { assetKey: 'duration_cold_start_baseline' as const, consumerKey: 'durationSuggestionService' },
+  { assetKey: 'forecast_residual_overlay' as const, consumerKey: 'taskDurationForecastService' },
+  { assetKey: 'forecast_residual_overlay' as const, consumerKey: 'projectRemainingDurationForecastService' },
+  { assetKey: 'forecast_confidence_weight' as const, consumerKey: 'taskDurationForecastService' },
+  { assetKey: 'standard_work_duration_seed' as const, consumerKey: 'durationSuggestionService' },
+  { assetKey: 'special_work_duration_seed' as const, consumerKey: 'wbsTemplateGenerationService' },
+  { assetKey: 'special_work_duration_seed' as const, consumerKey: 'durationSuggestionService' },
+  { assetKey: 'wbs_reference_days' as const, consumerKey: 'wbsTemplateGenerationService' },
+  { assetKey: 'wbs_reference_days' as const, consumerKey: 'projectRemainingDurationForecastService' },
+  { assetKey: 'dependency_rule_candidate' as const, consumerKey: 'wbsTemplateGenerationService' },
+  { assetKey: 'dependency_rule_candidate' as const, consumerKey: 'scheduleAccelerationService' },
+  { assetKey: 'critical_path_rule_candidate' as const, consumerKey: 'projectRemainingDurationForecastService' },
+  { assetKey: 'critical_path_rule_candidate' as const, consumerKey: 'scheduleAccelerationRuntimeService' },
+]
+
 function buildReadyOverrides(): DurationLiveLearningEvidenceOverride[] {
   return learnableAssetKeys.map((assetKey) => ({
     assetKey,
@@ -62,89 +79,97 @@ function buildReadyCompletionAudit() {
 }
 
 function buildAllProductionEvidenceRecords() {
-  return learnableAssetKeys.flatMap((assetKey) => [
-    {
+  return [
+    ...learnableAssetKeys.flatMap((assetKey) => [
+      {
+        assetKey,
+        evidenceKind: 'production_sample' as const,
+        evidenceRef: `duration_samples:${assetKey}:accepted`,
+        evidenceStatus: 'accepted',
+      },
+      {
+        assetKey,
+        evidenceKind: 'publication_execution' as const,
+        evidenceRef: `release_execution:${assetKey}:published`,
+        evidenceStatus: 'published',
+      },
+      {
+        assetKey,
+        evidenceKind: 'impact_monitoring' as const,
+        evidenceRef: `impact_monitoring:${assetKey}:armed`,
+        evidenceStatus: 'monitoring_armed',
+      },
+      {
+        assetKey,
+        evidenceKind: 'rollback_drill' as const,
+        evidenceRef: `rollback:${assetKey}:verified`,
+        evidenceStatus: 'rollback_verified',
+      },
+      {
+        assetKey,
+        evidenceKind: 'accuracy' as const,
+        evidenceRef: `accuracy:${assetKey}:mae-bias-ok`,
+        evidenceStatus: 'accuracy_passed',
+      },
+    ]),
+    ...expectedRuntimeConsumerObservations.map(({ assetKey, consumerKey }) => ({
       assetKey,
-      evidenceKind: 'production_sample' as const,
-      evidenceRef: `duration_samples:${assetKey}:accepted`,
-      evidenceStatus: 'accepted',
-    },
-    {
-      assetKey,
-      evidenceKind: 'publication_execution' as const,
-      evidenceRef: `release_execution:${assetKey}:published`,
-      evidenceStatus: 'published',
-    },
-    {
-      assetKey,
+      consumerKey,
       evidenceKind: 'runtime_consumer_observation' as const,
-      evidenceRef: `runtime_consumer:${assetKey}:observed`,
+      evidenceRef: `runtime_consumer:${assetKey}:${consumerKey}:observed`,
       evidenceStatus: 'observed',
-    },
-    {
-      assetKey,
-      evidenceKind: 'impact_monitoring' as const,
-      evidenceRef: `impact_monitoring:${assetKey}:armed`,
-      evidenceStatus: 'monitoring_armed',
-    },
-    {
-      assetKey,
-      evidenceKind: 'rollback_drill' as const,
-      evidenceRef: `rollback:${assetKey}:verified`,
-      evidenceStatus: 'rollback_verified',
-    },
-    {
-      assetKey,
-      evidenceKind: 'accuracy' as const,
-      evidenceRef: `accuracy:${assetKey}:mae-bias-ok`,
-      evidenceStatus: 'accuracy_passed',
-    },
-  ])
+    })),
+  ]
 }
 
 function buildAllProductionSourceRows() {
-  return learnableAssetKeys.flatMap((assetKey) => [
-    {
-      sourceTable: 'duration_experience_samples' as const,
-      row: {
-        id: `sample-${assetKey}`,
-        sample_status: 'active',
-        included_in_benchmark: true,
-        actual_duration: 8,
-        completed_at: '2026-06-01T00:00:00.000Z',
-        metadata: { liveLearningAssetKey: assetKey },
+  return [
+    ...learnableAssetKeys.flatMap((assetKey) => [
+      {
+        sourceTable: 'duration_experience_samples' as const,
+        row: {
+          id: `sample-${assetKey}`,
+          sample_status: 'active',
+          included_in_benchmark: true,
+          actual_duration: 8,
+          completed_at: '2026-06-01T00:00:00.000Z',
+          metadata: { liveLearningAssetKey: assetKey },
+        },
       },
-    },
-    {
-      sourceTable: 'algorithm_learnable_parameter_runtime_publications' as const,
-      row: {
-        publication_key: `publication-${assetKey}`,
-        asset_key: assetKey,
-        publication_status: 'published',
-        impact_monitoring: { status: 'monitoring_armed' },
-        rollback_execution: { status: 'rollback_verified' },
+      {
+        sourceTable: 'algorithm_learnable_parameter_runtime_publications' as const,
+        row: {
+          publication_key: `publication-${assetKey}`,
+          asset_key: assetKey,
+          publication_status: 'published',
+          impact_monitoring: { status: 'monitoring_armed' },
+          rollback_execution: { status: 'rollback_verified' },
+        },
       },
-    },
-    {
-      sourceTable: 'duration_algorithm_accuracy_events' as const,
-      row: {
-        id: `accuracy-${assetKey}`,
-        backtest_status: 'backtested',
-        absolute_error_days: 1,
-        prediction_context: { assetKey },
-        actual_context: { accuracyGateStatus: 'accuracy_passed' },
+      {
+        sourceTable: 'duration_algorithm_accuracy_events' as const,
+        row: {
+          id: `accuracy-${assetKey}`,
+          backtest_status: 'backtested',
+          absolute_error_days: 1,
+          prediction_context: { assetKey },
+          actual_context: { accuracyGateStatus: 'accuracy_passed' },
+        },
       },
-    },
-    {
+    ]),
+    ...expectedRuntimeConsumerObservations.map(({ assetKey, consumerKey }) => ({
       sourceTable: 'runtime_consumer_observations' as const,
       row: {
-        id: `consumer-${assetKey}`,
+        id: `consumer-${assetKey}-${consumerKey}`,
         asset_key: assetKey,
         publication_key: `publication-${assetKey}`,
+        consumer_key: consumerKey,
         observation_status: 'observed',
+        writes_runtime_directly: false,
+        writes_fact_directly: false,
       },
-    },
-  ])
+    })),
+  ]
 }
 
 describe('durationLiveLearningProductionEvidenceGateService', () => {
@@ -217,6 +242,7 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
       expect(entry.requiredFieldsBySourceTable.runtime_consumer_observations).toEqual(expect.arrayContaining([
         'id',
         'asset_key',
+        'consumer_key',
         'observation_status',
       ]))
     }
@@ -588,10 +614,31 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
     expect(audit.status).toBe('duration_live_learning_production_claim_ready')
     expect(audit.evidenceCollection.rejectedRecords).toEqual([])
     expect(audit.productionGate.status).toBe('duration_live_learning_production_evidence_ready')
+    expect(audit.runtimeConsumerObservationCoverage.status).toBe('runtime_consumer_observation_coverage_ready')
+    expect(audit.runtimeConsumerObservationCoverage.missingConsumerObservations).toEqual([])
     expect(audit.productionGate.productionEvidenceAssetKeys).toEqual(learnableAssetKeys)
     expect(audit.allowedClaim).toBe(
       'all_learnable_duration_prediction_and_network_assets_are_live_self_learning;facts_and_commitments_remain_locked',
     )
+  })
+
+  it('blocks the final production claim when any declared runtime consumer has no observation', () => {
+    const audit = buildDurationLiveLearningProductionClaimAudit({
+      completionAudit: buildReadyCompletionAudit(),
+      records: buildAllProductionEvidenceRecords().filter((record) =>
+        record.assetKey !== 'forecast_residual_overlay'
+        || record.evidenceKind !== 'runtime_consumer_observation'
+        || record.consumerKey !== 'projectRemainingDurationForecastService'),
+    })
+
+    expect(audit.productionGate.status).toBe('duration_live_learning_production_evidence_ready')
+    expect(audit.runtimeConsumerObservationCoverage.status).toBe('runtime_consumer_observation_coverage_not_ready')
+    expect(audit.runtimeConsumerObservationCoverage.missingConsumerObservations).toEqual([{
+      assetKey: 'forecast_residual_overlay',
+      consumerKey: 'projectRemainingDurationForecastService',
+    }])
+    expect(audit.status).toBe('duration_live_learning_production_claim_not_ready')
+    expect(audit.allowedClaim).toBe('not_ready_for_live_self_learning_claim')
   })
 
   it('builds the final production claim audit directly from production source rows', () => {
@@ -604,5 +651,6 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
     expect(audit.evidenceRowCollection.rejectedRows).toEqual([])
     expect(audit.evidenceCollection.rejectedRecords).toEqual([])
     expect(audit.productionGate.status).toBe('duration_live_learning_production_evidence_ready')
+    expect(audit.runtimeConsumerObservationCoverage.status).toBe('runtime_consumer_observation_coverage_ready')
   })
 })

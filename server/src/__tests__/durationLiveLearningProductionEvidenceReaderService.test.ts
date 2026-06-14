@@ -34,6 +34,23 @@ const learnableAssetKeys: DurationLiveLearningAssetKey[] = [
   'critical_path_rule_candidate',
 ]
 
+const expectedRuntimeConsumerObservations = [
+  { assetKey: 'base_duration_benchmark' as const, consumerKey: 'durationSuggestionService' },
+  { assetKey: 'duration_cold_start_baseline' as const, consumerKey: 'durationSuggestionService' },
+  { assetKey: 'forecast_residual_overlay' as const, consumerKey: 'taskDurationForecastService' },
+  { assetKey: 'forecast_residual_overlay' as const, consumerKey: 'projectRemainingDurationForecastService' },
+  { assetKey: 'forecast_confidence_weight' as const, consumerKey: 'taskDurationForecastService' },
+  { assetKey: 'standard_work_duration_seed' as const, consumerKey: 'durationSuggestionService' },
+  { assetKey: 'special_work_duration_seed' as const, consumerKey: 'wbsTemplateGenerationService' },
+  { assetKey: 'special_work_duration_seed' as const, consumerKey: 'durationSuggestionService' },
+  { assetKey: 'wbs_reference_days' as const, consumerKey: 'wbsTemplateGenerationService' },
+  { assetKey: 'wbs_reference_days' as const, consumerKey: 'projectRemainingDurationForecastService' },
+  { assetKey: 'dependency_rule_candidate' as const, consumerKey: 'wbsTemplateGenerationService' },
+  { assetKey: 'dependency_rule_candidate' as const, consumerKey: 'scheduleAccelerationService' },
+  { assetKey: 'critical_path_rule_candidate' as const, consumerKey: 'projectRemainingDurationForecastService' },
+  { assetKey: 'critical_path_rule_candidate' as const, consumerKey: 'scheduleAccelerationRuntimeService' },
+]
+
 function buildReadyCompletionAudit() {
   const evidenceOverrides: DurationLiveLearningEvidenceOverride[] = learnableAssetKeys.map((assetKey) => ({
     assetKey,
@@ -80,10 +97,11 @@ function rowsForSql(sql: string) {
     }))
   }
   if (normalized.includes('from public.runtime_consumer_observations')) {
-    return learnableAssetKeys.map((assetKey) => ({
-      id: `consumer-${assetKey}`,
+    return expectedRuntimeConsumerObservations.map(({ assetKey, consumerKey }) => ({
+      id: `consumer-${assetKey}-${consumerKey}`,
       asset_key: assetKey,
       publication_key: `publication-${assetKey}`,
+      consumer_key: consumerKey,
       observation_status: 'observed',
       writes_runtime_directly: false,
       writes_fact_directly: false,
@@ -115,6 +133,9 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
     })
 
     expect(audit.status).toBe('duration_live_learning_production_claim_ready')
+    expect(audit.runtimeConsumerObservationCoverage.status).toBe('runtime_consumer_observation_coverage_ready')
+    expect(audit.runtimeConsumerObservationCoverage.requiredConsumerObservations).toEqual(expectedRuntimeConsumerObservations)
+    expect(audit.runtimeConsumerObservationCoverage.missingConsumerObservations).toEqual([])
     expect(audit.sourceQuery.sourceTables).toEqual([
       'duration_experience_samples',
       'algorithm_learnable_parameter_runtime_publications',
