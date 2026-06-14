@@ -10,6 +10,7 @@ import type {
 } from '../services/durationLiveLearningClosureService.js'
 import {
   buildDurationLiveLearningProductionClaimAudit,
+  collectDurationLiveLearningProductionEvidenceRecordsFromRows,
   collectDurationLiveLearningProductionEvidenceRefs,
   evaluateDurationLiveLearningProductionEvidenceGate,
 } from '../services/durationLiveLearningProductionEvidenceGateService.js'
@@ -96,6 +97,51 @@ function buildAllProductionEvidenceRecords() {
       evidenceKind: 'accuracy' as const,
       evidenceRef: `accuracy:${assetKey}:mae-bias-ok`,
       evidenceStatus: 'accuracy_passed',
+    },
+  ])
+}
+
+function buildAllProductionSourceRows() {
+  return learnableAssetKeys.flatMap((assetKey) => [
+    {
+      sourceTable: 'duration_experience_samples' as const,
+      row: {
+        id: `sample-${assetKey}`,
+        sample_status: 'active',
+        included_in_benchmark: true,
+        actual_duration: 8,
+        completed_at: '2026-06-01T00:00:00.000Z',
+        metadata: { liveLearningAssetKey: assetKey },
+      },
+    },
+    {
+      sourceTable: 'algorithm_learnable_parameter_runtime_publications' as const,
+      row: {
+        publication_key: `publication-${assetKey}`,
+        asset_key: assetKey,
+        publication_status: 'published',
+        impact_monitoring: { status: 'monitoring_armed' },
+        rollback_execution: { status: 'rollback_verified' },
+      },
+    },
+    {
+      sourceTable: 'duration_algorithm_accuracy_events' as const,
+      row: {
+        id: `accuracy-${assetKey}`,
+        backtest_status: 'backtested',
+        absolute_error_days: 1,
+        prediction_context: { assetKey },
+        actual_context: { accuracyGateStatus: 'accuracy_passed' },
+      },
+    },
+    {
+      sourceTable: 'runtime_consumer_observations' as const,
+      row: {
+        id: `consumer-${assetKey}`,
+        asset_key: assetKey,
+        publication_key: `publication-${assetKey}`,
+        observation_status: 'observed',
+      },
     },
   ])
 }
@@ -249,6 +295,108 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
     }])
   })
 
+  it('adapts production source rows into typed production evidence records', () => {
+    const adapted = collectDurationLiveLearningProductionEvidenceRecordsFromRows({
+      rows: [
+        {
+          sourceTable: 'duration_experience_samples',
+          row: {
+            id: 'sample-1',
+            sample_status: 'active',
+            included_in_benchmark: true,
+            actual_duration: 8,
+            completed_at: '2026-06-01T00:00:00.000Z',
+            metadata: { liveLearningAssetKey: 'base_duration_benchmark' },
+          },
+        },
+        {
+          sourceTable: 'algorithm_learnable_parameter_runtime_publications',
+          row: {
+            publication_key: 'forecast-weight-v2',
+            asset_key: 'forecast_confidence_weight',
+            publication_status: 'published',
+            impact_monitoring: { status: 'monitoring_armed', eventRef: 'impact_monitoring:forecast-weight-v2:armed' },
+            rollback_execution: { status: 'rollback_verified', eventRef: 'rollback:forecast-weight-v2:verified' },
+          },
+        },
+        {
+          sourceTable: 'algorithm_learnable_parameter_release_events',
+          row: {
+            event_type: 'impact_monitoring',
+            event_status: 'monitoring_passed',
+            source_publication_key: 'forecast-weight-v2',
+            event_payload: { assetKey: 'forecast_confidence_weight' },
+          },
+        },
+        {
+          sourceTable: 'duration_algorithm_accuracy_events',
+          row: {
+            id: 'accuracy-1',
+            backtest_status: 'backtested',
+            absolute_error_days: 1,
+            prediction_context: { assetKey: 'forecast_confidence_weight' },
+            actual_context: { accuracyGateStatus: 'accuracy_passed' },
+          },
+        },
+        {
+          sourceTable: 'runtime_consumer_observations',
+          row: {
+            id: 'consumer-1',
+            asset_key: 'forecast_confidence_weight',
+            publication_key: 'forecast-weight-v2',
+            observation_status: 'observed',
+          },
+        },
+      ],
+    })
+
+    expect(adapted.records).toEqual([
+      {
+        assetKey: 'base_duration_benchmark',
+        evidenceKind: 'production_sample',
+        evidenceRef: 'duration_samples:sample-1',
+        evidenceStatus: 'accepted',
+      },
+      {
+        assetKey: 'forecast_confidence_weight',
+        evidenceKind: 'publication_execution',
+        evidenceRef: 'algorithm_learnable_parameter_runtime_publications:forecast-weight-v2',
+        evidenceStatus: 'published',
+      },
+      {
+        assetKey: 'forecast_confidence_weight',
+        evidenceKind: 'impact_monitoring',
+        evidenceRef: 'impact_monitoring:forecast-weight-v2:armed',
+        evidenceStatus: 'monitoring_armed',
+      },
+      {
+        assetKey: 'forecast_confidence_weight',
+        evidenceKind: 'rollback_drill',
+        evidenceRef: 'rollback:forecast-weight-v2:verified',
+        evidenceStatus: 'rollback_verified',
+      },
+      {
+        assetKey: 'forecast_confidence_weight',
+        evidenceKind: 'impact_monitoring',
+        evidenceRef: 'impact_monitoring:forecast-weight-v2:monitoring_passed',
+        evidenceStatus: 'monitoring_passed',
+      },
+      {
+        assetKey: 'forecast_confidence_weight',
+        evidenceKind: 'accuracy',
+        evidenceRef: 'duration_algorithm_accuracy_events:accuracy-1',
+        evidenceStatus: 'accuracy_passed',
+      },
+      {
+        assetKey: 'forecast_confidence_weight',
+        evidenceKind: 'runtime_consumer_observation',
+        evidenceRef: 'runtime_consumer:consumer-1',
+        evidenceStatus: 'observed',
+      },
+    ])
+    expect(adapted.rejectedRows).toEqual([])
+  })
+
   it('builds the final production claim audit from completion audit plus typed production records', () => {
     const audit = buildDurationLiveLearningProductionClaimAudit({
       completionAudit: buildReadyCompletionAudit(),
@@ -262,5 +410,17 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
     expect(audit.allowedClaim).toBe(
       'all_learnable_duration_prediction_and_network_assets_are_live_self_learning;facts_and_commitments_remain_locked',
     )
+  })
+
+  it('builds the final production claim audit directly from production source rows', () => {
+    const audit = buildDurationLiveLearningProductionClaimAudit({
+      completionAudit: buildReadyCompletionAudit(),
+      sourceRows: buildAllProductionSourceRows(),
+    })
+
+    expect(audit.status).toBe('duration_live_learning_production_claim_ready')
+    expect(audit.evidenceRowCollection.rejectedRows).toEqual([])
+    expect(audit.evidenceCollection.rejectedRecords).toEqual([])
+    expect(audit.productionGate.status).toBe('duration_live_learning_production_evidence_ready')
   })
 })

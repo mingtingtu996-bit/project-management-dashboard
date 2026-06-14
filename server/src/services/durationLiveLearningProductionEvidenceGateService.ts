@@ -54,6 +54,36 @@ export interface DurationLiveLearningProductionEvidenceCollectionInput {
   records?: readonly DurationLiveLearningProductionEvidenceRecord[]
 }
 
+export type DurationLiveLearningProductionEvidenceSourceTable =
+  | 'duration_experience_samples'
+  | 'duration_algorithm_accuracy_events'
+  | 'algorithm_learnable_parameter_runtime_publications'
+  | 'algorithm_learnable_parameter_release_events'
+  | 'runtime_consumer_observations'
+
+export interface DurationLiveLearningProductionEvidenceSourceRow {
+  sourceTable: DurationLiveLearningProductionEvidenceSourceTable
+  row: Record<string, unknown>
+}
+
+export interface DurationLiveLearningRejectedProductionEvidenceSourceRow {
+  sourceTable: DurationLiveLearningProductionEvidenceSourceTable
+  row: Record<string, unknown>
+  reason:
+    | 'production_source_asset_key_required'
+    | 'production_source_row_id_required'
+    | 'production_source_row_not_evidence_ready'
+}
+
+export interface DurationLiveLearningProductionEvidenceRowCollectionInput {
+  rows?: readonly DurationLiveLearningProductionEvidenceSourceRow[]
+}
+
+export interface DurationLiveLearningProductionEvidenceRowCollection {
+  records: DurationLiveLearningProductionEvidenceRecord[]
+  rejectedRows: DurationLiveLearningRejectedProductionEvidenceSourceRow[]
+}
+
 export interface DurationLiveLearningProductionEvidenceCollection {
   productionEvidence: DurationLiveLearningProductionEvidenceRef[]
   rejectedRecords: DurationLiveLearningRejectedProductionEvidenceRecord[]
@@ -83,6 +113,7 @@ export interface DurationLiveLearningProductionEvidenceGate {
 export interface DurationLiveLearningProductionClaimAuditInput {
   completionAudit: DurationLiveLearningCompletionAudit
   records?: readonly DurationLiveLearningProductionEvidenceRecord[]
+  sourceRows?: readonly DurationLiveLearningProductionEvidenceSourceRow[]
 }
 
 export interface DurationLiveLearningProductionClaimAudit {
@@ -92,6 +123,7 @@ export interface DurationLiveLearningProductionClaimAudit {
   allowedClaim: DurationLiveLearningCompletionAudit['allowedClaim']
   prohibitedClaim: DurationLiveLearningCompletionAudit['prohibitedClaim']
   completionAudit: DurationLiveLearningCompletionAudit
+  evidenceRowCollection: DurationLiveLearningProductionEvidenceRowCollection
   evidenceCollection: DurationLiveLearningProductionEvidenceCollection
   productionGate: DurationLiveLearningProductionEvidenceGate
 }
@@ -102,6 +134,95 @@ function hasRef(value: string | null | undefined) {
 
 function normalizeText(value: string | null | undefined) {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+function readText(row: Record<string, unknown>, ...keys: string[]) {
+  for (const key of keys) {
+    const value = row[key]
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return ''
+}
+
+function readRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+}
+
+function readBoolean(row: Record<string, unknown>, key: string) {
+  return row[key] === true
+}
+
+function hasNumber(row: Record<string, unknown>, key: string) {
+  return typeof row[key] === 'number' && Number.isFinite(row[key])
+}
+
+function assetKeyFromRow(row: Record<string, unknown>): DurationLiveLearningAssetKey | null {
+  const direct = readText(row, 'asset_key', 'assetKey')
+  if (direct) return direct as DurationLiveLearningAssetKey
+  const metadata = readRecord(row.metadata)
+  const eventPayload = readRecord(row.event_payload ?? row.eventPayload)
+  const predictionContext = readRecord(row.prediction_context ?? row.predictionContext)
+  const actualContext = readRecord(row.actual_context ?? row.actualContext)
+  const nested = readText(metadata, 'liveLearningAssetKey', 'live_learning_asset_key', 'assetKey', 'asset_key')
+    || readText(eventPayload, 'liveLearningAssetKey', 'live_learning_asset_key', 'assetKey', 'asset_key')
+    || readText(predictionContext, 'liveLearningAssetKey', 'live_learning_asset_key', 'assetKey', 'asset_key')
+    || readText(actualContext, 'liveLearningAssetKey', 'live_learning_asset_key', 'assetKey', 'asset_key')
+  return nested ? nested as DurationLiveLearningAssetKey : null
+}
+
+function isActiveBenchmarkSample(row: Record<string, unknown>) {
+  return readText(row, 'sample_status', 'sampleStatus') === 'active'
+    && readBoolean(row, 'included_in_benchmark')
+    && hasNumber(row, 'actual_duration')
+}
+
+function sampleEvidenceStatus(row: Record<string, unknown>) {
+  return readText(row, 'completed_at', 'completedAt') ? 'accepted' : 'weak'
+}
+
+function accuracyGateStatus(row: Record<string, unknown>) {
+  const actualContext = readRecord(row.actual_context ?? row.actualContext)
+  return readText(row, 'accuracy_gate_status', 'accuracyGateStatus')
+    || readText(actualContext, 'accuracyGateStatus', 'accuracy_gate_status')
+}
+
+function publicationEvidenceStatus(row: Record<string, unknown>) {
+  const status = readText(row, 'publication_status', 'publicationStatus')
+  return status === 'published' || status === 'canary' ? status : ''
+}
+
+function impactMonitoringStatus(value: unknown) {
+  const monitoring = readRecord(value)
+  const status = readText(monitoring, 'status')
+  return status === 'monitoring_armed' || status === 'monitoring_running' || status === 'monitoring_passed'
+    ? status
+    : ''
+}
+
+function rollbackExecutionStatus(value: unknown) {
+  const rollback = readRecord(value)
+  const status = readText(rollback, 'status')
+  return status === 'rollback_verified' || status === 'rollback_executed' ? status : ''
+}
+
+function pushRejectedRow(
+  rejectedRows: DurationLiveLearningRejectedProductionEvidenceSourceRow[],
+  source: DurationLiveLearningProductionEvidenceSourceRow,
+  reason: DurationLiveLearningRejectedProductionEvidenceSourceRow['reason'],
+) {
+  rejectedRows.push({ ...source, reason })
+}
+
+function pushRecord(
+  records: DurationLiveLearningProductionEvidenceRecord[],
+  assetKey: DurationLiveLearningAssetKey,
+  evidenceKind: DurationLiveLearningProductionEvidenceKind,
+  evidenceRef: string,
+  evidenceStatus: string,
+) {
+  records.push({ assetKey, evidenceKind, evidenceRef, evidenceStatus })
 }
 
 function acceptedStatusesFor(kind: DurationLiveLearningProductionEvidenceKind) {
@@ -183,6 +304,127 @@ export function collectDurationLiveLearningProductionEvidenceRefs(
   }
 }
 
+export function collectDurationLiveLearningProductionEvidenceRecordsFromRows(
+  input: DurationLiveLearningProductionEvidenceRowCollectionInput,
+): DurationLiveLearningProductionEvidenceRowCollection {
+  const records: DurationLiveLearningProductionEvidenceRecord[] = []
+  const rejectedRows: DurationLiveLearningRejectedProductionEvidenceSourceRow[] = []
+
+  for (const source of input.rows ?? []) {
+    const row = source.row
+    const assetKey = assetKeyFromRow(row)
+    if (!assetKey) {
+      pushRejectedRow(rejectedRows, source, 'production_source_asset_key_required')
+      continue
+    }
+
+    if (source.sourceTable === 'duration_experience_samples') {
+      const id = readText(row, 'id')
+      if (!id) {
+        pushRejectedRow(rejectedRows, source, 'production_source_row_id_required')
+        continue
+      }
+      if (!isActiveBenchmarkSample(row)) {
+        pushRejectedRow(rejectedRows, source, 'production_source_row_not_evidence_ready')
+        continue
+      }
+      pushRecord(records, assetKey, 'production_sample', `duration_samples:${id}`, sampleEvidenceStatus(row))
+      continue
+    }
+
+    if (source.sourceTable === 'algorithm_learnable_parameter_runtime_publications') {
+      const publicationKey = readText(row, 'publication_key', 'publicationKey')
+      const publicationStatus = publicationEvidenceStatus(row)
+      if (!publicationKey) {
+        pushRejectedRow(rejectedRows, source, 'production_source_row_id_required')
+        continue
+      }
+      if (!publicationStatus) {
+        pushRejectedRow(rejectedRows, source, 'production_source_row_not_evidence_ready')
+        continue
+      }
+      pushRecord(
+        records,
+        assetKey,
+        'publication_execution',
+        `algorithm_learnable_parameter_runtime_publications:${publicationKey}`,
+        publicationStatus,
+      )
+
+      const monitoringStatus = impactMonitoringStatus(row.impact_monitoring ?? row.impactMonitoring)
+      if (monitoringStatus) {
+        const eventRef = readText(readRecord(row.impact_monitoring ?? row.impactMonitoring), 'eventRef', 'event_ref')
+        pushRecord(records, assetKey, 'impact_monitoring', eventRef || `impact_monitoring:${publicationKey}:${monitoringStatus}`, monitoringStatus)
+      }
+      const rollbackStatus = rollbackExecutionStatus(row.rollback_execution ?? row.rollbackExecution)
+      if (rollbackStatus) {
+        const eventRef = readText(readRecord(row.rollback_execution ?? row.rollbackExecution), 'eventRef', 'event_ref')
+        pushRecord(records, assetKey, 'rollback_drill', eventRef || `rollback:${publicationKey}:${rollbackStatus}`, rollbackStatus)
+      }
+      continue
+    }
+
+    if (source.sourceTable === 'algorithm_learnable_parameter_release_events') {
+      const sourcePublicationKey = readText(row, 'source_publication_key', 'sourcePublicationKey')
+      const eventType = readText(row, 'event_type', 'eventType')
+      const eventStatus = readText(row, 'event_status', 'eventStatus')
+      if (!sourcePublicationKey) {
+        pushRejectedRow(rejectedRows, source, 'production_source_row_id_required')
+        continue
+      }
+      if (eventType === 'impact_monitoring' && eventStatus === 'monitoring_passed') {
+        pushRecord(
+          records,
+          assetKey,
+          'impact_monitoring',
+          `impact_monitoring:${sourcePublicationKey}:monitoring_passed`,
+          'monitoring_passed',
+        )
+        continue
+      }
+      if (eventType === 'rollback_execution' && eventStatus === 'rollback_executed') {
+        pushRecord(
+          records,
+          assetKey,
+          'rollback_drill',
+          `rollback:${sourcePublicationKey}:rollback_executed`,
+          'rollback_executed',
+        )
+        continue
+      }
+      pushRejectedRow(rejectedRows, source, 'production_source_row_not_evidence_ready')
+      continue
+    }
+
+    if (source.sourceTable === 'duration_algorithm_accuracy_events') {
+      const id = readText(row, 'id')
+      if (!id) {
+        pushRejectedRow(rejectedRows, source, 'production_source_row_id_required')
+        continue
+      }
+      if (accuracyGateStatus(row) !== 'accuracy_passed' || !hasNumber(row, 'absolute_error_days')) {
+        pushRejectedRow(rejectedRows, source, 'production_source_row_not_evidence_ready')
+        continue
+      }
+      pushRecord(records, assetKey, 'accuracy', `duration_algorithm_accuracy_events:${id}`, 'accuracy_passed')
+      continue
+    }
+
+    const id = readText(row, 'id')
+    if (!id) {
+      pushRejectedRow(rejectedRows, source, 'production_source_row_id_required')
+      continue
+    }
+    if (readText(row, 'observation_status', 'observationStatus') !== 'observed') {
+      pushRejectedRow(rejectedRows, source, 'production_source_row_not_evidence_ready')
+      continue
+    }
+    pushRecord(records, assetKey, 'runtime_consumer_observation', `runtime_consumer:${id}`, 'observed')
+  }
+
+  return { records, rejectedRows }
+}
+
 function buildProductionEvidenceMap(
   productionEvidence: readonly DurationLiveLearningProductionEvidenceRef[] | undefined,
 ) {
@@ -259,8 +501,14 @@ export function evaluateDurationLiveLearningProductionEvidenceGate(
 export function buildDurationLiveLearningProductionClaimAudit(
   input: DurationLiveLearningProductionClaimAuditInput,
 ): DurationLiveLearningProductionClaimAudit {
+  const evidenceRowCollection = collectDurationLiveLearningProductionEvidenceRecordsFromRows({
+    rows: input.sourceRows,
+  })
   const evidenceCollection = collectDurationLiveLearningProductionEvidenceRefs({
-    records: input.records,
+    records: [
+      ...evidenceRowCollection.records,
+      ...(input.records ?? []),
+    ],
   })
   const productionGate = evaluateDurationLiveLearningProductionEvidenceGate({
     completionAudit: input.completionAudit,
@@ -275,6 +523,7 @@ export function buildDurationLiveLearningProductionClaimAudit(
     allowedClaim: productionGate.allowedClaim,
     prohibitedClaim: productionGate.prohibitedClaim,
     completionAudit: input.completionAudit,
+    evidenceRowCollection,
     evidenceCollection,
     productionGate,
   }
