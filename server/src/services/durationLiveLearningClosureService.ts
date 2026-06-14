@@ -20,6 +20,13 @@ export type DurationLiveLearningAssetClass =
 
 export type DurationLearningScope = 'global' | 'industry' | 'company' | 'project'
 
+export type DurationLearningScopeEvidence =
+  | DurationLearningScope
+  | 'system'
+  | 'industry_baseline'
+  | 'segment_baseline'
+  | string
+
 export type DurationLiveLearningClosureCondition =
   | 'asset_classification_required'
   | 'prediction_event_required'
@@ -50,7 +57,7 @@ export type DurationLiveLearningEvidence = {
   predictionEventRecorded?: boolean
   actualOutcomeEventRecorded?: boolean
   tieredLearningPolicyRegistered?: boolean
-  enabledLearningScopes?: readonly DurationLearningScope[]
+  enabledLearningScopes?: readonly DurationLearningScopeEvidence[]
   runtimeConsumerUsesPublishedArtifact?: boolean
   releaseExitApproved?: boolean
   impactMonitoringReady?: boolean
@@ -94,6 +101,47 @@ export type DurationLiveLearningPortfolioEvaluation = {
   learnableAssets: DurationLiveLearningAssetEvaluation[]
   factLockedAssets: DurationLiveLearningAssetEvaluation[]
   missingClosureConditions: DurationLiveLearningClosureCondition[]
+}
+
+export type DurationLiveLearningRolloutBatch = 'duration_prediction_core_a' | 'plan_network_core_b'
+
+export type DurationLiveLearningImplementationAnchors = {
+  primaryService: string
+  runtimeConsumers: string[]
+  predictionEventAnchors: string[]
+  outcomeEventAnchors: string[]
+  releaseGateAnchors: string[]
+}
+
+export type DurationLiveLearningManifest = {
+  rolloutBatch: DurationLiveLearningRolloutBatch
+  assetKey: DurationLiveLearningAssetKey
+  assetFamily: string
+  implementationAnchors: DurationLiveLearningImplementationAnchors
+  currentEvidence: DurationLiveLearningEvidence
+  nextRuntimeSteps: string[]
+}
+
+export type DurationLiveLearningManifestEvaluation = {
+  rolloutBatch: DurationLiveLearningRolloutBatch
+  status: 'manifest_live_self_learning_ready' | 'manifest_not_ready'
+  allowedClaim:
+    | 'first_batch_live_self_learning_ready_for_learnable_assets'
+    | 'first_batch_manifest_established_not_ready_for_live_self_learning_claim'
+    | 'batch_live_self_learning_ready_for_learnable_assets'
+    | 'batch_manifest_established_not_ready_for_live_self_learning_claim'
+  prohibitedClaim: 'all_duration_assets_are_live_self_learning'
+  totalAssets: number
+  readyAssets: number
+  assetEvaluations: DurationLiveLearningAssetEvaluation[]
+  missingClosureConditions: DurationLiveLearningClosureCondition[]
+}
+
+export type DurationLearningScopeCoverage = {
+  normalizedScopes: DurationLearningScope[]
+  unknownScopes: string[]
+  hasFullCoverage: boolean
+  missingScopes: DurationLearningScope[]
 }
 
 const ALL_LEARNING_SCOPES: DurationLearningScope[] = ['global', 'industry', 'company', 'project']
@@ -287,6 +335,274 @@ const CONTRACT_BY_ASSET_KEY = new Map(
   DURATION_LIVE_LEARNING_ASSET_CONTRACTS.map((contract) => [contract.assetKey, contract]),
 )
 
+const DURATION_LIVE_LEARNING_MANIFESTS: DurationLiveLearningManifest[] = [
+  {
+    rolloutBatch: 'duration_prediction_core_a',
+    assetKey: 'base_duration_benchmark',
+    assetFamily: 'base_duration_and_benchmark_blend',
+    implementationAnchors: {
+      primaryService: 'durationSuggestionService.ts',
+      runtimeConsumers: ['durationSuggestionService.ts'],
+      predictionEventAnchors: ['duration_prediction_events'],
+      outcomeEventAnchors: ['durationExperienceService.ts', 'projectProductivityCalibrationService.ts'],
+      releaseGateAnchors: [
+        'algorithmAssetLearnableParameterRuntimeConsumptionService.ts',
+        'algorithmAssetLearnableParameterReleaseExecutionService.ts',
+      ],
+    },
+    currentEvidence: {
+      assetClassificationRegistered: true,
+      predictionEventRecorded: true,
+      actualOutcomeEventRecorded: true,
+      tieredLearningPolicyRegistered: true,
+      enabledLearningScopes: ['company', 'project'],
+      runtimeConsumerUsesPublishedArtifact: true,
+      releaseExitApproved: true,
+      impactMonitoringReady: false,
+      rollbackTargetReady: true,
+      accuracyMetricsAvailable: true,
+    },
+    nextRuntimeSteps: [
+      'prove_global_industry_company_project_scope_chain_for_base_duration_benchmark',
+      'bind_impact_monitoring_to_base_duration_runtime_publication',
+    ],
+  },
+  {
+    rolloutBatch: 'duration_prediction_core_a',
+    assetKey: 'duration_cold_start_baseline',
+    assetFamily: 'cold_start_shared_baseline',
+    implementationAnchors: {
+      primaryService: 'algorithmAssetColdStartBaselineService.ts',
+      runtimeConsumers: ['durationSuggestionService.ts'],
+      predictionEventAnchors: ['duration_prediction_events'],
+      outcomeEventAnchors: ['durationExperienceService.ts'],
+      releaseGateAnchors: ['algorithmAssetColdStartBaselineService.ts'],
+    },
+    currentEvidence: {
+      assetClassificationRegistered: true,
+      predictionEventRecorded: true,
+      actualOutcomeEventRecorded: false,
+      tieredLearningPolicyRegistered: true,
+      enabledLearningScopes: ['global', 'industry'],
+      runtimeConsumerUsesPublishedArtifact: true,
+      releaseExitApproved: false,
+      impactMonitoringReady: false,
+      rollbackTargetReady: false,
+      accuracyMetricsAvailable: false,
+    },
+    nextRuntimeSteps: [
+      'record_cold_start_actual_outcome_after_project_completion',
+      'add_company_and_project_shrinkage_path_after_cold_start_baseline',
+      'route_cold_start_baseline_through_release_exit_and_rollback',
+    ],
+  },
+  {
+    rolloutBatch: 'duration_prediction_core_a',
+    assetKey: 'forecast_residual_overlay',
+    assetFamily: 'task_remaining_residual_overlay',
+    implementationAnchors: {
+      primaryService: 'algorithmAssetForecastResidualOverlayService.ts',
+      runtimeConsumers: ['taskDurationForecastService.ts', 'projectRemainingDurationForecastService.ts'],
+      predictionEventAnchors: ['duration_prediction_events'],
+      outcomeEventAnchors: ['durationAlgorithmAccuracyService.ts', 'durationAccuracyReplayAcceptanceService.ts'],
+      releaseGateAnchors: [
+        'algorithmAssetLearnableParameterReleaseExecutionService.ts',
+        'algorithmAssetForecastResidualOverlayService.ts',
+      ],
+    },
+    currentEvidence: {
+      assetClassificationRegistered: true,
+      predictionEventRecorded: true,
+      actualOutcomeEventRecorded: true,
+      tieredLearningPolicyRegistered: true,
+      enabledLearningScopes: ['company', 'project'],
+      runtimeConsumerUsesPublishedArtifact: true,
+      releaseExitApproved: true,
+      impactMonitoringReady: true,
+      rollbackTargetReady: true,
+      accuracyMetricsAvailable: true,
+    },
+    nextRuntimeSteps: [
+      'add_global_and_industry_residual_overlay_fallback_or_document_scope_exception',
+    ],
+  },
+  {
+    rolloutBatch: 'duration_prediction_core_a',
+    assetKey: 'forecast_confidence_weight',
+    assetFamily: 'forecast_confidence_runtime_weight',
+    implementationAnchors: {
+      primaryService: 'algorithmAssetLearnableParameterRuntimeConsumptionService.ts',
+      runtimeConsumers: ['taskDurationForecastService.ts'],
+      predictionEventAnchors: ['duration_prediction_events'],
+      outcomeEventAnchors: ['durationAlgorithmAccuracyService.ts'],
+      releaseGateAnchors: ['algorithmAssetLearnableParameterReleaseExecutionService.ts'],
+    },
+    currentEvidence: {
+      assetClassificationRegistered: true,
+      predictionEventRecorded: true,
+      actualOutcomeEventRecorded: true,
+      tieredLearningPolicyRegistered: true,
+      enabledLearningScopes: ['company', 'project'],
+      runtimeConsumerUsesPublishedArtifact: true,
+      releaseExitApproved: true,
+      impactMonitoringReady: true,
+      rollbackTargetReady: true,
+      accuracyMetricsAvailable: true,
+    },
+    nextRuntimeSteps: [
+      'add_global_and_industry_confidence_weight_fallback_or_document_scope_exception',
+    ],
+  },
+  {
+    rolloutBatch: 'plan_network_core_b',
+    assetKey: 'standard_work_duration_seed',
+    assetFamily: 'standard_work_seed_reference_days',
+    implementationAnchors: {
+      primaryService: 'standardWorkDurationSeedReplayService.ts',
+      runtimeConsumers: ['durationSuggestionService.ts'],
+      predictionEventAnchors: ['duration_prediction_events', 'standard_work_duration_seed_replay'],
+      outcomeEventAnchors: ['durationExperienceService.ts'],
+      releaseGateAnchors: [
+        'standardWorkDurationSeedReplayGovernanceService.ts',
+        'standardWorkDurationSeedReplayCandidateBridgeService.ts',
+      ],
+    },
+    currentEvidence: {
+      assetClassificationRegistered: true,
+      predictionEventRecorded: true,
+      actualOutcomeEventRecorded: true,
+      tieredLearningPolicyRegistered: false,
+      enabledLearningScopes: ['system'],
+      runtimeConsumerUsesPublishedArtifact: false,
+      releaseExitApproved: false,
+      impactMonitoringReady: false,
+      rollbackTargetReady: false,
+      accuracyMetricsAvailable: false,
+    },
+    nextRuntimeSteps: [
+      'add_dedicated_seed_publication_writer_after_replay_candidate_approval',
+      'record_seed_version_lineage_in_duration_prediction_events',
+      'bind_seed_replay_accuracy_to_release_exit_and_rollback',
+    ],
+  },
+  {
+    rolloutBatch: 'plan_network_core_b',
+    assetKey: 'special_work_duration_seed',
+    assetFamily: 'special_work_seed_and_template_reference_days',
+    implementationAnchors: {
+      primaryService: 'wbsTemplateGenerationService.ts',
+      runtimeConsumers: ['wbsTemplateGenerationService.ts', 'durationSuggestionService.ts'],
+      predictionEventAnchors: ['network_prediction_events', 'wbs_template_generation_trace'],
+      outcomeEventAnchors: ['wbsTemplateFeedbackGovernance.test.ts'],
+      releaseGateAnchors: ['wbsTemplateCandidateEventService.ts'],
+    },
+    currentEvidence: {
+      assetClassificationRegistered: true,
+      predictionEventRecorded: false,
+      actualOutcomeEventRecorded: false,
+      tieredLearningPolicyRegistered: false,
+      enabledLearningScopes: ['system'],
+      runtimeConsumerUsesPublishedArtifact: false,
+      releaseExitApproved: false,
+      impactMonitoringReady: false,
+      rollbackTargetReady: false,
+      accuracyMetricsAvailable: false,
+    },
+    nextRuntimeSteps: [
+      'record_special_work_network_prediction_event',
+      'record_user_keep_delete_adjust_outcome_for_special_seed_rows',
+      'publish_special_seed_candidates_through_release_exit_before_runtime_consumption',
+    ],
+  },
+  {
+    rolloutBatch: 'plan_network_core_b',
+    assetKey: 'wbs_reference_days',
+    assetFamily: 'wbs_reference_days_and_template_rhythm',
+    implementationAnchors: {
+      primaryService: 'wbsTemplateGoldenBenchmarkReplayService.ts',
+      runtimeConsumers: ['wbsTemplateGenerationService.ts', 'projectRemainingDurationForecastService.ts'],
+      predictionEventAnchors: ['network_prediction_events', 'wbs_reference_days_lineage'],
+      outcomeEventAnchors: ['wbsTemplateFeedbackGovernance.test.ts', 'durationAccuracyReplayAcceptanceService.ts'],
+      releaseGateAnchors: ['wbsTemplateGoldenBenchmarkGateService.ts'],
+    },
+    currentEvidence: {
+      assetClassificationRegistered: true,
+      predictionEventRecorded: false,
+      actualOutcomeEventRecorded: false,
+      tieredLearningPolicyRegistered: false,
+      enabledLearningScopes: ['system'],
+      runtimeConsumerUsesPublishedArtifact: false,
+      releaseExitApproved: false,
+      impactMonitoringReady: false,
+      rollbackTargetReady: false,
+      accuracyMetricsAvailable: false,
+    },
+    nextRuntimeSteps: [
+      'create_wbs_reference_days_runtime_writer',
+      'record_template_reference_days_prediction_and_outcome_events',
+      'bind_template_feedback_to_accuracy_metrics_without_seed_silent_rewrite',
+    ],
+  },
+  {
+    rolloutBatch: 'plan_network_core_b',
+    assetKey: 'dependency_rule_candidate',
+    assetFamily: 'construction_dependency_rule_candidate',
+    implementationAnchors: {
+      primaryService: 'constructionDependencyReplayCalibrationService.ts',
+      runtimeConsumers: ['wbsTemplateGenerationService.ts', 'scheduleAccelerationService.ts'],
+      predictionEventAnchors: ['network_prediction_events', 'dependency_replay_calibration'],
+      outcomeEventAnchors: ['constructionDependencyReplayCalibrationJob.ts'],
+      releaseGateAnchors: ['constructionDependencyReplayCalibrationService.ts'],
+    },
+    currentEvidence: {
+      assetClassificationRegistered: true,
+      predictionEventRecorded: false,
+      actualOutcomeEventRecorded: false,
+      tieredLearningPolicyRegistered: false,
+      enabledLearningScopes: ['system'],
+      runtimeConsumerUsesPublishedArtifact: false,
+      releaseExitApproved: false,
+      impactMonitoringReady: false,
+      rollbackTargetReady: false,
+      accuracyMetricsAvailable: false,
+    },
+    nextRuntimeSteps: [
+      'create_dependency_rule_runtime_writer_after_replay_candidate_approval',
+      'record_dependency_prediction_event_and_actual_predecessor_fulfillment_outcome',
+      'bind_dependency_accuracy_to_release_exit_and_rollback',
+    ],
+  },
+  {
+    rolloutBatch: 'plan_network_core_b',
+    assetKey: 'critical_path_rule_candidate',
+    assetFamily: 'critical_path_and_float_rule_candidate',
+    implementationAnchors: {
+      primaryService: 'projectCriticalPathService.ts',
+      runtimeConsumers: ['projectRemainingDurationForecastService.ts', 'scheduleAccelerationRuntimeService.ts'],
+      predictionEventAnchors: ['network_prediction_events', 'critical_path_projection_lineage'],
+      outcomeEventAnchors: ['projectDailySnapshotService.ts', 'projectExecutionSummaryService.ts'],
+      releaseGateAnchors: ['durationAccuracyReplayAcceptanceService.ts'],
+    },
+    currentEvidence: {
+      assetClassificationRegistered: true,
+      predictionEventRecorded: false,
+      actualOutcomeEventRecorded: false,
+      tieredLearningPolicyRegistered: false,
+      enabledLearningScopes: ['system'],
+      runtimeConsumerUsesPublishedArtifact: false,
+      releaseExitApproved: false,
+      impactMonitoringReady: false,
+      rollbackTargetReady: false,
+      accuracyMetricsAvailable: false,
+    },
+    nextRuntimeSteps: [
+      'record_critical_path_prediction_event_and_float_outcome',
+      'separate_user_confirmed_critical_path_fact_from_learned_projection_candidate',
+      'publish_critical_path_rule_candidate_only_after_release_exit',
+    ],
+  },
+]
+
 function cloneContract(contract: DurationLiveLearningAssetContract): DurationLiveLearningAssetContract {
   return {
     ...contract,
@@ -299,12 +615,45 @@ function uniqueConditions(values: DurationLiveLearningClosureCondition[]): Durat
   return [...new Set(values)]
 }
 
+function normalizeScopeEvidence(value: DurationLearningScopeEvidence): DurationLearningScope | null {
+  const scope = String(value ?? '').trim()
+  if (scope === 'global' || scope === 'system') return 'global'
+  if (scope === 'industry' || scope === 'industry_baseline' || scope === 'segment_baseline') return 'industry'
+  if (scope === 'company') return 'company'
+  if (scope === 'project') return 'project'
+  return null
+}
+
+export function resolveDurationLearningScopeCoverage(
+  scopes: readonly DurationLearningScopeEvidence[] | undefined,
+): DurationLearningScopeCoverage {
+  const normalized = new Set<DurationLearningScope>()
+  const unknownScopes: string[] = []
+  for (const scope of scopes ?? []) {
+    const normalizedScope = normalizeScopeEvidence(scope)
+    if (normalizedScope) {
+      normalized.add(normalizedScope)
+      continue
+    }
+    const raw = String(scope ?? '').trim()
+    if (raw && !unknownScopes.includes(raw)) unknownScopes.push(raw)
+  }
+  const normalizedScopes = ALL_LEARNING_SCOPES.filter((scope) => normalized.has(scope))
+  const missingScopes = ALL_LEARNING_SCOPES.filter((scope) => !normalized.has(scope))
+  return {
+    normalizedScopes,
+    unknownScopes,
+    hasFullCoverage: missingScopes.length === 0,
+    missingScopes,
+  }
+}
+
 function hasAllRequiredScopes(
   requiredScopes: DurationLearningScope[],
-  enabledScopes: readonly DurationLearningScope[] | undefined,
+  enabledScopes: readonly DurationLearningScopeEvidence[] | undefined,
 ): boolean {
   if (requiredScopes.length === 0) return true
-  const enabled = new Set(enabledScopes ?? [])
+  const enabled = new Set(resolveDurationLearningScopeCoverage(enabledScopes).normalizedScopes)
   return requiredScopes.every((scope) => enabled.has(scope))
 }
 
@@ -402,6 +751,66 @@ export function evaluateDurationLiveLearningPortfolio(
     prohibitedClaim: 'all_duration_assets_are_live_self_learning',
     learnableAssets,
     factLockedAssets,
+    missingClosureConditions,
+  }
+}
+
+function cloneManifest(manifest: DurationLiveLearningManifest): DurationLiveLearningManifest {
+  return {
+    ...manifest,
+    implementationAnchors: {
+      primaryService: manifest.implementationAnchors.primaryService,
+      runtimeConsumers: [...manifest.implementationAnchors.runtimeConsumers],
+      predictionEventAnchors: [...manifest.implementationAnchors.predictionEventAnchors],
+      outcomeEventAnchors: [...manifest.implementationAnchors.outcomeEventAnchors],
+      releaseGateAnchors: [...manifest.implementationAnchors.releaseGateAnchors],
+    },
+    currentEvidence: {
+      ...manifest.currentEvidence,
+      enabledLearningScopes: manifest.currentEvidence.enabledLearningScopes
+        ? [...manifest.currentEvidence.enabledLearningScopes]
+        : undefined,
+    },
+    nextRuntimeSteps: [...manifest.nextRuntimeSteps],
+  }
+}
+
+export function listDurationLiveLearningManifests(
+  rolloutBatch?: DurationLiveLearningRolloutBatch,
+): DurationLiveLearningManifest[] {
+  return DURATION_LIVE_LEARNING_MANIFESTS
+    .filter((manifest) => !rolloutBatch || manifest.rolloutBatch === rolloutBatch)
+    .map(cloneManifest)
+}
+
+export function evaluateDurationLiveLearningManifest(
+  rolloutBatch: DurationLiveLearningRolloutBatch,
+): DurationLiveLearningManifestEvaluation {
+  const manifests = listDurationLiveLearningManifests(rolloutBatch)
+  const assetEvaluations = manifests.map((manifest) => evaluateDurationLiveLearningAsset({
+    assetKey: manifest.assetKey,
+    evidence: manifest.currentEvidence,
+  }))
+  const missingClosureConditions = uniqueConditions(
+    assetEvaluations.flatMap((evaluation) => evaluation.missingClosureConditions),
+  )
+  const readyAssets = assetEvaluations.filter((evaluation) => evaluation.allowedLiveLearningClaim).length
+  const ready = manifests.length > 0 && readyAssets === manifests.length
+
+  return {
+    rolloutBatch,
+    status: ready ? 'manifest_live_self_learning_ready' : 'manifest_not_ready',
+    allowedClaim: rolloutBatch === 'duration_prediction_core_a'
+      ? ready
+        ? 'first_batch_live_self_learning_ready_for_learnable_assets'
+        : 'first_batch_manifest_established_not_ready_for_live_self_learning_claim'
+      : ready
+        ? 'batch_live_self_learning_ready_for_learnable_assets'
+        : 'batch_manifest_established_not_ready_for_live_self_learning_claim',
+    prohibitedClaim: 'all_duration_assets_are_live_self_learning',
+    totalAssets: manifests.length,
+    readyAssets,
+    assetEvaluations,
     missingClosureConditions,
   }
 }
