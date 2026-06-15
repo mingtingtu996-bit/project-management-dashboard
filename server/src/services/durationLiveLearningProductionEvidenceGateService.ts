@@ -1010,22 +1010,40 @@ function evaluateAssetEvidence(
 ): DurationLiveLearningProductionEvidenceGap | null {
   const missingReasonCodes: DurationLiveLearningProductionEvidenceReasonCode[] = []
 
-  if (!hasRef(evidence?.productionSampleEvidenceRef)) {
+  if (
+    !hasRef(evidence?.productionSampleEvidenceRef)
+    || !hasAcceptedRefSource('production_sample', evidence.productionSampleEvidenceRef, assetKey)
+  ) {
     missingReasonCodes.push('production_sample_evidence_required')
   }
-  if (!hasRef(evidence?.publicationExecutionRef)) {
+  if (
+    !hasRef(evidence?.publicationExecutionRef)
+    || !hasAcceptedRefSource('publication_execution', evidence.publicationExecutionRef, assetKey)
+  ) {
     missingReasonCodes.push('publication_execution_evidence_required')
   }
-  if (!hasRef(evidence?.runtimeConsumerObservationRef)) {
+  if (
+    !hasRef(evidence?.runtimeConsumerObservationRef)
+    || !hasAcceptedRefSource('runtime_consumer_observation', evidence.runtimeConsumerObservationRef, assetKey)
+  ) {
     missingReasonCodes.push('runtime_consumer_observation_required')
   }
-  if (!hasRef(evidence?.impactMonitoringEvidenceRef)) {
+  if (
+    !hasRef(evidence?.impactMonitoringEvidenceRef)
+    || !hasAcceptedRefSource('impact_monitoring', evidence.impactMonitoringEvidenceRef, assetKey)
+  ) {
     missingReasonCodes.push('impact_monitoring_evidence_required')
   }
-  if (!hasRef(evidence?.rollbackDrillEvidenceRef)) {
+  if (
+    !hasRef(evidence?.rollbackDrillEvidenceRef)
+    || !hasAcceptedRefSource('rollback_drill', evidence.rollbackDrillEvidenceRef, assetKey)
+  ) {
     missingReasonCodes.push('rollback_drill_evidence_required')
   }
-  if (!hasRef(evidence?.accuracyEvidenceRef)) {
+  if (
+    !hasRef(evidence?.accuracyEvidenceRef)
+    || !hasAcceptedRefSource('accuracy', evidence.accuracyEvidenceRef, assetKey)
+  ) {
     missingReasonCodes.push('accuracy_evidence_required')
   }
 

@@ -549,7 +549,7 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
       productionEvidence: learnableAssetKeys.map((assetKey) => ({
         assetKey,
         productionSampleEvidenceRef: productionSampleEvidenceRefForAsset(assetKey),
-        publicationExecutionRef: `release_execution:${assetKey}:published`,
+        publicationExecutionRef: publicationEvidenceRefForAsset(assetKey),
         runtimeConsumerObservationRef: `runtime_consumer:${assetKey}:observed`,
         impactMonitoringEvidenceRef: `impact_monitoring:${assetKey}:armed`,
         rollbackDrillEvidenceRef: `rollback:${assetKey}:verified`,
@@ -563,6 +563,32 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
     )
     expect(gate.missingEvidenceByAsset).toEqual([])
     expect(gate.productionEvidenceAssetKeys).toEqual(learnableAssetKeys)
+  })
+
+  it('blocks direct production evidence refs when their source prefixes are not allowed for the asset', () => {
+    const gate = evaluateDurationLiveLearningProductionEvidenceGate({
+      completionAudit: buildReadyCompletionAudit(),
+      productionEvidence: [{
+        assetKey: 'critical_path_rule_candidate',
+        productionSampleEvidenceRef: 'duration_samples:critical-path:accepted',
+        publicationExecutionRef: 'release_execution:critical_path_rule_candidate:published',
+        runtimeConsumerObservationRef: 'runtime_consumer:critical-path:observed',
+        impactMonitoringEvidenceRef: 'impact_monitoring:critical-path:armed',
+        rollbackDrillEvidenceRef: 'rollback:critical-path:verified',
+        accuracyEvidenceRef: 'spreadsheet-upload:critical-path:mae-ok',
+      }],
+    })
+
+    expect(gate.status).toBe('duration_live_learning_production_evidence_not_ready')
+    expect(gate.allowedClaim).toBe('not_ready_for_live_self_learning_claim')
+    expect(gate.missingEvidenceByAsset).toContainEqual({
+      assetKey: 'critical_path_rule_candidate',
+      missingReasonCodes: [
+        'production_sample_evidence_required',
+        'publication_execution_evidence_required',
+        'accuracy_evidence_required',
+      ],
+    })
   })
 
   it('collects gate-ready production refs from typed evidence records and ignores non-production states', () => {
