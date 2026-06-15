@@ -15,6 +15,9 @@ import type {
 import type {
   DurationRuntimeConsumerBusinessPathSourceFile,
 } from './durationRuntimeConsumerBusinessPathIntegrationAuditService.js'
+import {
+  loadDurationRuntimeConsumerBusinessPathSourceFiles,
+} from './durationRuntimeConsumerBusinessPathIntegrationAuditService.js'
 
 export type DurationLiveLearningProductionEvidenceQueryExec = <T = Record<string, unknown>>(
   sql: string,
@@ -216,11 +219,13 @@ export async function buildDurationLiveLearningProductionClaimAuditFromDb(
   input: DurationLiveLearningProductionClaimAuditFromDbInput,
 ): Promise<DurationLiveLearningProductionClaimAuditFromDb> {
   const sourceQuery = await loadDurationLiveLearningProductionEvidenceSourceRows(input)
+  const runtimeConsumerBusinessPathSourceFiles = input.runtimeConsumerBusinessPathSourceFiles
+    ?? await loadDurationRuntimeConsumerBusinessPathSourceFiles()
   const audit = buildDurationLiveLearningProductionClaimAudit({
     completionAudit: input.completionAudit,
     sourceRows: sourceQuery.sourceRows,
     runtimeConsumerRuntimeCallEvidence: input.runtimeConsumerRuntimeCallEvidence,
-    runtimeConsumerBusinessPathSourceFiles: input.runtimeConsumerBusinessPathSourceFiles,
+    runtimeConsumerBusinessPathSourceFiles,
   })
 
   return {

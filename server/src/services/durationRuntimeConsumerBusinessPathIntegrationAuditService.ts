@@ -1,6 +1,17 @@
+import { readFile } from 'node:fs/promises'
+import { resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
 export interface DurationRuntimeConsumerBusinessPathSourceFile {
   sourcePath: string
   sourceText: string
+}
+
+export type DurationRuntimeConsumerBusinessPathReadFile = (filePath: string) => Promise<string>
+
+export interface LoadDurationRuntimeConsumerBusinessPathSourceFilesInput {
+  repoRoot?: string
+  readFileText?: DurationRuntimeConsumerBusinessPathReadFile
 }
 
 export interface DurationRuntimeConsumerBusinessPathIntegration {
@@ -67,6 +78,8 @@ const REQUIRED_BUSINESS_PATH_INTEGRATIONS: DurationRuntimeConsumerBusinessPathIn
   },
 ]
 
+const DEFAULT_REPO_ROOT = fileURLToPath(new URL('../../..', import.meta.url))
+
 function normalizePath(value: string) {
   return value.replace(/\\/g, '/')
 }
@@ -83,6 +96,19 @@ function hasFacadeCall(sourceText: string, facadeFunctionName: string) {
 export function listDurationRuntimeConsumerBusinessPathRequiredIntegrations():
   DurationRuntimeConsumerBusinessPathIntegration[] {
   return REQUIRED_BUSINESS_PATH_INTEGRATIONS.map((item) => ({ ...item }))
+}
+
+export async function loadDurationRuntimeConsumerBusinessPathSourceFiles(
+  input: LoadDurationRuntimeConsumerBusinessPathSourceFilesInput = {},
+): Promise<DurationRuntimeConsumerBusinessPathSourceFile[]> {
+  const repoRoot = input.repoRoot ?? DEFAULT_REPO_ROOT
+  const readFileText = input.readFileText ?? ((filePath: string) => readFile(filePath, 'utf8'))
+
+  return Promise.all(REQUIRED_BUSINESS_PATH_INTEGRATIONS.map(async (required) => {
+    const sourcePath = required.sourcePath
+    const sourceText = await readFileText(resolve(repoRoot, sourcePath)).catch(() => '')
+    return { sourcePath, sourceText }
+  }))
 }
 
 export function evaluateDurationRuntimeConsumerBusinessPathIntegrationCoverage(

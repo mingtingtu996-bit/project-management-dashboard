@@ -323,4 +323,23 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
     expect(joinedSql).not.toContain('task_baseline_items')
     expect(joinedSql).not.toContain('monthly_plan_items')
   })
+
+  it('loads facade-backed business path source files when caller does not pass source text', async () => {
+    const {
+      buildDurationLiveLearningProductionClaimAuditFromDb,
+    } = await import('../services/durationLiveLearningProductionEvidenceReaderService.js')
+    const queryExec = async <T = Record<string, unknown>>(sql: string): Promise<T[]> =>
+      rowsForSql(sql) as T[]
+
+    const audit = await buildDurationLiveLearningProductionClaimAuditFromDb({
+      completionAudit: buildReadyCompletionAudit(),
+      queryExec,
+      maxRowsPerSourceTable: 200,
+    })
+
+    expect(audit.status).toBe('duration_live_learning_production_claim_ready')
+    expect(audit.runtimeConsumerBusinessPathIntegrationCoverage.status)
+      .toBe('runtime_consumer_business_path_integration_ready')
+    expect(audit.runtimeConsumerBusinessPathIntegrationCoverage.missingIntegrations).toEqual([])
+  })
 })
