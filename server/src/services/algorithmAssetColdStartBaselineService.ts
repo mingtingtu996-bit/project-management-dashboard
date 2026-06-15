@@ -258,6 +258,24 @@ function coldStartEvidenceRefsFromProductionInput(
   }).productionEvidence.find((evidence) => evidence.assetKey === COLD_START_BASELINE_ASSET_KEY)
 }
 
+function runtimePublicationKeyFromEvidenceRef(value: unknown) {
+  const normalized = String(value ?? '').trim()
+  const runtimePublicationPrefix = 'algorithm_learnable_parameter_runtime_publications:'
+  return normalized.startsWith(runtimePublicationPrefix)
+    ? normalized.slice(runtimePublicationPrefix.length)
+    : normalized
+}
+
+function coldStartRuntimeObservationMatchesPublication(
+  evidenceRefs: DurationLiveLearningProductionEvidenceRef,
+) {
+  const publicationExecutionKey = runtimePublicationKeyFromEvidenceRef(evidenceRefs.publicationExecutionRef)
+  const observedPublicationKey = String(evidenceRefs.runtimeConsumerPublicationKey ?? '').trim()
+  return Boolean(publicationExecutionKey)
+    && Boolean(observedPublicationKey)
+    && publicationExecutionKey === observedPublicationKey
+}
+
 function hasRollbackTarget(value: string | null | undefined) {
   return Boolean(value?.trim())
 }
@@ -492,6 +510,8 @@ export function buildAlgorithmAssetColdStartLiveLearningEvidenceFromProductionRo
   }
   const hasAcceptedOutcome = acceptedSampleCounts.company + acceptedSampleCounts.project > 0
   const hasRuntimeConsumerObservation = Boolean(evidenceRefs.runtimeConsumerObservationRef)
+  const runtimeConsumerObservationMatchesPublication = hasRuntimeConsumerObservation
+    && coldStartRuntimeObservationMatchesPublication(evidenceRefs)
   const decision = evaluateAlgorithmAssetColdStartLiveLearningEvidence({
     runtimeDecision: input.runtimeDecision,
     actualOutcomeRecorded: hasAcceptedOutcome,
@@ -505,13 +525,17 @@ export function buildAlgorithmAssetColdStartLiveLearningEvidenceFromProductionRo
     rollbackTargetReady: Boolean(evidenceRefs.rollbackDrillEvidenceRef),
     accuracyMetricsAvailable: Boolean(evidenceRefs.accuracyEvidenceRef),
   })
-  const missingReasons = hasRuntimeConsumerObservation
-    ? decision.missingReasons
-    : uniqueValues([...decision.missingReasons, 'runtime_consumer_observation_required'])
+  const missingReasons = uniqueValues([
+    ...decision.missingReasons,
+    hasRuntimeConsumerObservation ? '' : 'runtime_consumer_observation_required',
+    hasRuntimeConsumerObservation && !runtimeConsumerObservationMatchesPublication
+      ? 'runtime_consumer_publication_mismatch'
+      : '',
+  ])
   const liveLearningEvidence = {
     ...decision.liveLearningEvidence,
     runtimeConsumerUsesPublishedArtifact: decision.liveLearningEvidence.runtimeConsumerUsesPublishedArtifact
-      && hasRuntimeConsumerObservation,
+      && runtimeConsumerObservationMatchesPublication,
   }
 
   return {
