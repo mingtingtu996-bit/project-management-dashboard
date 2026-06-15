@@ -8990,6 +8990,10 @@ async function generateWbsTemplateRowsInternal(params: {
   }> | null
   duplicatePolicy?: 'preserve_historical_skip_future'
   diagnosticDurationSuggestionMode?: WbsTemplateDurationSuggestionMode
+  runtimeConsumerObservationQueryExec?: DurationRuntimeConsumerObservationQueryExec | null
+  runtimeArtifactPublications?: readonly WbsTemplateGenerationRuntimeArtifactPublication[] | null
+  runtimeConsumerObservedAt?: string | null
+  runtimeConsumerErrorHandler?: (error: unknown) => void
 }): Promise<{
   generationBatchId: string
   templateId: string
@@ -9298,10 +9302,58 @@ export async function generateWbsTemplateRows(
   params: Parameters<typeof generateWbsTemplateRowsInternal>[0],
 ): Promise<Awaited<ReturnType<typeof generateWbsTemplateRowsInternal>>> {
   const generated = await generateWbsTemplateRowsInternal(params)
-  return {
+  const publicGenerated = {
     ...generated,
     rows: sanitizeGeneratedTemplateRowsForPublicOutput(generated.rows),
   }
+
+  const runtimeArtifactPublications = params.runtimeArtifactPublications ?? []
+  if (params.runtimeConsumerObservationQueryExec && runtimeArtifactPublications.length > 0) {
+    const templateIds = uniqueStringArray([
+      normalizeText(generated.templateId),
+      ...generated.templateIds.map(normalizeText),
+    ].filter(Boolean))
+    try {
+      await recordWbsTemplateGenerationConsumedArtifacts({
+        queryExec: params.runtimeConsumerObservationQueryExec,
+        observedAt: normalizeText(params.runtimeConsumerObservedAt) || undefined,
+        callContext: {
+          projectId: normalizeText(params.projectId) || null,
+          generationBatchId: normalizeText(generated.generationBatchId) || null,
+          templateId: templateIds[0] ?? null,
+          templateIds,
+          generationDepth: generated.generationDepth,
+          rowCount: generated.rows.length,
+        },
+        sourceEvidenceRefs: [
+          [
+            'wbs_template_generation',
+            normalizeText(params.projectId) || 'no_project',
+            normalizeText(generated.generationBatchId) || 'no_batch',
+            templateIds.join('+') || 'no_template',
+          ].join(':'),
+        ],
+        artifacts: buildWbsTemplateGenerationConsumedArtifacts({
+          generation: generated,
+          runtimeArtifactPublications,
+          projectId: params.projectId,
+        }),
+      })
+    } catch (error) {
+      if (params.runtimeConsumerErrorHandler) {
+        params.runtimeConsumerErrorHandler(error)
+      } else {
+        logger.warn('[wbsTemplateGenerationService] failed to record WBS template runtime consumer evidence', {
+          projectId: params.projectId,
+          generationBatchId: generated.generationBatchId,
+          templateIds,
+          error,
+        })
+      }
+    }
+  }
+
+  return publicGenerated
 }
 
 export async function generateWbsTemplatePhaseChainRows(params: {

@@ -320,7 +320,7 @@ describe('v1.4.7.2 WBS template generation service', () => {
       runtimeArtifactPublications: [
         {
           assetKey: 'special_work_duration_seed',
-          publicationKey: 'special_work_seed_runtime:special-v9',
+          publicationKey: 'wbs_template_runtime:special-v9',
           publicationStatus: 'published',
         },
         {
@@ -355,7 +355,7 @@ describe('v1.4.7.2 WBS template generation service', () => {
     expect(callsForTable(calls, 'runtime_consumer_observations').map((call) => call.params.slice(0, 4))).toEqual([
       [
         'special_work_duration_seed',
-        'special_work_seed_runtime:special-v9',
+        'wbs_template_runtime:special-v9',
         'wbsTemplateGenerationService',
         'wbs_template_generation',
       ],
@@ -373,6 +373,75 @@ describe('v1.4.7.2 WBS template generation service', () => {
       ],
     ])
   })
+
+  it('records runtime consumer evidence from generateWbsTemplateRows when published artifacts are consumed', async () => {
+    const { calls, queryExec } = createRecordingQueryExec()
+
+    const generated = await generateWbsTemplateRowsRaw({
+      projectId: '00000000-0000-4000-8000-000000000001',
+      surface: 'task_list',
+      detailLevel: 'standard',
+      diagnosticDurationSuggestionMode: 'fast_template',
+      operation: {
+        type: 'template_generate',
+        generationBatchId: 'batch-runtime-consumption',
+        templateId: CHINA_GB55032_TEMPLATE_ID,
+        selectedNodeIds: ['01-01-01'],
+        plannedStartDate: '2026-06-01',
+        scope: {
+          building_object_id: 'building-1',
+        },
+      },
+      runtimeConsumerObservationQueryExec: queryExec,
+      runtimeConsumerObservedAt: '2026-06-15T12:00:00.000Z',
+      runtimeArtifactPublications: [
+        {
+          assetKey: 'special_work_duration_seed',
+          publicationKey: 'wbs_template_runtime:special-v9',
+          publicationStatus: 'published',
+        },
+        {
+          assetKey: 'wbs_reference_days',
+          publicationKey: 'wbs_reference_days_runtime:reference-v9',
+          publicationStatus: 'runtime_published',
+        },
+        {
+          assetKey: 'dependency_rule_candidate',
+          publicationKey: 'dependency_rule_runtime:dependency-v9',
+          publicationStatus: 'canary',
+        },
+        {
+          assetKey: 'forecast_confidence_weight',
+          publicationKey: 'forecast_confidence_weight_runtime:weight-v9',
+          publicationStatus: 'published',
+        },
+      ],
+    })
+
+    expect(generated.generationBatchId).toBe('batch-runtime-consumption')
+    expect(generated.rows.length).toBeGreaterThan(0)
+    expect(callsForTable(calls, 'runtime_consumer_runtime_calls')).toHaveLength(1)
+    expect(callsForTable(calls, 'runtime_consumer_observations').map((call) => call.params.slice(0, 4))).toEqual([
+      [
+        'special_work_duration_seed',
+        'wbs_template_runtime:special-v9',
+        'wbsTemplateGenerationService',
+        'wbs_template_generation',
+      ],
+      [
+        'wbs_reference_days',
+        'wbs_reference_days_runtime:reference-v9',
+        'wbsTemplateGenerationService',
+        'wbs_template_generation',
+      ],
+      [
+        'dependency_rule_candidate',
+        'dependency_rule_runtime:dependency-v9',
+        'wbsTemplateGenerationService',
+        'wbs_template_generation',
+      ],
+    ])
+  }, 30000)
 
   it('keeps display semantics separate from duration and dependency semantics', () => {
     expect(inferDurationContributionMode({ name: 'document archive', planItemKind: 'document_task' })).toBe('record_only')
