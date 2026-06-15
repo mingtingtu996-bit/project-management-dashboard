@@ -218,6 +218,29 @@ describe('durationRuntimeConsumerObservationService', () => {
     expect(calls).toEqual([])
   })
 
+  it('blocks observations whose publication key cannot belong to the declared asset', async () => {
+    const {
+      recordDurationRuntimeConsumerObservation,
+    } = await import('../services/durationRuntimeConsumerObservationService.js')
+    const { calls, queryExec } = createRecordingQueryExec()
+
+    const result = await recordDurationRuntimeConsumerObservation({
+      queryExec,
+      assetKey: 'critical_path_rule_candidate',
+      publicationKey: 'duration_benchmark_runtime:base-v2',
+      consumerKey: 'projectRemainingDurationForecastService',
+      consumerSurface: 'remaining_duration_forecast',
+    })
+
+    expect(result).toEqual(expect.objectContaining({
+      status: 'runtime_consumer_observation_blocked',
+      canPersist: false,
+      observation: null,
+      reasons: ['runtime_consumer_observation_publication_key_not_allowed_for_asset'],
+    }))
+    expect(calls).toEqual([])
+  })
+
   it('records multiple published artifacts observed by one declared runtime consumer', async () => {
     const {
       recordDurationRuntimeConsumerObservedArtifacts,

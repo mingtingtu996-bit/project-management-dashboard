@@ -52,6 +52,10 @@ const durationOutcomeAssetKeys = learnableAssetKeys.filter((assetKey) =>
   !planNetworkAssetKeys.includes(assetKey))
 
 function publicationKeyForAsset(assetKey: DurationLiveLearningAssetKey) {
+  if (assetKey === 'base_duration_benchmark') return 'duration_benchmark_runtime:base-v2'
+  if (assetKey === 'duration_cold_start_baseline') return 'cold_start_baseline_runtime:segment-v2'
+  if (assetKey === 'forecast_residual_overlay') return 'forecast_residual_overlay_runtime:overlay-v2'
+  if (assetKey === 'forecast_confidence_weight') return 'forecast_confidence_weight_runtime:weight-v2'
   if (assetKey === 'standard_work_duration_seed') {
     return 'algorithm_seed_versions:seed-version-standard-work-duration-v2'
   }

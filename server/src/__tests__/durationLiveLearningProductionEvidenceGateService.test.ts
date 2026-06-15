@@ -236,12 +236,17 @@ function buildAllProductionEvidenceRecords() {
       consumerKey,
       evidenceKind: 'runtime_consumer_observation' as const,
       evidenceRef: `runtime_consumer:${assetKey}:${consumerKey}:observed`,
+      publicationKey: publicationKeyForAsset(assetKey),
       evidenceStatus: 'observed',
     })),
   ]
 }
 
 function publicationKeyForAsset(assetKey: DurationLiveLearningAssetKey) {
+  if (assetKey === 'base_duration_benchmark') return 'duration_benchmark_runtime:base-v2'
+  if (assetKey === 'duration_cold_start_baseline') return 'cold_start_baseline_runtime:segment-v2'
+  if (assetKey === 'forecast_residual_overlay') return 'forecast_residual_overlay_runtime:overlay-v2'
+  if (assetKey === 'forecast_confidence_weight') return 'forecast_confidence_weight_runtime:weight-v2'
   if (assetKey === 'standard_work_duration_seed') {
     return 'algorithm_seed_versions:seed-version-standard-work-duration-v2'
   }
@@ -553,6 +558,7 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
         productionSampleEvidenceRef: productionSampleEvidenceRefForAsset(assetKey),
         publicationExecutionRef: publicationEvidenceRefForAsset(assetKey),
         runtimeConsumerObservationRef: `runtime_consumer:${assetKey}:observed`,
+        runtimeConsumerPublicationKey: publicationKeyForAsset(assetKey),
         impactMonitoringEvidenceRef: `impact_monitoring:${assetKey}:armed`,
         rollbackDrillEvidenceRef: `rollback:${assetKey}:verified`,
         accuracyEvidenceRef: `accuracy:${assetKey}:mae-bias-ok`,
@@ -588,6 +594,7 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
       missingReasonCodes: [
         'production_sample_evidence_required',
         'publication_execution_evidence_required',
+        'runtime_consumer_observation_required',
         'accuracy_evidence_required',
       ],
     })
@@ -612,6 +619,7 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
           assetKey: 'base_duration_benchmark',
           evidenceKind: 'runtime_consumer_observation',
           evidenceRef: 'runtime_consumer:base:observed',
+          publicationKey: 'duration_benchmark_runtime:base-v2',
           evidenceStatus: 'observed',
         },
         {
@@ -652,6 +660,7 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
       productionSampleEvidenceRef: 'duration_samples:base:accepted',
       publicationExecutionRef: 'algorithm_learnable_parameter_runtime_publications:duration_benchmark_runtime:base-v2',
       runtimeConsumerObservationRef: 'runtime_consumer:base:observed',
+      runtimeConsumerPublicationKey: 'duration_benchmark_runtime:base-v2',
       impactMonitoringEvidenceRef: 'impact_monitoring:base:armed',
       rollbackDrillEvidenceRef: 'rollback:base:verified',
       accuracyEvidenceRef: 'accuracy:base:mae-bias-ok',
@@ -672,6 +681,71 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
         reason: 'production_evidence_ref_required',
       },
     ])
+  })
+
+  it('rejects typed runtime consumer observation records without asset-bound publication provenance', () => {
+    const collected = collectDurationLiveLearningProductionEvidenceRefs({
+      records: [
+        {
+          assetKey: 'critical_path_rule_candidate',
+          consumerKey: 'projectRemainingDurationForecastService',
+          evidenceKind: 'runtime_consumer_observation',
+          evidenceRef: 'runtime_consumer:critical-path:observed',
+          evidenceStatus: 'observed',
+        },
+        {
+          assetKey: 'critical_path_rule_candidate',
+          consumerKey: 'projectRemainingDurationForecastService',
+          evidenceKind: 'runtime_consumer_observation',
+          evidenceRef: 'runtime_consumer:critical-path:wrong-publication',
+          publicationKey: 'duration_benchmark_runtime:base-v2',
+          evidenceStatus: 'observed',
+        },
+      ],
+    })
+
+    expect(collected.productionEvidence).toEqual([])
+    expect(collected.rejectedRecords).toEqual([
+      {
+        assetKey: 'critical_path_rule_candidate',
+        consumerKey: 'projectRemainingDurationForecastService',
+        evidenceKind: 'runtime_consumer_observation',
+        evidenceRef: 'runtime_consumer:critical-path:observed',
+        evidenceStatus: 'observed',
+        reason: 'production_evidence_publication_key_not_allowed_for_asset',
+      },
+      {
+        assetKey: 'critical_path_rule_candidate',
+        consumerKey: 'projectRemainingDurationForecastService',
+        evidenceKind: 'runtime_consumer_observation',
+        evidenceRef: 'runtime_consumer:critical-path:wrong-publication',
+        publicationKey: 'duration_benchmark_runtime:base-v2',
+        evidenceStatus: 'observed',
+        reason: 'production_evidence_publication_key_not_allowed_for_asset',
+      },
+    ])
+  })
+
+  it('blocks direct production evidence when runtime consumer publication provenance is missing', () => {
+    const gate = evaluateDurationLiveLearningProductionEvidenceGate({
+      completionAudit: buildReadyCompletionAudit(),
+      productionEvidence: learnableAssetKeys.map((assetKey) => ({
+        assetKey,
+        productionSampleEvidenceRef: productionSampleEvidenceRefForAsset(assetKey),
+        publicationExecutionRef: publicationEvidenceRefForAsset(assetKey),
+        runtimeConsumerObservationRef: `runtime_consumer:${assetKey}:observed`,
+        impactMonitoringEvidenceRef: `impact_monitoring:${assetKey}:armed`,
+        rollbackDrillEvidenceRef: `rollback:${assetKey}:verified`,
+        accuracyEvidenceRef: `accuracy:${assetKey}:mae-bias-ok`,
+      })),
+    })
+
+    expect(gate.status).toBe('duration_live_learning_production_evidence_not_ready')
+    expect(gate.allowedClaim).toBe('not_ready_for_live_self_learning_claim')
+    expect(gate.missingEvidenceByAsset).toEqual(learnableAssetKeys.map((assetKey) => ({
+      assetKey,
+      missingReasonCodes: ['runtime_consumer_observation_required'],
+    })))
   })
 
   it('rejects accepted production evidence records when their refs do not match the evidence source allowlist', () => {
@@ -835,11 +909,17 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
         {
           sourceTable: 'algorithm_learnable_parameter_runtime_publications',
           row: {
-            publication_key: 'forecast-weight-v2',
+            publication_key: 'forecast_confidence_weight_runtime:weight-v2',
             asset_key: 'forecast_confidence_weight',
             publication_status: 'published',
-            impact_monitoring: { status: 'monitoring_armed', eventRef: 'impact_monitoring:forecast-weight-v2:armed' },
-            rollback_execution: { status: 'rollback_verified', eventRef: 'rollback:forecast-weight-v2:verified' },
+            impact_monitoring: {
+              status: 'monitoring_armed',
+              eventRef: 'impact_monitoring:forecast_confidence_weight_runtime:weight-v2:armed',
+            },
+            rollback_execution: {
+              status: 'rollback_verified',
+              eventRef: 'rollback:forecast_confidence_weight_runtime:weight-v2:verified',
+            },
           },
         },
         {
@@ -858,7 +938,7 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
           row: {
             event_type: 'impact_monitoring',
             event_status: 'monitoring_passed',
-            source_publication_key: 'forecast-weight-v2',
+            source_publication_key: 'forecast_confidence_weight_runtime:weight-v2',
             event_payload: { assetKey: 'forecast_confidence_weight' },
           },
         },
@@ -877,7 +957,7 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
           row: {
             id: 'consumer-1',
             asset_key: 'forecast_confidence_weight',
-            publication_key: 'forecast-weight-v2',
+            publication_key: 'forecast_confidence_weight_runtime:weight-v2',
             consumer_key: 'taskDurationForecastService',
             observation_status: 'observed',
             writes_runtime_directly: false,
@@ -897,19 +977,19 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
       {
         assetKey: 'forecast_confidence_weight',
         evidenceKind: 'publication_execution',
-        evidenceRef: 'algorithm_learnable_parameter_runtime_publications:forecast-weight-v2',
+        evidenceRef: 'algorithm_learnable_parameter_runtime_publications:forecast_confidence_weight_runtime:weight-v2',
         evidenceStatus: 'published',
       },
       {
         assetKey: 'forecast_confidence_weight',
         evidenceKind: 'impact_monitoring',
-        evidenceRef: 'impact_monitoring:forecast-weight-v2:armed',
+        evidenceRef: 'impact_monitoring:forecast_confidence_weight_runtime:weight-v2:armed',
         evidenceStatus: 'monitoring_armed',
       },
       {
         assetKey: 'forecast_confidence_weight',
         evidenceKind: 'rollback_drill',
-        evidenceRef: 'rollback:forecast-weight-v2:verified',
+        evidenceRef: 'rollback:forecast_confidence_weight_runtime:weight-v2:verified',
         evidenceStatus: 'rollback_verified',
       },
       {
@@ -921,7 +1001,7 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
       {
         assetKey: 'forecast_confidence_weight',
         evidenceKind: 'impact_monitoring',
-        evidenceRef: 'impact_monitoring:forecast-weight-v2:monitoring_passed',
+        evidenceRef: 'impact_monitoring:forecast_confidence_weight_runtime:weight-v2:monitoring_passed',
         evidenceStatus: 'monitoring_passed',
       },
       {
@@ -935,6 +1015,7 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
         consumerKey: 'taskDurationForecastService',
         evidenceKind: 'runtime_consumer_observation',
         evidenceRef: 'runtime_consumer:consumer-1',
+        publicationKey: 'forecast_confidence_weight_runtime:weight-v2',
         evidenceStatus: 'observed',
       },
     ])
@@ -988,6 +1069,31 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
       ...source,
       reason: 'production_source_row_not_evidence_ready',
     })))
+  })
+
+  it('rejects runtime consumer observation rows whose publication key cannot belong to the observed asset', () => {
+    const row = {
+      id: 'consumer-wrong-publication',
+      asset_key: 'critical_path_rule_candidate',
+      publication_key: 'duration_benchmark_runtime:base-v2',
+      consumer_key: 'projectRemainingDurationForecastService',
+      observation_status: 'observed',
+      writes_runtime_directly: false,
+      writes_fact_directly: false,
+    }
+    const adapted = collectDurationLiveLearningProductionEvidenceRecordsFromRows({
+      rows: [{
+        sourceTable: 'runtime_consumer_observations',
+        row,
+      }],
+    })
+
+    expect(adapted.records).toEqual([])
+    expect(adapted.rejectedRows).toEqual([{
+      sourceTable: 'runtime_consumer_observations',
+      row,
+      reason: 'production_source_row_not_evidence_ready',
+    }])
   })
 
   it('adapts plan-network runtime publication rows into production publication records', () => {

@@ -61,8 +61,56 @@ const CONSUMER_SURFACE_BY_KEY: Record<string, string> = {
   scheduleAccelerationRuntimeService: 'schedule_acceleration_runtime',
 }
 
+const RUNTIME_PUBLICATION_KEY_PREFIXES_BY_ASSET: Partial<Record<DurationLiveLearningAssetKey, string[]>> = {
+  base_duration_benchmark: [
+    'duration_benchmark_runtime:',
+    'duration-benchmark-runtime:',
+    'learnable-parameter-runtime:duration-blend:',
+    'learnable-parameter-runtime:p50-p75-blend:',
+    'learnable-parameter-runtime:event-duration-blend:',
+    'learnable-parameter-runtime:event-p50-p75:',
+  ],
+  duration_cold_start_baseline: [
+    'cold_start_baseline_runtime:',
+    'duration_cold_start_baseline_runtime:',
+    'learnable-parameter-runtime:cold-start:',
+  ],
+  forecast_residual_overlay: [
+    'forecast_residual_overlay_runtime:',
+    'learnable-parameter-runtime:forecast-l',
+  ],
+  forecast_confidence_weight: [
+    'forecast_confidence_weight_runtime:',
+    'learnable-parameter-runtime:confidence:',
+    'learnable-parameter-runtime:event-confidence-penalty:',
+  ],
+  standard_work_duration_seed: [
+    'algorithm_seed_versions:',
+    'standard_work_duration_seed_runtime:',
+  ],
+  special_work_duration_seed: [
+    'wbs_template_runtime:',
+    'wbs-template-runtime:',
+  ],
+  wbs_reference_days: [
+    'wbs_reference_days_runtime:',
+  ],
+  dependency_rule_candidate: [
+    'dependency_rule_runtime:',
+    'dependency-rule-runtime:',
+  ],
+  critical_path_rule_candidate: [
+    'critical_path_rule_runtime:',
+    'critical-path-rule-runtime:',
+  ],
+}
+
 function normalizeConsumerKey(value: string) {
   return value.trim().replace(/\.ts$/i, '')
+}
+
+function normalizeText(value: unknown) {
+  return String(value ?? '').trim()
 }
 
 function integrationContractKey(contract: DurationRuntimeConsumerObservationIntegratedContract) {
@@ -91,6 +139,22 @@ export function listDurationRuntimeConsumerObservationIntegrationContracts():
         acceptedPublicationStatuses: [...ACCEPTED_PUBLICATION_STATUSES],
       }
     }))
+}
+
+export function listDurationRuntimeConsumerPublicationKeyPrefixesForAsset(
+  assetKey: DurationLiveLearningAssetKey,
+): string[] {
+  return [...(RUNTIME_PUBLICATION_KEY_PREFIXES_BY_ASSET[assetKey] ?? [])]
+}
+
+export function isDurationRuntimeConsumerPublicationKeyAllowedForAsset(
+  assetKey: DurationLiveLearningAssetKey,
+  publicationKey: unknown,
+): boolean {
+  const normalizedPublicationKey = normalizeText(publicationKey)
+  if (!normalizedPublicationKey) return false
+  return listDurationRuntimeConsumerPublicationKeyPrefixesForAsset(assetKey)
+    .some((prefix) => normalizedPublicationKey.startsWith(prefix))
 }
 
 export function evaluateDurationRuntimeConsumerObservationIntegrationCoverage(

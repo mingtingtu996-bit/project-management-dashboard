@@ -7,6 +7,7 @@ import {
 } from './durationLiveLearningClosureService.js'
 import {
   evaluateDurationRuntimeConsumerObservationIntegrationCoverage,
+  isDurationRuntimeConsumerPublicationKeyAllowedForAsset,
   type DurationRuntimeConsumerObservationAdapterRegistration,
   type DurationRuntimeConsumerObservationIntegrationCoverage,
 } from './durationRuntimeConsumerObservationIntegrationService.js'
@@ -38,6 +39,7 @@ export interface DurationLiveLearningProductionEvidenceRef {
   productionSampleEvidenceRef?: string | null
   publicationExecutionRef?: string | null
   runtimeConsumerObservationRef?: string | null
+  runtimeConsumerPublicationKey?: string | null
   impactMonitoringEvidenceRef?: string | null
   rollbackDrillEvidenceRef?: string | null
   accuracyEvidenceRef?: string | null
@@ -56,6 +58,7 @@ export interface DurationLiveLearningProductionEvidenceRecord {
   evidenceKind: DurationLiveLearningProductionEvidenceKind
   evidenceRef?: string | null
   evidenceStatus?: string | null
+  publicationKey?: string | null
   consumerKey?: string | null
 }
 
@@ -82,6 +85,7 @@ export interface DurationLiveLearningRejectedProductionEvidenceRecord {
     | 'production_evidence_ref_required'
     | 'production_evidence_status_not_accepted'
     | 'production_evidence_ref_source_not_allowed'
+    | 'production_evidence_publication_key_not_allowed_for_asset'
 }
 
 export interface DurationLiveLearningProductionEvidenceCollectionInput {
@@ -664,6 +668,7 @@ function observedRuntimeConsumerObservationsFromRecords(
     if (!consumerKey) continue
     if (!acceptedStatusesFor(record.evidenceKind).has(normalizeText(record.evidenceStatus))) continue
     if (!evidenceRef || !hasAcceptedRefSource(record.evidenceKind, evidenceRef, record.assetKey)) continue
+    if (!isDurationRuntimeConsumerPublicationKeyAllowedForAsset(record.assetKey, record.publicationKey)) continue
     observed.push({ assetKey: record.assetKey, consumerKey })
   }
   return observed
@@ -678,9 +683,10 @@ function observedRuntimeConsumerObservationsFromSourceRows(
     const row = source.row
     const assetKey = assetKeyFromSourceRow(source)
     const consumerKey = normalizeConsumerKey(readText(row, 'consumer_key', 'consumerKey'))
+    const publicationKey = readText(row, 'publication_key', 'publicationKey')
     if (!assetKey || !consumerKey) continue
     if (readText(row, 'observation_status', 'observationStatus') !== 'observed') continue
-    if (!readText(row, 'publication_key', 'publicationKey')) continue
+    if (!isDurationRuntimeConsumerPublicationKeyAllowedForAsset(assetKey, publicationKey)) continue
     if (readTrue(row, 'writes_runtime_directly', 'writesRuntimeDirectly')) continue
     if (readTrue(row, 'writes_fact_directly', 'writesFactDirectly')) continue
     observed.push({ assetKey, consumerKey })
@@ -715,10 +721,14 @@ function assignEvidenceRef(
   target: DurationLiveLearningProductionEvidenceRef,
   kind: DurationLiveLearningProductionEvidenceKind,
   evidenceRef: string,
+  publicationKey?: string | null,
 ) {
   if (kind === 'production_sample') target.productionSampleEvidenceRef ??= evidenceRef
   if (kind === 'publication_execution') target.publicationExecutionRef ??= evidenceRef
-  if (kind === 'runtime_consumer_observation') target.runtimeConsumerObservationRef ??= evidenceRef
+  if (kind === 'runtime_consumer_observation') {
+    target.runtimeConsumerObservationRef ??= evidenceRef
+    target.runtimeConsumerPublicationKey ??= normalizeText(publicationKey)
+  }
   if (kind === 'impact_monitoring') target.impactMonitoringEvidenceRef ??= evidenceRef
   if (kind === 'rollback_drill') target.rollbackDrillEvidenceRef ??= evidenceRef
   if (kind === 'accuracy') target.accuracyEvidenceRef ??= evidenceRef
@@ -746,9 +756,16 @@ export function collectDurationLiveLearningProductionEvidenceRefs(
       rejectedRecords.push({ ...record, reason: 'production_evidence_ref_source_not_allowed' })
       continue
     }
+    if (
+      record.evidenceKind === 'runtime_consumer_observation'
+      && !isDurationRuntimeConsumerPublicationKeyAllowedForAsset(record.assetKey, record.publicationKey)
+    ) {
+      rejectedRecords.push({ ...record, reason: 'production_evidence_publication_key_not_allowed_for_asset' })
+      continue
+    }
 
     const current = evidenceByAssetKey.get(record.assetKey) ?? { assetKey: record.assetKey }
-    assignEvidenceRef(current, record.evidenceKind, evidenceRef)
+    assignEvidenceRef(current, record.evidenceKind, evidenceRef, record.publicationKey)
     evidenceByAssetKey.set(record.assetKey, current)
   }
 
@@ -972,7 +989,7 @@ export function collectDurationLiveLearningProductionEvidenceRecordsFromRows(
     const consumerKey = normalizeConsumerKey(readText(row, 'consumer_key', 'consumerKey'))
     if (
       readText(row, 'observation_status', 'observationStatus') !== 'observed'
-      || !publicationKey
+      || !isDurationRuntimeConsumerPublicationKeyAllowedForAsset(assetKey, publicationKey)
       || !consumerKey
       || readTrue(row, 'writes_runtime_directly', 'writesRuntimeDirectly')
       || readTrue(row, 'writes_fact_directly', 'writesFactDirectly')
@@ -985,6 +1002,7 @@ export function collectDurationLiveLearningProductionEvidenceRecordsFromRows(
       consumerKey,
       evidenceKind: 'runtime_consumer_observation',
       evidenceRef: `runtime_consumer:${id}`,
+      publicationKey,
       evidenceStatus: 'observed',
     })
   }
@@ -1041,6 +1059,7 @@ function evaluateAssetEvidence(
   if (
     !hasRef(evidence?.runtimeConsumerObservationRef)
     || !hasAcceptedRefSource('runtime_consumer_observation', evidence.runtimeConsumerObservationRef, assetKey)
+    || !isDurationRuntimeConsumerPublicationKeyAllowedForAsset(assetKey, evidence.runtimeConsumerPublicationKey)
   ) {
     missingReasonCodes.push('runtime_consumer_observation_required')
   }

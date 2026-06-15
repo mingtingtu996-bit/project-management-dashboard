@@ -1,5 +1,6 @@
 import type { DurationLiveLearningAssetKey } from './durationLiveLearningClosureService.js'
 import {
+  isDurationRuntimeConsumerPublicationKeyAllowedForAsset,
   listDurationRuntimeConsumerObservationIntegrationContracts,
   type DurationRuntimeConsumerPublicationStatus,
 } from './durationRuntimeConsumerObservationIntegrationService.js'
@@ -212,6 +213,13 @@ function validateInput(input: RecordDurationRuntimeConsumerObservationInput) {
   if (!normalizeText(input.consumerSurface)) reasons.push('runtime_consumer_observation_consumer_surface_required')
   if (input.writesRuntimeDirectly) reasons.push('runtime_consumer_observation_must_not_write_runtime_directly')
   if (input.writesFactDirectly) reasons.push('runtime_consumer_observation_must_not_write_fact_directly')
+  if (
+    normalizeText(input.assetKey)
+    && normalizeText(input.publicationKey)
+    && !isDurationRuntimeConsumerPublicationKeyAllowedForAsset(input.assetKey, input.publicationKey)
+  ) {
+    reasons.push('runtime_consumer_observation_publication_key_not_allowed_for_asset')
+  }
   if (!isDeclaredRuntimeConsumerForAsset(input.assetKey, input.consumerKey)) {
     reasons.push('runtime_consumer_observation_consumer_not_declared_for_asset')
   }
