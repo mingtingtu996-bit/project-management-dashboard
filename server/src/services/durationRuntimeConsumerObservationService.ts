@@ -10,6 +10,7 @@ export type DurationRuntimeConsumerObservationQueryExec = <T = Record<string, un
 ) => Promise<T[]>
 
 export type DurationRuntimeConsumerObservationStatus = 'observed' | 'rejected'
+export type DurationRuntimeConsumerRuntimeCallStatus = 'called' | 'rejected'
 
 export interface DurationRuntimeConsumerObservation {
   assetKey: DurationLiveLearningAssetKey
@@ -22,6 +23,29 @@ export interface DurationRuntimeConsumerObservation {
   writesRuntimeDirectly: false
   writesFactDirectly: false
   observedAt: string
+}
+
+export interface DurationRuntimeConsumerRuntimeCall {
+  consumerKey: string
+  runtimeEntryRef: string
+  callStatus: DurationRuntimeConsumerRuntimeCallStatus
+  callContext: Record<string, unknown>
+  sourceEvidenceRefs: string[]
+  writesRuntimeDirectly: false
+  writesFactDirectly: false
+  calledAt: string
+}
+
+export interface RecordDurationRuntimeConsumerRuntimeCallInput {
+  queryExec: DurationRuntimeConsumerObservationQueryExec
+  consumerKey: string
+  runtimeEntryRef: string
+  callStatus?: DurationRuntimeConsumerRuntimeCallStatus
+  callContext?: Record<string, unknown> | null
+  sourceEvidenceRefs?: string[] | null
+  calledAt?: string
+  writesRuntimeDirectly?: boolean
+  writesFactDirectly?: boolean
 }
 
 export interface RecordDurationRuntimeConsumerObservationInput {
@@ -76,6 +100,17 @@ export interface DurationRuntimeConsumerObservationResult {
   reasons: string[]
 }
 
+export interface DurationRuntimeConsumerRuntimeCallResult {
+  status:
+    | 'runtime_consumer_runtime_call_recorded'
+    | 'runtime_consumer_runtime_call_blocked'
+  canPersist: boolean
+  runtimeCall: DurationRuntimeConsumerRuntimeCall | null
+  writesRuntimeDirectly: false
+  writesFactDirectly: false
+  reasons: string[]
+}
+
 export interface DurationRuntimeConsumerObservedArtifactsResult {
   status:
     | 'runtime_consumer_observations_recorded'
@@ -112,11 +147,29 @@ function isDeclaredRuntimeConsumerForAsset(assetKey: unknown, consumerKey: unkno
       && contract.consumerKey === normalizedConsumerKey)
 }
 
+function isDeclaredRuntimeConsumer(consumerKey: unknown) {
+  const normalizedConsumerKey = normalizeConsumerKey(consumerKey)
+  if (!normalizedConsumerKey) return false
+  return listDurationRuntimeConsumerObservationIntegrationContracts()
+    .some((contract) => contract.consumerKey === normalizedConsumerKey)
+}
+
 function buildBlockResult(reasons: string[]): DurationRuntimeConsumerObservationResult {
   return {
     status: 'runtime_consumer_observation_blocked',
     canPersist: false,
     observation: null,
+    writesRuntimeDirectly: false,
+    writesFactDirectly: false,
+    reasons: Array.from(new Set(reasons)),
+  }
+}
+
+function buildRuntimeCallBlockResult(reasons: string[]): DurationRuntimeConsumerRuntimeCallResult {
+  return {
+    status: 'runtime_consumer_runtime_call_blocked',
+    canPersist: false,
+    runtimeCall: null,
     writesRuntimeDirectly: false,
     writesFactDirectly: false,
     reasons: Array.from(new Set(reasons)),
@@ -153,6 +206,31 @@ function validateInput(input: RecordDurationRuntimeConsumerObservationInput) {
   return reasons
 }
 
+function validateRuntimeCallInput(input: RecordDurationRuntimeConsumerRuntimeCallInput) {
+  const reasons: string[] = []
+  if (!normalizeText(input.consumerKey)) reasons.push('runtime_consumer_runtime_call_consumer_key_required')
+  if (!normalizeText(input.runtimeEntryRef)) reasons.push('runtime_consumer_runtime_call_entry_ref_required')
+  if (input.writesRuntimeDirectly) reasons.push('runtime_consumer_runtime_call_must_not_write_runtime_directly')
+  if (input.writesFactDirectly) reasons.push('runtime_consumer_runtime_call_must_not_write_fact_directly')
+  if (normalizeText(input.consumerKey) && !isDeclaredRuntimeConsumer(input.consumerKey)) {
+    reasons.push('runtime_consumer_runtime_call_consumer_not_declared')
+  }
+  return reasons
+}
+
+function buildRuntimeCall(input: RecordDurationRuntimeConsumerRuntimeCallInput): DurationRuntimeConsumerRuntimeCall {
+  return {
+    consumerKey: normalizeConsumerKey(input.consumerKey),
+    runtimeEntryRef: normalizeText(input.runtimeEntryRef),
+    callStatus: input.callStatus ?? 'called',
+    callContext: input.callContext ?? {},
+    sourceEvidenceRefs: normalizeEvidenceRefs(input.sourceEvidenceRefs),
+    writesRuntimeDirectly: false,
+    writesFactDirectly: false,
+    calledAt: input.calledAt ?? new Date().toISOString(),
+  }
+}
+
 function buildObservation(input: RecordDurationRuntimeConsumerObservationInput): DurationRuntimeConsumerObservation {
   return {
     assetKey: normalizeText(input.assetKey) as DurationLiveLearningAssetKey,
@@ -187,6 +265,46 @@ function summarizeObservedArtifactResults(
     writesRuntimeDirectly: false,
     writesFactDirectly: false,
     reasons: Array.from(new Set(results.flatMap((result) => result.reasons))),
+  }
+}
+
+export async function recordDurationRuntimeConsumerRuntimeCall(
+  input: RecordDurationRuntimeConsumerRuntimeCallInput,
+): Promise<DurationRuntimeConsumerRuntimeCallResult> {
+  const reasons = validateRuntimeCallInput(input)
+  if (reasons.length > 0) return buildRuntimeCallBlockResult(reasons)
+
+  const runtimeCall = buildRuntimeCall(input)
+  await input.queryExec(
+    `insert into public.runtime_consumer_runtime_calls (
+      consumer_key,
+      runtime_entry_ref,
+      call_status,
+      call_context,
+      source_evidence_refs,
+      writes_runtime_directly,
+      writes_fact_directly,
+      called_at
+    ) values ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [
+      runtimeCall.consumerKey,
+      runtimeCall.runtimeEntryRef,
+      runtimeCall.callStatus,
+      runtimeCall.callContext,
+      runtimeCall.sourceEvidenceRefs,
+      runtimeCall.writesRuntimeDirectly,
+      runtimeCall.writesFactDirectly,
+      runtimeCall.calledAt,
+    ],
+  )
+
+  return {
+    status: 'runtime_consumer_runtime_call_recorded',
+    canPersist: true,
+    runtimeCall,
+    writesRuntimeDirectly: false,
+    writesFactDirectly: false,
+    reasons: [],
   }
 }
 

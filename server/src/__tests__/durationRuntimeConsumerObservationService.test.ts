@@ -14,6 +14,94 @@ function joinedSql(calls: Array<{ sql: string }>) {
 }
 
 describe('durationRuntimeConsumerObservationService', () => {
+  it('records runtime consumer runtime calls without writing runtime artifacts or facts', async () => {
+    const {
+      recordDurationRuntimeConsumerRuntimeCall,
+    } = await import('../services/durationRuntimeConsumerObservationService.js')
+    const { calls, queryExec } = createRecordingQueryExec()
+
+    const result = await recordDurationRuntimeConsumerRuntimeCall({
+      queryExec,
+      consumerKey: 'projectRemainingDurationForecastService.ts',
+      runtimeEntryRef: 'projectRemainingDurationForecastService:forecastRemainingDuration',
+      callContext: { projectId: 'project-a' },
+      sourceEvidenceRefs: ['runtime-path:remaining-duration:call'],
+      calledAt: '2026-06-15T06:00:00.000Z',
+    })
+
+    expect(result).toEqual(expect.objectContaining({
+      status: 'runtime_consumer_runtime_call_recorded',
+      canPersist: true,
+      writesRuntimeDirectly: false,
+      writesFactDirectly: false,
+      reasons: [],
+    }))
+    expect(result.runtimeCall).toEqual(expect.objectContaining({
+      consumerKey: 'projectRemainingDurationForecastService',
+      runtimeEntryRef: 'projectRemainingDurationForecastService:forecastRemainingDuration',
+      callStatus: 'called',
+      writesRuntimeDirectly: false,
+      writesFactDirectly: false,
+    }))
+
+    const sql = joinedSql(calls)
+    expect(sql).toContain('insert into public.runtime_consumer_runtime_calls')
+    expect(sql).not.toContain('runtime_consumer_observations')
+    expect(sql).not.toContain('algorithm_learnable_parameter_runtime_publications')
+    expect(sql).not.toContain('algorithm_seed_versions')
+    expect(sql).not.toContain('standard_work_duration')
+    expect(sql).not.toContain('tasks ')
+    expect(sql).not.toContain('task_baseline_items')
+    expect(sql).not.toContain('monthly_plan_items')
+  })
+
+  it('blocks runtime calls that try to declare direct runtime or fact mutation', async () => {
+    const {
+      recordDurationRuntimeConsumerRuntimeCall,
+    } = await import('../services/durationRuntimeConsumerObservationService.js')
+    const { calls, queryExec } = createRecordingQueryExec()
+
+    const result = await recordDurationRuntimeConsumerRuntimeCall({
+      queryExec,
+      consumerKey: 'durationSuggestionService',
+      runtimeEntryRef: 'durationSuggestionService:suggestDuration',
+      writesRuntimeDirectly: true,
+      writesFactDirectly: true,
+    })
+
+    expect(result).toEqual(expect.objectContaining({
+      status: 'runtime_consumer_runtime_call_blocked',
+      canPersist: false,
+      runtimeCall: null,
+      reasons: [
+        'runtime_consumer_runtime_call_must_not_write_runtime_directly',
+        'runtime_consumer_runtime_call_must_not_write_fact_directly',
+      ],
+    }))
+    expect(calls).toEqual([])
+  })
+
+  it('blocks runtime calls from undeclared consumers', async () => {
+    const {
+      recordDurationRuntimeConsumerRuntimeCall,
+    } = await import('../services/durationRuntimeConsumerObservationService.js')
+    const { calls, queryExec } = createRecordingQueryExec()
+
+    const result = await recordDurationRuntimeConsumerRuntimeCall({
+      queryExec,
+      consumerKey: 'unknownDurationConsumerService',
+      runtimeEntryRef: 'unknownDurationConsumerService:run',
+    })
+
+    expect(result).toEqual(expect.objectContaining({
+      status: 'runtime_consumer_runtime_call_blocked',
+      canPersist: false,
+      runtimeCall: null,
+      reasons: ['runtime_consumer_runtime_call_consumer_not_declared'],
+    }))
+    expect(calls).toEqual([])
+  })
+
   it('records runtime consumer observations without writing runtime artifacts or facts', async () => {
     const {
       recordDurationRuntimeConsumerObservation,

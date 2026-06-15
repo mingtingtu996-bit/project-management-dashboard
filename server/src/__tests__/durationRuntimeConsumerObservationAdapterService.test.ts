@@ -9,6 +9,10 @@ function createRecordingQueryExec() {
   return { calls, queryExec }
 }
 
+function callsForTable(calls: Array<{ sql: string, params: unknown[] }>, tableName: string) {
+  return calls.filter((call) => call.sql.toLowerCase().includes(tableName))
+}
+
 describe('durationRuntimeConsumerObservationAdapterService', () => {
   it('records project remaining duration forecast consumed artifacts through the contract adapter', async () => {
     const {
@@ -41,7 +45,16 @@ describe('durationRuntimeConsumerObservationAdapterService', () => {
       blockedCount: 0,
       reasons: [],
     }))
-    expect(calls.map((call) => call.params.slice(0, 4))).toEqual([
+    expect(result.runtimeCallResult).toEqual(expect.objectContaining({
+      status: 'runtime_consumer_runtime_call_recorded',
+      canPersist: true,
+    }))
+    expect(callsForTable(calls, 'runtime_consumer_runtime_calls')).toHaveLength(1)
+    expect(callsForTable(calls, 'runtime_consumer_runtime_calls')[0].params.slice(0, 2)).toEqual([
+      'projectRemainingDurationForecastService',
+      'projectRemainingDurationForecastService:forecastRemainingDuration',
+    ])
+    expect(callsForTable(calls, 'runtime_consumer_observations').map((call) => call.params.slice(0, 4))).toEqual([
       [
         'forecast_residual_overlay',
         'forecast_residual_overlay_runtime:overlay-v4',
@@ -78,6 +91,11 @@ describe('durationRuntimeConsumerObservationAdapterService', () => {
       blockedCount: 1,
       reasons: ['runtime_consumer_observation_contract_not_found'],
     }))
-    expect(calls).toEqual([])
+    expect(result.runtimeCallResult).toEqual(expect.objectContaining({
+      status: 'runtime_consumer_runtime_call_recorded',
+      canPersist: true,
+    }))
+    expect(callsForTable(calls, 'runtime_consumer_runtime_calls')).toHaveLength(1)
+    expect(callsForTable(calls, 'runtime_consumer_observations')).toEqual([])
   })
 })

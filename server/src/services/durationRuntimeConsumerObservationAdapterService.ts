@@ -1,8 +1,10 @@
 import {
+  recordDurationRuntimeConsumerRuntimeCall,
   recordDurationRuntimeConsumerObservedContractArtifacts,
   type DurationRuntimeConsumerObservedArtifact,
   type DurationRuntimeConsumerObservationQueryExec,
   type DurationRuntimeConsumerObservedArtifactsResult,
+  type DurationRuntimeConsumerRuntimeCallResult,
 } from './durationRuntimeConsumerObservationService.js'
 import type {
   DurationLiveLearningAssetKey,
@@ -11,14 +13,32 @@ import type {
 export interface RecordDurationRuntimeConsumerFacadeArtifactsInput {
   queryExec: DurationRuntimeConsumerObservationQueryExec
   artifacts: readonly DurationRuntimeConsumerObservedArtifact[]
+  runtimeEntryRef?: string
+  callContext?: Record<string, unknown> | null
+  sourceEvidenceRefs?: string[] | null
+  calledAt?: string
   observedAt?: string
   writesRuntimeDirectly?: boolean
   writesFactDirectly?: boolean
 }
 
+export interface DurationRuntimeConsumerFacadeArtifactsResult
+  extends DurationRuntimeConsumerObservedArtifactsResult {
+  runtimeCallResult: DurationRuntimeConsumerRuntimeCallResult
+}
+
 export interface DurationRuntimeConsumerObservationFacadeRegistration {
   consumerKey: string
   assetKeys: readonly DurationLiveLearningAssetKey[]
+}
+
+const RUNTIME_ENTRY_REFS_BY_CONSUMER_KEY: Record<string, string> = {
+  durationSuggestionService: 'durationSuggestionService:suggestDuration',
+  taskDurationForecastService: 'taskDurationForecastService:forecastTaskDuration',
+  projectRemainingDurationForecastService: 'projectRemainingDurationForecastService:forecastRemainingDuration',
+  wbsTemplateGenerationService: 'wbsTemplateGenerationService:generateTemplate',
+  scheduleAccelerationService: 'scheduleAccelerationService:buildAccelerationPlan',
+  scheduleAccelerationRuntimeService: 'scheduleAccelerationRuntimeService:applyRuntimeAcceleration',
 }
 
 const FACADE_REGISTRATIONS: DurationRuntimeConsumerObservationFacadeRegistration[] = [
@@ -72,11 +92,21 @@ export function listDurationRuntimeConsumerObservationFacadeRegistrations():
   }))
 }
 
-function recordConsumerArtifacts(
+async function recordConsumerArtifacts(
   consumerKey: string,
   input: RecordDurationRuntimeConsumerFacadeArtifactsInput,
-): Promise<DurationRuntimeConsumerObservedArtifactsResult> {
-  return recordDurationRuntimeConsumerObservedContractArtifacts({
+): Promise<DurationRuntimeConsumerFacadeArtifactsResult> {
+  const runtimeCallResult = await recordDurationRuntimeConsumerRuntimeCall({
+    queryExec: input.queryExec,
+    consumerKey,
+    runtimeEntryRef: input.runtimeEntryRef ?? RUNTIME_ENTRY_REFS_BY_CONSUMER_KEY[consumerKey],
+    callContext: input.callContext,
+    sourceEvidenceRefs: input.sourceEvidenceRefs,
+    calledAt: input.calledAt ?? input.observedAt,
+    writesRuntimeDirectly: input.writesRuntimeDirectly,
+    writesFactDirectly: input.writesFactDirectly,
+  })
+  const observationsResult = await recordDurationRuntimeConsumerObservedContractArtifacts({
     queryExec: input.queryExec,
     consumerKey,
     artifacts: input.artifacts,
@@ -84,6 +114,11 @@ function recordConsumerArtifacts(
     writesRuntimeDirectly: input.writesRuntimeDirectly,
     writesFactDirectly: input.writesFactDirectly,
   })
+
+  return {
+    ...observationsResult,
+    runtimeCallResult,
+  }
 }
 
 export function recordDurationSuggestionConsumedArtifacts(
