@@ -42,7 +42,21 @@ vi.mock('../services/durationSuggestionService.js', () => ({
 const {
   buildRuntimeProjectRemainingDurationForecast,
   evaluateRuntimeScheduleAcceleration,
+  recordScheduleAccelerationRuntimeConsumption,
 } = await import('../services/scheduleAccelerationRuntimeService.js')
+
+function createRecordingQueryExec() {
+  const calls: Array<{ sql: string, params: unknown[] }> = []
+  const queryExec = async <T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<T[]> => {
+    calls.push({ sql, params })
+    return [] as T[]
+  }
+  return { calls, queryExec }
+}
+
+function callsForTable(calls: Array<{ sql: string, params: unknown[] }>, tableName: string) {
+  return calls.filter((call) => call.sql.toLowerCase().includes(tableName))
+}
 
 describe('scheduleAccelerationRuntimeService', () => {
   beforeEach(() => {
@@ -645,5 +659,48 @@ describe('scheduleAccelerationRuntimeService', () => {
 
     expect(result.projectRemainingForecast.targetEndDate).toBe('2026-06-25')
     expect(result.targetFeasibility?.targetEndDate).toBe('2026-06-25')
+  })
+
+  it('records v1.4.22.5 runtime consumer evidence for critical-path artifacts consumed by runtime acceleration', async () => {
+    const { calls, queryExec } = createRecordingQueryExec()
+
+    const result = await recordScheduleAccelerationRuntimeConsumption({
+      queryExec,
+      projectId: 'project-1',
+      runtimeEntryRef: 'scheduleAccelerationRuntimeService:applyRuntimeAcceleration',
+      observedAt: '2026-06-15T08:00:00.000Z',
+      runtimeArtifactPublications: [
+        {
+          assetKey: 'critical_path_rule_candidate',
+          publicationKey: 'critical_path_rule_runtime:critical-v6',
+          publicationStatus: 'runtime_published',
+        },
+        {
+          assetKey: 'dependency_rule_candidate',
+          publicationKey: 'dependency_rule_runtime:dependency-v6',
+          publicationStatus: 'published',
+        },
+      ],
+    })
+
+    expect(result).toEqual(expect.objectContaining({
+      status: 'runtime_consumer_observations_recorded',
+      recordedCount: 1,
+      blockedCount: 0,
+      reasons: [],
+    }))
+    expect(result.runtimeCallResult).toEqual(expect.objectContaining({
+      status: 'runtime_consumer_runtime_call_recorded',
+      canPersist: true,
+    }))
+    expect(callsForTable(calls, 'runtime_consumer_runtime_calls')).toHaveLength(1)
+    expect(callsForTable(calls, 'runtime_consumer_observations').map((call) => call.params.slice(0, 4))).toEqual([
+      [
+        'critical_path_rule_candidate',
+        'critical_path_rule_runtime:critical-v6',
+        'scheduleAccelerationRuntimeService',
+        'schedule_acceleration_runtime',
+      ],
+    ])
   })
 })

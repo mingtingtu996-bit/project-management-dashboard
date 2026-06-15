@@ -475,13 +475,15 @@ export function buildProjectRemainingDurationForecast(params: {
     : null
   const latestGateFinishDate = latestDate(externalGateRows.map((row) => readRowGoverningFinish(row, asOfDate)))
   const latestCommitmentFinishDate = normalizeDate(monthlyCommitments.latestCommitmentFinishDate)
+  const mergeBias = computeCriticalMergeBiasDays(internalCriticalRows, asOfDate)
+  const confidenceBandGoverningFinishDate = mergeBias.mergeBiasDays > 0 ? null : confidenceBandFinishDate
   const rawInternalWorkFinishDate = latestDate([
     latestRemainingFinishDate,
     latestCriticalFinishDate,
+    confidenceBandGoverningFinishDate,
     criticalPathSpanFinishDate,
     asOfDate,
   ])
-  const mergeBias = computeCriticalMergeBiasDays(internalCriticalRows, asOfDate)
   const mergeBiasedFinishDate = mergeBias.mergeBiasDays > 0
     ? addCalendarDays(rawInternalWorkFinishDate, mergeBias.mergeBiasDays)
     : rawInternalWorkFinishDate
