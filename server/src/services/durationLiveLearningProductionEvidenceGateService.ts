@@ -18,6 +18,11 @@ import {
   type DurationRuntimeConsumerObservationRuntimeCallCoverage,
   type DurationRuntimeConsumerObservationRuntimeCallEvidence,
 } from './durationRuntimeConsumerObservationRuntimeCallAuditService.js'
+import {
+  evaluateDurationRuntimeConsumerBusinessPathIntegrationCoverage,
+  type DurationRuntimeConsumerBusinessPathIntegrationCoverage,
+  type DurationRuntimeConsumerBusinessPathSourceFile,
+} from './durationRuntimeConsumerBusinessPathIntegrationAuditService.js'
 
 export type DurationLiveLearningProductionEvidenceReasonCode =
   | 'completion_audit_ready_required'
@@ -157,6 +162,7 @@ export interface DurationLiveLearningProductionClaimAuditInput {
   sourceRows?: readonly DurationLiveLearningProductionEvidenceSourceRow[]
   runtimeConsumerAdapterRegistrations?: readonly DurationRuntimeConsumerObservationAdapterRegistration[]
   runtimeConsumerRuntimeCallEvidence?: readonly DurationRuntimeConsumerObservationRuntimeCallEvidence[]
+  runtimeConsumerBusinessPathSourceFiles?: readonly DurationRuntimeConsumerBusinessPathSourceFile[]
 }
 
 export interface DurationLiveLearningProductionClaimAudit {
@@ -172,6 +178,7 @@ export interface DurationLiveLearningProductionClaimAudit {
   runtimeConsumerObservationCoverage: DurationRuntimeConsumerObservationCoverage
   runtimeConsumerObservationIntegrationCoverage: DurationRuntimeConsumerObservationIntegrationCoverage
   runtimeConsumerRuntimeCallCoverage: DurationRuntimeConsumerObservationRuntimeCallCoverage
+  runtimeConsumerBusinessPathIntegrationCoverage: DurationRuntimeConsumerBusinessPathIntegrationCoverage
 }
 
 const LEARNABLE_DURATION_LIVE_LEARNING_ASSET_KEYS: DurationLiveLearningAssetKey[] = [
@@ -933,10 +940,15 @@ export function buildDurationLiveLearningProductionClaimAudit(
       ...(input.runtimeConsumerRuntimeCallEvidence ?? []),
     ],
   })
+  const runtimeConsumerBusinessPathIntegrationCoverage =
+    evaluateDurationRuntimeConsumerBusinessPathIntegrationCoverage({
+      sourceFiles: input.runtimeConsumerBusinessPathSourceFiles,
+    })
   const ready = productionGate.status === 'duration_live_learning_production_evidence_ready'
     && runtimeConsumerObservationCoverage.status === 'runtime_consumer_observation_coverage_ready'
     && runtimeConsumerObservationIntegrationCoverage.status === 'runtime_consumer_observation_integration_ready'
     && runtimeConsumerRuntimeCallCoverage.status === 'runtime_consumer_observation_runtime_calls_ready'
+    && runtimeConsumerBusinessPathIntegrationCoverage.status === 'runtime_consumer_business_path_integration_ready'
 
   return {
     status: ready
@@ -951,5 +963,6 @@ export function buildDurationLiveLearningProductionClaimAudit(
     runtimeConsumerObservationCoverage,
     runtimeConsumerObservationIntegrationCoverage,
     runtimeConsumerRuntimeCallCoverage,
+    runtimeConsumerBusinessPathIntegrationCoverage,
   }
 }

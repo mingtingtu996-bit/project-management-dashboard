@@ -152,6 +152,35 @@ function rowsForSql(sql: string) {
   throw new Error(`unexpected query: ${sql}`)
 }
 
+function buildReadyBusinessPathSourceFiles() {
+  return [
+    {
+      sourcePath: 'server/src/services/durationSuggestionService.ts',
+      sourceText: "import { recordDurationSuggestionConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'; recordDurationSuggestionConsumedArtifacts({ queryExec, artifacts: [] })",
+    },
+    {
+      sourcePath: 'server/src/services/taskDurationForecastService.ts',
+      sourceText: "import { recordTaskDurationForecastConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'; recordTaskDurationForecastConsumedArtifacts({ queryExec, artifacts: [] })",
+    },
+    {
+      sourcePath: 'server/src/services/projectRemainingDurationForecastService.ts',
+      sourceText: "import { recordProjectRemainingDurationForecastConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'; recordProjectRemainingDurationForecastConsumedArtifacts({ queryExec, artifacts: [] })",
+    },
+    {
+      sourcePath: 'server/src/services/wbsTemplateGenerationService.ts',
+      sourceText: "import { recordWbsTemplateGenerationConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'; recordWbsTemplateGenerationConsumedArtifacts({ queryExec, artifacts: [] })",
+    },
+    {
+      sourcePath: 'server/src/services/scheduleAccelerationService.ts',
+      sourceText: "import { recordScheduleAccelerationConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'; recordScheduleAccelerationConsumedArtifacts({ queryExec, artifacts: [] })",
+    },
+    {
+      sourcePath: 'server/src/services/scheduleAccelerationRuntimeService.ts',
+      sourceText: "import { recordScheduleAccelerationRuntimeConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'; recordScheduleAccelerationRuntimeConsumedArtifacts({ queryExec, artifacts: [] })",
+    },
+  ]
+}
+
 describe('durationLiveLearningProductionEvidenceReaderService', () => {
   it('builds the production claim audit from canonical read-only source queries', async () => {
     const {
@@ -167,6 +196,7 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
       completionAudit: buildReadyCompletionAudit(),
       queryExec,
       maxRowsPerSourceTable: 200,
+      runtimeConsumerBusinessPathSourceFiles: buildReadyBusinessPathSourceFiles(),
     })
 
     expect(audit.status).toBe('duration_live_learning_production_claim_ready')
@@ -175,6 +205,8 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
       .toBe('runtime_consumer_observation_integration_ready')
     expect(audit.runtimeConsumerRuntimeCallCoverage.status)
       .toBe('runtime_consumer_observation_runtime_calls_ready')
+    expect(audit.runtimeConsumerBusinessPathIntegrationCoverage.status)
+      .toBe('runtime_consumer_business_path_integration_ready')
     expect(audit.runtimeConsumerObservationCoverage.requiredConsumerObservations).toEqual(expectedRuntimeConsumerObservations)
     expect(audit.runtimeConsumerObservationCoverage.missingConsumerObservations).toEqual([])
     expect(audit.sourceQuery.sourceTables).toEqual([

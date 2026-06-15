@@ -215,6 +215,65 @@ function buildRuntimeConsumerRuntimeCallRows() {
   }))
 }
 
+function buildReadyBusinessPathSourceFiles() {
+  return [
+    {
+      sourcePath: 'server/src/services/durationSuggestionService.ts',
+      sourceText: `
+        import { recordDurationSuggestionConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
+        export async function suggestDuration() {
+          await recordDurationSuggestionConsumedArtifacts({ queryExec, artifacts: [] })
+        }
+      `,
+    },
+    {
+      sourcePath: 'server/src/services/taskDurationForecastService.ts',
+      sourceText: `
+        import { recordTaskDurationForecastConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
+        export async function forecastTaskDuration() {
+          await recordTaskDurationForecastConsumedArtifacts({ queryExec, artifacts: [] })
+        }
+      `,
+    },
+    {
+      sourcePath: 'server/src/services/projectRemainingDurationForecastService.ts',
+      sourceText: `
+        import { recordProjectRemainingDurationForecastConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
+        export async function forecastRemainingDuration() {
+          await recordProjectRemainingDurationForecastConsumedArtifacts({ queryExec, artifacts: [] })
+        }
+      `,
+    },
+    {
+      sourcePath: 'server/src/services/wbsTemplateGenerationService.ts',
+      sourceText: `
+        import { recordWbsTemplateGenerationConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
+        export async function generateTemplate() {
+          await recordWbsTemplateGenerationConsumedArtifacts({ queryExec, artifacts: [] })
+        }
+      `,
+    },
+    {
+      sourcePath: 'server/src/services/scheduleAccelerationService.ts',
+      sourceText: `
+        import { recordScheduleAccelerationConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
+        export async function buildAccelerationPlan() {
+          await recordScheduleAccelerationConsumedArtifacts({ queryExec, artifacts: [] })
+        }
+      `,
+    },
+    {
+      sourcePath: 'server/src/services/scheduleAccelerationRuntimeService.ts',
+      sourceText: `
+        import { recordScheduleAccelerationRuntimeConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
+        export async function applyRuntimeAcceleration() {
+          await recordScheduleAccelerationRuntimeConsumedArtifacts({ queryExec, artifacts: [] })
+        }
+      `,
+    },
+  ]
+}
+
 describe('durationLiveLearningProductionEvidenceGateService', () => {
   it('lists the canonical production evidence source plan for every learnable asset', () => {
     const sourcePlan = listDurationLiveLearningProductionEvidenceSourcePlan()
@@ -662,6 +721,7 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
       completionAudit: buildReadyCompletionAudit(),
       records: buildAllProductionEvidenceRecords(),
       runtimeConsumerRuntimeCallEvidence: runtimeCallEvidence,
+      runtimeConsumerBusinessPathSourceFiles: buildReadyBusinessPathSourceFiles(),
     })
 
     expect(audit.status).toBe('duration_live_learning_production_claim_ready')
@@ -669,6 +729,8 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
     expect(audit.productionGate.status).toBe('duration_live_learning_production_evidence_ready')
     expect(audit.runtimeConsumerObservationCoverage.status).toBe('runtime_consumer_observation_coverage_ready')
     expect(audit.runtimeConsumerObservationCoverage.missingConsumerObservations).toEqual([])
+    expect(audit.runtimeConsumerBusinessPathIntegrationCoverage.status)
+      .toBe('runtime_consumer_business_path_integration_ready')
     expect(audit.productionGate.productionEvidenceAssetKeys).toEqual(learnableAssetKeys)
     expect(audit.allowedClaim).toBe(
       'all_learnable_duration_prediction_and_network_assets_are_live_self_learning;facts_and_commitments_remain_locked',
@@ -702,6 +764,7 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
         ...buildAllProductionSourceRows(),
         ...buildRuntimeConsumerRuntimeCallRows(),
       ],
+      runtimeConsumerBusinessPathSourceFiles: buildReadyBusinessPathSourceFiles(),
     })
 
     expect(audit.status).toBe('duration_live_learning_production_claim_ready')
@@ -711,6 +774,38 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
     expect(audit.runtimeConsumerObservationCoverage.status).toBe('runtime_consumer_observation_coverage_ready')
     expect(audit.runtimeConsumerRuntimeCallCoverage.status)
       .toBe('runtime_consumer_observation_runtime_calls_ready')
+    expect(audit.runtimeConsumerBusinessPathIntegrationCoverage.status)
+      .toBe('runtime_consumer_business_path_integration_ready')
+  })
+
+  it('blocks the final production claim when facade-backed business paths are not integrated', () => {
+    const audit = buildDurationLiveLearningProductionClaimAudit({
+      completionAudit: buildReadyCompletionAudit(),
+      sourceRows: [
+        ...buildAllProductionSourceRows(),
+        ...buildRuntimeConsumerRuntimeCallRows(),
+      ],
+      runtimeConsumerBusinessPathSourceFiles: [{
+        sourcePath: 'server/src/services/projectRemainingDurationForecastService.ts',
+        sourceText: 'export function buildProjectRemainingDurationForecast() { return {} }',
+      }],
+    })
+
+    expect(audit.productionGate.status).toBe('duration_live_learning_production_evidence_ready')
+    expect(audit.runtimeConsumerObservationCoverage.status).toBe('runtime_consumer_observation_coverage_ready')
+    expect(audit.runtimeConsumerRuntimeCallCoverage.status)
+      .toBe('runtime_consumer_observation_runtime_calls_ready')
+    expect(audit.runtimeConsumerBusinessPathIntegrationCoverage.status)
+      .toBe('runtime_consumer_business_path_integration_not_ready')
+    expect(audit.runtimeConsumerBusinessPathIntegrationCoverage.missingIntegrations)
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          consumerKey: 'projectRemainingDurationForecastService',
+          facadeFunctionName: 'recordProjectRemainingDurationForecastConsumedArtifacts',
+        }),
+      ]))
+    expect(audit.status).toBe('duration_live_learning_production_claim_not_ready')
+    expect(audit.allowedClaim).toBe('not_ready_for_live_self_learning_claim')
   })
 
   it('blocks the final production claim when consumer observation facades are not fully integrated', () => {
