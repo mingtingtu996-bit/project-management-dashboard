@@ -34,6 +34,24 @@ const learnableAssetKeys: DurationLiveLearningAssetKey[] = [
   'critical_path_rule_candidate',
 ]
 
+const parameterPublicationAssetKeys: DurationLiveLearningAssetKey[] = [
+  'base_duration_benchmark',
+  'duration_cold_start_baseline',
+  'forecast_residual_overlay',
+  'forecast_confidence_weight',
+]
+
+function publicationKeyForAsset(assetKey: DurationLiveLearningAssetKey) {
+  if (assetKey === 'standard_work_duration_seed') {
+    return 'algorithm_seed_versions:seed-version-standard-work-duration-v2'
+  }
+  if (assetKey === 'special_work_duration_seed') return 'wbs_template_runtime:special-work-seed-v2'
+  if (assetKey === 'wbs_reference_days') return 'wbs_reference_days_runtime:wbs-reference-days-v2'
+  if (assetKey === 'dependency_rule_candidate') return 'dependency_rule_runtime:dependency-rule-v2'
+  if (assetKey === 'critical_path_rule_candidate') return 'critical_path_rule_runtime:critical-path-rule-v2'
+  return `publication-${assetKey}`
+}
+
 const expectedRuntimeConsumerObservations = [
   { assetKey: 'base_duration_benchmark' as const, consumerKey: 'durationSuggestionService' },
   { assetKey: 'duration_cold_start_baseline' as const, consumerKey: 'durationSuggestionService' },
@@ -105,8 +123,8 @@ function rowsForSql(sql: string) {
     }))
   }
   if (normalized.includes('from public.algorithm_learnable_parameter_runtime_publications')) {
-    return learnableAssetKeys.map((assetKey) => ({
-      publication_key: `publication-${assetKey}`,
+    return parameterPublicationAssetKeys.map((assetKey) => ({
+      publication_key: publicationKeyForAsset(assetKey),
       asset_key: assetKey,
       publication_status: 'published',
       impact_monitoring: { status: 'monitoring_armed' },
@@ -137,7 +155,7 @@ function rowsForSql(sql: string) {
     return expectedRuntimeConsumerObservations.map(({ assetKey, consumerKey }) => ({
       id: `consumer-${assetKey}-${consumerKey}`,
       asset_key: assetKey,
-      publication_key: `publication-${assetKey}`,
+      publication_key: publicationKeyForAsset(assetKey),
       consumer_key: consumerKey,
       observation_status: 'observed',
       writes_runtime_directly: false,
@@ -154,11 +172,64 @@ function rowsForSql(sql: string) {
       writes_fact_directly: false,
     }))
   }
-  if (normalized.includes('from public.wbs_template_runtime_publications')) return []
+  if (normalized.includes('from public.wbs_template_runtime_publications')) {
+    return [
+      {
+        publication_key: publicationKeyForAsset('special_work_duration_seed'),
+        asset_kind: 'special_work_duration_seed',
+        asset_version_id: 'special_work_duration_seed-version-v2',
+        runtime_publication_status: 'runtime_published',
+        impact_monitoring: { status: 'monitoring_armed' },
+        rollback_execution: { status: 'rollback_verified' },
+      },
+      {
+        publication_key: publicationKeyForAsset('wbs_reference_days'),
+        asset_kind: 'wbs_reference_days',
+        asset_version_id: 'wbs_reference_days-version-v2',
+        runtime_publication_status: 'runtime_published',
+        impact_monitoring: { status: 'monitoring_armed' },
+        rollback_execution: { status: 'rollback_verified' },
+      },
+    ]
+  }
   if (normalized.includes('from public.wbs_template_runtime_events')) return []
-  if (normalized.includes('from public.construction_dependency_rule_runtime_publications')) return []
+  if (normalized.includes('from public.construction_dependency_rule_runtime_publications')) {
+    return [
+      {
+        publication_key: publicationKeyForAsset('dependency_rule_candidate'),
+        dependency_rule_version_id: 'dependency_rule_candidate-version-v2',
+        runtime_publication_status: 'runtime_published',
+        dependency_rule_lineage: { assetType: 'dependency_rule_candidate' },
+        impact_monitoring: { status: 'monitoring_armed' },
+        rollback_execution: { status: 'rollback_verified' },
+      },
+      {
+        publication_key: publicationKeyForAsset('critical_path_rule_candidate'),
+        dependency_rule_version_id: 'critical_path_rule_candidate-version-v2',
+        runtime_publication_status: 'runtime_published',
+        dependency_rule_lineage: { assetType: 'critical_path_rule_candidate' },
+        impact_monitoring: { status: 'monitoring_armed' },
+        rollback_execution: { status: 'rollback_verified' },
+      },
+    ]
+  }
   if (normalized.includes('from public.construction_dependency_rule_runtime_events')) return []
-  if (normalized.includes('from public.algorithm_learnable_parameter_release_events')) return []
+  if (normalized.includes('from public.algorithm_learnable_parameter_release_events')) {
+    return [
+      {
+        event_type: 'impact_monitoring',
+        event_status: 'monitoring_passed',
+        source_publication_key: publicationKeyForAsset('standard_work_duration_seed'),
+        event_payload: { assetKey: 'standard_work_duration_seed' },
+      },
+      {
+        event_type: 'rollback_execution',
+        event_status: 'rollback_executed',
+        source_publication_key: publicationKeyForAsset('standard_work_duration_seed'),
+        event_payload: { assetKey: 'standard_work_duration_seed' },
+      },
+    ]
+  }
   throw new Error(`unexpected query: ${sql}`)
 }
 
@@ -221,16 +292,16 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
     expect(audit.runtimeConsumerObservationCoverage.missingConsumerObservations).toEqual([])
     expect(audit.sourceQuery.sourceTables).toEqual([
       'duration_experience_samples',
+      'duration_algorithm_accuracy_events',
+      'runtime_consumer_observations',
+      'runtime_consumer_runtime_calls',
       'algorithm_learnable_parameter_runtime_publications',
-      'algorithm_seed_versions',
       'algorithm_learnable_parameter_release_events',
+      'algorithm_seed_versions',
       'wbs_template_runtime_publications',
       'wbs_template_runtime_events',
       'construction_dependency_rule_runtime_publications',
       'construction_dependency_rule_runtime_events',
-      'duration_algorithm_accuracy_events',
-      'runtime_consumer_observations',
-      'runtime_consumer_runtime_calls',
     ])
     expect(audit.evidenceRowCollection.rejectedRows).toEqual([])
     expect(audit.evidenceCollection.rejectedRecords).toEqual([])
