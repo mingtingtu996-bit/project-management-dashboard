@@ -260,27 +260,57 @@ function buildReadyBusinessPathSourceFiles() {
   return [
     {
       sourcePath: 'server/src/services/durationSuggestionService.ts',
-      sourceText: "import { recordDurationSuggestionConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'; recordDurationSuggestionConsumedArtifacts({ queryExec, artifacts: [] })",
+      sourceText: `
+        import { recordDurationSuggestionConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
+        export async function suggestDuration() {
+          await recordDurationSuggestionConsumedArtifacts({ queryExec, artifacts: [] })
+        }
+      `,
     },
     {
       sourcePath: 'server/src/services/taskDurationForecastService.ts',
-      sourceText: "import { recordTaskDurationForecastConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'; recordTaskDurationForecastConsumedArtifacts({ queryExec, artifacts: [] })",
+      sourceText: `
+        import { recordTaskDurationForecastConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
+        export async function forecastTaskDuration() {
+          await recordTaskDurationForecastConsumedArtifacts({ queryExec, artifacts: [] })
+        }
+      `,
     },
     {
       sourcePath: 'server/src/services/projectRemainingDurationForecastService.ts',
-      sourceText: "import { recordProjectRemainingDurationForecastConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'; recordProjectRemainingDurationForecastConsumedArtifacts({ queryExec, artifacts: [] })",
+      sourceText: `
+        import { recordProjectRemainingDurationForecastConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
+        export async function forecastRemainingDuration() {
+          await recordProjectRemainingDurationForecastConsumedArtifacts({ queryExec, artifacts: [] })
+        }
+      `,
     },
     {
       sourcePath: 'server/src/services/wbsTemplateGenerationService.ts',
-      sourceText: "import { recordWbsTemplateGenerationConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'; recordWbsTemplateGenerationConsumedArtifacts({ queryExec, artifacts: [] })",
+      sourceText: `
+        import { recordWbsTemplateGenerationConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
+        export async function generateTemplate() {
+          await recordWbsTemplateGenerationConsumedArtifacts({ queryExec, artifacts: [] })
+        }
+      `,
     },
     {
       sourcePath: 'server/src/services/scheduleAccelerationService.ts',
-      sourceText: "import { recordScheduleAccelerationConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'; recordScheduleAccelerationConsumedArtifacts({ queryExec, artifacts: [] })",
+      sourceText: `
+        import { recordScheduleAccelerationConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
+        export async function buildAccelerationPlan() {
+          await recordScheduleAccelerationConsumedArtifacts({ queryExec, artifacts: [] })
+        }
+      `,
     },
     {
       sourcePath: 'server/src/services/scheduleAccelerationRuntimeService.ts',
-      sourceText: "import { recordScheduleAccelerationRuntimeConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'; recordScheduleAccelerationRuntimeConsumedArtifacts({ queryExec, artifacts: [] })",
+      sourceText: `
+        import { recordScheduleAccelerationRuntimeConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
+        export async function applyRuntimeAcceleration() {
+          await recordScheduleAccelerationRuntimeConsumedArtifacts({ queryExec, artifacts: [] })
+        }
+      `,
     },
   ]
 }
@@ -371,7 +401,7 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
     expect(joinedSql).not.toContain('monthly_plan_items')
   })
 
-  it('loads facade-backed business path source files when caller does not pass source text', async () => {
+  it('loads real business path source files and keeps the claim blocked when runtime entries are not integrated', async () => {
     const {
       buildDurationLiveLearningProductionClaimAuditFromDb,
     } = await import('../services/durationLiveLearningProductionEvidenceReaderService.js')
@@ -385,9 +415,9 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
       records: buildPlanNetworkOutcomeRecords(),
     })
 
-    expect(audit.status).toBe('duration_live_learning_production_claim_ready')
+    expect(audit.status).toBe('duration_live_learning_production_claim_not_ready')
     expect(audit.runtimeConsumerBusinessPathIntegrationCoverage.status)
-      .toBe('runtime_consumer_business_path_integration_ready')
-    expect(audit.runtimeConsumerBusinessPathIntegrationCoverage.missingIntegrations).toEqual([])
+      .toBe('runtime_consumer_business_path_integration_not_ready')
+    expect(audit.runtimeConsumerBusinessPathIntegrationCoverage.missingIntegrations.length).toBeGreaterThan(0)
   })
 })

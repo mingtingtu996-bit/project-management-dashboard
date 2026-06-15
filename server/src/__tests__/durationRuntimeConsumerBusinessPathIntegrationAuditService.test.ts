@@ -131,4 +131,35 @@ describe('durationRuntimeConsumerBusinessPathIntegrationAuditService', () => {
       facadeFunctionName: 'recordProjectRemainingDurationForecastConsumedArtifacts',
     }))
   })
+
+  it('does not count helper-only facade calls unless the declared runtime entry calls the facade', async () => {
+    const {
+      evaluateDurationRuntimeConsumerBusinessPathIntegrationCoverage,
+    } = await import('../services/durationRuntimeConsumerBusinessPathIntegrationAuditService.js')
+
+    const coverage = evaluateDurationRuntimeConsumerBusinessPathIntegrationCoverage({
+      sourceFiles: [
+        {
+          sourcePath: 'server/src/services/projectRemainingDurationForecastService.ts',
+          sourceText: `
+            import { recordProjectRemainingDurationForecastConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
+            export function recordProjectRemainingDurationForecastRuntimeConsumption() {
+              return recordProjectRemainingDurationForecastConsumedArtifacts({ queryExec, artifacts: [] })
+            }
+            export async function forecastRemainingDuration() {
+              return {}
+            }
+          `,
+        },
+      ],
+    })
+
+    expect(coverage.status).toBe('runtime_consumer_business_path_integration_not_ready')
+    expect(coverage.observedIntegrations).toEqual([])
+    expect(coverage.missingIntegrations).toContainEqual(expect.objectContaining({
+      consumerKey: 'projectRemainingDurationForecastService',
+      runtimeEntryRef: 'projectRemainingDurationForecastService:forecastRemainingDuration',
+      facadeFunctionName: 'recordProjectRemainingDurationForecastConsumedArtifacts',
+    }))
+  })
 })

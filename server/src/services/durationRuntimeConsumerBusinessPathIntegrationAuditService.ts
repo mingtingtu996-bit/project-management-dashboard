@@ -23,7 +23,7 @@ export interface DurationRuntimeConsumerBusinessPathIntegration {
 
 export interface DurationRuntimeConsumerObservedBusinessPathIntegration
   extends DurationRuntimeConsumerBusinessPathIntegration {
-  evidence: 'facade_call_in_business_source'
+  evidence: 'facade_call_in_declared_runtime_entry_source'
 }
 
 export interface DurationRuntimeConsumerBusinessPathIntegrationCoverageInput {
@@ -92,11 +92,57 @@ function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-function hasFacadeCall(sourceText: string, facadeFunctionName: string) {
+function runtimeEntryFunctionName(runtimeEntryRef: string) {
+  return runtimeEntryRef.split(':')[1]?.trim() ?? ''
+}
+
+function extractBlockBody(sourceText: string, openingBraceIndex: number) {
+  if (openingBraceIndex < 0 || sourceText[openingBraceIndex] !== '{') return ''
+
+  let depth = 0
+  for (let index = openingBraceIndex; index < sourceText.length; index += 1) {
+    const char = sourceText[index]
+    if (char === '{') depth += 1
+    if (char === '}') {
+      depth -= 1
+      if (depth === 0) {
+        return sourceText.slice(openingBraceIndex + 1, index)
+      }
+    }
+  }
+  return ''
+}
+
+function findRuntimeEntryBody(sourceText: string, runtimeEntryRef: string) {
+  const entryFunctionName = runtimeEntryFunctionName(runtimeEntryRef)
+  if (!entryFunctionName) return ''
+
+  const escapedFunctionName = escapeRegExp(entryFunctionName)
+  const patterns = [
+    new RegExp(`\\b(?:export\\s+)?(?:async\\s+)?function\\s+${escapedFunctionName}\\s*\\([^)]*\\)\\s*\\{`),
+    new RegExp(`\\b(?:export\\s+)?(?:const|let|var)\\s+${escapedFunctionName}\\s*=\\s*(?:async\\s*)?(?:\\([^)]*\\)|[A-Za-z_$][\\w$]*)\\s*=>\\s*\\{`),
+  ]
+
+  for (const pattern of patterns) {
+    const match = pattern.exec(sourceText)
+    if (!match) continue
+    const openingBraceIndex = sourceText.indexOf('{', match.index)
+    const body = extractBlockBody(sourceText, openingBraceIndex)
+    if (body) return body
+  }
+  return ''
+}
+
+function hasFacadeCallInRuntimeEntry(
+  sourceText: string,
+  facadeFunctionName: string,
+  runtimeEntryRef: string,
+) {
   const callPattern = new RegExp(`\\b${escapeRegExp(facadeFunctionName)}\\s*\\(`)
+  const runtimeEntryBody = findRuntimeEntryBody(sourceText, runtimeEntryRef)
   return sourceText.includes(facadeFunctionName)
     && sourceText.includes('durationRuntimeConsumerObservationAdapterService')
-    && callPattern.test(sourceText)
+    && callPattern.test(runtimeEntryBody)
 }
 
 export function listDurationRuntimeConsumerBusinessPathRequiredIntegrations():
@@ -127,10 +173,14 @@ export function evaluateDurationRuntimeConsumerBusinessPathIntegrationCoverage(
     const matchingSource = (input.sourceFiles ?? []).find((source) =>
       sourcePathMatches(source.sourcePath, required.sourcePath))
     if (!matchingSource) continue
-    if (!hasFacadeCall(matchingSource.sourceText, required.facadeFunctionName)) continue
+    if (!hasFacadeCallInRuntimeEntry(
+      matchingSource.sourceText,
+      required.facadeFunctionName,
+      required.runtimeEntryRef,
+    )) continue
     observedIntegrations.push({
       ...required,
-      evidence: 'facade_call_in_business_source',
+      evidence: 'facade_call_in_declared_runtime_entry_source',
     })
   }
 
