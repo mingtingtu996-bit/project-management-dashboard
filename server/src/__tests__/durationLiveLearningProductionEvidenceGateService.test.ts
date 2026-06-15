@@ -508,6 +508,8 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
         'asset_key',
         'consumer_key',
         'observation_status',
+        'writes_runtime_directly',
+        'writes_fact_directly',
       ]))
       expect(entry.requiredFieldsBySourceTable.runtime_consumer_runtime_calls).toEqual(expect.arrayContaining([
         'id',
@@ -876,7 +878,10 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
             id: 'consumer-1',
             asset_key: 'forecast_confidence_weight',
             publication_key: 'forecast-weight-v2',
+            consumer_key: 'taskDurationForecastService',
             observation_status: 'observed',
+            writes_runtime_directly: false,
+            writes_fact_directly: false,
           },
         },
       ],
@@ -927,12 +932,62 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
       },
       {
         assetKey: 'forecast_confidence_weight',
+        consumerKey: 'taskDurationForecastService',
         evidenceKind: 'runtime_consumer_observation',
         evidenceRef: 'runtime_consumer:consumer-1',
         evidenceStatus: 'observed',
       },
     ])
     expect(adapted.rejectedRows).toEqual([])
+  })
+
+  it('rejects runtime consumer observation rows that are missing publication or declare runtime/fact writes', () => {
+    const unsafeRows = [
+      {
+        sourceTable: 'runtime_consumer_observations' as const,
+        row: {
+          id: 'consumer-without-publication',
+          asset_key: 'base_duration_benchmark',
+          consumer_key: 'durationSuggestionService',
+          observation_status: 'observed',
+          writes_runtime_directly: false,
+          writes_fact_directly: false,
+        },
+      },
+      {
+        sourceTable: 'runtime_consumer_observations' as const,
+        row: {
+          id: 'consumer-runtime-writer',
+          asset_key: 'base_duration_benchmark',
+          publication_key: 'duration_benchmark_runtime:base-v2',
+          consumer_key: 'durationSuggestionService',
+          observation_status: 'observed',
+          writes_runtime_directly: true,
+          writes_fact_directly: false,
+        },
+      },
+      {
+        sourceTable: 'runtime_consumer_observations' as const,
+        row: {
+          id: 'consumer-fact-writer',
+          asset_key: 'base_duration_benchmark',
+          publication_key: 'duration_benchmark_runtime:base-v2',
+          consumer_key: 'durationSuggestionService',
+          observation_status: 'observed',
+          writes_runtime_directly: false,
+          writes_fact_directly: true,
+        },
+      },
+    ]
+    const adapted = collectDurationLiveLearningProductionEvidenceRecordsFromRows({
+      rows: unsafeRows,
+    })
+
+    expect(adapted.records).toEqual([])
+    expect(adapted.rejectedRows).toEqual(unsafeRows.map((source) => ({
+      ...source,
+      reason: 'production_source_row_not_evidence_ready',
+    })))
   })
 
   it('adapts plan-network runtime publication rows into production publication records', () => {

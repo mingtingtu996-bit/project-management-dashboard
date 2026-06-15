@@ -328,6 +328,8 @@ const REQUIRED_FIELDS_BY_SOURCE_TABLE: Record<DurationLiveLearningProductionEvid
     'publication_key',
     'consumer_key',
     'observation_status',
+    'writes_runtime_directly',
+    'writes_fact_directly',
   ],
   runtime_consumer_runtime_calls: [
     'id',
@@ -966,11 +968,25 @@ export function collectDurationLiveLearningProductionEvidenceRecordsFromRows(
       pushRejectedRow(rejectedRows, source, 'production_source_row_id_required')
       continue
     }
-    if (readText(row, 'observation_status', 'observationStatus') !== 'observed') {
+    const publicationKey = readText(row, 'publication_key', 'publicationKey')
+    const consumerKey = normalizeConsumerKey(readText(row, 'consumer_key', 'consumerKey'))
+    if (
+      readText(row, 'observation_status', 'observationStatus') !== 'observed'
+      || !publicationKey
+      || !consumerKey
+      || readTrue(row, 'writes_runtime_directly', 'writesRuntimeDirectly')
+      || readTrue(row, 'writes_fact_directly', 'writesFactDirectly')
+    ) {
       pushRejectedRow(rejectedRows, source, 'production_source_row_not_evidence_ready')
       continue
     }
-    pushRecord(records, assetKey, 'runtime_consumer_observation', `runtime_consumer:${id}`, 'observed')
+    records.push({
+      assetKey,
+      consumerKey,
+      evidenceKind: 'runtime_consumer_observation',
+      evidenceRef: `runtime_consumer:${id}`,
+      evidenceStatus: 'observed',
+    })
   }
 
   return { records, rejectedRows }
