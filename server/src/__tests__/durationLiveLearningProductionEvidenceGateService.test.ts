@@ -51,6 +51,7 @@ const durationOutcomeProductionSourceTables = [
 ] as const
 
 const networkOutcomeProductionSourceTables = [
+  'duration_plan_network_outcomes',
   'duration_algorithm_accuracy_events',
   'runtime_consumer_observations',
   'runtime_consumer_runtime_calls',
@@ -472,6 +473,13 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
         'included_in_benchmark',
         'actual_duration',
         'metadata.liveLearningAssetKey',
+      ]))
+      expect(entry.requiredFieldsBySourceTable.duration_plan_network_outcomes).toEqual(expect.arrayContaining([
+        'id',
+        'asset_key',
+        'outcome_status',
+        'writes_runtime_directly',
+        'writes_fact_directly',
       ]))
       expect(entry.requiredFieldsBySourceTable.algorithm_learnable_parameter_runtime_publications).toEqual(expect.arrayContaining([
         'publication_key',

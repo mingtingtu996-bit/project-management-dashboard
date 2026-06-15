@@ -95,6 +95,7 @@ export interface DurationLiveLearningProductionEvidenceCollectionInput {
 
 export type DurationLiveLearningProductionEvidenceSourceTable =
   | 'duration_experience_samples'
+  | 'duration_plan_network_outcomes'
   | 'duration_algorithm_accuracy_events'
   | 'algorithm_learnable_parameter_runtime_publications'
   | 'algorithm_seed_versions'
@@ -210,6 +211,7 @@ const REQUIRED_PRODUCTION_EVIDENCE_KINDS: DurationLiveLearningProductionEvidence
 
 const CANONICAL_PRODUCTION_EVIDENCE_SOURCE_TABLES: DurationLiveLearningProductionEvidenceSourceTable[] = [
   'duration_experience_samples',
+  'duration_plan_network_outcomes',
   'algorithm_learnable_parameter_runtime_publications',
   'algorithm_seed_versions',
   'algorithm_learnable_parameter_release_events',
@@ -230,6 +232,7 @@ const DURATION_OUTCOME_PRODUCTION_EVIDENCE_SOURCE_TABLES: DurationLiveLearningPr
 ]
 
 const NETWORK_OUTCOME_PRODUCTION_EVIDENCE_SOURCE_TABLES: DurationLiveLearningProductionEvidenceSourceTable[] = [
+  'duration_plan_network_outcomes',
   'duration_algorithm_accuracy_events',
   'runtime_consumer_observations',
   'runtime_consumer_runtime_calls',
@@ -267,6 +270,13 @@ const REQUIRED_FIELDS_BY_SOURCE_TABLE: Record<DurationLiveLearningProductionEvid
     'actual_duration',
     'completed_at',
     'metadata.liveLearningAssetKey',
+  ],
+  duration_plan_network_outcomes: [
+    'id',
+    'asset_key',
+    'outcome_status',
+    'writes_runtime_directly',
+    'writes_fact_directly',
   ],
   algorithm_learnable_parameter_runtime_publications: [
     'publication_key',
@@ -528,6 +538,11 @@ function isActiveBenchmarkSample(row: Record<string, unknown>) {
 
 function sampleEvidenceStatus(row: Record<string, unknown>) {
   return readText(row, 'completed_at', 'completedAt') ? 'accepted' : 'weak'
+}
+
+function planNetworkOutcomeEvidenceStatus(row: Record<string, unknown>) {
+  const status = readText(row, 'outcome_status', 'outcomeStatus')
+  return status === 'accepted' || status === 'weak' ? status : ''
 }
 
 function sourceTableAllowedForAssetKey(
@@ -809,6 +824,25 @@ export function collectDurationLiveLearningProductionEvidenceRecordsFromRows(
         continue
       }
       pushRecord(records, assetKey, 'production_sample', `duration_samples:${id}`, sampleEvidenceStatus(row))
+      continue
+    }
+
+    if (source.sourceTable === 'duration_plan_network_outcomes') {
+      const id = readText(row, 'id')
+      const outcomeStatus = planNetworkOutcomeEvidenceStatus(row)
+      if (!id) {
+        pushRejectedRow(rejectedRows, source, 'production_source_row_id_required')
+        continue
+      }
+      if (
+        !outcomeStatus
+        || readTrue(row, 'writes_runtime_directly', 'writesRuntimeDirectly')
+        || readTrue(row, 'writes_fact_directly', 'writesFactDirectly')
+      ) {
+        pushRejectedRow(rejectedRows, source, 'production_source_row_not_evidence_ready')
+        continue
+      }
+      pushRecord(records, assetKey, 'production_sample', `network_outcomes:${id}`, outcomeStatus)
       continue
     }
 

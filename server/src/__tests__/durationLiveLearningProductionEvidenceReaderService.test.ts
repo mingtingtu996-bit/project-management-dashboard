@@ -133,8 +133,23 @@ function buildPlanNetworkOutcomeRecords() {
   }))
 }
 
-function rowsForSql(sql: string) {
+function buildPlanNetworkOutcomeRows() {
+  return planNetworkAssetKeys.map((assetKey) => ({
+    id: `outcome-${assetKey}`,
+    asset_key: assetKey,
+    outcome_status: 'accepted',
+    outcome_ref: `network_outcomes:${assetKey}:accepted`,
+    writes_runtime_directly: false,
+    writes_fact_directly: false,
+  }))
+}
+
+function rowsForSql(sql: string, options: { includePlanNetworkOutcomes?: boolean } = {}) {
+  const includePlanNetworkOutcomes = options.includePlanNetworkOutcomes ?? true
   const normalized = sql.toLowerCase()
+  if (normalized.includes('from public.duration_plan_network_outcomes')) {
+    return includePlanNetworkOutcomes ? buildPlanNetworkOutcomeRows() : []
+  }
   if (normalized.includes('from public.duration_experience_samples')) {
     const rows: Array<Record<string, unknown>> = []
     for (const assetKey of durationOutcomeAssetKeys) {
@@ -351,7 +366,7 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
       buildDurationLiveLearningProductionClaimAuditFromDb,
     } = await import('../services/durationLiveLearningProductionEvidenceReaderService.js')
     const queryExec = async <T = Record<string, unknown>>(sql: string): Promise<T[]> =>
-      rowsForSql(sql) as T[]
+      rowsForSql(sql, { includePlanNetworkOutcomes: false }) as T[]
 
     const audit = await buildDurationLiveLearningProductionClaimAuditFromDb({
       completionAudit: buildReadyCompletionAudit(),
@@ -410,6 +425,7 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
       'algorithm_learnable_parameter_runtime_publications',
       'algorithm_learnable_parameter_release_events',
       'algorithm_seed_versions',
+      'duration_plan_network_outcomes',
       'wbs_template_runtime_publications',
       'wbs_template_runtime_events',
       'construction_dependency_rule_runtime_publications',
@@ -424,6 +440,7 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
     expect(joinedSql).toContain('from public.algorithm_seed_versions')
     expect(joinedSql).toContain("seed_type = 'standard_work_duration'")
     expect(joinedSql).toContain('from public.algorithm_learnable_parameter_release_events')
+    expect(joinedSql).toContain('from public.duration_plan_network_outcomes')
     expect(joinedSql).toContain('from public.wbs_template_runtime_publications')
     expect(joinedSql).toContain('from public.wbs_template_runtime_events')
     expect(joinedSql).toContain('from public.construction_dependency_rule_runtime_publications')
@@ -434,6 +451,31 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
     expect(joinedSql).not.toMatch(/\binsert\b|\bupdate\b|\bdelete\b/)
     expect(joinedSql).not.toContain('task_baseline_items')
     expect(joinedSql).not.toContain('monthly_plan_items')
+  })
+
+  it('builds the DB production claim from canonical plan-network outcome rows without typed records', async () => {
+    const {
+      buildDurationLiveLearningProductionClaimAuditFromDb,
+    } = await import('../services/durationLiveLearningProductionEvidenceReaderService.js')
+    const queryExec = async <T = Record<string, unknown>>(sql: string): Promise<T[]> =>
+      rowsForSql(sql) as T[]
+
+    const audit = await buildDurationLiveLearningProductionClaimAuditFromDb({
+      completionAudit: buildReadyCompletionAudit(),
+      queryExec,
+      maxRowsPerSourceTable: 200,
+    })
+
+    expect(audit.status).toBe('duration_live_learning_production_claim_ready')
+    expect(audit.completionAudit.status).toBe('duration_live_learning_completion_ready')
+    expect(audit.evidenceRowCollection.rejectedRows).toEqual([])
+    expect(audit.productionGate.missingEvidenceByAsset).toEqual([])
+    expect(audit.evidenceCollection.productionEvidence)
+      .toEqual(expect.arrayContaining(planNetworkAssetKeys.map((assetKey) =>
+        expect.objectContaining({
+          assetKey,
+          productionSampleEvidenceRef: `network_outcomes:outcome-${assetKey}`,
+        }))))
   })
 
   it('builds the DB completion audit from production source rows instead of caller supplied completion audit', async () => {

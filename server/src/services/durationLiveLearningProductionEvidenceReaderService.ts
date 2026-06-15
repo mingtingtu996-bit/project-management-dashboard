@@ -235,6 +235,18 @@ function queryForSourceTable(sourceTable: DurationLiveLearningProductionEvidence
     `
   }
 
+  if (sourceTable === 'duration_plan_network_outcomes') {
+    return `
+      select *
+      from public.duration_plan_network_outcomes
+      where outcome_status in ('accepted', 'weak')
+        and writes_runtime_directly = false
+        and writes_fact_directly = false
+      order by observed_at desc nulls last, created_at desc
+      limit $1
+    `
+  }
+
   if (sourceTable === 'algorithm_learnable_parameter_runtime_publications') {
     return `
       select *

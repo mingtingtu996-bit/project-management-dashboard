@@ -22,6 +22,7 @@ describe('v1.4.22.5 runtime consumer observation migration', () => {
 
     expect(fileNames).toContain('204_v14225_runtime_consumer_observations.sql')
     expect(fileNames).toContain('205_v14225_runtime_consumer_runtime_calls.sql')
+    expect(fileNames).toContain('207_v14225_plan_network_outcomes.sql')
     expect(fileNames).not.toContain('202_v14225_runtime_consumer_observations.sql')
     expect(fileNames).toContain('202_v14223_dependency_rule_runtime_publications.sql')
     expect(fileNames).toContain('203_v14223_wbs_template_runtime_publications.sql')
@@ -57,5 +58,24 @@ describe('v1.4.22.5 runtime consumer observation migration', () => {
     expect(source).toContain('ALTER TABLE public.runtime_consumer_runtime_calls ENABLE ROW LEVEL SECURITY')
     expect(source).toContain('idx_runtime_consumer_runtime_calls_consumer')
     expect(source).toContain('idx_runtime_consumer_runtime_calls_entry')
+  })
+
+  it('creates a read-only production evidence source for plan-network outcomes', () => {
+    const source = allMigrationSource()
+
+    expect(source).toContain('CREATE TABLE IF NOT EXISTS public.duration_plan_network_outcomes')
+    expect(source).toContain('asset_key TEXT NOT NULL')
+    expect(source).toContain("CHECK (asset_key IN (")
+    expect(source).toContain("'special_work_duration_seed'")
+    expect(source).toContain("'wbs_reference_days'")
+    expect(source).toContain("'dependency_rule_candidate'")
+    expect(source).toContain("'critical_path_rule_candidate'")
+    expect(source).toContain("outcome_status TEXT NOT NULL")
+    expect(source).toContain("CHECK (outcome_status IN ('accepted', 'weak', 'rejected'))")
+    expect(source).toContain('duration_plan_network_outcomes_no_runtime_writes')
+    expect(source).toContain('duration_plan_network_outcomes_no_fact_writes')
+    expect(source).toContain('ALTER TABLE public.duration_plan_network_outcomes ENABLE ROW LEVEL SECURITY')
+    expect(source).toContain('idx_duration_plan_network_outcomes_asset')
+    expect(source).toContain('idx_duration_plan_network_outcomes_publication')
   })
 })
