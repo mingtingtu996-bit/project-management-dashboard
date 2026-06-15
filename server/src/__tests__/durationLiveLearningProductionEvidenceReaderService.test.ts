@@ -8,6 +8,7 @@ import type {
   DurationLiveLearningEvidence,
   DurationLiveLearningEvidenceOverride,
 } from '../services/durationLiveLearningClosureService.js'
+import type { DurationRuntimeConsumerObservationRuntimeCallEvidence } from '../services/durationRuntimeConsumerObservationRuntimeCallAuditService.js'
 
 const readyEvidence: DurationLiveLearningEvidence = {
   assetClassificationRegistered: true,
@@ -49,6 +50,33 @@ const expectedRuntimeConsumerObservations = [
   { assetKey: 'dependency_rule_candidate' as const, consumerKey: 'scheduleAccelerationService' },
   { assetKey: 'critical_path_rule_candidate' as const, consumerKey: 'projectRemainingDurationForecastService' },
   { assetKey: 'critical_path_rule_candidate' as const, consumerKey: 'scheduleAccelerationRuntimeService' },
+]
+
+const runtimeCallEvidence: DurationRuntimeConsumerObservationRuntimeCallEvidence[] = [
+  {
+    consumerKey: 'durationSuggestionService',
+    runtimeEntryRef: 'durationSuggestionService:suggestDuration',
+  },
+  {
+    consumerKey: 'taskDurationForecastService',
+    runtimeEntryRef: 'taskDurationForecastService:forecastTaskDuration',
+  },
+  {
+    consumerKey: 'projectRemainingDurationForecastService',
+    runtimeEntryRef: 'projectRemainingDurationForecastService:forecastRemainingDuration',
+  },
+  {
+    consumerKey: 'wbsTemplateGenerationService',
+    runtimeEntryRef: 'wbsTemplateGenerationService:generateTemplate',
+  },
+  {
+    consumerKey: 'scheduleAccelerationService',
+    runtimeEntryRef: 'scheduleAccelerationService:buildAccelerationPlan',
+  },
+  {
+    consumerKey: 'scheduleAccelerationRuntimeService',
+    runtimeEntryRef: 'scheduleAccelerationRuntimeService:applyRuntimeAcceleration',
+  },
 ]
 
 function buildReadyCompletionAudit() {
@@ -130,6 +158,7 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
       completionAudit: buildReadyCompletionAudit(),
       queryExec,
       maxRowsPerSourceTable: 200,
+      runtimeConsumerRuntimeCallEvidence: runtimeCallEvidence,
     })
 
     expect(audit.status).toBe('duration_live_learning_production_claim_ready')

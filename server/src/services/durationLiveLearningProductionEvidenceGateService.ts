@@ -13,6 +13,11 @@ import {
 import {
   listDurationRuntimeConsumerObservationFacadeRegistrations,
 } from './durationRuntimeConsumerObservationAdapterService.js'
+import {
+  evaluateDurationRuntimeConsumerObservationRuntimeCallCoverage,
+  type DurationRuntimeConsumerObservationRuntimeCallCoverage,
+  type DurationRuntimeConsumerObservationRuntimeCallEvidence,
+} from './durationRuntimeConsumerObservationRuntimeCallAuditService.js'
 
 export type DurationLiveLearningProductionEvidenceReasonCode =
   | 'completion_audit_ready_required'
@@ -150,6 +155,7 @@ export interface DurationLiveLearningProductionClaimAuditInput {
   records?: readonly DurationLiveLearningProductionEvidenceRecord[]
   sourceRows?: readonly DurationLiveLearningProductionEvidenceSourceRow[]
   runtimeConsumerAdapterRegistrations?: readonly DurationRuntimeConsumerObservationAdapterRegistration[]
+  runtimeConsumerRuntimeCallEvidence?: readonly DurationRuntimeConsumerObservationRuntimeCallEvidence[]
 }
 
 export interface DurationLiveLearningProductionClaimAudit {
@@ -164,6 +170,7 @@ export interface DurationLiveLearningProductionClaimAudit {
   productionGate: DurationLiveLearningProductionEvidenceGate
   runtimeConsumerObservationCoverage: DurationRuntimeConsumerObservationCoverage
   runtimeConsumerObservationIntegrationCoverage: DurationRuntimeConsumerObservationIntegrationCoverage
+  runtimeConsumerRuntimeCallCoverage: DurationRuntimeConsumerObservationRuntimeCallCoverage
 }
 
 const LEARNABLE_DURATION_LIVE_LEARNING_ASSET_KEYS: DurationLiveLearningAssetKey[] = [
@@ -888,9 +895,13 @@ export function buildDurationLiveLearningProductionClaimAudit(
       adapterRegistrations: input.runtimeConsumerAdapterRegistrations
         ?? listDurationRuntimeConsumerObservationFacadeRegistrations(),
     })
+  const runtimeConsumerRuntimeCallCoverage = evaluateDurationRuntimeConsumerObservationRuntimeCallCoverage({
+    runtimeCallEvidence: input.runtimeConsumerRuntimeCallEvidence,
+  })
   const ready = productionGate.status === 'duration_live_learning_production_evidence_ready'
     && runtimeConsumerObservationCoverage.status === 'runtime_consumer_observation_coverage_ready'
     && runtimeConsumerObservationIntegrationCoverage.status === 'runtime_consumer_observation_integration_ready'
+    && runtimeConsumerRuntimeCallCoverage.status === 'runtime_consumer_observation_runtime_calls_ready'
 
   return {
     status: ready
@@ -904,5 +915,6 @@ export function buildDurationLiveLearningProductionClaimAudit(
     productionGate,
     runtimeConsumerObservationCoverage,
     runtimeConsumerObservationIntegrationCoverage,
+    runtimeConsumerRuntimeCallCoverage,
   }
 }

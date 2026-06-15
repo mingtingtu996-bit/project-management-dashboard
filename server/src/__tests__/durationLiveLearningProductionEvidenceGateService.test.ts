@@ -15,6 +15,8 @@ import {
   evaluateDurationLiveLearningProductionEvidenceGate,
   listDurationLiveLearningProductionEvidenceSourcePlan,
 } from '../services/durationLiveLearningProductionEvidenceGateService.js'
+import { listDurationRuntimeConsumerObservationFacadeRegistrations } from '../services/durationRuntimeConsumerObservationAdapterService.js'
+import type { DurationRuntimeConsumerObservationRuntimeCallEvidence } from '../services/durationRuntimeConsumerObservationRuntimeCallAuditService.js'
 
 const readyEvidence: DurationLiveLearningEvidence = {
   assetClassificationRegistered: true,
@@ -56,6 +58,33 @@ const expectedRuntimeConsumerObservations = [
   { assetKey: 'dependency_rule_candidate' as const, consumerKey: 'scheduleAccelerationService' },
   { assetKey: 'critical_path_rule_candidate' as const, consumerKey: 'projectRemainingDurationForecastService' },
   { assetKey: 'critical_path_rule_candidate' as const, consumerKey: 'scheduleAccelerationRuntimeService' },
+]
+
+const runtimeCallEvidence: DurationRuntimeConsumerObservationRuntimeCallEvidence[] = [
+  {
+    consumerKey: 'durationSuggestionService',
+    runtimeEntryRef: 'durationSuggestionService:suggestDuration',
+  },
+  {
+    consumerKey: 'taskDurationForecastService',
+    runtimeEntryRef: 'taskDurationForecastService:forecastTaskDuration',
+  },
+  {
+    consumerKey: 'projectRemainingDurationForecastService',
+    runtimeEntryRef: 'projectRemainingDurationForecastService:forecastRemainingDuration',
+  },
+  {
+    consumerKey: 'wbsTemplateGenerationService',
+    runtimeEntryRef: 'wbsTemplateGenerationService:generateTemplate',
+  },
+  {
+    consumerKey: 'scheduleAccelerationService',
+    runtimeEntryRef: 'scheduleAccelerationService:buildAccelerationPlan',
+  },
+  {
+    consumerKey: 'scheduleAccelerationRuntimeService',
+    runtimeEntryRef: 'scheduleAccelerationRuntimeService:applyRuntimeAcceleration',
+  },
 ]
 
 function buildReadyOverrides(): DurationLiveLearningEvidenceOverride[] {
@@ -609,6 +638,7 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
     const audit = buildDurationLiveLearningProductionClaimAudit({
       completionAudit: buildReadyCompletionAudit(),
       records: buildAllProductionEvidenceRecords(),
+      runtimeConsumerRuntimeCallEvidence: runtimeCallEvidence,
     })
 
     expect(audit.status).toBe('duration_live_learning_production_claim_ready')
@@ -629,6 +659,7 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
         record.assetKey !== 'forecast_residual_overlay'
         || record.evidenceKind !== 'runtime_consumer_observation'
         || record.consumerKey !== 'projectRemainingDurationForecastService'),
+      runtimeConsumerRuntimeCallEvidence: runtimeCallEvidence,
     })
 
     expect(audit.productionGate.status).toBe('duration_live_learning_production_evidence_ready')
@@ -645,6 +676,7 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
     const audit = buildDurationLiveLearningProductionClaimAudit({
       completionAudit: buildReadyCompletionAudit(),
       sourceRows: buildAllProductionSourceRows(),
+      runtimeConsumerRuntimeCallEvidence: runtimeCallEvidence,
     })
 
     expect(audit.status).toBe('duration_live_learning_production_claim_ready')
@@ -671,6 +703,23 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
     expect(audit.runtimeConsumerObservationIntegrationCoverage.status)
       .toBe('runtime_consumer_observation_integration_not_ready')
     expect(audit.runtimeConsumerObservationIntegrationCoverage.missingContracts.length).toBeGreaterThan(0)
+    expect(audit.status).toBe('duration_live_learning_production_claim_not_ready')
+    expect(audit.allowedClaim).toBe('not_ready_for_live_self_learning_claim')
+  })
+
+  it('blocks the final production claim when runtime call evidence is missing', () => {
+    const audit = buildDurationLiveLearningProductionClaimAudit({
+      completionAudit: buildReadyCompletionAudit(),
+      records: buildAllProductionEvidenceRecords(),
+      runtimeConsumerAdapterRegistrations: listDurationRuntimeConsumerObservationFacadeRegistrations(),
+    })
+
+    expect(audit.productionGate.status).toBe('duration_live_learning_production_evidence_ready')
+    expect(audit.runtimeConsumerObservationCoverage.status).toBe('runtime_consumer_observation_coverage_ready')
+    expect(audit.runtimeConsumerObservationIntegrationCoverage.status)
+      .toBe('runtime_consumer_observation_integration_ready')
+    expect(audit.runtimeConsumerRuntimeCallCoverage.status)
+      .toBe('runtime_consumer_observation_runtime_calls_not_ready')
     expect(audit.status).toBe('duration_live_learning_production_claim_not_ready')
     expect(audit.allowedClaim).toBe('not_ready_for_live_self_learning_claim')
   })

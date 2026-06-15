@@ -9,6 +9,9 @@ import {
   type DurationLiveLearningProductionEvidenceSourceRow,
   type DurationLiveLearningProductionEvidenceSourceTable,
 } from './durationLiveLearningProductionEvidenceGateService.js'
+import type {
+  DurationRuntimeConsumerObservationRuntimeCallEvidence,
+} from './durationRuntimeConsumerObservationRuntimeCallAuditService.js'
 
 export type DurationLiveLearningProductionEvidenceQueryExec = <T = Record<string, unknown>>(
   sql: string,
@@ -29,6 +32,7 @@ export interface DurationLiveLearningProductionEvidenceSourceQuery {
 export interface DurationLiveLearningProductionClaimAuditFromDbInput
   extends DurationLiveLearningProductionEvidenceSourceQueryInput {
   completionAudit: DurationLiveLearningCompletionAudit
+  runtimeConsumerRuntimeCallEvidence?: readonly DurationRuntimeConsumerObservationRuntimeCallEvidence[]
 }
 
 export type DurationLiveLearningProductionClaimAuditFromDb =
@@ -186,6 +190,7 @@ export async function buildDurationLiveLearningProductionClaimAuditFromDb(
   const audit = buildDurationLiveLearningProductionClaimAudit({
     completionAudit: input.completionAudit,
     sourceRows: sourceQuery.sourceRows,
+    runtimeConsumerRuntimeCallEvidence: input.runtimeConsumerRuntimeCallEvidence,
   })
 
   return {
