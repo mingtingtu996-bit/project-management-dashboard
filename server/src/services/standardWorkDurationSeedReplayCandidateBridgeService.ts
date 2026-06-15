@@ -15,6 +15,15 @@ import {
 import type {
   StandardWorkDurationSeedReplayGovernanceReport,
 } from './standardWorkDurationSeedReplayGovernanceService.js'
+import {
+  collectDurationLiveLearningProductionEvidenceRecordsFromRows,
+  collectDurationLiveLearningProductionEvidenceRefs,
+  type DurationLiveLearningProductionEvidenceRecord,
+  type DurationLiveLearningProductionEvidenceRef,
+  type DurationLiveLearningProductionEvidenceSourceRow,
+  type DurationLiveLearningRejectedProductionEvidenceRecord,
+  type DurationLiveLearningRejectedProductionEvidenceSourceRow,
+} from './durationLiveLearningProductionEvidenceGateService.js'
 
 export interface StandardWorkDurationReplayCandidateBridgeResult {
   attemptedCandidateCount: number
@@ -40,6 +49,15 @@ export interface StandardWorkDurationSeedPublicationReadinessInput {
   accuracyMetricsAvailable: boolean
 }
 
+export interface StandardWorkDurationSeedPublicationReadinessFromProductionRowsInput {
+  report: StandardWorkDurationSeedReplayGovernanceReport
+  bridgeResult: StandardWorkDurationReplayCandidateBridgeResult
+  approvedCandidateIds: readonly string[]
+  enabledLearningScopes: readonly StandardWorkDurationSeedLearningScopeEvidence[]
+  sourceRows?: readonly DurationLiveLearningProductionEvidenceSourceRow[]
+  records?: readonly DurationLiveLearningProductionEvidenceRecord[]
+}
+
 export interface StandardWorkDurationSeedVersionLineage {
   seedType: 'standard_work_duration'
   seedVersionId: string | null
@@ -51,6 +69,12 @@ export interface StandardWorkDurationSeedVersionLineage {
   sourceSampleIds: string[]
 }
 
+export interface StandardWorkDurationSeedProductionLineage {
+  evidenceRefs: DurationLiveLearningProductionEvidenceRef
+  rejectedRows: DurationLiveLearningRejectedProductionEvidenceSourceRow[]
+  rejectedRecords: DurationLiveLearningRejectedProductionEvidenceRecord[]
+}
+
 export interface StandardWorkDurationSeedPublicationReadiness {
   status: 'standard_work_seed_publication_ready' | 'standard_work_seed_publication_not_ready'
   liveLearningEvidence: StandardWorkDurationSeedLiveLearningEvidence
@@ -58,10 +82,29 @@ export interface StandardWorkDurationSeedPublicationReadiness {
   missingReasons: string[]
 }
 
+export type StandardWorkDurationSeedProductionPublicationReadiness =
+  StandardWorkDurationSeedPublicationReadiness & {
+    productionLineage: StandardWorkDurationSeedProductionLineage
+  }
+
 type ReplayQueueKind = 'p50_review' | 'missing_seed'
+
+const STANDARD_WORK_DURATION_SEED_ASSET_KEY = 'standard_work_duration_seed'
 
 function normalizeText(value: unknown) {
   return String(value ?? '').trim()
+}
+
+function readRowText(row: Record<string, unknown>, ...keys: string[]) {
+  for (const key of keys) {
+    const value = row[key]
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return ''
+}
+
+function readRowBoolean(row: Record<string, unknown>, key: string) {
+  return row[key] === true
 }
 
 function normalizeDays(value: unknown) {
@@ -119,6 +162,49 @@ function buildPublicationSourceSampleIds(report: StandardWorkDurationSeedReplayG
     ...report.replay.calibrationQueues.p50ReviewCandidates.flatMap((item) => item.sampleIds),
     ...report.replay.calibrationQueues.missingSeedCandidates.flatMap((item) => item.sampleIds),
   ].map(normalizeText).filter(Boolean)))
+}
+
+function findCurrentPublishedStandardWorkSeedVersionId(
+  sourceRows: readonly DurationLiveLearningProductionEvidenceSourceRow[] | undefined,
+) {
+  for (const source of sourceRows ?? []) {
+    if (source.sourceTable !== 'algorithm_seed_versions') continue
+    const row = source.row
+    const seedVersionId = readRowText(row, 'id')
+    if (
+      seedVersionId
+      && readRowText(row, 'seed_type', 'seedType') === 'standard_work_duration'
+      && readRowText(row, 'status') === 'active'
+      && readRowBoolean(row, 'is_current')
+      && readRowText(row, 'published_at', 'publishedAt')
+    ) {
+      return seedVersionId
+    }
+  }
+  return null
+}
+
+function standardWorkSeedProductionLineageFromProductionInput(
+  input: Pick<StandardWorkDurationSeedPublicationReadinessFromProductionRowsInput, 'sourceRows' | 'records'>,
+): StandardWorkDurationSeedProductionLineage {
+  const rowCollection = collectDurationLiveLearningProductionEvidenceRecordsFromRows({
+    rows: input.sourceRows,
+  })
+  const evidenceCollection = collectDurationLiveLearningProductionEvidenceRefs({
+    records: [
+      ...rowCollection.records,
+      ...(input.records ?? []),
+    ],
+  })
+  const evidenceRefs = evidenceCollection.productionEvidence.find((evidence) =>
+    evidence.assetKey === STANDARD_WORK_DURATION_SEED_ASSET_KEY)
+    ?? { assetKey: STANDARD_WORK_DURATION_SEED_ASSET_KEY }
+
+  return {
+    evidenceRefs,
+    rejectedRows: rowCollection.rejectedRows,
+    rejectedRecords: evidenceCollection.rejectedRecords,
+  }
 }
 
 function buildCandidatePayload(
@@ -313,5 +399,56 @@ export function buildStandardWorkDurationSeedPublicationReadiness(
       sourceSampleIds,
     },
     missingReasons: readiness.missingReasons,
+  }
+}
+
+export function buildStandardWorkDurationSeedPublicationReadinessFromProductionRows(
+  input: StandardWorkDurationSeedPublicationReadinessFromProductionRowsInput,
+): StandardWorkDurationSeedProductionPublicationReadiness {
+  assertReplayBridgeBoundary(input.report)
+  const approvedCandidateIds = Array.from(new Set(input.approvedCandidateIds.map(normalizeText).filter(Boolean)))
+  const productionLineage = standardWorkSeedProductionLineageFromProductionInput(input)
+  const evidenceRefs = productionLineage.evidenceRefs
+  const seedVersionId = findCurrentPublishedStandardWorkSeedVersionId(input.sourceRows)
+  const runtimePublicationKey = normalizeText(evidenceRefs.publicationExecutionRef) || null
+  const rollbackTarget = normalizeText(evidenceRefs.rollbackDrillEvidenceRef) || null
+  const sourceSampleIds = buildPublicationSourceSampleIds(input.report)
+  const seedPublicationWriterReady = Boolean(seedVersionId && runtimePublicationKey)
+    && input.bridgeResult.candidateOnlyUpsertedCount > 0
+    && input.bridgeResult.failedCandidateCount === 0
+  const seedVersionLineageRecorded = Boolean(seedVersionId)
+    && approvedCandidateIds.length > 0
+    && sourceSampleIds.length > 0
+  const readiness = evaluateStandardWorkDurationSeedLiveLearningEvidence({
+    replayReport: input.report.replay,
+    actualOutcomeEventRecorded: Boolean(evidenceRefs.productionSampleEvidenceRef),
+    approvedReplayCandidateRecorded: approvedCandidateIds.length > 0,
+    enabledLearningScopes: input.enabledLearningScopes,
+    runtimeConsumerUsesPublishedArtifact: Boolean(evidenceRefs.runtimeConsumerObservationRef),
+    seedPublicationWriterReady,
+    seedVersionLineageRecorded,
+    releaseExitApproved: Boolean(evidenceRefs.publicationExecutionRef),
+    impactMonitoringReady: Boolean(evidenceRefs.impactMonitoringEvidenceRef),
+    rollbackTargetReady: Boolean(evidenceRefs.rollbackDrillEvidenceRef),
+    accuracyMetricsAvailable: Boolean(evidenceRefs.accuracyEvidenceRef),
+  })
+
+  return {
+    status: readiness.status === 'standard_work_seed_live_learning_ready'
+      ? 'standard_work_seed_publication_ready'
+      : 'standard_work_seed_publication_not_ready',
+    liveLearningEvidence: readiness.liveLearningEvidence,
+    seedVersionLineage: {
+      seedType: 'standard_work_duration',
+      seedVersionId,
+      runtimePublicationKey,
+      rollbackTarget,
+      replayReportCode: input.report.replay.reportCode,
+      governanceReportCode: input.report.reportCode,
+      approvedCandidateIds,
+      sourceSampleIds,
+    },
+    missingReasons: readiness.missingReasons,
+    productionLineage,
   }
 }

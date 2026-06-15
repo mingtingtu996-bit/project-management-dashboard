@@ -18,6 +18,7 @@ vi.mock('../services/algorithmSeedLearningService.js', async (importOriginal) =>
 })
 
 const {
+  buildStandardWorkDurationSeedPublicationReadinessFromProductionRows,
   buildStandardWorkDurationSeedPublicationReadiness,
   createStandardWorkDurationReplayUpgradeCandidates,
 } = await import('../services/standardWorkDurationSeedReplayCandidateBridgeService.js')
@@ -289,5 +290,126 @@ describe('standardWorkDurationSeedReplayCandidateBridgeService', () => {
       'rollback_target_required',
       'accuracy_metrics_required',
     ]))
+  })
+
+  it('builds publication readiness from canonical production source rows without writing seeds', () => {
+    mocks.createAlgorithmSeedUpgradeCandidate.mockClear()
+
+    const readiness = buildStandardWorkDurationSeedPublicationReadinessFromProductionRows({
+      report: governanceReport,
+      bridgeResult: {
+        attemptedCandidateCount: 2,
+        candidateOnlyUpsertedCount: 2,
+        p50ReviewCandidateOnlyCount: 1,
+        missingSeedCandidateOnlyCount: 1,
+        evidenceCollectionSkippedCount: 1,
+        failedCandidateCount: 0,
+        seedWritesBlocked: 1,
+        failed: [],
+      },
+      approvedCandidateIds: ['candidate-process_duration:cast_in_place_concrete'],
+      enabledLearningScopes: ['system', 'industry_baseline', 'company', 'project'],
+      sourceRows: [
+        {
+          sourceTable: 'duration_experience_samples',
+          row: {
+            id: 'sample-standard-seed-1',
+            sample_status: 'active',
+            included_in_benchmark: true,
+            actual_duration: 9,
+            completed_at: '2026-06-14T00:00:00.000Z',
+            metadata: {
+              liveLearningAssetKey: 'standard_work_duration_seed',
+            },
+          },
+        },
+        {
+          sourceTable: 'algorithm_seed_versions',
+          row: {
+            id: 'seed-version-standard-work-duration-v2',
+            seed_type: 'standard_work_duration',
+            seed_version: 'v2',
+            status: 'active',
+            is_current: true,
+            published_at: '2026-06-14T00:00:00.000Z',
+          },
+        },
+        {
+          sourceTable: 'runtime_consumer_observations',
+          row: {
+            id: 'consumer-standard-seed-1',
+            asset_key: 'standard_work_duration_seed',
+            consumer_key: 'durationSuggestionService',
+            publication_key: 'algorithm_seed_versions:seed-version-standard-work-duration-v2',
+            observation_status: 'observed',
+            writes_runtime_directly: false,
+            writes_fact_directly: false,
+          },
+        },
+        {
+          sourceTable: 'algorithm_learnable_parameter_release_events',
+          row: {
+            event_type: 'impact_monitoring',
+            event_status: 'monitoring_passed',
+            source_publication_key: 'algorithm_seed_versions:seed-version-standard-work-duration-v2',
+            event_payload: {
+              assetKey: 'standard_work_duration_seed',
+            },
+          },
+        },
+        {
+          sourceTable: 'algorithm_learnable_parameter_release_events',
+          row: {
+            event_type: 'rollback_execution',
+            event_status: 'rollback_executed',
+            source_publication_key: 'algorithm_seed_versions:seed-version-standard-work-duration-v2',
+            event_payload: {
+              assetKey: 'standard_work_duration_seed',
+            },
+          },
+        },
+        {
+          sourceTable: 'duration_algorithm_accuracy_events',
+          row: {
+            id: 'accuracy-standard-seed-1',
+            absolute_error_days: 1,
+            prediction_context: {
+              assetKey: 'standard_work_duration_seed',
+            },
+            actual_context: {
+              accuracyGateStatus: 'accuracy_passed',
+            },
+          },
+        },
+      ],
+    })
+
+    expect(readiness.status).toBe('standard_work_seed_publication_ready')
+    expect(readiness.liveLearningEvidence).toEqual(expect.objectContaining({
+      seedPublicationWriterReady: true,
+      seedVersionLineageRecorded: true,
+      runtimeConsumerUsesPublishedArtifact: true,
+      releaseExitApproved: true,
+      impactMonitoringReady: true,
+      rollbackTargetReady: true,
+      accuracyMetricsAvailable: true,
+    }))
+    expect(readiness.seedVersionLineage).toEqual(expect.objectContaining({
+      seedVersionId: 'seed-version-standard-work-duration-v2',
+      runtimePublicationKey: 'algorithm_seed_versions:seed-version-standard-work-duration-v2',
+      rollbackTarget: 'rollback:algorithm_seed_versions:seed-version-standard-work-duration-v2:rollback_executed',
+      approvedCandidateIds: ['candidate-process_duration:cast_in_place_concrete'],
+    }))
+    expect(readiness.productionLineage.evidenceRefs).toEqual(expect.objectContaining({
+      productionSampleEvidenceRef: 'duration_samples:sample-standard-seed-1',
+      publicationExecutionRef: 'algorithm_seed_versions:seed-version-standard-work-duration-v2',
+      runtimeConsumerObservationRef: 'runtime_consumer:consumer-standard-seed-1',
+      impactMonitoringEvidenceRef: 'impact_monitoring:algorithm_seed_versions:seed-version-standard-work-duration-v2:monitoring_passed',
+      rollbackDrillEvidenceRef: 'rollback:algorithm_seed_versions:seed-version-standard-work-duration-v2:rollback_executed',
+      accuracyEvidenceRef: 'duration_algorithm_accuracy_events:accuracy-standard-seed-1',
+    }))
+    expect(readiness.productionLineage.rejectedRows).toEqual([])
+    expect(readiness.productionLineage.rejectedRecords).toEqual([])
+    expect(mocks.createAlgorithmSeedUpgradeCandidate).not.toHaveBeenCalled()
   })
 })
