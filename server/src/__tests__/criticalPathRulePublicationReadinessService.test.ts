@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  buildCriticalPathRulePublicationReadinessFromProductionRows,
   buildCriticalPathRulePublicationReadiness,
 } from '../services/criticalPathRulePublicationReadinessService.js'
 import type { CriticalPathSnapshot } from '../services/projectCriticalPathService.js'
@@ -92,6 +93,96 @@ describe('criticalPathRulePublicationReadinessService', () => {
       projectDurationDays: 8,
     })
     expect(readiness.missingReasons).toEqual([])
+  })
+
+  it('builds critical path rule publication readiness from production source rows without mutating critical path facts', () => {
+    const readiness = buildCriticalPathRulePublicationReadinessFromProductionRows({
+      criticalPathSnapshot: buildCriticalPathSnapshot(),
+      approvedCandidateEventIds: ['critical-path-candidate-1'],
+      enabledLearningScopes: ['system', 'industry_baseline', 'company', 'project'],
+      records: [{
+        assetKey: 'critical_path_rule_candidate',
+        evidenceKind: 'production_sample',
+        evidenceRef: 'network_outcomes:critical-path-outcome-1',
+        evidenceStatus: 'accepted',
+      }],
+      sourceRows: [
+        {
+          sourceTable: 'construction_dependency_rule_runtime_publications',
+          row: {
+            publication_key: 'critical_path_rule_runtime:critical-path-rule-version-v2',
+            critical_path_rule_version_id: 'critical-path-rule-version-v2',
+            runtime_publication_status: 'runtime_published',
+            dependency_rule_lineage: { assetType: 'critical_path_rule_candidate' },
+            impact_monitoring: {
+              status: 'monitoring_armed',
+              eventRef: 'impact_monitoring:critical_path_rule_runtime:critical-path-rule-version-v2:armed',
+            },
+            rollback_execution: {
+              status: 'rollback_verified',
+              eventRef: 'rollback:critical_path_rule_runtime:critical-path-rule-version-v2:verified',
+            },
+          },
+        },
+        {
+          sourceTable: 'runtime_consumer_observations',
+          row: {
+            id: 'consumer-critical-path-rule-1',
+            asset_key: 'critical_path_rule_candidate',
+            consumer_key: 'projectRemainingDurationForecastService',
+            publication_key: 'critical_path_rule_runtime:critical-path-rule-version-v2',
+            observation_status: 'observed',
+            writes_runtime_directly: false,
+            writes_fact_directly: false,
+          },
+        },
+        {
+          sourceTable: 'duration_algorithm_accuracy_events',
+          row: {
+            id: 'accuracy-critical-path-rule-1',
+            absolute_error_days: 1,
+            prediction_context: {
+              assetKey: 'critical_path_rule_candidate',
+            },
+            actual_context: {
+              accuracyGateStatus: 'accuracy_passed',
+            },
+          },
+        },
+      ],
+    })
+
+    expect(readiness.status).toBe('critical_path_rule_publication_ready')
+    expect(readiness.liveLearningEvidence).toEqual(expect.objectContaining({
+      actualOutcomeEventRecorded: true,
+      criticalPathProjectionEvidencePresent: true,
+      criticalPathRulePublicationWriterReady: true,
+      criticalPathRuleLineageRecorded: true,
+      criticalPathFactsRemainLocked: true,
+      runtimeConsumerUsesPublishedArtifact: true,
+      releaseExitApproved: true,
+      impactMonitoringReady: true,
+      rollbackTargetReady: true,
+      accuracyMetricsAvailable: true,
+    }))
+    expect(readiness.criticalPathRuleLineage).toEqual(expect.objectContaining({
+      criticalPathRuleVersionId: 'critical-path-rule-version-v2',
+      runtimePublicationKey: 'critical_path_rule_runtime:critical-path-rule-version-v2',
+      rollbackTarget: 'rollback:critical_path_rule_runtime:critical-path-rule-version-v2:verified',
+      approvedCandidateEventIds: ['critical-path-candidate-1'],
+      criticalPathInputHash: 'sha256:critical-path-input',
+      criticalSetHash: 'sha256:critical-set',
+    }))
+    expect(readiness.productionLineage.evidenceRefs).toEqual(expect.objectContaining({
+      productionSampleEvidenceRef: 'network_outcomes:critical-path-outcome-1',
+      publicationExecutionRef: 'critical_path_rule_runtime:critical-path-rule-version-v2',
+      runtimeConsumerObservationRef: 'runtime_consumer:consumer-critical-path-rule-1',
+      impactMonitoringEvidenceRef: 'impact_monitoring:critical_path_rule_runtime:critical-path-rule-version-v2:armed',
+      rollbackDrillEvidenceRef: 'rollback:critical_path_rule_runtime:critical-path-rule-version-v2:verified',
+      accuracyEvidenceRef: 'duration_algorithm_accuracy_events:accuracy-critical-path-rule-1',
+    }))
+    expect(readiness.productionLineage.rejectedRows).toEqual([])
+    expect(readiness.productionLineage.rejectedRecords).toEqual([])
   })
 
   it('keeps critical path rule publication readiness closed without prediction, approvals, lineage, and release evidence', () => {
