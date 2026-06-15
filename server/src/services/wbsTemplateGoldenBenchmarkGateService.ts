@@ -225,6 +225,16 @@ function uniqueValues<T extends string>(values: T[]): T[] {
   return [...new Set(values.filter(Boolean))]
 }
 
+function wbsReferenceDaysObservationMatchesPublication(
+  evidenceRefs: DurationLiveLearningProductionEvidenceRef,
+) {
+  const publicationKey = normalizeText(evidenceRefs.publicationExecutionRef)
+  const observedPublicationKey = normalizeText(evidenceRefs.runtimeConsumerPublicationKey)
+  return Boolean(publicationKey)
+    && Boolean(observedPublicationKey)
+    && publicationKey === observedPublicationKey
+}
+
 function normalizeLower(value: unknown): string {
   return String(value ?? '').trim().toLowerCase()
 }
@@ -657,6 +667,9 @@ export function buildWbsReferenceDaysPublicationReadinessFromProductionRows(
   const referenceDaysVersionId = findCurrentPublishedWbsReferenceDaysVersionId(input.sourceRows)
   const runtimePublicationKey = normalizeText(evidenceRefs.publicationExecutionRef)
   const rollbackTarget = normalizeText(evidenceRefs.rollbackDrillEvidenceRef)
+  const hasRuntimeConsumerObservation = Boolean(evidenceRefs.runtimeConsumerObservationRef)
+  const runtimeConsumerObservationMatchesPublication = hasRuntimeConsumerObservation
+    && wbsReferenceDaysObservationMatchesPublication(evidenceRefs)
   const referenceDaysPublicationWriterReady = Boolean(referenceDaysVersionId && runtimePublicationKey)
   const referenceDaysLineageRecorded = Boolean(referenceDaysVersionId)
     && approvedCandidateEventIds.length > 0
@@ -667,7 +680,7 @@ export function buildWbsReferenceDaysPublicationReadinessFromProductionRows(
     templateReferenceDaysOutcomeRecorded: Boolean(evidenceRefs.productionSampleEvidenceRef),
     approvedReferenceDaysCandidateRecorded: approvedCandidateEventIds.length > 0,
     enabledLearningScopes: input.enabledLearningScopes,
-    runtimeConsumerUsesPublishedArtifact: Boolean(evidenceRefs.runtimeConsumerObservationRef),
+    runtimeConsumerUsesPublishedArtifact: runtimeConsumerObservationMatchesPublication,
     referenceDaysPublicationWriterReady,
     referenceDaysLineageRecorded,
     releaseExitApproved: Boolean(evidenceRefs.publicationExecutionRef),
@@ -690,7 +703,12 @@ export function buildWbsReferenceDaysPublicationReadinessFromProductionRows(
       benchmarkGateVersion: input.runtimeGate.version,
       benchmarkScenarioCount: input.runtimeGate.resultCount,
     },
-    missingReasons: readiness.missingReasons,
+    missingReasons: uniqueValues([
+      ...readiness.missingReasons,
+      hasRuntimeConsumerObservation && !runtimeConsumerObservationMatchesPublication
+        ? 'runtime_consumer_publication_mismatch'
+        : '',
+    ]),
     productionLineage,
   }
 }
