@@ -41,7 +41,9 @@ export interface DurationLiveLearningProductionEvidenceRef {
   runtimeConsumerObservationRef?: string | null
   runtimeConsumerPublicationKey?: string | null
   impactMonitoringEvidenceRef?: string | null
+  impactMonitoringPublicationKey?: string | null
   rollbackDrillEvidenceRef?: string | null
+  rollbackDrillPublicationKey?: string | null
   accuracyEvidenceRef?: string | null
 }
 
@@ -596,8 +598,15 @@ function pushRecord(
   evidenceKind: DurationLiveLearningProductionEvidenceKind,
   evidenceRef: string,
   evidenceStatus: string,
+  publicationKey?: string | null,
 ) {
-  records.push({ assetKey, evidenceKind, evidenceRef, evidenceStatus })
+  records.push({
+    assetKey,
+    evidenceKind,
+    evidenceRef,
+    evidenceStatus,
+    ...(publicationKey ? { publicationKey } : {}),
+  })
 }
 
 function acceptedStatusesFor(kind: DurationLiveLearningProductionEvidenceKind) {
@@ -744,8 +753,16 @@ function assignEvidenceRef(
     target.runtimeConsumerObservationRef ??= evidenceRef
     target.runtimeConsumerPublicationKey ??= normalizeText(publicationKey)
   }
-  if (kind === 'impact_monitoring') target.impactMonitoringEvidenceRef ??= evidenceRef
-  if (kind === 'rollback_drill') target.rollbackDrillEvidenceRef ??= evidenceRef
+  if (kind === 'impact_monitoring') {
+    target.impactMonitoringEvidenceRef ??= evidenceRef
+    const normalizedPublicationKey = normalizeText(publicationKey)
+    if (normalizedPublicationKey) target.impactMonitoringPublicationKey ??= normalizedPublicationKey
+  }
+  if (kind === 'rollback_drill') {
+    target.rollbackDrillEvidenceRef ??= evidenceRef
+    const normalizedPublicationKey = normalizeText(publicationKey)
+    if (normalizedPublicationKey) target.rollbackDrillPublicationKey ??= normalizedPublicationKey
+  }
   if (kind === 'accuracy') target.accuracyEvidenceRef ??= evidenceRef
 }
 
@@ -868,12 +885,26 @@ export function collectDurationLiveLearningProductionEvidenceRecordsFromRows(
       const monitoringStatus = impactMonitoringStatus(row.impact_monitoring ?? row.impactMonitoring)
       if (monitoringStatus) {
         const eventRef = readText(readRecord(row.impact_monitoring ?? row.impactMonitoring), 'eventRef', 'event_ref')
-        pushRecord(records, assetKey, 'impact_monitoring', eventRef || `impact_monitoring:${publicationKey}:${monitoringStatus}`, monitoringStatus)
+        pushRecord(
+          records,
+          assetKey,
+          'impact_monitoring',
+          eventRef || `impact_monitoring:${publicationKey}:${monitoringStatus}`,
+          monitoringStatus,
+          publicationKey,
+        )
       }
       const rollbackStatus = rollbackExecutionStatus(row.rollback_execution ?? row.rollbackExecution)
       if (rollbackStatus) {
         const eventRef = readText(readRecord(row.rollback_execution ?? row.rollbackExecution), 'eventRef', 'event_ref')
-        pushRecord(records, assetKey, 'rollback_drill', eventRef || `rollback:${publicationKey}:${rollbackStatus}`, rollbackStatus)
+        pushRecord(
+          records,
+          assetKey,
+          'rollback_drill',
+          eventRef || `rollback:${publicationKey}:${rollbackStatus}`,
+          rollbackStatus,
+          publicationKey,
+        )
       }
       continue
     }
@@ -893,6 +924,7 @@ export function collectDurationLiveLearningProductionEvidenceRecordsFromRows(
           'impact_monitoring',
           `impact_monitoring:${sourcePublicationKey}:monitoring_passed`,
           'monitoring_passed',
+          sourcePublicationKey,
         )
         continue
       }
@@ -903,6 +935,7 @@ export function collectDurationLiveLearningProductionEvidenceRecordsFromRows(
           'rollback_drill',
           `rollback:${sourcePublicationKey}:rollback_executed`,
           'rollback_executed',
+          sourcePublicationKey,
         )
         continue
       }
@@ -955,12 +988,26 @@ export function collectDurationLiveLearningProductionEvidenceRecordsFromRows(
       const monitoringStatus = impactMonitoringStatus(row.impact_monitoring ?? row.impactMonitoring)
       if (monitoringStatus) {
         const eventRef = readText(readRecord(row.impact_monitoring ?? row.impactMonitoring), 'eventRef', 'event_ref')
-        pushRecord(records, assetKey, 'impact_monitoring', eventRef || `impact_monitoring:${publicationKey}:${monitoringStatus}`, monitoringStatus)
+        pushRecord(
+          records,
+          assetKey,
+          'impact_monitoring',
+          eventRef || `impact_monitoring:${publicationKey}:${monitoringStatus}`,
+          monitoringStatus,
+          publicationKey,
+        )
       }
       const rollbackStatus = rollbackExecutionStatus(row.rollback_execution ?? row.rollbackExecution)
       if (rollbackStatus) {
         const eventRef = readText(readRecord(row.rollback_execution ?? row.rollbackExecution), 'eventRef', 'event_ref')
-        pushRecord(records, assetKey, 'rollback_drill', eventRef || `rollback:${publicationKey}:${rollbackStatus}`, rollbackStatus)
+        pushRecord(
+          records,
+          assetKey,
+          'rollback_drill',
+          eventRef || `rollback:${publicationKey}:${rollbackStatus}`,
+          rollbackStatus,
+          publicationKey,
+        )
       }
       continue
     }
@@ -983,6 +1030,7 @@ export function collectDurationLiveLearningProductionEvidenceRecordsFromRows(
           'impact_monitoring',
           `impact_monitoring:${sourcePublicationKey}:monitoring_passed`,
           'monitoring_passed',
+          sourcePublicationKey,
         )
         continue
       }
@@ -993,6 +1041,7 @@ export function collectDurationLiveLearningProductionEvidenceRecordsFromRows(
           'rollback_drill',
           `rollback:${sourcePublicationKey}:rollback_executed`,
           'rollback_executed',
+          sourcePublicationKey,
         )
         continue
       }
@@ -1100,6 +1149,20 @@ function buildProductionEvidenceMap(
   return map
 }
 
+function publicationRefMatchesPublicationKey(
+  publicationExecutionRef: string | null | undefined,
+  publicationKey: string | null | undefined,
+) {
+  const publicationRef = normalizeText(publicationExecutionRef)
+  const normalizedPublicationKey = normalizeText(publicationKey)
+  if (!normalizedPublicationKey) return true
+  return Boolean(publicationRef)
+    && (
+      publicationRef === normalizedPublicationKey
+      || publicationRef.endsWith(`:${normalizedPublicationKey}`)
+    )
+}
+
 function evaluateAssetEvidence(
   assetKey: DurationLiveLearningAssetKey,
   evidence: DurationLiveLearningProductionEvidenceRef | undefined,
@@ -1128,12 +1191,14 @@ function evaluateAssetEvidence(
   if (
     !hasRef(evidence?.impactMonitoringEvidenceRef)
     || !hasAcceptedRefSource('impact_monitoring', evidence.impactMonitoringEvidenceRef, assetKey)
+    || !publicationRefMatchesPublicationKey(evidence.publicationExecutionRef, evidence.impactMonitoringPublicationKey)
   ) {
     missingReasonCodes.push('impact_monitoring_evidence_required')
   }
   if (
     !hasRef(evidence?.rollbackDrillEvidenceRef)
     || !hasAcceptedRefSource('rollback_drill', evidence.rollbackDrillEvidenceRef, assetKey)
+    || !publicationRefMatchesPublicationKey(evidence.publicationExecutionRef, evidence.rollbackDrillPublicationKey)
   ) {
     missingReasonCodes.push('rollback_drill_evidence_required')
   }

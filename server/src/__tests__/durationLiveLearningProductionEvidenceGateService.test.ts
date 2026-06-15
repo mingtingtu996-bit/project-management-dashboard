@@ -993,12 +993,14 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
         evidenceKind: 'impact_monitoring',
         evidenceRef: 'impact_monitoring:forecast_confidence_weight_runtime:weight-v2:armed',
         evidenceStatus: 'monitoring_armed',
+        publicationKey: 'forecast_confidence_weight_runtime:weight-v2',
       },
       {
         assetKey: 'forecast_confidence_weight',
         evidenceKind: 'rollback_drill',
         evidenceRef: 'rollback:forecast_confidence_weight_runtime:weight-v2:verified',
         evidenceStatus: 'rollback_verified',
+        publicationKey: 'forecast_confidence_weight_runtime:weight-v2',
       },
       {
         assetKey: 'standard_work_duration_seed',
@@ -1011,6 +1013,7 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
         evidenceKind: 'impact_monitoring',
         evidenceRef: 'impact_monitoring:forecast_confidence_weight_runtime:weight-v2:monitoring_passed',
         evidenceStatus: 'monitoring_passed',
+        publicationKey: 'forecast_confidence_weight_runtime:weight-v2',
       },
       {
         assetKey: 'forecast_confidence_weight',
@@ -1170,18 +1173,21 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
         evidenceKind: 'impact_monitoring',
         evidenceRef: 'impact_monitoring:wbs_template_runtime:special-seed-version-v2:monitoring_armed',
         evidenceStatus: 'monitoring_armed',
+        publicationKey: 'wbs_template_runtime:special-seed-version-v2',
       },
       {
         assetKey: 'special_work_duration_seed',
         evidenceKind: 'rollback_drill',
         evidenceRef: 'rollback:wbs_template_runtime:special-seed-version-v2:rollback_verified',
         evidenceStatus: 'rollback_verified',
+        publicationKey: 'wbs_template_runtime:special-seed-version-v2',
       },
       {
         assetKey: 'wbs_reference_days',
         evidenceKind: 'impact_monitoring',
         evidenceRef: 'impact_monitoring:wbs_reference_days_runtime:wbs-reference-days-v2:monitoring_passed',
         evidenceStatus: 'monitoring_passed',
+        publicationKey: 'wbs_reference_days_runtime:wbs-reference-days-v2',
       },
       {
         assetKey: 'dependency_rule_candidate',
@@ -1194,18 +1200,21 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
         evidenceKind: 'impact_monitoring',
         evidenceRef: 'impact_monitoring:dependency_rule_runtime:dependency-rule-version-v2:monitoring_armed',
         evidenceStatus: 'monitoring_armed',
+        publicationKey: 'dependency_rule_runtime:dependency-rule-version-v2',
       },
       {
         assetKey: 'dependency_rule_candidate',
         evidenceKind: 'rollback_drill',
         evidenceRef: 'rollback:dependency_rule_runtime:dependency-rule-version-v2:rollback_verified',
         evidenceStatus: 'rollback_verified',
+        publicationKey: 'dependency_rule_runtime:dependency-rule-version-v2',
       },
       {
         assetKey: 'critical_path_rule_candidate',
         evidenceKind: 'rollback_drill',
         evidenceRef: 'rollback:critical_path_rule_runtime:critical-path-rule-version-v2:rollback_executed',
         evidenceStatus: 'rollback_executed',
+        publicationKey: 'critical_path_rule_runtime:critical-path-rule-version-v2',
       },
     ])
     expect(adapted.rejectedRows).toEqual([])
@@ -1320,6 +1329,44 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
       .toBe('runtime_consumer_observation_runtime_calls_ready')
     expect(audit.runtimeConsumerBusinessPathIntegrationCoverage.status)
       .toBe('runtime_consumer_business_path_integration_ready')
+  })
+
+  it('blocks the final production claim when monitoring and rollback belong to a different publication than the consumed artifact', () => {
+    const staleSeedPublicationKey = 'algorithm_seed_versions:seed-version-standard-work-duration-v1'
+    const audit = buildDurationLiveLearningProductionClaimAudit({
+      completionAudit: buildReadyCompletionAudit(),
+      sourceRows: [
+        ...buildAllProductionSourceRows().map((source) => {
+          if (
+            source.sourceTable !== 'algorithm_learnable_parameter_release_events'
+            || source.row.event_payload?.assetKey !== 'standard_work_duration_seed'
+          ) {
+            return source
+          }
+          return {
+            ...source,
+            row: {
+              ...source.row,
+              source_publication_key: staleSeedPublicationKey,
+            },
+          }
+        }),
+        ...buildRuntimeConsumerRuntimeCallRows(),
+      ],
+      records: buildPlanNetworkOutcomeRecords(),
+      runtimeConsumerBusinessPathSourceFiles: buildReadyBusinessPathSourceFiles(),
+    })
+
+    expect(audit.status).toBe('duration_live_learning_production_claim_not_ready')
+    expect(audit.productionGate.status).toBe('duration_live_learning_production_evidence_not_ready')
+    expect(audit.productionGate.missingEvidenceByAsset).toEqual(expect.arrayContaining([{
+      assetKey: 'standard_work_duration_seed',
+      missingReasonCodes: expect.arrayContaining([
+        'impact_monitoring_evidence_required',
+        'rollback_drill_evidence_required',
+      ]),
+    }]))
+    expect(audit.allowedClaim).toBe('not_ready_for_live_self_learning_claim')
   })
 
   it('blocks the final production claim when facade-backed business paths are not integrated', () => {
