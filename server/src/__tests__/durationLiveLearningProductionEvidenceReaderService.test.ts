@@ -41,6 +41,16 @@ const parameterPublicationAssetKeys: DurationLiveLearningAssetKey[] = [
   'forecast_confidence_weight',
 ]
 
+const planNetworkAssetKeys: DurationLiveLearningAssetKey[] = [
+  'special_work_duration_seed',
+  'wbs_reference_days',
+  'dependency_rule_candidate',
+  'critical_path_rule_candidate',
+]
+
+const durationOutcomeAssetKeys = learnableAssetKeys.filter((assetKey) =>
+  !planNetworkAssetKeys.includes(assetKey))
+
 function publicationKeyForAsset(assetKey: DurationLiveLearningAssetKey) {
   if (assetKey === 'standard_work_duration_seed') {
     return 'algorithm_seed_versions:seed-version-standard-work-duration-v2'
@@ -110,10 +120,19 @@ function buildReadyCompletionAudit() {
   return buildDurationLiveLearningCompletionAudit({ evidenceOverrides })
 }
 
+function buildPlanNetworkOutcomeRecords() {
+  return planNetworkAssetKeys.map((assetKey) => ({
+    assetKey,
+    evidenceKind: 'production_sample' as const,
+    evidenceRef: `network_outcomes:${assetKey}:accepted`,
+    evidenceStatus: 'accepted',
+  }))
+}
+
 function rowsForSql(sql: string) {
   const normalized = sql.toLowerCase()
   if (normalized.includes('from public.duration_experience_samples')) {
-    return learnableAssetKeys.map((assetKey) => ({
+    return durationOutcomeAssetKeys.map((assetKey) => ({
       id: `sample-${assetKey}`,
       sample_status: 'active',
       included_in_benchmark: true,
@@ -263,6 +282,29 @@ function buildReadyBusinessPathSourceFiles() {
 }
 
 describe('durationLiveLearningProductionEvidenceReaderService', () => {
+  it('keeps the DB-only production claim blocked when typed network outcomes are absent', async () => {
+    const {
+      buildDurationLiveLearningProductionClaimAuditFromDb,
+    } = await import('../services/durationLiveLearningProductionEvidenceReaderService.js')
+    const queryExec = async <T = Record<string, unknown>>(sql: string): Promise<T[]> =>
+      rowsForSql(sql) as T[]
+
+    const audit = await buildDurationLiveLearningProductionClaimAuditFromDb({
+      completionAudit: buildReadyCompletionAudit(),
+      queryExec,
+      maxRowsPerSourceTable: 200,
+      runtimeConsumerBusinessPathSourceFiles: buildReadyBusinessPathSourceFiles(),
+    })
+
+    expect(audit.status).toBe('duration_live_learning_production_claim_not_ready')
+    expect(audit.evidenceRowCollection.rejectedRows).toEqual([])
+    expect(audit.productionGate.status).toBe('duration_live_learning_production_evidence_not_ready')
+    expect(audit.productionGate.missingEvidenceByAsset).toEqual(planNetworkAssetKeys.map((assetKey) => ({
+      assetKey,
+      missingReasonCodes: ['production_sample_evidence_required'],
+    })))
+  })
+
   it('builds the production claim audit from canonical read-only source queries', async () => {
     const {
       buildDurationLiveLearningProductionClaimAuditFromDb,
@@ -277,6 +319,7 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
       completionAudit: buildReadyCompletionAudit(),
       queryExec,
       maxRowsPerSourceTable: 200,
+      records: buildPlanNetworkOutcomeRecords(),
       runtimeConsumerBusinessPathSourceFiles: buildReadyBusinessPathSourceFiles(),
     })
 
@@ -335,6 +378,7 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
       completionAudit: buildReadyCompletionAudit(),
       queryExec,
       maxRowsPerSourceTable: 200,
+      records: buildPlanNetworkOutcomeRecords(),
     })
 
     expect(audit.status).toBe('duration_live_learning_production_claim_ready')

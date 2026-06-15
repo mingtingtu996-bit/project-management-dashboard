@@ -218,8 +218,14 @@ const CANONICAL_PRODUCTION_EVIDENCE_SOURCE_TABLES: DurationLiveLearningProductio
   'runtime_consumer_runtime_calls',
 ]
 
-const COMMON_PRODUCTION_EVIDENCE_SOURCE_TABLES: DurationLiveLearningProductionEvidenceSourceTable[] = [
+const DURATION_OUTCOME_PRODUCTION_EVIDENCE_SOURCE_TABLES: DurationLiveLearningProductionEvidenceSourceTable[] = [
   'duration_experience_samples',
+  'duration_algorithm_accuracy_events',
+  'runtime_consumer_observations',
+  'runtime_consumer_runtime_calls',
+]
+
+const NETWORK_OUTCOME_PRODUCTION_EVIDENCE_SOURCE_TABLES: DurationLiveLearningProductionEvidenceSourceTable[] = [
   'duration_algorithm_accuracy_events',
   'runtime_consumer_observations',
   'runtime_consumer_runtime_calls',
@@ -238,6 +244,13 @@ const WBS_RUNTIME_PUBLICATION_ASSET_KEYS = new Set<DurationLiveLearningAssetKey>
 ])
 
 const CONSTRUCTION_DEPENDENCY_RUNTIME_PUBLICATION_ASSET_KEYS = new Set<DurationLiveLearningAssetKey>([
+  'dependency_rule_candidate',
+  'critical_path_rule_candidate',
+])
+
+const PLAN_NETWORK_PRODUCTION_SAMPLE_ASSET_KEYS = new Set<DurationLiveLearningAssetKey>([
+  'special_work_duration_seed',
+  'wbs_reference_days',
   'dependency_rule_candidate',
   'critical_path_rule_candidate',
 ])
@@ -340,7 +353,7 @@ function sourceTablesForAssetKey(
 ): DurationLiveLearningProductionEvidenceSourceTable[] {
   if (PARAMETER_RUNTIME_PUBLICATION_ASSET_KEYS.has(assetKey)) {
     return [
-      ...COMMON_PRODUCTION_EVIDENCE_SOURCE_TABLES,
+      ...DURATION_OUTCOME_PRODUCTION_EVIDENCE_SOURCE_TABLES,
       'algorithm_learnable_parameter_runtime_publications',
       'algorithm_learnable_parameter_release_events',
     ]
@@ -348,7 +361,7 @@ function sourceTablesForAssetKey(
 
   if (assetKey === 'standard_work_duration_seed') {
     return [
-      ...COMMON_PRODUCTION_EVIDENCE_SOURCE_TABLES,
+      ...DURATION_OUTCOME_PRODUCTION_EVIDENCE_SOURCE_TABLES,
       'algorithm_seed_versions',
       'algorithm_learnable_parameter_release_events',
     ]
@@ -356,7 +369,7 @@ function sourceTablesForAssetKey(
 
   if (WBS_RUNTIME_PUBLICATION_ASSET_KEYS.has(assetKey)) {
     return [
-      ...COMMON_PRODUCTION_EVIDENCE_SOURCE_TABLES,
+      ...NETWORK_OUTCOME_PRODUCTION_EVIDENCE_SOURCE_TABLES,
       'wbs_template_runtime_publications',
       'wbs_template_runtime_events',
     ]
@@ -364,13 +377,13 @@ function sourceTablesForAssetKey(
 
   if (CONSTRUCTION_DEPENDENCY_RUNTIME_PUBLICATION_ASSET_KEYS.has(assetKey)) {
     return [
-      ...COMMON_PRODUCTION_EVIDENCE_SOURCE_TABLES,
+      ...NETWORK_OUTCOME_PRODUCTION_EVIDENCE_SOURCE_TABLES,
       'construction_dependency_rule_runtime_publications',
       'construction_dependency_rule_runtime_events',
     ]
   }
 
-  return [...COMMON_PRODUCTION_EVIDENCE_SOURCE_TABLES]
+  return [...DURATION_OUTCOME_PRODUCTION_EVIDENCE_SOURCE_TABLES]
 }
 
 export function listDurationLiveLearningProductionEvidenceSourcePlan(): DurationLiveLearningProductionEvidenceSourcePlan[] {
@@ -606,7 +619,11 @@ function acceptedRefPrefixesFor(
   kind: DurationLiveLearningProductionEvidenceKind,
   assetKey?: DurationLiveLearningAssetKey,
 ) {
-  if (kind === 'production_sample') return ['duration_samples:', 'duration_outcomes:', 'network_outcomes:']
+  if (kind === 'production_sample') {
+    if (assetKey && PLAN_NETWORK_PRODUCTION_SAMPLE_ASSET_KEYS.has(assetKey)) return ['network_outcomes:']
+    if (assetKey) return ['duration_samples:', 'duration_outcomes:']
+    return ['duration_samples:', 'duration_outcomes:', 'network_outcomes:']
+  }
   if (kind === 'publication_execution') {
     return assetKey ? acceptedPublicationExecutionRefPrefixesForAsset(assetKey) : []
   }

@@ -43,12 +43,25 @@ const learnableAssetKeys: DurationLiveLearningAssetKey[] = [
   'critical_path_rule_candidate',
 ]
 
-const commonProductionSourceTables = [
+const durationOutcomeProductionSourceTables = [
   'duration_experience_samples',
   'duration_algorithm_accuracy_events',
   'runtime_consumer_observations',
   'runtime_consumer_runtime_calls',
 ] as const
+
+const networkOutcomeProductionSourceTables = [
+  'duration_algorithm_accuracy_events',
+  'runtime_consumer_observations',
+  'runtime_consumer_runtime_calls',
+] as const
+
+const planNetworkAssetKeys: DurationLiveLearningAssetKey[] = [
+  'special_work_duration_seed',
+  'wbs_reference_days',
+  'dependency_rule_candidate',
+  'critical_path_rule_candidate',
+]
 
 function expectedSourceTablesForAssetKey(assetKey: DurationLiveLearningAssetKey) {
   if (
@@ -58,27 +71,27 @@ function expectedSourceTablesForAssetKey(assetKey: DurationLiveLearningAssetKey)
     || assetKey === 'forecast_confidence_weight'
   ) {
     return [
-      ...commonProductionSourceTables,
+      ...durationOutcomeProductionSourceTables,
       'algorithm_learnable_parameter_runtime_publications',
       'algorithm_learnable_parameter_release_events',
     ]
   }
   if (assetKey === 'standard_work_duration_seed') {
     return [
-      ...commonProductionSourceTables,
+      ...durationOutcomeProductionSourceTables,
       'algorithm_seed_versions',
       'algorithm_learnable_parameter_release_events',
     ]
   }
   if (assetKey === 'special_work_duration_seed' || assetKey === 'wbs_reference_days') {
     return [
-      ...commonProductionSourceTables,
+      ...networkOutcomeProductionSourceTables,
       'wbs_template_runtime_publications',
       'wbs_template_runtime_events',
     ]
   }
   return [
-    ...commonProductionSourceTables,
+    ...networkOutcomeProductionSourceTables,
     'construction_dependency_rule_runtime_publications',
     'construction_dependency_rule_runtime_events',
   ]
@@ -170,13 +183,27 @@ function publicationEvidenceRefForAsset(assetKey: DurationLiveLearningAssetKey) 
   return 'critical_path_rule_runtime:critical-path-rule-v2'
 }
 
+function productionSampleEvidenceRefForAsset(assetKey: DurationLiveLearningAssetKey) {
+  if (planNetworkAssetKeys.includes(assetKey)) return `network_outcomes:${assetKey}:accepted`
+  return `duration_samples:${assetKey}:accepted`
+}
+
+function buildPlanNetworkOutcomeRecords() {
+  return planNetworkAssetKeys.map((assetKey) => ({
+    assetKey,
+    evidenceKind: 'production_sample' as const,
+    evidenceRef: `network_outcomes:${assetKey}:accepted`,
+    evidenceStatus: 'accepted',
+  }))
+}
+
 function buildAllProductionEvidenceRecords() {
   return [
     ...learnableAssetKeys.flatMap((assetKey) => [
       {
         assetKey,
         evidenceKind: 'production_sample' as const,
-        evidenceRef: `duration_samples:${assetKey}:accepted`,
+        evidenceRef: productionSampleEvidenceRefForAsset(assetKey),
         evidenceStatus: 'accepted',
       },
       {
@@ -306,17 +333,19 @@ function publicationSourceRowsForAsset(assetKey: DurationLiveLearningAssetKey) {
 function buildAllProductionSourceRows() {
   return [
     ...learnableAssetKeys.flatMap((assetKey) => [
-      {
-        sourceTable: 'duration_experience_samples' as const,
-        row: {
-          id: `sample-${assetKey}`,
-          sample_status: 'active',
-          included_in_benchmark: true,
-          actual_duration: 8,
-          completed_at: '2026-06-01T00:00:00.000Z',
-          metadata: { liveLearningAssetKey: assetKey },
-        },
-      },
+      ...(planNetworkAssetKeys.includes(assetKey)
+        ? []
+        : [{
+            sourceTable: 'duration_experience_samples' as const,
+            row: {
+              id: `sample-${assetKey}`,
+              sample_status: 'active',
+              included_in_benchmark: true,
+              actual_duration: 8,
+              completed_at: '2026-06-01T00:00:00.000Z',
+              metadata: { liveLearningAssetKey: assetKey },
+            },
+          }]),
       ...publicationSourceRowsForAsset(assetKey),
       {
         sourceTable: 'duration_algorithm_accuracy_events' as const,
@@ -519,7 +548,7 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
       completionAudit: buildReadyCompletionAudit(),
       productionEvidence: learnableAssetKeys.map((assetKey) => ({
         assetKey,
-        productionSampleEvidenceRef: `duration_samples:${assetKey}:accepted`,
+        productionSampleEvidenceRef: productionSampleEvidenceRefForAsset(assetKey),
         publicationExecutionRef: `release_execution:${assetKey}:published`,
         runtimeConsumerObservationRef: `runtime_consumer:${assetKey}:observed`,
         impactMonitoringEvidenceRef: `impact_monitoring:${assetKey}:armed`,
@@ -671,6 +700,26 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
     })))
   })
 
+  it('rejects duration sample refs for plan-network production sample evidence', () => {
+    const collected = collectDurationLiveLearningProductionEvidenceRefs({
+      records: planNetworkAssetKeys.map((assetKey) => ({
+        assetKey,
+        evidenceKind: 'production_sample',
+        evidenceRef: `duration_samples:${assetKey}:accepted`,
+        evidenceStatus: 'accepted',
+      })),
+    })
+
+    expect(collected.productionEvidence).toEqual([])
+    expect(collected.rejectedRecords).toEqual(planNetworkAssetKeys.map((assetKey) => ({
+      assetKey,
+      evidenceKind: 'production_sample',
+      evidenceRef: `duration_samples:${assetKey}:accepted`,
+      evidenceStatus: 'accepted',
+      reason: 'production_evidence_ref_source_not_allowed',
+    })))
+  })
+
   it('rejects parameter runtime publication rows for seed and plan-network assets', () => {
     const adapted = collectDurationLiveLearningProductionEvidenceRecordsFromRows({
       rows: [
@@ -706,6 +755,36 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
         publication_status: 'published',
         impact_monitoring: { status: 'monitoring_armed' },
         rollback_execution: { status: 'rollback_verified' },
+      },
+      reason: 'production_source_table_not_allowed_for_asset',
+    })))
+  })
+
+  it('rejects duration experience sample rows for plan-network assets', () => {
+    const adapted = collectDurationLiveLearningProductionEvidenceRecordsFromRows({
+      rows: planNetworkAssetKeys.map((assetKey) => ({
+        sourceTable: 'duration_experience_samples',
+        row: {
+          id: `sample-${assetKey}`,
+          sample_status: 'active',
+          included_in_benchmark: true,
+          actual_duration: 8,
+          completed_at: '2026-06-01T00:00:00.000Z',
+          metadata: { liveLearningAssetKey: assetKey },
+        },
+      })),
+    })
+
+    expect(adapted.records).toEqual([])
+    expect(adapted.rejectedRows).toEqual(planNetworkAssetKeys.map((assetKey) => ({
+      sourceTable: 'duration_experience_samples',
+      row: {
+        id: `sample-${assetKey}`,
+        sample_status: 'active',
+        included_in_benchmark: true,
+        actual_duration: 8,
+        completed_at: '2026-06-01T00:00:00.000Z',
+        metadata: { liveLearningAssetKey: assetKey },
       },
       reason: 'production_source_table_not_allowed_for_asset',
     })))
@@ -978,13 +1057,33 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
     expect(audit.allowedClaim).toBe('not_ready_for_live_self_learning_claim')
   })
 
-  it('builds the final production claim audit directly from production source rows', () => {
+  it('keeps the source-row production claim blocked until typed network outcomes are supplied', () => {
     const audit = buildDurationLiveLearningProductionClaimAudit({
       completionAudit: buildReadyCompletionAudit(),
       sourceRows: [
         ...buildAllProductionSourceRows(),
         ...buildRuntimeConsumerRuntimeCallRows(),
       ],
+      runtimeConsumerBusinessPathSourceFiles: buildReadyBusinessPathSourceFiles(),
+    })
+
+    expect(audit.status).toBe('duration_live_learning_production_claim_not_ready')
+    expect(audit.evidenceRowCollection.rejectedRows).toEqual([])
+    expect(audit.productionGate.status).toBe('duration_live_learning_production_evidence_not_ready')
+    expect(audit.productionGate.missingEvidenceByAsset).toEqual(planNetworkAssetKeys.map((assetKey) => ({
+      assetKey,
+      missingReasonCodes: ['production_sample_evidence_required'],
+    })))
+  })
+
+  it('builds the final production claim audit from production source rows plus typed network outcomes', () => {
+    const audit = buildDurationLiveLearningProductionClaimAudit({
+      completionAudit: buildReadyCompletionAudit(),
+      sourceRows: [
+        ...buildAllProductionSourceRows(),
+        ...buildRuntimeConsumerRuntimeCallRows(),
+      ],
+      records: buildPlanNetworkOutcomeRecords(),
       runtimeConsumerBusinessPathSourceFiles: buildReadyBusinessPathSourceFiles(),
     })
 
@@ -1006,6 +1105,7 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
         ...buildAllProductionSourceRows(),
         ...buildRuntimeConsumerRuntimeCallRows(),
       ],
+      records: buildPlanNetworkOutcomeRecords(),
       runtimeConsumerBusinessPathSourceFiles: [{
         sourcePath: 'server/src/services/projectRemainingDurationForecastService.ts',
         sourceText: 'export function buildProjectRemainingDurationForecast() { return {} }',
