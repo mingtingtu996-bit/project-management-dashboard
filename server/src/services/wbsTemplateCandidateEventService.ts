@@ -98,6 +98,8 @@ export interface SpecialWorkDurationSeedPublicationReadinessInput {
   approvedCandidateEventIds: readonly string[]
   seedVersionId?: string | null
   runtimePublicationKey?: string | null
+  runtimeConsumerObservationRef?: string | null
+  runtimeConsumerPublicationKey?: string | null
   rollbackTarget?: string | null
   generatedEntityIds?: readonly string[]
   enabledLearningScopes: readonly SpecialWorkDurationSeedLearningScopeEvidence[]
@@ -147,6 +149,15 @@ export type SpecialWorkDurationSeedProductionPublicationReadiness =
   }
 
 const SPECIAL_WORK_DURATION_SEED_ASSET_KEY = 'special_work_duration_seed'
+
+type WbsTemplateCandidateCounts = {
+  generatedRowCount: number
+  retainedRowCount: number
+  rejectedRowCount: number
+  pendingRowCount: number
+}
+
+type PlanNetworkOutcomeStatus = 'accepted' | 'weak'
 
 function normalizeString(value: unknown): string | null {
   const normalized = String(value ?? '').trim()
@@ -281,6 +292,97 @@ function extractMissingColumn(error: unknown, tableName: string) {
   return null
 }
 
+function specialWorkDurationNetworkOutcomeStatus(
+  counts: WbsTemplateCandidateCounts,
+): PlanNetworkOutcomeStatus | null {
+  if (counts.generatedRowCount <= 0) return null
+
+  const resolvedRowCount = counts.retainedRowCount + counts.rejectedRowCount
+  if (resolvedRowCount <= 0) return null
+
+  return counts.pendingRowCount === 0 && resolvedRowCount >= counts.generatedRowCount
+    ? 'accepted'
+    : 'weak'
+}
+
+function buildWbsTemplateCandidateOutcomeId(input: RecordWbsTemplateCandidateEventInput) {
+  const identity = normalizeString(input.generationBatchId)
+    ?? normalizeString(input.templateId)
+    ?? normalizeString(input.attachUnderRowId)
+    ?? 'unbatched'
+  return `wbs-template-candidate:${input.projectId}:${input.surface}:${identity}`
+}
+
+function readRuntimePublicationKeyFromMetadata(metadata: Record<string, unknown>) {
+  return normalizeString(metadata.runtimePublicationKey)
+    ?? normalizeString(metadata.runtime_publication_key)
+    ?? normalizeString(metadata.publicationKey)
+    ?? normalizeString(metadata.publication_key)
+}
+
+async function recordSpecialWorkDurationPlanNetworkOutcome(
+  input: RecordWbsTemplateCandidateEventInput,
+  counts: WbsTemplateCandidateCounts,
+  selectedNodeIds: string[],
+  generatedEntityIds: string[],
+) {
+  const outcomeStatus = specialWorkDurationNetworkOutcomeStatus(counts)
+  if (!outcomeStatus) return
+
+  try {
+    const table = supabase.from('duration_plan_network_outcomes')
+    if (typeof table?.upsert !== 'function') return
+
+    const metadata = normalizeObject(input.metadata)
+    const generationBatchId = normalizeString(input.generationBatchId)
+    const outcomeId = buildWbsTemplateCandidateOutcomeId(input)
+    const { error } = await table.upsert({
+      id: outcomeId,
+      asset_key: SPECIAL_WORK_DURATION_SEED_ASSET_KEY,
+      outcome_status: outcomeStatus,
+      outcome_ref: generationBatchId
+        ? `wbs_template_candidate_event:${generationBatchId}`
+        : `wbs_template_candidate_event:${outcomeId}`,
+      company_id: normalizeString(input.companyId),
+      project_id: input.projectId,
+      publication_key: readRuntimePublicationKeyFromMetadata(metadata),
+      metadata: {
+        ...metadata,
+        source: 'wbs_template_candidate_event',
+        surface: input.surface,
+        template_id: normalizeString(input.templateId),
+        generation_batch_id: generationBatchId,
+        selected_node_ids: selectedNodeIds,
+        generated_entity_ids: generatedEntityIds,
+        generated_row_count: counts.generatedRowCount,
+        retained_row_count: counts.retainedRowCount,
+        rejected_row_count: counts.rejectedRowCount,
+        pending_row_count: counts.pendingRowCount,
+        resolved_row_count: counts.retainedRowCount + counts.rejectedRowCount,
+        acceptance_rate_basis: 'retained_rows_divided_by_generated_rows',
+      },
+      writes_runtime_directly: false,
+      writes_fact_directly: false,
+    }, { onConflict: 'id', ignoreDuplicates: false })
+
+    if (error) {
+      logger.warn('[wbs-template-candidate] failed to record special work duration network outcome', {
+        projectId: input.projectId,
+        surface: input.surface,
+        generationBatchId: input.generationBatchId,
+        error: error.message,
+      })
+    }
+  } catch (error) {
+    logger.warn('[wbs-template-candidate] skipped special work duration network outcome', {
+      projectId: input.projectId,
+      surface: input.surface,
+      generationBatchId: input.generationBatchId,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
 async function insertCandidateEventWithSchemaFallback(row: Record<string, unknown>) {
   const workingRow = { ...row }
   for (let attempt = 0; attempt < 4; attempt += 1) {
@@ -295,12 +397,7 @@ async function insertCandidateEventWithSchemaFallback(row: Record<string, unknow
 
 async function updateWbsTemplateCandidateAggregation(
   input: RecordWbsTemplateCandidateEventInput,
-  counts: {
-    generatedRowCount: number
-    retainedRowCount: number
-    rejectedRowCount: number
-    pendingRowCount: number
-  },
+  counts: WbsTemplateCandidateCounts,
 ) {
   const templateId = normalizeString(input.templateId) ?? 'unknown'
   const periodMonth = getCurrentPeriodMonth()
@@ -375,12 +472,7 @@ async function updateWbsTemplateCandidateAggregation(
 
 async function persistUnifiedAlgorithmAssetCandidateEvent(
   input: RecordWbsTemplateCandidateEventInput,
-  counts: {
-    generatedRowCount: number
-    retainedRowCount: number
-    rejectedRowCount: number
-    pendingRowCount: number
-  },
+  counts: WbsTemplateCandidateCounts,
   selectedNodeIds: string[],
   generatedEntityIds: string[],
 ) {
@@ -491,6 +583,12 @@ export async function recordWbsTemplateCandidateEvent(input: RecordWbsTemplateCa
       rejectedRowCount,
       pendingRowCount,
     })
+    await recordSpecialWorkDurationPlanNetworkOutcome(input, {
+      generatedRowCount,
+      retainedRowCount,
+      rejectedRowCount,
+      pendingRowCount,
+    }, selectedNodeIds, generatedEntityIds)
     await persistUnifiedAlgorithmAssetCandidateEvent(input, {
       generatedRowCount,
       retainedRowCount,
@@ -584,11 +682,25 @@ export function buildSpecialWorkDurationSeedPublicationReadiness(
   const generatedEntityIds = normalizeStringList(input.generatedEntityIds)
   const seedVersionId = normalizeString(input.seedVersionId)
   const runtimePublicationKey = normalizeString(input.runtimePublicationKey)
+  const runtimeConsumerObservationRef = normalizeString(input.runtimeConsumerObservationRef)
+  const runtimeConsumerPublicationKey = normalizeString(input.runtimeConsumerPublicationKey)
   const rollbackTarget = normalizeString(input.rollbackTarget)
   const specialSeedPublicationWriterReady = Boolean(seedVersionId && runtimePublicationKey)
   const seedVersionLineageRecorded = Boolean(seedVersionId)
     && approvedCandidateEventIds.length > 0
     && generatedRowCount > 0
+  const runtimeConsumerPublicationMismatched = Boolean(
+    runtimeConsumerObservationRef
+      && runtimePublicationKey
+      && runtimeConsumerPublicationKey
+      && runtimeConsumerPublicationKey !== runtimePublicationKey,
+  )
+  const runtimeConsumerObservationMatchesPublication = Boolean(
+    runtimeConsumerObservationRef
+      && runtimePublicationKey
+      && runtimeConsumerPublicationKey
+      && runtimeConsumerPublicationKey === runtimePublicationKey,
+  )
 
   const readiness = evaluateSpecialWorkDurationSeedLiveLearningEvidence({
     candidateOutcome: {
@@ -601,7 +713,7 @@ export function buildSpecialWorkDurationSeedPublicationReadiness(
     templateFeedbackOutcomeRecorded: generatedRowCount > 0,
     approvedSpecialSeedCandidateRecorded: approvedCandidateEventIds.length > 0,
     enabledLearningScopes: input.enabledLearningScopes,
-    runtimeConsumerUsesPublishedArtifact: Boolean(runtimePublicationKey),
+    runtimeConsumerUsesPublishedArtifact: runtimeConsumerObservationMatchesPublication,
     specialSeedPublicationWriterReady,
     seedVersionLineageRecorded,
     releaseExitApproved: input.releaseExitApproved,
@@ -627,7 +739,10 @@ export function buildSpecialWorkDurationSeedPublicationReadiness(
       rejectedRowCount,
       pendingRowCount,
     },
-    missingReasons: readiness.missingReasons,
+    missingReasons: uniqueValues([
+      ...readiness.missingReasons,
+      runtimeConsumerPublicationMismatched ? 'runtime_consumer_publication_mismatch' : '',
+    ]),
   }
 }
 

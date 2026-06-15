@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => {
     eventInsert: vi.fn(),
     aggregationSelect: vi.fn(),
     aggregationUpsert: vi.fn(),
+    planNetworkOutcomeUpsert: vi.fn(),
     aggregationQuery,
     rawQuery: vi.fn(),
     from: vi.fn(),
@@ -60,6 +61,7 @@ describe('wbsTemplateCandidateEventService', () => {
       error: null,
     })
     mocks.aggregationUpsert.mockResolvedValue({ error: null })
+    mocks.planNetworkOutcomeUpsert.mockResolvedValue({ error: null })
     mocks.rawQuery.mockResolvedValue({ rows: [{ id: 'algorithm-candidate-event-id' }] })
     mocks.from.mockImplementation((tableName: string) => {
       if (tableName === 'wbs_template_candidate_events') {
@@ -70,6 +72,9 @@ describe('wbsTemplateCandidateEventService', () => {
           select: mocks.aggregationSelect,
           upsert: mocks.aggregationUpsert,
         }
+      }
+      if (tableName === 'duration_plan_network_outcomes') {
+        return { upsert: mocks.planNetworkOutcomeUpsert }
       }
       return {}
     })
@@ -183,6 +188,52 @@ describe('wbsTemplateCandidateEventService', () => {
     )
   })
 
+  it('records accepted special work duration network outcomes without writing runtime or facts', async () => {
+    await recordWbsTemplateCandidateEvent({
+      companyId: '10000000-0000-4000-8000-000000000001',
+      projectId: '00000000-0000-4000-8000-000000000001',
+      surface: 'task_list',
+      generationBatchId: 'batch-1',
+      templateId: 'china-gb55032-2022',
+      selectedNodeIds: ['02-01-01'],
+      scope: { building_object_id: 'building-1' },
+      generatedEntityIds: ['task-1', 'task-2', 'task-3'],
+      generatedRowCount: 4,
+      retainedRowCount: 3,
+      rejectedRowCount: 1,
+      pendingRowCount: 0,
+      actorId: '00000000-0000-4000-8000-000000000002',
+      metadata: { source: 'task_list_commit' },
+    })
+
+    expect(mocks.planNetworkOutcomeUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'wbs-template-candidate:00000000-0000-4000-8000-000000000001:task_list:batch-1',
+        asset_key: 'special_work_duration_seed',
+        outcome_status: 'accepted',
+        outcome_ref: 'wbs_template_candidate_event:batch-1',
+        company_id: '10000000-0000-4000-8000-000000000001',
+        project_id: '00000000-0000-4000-8000-000000000001',
+        publication_key: null,
+        writes_runtime_directly: false,
+        writes_fact_directly: false,
+        metadata: expect.objectContaining({
+          source: 'wbs_template_candidate_event',
+          surface: 'task_list',
+          template_id: 'china-gb55032-2022',
+          generation_batch_id: 'batch-1',
+          generated_row_count: 4,
+          retained_row_count: 3,
+          rejected_row_count: 1,
+          pending_row_count: 0,
+          selected_node_ids: ['02-01-01'],
+          generated_entity_ids: ['task-1', 'task-2', 'task-3'],
+        }),
+      }),
+      { onConflict: 'id', ignoreDuplicates: false },
+    )
+  })
+
   it('does not let aggregation failures block the commit path', async () => {
     mocks.aggregationUpsert.mockResolvedValue({ error: { message: 'upsert failed' } })
 
@@ -258,6 +309,8 @@ describe('wbsTemplateCandidateEventService', () => {
       approvedCandidateEventIds: ['algorithm-candidate-event-id', 'algorithm-candidate-event-id'],
       seedVersionId: 'special-seed-version-v2',
       runtimePublicationKey: 'wbs_template_runtime:special-seed-version-v2',
+      runtimeConsumerObservationRef: 'runtime_consumer:consumer-special-seed-1',
+      runtimeConsumerPublicationKey: 'wbs_template_runtime:special-seed-version-v2',
       rollbackTarget: 'wbs_template_runtime:special-seed-version-v1',
       generatedEntityIds: ['task-1', 'task-2'],
       enabledLearningScopes: ['system', 'segment_baseline', 'company', 'project'],
