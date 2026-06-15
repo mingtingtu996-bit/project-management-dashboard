@@ -653,4 +653,25 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
     expect(audit.productionGate.status).toBe('duration_live_learning_production_evidence_ready')
     expect(audit.runtimeConsumerObservationCoverage.status).toBe('runtime_consumer_observation_coverage_ready')
   })
+
+  it('blocks the final production claim when consumer observation facades are not fully integrated', () => {
+    const audit = buildDurationLiveLearningProductionClaimAudit({
+      completionAudit: buildReadyCompletionAudit(),
+      records: buildAllProductionEvidenceRecords(),
+      runtimeConsumerAdapterRegistrations: [
+        {
+          consumerKey: 'durationSuggestionService',
+          assetKeys: ['base_duration_benchmark'],
+        },
+      ],
+    })
+
+    expect(audit.productionGate.status).toBe('duration_live_learning_production_evidence_ready')
+    expect(audit.runtimeConsumerObservationCoverage.status).toBe('runtime_consumer_observation_coverage_ready')
+    expect(audit.runtimeConsumerObservationIntegrationCoverage.status)
+      .toBe('runtime_consumer_observation_integration_not_ready')
+    expect(audit.runtimeConsumerObservationIntegrationCoverage.missingContracts.length).toBeGreaterThan(0)
+    expect(audit.status).toBe('duration_live_learning_production_claim_not_ready')
+    expect(audit.allowedClaim).toBe('not_ready_for_live_self_learning_claim')
+  })
 })

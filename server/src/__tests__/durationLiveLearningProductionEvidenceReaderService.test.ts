@@ -134,6 +134,8 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
 
     expect(audit.status).toBe('duration_live_learning_production_claim_ready')
     expect(audit.runtimeConsumerObservationCoverage.status).toBe('runtime_consumer_observation_coverage_ready')
+    expect(audit.runtimeConsumerObservationIntegrationCoverage.status)
+      .toBe('runtime_consumer_observation_integration_ready')
     expect(audit.runtimeConsumerObservationCoverage.requiredConsumerObservations).toEqual(expectedRuntimeConsumerObservations)
     expect(audit.runtimeConsumerObservationCoverage.missingConsumerObservations).toEqual([])
     expect(audit.sourceQuery.sourceTables).toEqual([
