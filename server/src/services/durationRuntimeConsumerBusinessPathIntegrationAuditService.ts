@@ -44,7 +44,7 @@ const REQUIRED_BUSINESS_PATH_INTEGRATIONS: DurationRuntimeConsumerBusinessPathIn
     consumerKey: 'durationSuggestionService',
     sourcePath: 'server/src/services/durationSuggestionService.ts',
     facadeFunctionName: 'recordDurationSuggestionConsumedArtifacts',
-    runtimeEntryRef: 'durationSuggestionService:suggestDuration',
+    runtimeEntryRef: 'durationSuggestionService:getTaskDurationSuggestion',
   },
   {
     consumerKey: 'taskDurationForecastService',
@@ -56,25 +56,25 @@ const REQUIRED_BUSINESS_PATH_INTEGRATIONS: DurationRuntimeConsumerBusinessPathIn
     consumerKey: 'projectRemainingDurationForecastService',
     sourcePath: 'server/src/services/projectRemainingDurationForecastService.ts',
     facadeFunctionName: 'recordProjectRemainingDurationForecastConsumedArtifacts',
-    runtimeEntryRef: 'projectRemainingDurationForecastService:forecastRemainingDuration',
+    runtimeEntryRef: 'projectRemainingDurationForecastService:buildProjectRemainingDurationForecast',
   },
   {
     consumerKey: 'wbsTemplateGenerationService',
     sourcePath: 'server/src/services/wbsTemplateGenerationService.ts',
     facadeFunctionName: 'recordWbsTemplateGenerationConsumedArtifacts',
-    runtimeEntryRef: 'wbsTemplateGenerationService:generateTemplate',
+    runtimeEntryRef: 'wbsTemplateGenerationService:generateWbsTemplateRows',
   },
   {
     consumerKey: 'scheduleAccelerationService',
     sourcePath: 'server/src/services/scheduleAccelerationService.ts',
     facadeFunctionName: 'recordScheduleAccelerationConsumedArtifacts',
-    runtimeEntryRef: 'scheduleAccelerationService:buildAccelerationPlan',
+    runtimeEntryRef: 'scheduleAccelerationService:evaluateRuntimeDelayRecoveryWithCriticalPath',
   },
   {
     consumerKey: 'scheduleAccelerationRuntimeService',
     sourcePath: 'server/src/services/scheduleAccelerationRuntimeService.ts',
     facadeFunctionName: 'recordScheduleAccelerationRuntimeConsumedArtifacts',
-    runtimeEntryRef: 'scheduleAccelerationRuntimeService:applyRuntimeAcceleration',
+    runtimeEntryRef: 'scheduleAccelerationRuntimeService:evaluateRuntimeScheduleAcceleration',
   },
 ]
 

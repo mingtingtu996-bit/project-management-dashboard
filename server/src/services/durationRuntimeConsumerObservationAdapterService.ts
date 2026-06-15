@@ -33,12 +33,12 @@ export interface DurationRuntimeConsumerObservationFacadeRegistration {
 }
 
 const RUNTIME_ENTRY_REFS_BY_CONSUMER_KEY: Record<string, string> = {
-  durationSuggestionService: 'durationSuggestionService:suggestDuration',
+  durationSuggestionService: 'durationSuggestionService:getTaskDurationSuggestion',
   taskDurationForecastService: 'taskDurationForecastService:forecastTaskDuration',
-  projectRemainingDurationForecastService: 'projectRemainingDurationForecastService:forecastRemainingDuration',
-  wbsTemplateGenerationService: 'wbsTemplateGenerationService:generateTemplate',
-  scheduleAccelerationService: 'scheduleAccelerationService:buildAccelerationPlan',
-  scheduleAccelerationRuntimeService: 'scheduleAccelerationRuntimeService:applyRuntimeAcceleration',
+  projectRemainingDurationForecastService: 'projectRemainingDurationForecastService:buildProjectRemainingDurationForecast',
+  wbsTemplateGenerationService: 'wbsTemplateGenerationService:generateWbsTemplateRows',
+  scheduleAccelerationService: 'scheduleAccelerationService:evaluateRuntimeDelayRecoveryWithCriticalPath',
+  scheduleAccelerationRuntimeService: 'scheduleAccelerationRuntimeService:evaluateRuntimeScheduleAcceleration',
 }
 
 const FACADE_REGISTRATIONS: DurationRuntimeConsumerObservationFacadeRegistration[] = [

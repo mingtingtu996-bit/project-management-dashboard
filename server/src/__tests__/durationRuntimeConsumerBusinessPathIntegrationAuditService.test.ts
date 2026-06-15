@@ -1,6 +1,29 @@
 import { describe, expect, it } from 'vitest'
 
 describe('durationRuntimeConsumerBusinessPathIntegrationAuditService', () => {
+  it('anchors runtime entry refs to real exported business functions instead of abstract placeholders', async () => {
+    const {
+      listDurationRuntimeConsumerBusinessPathRequiredIntegrations,
+    } = await import('../services/durationRuntimeConsumerBusinessPathIntegrationAuditService.js')
+
+    expect(listDurationRuntimeConsumerBusinessPathRequiredIntegrations()
+      .map(({ consumerKey, runtimeEntryRef }) => [consumerKey, runtimeEntryRef]))
+      .toEqual([
+        ['durationSuggestionService', 'durationSuggestionService:getTaskDurationSuggestion'],
+        ['taskDurationForecastService', 'taskDurationForecastService:forecastTaskDuration'],
+        [
+          'projectRemainingDurationForecastService',
+          'projectRemainingDurationForecastService:buildProjectRemainingDurationForecast',
+        ],
+        ['wbsTemplateGenerationService', 'wbsTemplateGenerationService:generateWbsTemplateRows'],
+        [
+          'scheduleAccelerationService',
+          'scheduleAccelerationService:evaluateRuntimeDelayRecoveryWithCriticalPath',
+        ],
+        ['scheduleAccelerationRuntimeService', 'scheduleAccelerationRuntimeService:evaluateRuntimeScheduleAcceleration'],
+      ])
+  })
+
   it('requires every facade-backed runtime consumer to call its named facade from the business path', async () => {
     const {
       evaluateDurationRuntimeConsumerBusinessPathIntegrationCoverage,
@@ -12,7 +35,7 @@ describe('durationRuntimeConsumerBusinessPathIntegrationAuditService', () => {
           sourcePath: 'server/src/services/durationSuggestionService.ts',
           sourceText: `
             import { recordDurationSuggestionConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
-            export async function suggestDuration() {
+            export async function getTaskDurationSuggestion() {
               await recordDurationSuggestionConsumedArtifacts({ queryExec, artifacts: [] })
             }
           `,
@@ -30,7 +53,7 @@ describe('durationRuntimeConsumerBusinessPathIntegrationAuditService', () => {
           sourcePath: 'server/src/services/projectRemainingDurationForecastService.ts',
           sourceText: `
             import { recordProjectRemainingDurationForecastConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
-            export async function forecastRemainingDuration() {
+            export function buildProjectRemainingDurationForecast() {
               await recordProjectRemainingDurationForecastConsumedArtifacts({ queryExec, artifacts: [] })
             }
           `,
@@ -39,7 +62,7 @@ describe('durationRuntimeConsumerBusinessPathIntegrationAuditService', () => {
           sourcePath: 'server/src/services/wbsTemplateGenerationService.ts',
           sourceText: `
             import { recordWbsTemplateGenerationConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
-            export async function generateTemplate() {
+            export async function generateWbsTemplateRows() {
               await recordWbsTemplateGenerationConsumedArtifacts({ queryExec, artifacts: [] })
             }
           `,
@@ -48,7 +71,7 @@ describe('durationRuntimeConsumerBusinessPathIntegrationAuditService', () => {
           sourcePath: 'server/src/services/scheduleAccelerationService.ts',
           sourceText: `
             import { recordScheduleAccelerationConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
-            export async function buildAccelerationPlan() {
+            export async function evaluateRuntimeDelayRecoveryWithCriticalPath() {
               await recordScheduleAccelerationConsumedArtifacts({ queryExec, artifacts: [] })
             }
           `,
@@ -57,7 +80,7 @@ describe('durationRuntimeConsumerBusinessPathIntegrationAuditService', () => {
           sourcePath: 'server/src/services/scheduleAccelerationRuntimeService.ts',
           sourceText: `
             import { recordScheduleAccelerationRuntimeConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
-            export async function applyRuntimeAcceleration() {
+            export async function evaluateRuntimeScheduleAcceleration() {
               await recordScheduleAccelerationRuntimeConsumedArtifacts({ queryExec, artifacts: [] })
             }
           `,
@@ -146,7 +169,7 @@ describe('durationRuntimeConsumerBusinessPathIntegrationAuditService', () => {
             export function recordProjectRemainingDurationForecastRuntimeConsumption() {
               return recordProjectRemainingDurationForecastConsumedArtifacts({ queryExec, artifacts: [] })
             }
-            export async function forecastRemainingDuration() {
+            export function buildProjectRemainingDurationForecast() {
               return {}
             }
           `,
@@ -158,7 +181,7 @@ describe('durationRuntimeConsumerBusinessPathIntegrationAuditService', () => {
     expect(coverage.observedIntegrations).toEqual([])
     expect(coverage.missingIntegrations).toContainEqual(expect.objectContaining({
       consumerKey: 'projectRemainingDurationForecastService',
-      runtimeEntryRef: 'projectRemainingDurationForecastService:forecastRemainingDuration',
+      runtimeEntryRef: 'projectRemainingDurationForecastService:buildProjectRemainingDurationForecast',
       facadeFunctionName: 'recordProjectRemainingDurationForecastConsumedArtifacts',
     }))
   })

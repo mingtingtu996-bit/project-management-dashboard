@@ -52,7 +52,7 @@ describe('durationRuntimeConsumerObservationAdapterService', () => {
     expect(callsForTable(calls, 'runtime_consumer_runtime_calls')).toHaveLength(1)
     expect(callsForTable(calls, 'runtime_consumer_runtime_calls')[0].params.slice(0, 2)).toEqual([
       'projectRemainingDurationForecastService',
-      'projectRemainingDurationForecastService:forecastRemainingDuration',
+      'projectRemainingDurationForecastService:buildProjectRemainingDurationForecast',
     ])
     expect(callsForTable(calls, 'runtime_consumer_observations').map((call) => call.params.slice(0, 4))).toEqual([
       [

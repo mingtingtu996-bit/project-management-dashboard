@@ -86,7 +86,7 @@ const expectedRuntimeConsumerObservations = [
 const runtimeCallEvidence = [
   {
     consumerKey: 'durationSuggestionService',
-    runtimeEntryRef: 'durationSuggestionService:suggestDuration',
+    runtimeEntryRef: 'durationSuggestionService:getTaskDurationSuggestion',
   },
   {
     consumerKey: 'taskDurationForecastService',
@@ -94,19 +94,19 @@ const runtimeCallEvidence = [
   },
   {
     consumerKey: 'projectRemainingDurationForecastService',
-    runtimeEntryRef: 'projectRemainingDurationForecastService:forecastRemainingDuration',
+    runtimeEntryRef: 'projectRemainingDurationForecastService:buildProjectRemainingDurationForecast',
   },
   {
     consumerKey: 'wbsTemplateGenerationService',
-    runtimeEntryRef: 'wbsTemplateGenerationService:generateTemplate',
+    runtimeEntryRef: 'wbsTemplateGenerationService:generateWbsTemplateRows',
   },
   {
     consumerKey: 'scheduleAccelerationService',
-    runtimeEntryRef: 'scheduleAccelerationService:buildAccelerationPlan',
+    runtimeEntryRef: 'scheduleAccelerationService:evaluateRuntimeDelayRecoveryWithCriticalPath',
   },
   {
     consumerKey: 'scheduleAccelerationRuntimeService',
-    runtimeEntryRef: 'scheduleAccelerationRuntimeService:applyRuntimeAcceleration',
+    runtimeEntryRef: 'scheduleAccelerationRuntimeService:evaluateRuntimeScheduleAcceleration',
   },
 ]
 
@@ -262,7 +262,7 @@ function buildReadyBusinessPathSourceFiles() {
       sourcePath: 'server/src/services/durationSuggestionService.ts',
       sourceText: `
         import { recordDurationSuggestionConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
-        export async function suggestDuration() {
+        export async function getTaskDurationSuggestion() {
           await recordDurationSuggestionConsumedArtifacts({ queryExec, artifacts: [] })
         }
       `,
@@ -280,7 +280,7 @@ function buildReadyBusinessPathSourceFiles() {
       sourcePath: 'server/src/services/projectRemainingDurationForecastService.ts',
       sourceText: `
         import { recordProjectRemainingDurationForecastConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
-        export async function forecastRemainingDuration() {
+        export function buildProjectRemainingDurationForecast() {
           await recordProjectRemainingDurationForecastConsumedArtifacts({ queryExec, artifacts: [] })
         }
       `,
@@ -289,7 +289,7 @@ function buildReadyBusinessPathSourceFiles() {
       sourcePath: 'server/src/services/wbsTemplateGenerationService.ts',
       sourceText: `
         import { recordWbsTemplateGenerationConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
-        export async function generateTemplate() {
+        export async function generateWbsTemplateRows() {
           await recordWbsTemplateGenerationConsumedArtifacts({ queryExec, artifacts: [] })
         }
       `,
@@ -298,7 +298,7 @@ function buildReadyBusinessPathSourceFiles() {
       sourcePath: 'server/src/services/scheduleAccelerationService.ts',
       sourceText: `
         import { recordScheduleAccelerationConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
-        export async function buildAccelerationPlan() {
+        export async function evaluateRuntimeDelayRecoveryWithCriticalPath() {
           await recordScheduleAccelerationConsumedArtifacts({ queryExec, artifacts: [] })
         }
       `,
@@ -307,7 +307,7 @@ function buildReadyBusinessPathSourceFiles() {
       sourcePath: 'server/src/services/scheduleAccelerationRuntimeService.ts',
       sourceText: `
         import { recordScheduleAccelerationRuntimeConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
-        export async function applyRuntimeAcceleration() {
+        export async function evaluateRuntimeScheduleAcceleration() {
           await recordScheduleAccelerationRuntimeConsumedArtifacts({ queryExec, artifacts: [] })
         }
       `,

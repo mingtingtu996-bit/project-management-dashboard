@@ -23,7 +23,7 @@ describe('durationRuntimeConsumerObservationService', () => {
     const result = await recordDurationRuntimeConsumerRuntimeCall({
       queryExec,
       consumerKey: 'projectRemainingDurationForecastService.ts',
-      runtimeEntryRef: 'projectRemainingDurationForecastService:forecastRemainingDuration',
+      runtimeEntryRef: 'projectRemainingDurationForecastService:buildProjectRemainingDurationForecast',
       callContext: { projectId: 'project-a' },
       sourceEvidenceRefs: ['runtime-path:remaining-duration:call'],
       calledAt: '2026-06-15T06:00:00.000Z',
@@ -38,7 +38,7 @@ describe('durationRuntimeConsumerObservationService', () => {
     }))
     expect(result.runtimeCall).toEqual(expect.objectContaining({
       consumerKey: 'projectRemainingDurationForecastService',
-      runtimeEntryRef: 'projectRemainingDurationForecastService:forecastRemainingDuration',
+      runtimeEntryRef: 'projectRemainingDurationForecastService:buildProjectRemainingDurationForecast',
       callStatus: 'called',
       writesRuntimeDirectly: false,
       writesFactDirectly: false,
@@ -64,7 +64,7 @@ describe('durationRuntimeConsumerObservationService', () => {
     const result = await recordDurationRuntimeConsumerRuntimeCall({
       queryExec,
       consumerKey: 'durationSuggestionService',
-      runtimeEntryRef: 'durationSuggestionService:suggestDuration',
+      runtimeEntryRef: 'durationSuggestionService:getTaskDurationSuggestion',
       writesRuntimeDirectly: true,
       writesFactDirectly: true,
     })

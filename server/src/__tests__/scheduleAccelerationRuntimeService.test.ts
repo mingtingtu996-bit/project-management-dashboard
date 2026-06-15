@@ -667,7 +667,7 @@ describe('scheduleAccelerationRuntimeService', () => {
     const result = await recordScheduleAccelerationRuntimeConsumption({
       queryExec,
       projectId: 'project-1',
-      runtimeEntryRef: 'scheduleAccelerationRuntimeService:applyRuntimeAcceleration',
+      runtimeEntryRef: 'scheduleAccelerationRuntimeService:evaluateRuntimeScheduleAcceleration',
       observedAt: '2026-06-15T08:00:00.000Z',
       runtimeArtifactPublications: [
         {
