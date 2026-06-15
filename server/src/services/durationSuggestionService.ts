@@ -2,6 +2,7 @@
 // New duration decisions must enter through this service; legacy AI fields are compatibility fallback only.
 
 import { getProjectCompanyId } from '../auth/access.js'
+import { query as rawQuery } from '../database.js'
 import { logger } from '../middleware/logger.js'
 import {
   applyDurationContextToDays,
@@ -220,6 +221,7 @@ export interface DurationSuggestionInput {
   projectGenerationFacts?: Record<string, unknown> | null
   runtimeExecutionFacts?: Record<string, unknown> | null
   workCalendar?: ConstructionCalendarContext | null
+  runtimeConsumerObservationQueryExec?: DurationRuntimeConsumerObservationQueryExec | null
 }
 
 export interface DurationSuggestionRuntimeArtifactPublication {
@@ -231,7 +233,7 @@ export interface DurationSuggestionRuntimeArtifactPublication {
 }
 
 export interface RecordDurationSuggestionRuntimeConsumptionInput {
-  queryExec: DurationRuntimeConsumerObservationQueryExec
+  queryExec?: DurationRuntimeConsumerObservationQueryExec
   runtimeArtifactPublications: readonly DurationSuggestionRuntimeArtifactPublication[]
   projectId?: string | null
   taskId?: string | null
@@ -388,6 +390,13 @@ function normalizeId(value: unknown) {
   return String(value ?? '').trim()
 }
 
+function buildDurationRuntimeConsumerObservationQueryExec(): DurationRuntimeConsumerObservationQueryExec {
+  return async <T = Record<string, unknown>>(sql: string, params: unknown[] = []) => {
+    const result = await rawQuery(sql, params as any[])
+    return result.rows as T[]
+  }
+}
+
 export function buildDurationSuggestionConsumedArtifacts(input: {
   runtimeArtifactPublications: readonly DurationSuggestionRuntimeArtifactPublication[]
   projectId?: string | null
@@ -418,11 +427,12 @@ export function buildDurationSuggestionConsumedArtifacts(input: {
 export function recordDurationSuggestionRuntimeConsumption(
   input: RecordDurationSuggestionRuntimeConsumptionInput,
 ): Promise<DurationRuntimeConsumerFacadeArtifactsResult> {
+  const queryExec = input.queryExec ?? buildDurationRuntimeConsumerObservationQueryExec()
   const projectId = normalizeId(input.projectId)
   const taskId = normalizeId(input.taskId)
   const standardWorkCode = normalizeId(input.standardWorkCode)
   return recordDurationSuggestionConsumedArtifacts({
-    queryExec: input.queryExec,
+    queryExec,
     observedAt: input.observedAt,
     callContext: {
       projectId: projectId || null,
@@ -440,6 +450,132 @@ export function recordDurationSuggestionRuntimeConsumption(
       standardWorkCode,
     }),
   })
+}
+
+function isDurationSuggestionRuntimePublicationStatus(value: unknown) {
+  const status = normalizeId(value)
+  return status === 'published' || status === 'canary' || status === 'runtime_published'
+}
+
+function buildStandardSeedRuntimePublication(
+  standardSeed: Record<string, unknown> | null | undefined,
+): DurationSuggestionRuntimeArtifactPublication | null {
+  if (!standardSeed) return null
+  const seedSource = normalizeId(standardSeed.__resolverSource)
+  if (seedSource !== 'active_seed') return null
+  const seedVersion = normalizeId(
+    standardSeed.__seedVersion
+      ?? standardSeed.seedVersion
+      ?? standardSeed.seed_version
+      ?? standardSeed.sourceVersion
+      ?? standardSeed.source_version,
+  )
+  if (!seedVersion) return null
+  const seedStableCode = normalizeId(standardSeed.__stableCode ?? standardSeed.stableCode ?? standardSeed.stable_code)
+  return {
+    assetKey: 'standard_work_duration_seed',
+    publicationKey: `algorithm_seed_versions:${seedVersion}`,
+    publicationStatus: 'runtime_published',
+    sourceEvidenceRefs: [`algorithm_seed_versions:${seedVersion}`],
+    observationContext: {
+      seedSource,
+      seedStableCode: seedStableCode || null,
+    },
+  }
+}
+
+function buildDurationSuggestionRuntimeArtifactPublications(input: {
+  benchmarkBlendRuntimeParameter?: BenchmarkBlendRuntimeParameter | null
+  coldStartDecision?: AlgorithmAssetColdStartRuntimeDecision | null
+  coldStartBaselines?: AlgorithmAssetColdStartBaseline[]
+  standardSeed?: Record<string, unknown> | null
+}): DurationSuggestionRuntimeArtifactPublication[] {
+  const publications: DurationSuggestionRuntimeArtifactPublication[] = []
+  const seen = new Set<string>()
+  const push = (publication: DurationSuggestionRuntimeArtifactPublication | null) => {
+    if (!publication) return
+    if (!normalizeId(publication.publicationKey)) return
+    if (!isDurationSuggestionRuntimePublicationStatus(publication.publicationStatus)) return
+    const key = `${publication.assetKey}:${publication.publicationKey}`
+    if (seen.has(key)) return
+    seen.add(key)
+    publications.push(publication)
+  }
+
+  if (input.benchmarkBlendRuntimeParameter?.publicationKey) {
+    push({
+      assetKey: 'base_duration_benchmark',
+      publicationKey: input.benchmarkBlendRuntimeParameter.publicationKey,
+      publicationStatus: input.benchmarkBlendRuntimeParameter.publicationStatus,
+      sourceEvidenceRefs: [
+        `algorithm_learnable_parameter_runtime_publications:${input.benchmarkBlendRuntimeParameter.publicationKey}`,
+      ],
+      observationContext: {
+        parameterKey: 'duration.benchmark_blend_weight',
+        scopeLevel: input.benchmarkBlendRuntimeParameter.scopeLevel,
+      },
+    })
+  }
+
+  if (input.benchmarkBlendRuntimeParameter?.p50P75BlendRatioPublicationKey) {
+    push({
+      assetKey: 'base_duration_benchmark',
+      publicationKey: input.benchmarkBlendRuntimeParameter.p50P75BlendRatioPublicationKey,
+      publicationStatus: input.benchmarkBlendRuntimeParameter.p50P75BlendRatioPublicationStatus,
+      sourceEvidenceRefs: [
+        `algorithm_learnable_parameter_runtime_publications:${input.benchmarkBlendRuntimeParameter.p50P75BlendRatioPublicationKey}`,
+      ],
+      observationContext: {
+        parameterKey: 'duration.p50_p75_blend_ratio',
+        scopeLevel: input.benchmarkBlendRuntimeParameter.p50P75BlendRatioScopeLevel,
+      },
+    })
+  }
+
+  const selectedColdStartBaseline = input.coldStartDecision?.status === 'shared_baseline_reference'
+    && input.coldStartDecision.runtimeConsumable
+    && input.coldStartDecision.selectedBaselineId
+    ? input.coldStartBaselines?.find((baseline) => baseline.baselineId === input.coldStartDecision?.selectedBaselineId) ?? null
+    : null
+  if (selectedColdStartBaseline?.runtimePublicationKey) {
+    push({
+      assetKey: 'duration_cold_start_baseline',
+      publicationKey: selectedColdStartBaseline.runtimePublicationKey,
+      publicationStatus: selectedColdStartBaseline.runtimePublicationStatus,
+      sourceEvidenceRefs: [`algorithm_cold_start_baselines:${selectedColdStartBaseline.baselineId}`],
+      observationContext: {
+        baselineId: selectedColdStartBaseline.baselineId,
+        baselineScope: selectedColdStartBaseline.baselineScope,
+      },
+    })
+  }
+
+  push(buildStandardSeedRuntimePublication(input.standardSeed))
+
+  return publications
+}
+
+async function recordDurationSuggestionRuntimeConsumerEvidence(
+  input: DurationSuggestionInput,
+  runtimeArtifactPublications: readonly DurationSuggestionRuntimeArtifactPublication[] | null | undefined,
+) {
+  if (!runtimeArtifactPublications || runtimeArtifactPublications.length === 0) return
+  try {
+    await recordDurationSuggestionRuntimeConsumption({
+      queryExec: input.runtimeConsumerObservationQueryExec ?? undefined,
+      projectId: input.projectId,
+      taskId: input.taskId,
+      standardWorkCode: input.standardWorkCode,
+      runtimeArtifactPublications,
+    })
+  } catch (error) {
+    logger.warn('[durationSuggestionService] failed to record duration runtime consumer evidence', {
+      projectId: input.projectId,
+      taskId: input.taskId,
+      standardWorkCode: input.standardWorkCode,
+      error,
+    })
+  }
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -2343,9 +2479,11 @@ function isBenchmarkCandidateUsable(
 type BenchmarkBlendRuntimeParameter = {
   weight: number
   publicationKey: string | null
+  publicationStatus: string | null
   scopeLevel: string | null
   p50P75BlendRatio?: number | null
   p50P75BlendRatioPublicationKey?: string | null
+  p50P75BlendRatioPublicationStatus?: string | null
   p50P75BlendRatioScopeLevel?: string | null
 }
 
@@ -2607,6 +2745,7 @@ async function loadBenchmarkBlendRuntimeParameter(
       benchmarkWeight = {
         weight: result.runtimeValue,
         publicationKey: result.publicationKey,
+        publicationStatus: result.publicationStatus,
         scopeLevel: result.scopeLevel,
       }
     }
@@ -2646,6 +2785,7 @@ async function loadBenchmarkBlendRuntimeParameter(
         ...benchmarkWeight,
         p50P75BlendRatio: result.runtimeValue,
         p50P75BlendRatioPublicationKey: result.publicationKey,
+        p50P75BlendRatioPublicationStatus: result.publicationStatus,
         p50P75BlendRatioScopeLevel: result.scopeLevel,
       }
     }
@@ -2679,7 +2819,8 @@ function readRollbackTarget(value: unknown) {
 }
 
 function mapColdStartBaselineRow(row: Record<string, unknown>): AlgorithmAssetColdStartBaseline | null {
-  if (normalizeId(row.runtime_publication_status) === 'runtime_rolled_back') return null
+  const runtimePublicationStatus = normalizeId(row.runtime_publication_status) as AlgorithmAssetColdStartBaseline['runtimePublicationStatus']
+  if (runtimePublicationStatus === 'runtime_rolled_back') return null
 
   const baselineValue = readMetadataObject(row.baseline_value)
   const evidenceSummary = readMetadataObject(row.evidence_summary)
@@ -2714,6 +2855,8 @@ function mapColdStartBaselineRow(row: Record<string, unknown>): AlgorithmAssetCo
       ? 'contains_private_details'
       : 'aggregate_summary_only',
     rollbackTarget: readRollbackTarget(row.rollback_target ?? evidenceSummary.rollbackTarget ?? evidenceSummary.rollback_target) ?? null,
+    runtimePublicationKey: normalizeId(row.publication_key ?? evidenceSummary.publicationKey ?? evidenceSummary.publication_key) || null,
+    runtimePublicationStatus: runtimePublicationStatus || null,
     consumesCompanyOverrides: Boolean(evidenceSummary.consumesCompanyOverrides ?? evidenceSummary.consumes_company_overrides),
     consumesProjectSampleDetails: Boolean(evidenceSummary.consumesProjectSampleDetails ?? evidenceSummary.consumes_project_sample_details),
     consumesCandidateResults: Boolean(evidenceSummary.consumesCandidateResults ?? evidenceSummary.consumes_candidate_results),
@@ -3763,6 +3906,9 @@ async function finalizeSuggestion(
   suggestion: DurationSuggestion,
   input: DurationSuggestionInput,
   purpose: DurationSuggestionPurpose,
+  options: {
+    runtimeArtifactPublications?: readonly DurationSuggestionRuntimeArtifactPublication[] | null
+  } = {},
 ) {
   const contextualSuggestion = await applyProjectExecutionEnvironment(suggestion, input, purpose)
   const boundedSuggestion = withParentDurationBoundaryContext(contextualSuggestion, input)
@@ -3775,6 +3921,7 @@ async function finalizeSuggestion(
   const governedSuggestion = withDurationOutputContract(calendarAwareSuggestion)
   logDurationSuggestionRun(input, purpose, governedSuggestion)
   await recordDurationSuggestionPredictionEvent(input, purpose, governedSuggestion)
+  await recordDurationSuggestionRuntimeConsumerEvidence(input, options.runtimeArtifactPublications)
   return governedSuggestion
 }
 
@@ -4043,7 +4190,11 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
             duration_contribution_mode: true,
           },
           durationContributionMode,
-        }, factorSummary), normalizedInput, suggestionPurpose)
+        }, factorSummary), normalizedInput, suggestionPurpose, {
+          runtimeArtifactPublications: buildDurationSuggestionRuntimeArtifactPublications({
+            standardSeed: standardSeed as Record<string, unknown>,
+          }),
+        })
       }
       const seedReference = resolveSeedReferenceDuration(standardSeed as Record<string, unknown>)
       const baseDays = seedReference.days
@@ -4171,6 +4322,12 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
         ? 'standard_work_duration_seed+cold_start_baseline'
         : 'standard_work_duration_seed'
       const standardForecastSource = scale.factor === 1 ? baseForecastSource : appendForecastSourceSuffix(baseForecastSource, 'scale_proxy')
+      const runtimeArtifactPublications = buildDurationSuggestionRuntimeArtifactPublications({
+        benchmarkBlendRuntimeParameter,
+        coldStartDecision,
+        coldStartBaselines,
+        standardSeed: standardSeed as Record<string, unknown>,
+      })
       return finalizeSuggestion(withQuantitySourceSummary(withScaleFactorSummary(withDurationContext({
         recommendedDurationDays: scaledRecommended,
         conservativeDurationDays: scaledConservative,
@@ -4255,7 +4412,9 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
           task_scale_proxy: scale.factor !== 1,
         },
         durationContributionMode: durationContributionMode ?? 'duration_bearing',
-      }, effectiveFactorSummaryWithBenchmarkDistribution), scale), scale), normalizedInput, suggestionPurpose)
+      }, effectiveFactorSummaryWithBenchmarkDistribution), scale), scale), normalizedInput, suggestionPurpose, {
+        runtimeArtifactPublications,
+      })
     }
 
     const noSeedReason = getNoSeedReason(normalizedInput)

@@ -38,6 +38,7 @@ export type AlgorithmAssetColdStartBaseline = {
   maxSingleCompanyShare: number
   sourceAggregation: AlgorithmAssetColdStartSourceAggregation
   rollbackTarget?: string | null
+  runtimePublicationKey?: string | null
   runtimePublicationStatus?: AlgorithmAssetColdStartRuntimePublicationStatus | null
   consumesCompanyOverrides?: boolean
   consumesProjectSampleDetails?: boolean

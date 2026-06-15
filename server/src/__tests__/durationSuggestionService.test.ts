@@ -55,8 +55,13 @@ const mocks = vi.hoisted(() => {
     getProjectCompanyId: vi.fn(),
     recordDurationAccuracyPrediction: vi.fn(),
     loadAlgorithmAssetLearnableParameterRuntimeValue: vi.fn(),
+    rawQuery: vi.fn(async () => ({ rows: [] })),
   }
 })
+
+vi.mock('../database.js', () => ({
+  query: mocks.rawQuery,
+}))
 
 vi.mock('../services/dbService.js', () => ({
   supabase: {
@@ -3345,6 +3350,203 @@ describe('durationSuggestionService', () => {
       basis: 'official_construction_calendar_seed',
       windowCount: 1,
     }))
+  })
+
+  it('records runtime consumer evidence from getTaskDurationSuggestion when published artifacts are consumed', async () => {
+    const { calls, queryExec } = createRecordingQueryExec()
+    mocks.query.maybeSingle.mockImplementation(async () => {
+      if (isCompanyBenchmarkScope('company-1')) {
+        return {
+          data: {
+            p50_days: 8,
+            p75_days: 10,
+            p80_days: 12,
+            sample_count: 24,
+            confidence_level: 'high',
+            confidence_score: 86,
+            company_id: 'company-1',
+          },
+          error: null,
+        }
+      }
+      return { data: null, error: null }
+    })
+    mocks.state.coldStartBaselinesData = [{
+      id: 'segment-v1',
+      baseline_key: 'standard_work_duration:rebar_installation',
+      scope_level: 'segment_baseline',
+      publication_key: 'cold_start_baseline_runtime:segment-v1',
+      runtime_publication_status: 'published',
+      rollback_target: 'cold_start_baseline_runtime:segment-v0',
+      baseline_value: { p50Days: 9 },
+      evidence_summary: {
+        minCompanyCount: 3,
+        contributingCompanyCount: 5,
+        minProjectCount: 10,
+        contributingProjectCount: 16,
+        singleCompanyShare: 0.24,
+        maxSingleCompanyShare: 0.4,
+        applicableScenarioKeys: ['residential'],
+      },
+    }]
+    mocks.resolveStandardWorkDurationSeed.mockResolvedValue({
+      __resolverSource: 'active_seed',
+      __seedVersion: 'standard-v1',
+      __stableCode: 'rebar_installation',
+      stableCode: 'rebar_installation',
+      defaultDaysP50: 10,
+      defaultDaysP80: 14,
+      fixedDays: 1,
+      variableDays: 9,
+      confidence: 'medium',
+      benchmarkBasis: 'Rebar installation default per work face.',
+    })
+    mocks.loadAlgorithmAssetLearnableParameterRuntimeValue
+      .mockResolvedValueOnce({
+        status: 'runtime_parameter_consumable',
+        runtimeConsumable: true,
+        parameterKey: 'duration.benchmark_blend_weight',
+        runtimeValue: 0.5,
+        publicationKey: 'duration_benchmark_runtime:benchmark-blend-v2',
+        publicationStatus: 'published',
+        scopeLevel: 'company',
+        companyId: 'company-1',
+        projectId: null,
+        rollbackTarget: 'duration_benchmark_runtime:benchmark-blend-v1',
+        reasons: [],
+        writesSeedRuntimeDirectly: false,
+      })
+      .mockResolvedValueOnce({
+        status: 'runtime_parameter_not_found',
+        runtimeConsumable: false,
+        parameterKey: 'duration.p50_p75_blend_ratio',
+        runtimeValue: null,
+        publicationKey: null,
+        publicationStatus: null,
+        scopeLevel: null,
+        companyId: null,
+        projectId: null,
+        rollbackTarget: null,
+        reasons: ['runtime_parameter_publication_not_found'],
+        writesSeedRuntimeDirectly: false,
+      })
+
+    const suggestion = await getTaskDurationSuggestion({
+      projectId: 'project-1',
+      companyId: 'company-1',
+      standardWorkCode: 'rebar_installation',
+      taskTitle: 'rebar installation',
+      projectTypeCode: 'residential',
+      wbsNodeType: 'process',
+      runtimeConsumerObservationQueryExec: queryExec,
+    } as any)
+
+    expect(suggestion.durationCalibrationSource).toBe('standard_work_duration_seed+company_history_sample')
+    expect(callsForTable(calls, 'runtime_consumer_runtime_calls')).toHaveLength(1)
+    expect(callsForTable(calls, 'runtime_consumer_observations').map((call) => call.params.slice(0, 4))).toEqual([
+      [
+        'base_duration_benchmark',
+        'duration_benchmark_runtime:benchmark-blend-v2',
+        'durationSuggestionService',
+        'duration_suggestion',
+      ],
+      [
+        'standard_work_duration_seed',
+        'algorithm_seed_versions:standard-v1',
+        'durationSuggestionService',
+        'duration_suggestion',
+      ],
+    ])
+  })
+
+  it('records runtime consumer evidence for shared cold-start baselines consumed by getTaskDurationSuggestion', async () => {
+    const { calls, queryExec } = createRecordingQueryExec()
+    mocks.state.coldStartBaselinesData = [{
+      id: 'segment-v1',
+      baseline_key: 'standard_work_duration:rebar_installation',
+      scope_level: 'segment_baseline',
+      publication_key: 'cold_start_baseline_runtime:segment-v1',
+      runtime_publication_status: 'published',
+      rollback_target: 'cold_start_baseline_runtime:segment-v0',
+      baseline_value: { p50Days: 9 },
+      evidence_summary: {
+        minCompanyCount: 3,
+        contributingCompanyCount: 5,
+        minProjectCount: 10,
+        contributingProjectCount: 16,
+        singleCompanyShare: 0.24,
+        maxSingleCompanyShare: 0.4,
+        applicableScenarioKeys: ['residential'],
+      },
+    }]
+    mocks.resolveStandardWorkDurationSeed.mockResolvedValue({
+      __resolverSource: 'active_seed',
+      __seedVersion: 'standard-v1',
+      __stableCode: 'rebar_installation',
+      stableCode: 'rebar_installation',
+      defaultDaysP50: 10,
+      defaultDaysP80: 14,
+      fixedDays: 1,
+      variableDays: 9,
+      confidence: 'medium',
+      benchmarkBasis: 'Rebar installation default per work face.',
+    })
+
+    const suggestion = await getTaskDurationSuggestion({
+      projectId: 'project-1',
+      companyId: 'company-1',
+      standardWorkCode: 'rebar_installation',
+      taskTitle: 'rebar installation',
+      projectTypeCode: 'residential',
+      wbsNodeType: 'process',
+      runtimeConsumerObservationQueryExec: queryExec,
+    } as any)
+
+    expect(suggestion.durationCalibrationSource).toBe('cold_start_baseline')
+    expect(callsForTable(calls, 'runtime_consumer_runtime_calls')).toHaveLength(1)
+    expect(callsForTable(calls, 'runtime_consumer_observations').map((call) => call.params.slice(0, 4))).toEqual([
+      [
+        'duration_cold_start_baseline',
+        'cold_start_baseline_runtime:segment-v1',
+        'durationSuggestionService',
+        'duration_suggestion',
+      ],
+      [
+        'standard_work_duration_seed',
+        'algorithm_seed_versions:standard-v1',
+        'durationSuggestionService',
+        'duration_suggestion',
+      ],
+    ])
+  })
+
+  it('does not record company override seeds as algorithm seed runtime publications', async () => {
+    const { calls, queryExec } = createRecordingQueryExec()
+    mocks.resolveStandardWorkDurationSeed.mockResolvedValue({
+      __resolverSource: 'company_override',
+      __seedVersion: 'company-override-v1',
+      __stableCode: 'rebar_installation',
+      stableCode: 'rebar_installation',
+      defaultDaysP50: 10,
+      defaultDaysP80: 14,
+      fixedDays: 1,
+      variableDays: 9,
+      confidence: 'medium',
+      benchmarkBasis: 'Company override reference.',
+    })
+
+    const suggestion = await getTaskDurationSuggestion({
+      projectId: 'project-1',
+      companyId: 'company-1',
+      standardWorkCode: 'rebar_installation',
+      taskTitle: 'rebar installation',
+      wbsNodeType: 'process',
+      runtimeConsumerObservationQueryExec: queryExec,
+    } as any)
+
+    expect(suggestion.durationCalibrationSource).toBe('standard_work_duration_seed')
+    expect(callsForTable(calls, 'runtime_consumer_runtime_calls')).toHaveLength(0)
+    expect(callsForTable(calls, 'runtime_consumer_observations')).toHaveLength(0)
   })
 
   it('records v1.4.22.5 runtime consumer evidence for duration suggestion artifacts', async () => {
