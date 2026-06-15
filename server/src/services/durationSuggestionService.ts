@@ -555,29 +555,6 @@ function buildDurationSuggestionRuntimeArtifactPublications(input: {
   return publications
 }
 
-async function recordDurationSuggestionRuntimeConsumerEvidence(
-  input: DurationSuggestionInput,
-  runtimeArtifactPublications: readonly DurationSuggestionRuntimeArtifactPublication[] | null | undefined,
-) {
-  if (!runtimeArtifactPublications || runtimeArtifactPublications.length === 0) return
-  try {
-    await recordDurationSuggestionRuntimeConsumption({
-      queryExec: input.runtimeConsumerObservationQueryExec ?? undefined,
-      projectId: input.projectId,
-      taskId: input.taskId,
-      standardWorkCode: input.standardWorkCode,
-      runtimeArtifactPublications,
-    })
-  } catch (error) {
-    logger.warn('[durationSuggestionService] failed to record duration runtime consumer evidence', {
-      projectId: input.projectId,
-      taskId: input.taskId,
-      standardWorkCode: input.standardWorkCode,
-      error,
-    })
-  }
-}
-
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value))
 }
@@ -3906,9 +3883,6 @@ async function finalizeSuggestion(
   suggestion: DurationSuggestion,
   input: DurationSuggestionInput,
   purpose: DurationSuggestionPurpose,
-  options: {
-    runtimeArtifactPublications?: readonly DurationSuggestionRuntimeArtifactPublication[] | null
-  } = {},
 ) {
   const contextualSuggestion = await applyProjectExecutionEnvironment(suggestion, input, purpose)
   const boundedSuggestion = withParentDurationBoundaryContext(contextualSuggestion, input)
@@ -3921,7 +3895,6 @@ async function finalizeSuggestion(
   const governedSuggestion = withDurationOutputContract(calendarAwareSuggestion)
   logDurationSuggestionRun(input, purpose, governedSuggestion)
   await recordDurationSuggestionPredictionEvent(input, purpose, governedSuggestion)
-  await recordDurationSuggestionRuntimeConsumerEvidence(input, options.runtimeArtifactPublications)
   return governedSuggestion
 }
 
@@ -4002,6 +3975,49 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
       suggestionPurpose,
     )
     const unavailableMaturity = resolveDataMaturity(normalizedInput, 0, suggestionPurpose)
+    const finalizeSuggestionWithRuntimeEvidence = async (
+      suggestion: DurationSuggestion,
+      runtimeArtifactPublications: readonly DurationSuggestionRuntimeArtifactPublication[],
+    ) => {
+      const governedSuggestion = await finalizeSuggestion(suggestion, normalizedInput, suggestionPurpose)
+      const artifacts = buildDurationSuggestionConsumedArtifacts({
+        runtimeArtifactPublications,
+        projectId: normalizedInput.projectId,
+        taskId: normalizedInput.taskId,
+        standardWorkCode: normalizedInput.standardWorkCode,
+      })
+      if (artifacts.length === 0) return governedSuggestion
+      try {
+        const projectIdForEvidence = normalizeId(normalizedInput.projectId)
+        const taskIdForEvidence = normalizeId(normalizedInput.taskId)
+        const standardWorkCodeForEvidence = normalizeId(normalizedInput.standardWorkCode)
+        await recordDurationSuggestionConsumedArtifacts({
+          queryExec: normalizedInput.runtimeConsumerObservationQueryExec ?? buildDurationRuntimeConsumerObservationQueryExec(),
+          callContext: {
+            projectId: projectIdForEvidence || null,
+            taskId: taskIdForEvidence || null,
+            standardWorkCode: standardWorkCodeForEvidence || null,
+            runtimeConsumer: 'durationSuggestionService',
+          },
+          sourceEvidenceRefs: [
+            [
+              'duration_suggestion',
+              projectIdForEvidence || 'no_project',
+              taskIdForEvidence || standardWorkCodeForEvidence || 'no_task',
+            ].join(':'),
+          ],
+          artifacts,
+        })
+      } catch (error) {
+        logger.warn('[durationSuggestionService] failed to record duration runtime consumer evidence', {
+          projectId: normalizedInput.projectId,
+          taskId: normalizedInput.taskId,
+          standardWorkCode: normalizedInput.standardWorkCode,
+          error,
+        })
+      }
+      return governedSuggestion
+    }
 
     if (!hasCoreClassification(normalizedInput)) {
       const reason = getMissingClassificationReason(normalizedInput)
@@ -4162,7 +4178,7 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
         const seedEvidenceScope = resolveSeedEvidenceScope(standardSeed as any)
         const seedSampleSize = readSeedGovernanceSampleSize(standardSeed as any, seedEvidenceScope)
         const maturity = resolveDataMaturity(normalizedInput, seedSampleSize, suggestionPurpose, seedEvidenceScope)
-        return finalizeSuggestion(withDurationContext({
+        return finalizeSuggestionWithRuntimeEvidence(withDurationContext({
           recommendedDurationDays: null,
           conservativeDurationDays: null,
           confidenceLevel: (standardSeed as any).confidence ?? 'medium',
@@ -4190,11 +4206,9 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
             duration_contribution_mode: true,
           },
           durationContributionMode,
-        }, factorSummary), normalizedInput, suggestionPurpose, {
-          runtimeArtifactPublications: buildDurationSuggestionRuntimeArtifactPublications({
-            standardSeed: standardSeed as Record<string, unknown>,
-          }),
-        })
+        }, factorSummary), buildDurationSuggestionRuntimeArtifactPublications({
+          standardSeed: standardSeed as Record<string, unknown>,
+        }))
       }
       const seedReference = resolveSeedReferenceDuration(standardSeed as Record<string, unknown>)
       const baseDays = seedReference.days
@@ -4328,7 +4342,7 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
         coldStartBaselines,
         standardSeed: standardSeed as Record<string, unknown>,
       })
-      return finalizeSuggestion(withQuantitySourceSummary(withScaleFactorSummary(withDurationContext({
+      return finalizeSuggestionWithRuntimeEvidence(withQuantitySourceSummary(withScaleFactorSummary(withDurationContext({
         recommendedDurationDays: scaledRecommended,
         conservativeDurationDays: scaledConservative,
         confidenceLevel: (standardSeed as any).confidence ?? 'medium',
@@ -4412,9 +4426,7 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
           task_scale_proxy: scale.factor !== 1,
         },
         durationContributionMode: durationContributionMode ?? 'duration_bearing',
-      }, effectiveFactorSummaryWithBenchmarkDistribution), scale), scale), normalizedInput, suggestionPurpose, {
-        runtimeArtifactPublications,
-      })
+      }, effectiveFactorSummaryWithBenchmarkDistribution), scale), scale), runtimeArtifactPublications)
     }
 
     const noSeedReason = getNoSeedReason(normalizedInput)

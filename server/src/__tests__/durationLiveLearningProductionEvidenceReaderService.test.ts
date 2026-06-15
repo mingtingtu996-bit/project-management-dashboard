@@ -401,7 +401,7 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
     expect(joinedSql).not.toContain('monthly_plan_items')
   })
 
-  it('loads real business path source files and keeps the claim blocked when runtime entries are not integrated', async () => {
+  it('loads real business path source files and allows the claim when runtime entries are integrated', async () => {
     const {
       buildDurationLiveLearningProductionClaimAuditFromDb,
     } = await import('../services/durationLiveLearningProductionEvidenceReaderService.js')
@@ -415,9 +415,9 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
       records: buildPlanNetworkOutcomeRecords(),
     })
 
-    expect(audit.status).toBe('duration_live_learning_production_claim_not_ready')
+    expect(audit.status).toBe('duration_live_learning_production_claim_ready')
     expect(audit.runtimeConsumerBusinessPathIntegrationCoverage.status)
-      .toBe('runtime_consumer_business_path_integration_not_ready')
-    expect(audit.runtimeConsumerBusinessPathIntegrationCoverage.missingIntegrations.length).toBeGreaterThan(0)
+      .toBe('runtime_consumer_business_path_integration_ready')
+    expect(audit.runtimeConsumerBusinessPathIntegrationCoverage.missingIntegrations).toEqual([])
   })
 })

@@ -902,30 +902,6 @@ function buildTaskDurationForecastRuntimeArtifactPublications(
   return publications
 }
 
-async function recordTaskDurationForecastRuntimeConsumerEvidence(input: {
-  forecast: TaskDurationForecast
-  task: ForecastTaskRow | null
-  options: NormalizedForecastOptions
-}) {
-  const runtimeArtifactPublications = buildTaskDurationForecastRuntimeArtifactPublications(input.forecast)
-  if (runtimeArtifactPublications.length === 0) return
-  try {
-    await recordTaskDurationForecastRuntimeConsumption({
-      queryExec: input.options.runtimeConsumerObservationQueryExec ?? undefined,
-      projectId: input.task?.project_id ?? null,
-      taskId: input.forecast.taskId,
-      forecast: input.forecast,
-      runtimeArtifactPublications,
-    })
-  } catch (error) {
-    logger.warn('[taskDurationForecastService] failed to record task duration runtime consumer evidence', {
-      taskId: input.forecast.taskId,
-      projectId: input.task?.project_id ?? null,
-      error,
-    })
-  }
-}
-
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -4986,11 +4962,6 @@ async function refreshTaskDurationForecast(
     businessFactorBadges: forecastDates.businessFactorBadges,
     forecastSources: forecastDates.forecastSources,
   })
-  await recordTaskDurationForecastRuntimeConsumerEvidence({
-    forecast,
-    task,
-    options,
-  })
   return forecast
 }
 
@@ -5004,7 +4975,48 @@ export async function forecastTaskDuration(taskId: string, options?: ForecastTas
   }
 
   const task = await loadTask(taskId)
-  return refreshTaskDurationForecast(taskId, task, normalizedOptions)
+  const forecast = await refreshTaskDurationForecast(taskId, task, normalizedOptions)
+  const runtimeArtifactPublications = buildTaskDurationForecastRuntimeArtifactPublications(forecast)
+  const artifacts = buildTaskDurationForecastConsumedArtifacts({
+    forecast,
+    runtimeArtifactPublications,
+    projectId: task?.project_id ?? null,
+    taskId: forecast.taskId,
+  })
+  if (artifacts.length > 0) {
+    try {
+      const projectIdForEvidence = normalizeText(task?.project_id)
+      const taskIdForEvidence = normalizeText(forecast.taskId)
+      await recordTaskDurationForecastConsumedArtifacts({
+        queryExec: normalizedOptions.runtimeConsumerObservationQueryExec ?? buildTaskDurationForecastRuntimeConsumerObservationQueryExec(),
+        callContext: {
+          projectId: projectIdForEvidence || null,
+          taskId: taskIdForEvidence || null,
+          forecastFinishDate: forecast.forecastFinishDate,
+          remainingDurationDays: forecast.remainingDurationDays,
+          conservativeRemainingDays: forecast.conservativeRemainingDays ?? null,
+          confidenceLevel: forecast.confidenceLevel,
+          confidenceScore: forecast.confidenceScore,
+        },
+        sourceEvidenceRefs: [
+          [
+            'task_duration_forecast',
+            projectIdForEvidence || 'no_project',
+            taskIdForEvidence || 'no_task',
+            forecast.forecastFinishDate ?? 'no_finish',
+          ].join(':'),
+        ],
+        artifacts,
+      })
+    } catch (error) {
+      logger.warn('[taskDurationForecastService] failed to record task duration runtime consumer evidence', {
+        taskId: forecast.taskId,
+        projectId: task?.project_id ?? null,
+        error,
+      })
+    }
+  }
+  return forecast
 }
 
 function toGovernedDurationForecastSignal(forecast: TaskDurationForecast) {

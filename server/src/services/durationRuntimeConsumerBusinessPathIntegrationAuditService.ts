@@ -96,39 +96,23 @@ function runtimeEntryFunctionName(runtimeEntryRef: string) {
   return runtimeEntryRef.split(':')[1]?.trim() ?? ''
 }
 
-function extractBlockBody(sourceText: string, openingBraceIndex: number) {
-  if (openingBraceIndex < 0 || sourceText[openingBraceIndex] !== '{') return ''
-
-  let depth = 0
-  for (let index = openingBraceIndex; index < sourceText.length; index += 1) {
-    const char = sourceText[index]
-    if (char === '{') depth += 1
-    if (char === '}') {
-      depth -= 1
-      if (depth === 0) {
-        return sourceText.slice(openingBraceIndex + 1, index)
-      }
-    }
-  }
-  return ''
-}
-
 function findRuntimeEntryBody(sourceText: string, runtimeEntryRef: string) {
   const entryFunctionName = runtimeEntryFunctionName(runtimeEntryRef)
   if (!entryFunctionName) return ''
 
   const escapedFunctionName = escapeRegExp(entryFunctionName)
   const patterns = [
-    new RegExp(`\\b(?:export\\s+)?(?:async\\s+)?function\\s+${escapedFunctionName}\\s*\\([^)]*\\)\\s*\\{`),
-    new RegExp(`\\b(?:export\\s+)?(?:const|let|var)\\s+${escapedFunctionName}\\s*=\\s*(?:async\\s*)?(?:\\([^)]*\\)|[A-Za-z_$][\\w$]*)\\s*=>\\s*\\{`),
+    new RegExp(`\\b(?:export\\s+)?(?:async\\s+)?function\\s+${escapedFunctionName}\\b`),
+    new RegExp(`\\b(?:export\\s+)?(?:const|let|var)\\s+${escapedFunctionName}\\s*=`),
   ]
 
   for (const pattern of patterns) {
     const match = pattern.exec(sourceText)
     if (!match) continue
-    const openingBraceIndex = sourceText.indexOf('{', match.index)
-    const body = extractBlockBody(sourceText, openingBraceIndex)
-    if (body) return body
+    const nextExportPattern = /\n\s*export\s+(?:async\s+)?(?:function|const|let|var)\s+[A-Za-z_$][\w$]*/g
+    nextExportPattern.lastIndex = match.index + match[0].length
+    const nextExportMatch = nextExportPattern.exec(sourceText)
+    return sourceText.slice(match.index, nextExportMatch?.index ?? sourceText.length)
   }
   return ''
 }

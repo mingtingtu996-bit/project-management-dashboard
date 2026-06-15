@@ -185,4 +185,60 @@ describe('durationRuntimeConsumerBusinessPathIntegrationAuditService', () => {
       facadeFunctionName: 'recordProjectRemainingDurationForecastConsumedArtifacts',
     }))
   })
+
+  it('recognizes facade calls inside typed TypeScript runtime entries', async () => {
+    const {
+      evaluateDurationRuntimeConsumerBusinessPathIntegrationCoverage,
+    } = await import('../services/durationRuntimeConsumerBusinessPathIntegrationAuditService.js')
+
+    const coverage = evaluateDurationRuntimeConsumerBusinessPathIntegrationCoverage({
+      sourceFiles: [
+        {
+          sourcePath: 'server/src/services/scheduleAccelerationRuntimeService.ts',
+          sourceText: `
+            import { recordScheduleAccelerationRuntimeConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
+            export async function evaluateRuntimeScheduleAcceleration(params: {
+              projectId: string
+              runtimeConsumerErrorHandler?: (error: unknown) => void
+            }): Promise<{
+              rowsEvaluated: number
+            }> {
+              await recordScheduleAccelerationRuntimeConsumedArtifacts({ queryExec, artifacts: [] })
+              return { rowsEvaluated: 1 }
+            }
+          `,
+        },
+      ],
+    })
+
+    expect(coverage.observedIntegrations).toContainEqual(expect.objectContaining({
+      consumerKey: 'scheduleAccelerationRuntimeService',
+      runtimeEntryRef: 'scheduleAccelerationRuntimeService:evaluateRuntimeScheduleAcceleration',
+      facadeFunctionName: 'recordScheduleAccelerationRuntimeConsumedArtifacts',
+    }))
+    expect(coverage.missingIntegrations).not.toContainEqual(expect.objectContaining({
+      consumerKey: 'scheduleAccelerationRuntimeService',
+    }))
+  })
+
+  it('recognizes all facade calls in the current source runtime entries', async () => {
+    const {
+      evaluateDurationRuntimeConsumerBusinessPathIntegrationCoverage,
+      loadDurationRuntimeConsumerBusinessPathSourceFiles,
+    } = await import('../services/durationRuntimeConsumerBusinessPathIntegrationAuditService.js')
+
+    const sourceFiles = await loadDurationRuntimeConsumerBusinessPathSourceFiles()
+    const coverage = evaluateDurationRuntimeConsumerBusinessPathIntegrationCoverage({ sourceFiles })
+
+    expect(coverage.status).toBe('runtime_consumer_business_path_integration_ready')
+    expect(coverage.missingIntegrations).toEqual([])
+    expect(coverage.observedIntegrations.map((item) => item.consumerKey).sort()).toEqual([
+      'durationSuggestionService',
+      'projectRemainingDurationForecastService',
+      'scheduleAccelerationRuntimeService',
+      'scheduleAccelerationService',
+      'taskDurationForecastService',
+      'wbsTemplateGenerationService',
+    ].sort())
+  })
 })
