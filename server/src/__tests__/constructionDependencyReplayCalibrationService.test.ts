@@ -3,6 +3,7 @@ import { V1475_EXPLICIT_BUSINESS_GATE_SOURCE_ID } from '../seeds/v1475Dependency
 import {
   buildConstructionDependencyRulePublicationReadinessFromProductionRows,
   buildConstructionDependencyRulePublicationReadiness,
+  collectAndPersistConstructionDependencyReplayCalibrationCandidates,
   collectConstructionDependencyReplayCalibrationReport,
   evaluateConstructionDependencyRuleCandidateLiveLearningEvidence,
 } from '../services/constructionDependencyReplayCalibrationService.js'
@@ -168,6 +169,86 @@ describe('construction dependency replay calibration service', () => {
         }),
       ],
     }))
+  })
+
+  it('records dependency-rule replay candidates as plan-network outcomes without mutating task dependencies', async () => {
+    const rows = [
+      {
+        id: 'dep-l3-zero-lag',
+        project_id: 'project-1',
+        dependency_type: 'FS',
+        lag_days: 0,
+        source_type: 'cross_item_workflow',
+        metadata: { seedRuleId: 'prefab_factory_to_site_hoist_handoff' },
+        predecessor_task_id: 'task-prefab-factory-release',
+        predecessor_task_code: 'PFB-00-01-02-P01',
+        predecessor_title: 'prefab factory release',
+        predecessor_actual_end_date: '2026-06-01',
+        successor_task_id: 'task-prefab-site-hoist',
+        successor_task_code: 'PFB-01-01-03-P01',
+        successor_title: 'prefab site hoist start',
+        successor_actual_start_date: '2026-06-04',
+      },
+      {
+        id: 'dep-l3-zero-lag-second-project',
+        project_id: 'project-2',
+        dependency_type: 'FS',
+        lag_days: 0,
+        source_type: 'cross_item_workflow',
+        metadata: { seedRuleId: 'prefab_factory_to_site_hoist_handoff' },
+        predecessor_task_id: 'task-prefab-factory-release-p2',
+        predecessor_task_code: 'PFB-00-01-02-P02',
+        predecessor_title: 'prefab factory release',
+        predecessor_actual_end_date: '2026-07-01',
+        successor_task_id: 'task-prefab-site-hoist-p2',
+        successor_task_code: 'PFB-01-01-03-P02',
+        successor_title: 'prefab site hoist start',
+        successor_actual_start_date: '2026-07-05',
+      },
+    ]
+    const queryExecCalls: Array<{ sql: string; params: unknown[] }> = []
+    const queryExec = async <T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<T[]> => {
+      queryExecCalls.push({ sql, params })
+      return [] as T[]
+    }
+
+    const result = await collectAndPersistConstructionDependencyReplayCalibrationCandidates({
+      companyId: '10000000-0000-4000-8000-000000000001',
+      projectIds: ['project-1', 'project-2'],
+      queryRows: async <T = Record<string, unknown>>(): Promise<T[]> => rows as T[],
+      queryExec,
+    })
+
+    expect(result.report.summary.comparableActualDateCount).toBe(2)
+    const outcomeInsert = queryExecCalls.find((call) =>
+      call.sql.toLowerCase().includes('insert into public.duration_plan_network_outcomes'),
+    )
+
+    expect(outcomeInsert).toBeTruthy()
+    expect(outcomeInsert?.sql.toLowerCase()).toContain('on conflict (id) do update')
+    expect(outcomeInsert?.sql.toLowerCase()).not.toContain('insert into public.task_dependencies')
+    expect(outcomeInsert?.sql.toLowerCase()).not.toContain('update public.task_dependencies')
+    expect(outcomeInsert?.params).toEqual([
+      'dependency-rule-candidate:cross_item_workflow:prefab_factory_to_site_hoist_handoff:10000000-0000-4000-8000-000000000001:multi-project',
+      'dependency_rule_candidate',
+      'weak',
+      'construction_dependency_replay_calibration:cross_item_workflow:prefab_factory_to_site_hoist_handoff',
+      '10000000-0000-4000-8000-000000000001',
+      null,
+      null,
+      expect.objectContaining({
+        source: 'construction_dependency_replay_calibration',
+        matched_layer: 'cross_item_workflow',
+        matched_seed_code: 'prefab_factory_to_site_hoist_handoff',
+        sample_count: 2,
+        project_count: 2,
+        conflict_count: 0,
+        writes_runtime_directly: false,
+        writes_fact_directly: false,
+      }),
+      false,
+      false,
+    ])
   })
 
   it('requires replay outcome, candidate approval, dedicated writer, lineage, and release gates before dependency rules are live-learning ready', () => {

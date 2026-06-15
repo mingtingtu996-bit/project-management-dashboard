@@ -8,6 +8,7 @@ import {
   V1475_EXPLICIT_BUSINESS_GATE_TEMPLATES,
 } from '../seeds/v1475DependencyIntentTemplates.js'
 import { signedDurationDayDelta } from '../utils/durationDays.js'
+import { logger } from '../middleware/logger.js'
 import { createAndPersistAlgorithmAssetCandidateEvent } from './algorithmAssetCandidateEventAdapterService.js'
 import type { AlgorithmAssetGovernanceQueryExec } from './algorithmAssetGovernancePersistenceService.js'
 import {
@@ -264,6 +265,7 @@ export type ConstructionDependencyRuleProductionPublicationReadiness =
 const DEFAULT_MAX_SAMPLES = 200
 const DEFAULT_ZERO_LAG_REVIEW_THRESHOLD_DAYS = 2
 const DEPENDENCY_RULE_CANDIDATE_ASSET_KEY = 'dependency_rule_candidate'
+const DEPENDENCY_RULE_ACCEPTED_SAMPLE_THRESHOLD = 3
 
 function normalizeText(value: unknown) {
   return String(value ?? '').trim()
@@ -803,6 +805,114 @@ function flattenCalibrationQueueCandidates(report: ConstructionDependencyReplayC
   ]
 }
 
+function dependencyRuleOutcomeStatus(queueItem: ConstructionDependencyReplayQueueItem): 'accepted' | 'weak' | null {
+  if (queueItem.sampleCount <= 0 || queueItem.sampleDependencyIds.length <= 0) return null
+  return queueItem.conflictCount === 0 && queueItem.sampleCount >= DEPENDENCY_RULE_ACCEPTED_SAMPLE_THRESHOLD
+    ? 'accepted'
+    : 'weak'
+}
+
+function scopedProjectId(projectIds: readonly string[]) {
+  const uniqueProjectIds = uniqueValues(projectIds.map(normalizeText))
+  return uniqueProjectIds.length === 1 ? uniqueProjectIds[0]! : null
+}
+
+function buildDependencyRuleOutcomeId(
+  queueItem: ConstructionDependencyReplayQueueItem,
+  companyId: string | null,
+  projectId: string | null,
+) {
+  return [
+    'dependency-rule-candidate',
+    queueItem.matchedLayer,
+    queueItem.matchedSeedCode,
+    companyId ?? 'no-company',
+    projectId ?? 'multi-project',
+  ].join(':')
+}
+
+async function recordDependencyRulePlanNetworkOutcomes(
+  report: ConstructionDependencyReplayCalibrationReport,
+  options: Pick<CollectAndPersistConstructionDependencyReplayCalibrationCandidatesOptions, 'companyId' | 'queryExec'>,
+) {
+  const queryExec = options.queryExec ?? buildDefaultQueryRows()
+  const companyId = normalizeNullableText(options.companyId)
+  const queueItems = flattenCalibrationQueueCandidates(report)
+
+  for (const queueItem of queueItems) {
+    const outcomeStatus = dependencyRuleOutcomeStatus(queueItem)
+    if (!outcomeStatus) continue
+
+    const projectId = scopedProjectId(queueItem.projectIds)
+    const metadata = {
+      source: 'construction_dependency_replay_calibration',
+      report_code: report.reportCode,
+      matched_layer: queueItem.matchedLayer,
+      matched_seed_code: queueItem.matchedSeedCode,
+      sample_count: queueItem.sampleCount,
+      project_count: queueItem.projectCount,
+      conflict_count: queueItem.conflictCount,
+      seed_lag_days: queueItem.seedLagDays,
+      median_observed_wait_days: queueItem.medianObservedWaitDays,
+      suggested_lag_days: queueItem.suggestedLagDays,
+      queue_status: queueItem.queueStatus,
+      recommendation: queueItem.recommendation,
+      sample_dependency_ids: queueItem.sampleDependencyIds,
+      project_ids: queueItem.projectIds,
+      comparable_actual_date_count: report.summary.comparableActualDateCount,
+      writes_runtime_directly: false,
+      writes_fact_directly: false,
+    }
+
+    try {
+      await queryExec(
+        `INSERT INTO public.duration_plan_network_outcomes (
+          id,
+          asset_key,
+          outcome_status,
+          outcome_ref,
+          company_id,
+          project_id,
+          publication_key,
+          metadata,
+          writes_runtime_directly,
+          writes_fact_directly
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        ON CONFLICT (id) DO UPDATE SET
+          outcome_status = EXCLUDED.outcome_status,
+          outcome_ref = EXCLUDED.outcome_ref,
+          company_id = EXCLUDED.company_id,
+          project_id = EXCLUDED.project_id,
+          publication_key = EXCLUDED.publication_key,
+          observed_at = now(),
+          metadata = EXCLUDED.metadata,
+          writes_runtime_directly = false,
+          writes_fact_directly = false`,
+        [
+          buildDependencyRuleOutcomeId(queueItem, companyId, projectId),
+          DEPENDENCY_RULE_CANDIDATE_ASSET_KEY,
+          outcomeStatus,
+          `${report.reportCode}:${queueItem.matchedLayer}:${queueItem.matchedSeedCode}`,
+          companyId,
+          projectId,
+          null,
+          metadata,
+          false,
+          false,
+        ],
+      )
+    } catch (error) {
+      logger.warn('[construction-dependency-replay] failed to record dependency rule network outcome', {
+        companyId,
+        projectId,
+        matchedLayer: queueItem.matchedLayer,
+        matchedSeedCode: queueItem.matchedSeedCode,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+}
+
 export async function collectAndPersistConstructionDependencyReplayCalibrationCandidates(
   options: CollectAndPersistConstructionDependencyReplayCalibrationCandidatesOptions = {},
 ) {
@@ -849,6 +959,7 @@ export async function collectAndPersistConstructionDependencyReplayCalibrationCa
     })
     persistedEvents.push(result)
   }
+  await recordDependencyRulePlanNetworkOutcomes(report, options)
 
   return {
     report,
