@@ -575,19 +575,40 @@ function acceptedStatusesFor(kind: DurationLiveLearningProductionEvidenceKind) {
   return new Set(['accuracy_passed'])
 }
 
-function acceptedRefPrefixesFor(kind: DurationLiveLearningProductionEvidenceKind) {
-  if (kind === 'production_sample') return ['duration_samples:', 'duration_outcomes:', 'network_outcomes:']
-  if (kind === 'publication_execution') {
+function acceptedPublicationExecutionRefPrefixesForAsset(
+  assetKey: DurationLiveLearningAssetKey,
+) {
+  if (PARAMETER_RUNTIME_PUBLICATION_ASSET_KEYS.has(assetKey)) {
     return [
-      'release_execution:',
-      'algorithm_seed_versions:',
       'algorithm_learnable_parameter_runtime_publications:',
-      'wbs_template_runtime:',
-      'wbs_reference_days_runtime:',
-      'dependency_rule_runtime:',
-      'critical_path_rule_runtime:',
       'duration_benchmark_runtime:',
     ]
+  }
+  if (assetKey === 'standard_work_duration_seed') {
+    return ['algorithm_seed_versions:']
+  }
+  if (assetKey === 'special_work_duration_seed') {
+    return ['wbs_template_runtime:']
+  }
+  if (assetKey === 'wbs_reference_days') {
+    return ['wbs_reference_days_runtime:']
+  }
+  if (assetKey === 'dependency_rule_candidate') {
+    return ['dependency_rule_runtime:']
+  }
+  if (assetKey === 'critical_path_rule_candidate') {
+    return ['critical_path_rule_runtime:']
+  }
+  return []
+}
+
+function acceptedRefPrefixesFor(
+  kind: DurationLiveLearningProductionEvidenceKind,
+  assetKey?: DurationLiveLearningAssetKey,
+) {
+  if (kind === 'production_sample') return ['duration_samples:', 'duration_outcomes:', 'network_outcomes:']
+  if (kind === 'publication_execution') {
+    return assetKey ? acceptedPublicationExecutionRefPrefixesForAsset(assetKey) : []
   }
   if (kind === 'runtime_consumer_observation') return ['runtime_consumer:', 'runtime_consumption:']
   if (kind === 'impact_monitoring') return ['impact_monitoring:']
@@ -595,8 +616,12 @@ function acceptedRefPrefixesFor(kind: DurationLiveLearningProductionEvidenceKind
   return ['accuracy:', 'duration_algorithm_accuracy_events:', 'duration_accuracy_replay:']
 }
 
-function hasAcceptedRefSource(kind: DurationLiveLearningProductionEvidenceKind, evidenceRef: string) {
-  return acceptedRefPrefixesFor(kind).some((prefix) => evidenceRef.startsWith(prefix))
+function hasAcceptedRefSource(
+  kind: DurationLiveLearningProductionEvidenceKind,
+  evidenceRef: string,
+  assetKey?: DurationLiveLearningAssetKey,
+) {
+  return acceptedRefPrefixesFor(kind, assetKey).some((prefix) => evidenceRef.startsWith(prefix))
 }
 
 export function listDurationLiveLearningExpectedRuntimeConsumerObservations(): DurationRuntimeConsumerObservationIdentity[] {
@@ -619,7 +644,7 @@ function observedRuntimeConsumerObservationsFromRecords(
     const consumerKey = normalizeConsumerKey(record.consumerKey)
     if (!consumerKey) continue
     if (!acceptedStatusesFor(record.evidenceKind).has(normalizeText(record.evidenceStatus))) continue
-    if (!evidenceRef || !hasAcceptedRefSource(record.evidenceKind, evidenceRef)) continue
+    if (!evidenceRef || !hasAcceptedRefSource(record.evidenceKind, evidenceRef, record.assetKey)) continue
     observed.push({ assetKey: record.assetKey, consumerKey })
   }
   return observed
@@ -698,7 +723,7 @@ export function collectDurationLiveLearningProductionEvidenceRefs(
       rejectedRecords.push({ ...record, reason: 'production_evidence_status_not_accepted' })
       continue
     }
-    if (!hasAcceptedRefSource(record.evidenceKind, evidenceRef)) {
+    if (!hasAcceptedRefSource(record.evidenceKind, evidenceRef, record.assetKey)) {
       rejectedRecords.push({ ...record, reason: 'production_evidence_ref_source_not_allowed' })
       continue
     }

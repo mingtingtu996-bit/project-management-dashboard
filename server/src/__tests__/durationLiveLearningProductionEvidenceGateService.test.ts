@@ -148,6 +148,28 @@ function buildReadyCompletionAudit() {
   })
 }
 
+function publicationEvidenceRefForAsset(assetKey: DurationLiveLearningAssetKey) {
+  if (assetKey === 'base_duration_benchmark') {
+    return 'algorithm_learnable_parameter_runtime_publications:duration_benchmark_runtime:base-v2'
+  }
+  if (assetKey === 'duration_cold_start_baseline') {
+    return 'algorithm_learnable_parameter_runtime_publications:duration_cold_start_baseline_runtime:cold-v2'
+  }
+  if (assetKey === 'forecast_residual_overlay') {
+    return 'algorithm_learnable_parameter_runtime_publications:forecast_residual_overlay_runtime:overlay-v2'
+  }
+  if (assetKey === 'forecast_confidence_weight') {
+    return 'algorithm_learnable_parameter_runtime_publications:forecast_confidence_weight_runtime:weight-v2'
+  }
+  if (assetKey === 'standard_work_duration_seed') {
+    return 'algorithm_seed_versions:seed-version-standard-work-duration-v2'
+  }
+  if (assetKey === 'special_work_duration_seed') return 'wbs_template_runtime:special-work-seed-v2'
+  if (assetKey === 'wbs_reference_days') return 'wbs_reference_days_runtime:wbs-reference-days-v2'
+  if (assetKey === 'dependency_rule_candidate') return 'dependency_rule_runtime:dependency-rule-v2'
+  return 'critical_path_rule_runtime:critical-path-rule-v2'
+}
+
 function buildAllProductionEvidenceRecords() {
   return [
     ...learnableAssetKeys.flatMap((assetKey) => [
@@ -160,7 +182,7 @@ function buildAllProductionEvidenceRecords() {
       {
         assetKey,
         evidenceKind: 'publication_execution' as const,
-        evidenceRef: `release_execution:${assetKey}:published`,
+        evidenceRef: publicationEvidenceRefForAsset(assetKey),
         evidenceStatus: 'published',
       },
       {
@@ -526,7 +548,7 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
         {
           assetKey: 'base_duration_benchmark',
           evidenceKind: 'publication_execution',
-          evidenceRef: 'release_execution:base:published',
+          evidenceRef: 'algorithm_learnable_parameter_runtime_publications:duration_benchmark_runtime:base-v2',
           evidenceStatus: 'published',
         },
         {
@@ -571,7 +593,7 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
     expect(collected.productionEvidence).toEqual([{
       assetKey: 'base_duration_benchmark',
       productionSampleEvidenceRef: 'duration_samples:base:accepted',
-      publicationExecutionRef: 'release_execution:base:published',
+      publicationExecutionRef: 'algorithm_learnable_parameter_runtime_publications:duration_benchmark_runtime:base-v2',
       runtimeConsumerObservationRef: 'runtime_consumer:base:observed',
       impactMonitoringEvidenceRef: 'impact_monitoring:base:armed',
       rollbackDrillEvidenceRef: 'rollback:base:verified',
@@ -615,6 +637,38 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
       evidenceStatus: 'accuracy_passed',
       reason: 'production_evidence_ref_source_not_allowed',
     }])
+  })
+
+  it('rejects generic release-execution publication refs for typed seed and plan-network records', () => {
+    const collected = collectDurationLiveLearningProductionEvidenceRefs({
+      records: [
+        'standard_work_duration_seed',
+        'special_work_duration_seed',
+        'wbs_reference_days',
+        'dependency_rule_candidate',
+        'critical_path_rule_candidate',
+      ].map((assetKey) => ({
+        assetKey: assetKey as DurationLiveLearningAssetKey,
+        evidenceKind: 'publication_execution' as const,
+        evidenceRef: `release_execution:${assetKey}:published`,
+        evidenceStatus: 'published',
+      })),
+    })
+
+    expect(collected.productionEvidence).toEqual([])
+    expect(collected.rejectedRecords).toEqual([
+      'standard_work_duration_seed',
+      'special_work_duration_seed',
+      'wbs_reference_days',
+      'dependency_rule_candidate',
+      'critical_path_rule_candidate',
+    ].map((assetKey) => ({
+      assetKey,
+      evidenceKind: 'publication_execution',
+      evidenceRef: `release_execution:${assetKey}:published`,
+      evidenceStatus: 'published',
+      reason: 'production_evidence_ref_source_not_allowed',
+    })))
   })
 
   it('rejects parameter runtime publication rows for seed and plan-network assets', () => {
