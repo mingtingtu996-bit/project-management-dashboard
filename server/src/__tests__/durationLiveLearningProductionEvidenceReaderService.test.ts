@@ -327,7 +327,6 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
       completionAudit: buildReadyCompletionAudit(),
       queryExec,
       maxRowsPerSourceTable: 200,
-      runtimeConsumerBusinessPathSourceFiles: buildReadyBusinessPathSourceFiles(),
     })
 
     expect(audit.status).toBe('duration_live_learning_production_claim_not_ready')
@@ -354,7 +353,6 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
       queryExec,
       maxRowsPerSourceTable: 200,
       records: buildPlanNetworkOutcomeRecords(),
-      runtimeConsumerBusinessPathSourceFiles: buildReadyBusinessPathSourceFiles(),
     })
 
     expect(audit.status).toBe('duration_live_learning_production_claim_ready')
@@ -414,6 +412,34 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
       maxRowsPerSourceTable: 200,
       records: buildPlanNetworkOutcomeRecords(),
     })
+
+    expect(audit.status).toBe('duration_live_learning_production_claim_ready')
+    expect(audit.runtimeConsumerBusinessPathIntegrationCoverage.status)
+      .toBe('runtime_consumer_business_path_integration_ready')
+    expect(audit.runtimeConsumerBusinessPathIntegrationCoverage.missingIntegrations).toEqual([])
+  })
+
+  it('ignores caller-supplied business path source text and loads repository source files for the DB claim', async () => {
+    const {
+      buildDurationLiveLearningProductionClaimAuditFromDb,
+    } = await import('../services/durationLiveLearningProductionEvidenceReaderService.js')
+    const queryExec = async <T = Record<string, unknown>>(sql: string): Promise<T[]> =>
+      rowsForSql(sql) as T[]
+    const fakeSourceFiles = buildReadyBusinessPathSourceFiles().map((sourceFile) => ({
+      ...sourceFile,
+      sourceText: 'export function placeholderWithoutRuntimeConsumerFacade() { return null }',
+    }))
+    const input = {
+      completionAudit: buildReadyCompletionAudit(),
+      queryExec,
+      maxRowsPerSourceTable: 200,
+      records: buildPlanNetworkOutcomeRecords(),
+      runtimeConsumerBusinessPathSourceFiles: fakeSourceFiles,
+    } as Parameters<typeof buildDurationLiveLearningProductionClaimAuditFromDb>[0] & {
+      runtimeConsumerBusinessPathSourceFiles: typeof fakeSourceFiles
+    }
+
+    const audit = await buildDurationLiveLearningProductionClaimAuditFromDb(input)
 
     expect(audit.status).toBe('duration_live_learning_production_claim_ready')
     expect(audit.runtimeConsumerBusinessPathIntegrationCoverage.status)
