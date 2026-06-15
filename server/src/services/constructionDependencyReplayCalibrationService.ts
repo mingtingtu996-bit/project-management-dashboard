@@ -284,6 +284,16 @@ function uniqueValues<T extends string>(values: T[]): T[] {
   return [...new Set(values.filter(Boolean))]
 }
 
+function dependencyRuleObservationMatchesPublication(
+  evidenceRefs: DurationLiveLearningProductionEvidenceRef,
+) {
+  const publicationKey = normalizeNullableText(evidenceRefs.publicationExecutionRef)
+  const observedPublicationKey = normalizeNullableText(evidenceRefs.runtimeConsumerPublicationKey)
+  return Boolean(publicationKey)
+    && Boolean(observedPublicationKey)
+    && publicationKey === observedPublicationKey
+}
+
 function normalizeStringList(values: readonly unknown[] | undefined): string[] {
   return uniqueValues((values ?? []).map((value) => normalizeText(value)).filter(Boolean))
 }
@@ -974,6 +984,9 @@ export function buildConstructionDependencyRulePublicationReadinessFromProductio
   const dependencyRuleVersionId = findCurrentPublishedDependencyRuleVersionId(input.sourceRows)
   const runtimePublicationKey = normalizeNullableText(evidenceRefs.publicationExecutionRef)
   const rollbackTarget = normalizeNullableText(evidenceRefs.rollbackDrillEvidenceRef)
+  const hasRuntimeConsumerObservation = Boolean(evidenceRefs.runtimeConsumerObservationRef)
+  const runtimeConsumerObservationMatchesPublication = hasRuntimeConsumerObservation
+    && dependencyRuleObservationMatchesPublication(evidenceRefs)
   const dependencyRulePublicationWriterReady = Boolean(dependencyRuleVersionId && runtimePublicationKey)
   const dependencyRuleLineageRecorded = Boolean(dependencyRuleVersionId)
     && approvedCandidateEventIds.length > 0
@@ -984,7 +997,7 @@ export function buildConstructionDependencyRulePublicationReadinessFromProductio
     dependencyOutcomeEventRecorded: Boolean(evidenceRefs.productionSampleEvidenceRef),
     approvedDependencyRuleCandidateRecorded: approvedCandidateEventIds.length > 0,
     enabledLearningScopes: input.enabledLearningScopes,
-    runtimeConsumerUsesPublishedArtifact: Boolean(evidenceRefs.runtimeConsumerObservationRef),
+    runtimeConsumerUsesPublishedArtifact: runtimeConsumerObservationMatchesPublication,
     dependencyRulePublicationWriterReady,
     dependencyRuleLineageRecorded,
     releaseExitApproved: Boolean(evidenceRefs.publicationExecutionRef),
@@ -1009,7 +1022,12 @@ export function buildConstructionDependencyRulePublicationReadinessFromProductio
       replayReportCode: input.replayReport.reportCode,
       comparableActualDateCount: input.replayReport.summary.comparableActualDateCount,
     },
-    missingReasons: readiness.missingReasons,
+    missingReasons: uniqueValues([
+      ...readiness.missingReasons,
+      hasRuntimeConsumerObservation && !runtimeConsumerObservationMatchesPublication
+        ? 'runtime_consumer_publication_mismatch'
+        : '',
+    ]),
     productionLineage,
   }
 }

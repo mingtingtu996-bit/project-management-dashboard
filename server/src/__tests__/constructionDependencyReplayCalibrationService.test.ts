@@ -469,6 +469,113 @@ describe('construction dependency replay calibration service', () => {
     expect(readiness.productionLineage.rejectedRecords).toEqual([])
   })
 
+  it('keeps dependency rule publication readiness blocked when consumer observes a different runtime publication', () => {
+    const report = {
+      reportCode: 'construction_dependency_replay_calibration' as const,
+      generatedAt: '2026-06-14T00:00:00.000Z',
+      governancePolicy: {
+        replayMode: 'report_only' as const,
+        seedWritePolicy: 'never_write_seed_from_replay' as const,
+        taskDependencyWritePolicy: 'never_write_task_dependencies_from_replay' as const,
+        promotionPolicy: 'manual_seed_review_required' as const,
+      },
+      summary: {
+        inputDependencyCount: 4,
+        matchedDependencyCount: 4,
+        comparableActualDateCount: 4,
+        l3MatchedDependencyCount: 2,
+        l4MatchedDependencyCount: 2,
+        validatedDependencyCount: 2,
+        reviewRequiredDependencyCount: 1,
+        conflictDependencyCount: 0,
+        insufficientActualDateCount: 0,
+        unmatchedSeedCount: 0,
+      },
+      calibrationQueues: {
+        l3LagCalibrationCandidates: [{
+          matchedLayer: 'cross_item_workflow' as const,
+          matchedSeedCode: 'prefab_factory_to_site_hoist_handoff',
+          sampleCount: 3,
+          projectCount: 2,
+          conflictCount: 0,
+          seedLagDays: 2,
+          medianObservedWaitDays: 4,
+          suggestedLagDays: 4,
+          queueStatus: 'manual_review_required' as const,
+          recommendation: 'review_nonzero_lag_or_condition_profile' as const,
+          promotionPolicy: 'Manual seed review required before changing L3 lagDays.',
+          sampleDependencyIds: ['dep-1', 'dep-2', 'dep-3'],
+          projectIds: ['project-1', 'project-2'],
+        }],
+        l4ConflictQuarantineCandidates: [],
+        evidenceCollectionCandidates: [],
+      },
+      items: [],
+    }
+
+    const readiness = buildConstructionDependencyRulePublicationReadinessFromProductionRows({
+      replayReport: report,
+      approvedCandidateEventIds: ['dependency-candidate-1'],
+      enabledLearningScopes: ['system', 'industry_baseline', 'company', 'project'],
+      records: [{
+        assetKey: 'dependency_rule_candidate',
+        evidenceKind: 'production_sample',
+        evidenceRef: 'network_outcomes:dependency-rule-outcome-1',
+        evidenceStatus: 'accepted',
+      }],
+      sourceRows: [
+        {
+          sourceTable: 'construction_dependency_rule_runtime_publications',
+          row: {
+            publication_key: 'dependency_rule_runtime:dependency-rule-version-v2',
+            dependency_rule_version_id: 'dependency-rule-version-v2',
+            runtime_publication_status: 'runtime_published',
+            dependency_rule_lineage: { assetType: 'dependency_rule_candidate' },
+            impact_monitoring: {
+              status: 'monitoring_armed',
+              eventRef: 'impact_monitoring:dependency_rule_runtime:dependency-rule-version-v2:armed',
+            },
+            rollback_execution: {
+              status: 'rollback_verified',
+              eventRef: 'rollback:dependency_rule_runtime:dependency-rule-version-v2:verified',
+            },
+          },
+        },
+        {
+          sourceTable: 'runtime_consumer_observations',
+          row: {
+            id: 'consumer-dependency-rule-1',
+            asset_key: 'dependency_rule_candidate',
+            consumer_key: 'scheduleAccelerationService',
+            publication_key: 'dependency_rule_runtime:dependency-rule-version-v1',
+            observation_status: 'observed',
+            writes_runtime_directly: false,
+            writes_fact_directly: false,
+          },
+        },
+        {
+          sourceTable: 'duration_algorithm_accuracy_events',
+          row: {
+            id: 'accuracy-dependency-rule-1',
+            absolute_error_days: 1,
+            prediction_context: {
+              assetKey: 'dependency_rule_candidate',
+            },
+            actual_context: {
+              accuracyGateStatus: 'accuracy_passed',
+            },
+          },
+        },
+      ],
+    })
+
+    expect(readiness.status).toBe('dependency_rule_publication_not_ready')
+    expect(readiness.liveLearningEvidence.runtimeConsumerUsesPublishedArtifact).toBe(false)
+    expect(readiness.missingReasons).toEqual(expect.arrayContaining([
+      'runtime_consumer_publication_mismatch',
+    ]))
+  })
+
   it('keeps dependency rule publication readiness closed without approved lineage, publication, and release evidence', () => {
     const report = {
       reportCode: 'construction_dependency_replay_calibration' as const,
