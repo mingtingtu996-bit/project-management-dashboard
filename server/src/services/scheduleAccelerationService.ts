@@ -1,4 +1,5 @@
 import { normalizeDurationContributionMode } from '../seeds/durationContributionMode.js'
+import { logger } from '../middleware/logger.js'
 import {
   SCHEDULE_ACCELERATION_DEFAULT_PROFILE_CODE,
   SCHEDULE_ACCELERATION_DEFAULT_RESOURCE_CRASH_CAP,
@@ -2079,15 +2080,51 @@ export async function evaluateRuntimeDelayRecoveryWithCriticalPath(params: {
   targetEndDate: string | null | undefined
   mode?: ScheduleAccelerationMode
   context?: Omit<ScheduleAccelerationContext, 'scenario'> & { runtime?: ScheduleRuntimeRecoveryContext }
+  runtimeConsumerObservationQueryExec?: DurationRuntimeConsumerObservationQueryExec | null
+  runtimeArtifactPublications?: readonly ScheduleAccelerationRuntimeArtifactPublication[] | null
+  runtimeConsumerObservedAt?: string | null
+  runtimeConsumerErrorHandler?: (error: unknown) => void
 }): Promise<ScheduleTargetFeasibility | undefined> {
   const rows = await hydrateScheduleAccelerationRowsWithCriticalPath({
     projectId: params.projectId,
     rows: params.rows,
   })
-  return evaluateRuntimeDelayRecovery({
+  const feasibility = evaluateRuntimeDelayRecovery({
     rows,
     targetEndDate: params.targetEndDate,
     mode: params.mode,
     context: params.context,
   })
+
+  const runtimeArtifactPublications = params.runtimeArtifactPublications ?? []
+  if (params.runtimeConsumerObservationQueryExec && runtimeArtifactPublications.length > 0) {
+    try {
+      await recordScheduleAccelerationConsumedArtifacts({
+        queryExec: params.runtimeConsumerObservationQueryExec,
+        observedAt: normalizeText(params.runtimeConsumerObservedAt) || undefined,
+        callContext: {
+          projectId: normalizeText(params.projectId) || null,
+          runtimeConsumer: 'scheduleAccelerationService',
+        },
+        sourceEvidenceRefs: [
+          ['schedule_acceleration', normalizeText(params.projectId) || 'no_project'].join(':'),
+        ],
+        artifacts: buildScheduleAccelerationConsumedArtifacts({
+          runtimeArtifactPublications,
+          projectId: params.projectId,
+        }),
+      })
+    } catch (error) {
+      if (params.runtimeConsumerErrorHandler) {
+        params.runtimeConsumerErrorHandler(error)
+      } else {
+        logger.warn('[scheduleAccelerationService] failed to record schedule acceleration runtime consumer evidence', {
+          projectId: params.projectId,
+          error,
+        })
+      }
+    }
+  }
+
+  return feasibility
 }

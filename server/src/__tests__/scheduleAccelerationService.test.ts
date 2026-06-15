@@ -1493,4 +1493,52 @@ describe('scheduleAccelerationService', () => {
       ],
     ])
   })
+
+  it('records runtime consumer evidence from evaluateRuntimeDelayRecoveryWithCriticalPath when dependency rules are consumed', async () => {
+    const { calls, queryExec } = createRecordingQueryExec()
+
+    const feasibility = await evaluateRuntimeDelayRecoveryWithCriticalPath({
+      projectId: 'project-1',
+      rows: [
+        buildRow({
+          clientRowId: 'critical-task',
+          values: {
+            ...buildRow().values,
+            title: 'Critical dependency-governed task',
+            planned_start_date: '2026-01-01',
+            planned_end_date: '2026-01-30',
+            is_critical: true,
+            total_float_days: 0,
+          },
+        }),
+      ],
+      targetEndDate: '2026-01-25',
+      mode: 'compression_preview',
+      runtimeConsumerObservationQueryExec: queryExec,
+      runtimeConsumerObservedAt: '2026-06-15T09:00:00.000Z',
+      runtimeArtifactPublications: [
+        {
+          assetKey: 'dependency_rule_candidate',
+          publicationKey: 'dependency_rule_runtime:dependency-v7',
+          publicationStatus: 'published',
+        },
+        {
+          assetKey: 'critical_path_rule_candidate',
+          publicationKey: 'critical_path_rule_runtime:critical-v7',
+          publicationStatus: 'runtime_published',
+        },
+      ],
+    })
+
+    expect(feasibility?.scenario).toBe('runtime_delay_recovery')
+    expect(callsForTable(calls, 'runtime_consumer_runtime_calls')).toHaveLength(1)
+    expect(callsForTable(calls, 'runtime_consumer_observations').map((call) => call.params.slice(0, 4))).toEqual([
+      [
+        'dependency_rule_candidate',
+        'dependency_rule_runtime:dependency-v7',
+        'scheduleAccelerationService',
+        'schedule_acceleration',
+      ],
+    ])
+  })
 })
