@@ -103,6 +103,19 @@ function queryForSourceTable(sourceTable: DurationLiveLearningProductionEvidence
     `
   }
 
+  if (sourceTable === 'algorithm_seed_versions') {
+    return `
+      select *
+      from public.algorithm_seed_versions
+      where seed_type = 'standard_work_duration'
+        and status = 'active'
+        and is_current = true
+        and published_at is not null
+      order by published_at desc, updated_at desc
+      limit $1
+    `
+  }
+
   if (sourceTable === 'wbs_template_runtime_publications') {
     return `
       select *

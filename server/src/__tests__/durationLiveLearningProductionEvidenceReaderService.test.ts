@@ -115,6 +115,16 @@ function rowsForSql(sql: string) {
       target_runtime_table: 'algorithm_learnable_parameter_runtime_publications',
     }))
   }
+  if (normalized.includes('from public.algorithm_seed_versions')) {
+    return [{
+      id: 'seed-version-standard-work-duration-v2',
+      seed_type: 'standard_work_duration',
+      seed_version: 'v2',
+      status: 'active',
+      is_current: true,
+      published_at: '2026-06-14T00:00:00.000Z',
+    }]
+  }
   if (normalized.includes('from public.duration_algorithm_accuracy_events')) {
     return learnableAssetKeys.map((assetKey) => ({
       id: `accuracy-${assetKey}`,
@@ -212,6 +222,7 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
     expect(audit.sourceQuery.sourceTables).toEqual([
       'duration_experience_samples',
       'algorithm_learnable_parameter_runtime_publications',
+      'algorithm_seed_versions',
       'algorithm_learnable_parameter_release_events',
       'wbs_template_runtime_publications',
       'wbs_template_runtime_events',
@@ -227,6 +238,8 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
     const joinedSql = calls.map((call) => call.sql.toLowerCase()).join('\n')
     expect(joinedSql).toContain('from public.duration_experience_samples')
     expect(joinedSql).toContain('from public.algorithm_learnable_parameter_runtime_publications')
+    expect(joinedSql).toContain('from public.algorithm_seed_versions')
+    expect(joinedSql).toContain("seed_type = 'standard_work_duration'")
     expect(joinedSql).toContain('from public.algorithm_learnable_parameter_release_events')
     expect(joinedSql).toContain('from public.wbs_template_runtime_publications')
     expect(joinedSql).toContain('from public.wbs_template_runtime_events')
@@ -236,8 +249,6 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
     expect(joinedSql).toContain('from public.runtime_consumer_observations')
     expect(joinedSql).toContain('from public.runtime_consumer_runtime_calls')
     expect(joinedSql).not.toMatch(/\binsert\b|\bupdate\b|\bdelete\b/)
-    expect(joinedSql).not.toContain('algorithm_seed_versions')
-    expect(joinedSql).not.toContain('standard_work_duration')
     expect(joinedSql).not.toContain('task_baseline_items')
     expect(joinedSql).not.toContain('monthly_plan_items')
   })

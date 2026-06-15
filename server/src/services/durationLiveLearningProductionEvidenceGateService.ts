@@ -92,6 +92,7 @@ export type DurationLiveLearningProductionEvidenceSourceTable =
   | 'duration_experience_samples'
   | 'duration_algorithm_accuracy_events'
   | 'algorithm_learnable_parameter_runtime_publications'
+  | 'algorithm_seed_versions'
   | 'algorithm_learnable_parameter_release_events'
   | 'wbs_template_runtime_publications'
   | 'wbs_template_runtime_events'
@@ -205,6 +206,7 @@ const REQUIRED_PRODUCTION_EVIDENCE_KINDS: DurationLiveLearningProductionEvidence
 const CANONICAL_PRODUCTION_EVIDENCE_SOURCE_TABLES: DurationLiveLearningProductionEvidenceSourceTable[] = [
   'duration_experience_samples',
   'algorithm_learnable_parameter_runtime_publications',
+  'algorithm_seed_versions',
   'algorithm_learnable_parameter_release_events',
   'wbs_template_runtime_publications',
   'wbs_template_runtime_events',
@@ -232,6 +234,14 @@ const REQUIRED_FIELDS_BY_SOURCE_TABLE: Record<DurationLiveLearningProductionEvid
     'impact_monitoring.eventRef',
     'rollback_execution.status',
     'rollback_execution.eventRef',
+  ],
+  algorithm_seed_versions: [
+    'id',
+    'seed_type',
+    'seed_version',
+    'status',
+    'is_current',
+    'published_at',
   ],
   algorithm_learnable_parameter_release_events: [
     'source_publication_key',
@@ -343,6 +353,11 @@ function inferPlanNetworkAssetKeyFromPublicationKey(publicationKey: string): Dur
   return null
 }
 
+function inferSeedAssetKeyFromSeedType(seedType: string): DurationLiveLearningAssetKey | null {
+  if (seedType === 'standard_work_duration') return 'standard_work_duration_seed'
+  return null
+}
+
 function readBoolean(row: Record<string, unknown>, key: string) {
   return row[key] === true
 }
@@ -392,6 +407,9 @@ function assetKeyFromRow(row: Record<string, unknown>): DurationLiveLearningAsse
 
 function assetKeyFromSourceRow(source: DurationLiveLearningProductionEvidenceSourceRow): DurationLiveLearningAssetKey | null {
   const row = source.row
+  if (source.sourceTable === 'algorithm_seed_versions') {
+    return inferSeedAssetKeyFromSeedType(readText(row, 'seed_type', 'seedType'))
+  }
   if (source.sourceTable === 'wbs_template_runtime_publications') {
     const assetKind = readText(row, 'asset_kind', 'assetKind')
     return assetKind ? assetKind as DurationLiveLearningAssetKey : null
@@ -719,6 +737,32 @@ export function collectDurationLiveLearningProductionEvidenceRecordsFromRows(
         continue
       }
       pushRejectedRow(rejectedRows, source, 'production_source_row_not_evidence_ready')
+      continue
+    }
+
+    if (source.sourceTable === 'algorithm_seed_versions') {
+      const seedVersionId = readText(row, 'id')
+      const seedType = readText(row, 'seed_type', 'seedType')
+      if (!seedVersionId || !seedType) {
+        pushRejectedRow(rejectedRows, source, 'production_source_row_id_required')
+        continue
+      }
+      if (
+        seedType !== 'standard_work_duration'
+        || readText(row, 'status') !== 'active'
+        || !readBoolean(row, 'is_current')
+        || !readText(row, 'published_at', 'publishedAt')
+      ) {
+        pushRejectedRow(rejectedRows, source, 'production_source_row_not_evidence_ready')
+        continue
+      }
+      pushRecord(
+        records,
+        assetKey,
+        'publication_execution',
+        `algorithm_seed_versions:${seedVersionId}`,
+        'published',
+      )
       continue
     }
 

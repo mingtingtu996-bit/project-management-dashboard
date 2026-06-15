@@ -291,6 +291,7 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
       expect(entry.sourceTables).toEqual([
         'duration_experience_samples',
         'algorithm_learnable_parameter_runtime_publications',
+        'algorithm_seed_versions',
         'algorithm_learnable_parameter_release_events',
         'wbs_template_runtime_publications',
         'wbs_template_runtime_events',
@@ -532,6 +533,17 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
           },
         },
         {
+          sourceTable: 'algorithm_seed_versions',
+          row: {
+            id: 'seed-version-standard-work-duration-v2',
+            seed_type: 'standard_work_duration',
+            seed_version: 'v2',
+            status: 'active',
+            is_current: true,
+            published_at: '2026-06-14T00:00:00.000Z',
+          },
+        },
+        {
           sourceTable: 'algorithm_learnable_parameter_release_events',
           row: {
             event_type: 'impact_monitoring',
@@ -586,6 +598,12 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
         evidenceKind: 'rollback_drill',
         evidenceRef: 'rollback:forecast-weight-v2:verified',
         evidenceStatus: 'rollback_verified',
+      },
+      {
+        assetKey: 'standard_work_duration_seed',
+        evidenceKind: 'publication_execution',
+        evidenceRef: 'algorithm_seed_versions:seed-version-standard-work-duration-v2',
+        evidenceStatus: 'published',
       },
       {
         assetKey: 'forecast_confidence_weight',
