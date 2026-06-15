@@ -11,6 +11,15 @@ import {
   isGovernedDurationOutputCode,
   type DurationOutputCode,
 } from './durationOutputGovernanceService.js'
+import {
+  collectDurationLiveLearningProductionEvidenceRecordsFromRows,
+  collectDurationLiveLearningProductionEvidenceRefs,
+  type DurationLiveLearningProductionEvidenceRecord,
+  type DurationLiveLearningProductionEvidenceRef,
+  type DurationLiveLearningProductionEvidenceSourceRow,
+  type DurationLiveLearningRejectedProductionEvidenceRecord,
+  type DurationLiveLearningRejectedProductionEvidenceSourceRow,
+} from './durationLiveLearningProductionEvidenceGateService.js'
 
 export const WBS_TEMPLATE_GOLDEN_BENCHMARK_GATE_VERSION = 'v1.4.22.1-wbs-template-golden-benchmark-gate-20260531'
 
@@ -152,6 +161,14 @@ export interface WbsReferenceDaysPublicationReadinessInput {
   accuracyMetricsAvailable: boolean
 }
 
+export interface WbsReferenceDaysPublicationReadinessFromProductionRowsInput {
+  runtimeGate: WbsTemplateGoldenBenchmarkRunGateResult
+  approvedCandidateEventIds: readonly string[]
+  enabledLearningScopes: readonly WbsReferenceDaysLearningScopeEvidence[]
+  sourceRows?: readonly DurationLiveLearningProductionEvidenceSourceRow[]
+  records?: readonly DurationLiveLearningProductionEvidenceRecord[]
+}
+
 export interface WbsReferenceDaysLineage {
   assetType: 'wbs_reference_days'
   referenceDaysVersionId: string | null
@@ -162,12 +179,25 @@ export interface WbsReferenceDaysLineage {
   benchmarkScenarioCount: number
 }
 
+export interface WbsReferenceDaysProductionLineage {
+  evidenceRefs: DurationLiveLearningProductionEvidenceRef
+  rejectedRows: DurationLiveLearningRejectedProductionEvidenceSourceRow[]
+  rejectedRecords: DurationLiveLearningRejectedProductionEvidenceRecord[]
+}
+
 export interface WbsReferenceDaysPublicationReadiness {
   status: 'wbs_reference_days_publication_ready' | 'wbs_reference_days_publication_not_ready'
   liveLearningEvidence: WbsReferenceDaysLiveLearningEvidence
   referenceDaysLineage: WbsReferenceDaysLineage
   missingReasons: string[]
 }
+
+export type WbsReferenceDaysProductionPublicationReadiness =
+  WbsReferenceDaysPublicationReadiness & {
+    productionLineage: WbsReferenceDaysProductionLineage
+  }
+
+const WBS_REFERENCE_DAYS_ASSET_KEY = 'wbs_reference_days'
 
 function makeFinding(
   code: string,
@@ -197,6 +227,56 @@ function uniqueValues<T extends string>(values: T[]): T[] {
 
 function normalizeLower(value: unknown): string {
   return String(value ?? '').trim().toLowerCase()
+}
+
+function readRowText(row: Record<string, unknown>, ...keys: string[]) {
+  for (const key of keys) {
+    const value = row[key]
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return ''
+}
+
+function findCurrentPublishedWbsReferenceDaysVersionId(
+  sourceRows: readonly DurationLiveLearningProductionEvidenceSourceRow[] | undefined,
+) {
+  for (const source of sourceRows ?? []) {
+    if (source.sourceTable !== 'wbs_template_runtime_publications') continue
+    const row = source.row
+    const referenceDaysVersionId = readRowText(row, 'asset_version_id', 'assetVersionId')
+    if (
+      referenceDaysVersionId
+      && readRowText(row, 'asset_kind', 'assetKind') === WBS_REFERENCE_DAYS_ASSET_KEY
+      && readRowText(row, 'publication_key', 'publicationKey')
+      && readRowText(row, 'runtime_publication_status', 'runtimePublicationStatus') === 'runtime_published'
+    ) {
+      return referenceDaysVersionId
+    }
+  }
+  return null
+}
+
+function wbsReferenceDaysProductionLineageFromProductionInput(
+  input: Pick<WbsReferenceDaysPublicationReadinessFromProductionRowsInput, 'sourceRows' | 'records'>,
+): WbsReferenceDaysProductionLineage {
+  const rowCollection = collectDurationLiveLearningProductionEvidenceRecordsFromRows({
+    rows: input.sourceRows,
+  })
+  const evidenceCollection = collectDurationLiveLearningProductionEvidenceRefs({
+    records: [
+      ...rowCollection.records,
+      ...(input.records ?? []),
+    ],
+  })
+  const evidenceRefs = evidenceCollection.productionEvidence.find((evidence) =>
+    evidence.assetKey === WBS_REFERENCE_DAYS_ASSET_KEY)
+    ?? { assetKey: WBS_REFERENCE_DAYS_ASSET_KEY }
+
+  return {
+    evidenceRefs,
+    rejectedRows: rowCollection.rejectedRows,
+    rejectedRecords: evidenceCollection.rejectedRecords,
+  }
 }
 
 const WBS_REFERENCE_DAYS_LEARNING_SCOPE_ORDER = ['global', 'industry', 'company', 'project'] as const
@@ -565,5 +645,52 @@ export function buildWbsReferenceDaysPublicationReadiness(
       benchmarkScenarioCount: input.runtimeGate.resultCount,
     },
     missingReasons: readiness.missingReasons,
+  }
+}
+
+export function buildWbsReferenceDaysPublicationReadinessFromProductionRows(
+  input: WbsReferenceDaysPublicationReadinessFromProductionRowsInput,
+): WbsReferenceDaysProductionPublicationReadiness {
+  const approvedCandidateEventIds = uniqueStrings(input.approvedCandidateEventIds)
+  const productionLineage = wbsReferenceDaysProductionLineageFromProductionInput(input)
+  const evidenceRefs = productionLineage.evidenceRefs
+  const referenceDaysVersionId = findCurrentPublishedWbsReferenceDaysVersionId(input.sourceRows)
+  const runtimePublicationKey = normalizeText(evidenceRefs.publicationExecutionRef)
+  const rollbackTarget = normalizeText(evidenceRefs.rollbackDrillEvidenceRef)
+  const referenceDaysPublicationWriterReady = Boolean(referenceDaysVersionId && runtimePublicationKey)
+  const referenceDaysLineageRecorded = Boolean(referenceDaysVersionId)
+    && approvedCandidateEventIds.length > 0
+    && input.runtimeGate.resultCount > 0
+
+  const readiness = evaluateWbsReferenceDaysLiveLearningEvidence({
+    runtimeGate: input.runtimeGate,
+    templateReferenceDaysOutcomeRecorded: Boolean(evidenceRefs.productionSampleEvidenceRef),
+    approvedReferenceDaysCandidateRecorded: approvedCandidateEventIds.length > 0,
+    enabledLearningScopes: input.enabledLearningScopes,
+    runtimeConsumerUsesPublishedArtifact: Boolean(evidenceRefs.runtimeConsumerObservationRef),
+    referenceDaysPublicationWriterReady,
+    referenceDaysLineageRecorded,
+    releaseExitApproved: Boolean(evidenceRefs.publicationExecutionRef),
+    impactMonitoringReady: Boolean(evidenceRefs.impactMonitoringEvidenceRef),
+    rollbackTargetReady: Boolean(evidenceRefs.rollbackDrillEvidenceRef),
+    accuracyMetricsAvailable: Boolean(evidenceRefs.accuracyEvidenceRef),
+  })
+
+  return {
+    status: readiness.status === 'wbs_reference_days_live_learning_ready'
+      ? 'wbs_reference_days_publication_ready'
+      : 'wbs_reference_days_publication_not_ready',
+    liveLearningEvidence: readiness.liveLearningEvidence,
+    referenceDaysLineage: {
+      assetType: 'wbs_reference_days',
+      referenceDaysVersionId,
+      runtimePublicationKey,
+      rollbackTarget,
+      approvedCandidateEventIds,
+      benchmarkGateVersion: input.runtimeGate.version,
+      benchmarkScenarioCount: input.runtimeGate.resultCount,
+    },
+    missingReasons: readiness.missingReasons,
+    productionLineage,
   }
 }

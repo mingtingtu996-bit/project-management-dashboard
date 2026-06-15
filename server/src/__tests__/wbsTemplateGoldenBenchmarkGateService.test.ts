@@ -3,6 +3,7 @@ import { WBS_TEMPLATE_REAL_PROJECT_COVERAGE_MATRIX } from '../seeds/wbsTemplateR
 import {
   WBS_TEMPLATE_GOLDEN_BENCHMARK_GATE_THRESHOLDS,
   assertWbsTemplateGoldenBenchmarkGate,
+  buildWbsReferenceDaysPublicationReadinessFromProductionRows,
   buildWbsReferenceDaysPublicationReadiness,
   evaluateWbsReferenceDaysLiveLearningEvidence,
   evaluateWbsTemplateGoldenBenchmarkRunGate,
@@ -227,6 +228,98 @@ describe('wbsTemplateGoldenBenchmarkGateService', () => {
       benchmarkScenarioCount: 13,
     })
     expect(readiness.missingReasons).toEqual([])
+  })
+
+  it('builds WBS reference-days publication readiness from production source rows', () => {
+    const runtimeGate = evaluateWbsTemplateGoldenBenchmarkRunGate(buildPassingRuntimeResults())
+
+    const readiness = buildWbsReferenceDaysPublicationReadinessFromProductionRows({
+      runtimeGate,
+      approvedCandidateEventIds: ['reference-candidate-1'],
+      enabledLearningScopes: ['system', 'industry_baseline', 'company', 'project'],
+      records: [{
+        assetKey: 'wbs_reference_days',
+        evidenceKind: 'production_sample',
+        evidenceRef: 'network_outcomes:wbs-reference-days-candidate-1',
+        evidenceStatus: 'accepted',
+      }],
+      sourceRows: [
+        {
+          sourceTable: 'wbs_template_runtime_publications',
+          row: {
+            publication_key: 'wbs_reference_days_runtime:wbs-reference-days-v2',
+            asset_kind: 'wbs_reference_days',
+            asset_version_id: 'wbs-reference-days-v2',
+            runtime_publication_status: 'runtime_published',
+            impact_monitoring: {
+              status: 'monitoring_armed',
+              eventRef: 'impact_monitoring:wbs_reference_days_runtime:wbs-reference-days-v2:armed',
+            },
+            rollback_execution: {
+              status: 'rollback_verified',
+              eventRef: 'rollback:wbs_reference_days_runtime:wbs-reference-days-v2:verified',
+            },
+          },
+        },
+        {
+          sourceTable: 'runtime_consumer_observations',
+          row: {
+            id: 'consumer-reference-days-1',
+            asset_key: 'wbs_reference_days',
+            consumer_key: 'wbsTemplateGenerationService',
+            publication_key: 'wbs_reference_days_runtime:wbs-reference-days-v2',
+            observation_status: 'observed',
+            writes_runtime_directly: false,
+            writes_fact_directly: false,
+          },
+        },
+        {
+          sourceTable: 'duration_algorithm_accuracy_events',
+          row: {
+            id: 'accuracy-reference-days-1',
+            absolute_error_days: 1,
+            prediction_context: {
+              assetKey: 'wbs_reference_days',
+            },
+            actual_context: {
+              accuracyGateStatus: 'accuracy_passed',
+            },
+          },
+        },
+      ],
+    })
+
+    expect(readiness.status).toBe('wbs_reference_days_publication_ready')
+    expect(readiness.liveLearningEvidence).toEqual(expect.objectContaining({
+      predictionEventRecorded: true,
+      actualOutcomeEventRecorded: true,
+      benchmarkReplayGatePassed: true,
+      approvedReferenceDaysCandidateRecorded: true,
+      referenceDaysPublicationWriterReady: true,
+      referenceDaysLineageRecorded: true,
+      runtimeConsumerUsesPublishedArtifact: true,
+      releaseExitApproved: true,
+      impactMonitoringReady: true,
+      rollbackTargetReady: true,
+      accuracyMetricsAvailable: true,
+    }))
+    expect(readiness.referenceDaysLineage).toEqual(expect.objectContaining({
+      referenceDaysVersionId: 'wbs-reference-days-v2',
+      runtimePublicationKey: 'wbs_reference_days_runtime:wbs-reference-days-v2',
+      rollbackTarget: 'rollback:wbs_reference_days_runtime:wbs-reference-days-v2:verified',
+      approvedCandidateEventIds: ['reference-candidate-1'],
+      benchmarkScenarioCount: 13,
+    }))
+    expect(readiness.productionLineage.evidenceRefs).toEqual(expect.objectContaining({
+      productionSampleEvidenceRef: 'network_outcomes:wbs-reference-days-candidate-1',
+      publicationExecutionRef: 'wbs_reference_days_runtime:wbs-reference-days-v2',
+      runtimeConsumerObservationRef: 'runtime_consumer:consumer-reference-days-1',
+      impactMonitoringEvidenceRef: 'impact_monitoring:wbs_reference_days_runtime:wbs-reference-days-v2:armed',
+      rollbackDrillEvidenceRef: 'rollback:wbs_reference_days_runtime:wbs-reference-days-v2:verified',
+      accuracyEvidenceRef: 'duration_algorithm_accuracy_events:accuracy-reference-days-1',
+    }))
+    expect(readiness.productionLineage.rejectedRows).toEqual([])
+    expect(readiness.productionLineage.rejectedRecords).toEqual([])
   })
 
   it('keeps WBS reference-days publication readiness closed without benchmark, approvals, lineage, and release evidence', () => {
