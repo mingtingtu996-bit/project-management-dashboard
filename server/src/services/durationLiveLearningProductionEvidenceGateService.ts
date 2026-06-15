@@ -86,6 +86,7 @@ export interface DurationLiveLearningRejectedProductionEvidenceRecord {
     | 'production_evidence_status_not_accepted'
     | 'production_evidence_ref_source_not_allowed'
     | 'production_evidence_publication_key_not_allowed_for_asset'
+    | 'production_evidence_direct_record_not_allowed_for_final_claim'
 }
 
 export interface DurationLiveLearningProductionEvidenceCollectionInput {
@@ -1032,6 +1033,29 @@ function runtimeConsumerRuntimeCallEvidenceFromSourceRows(
   return evidence
 }
 
+function splitFinalClaimDirectProductionEvidenceRecords(
+  records: readonly DurationLiveLearningProductionEvidenceRecord[] | undefined,
+) {
+  const allowedRecords: DurationLiveLearningProductionEvidenceRecord[] = []
+  const rejectedRecords: DurationLiveLearningRejectedProductionEvidenceRecord[] = []
+
+  for (const record of records ?? []) {
+    if (
+      record.evidenceKind === 'production_sample'
+      && PLAN_NETWORK_PRODUCTION_SAMPLE_ASSET_KEYS.has(record.assetKey)
+    ) {
+      allowedRecords.push(record)
+      continue
+    }
+    rejectedRecords.push({
+      ...record,
+      reason: 'production_evidence_direct_record_not_allowed_for_final_claim',
+    })
+  }
+
+  return { allowedRecords, rejectedRecords }
+}
+
 function buildProductionEvidenceMap(
   productionEvidence: readonly DurationLiveLearningProductionEvidenceRef[] | undefined,
 ) {
@@ -1130,21 +1154,27 @@ export function buildDurationLiveLearningProductionClaimAudit(
   const evidenceRowCollection = collectDurationLiveLearningProductionEvidenceRecordsFromRows({
     rows: input.sourceRows,
   })
-  const evidenceCollection = collectDurationLiveLearningProductionEvidenceRefs({
-    records: [
-      ...evidenceRowCollection.records,
-      ...(input.records ?? []),
-    ],
+  const directRecordCollection = splitFinalClaimDirectProductionEvidenceRecords(input.records)
+  const claimEvidenceRecords = [
+    ...evidenceRowCollection.records,
+    ...directRecordCollection.allowedRecords,
+  ]
+  const collectedEvidence = collectDurationLiveLearningProductionEvidenceRefs({
+    records: claimEvidenceRecords,
   })
+  const evidenceCollection: DurationLiveLearningProductionEvidenceCollection = {
+    productionEvidence: collectedEvidence.productionEvidence,
+    rejectedRecords: [
+      ...collectedEvidence.rejectedRecords,
+      ...directRecordCollection.rejectedRecords,
+    ],
+  }
   const productionGate = evaluateDurationLiveLearningProductionEvidenceGate({
     completionAudit: input.completionAudit,
     productionEvidence: evidenceCollection.productionEvidence,
   })
   const runtimeConsumerObservationCoverage = evaluateDurationRuntimeConsumerObservationCoverage({
-    records: [
-      ...evidenceRowCollection.records,
-      ...(input.records ?? []),
-    ],
+    records: claimEvidenceRecords,
     sourceRows: input.sourceRows,
   })
   const runtimeConsumerObservationIntegrationCoverage =

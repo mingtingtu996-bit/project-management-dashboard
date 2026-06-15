@@ -1203,7 +1203,7 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
     expect(adapted.rejectedRows).toEqual([])
   })
 
-  it('builds the final production claim audit from completion audit plus typed production records and runtime-call source rows', () => {
+  it('blocks the final production claim when non-network production evidence is supplied only as direct typed records', () => {
     const audit = buildDurationLiveLearningProductionClaimAudit({
       completionAudit: buildReadyCompletionAudit(),
       records: buildAllProductionEvidenceRecords(),
@@ -1211,23 +1211,28 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
       runtimeConsumerBusinessPathSourceFiles: buildReadyBusinessPathSourceFiles(),
     })
 
-    expect(audit.status).toBe('duration_live_learning_production_claim_ready')
-    expect(audit.evidenceCollection.rejectedRecords).toEqual([])
-    expect(audit.productionGate.status).toBe('duration_live_learning_production_evidence_ready')
-    expect(audit.runtimeConsumerObservationCoverage.status).toBe('runtime_consumer_observation_coverage_ready')
-    expect(audit.runtimeConsumerObservationCoverage.missingConsumerObservations).toEqual([])
-    expect(audit.runtimeConsumerBusinessPathIntegrationCoverage.status)
-      .toBe('runtime_consumer_business_path_integration_ready')
-    expect(audit.productionGate.productionEvidenceAssetKeys).toEqual(learnableAssetKeys)
-    expect(audit.allowedClaim).toBe(
-      'all_learnable_duration_prediction_and_network_assets_are_live_self_learning;facts_and_commitments_remain_locked',
-    )
+    expect(audit.status).toBe('duration_live_learning_production_claim_not_ready')
+    expect(audit.productionGate.status).toBe('duration_live_learning_production_evidence_not_ready')
+    expect(audit.evidenceCollection.rejectedRecords).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        assetKey: 'base_duration_benchmark',
+        evidenceKind: 'publication_execution',
+        reason: 'production_evidence_direct_record_not_allowed_for_final_claim',
+      }),
+      expect.objectContaining({
+        assetKey: 'forecast_residual_overlay',
+        evidenceKind: 'runtime_consumer_observation',
+        reason: 'production_evidence_direct_record_not_allowed_for_final_claim',
+      }),
+    ]))
+    expect(audit.allowedClaim).toBe('not_ready_for_live_self_learning_claim')
   })
 
   it('blocks the final production claim when runtime-call evidence is supplied only as manual overrides', () => {
     const input = {
       completionAudit: buildReadyCompletionAudit(),
-      records: buildAllProductionEvidenceRecords(),
+      sourceRows: buildAllProductionSourceRows(),
+      records: buildPlanNetworkOutcomeRecords(),
       runtimeConsumerRuntimeCallEvidence: runtimeCallEvidence,
       runtimeConsumerBusinessPathSourceFiles: buildReadyBusinessPathSourceFiles(),
     } as Parameters<typeof buildDurationLiveLearningProductionClaimAudit>[0] & {
@@ -1248,10 +1253,14 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
   it('blocks the final production claim when any declared runtime consumer has no observation', () => {
     const audit = buildDurationLiveLearningProductionClaimAudit({
       completionAudit: buildReadyCompletionAudit(),
-      records: buildAllProductionEvidenceRecords().filter((record) =>
-        record.assetKey !== 'forecast_residual_overlay'
-        || record.evidenceKind !== 'runtime_consumer_observation'
-        || record.consumerKey !== 'projectRemainingDurationForecastService'),
+      sourceRows: [
+        ...buildAllProductionSourceRows().filter((source) =>
+          source.sourceTable !== 'runtime_consumer_observations'
+          || source.row.asset_key !== 'forecast_residual_overlay'
+          || source.row.consumer_key !== 'projectRemainingDurationForecastService'),
+        ...buildRuntimeConsumerRuntimeCallRows(),
+      ],
+      records: buildPlanNetworkOutcomeRecords(),
     })
 
     expect(audit.productionGate.status).toBe('duration_live_learning_production_evidence_ready')
@@ -1339,7 +1348,11 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
   it('blocks the final production claim when consumer observation facades are not fully integrated', () => {
     const audit = buildDurationLiveLearningProductionClaimAudit({
       completionAudit: buildReadyCompletionAudit(),
-      records: buildAllProductionEvidenceRecords(),
+      sourceRows: [
+        ...buildAllProductionSourceRows(),
+        ...buildRuntimeConsumerRuntimeCallRows(),
+      ],
+      records: buildPlanNetworkOutcomeRecords(),
       runtimeConsumerAdapterRegistrations: [
         {
           consumerKey: 'durationSuggestionService',
@@ -1360,7 +1373,8 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
   it('blocks the final production claim when runtime call evidence is missing', () => {
     const audit = buildDurationLiveLearningProductionClaimAudit({
       completionAudit: buildReadyCompletionAudit(),
-      records: buildAllProductionEvidenceRecords(),
+      sourceRows: buildAllProductionSourceRows(),
+      records: buildPlanNetworkOutcomeRecords(),
       runtimeConsumerAdapterRegistrations: listDurationRuntimeConsumerObservationFacadeRegistrations(),
     })
 
