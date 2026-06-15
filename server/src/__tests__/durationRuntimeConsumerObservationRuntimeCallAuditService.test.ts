@@ -19,15 +19,27 @@ describe('durationRuntimeConsumerObservationRuntimeCallAuditService', () => {
       'scheduleAccelerationService',
       'scheduleAccelerationRuntimeService',
     ])
+    expect(audit.missingRuntimeCalls.map((item) => item.runtimeEntryRef)).toEqual([
+      'durationSuggestionService:suggestDuration',
+      'taskDurationForecastService:forecastTaskDuration',
+      'projectRemainingDurationForecastService:forecastRemainingDuration',
+      'wbsTemplateGenerationService:generateTemplate',
+      'scheduleAccelerationService:buildAccelerationPlan',
+      'scheduleAccelerationRuntimeService:applyRuntimeAcceleration',
+    ])
   })
 
-  it('accepts only declared facade consumers as runtime-call evidence', async () => {
+  it('accepts only declared facade consumers with canonical runtime entry refs as runtime-call evidence', async () => {
     const {
       evaluateDurationRuntimeConsumerObservationRuntimeCallCoverage,
     } = await import('../services/durationRuntimeConsumerObservationRuntimeCallAuditService.js')
 
     const audit = evaluateDurationRuntimeConsumerObservationRuntimeCallCoverage({
       runtimeCallEvidence: [
+        {
+          consumerKey: 'durationSuggestionService',
+          runtimeEntryRef: 'durationSuggestionService:suggestDuration',
+        },
         {
           consumerKey: 'projectRemainingDurationForecastService.ts',
           runtimeEntryRef: 'projectRemainingDurationForecastService:calculateRemainingDuration',
@@ -41,19 +53,28 @@ describe('durationRuntimeConsumerObservationRuntimeCallAuditService', () => {
 
     expect(audit.status).toBe('runtime_consumer_observation_runtime_calls_not_ready')
     expect(audit.observedRuntimeCalls).toEqual([{
-      consumerKey: 'projectRemainingDurationForecastService',
-      runtimeEntryRef: 'projectRemainingDurationForecastService:calculateRemainingDuration',
+      consumerKey: 'durationSuggestionService',
+      runtimeEntryRef: 'durationSuggestionService:suggestDuration',
     }])
-    expect(audit.rejectedRuntimeCalls).toEqual([{
-      consumerKey: 'unknownDurationConsumer',
-      runtimeEntryRef: 'unknown:entry',
-      reason: 'runtime_consumer_observation_facade_consumer_not_declared',
-    }])
-    expect(audit.missingRuntimeCalls).not.toContainEqual({
+    expect(audit.rejectedRuntimeCalls).toEqual([
+      {
+        consumerKey: 'projectRemainingDurationForecastService',
+        runtimeEntryRef: 'projectRemainingDurationForecastService:calculateRemainingDuration',
+        reason: 'runtime_consumer_observation_runtime_entry_ref_not_declared',
+      },
+      {
+        consumerKey: 'unknownDurationConsumer',
+        runtimeEntryRef: 'unknown:entry',
+        reason: 'runtime_consumer_observation_facade_consumer_not_declared',
+      },
+    ])
+    expect(audit.missingRuntimeCalls).toContainEqual({
       consumerKey: 'projectRemainingDurationForecastService',
+      runtimeEntryRef: 'projectRemainingDurationForecastService:forecastRemainingDuration',
     })
     expect(audit.missingRuntimeCalls).toContainEqual({
       consumerKey: 'taskDurationForecastService',
+      runtimeEntryRef: 'taskDurationForecastService:forecastTaskDuration',
     })
   })
 })

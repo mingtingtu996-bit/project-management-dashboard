@@ -102,6 +102,27 @@ describe('durationRuntimeConsumerObservationService', () => {
     expect(calls).toEqual([])
   })
 
+  it('blocks runtime calls whose entry ref does not match the declared facade runtime path', async () => {
+    const {
+      recordDurationRuntimeConsumerRuntimeCall,
+    } = await import('../services/durationRuntimeConsumerObservationService.js')
+    const { calls, queryExec } = createRecordingQueryExec()
+
+    const result = await recordDurationRuntimeConsumerRuntimeCall({
+      queryExec,
+      consumerKey: 'projectRemainingDurationForecastService',
+      runtimeEntryRef: 'projectRemainingDurationForecastService:calculateRemainingDuration',
+    })
+
+    expect(result).toEqual(expect.objectContaining({
+      status: 'runtime_consumer_runtime_call_blocked',
+      canPersist: false,
+      runtimeCall: null,
+      reasons: ['runtime_consumer_runtime_call_entry_ref_not_declared_for_consumer'],
+    }))
+    expect(calls).toEqual([])
+  })
+
   it('records runtime consumer observations without writing runtime artifacts or facts', async () => {
     const {
       recordDurationRuntimeConsumerObservation,

@@ -3,6 +3,9 @@ import {
   listDurationRuntimeConsumerObservationIntegrationContracts,
   type DurationRuntimeConsumerPublicationStatus,
 } from './durationRuntimeConsumerObservationIntegrationService.js'
+import {
+  listDurationRuntimeConsumerBusinessPathRequiredIntegrations,
+} from './durationRuntimeConsumerBusinessPathIntegrationAuditService.js'
 
 export type DurationRuntimeConsumerObservationQueryExec = <T = Record<string, unknown>>(
   sql: string,
@@ -154,6 +157,15 @@ function isDeclaredRuntimeConsumer(consumerKey: unknown) {
     .some((contract) => contract.consumerKey === normalizedConsumerKey)
 }
 
+function isDeclaredRuntimeEntryForConsumer(consumerKey: unknown, runtimeEntryRef: unknown) {
+  const normalizedConsumerKey = normalizeConsumerKey(consumerKey)
+  const normalizedRuntimeEntryRef = normalizeText(runtimeEntryRef)
+  if (!normalizedConsumerKey || !normalizedRuntimeEntryRef) return true
+  return listDurationRuntimeConsumerBusinessPathRequiredIntegrations()
+    .some((integration) => integration.consumerKey === normalizedConsumerKey
+      && integration.runtimeEntryRef === normalizedRuntimeEntryRef)
+}
+
 function buildBlockResult(reasons: string[]): DurationRuntimeConsumerObservationResult {
   return {
     status: 'runtime_consumer_observation_blocked',
@@ -214,6 +226,13 @@ function validateRuntimeCallInput(input: RecordDurationRuntimeConsumerRuntimeCal
   if (input.writesFactDirectly) reasons.push('runtime_consumer_runtime_call_must_not_write_fact_directly')
   if (normalizeText(input.consumerKey) && !isDeclaredRuntimeConsumer(input.consumerKey)) {
     reasons.push('runtime_consumer_runtime_call_consumer_not_declared')
+  }
+  if (
+    normalizeText(input.consumerKey)
+    && isDeclaredRuntimeConsumer(input.consumerKey)
+    && !isDeclaredRuntimeEntryForConsumer(input.consumerKey, input.runtimeEntryRef)
+  ) {
+    reasons.push('runtime_consumer_runtime_call_entry_ref_not_declared_for_consumer')
   }
   return reasons
 }

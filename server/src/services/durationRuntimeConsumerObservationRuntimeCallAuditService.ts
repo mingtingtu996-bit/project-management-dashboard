@@ -1,6 +1,9 @@
 import {
   listDurationRuntimeConsumerObservationFacadeRegistrations,
 } from './durationRuntimeConsumerObservationAdapterService.js'
+import {
+  listDurationRuntimeConsumerBusinessPathRequiredIntegrations,
+} from './durationRuntimeConsumerBusinessPathIntegrationAuditService.js'
 
 export interface DurationRuntimeConsumerObservationRuntimeCallEvidence {
   consumerKey: string
@@ -9,6 +12,7 @@ export interface DurationRuntimeConsumerObservationRuntimeCallEvidence {
 
 export interface DurationRuntimeConsumerObservationRuntimeCallIdentity {
   consumerKey: string
+  runtimeEntryRef: string
 }
 
 export interface DurationRuntimeConsumerObservationObservedRuntimeCall
@@ -18,7 +22,9 @@ export interface DurationRuntimeConsumerObservationObservedRuntimeCall
 
 export interface DurationRuntimeConsumerObservationRejectedRuntimeCall
   extends DurationRuntimeConsumerObservationObservedRuntimeCall {
-  reason: 'runtime_consumer_observation_facade_consumer_not_declared'
+  reason:
+    | 'runtime_consumer_observation_facade_consumer_not_declared'
+    | 'runtime_consumer_observation_runtime_entry_ref_not_declared'
 }
 
 export interface DurationRuntimeConsumerObservationRuntimeCallCoverageInput {
@@ -45,22 +51,33 @@ function normalizeText(value: string) {
 
 export function listDurationRuntimeConsumerObservationRequiredRuntimeCalls():
   DurationRuntimeConsumerObservationRuntimeCallIdentity[] {
-  return listDurationRuntimeConsumerObservationFacadeRegistrations()
-    .map((registration) => ({ consumerKey: registration.consumerKey }))
+  const declaredFacadeConsumers = new Set(
+    listDurationRuntimeConsumerObservationFacadeRegistrations()
+      .map((registration) => registration.consumerKey),
+  )
+  return listDurationRuntimeConsumerBusinessPathRequiredIntegrations()
+    .filter((integration) => declaredFacadeConsumers.has(integration.consumerKey))
+    .map((integration) => ({
+      consumerKey: integration.consumerKey,
+      runtimeEntryRef: integration.runtimeEntryRef,
+    }))
 }
 
 export function evaluateDurationRuntimeConsumerObservationRuntimeCallCoverage(
   input: DurationRuntimeConsumerObservationRuntimeCallCoverageInput = {},
 ): DurationRuntimeConsumerObservationRuntimeCallCoverage {
   const requiredRuntimeCalls = listDurationRuntimeConsumerObservationRequiredRuntimeCalls()
-  const requiredConsumerKeys = new Set(requiredRuntimeCalls.map((item) => item.consumerKey))
+  const requiredRuntimeCallByConsumerKey = new Map(
+    requiredRuntimeCalls.map((item) => [item.consumerKey, item]),
+  )
   const observedMap = new Map<string, DurationRuntimeConsumerObservationObservedRuntimeCall>()
   const rejectedRuntimeCalls: DurationRuntimeConsumerObservationRejectedRuntimeCall[] = []
 
   for (const evidence of input.runtimeCallEvidence ?? []) {
     const consumerKey = normalizeConsumerKey(evidence.consumerKey)
     const runtimeEntryRef = normalizeText(evidence.runtimeEntryRef)
-    if (!requiredConsumerKeys.has(consumerKey)) {
+    const requiredRuntimeCall = requiredRuntimeCallByConsumerKey.get(consumerKey)
+    if (!requiredRuntimeCall) {
       rejectedRuntimeCalls.push({
         consumerKey,
         runtimeEntryRef,
@@ -69,6 +86,14 @@ export function evaluateDurationRuntimeConsumerObservationRuntimeCallCoverage(
       continue
     }
     if (!runtimeEntryRef) continue
+    if (runtimeEntryRef !== requiredRuntimeCall.runtimeEntryRef) {
+      rejectedRuntimeCalls.push({
+        consumerKey,
+        runtimeEntryRef,
+        reason: 'runtime_consumer_observation_runtime_entry_ref_not_declared',
+      })
+      continue
+    }
     observedMap.set(consumerKey, { consumerKey, runtimeEntryRef })
   }
 
