@@ -88,9 +88,15 @@ function sourcePathMatches(actualPath: string, expectedPath: string) {
   return normalizePath(actualPath).endsWith(normalizePath(expectedPath))
 }
 
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
 function hasFacadeCall(sourceText: string, facadeFunctionName: string) {
+  const callPattern = new RegExp(`\\b${escapeRegExp(facadeFunctionName)}\\s*\\(`)
   return sourceText.includes(facadeFunctionName)
     && sourceText.includes('durationRuntimeConsumerObservationAdapterService')
+    && callPattern.test(sourceText)
 }
 
 export function listDurationRuntimeConsumerBusinessPathRequiredIntegrations():

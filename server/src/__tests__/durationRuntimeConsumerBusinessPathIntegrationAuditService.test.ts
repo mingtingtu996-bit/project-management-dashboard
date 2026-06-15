@@ -104,4 +104,31 @@ describe('durationRuntimeConsumerBusinessPathIntegrationAuditService', () => {
       }),
     ]))
   })
+
+  it('does not count adapter imports as business path integration unless the facade is called', async () => {
+    const {
+      evaluateDurationRuntimeConsumerBusinessPathIntegrationCoverage,
+    } = await import('../services/durationRuntimeConsumerBusinessPathIntegrationAuditService.js')
+
+    const coverage = evaluateDurationRuntimeConsumerBusinessPathIntegrationCoverage({
+      sourceFiles: [
+        {
+          sourcePath: 'server/src/services/projectRemainingDurationForecastService.ts',
+          sourceText: `
+            import { recordProjectRemainingDurationForecastConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
+            export function buildProjectRemainingDurationForecast() {
+              return {}
+            }
+          `,
+        },
+      ],
+    })
+
+    expect(coverage.status).toBe('runtime_consumer_business_path_integration_not_ready')
+    expect(coverage.observedIntegrations).toEqual([])
+    expect(coverage.missingIntegrations).toContainEqual(expect.objectContaining({
+      consumerKey: 'projectRemainingDurationForecastService',
+      facadeFunctionName: 'recordProjectRemainingDurationForecastConsumedArtifacts',
+    }))
+  })
 })
