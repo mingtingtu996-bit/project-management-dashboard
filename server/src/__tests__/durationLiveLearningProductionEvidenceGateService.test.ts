@@ -201,6 +201,20 @@ function buildAllProductionSourceRows() {
   ]
 }
 
+function buildRuntimeConsumerRuntimeCallRows() {
+  return runtimeCallEvidence.map(({ consumerKey, runtimeEntryRef }) => ({
+    sourceTable: 'runtime_consumer_runtime_calls' as const,
+    row: {
+      id: `runtime-call-${consumerKey}`,
+      consumer_key: consumerKey,
+      runtime_entry_ref: runtimeEntryRef,
+      call_status: 'called',
+      writes_runtime_directly: false,
+      writes_fact_directly: false,
+    },
+  }))
+}
+
 describe('durationLiveLearningProductionEvidenceGateService', () => {
   it('lists the canonical production evidence source plan for every learnable asset', () => {
     const sourcePlan = listDurationLiveLearningProductionEvidenceSourcePlan()
@@ -225,6 +239,7 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
         'construction_dependency_rule_runtime_events',
         'duration_algorithm_accuracy_events',
         'runtime_consumer_observations',
+        'runtime_consumer_runtime_calls',
       ])
       expect(entry.requiredFieldsBySourceTable.duration_experience_samples).toEqual(expect.arrayContaining([
         'id',
@@ -273,6 +288,14 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
         'asset_key',
         'consumer_key',
         'observation_status',
+      ]))
+      expect(entry.requiredFieldsBySourceTable.runtime_consumer_runtime_calls).toEqual(expect.arrayContaining([
+        'id',
+        'consumer_key',
+        'runtime_entry_ref',
+        'call_status',
+        'writes_runtime_directly',
+        'writes_fact_directly',
       ]))
     }
   })
@@ -675,8 +698,10 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
   it('builds the final production claim audit directly from production source rows', () => {
     const audit = buildDurationLiveLearningProductionClaimAudit({
       completionAudit: buildReadyCompletionAudit(),
-      sourceRows: buildAllProductionSourceRows(),
-      runtimeConsumerRuntimeCallEvidence: runtimeCallEvidence,
+      sourceRows: [
+        ...buildAllProductionSourceRows(),
+        ...buildRuntimeConsumerRuntimeCallRows(),
+      ],
     })
 
     expect(audit.status).toBe('duration_live_learning_production_claim_ready')
@@ -684,6 +709,8 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
     expect(audit.evidenceCollection.rejectedRecords).toEqual([])
     expect(audit.productionGate.status).toBe('duration_live_learning_production_evidence_ready')
     expect(audit.runtimeConsumerObservationCoverage.status).toBe('runtime_consumer_observation_coverage_ready')
+    expect(audit.runtimeConsumerRuntimeCallCoverage.status)
+      .toBe('runtime_consumer_observation_runtime_calls_ready')
   })
 
   it('blocks the final production claim when consumer observation facades are not fully integrated', () => {

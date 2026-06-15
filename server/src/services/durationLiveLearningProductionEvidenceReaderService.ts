@@ -151,6 +151,18 @@ function queryForSourceTable(sourceTable: DurationLiveLearningProductionEvidence
     `
   }
 
+  if (sourceTable === 'runtime_consumer_runtime_calls') {
+    return `
+      select *
+      from public.runtime_consumer_runtime_calls
+      where call_status = 'called'
+        and writes_runtime_directly = false
+        and writes_fact_directly = false
+      order by called_at desc
+      limit $1
+    `
+  }
+
   return `
     select *
     from public.runtime_consumer_observations

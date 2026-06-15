@@ -93,6 +93,7 @@ export type DurationLiveLearningProductionEvidenceSourceTable =
   | 'construction_dependency_rule_runtime_publications'
   | 'construction_dependency_rule_runtime_events'
   | 'runtime_consumer_observations'
+  | 'runtime_consumer_runtime_calls'
 
 export interface DurationLiveLearningProductionEvidenceSourceRow {
   sourceTable: DurationLiveLearningProductionEvidenceSourceTable
@@ -204,6 +205,7 @@ const CANONICAL_PRODUCTION_EVIDENCE_SOURCE_TABLES: DurationLiveLearningProductio
   'construction_dependency_rule_runtime_events',
   'duration_algorithm_accuracy_events',
   'runtime_consumer_observations',
+  'runtime_consumer_runtime_calls',
 ]
 
 const REQUIRED_FIELDS_BY_SOURCE_TABLE: Record<DurationLiveLearningProductionEvidenceSourceTable, string[]> = {
@@ -271,6 +273,14 @@ const REQUIRED_FIELDS_BY_SOURCE_TABLE: Record<DurationLiveLearningProductionEvid
     'publication_key',
     'consumer_key',
     'observation_status',
+  ],
+  runtime_consumer_runtime_calls: [
+    'id',
+    'consumer_key',
+    'runtime_entry_ref',
+    'call_status',
+    'writes_runtime_directly',
+    'writes_fact_directly',
   ],
 }
 
@@ -616,6 +626,10 @@ export function collectDurationLiveLearningProductionEvidenceRecordsFromRows(
   const rejectedRows: DurationLiveLearningRejectedProductionEvidenceSourceRow[] = []
 
   for (const source of input.rows ?? []) {
+    if (source.sourceTable === 'runtime_consumer_runtime_calls') {
+      continue
+    }
+
     const row = source.row
     const assetKey = assetKeyFromSourceRow(source)
     if (!assetKey) {
@@ -794,6 +808,24 @@ export function collectDurationLiveLearningProductionEvidenceRecordsFromRows(
   return { records, rejectedRows }
 }
 
+function runtimeConsumerRuntimeCallEvidenceFromSourceRows(
+  sourceRows: readonly DurationLiveLearningProductionEvidenceSourceRow[] | undefined,
+): DurationRuntimeConsumerObservationRuntimeCallEvidence[] {
+  const evidence: DurationRuntimeConsumerObservationRuntimeCallEvidence[] = []
+  for (const source of sourceRows ?? []) {
+    if (source.sourceTable !== 'runtime_consumer_runtime_calls') continue
+    const row = source.row
+    if (readText(row, 'call_status', 'callStatus') !== 'called') continue
+    if (readTrue(row, 'writes_runtime_directly', 'writesRuntimeDirectly')) continue
+    if (readTrue(row, 'writes_fact_directly', 'writesFactDirectly')) continue
+    const consumerKey = readText(row, 'consumer_key', 'consumerKey')
+    const runtimeEntryRef = readText(row, 'runtime_entry_ref', 'runtimeEntryRef')
+    if (!consumerKey || !runtimeEntryRef) continue
+    evidence.push({ consumerKey, runtimeEntryRef })
+  }
+  return evidence
+}
+
 function buildProductionEvidenceMap(
   productionEvidence: readonly DurationLiveLearningProductionEvidenceRef[] | undefined,
 ) {
@@ -896,7 +928,10 @@ export function buildDurationLiveLearningProductionClaimAudit(
         ?? listDurationRuntimeConsumerObservationFacadeRegistrations(),
     })
   const runtimeConsumerRuntimeCallCoverage = evaluateDurationRuntimeConsumerObservationRuntimeCallCoverage({
-    runtimeCallEvidence: input.runtimeConsumerRuntimeCallEvidence,
+    runtimeCallEvidence: [
+      ...runtimeConsumerRuntimeCallEvidenceFromSourceRows(input.sourceRows),
+      ...(input.runtimeConsumerRuntimeCallEvidence ?? []),
+    ],
   })
   const ready = productionGate.status === 'duration_live_learning_production_evidence_ready'
     && runtimeConsumerObservationCoverage.status === 'runtime_consumer_observation_coverage_ready'

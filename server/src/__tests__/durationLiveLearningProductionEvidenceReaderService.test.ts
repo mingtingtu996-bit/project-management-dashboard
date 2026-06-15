@@ -8,7 +8,6 @@ import type {
   DurationLiveLearningEvidence,
   DurationLiveLearningEvidenceOverride,
 } from '../services/durationLiveLearningClosureService.js'
-import type { DurationRuntimeConsumerObservationRuntimeCallEvidence } from '../services/durationRuntimeConsumerObservationRuntimeCallAuditService.js'
 
 const readyEvidence: DurationLiveLearningEvidence = {
   assetClassificationRegistered: true,
@@ -52,7 +51,7 @@ const expectedRuntimeConsumerObservations = [
   { assetKey: 'critical_path_rule_candidate' as const, consumerKey: 'scheduleAccelerationRuntimeService' },
 ]
 
-const runtimeCallEvidence: DurationRuntimeConsumerObservationRuntimeCallEvidence[] = [
+const runtimeCallEvidence = [
   {
     consumerKey: 'durationSuggestionService',
     runtimeEntryRef: 'durationSuggestionService:suggestDuration',
@@ -135,6 +134,16 @@ function rowsForSql(sql: string) {
       writes_fact_directly: false,
     }))
   }
+  if (normalized.includes('from public.runtime_consumer_runtime_calls')) {
+    return runtimeCallEvidence.map(({ consumerKey, runtimeEntryRef }) => ({
+      id: `runtime-call-${consumerKey}`,
+      consumer_key: consumerKey,
+      runtime_entry_ref: runtimeEntryRef,
+      call_status: 'called',
+      writes_runtime_directly: false,
+      writes_fact_directly: false,
+    }))
+  }
   if (normalized.includes('from public.wbs_template_runtime_publications')) return []
   if (normalized.includes('from public.wbs_template_runtime_events')) return []
   if (normalized.includes('from public.construction_dependency_rule_runtime_publications')) return []
@@ -158,13 +167,14 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
       completionAudit: buildReadyCompletionAudit(),
       queryExec,
       maxRowsPerSourceTable: 200,
-      runtimeConsumerRuntimeCallEvidence: runtimeCallEvidence,
     })
 
     expect(audit.status).toBe('duration_live_learning_production_claim_ready')
     expect(audit.runtimeConsumerObservationCoverage.status).toBe('runtime_consumer_observation_coverage_ready')
     expect(audit.runtimeConsumerObservationIntegrationCoverage.status)
       .toBe('runtime_consumer_observation_integration_ready')
+    expect(audit.runtimeConsumerRuntimeCallCoverage.status)
+      .toBe('runtime_consumer_observation_runtime_calls_ready')
     expect(audit.runtimeConsumerObservationCoverage.requiredConsumerObservations).toEqual(expectedRuntimeConsumerObservations)
     expect(audit.runtimeConsumerObservationCoverage.missingConsumerObservations).toEqual([])
     expect(audit.sourceQuery.sourceTables).toEqual([
@@ -177,6 +187,7 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
       'construction_dependency_rule_runtime_events',
       'duration_algorithm_accuracy_events',
       'runtime_consumer_observations',
+      'runtime_consumer_runtime_calls',
     ])
     expect(audit.evidenceRowCollection.rejectedRows).toEqual([])
     expect(audit.evidenceCollection.rejectedRecords).toEqual([])
@@ -191,6 +202,7 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
     expect(joinedSql).toContain('from public.construction_dependency_rule_runtime_events')
     expect(joinedSql).toContain('from public.duration_algorithm_accuracy_events')
     expect(joinedSql).toContain('from public.runtime_consumer_observations')
+    expect(joinedSql).toContain('from public.runtime_consumer_runtime_calls')
     expect(joinedSql).not.toMatch(/\binsert\b|\bupdate\b|\bdelete\b/)
     expect(joinedSql).not.toContain('algorithm_seed_versions')
     expect(joinedSql).not.toContain('standard_work_duration')

@@ -21,6 +21,7 @@ describe('v1.4.22.5 runtime consumer observation migration', () => {
     const fileNames = migrationFileNames()
 
     expect(fileNames).toContain('204_v14225_runtime_consumer_observations.sql')
+    expect(fileNames).toContain('205_v14225_runtime_consumer_runtime_calls.sql')
     expect(fileNames).not.toContain('202_v14225_runtime_consumer_observations.sql')
     expect(fileNames).toContain('202_v14223_dependency_rule_runtime_publications.sql')
     expect(fileNames).toContain('203_v14223_wbs_template_runtime_publications.sql')
@@ -40,5 +41,21 @@ describe('v1.4.22.5 runtime consumer observation migration', () => {
     expect(source).toContain('ALTER TABLE public.runtime_consumer_observations ENABLE ROW LEVEL SECURITY')
     expect(source).toContain('idx_runtime_consumer_observations_asset')
     expect(source).toContain('idx_runtime_consumer_observations_publication')
+  })
+
+  it('creates a read-only production evidence source for runtime consumer calls', () => {
+    const source = allMigrationSource()
+
+    expect(source).toContain('CREATE TABLE IF NOT EXISTS public.runtime_consumer_runtime_calls')
+    expect(source).toContain('consumer_key TEXT NOT NULL')
+    expect(source).toContain('runtime_entry_ref TEXT NOT NULL')
+    expect(source).toContain("call_status TEXT NOT NULL")
+    expect(source).toContain("CHECK (call_status IN ('called', 'rejected'))")
+    expect(source).toContain('runtime_consumer_runtime_calls_no_runtime_writes')
+    expect(source).toContain('writes_runtime_directly BOOLEAN NOT NULL DEFAULT false')
+    expect(source).toContain('writes_fact_directly BOOLEAN NOT NULL DEFAULT false')
+    expect(source).toContain('ALTER TABLE public.runtime_consumer_runtime_calls ENABLE ROW LEVEL SECURITY')
+    expect(source).toContain('idx_runtime_consumer_runtime_calls_consumer')
+    expect(source).toContain('idx_runtime_consumer_runtime_calls_entry')
   })
 })
