@@ -4,6 +4,15 @@ import {
   createAndPersistAlgorithmAssetCandidateEvent,
 } from './algorithmAssetCandidateEventAdapterService.js'
 import type { AlgorithmAssetGovernanceQueryExec } from './algorithmAssetGovernancePersistenceService.js'
+import {
+  collectDurationLiveLearningProductionEvidenceRecordsFromRows,
+  collectDurationLiveLearningProductionEvidenceRefs,
+  type DurationLiveLearningProductionEvidenceRecord,
+  type DurationLiveLearningProductionEvidenceRef,
+  type DurationLiveLearningProductionEvidenceSourceRow,
+  type DurationLiveLearningRejectedProductionEvidenceRecord,
+  type DurationLiveLearningRejectedProductionEvidenceSourceRow,
+} from './durationLiveLearningProductionEvidenceGateService.js'
 
 export interface RecordWbsTemplateCandidateEventInput {
   companyId?: string | null
@@ -97,6 +106,15 @@ export interface SpecialWorkDurationSeedPublicationReadinessInput {
   accuracyMetricsAvailable: boolean
 }
 
+export interface SpecialWorkDurationSeedPublicationReadinessFromProductionRowsInput {
+  candidateOutcome: SpecialWorkDurationSeedCandidateOutcomeEvidence
+  approvedCandidateEventIds: readonly string[]
+  generatedEntityIds?: readonly string[]
+  enabledLearningScopes: readonly SpecialWorkDurationSeedLearningScopeEvidence[]
+  sourceRows?: readonly DurationLiveLearningProductionEvidenceSourceRow[]
+  records?: readonly DurationLiveLearningProductionEvidenceRecord[]
+}
+
 export interface SpecialWorkDurationSeedVersionLineage {
   seedType: 'special_work_duration'
   seedVersionId: string | null
@@ -110,12 +128,25 @@ export interface SpecialWorkDurationSeedVersionLineage {
   pendingRowCount: number
 }
 
+export interface SpecialWorkDurationSeedProductionLineage {
+  evidenceRefs: DurationLiveLearningProductionEvidenceRef
+  rejectedRows: DurationLiveLearningRejectedProductionEvidenceSourceRow[]
+  rejectedRecords: DurationLiveLearningRejectedProductionEvidenceRecord[]
+}
+
 export interface SpecialWorkDurationSeedPublicationReadiness {
   status: 'special_work_seed_publication_ready' | 'special_work_seed_publication_not_ready'
   liveLearningEvidence: SpecialWorkDurationSeedLiveLearningEvidence
   seedVersionLineage: SpecialWorkDurationSeedVersionLineage
   missingReasons: string[]
 }
+
+export type SpecialWorkDurationSeedProductionPublicationReadiness =
+  SpecialWorkDurationSeedPublicationReadiness & {
+    productionLineage: SpecialWorkDurationSeedProductionLineage
+  }
+
+const SPECIAL_WORK_DURATION_SEED_ASSET_KEY = 'special_work_duration_seed'
 
 function normalizeString(value: unknown): string | null {
   const normalized = String(value ?? '').trim()
@@ -150,6 +181,56 @@ function normalizeStringList(values: readonly unknown[] | undefined): string[] {
   return uniqueValues((values ?? [])
     .map((value) => normalizeString(value))
     .filter((value): value is string => Boolean(value)))
+}
+
+function readRowText(row: Record<string, unknown>, ...keys: string[]) {
+  for (const key of keys) {
+    const value = row[key]
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return ''
+}
+
+function findCurrentPublishedSpecialWorkSeedVersionId(
+  sourceRows: readonly DurationLiveLearningProductionEvidenceSourceRow[] | undefined,
+) {
+  for (const source of sourceRows ?? []) {
+    if (source.sourceTable !== 'wbs_template_runtime_publications') continue
+    const row = source.row
+    const seedVersionId = readRowText(row, 'asset_version_id', 'assetVersionId')
+    if (
+      seedVersionId
+      && readRowText(row, 'asset_kind', 'assetKind') === SPECIAL_WORK_DURATION_SEED_ASSET_KEY
+      && readRowText(row, 'publication_key', 'publicationKey')
+      && readRowText(row, 'runtime_publication_status', 'runtimePublicationStatus') === 'runtime_published'
+    ) {
+      return seedVersionId
+    }
+  }
+  return null
+}
+
+function specialWorkSeedProductionLineageFromProductionInput(
+  input: Pick<SpecialWorkDurationSeedPublicationReadinessFromProductionRowsInput, 'sourceRows' | 'records'>,
+): SpecialWorkDurationSeedProductionLineage {
+  const rowCollection = collectDurationLiveLearningProductionEvidenceRecordsFromRows({
+    rows: input.sourceRows,
+  })
+  const evidenceCollection = collectDurationLiveLearningProductionEvidenceRefs({
+    records: [
+      ...rowCollection.records,
+      ...(input.records ?? []),
+    ],
+  })
+  const evidenceRefs = evidenceCollection.productionEvidence.find((evidence) =>
+    evidence.assetKey === SPECIAL_WORK_DURATION_SEED_ASSET_KEY)
+    ?? { assetKey: SPECIAL_WORK_DURATION_SEED_ASSET_KEY }
+
+  return {
+    evidenceRefs,
+    rejectedRows: rowCollection.rejectedRows,
+    rejectedRecords: evidenceCollection.rejectedRecords,
+  }
 }
 
 const SPECIAL_WORK_DURATION_LEARNING_SCOPE_ORDER = ['global', 'industry', 'company', 'project'] as const
@@ -537,5 +618,66 @@ export function buildSpecialWorkDurationSeedPublicationReadiness(
       pendingRowCount,
     },
     missingReasons: readiness.missingReasons,
+  }
+}
+
+export function buildSpecialWorkDurationSeedPublicationReadinessFromProductionRows(
+  input: SpecialWorkDurationSeedPublicationReadinessFromProductionRowsInput,
+): SpecialWorkDurationSeedProductionPublicationReadiness {
+  const generatedRowCount = readPositiveInteger(input.candidateOutcome.generatedRowCount)
+  const retainedRowCount = readBoundedInteger(input.candidateOutcome.retainedRowCount, 0, generatedRowCount)
+  const rejectedRowCount = readBoundedInteger(input.candidateOutcome.rejectedRowCount, 0, generatedRowCount)
+  const pendingRowCount = readBoundedInteger(input.candidateOutcome.pendingRowCount, 0, generatedRowCount)
+  const approvedCandidateEventIds = normalizeStringList(input.approvedCandidateEventIds)
+  const generatedEntityIds = normalizeStringList(input.generatedEntityIds)
+  const productionLineage = specialWorkSeedProductionLineageFromProductionInput(input)
+  const evidenceRefs = productionLineage.evidenceRefs
+  const seedVersionId = findCurrentPublishedSpecialWorkSeedVersionId(input.sourceRows)
+  const runtimePublicationKey = normalizeString(evidenceRefs.publicationExecutionRef)
+  const rollbackTarget = normalizeString(evidenceRefs.rollbackDrillEvidenceRef)
+  const specialSeedPublicationWriterReady = Boolean(seedVersionId && runtimePublicationKey)
+  const seedVersionLineageRecorded = Boolean(seedVersionId)
+    && approvedCandidateEventIds.length > 0
+    && generatedRowCount > 0
+
+  const readiness = evaluateSpecialWorkDurationSeedLiveLearningEvidence({
+    candidateOutcome: {
+      generatedRowCount,
+      retainedRowCount,
+      rejectedRowCount,
+      pendingRowCount,
+    },
+    networkPredictionEventRecorded: Boolean(evidenceRefs.productionSampleEvidenceRef),
+    templateFeedbackOutcomeRecorded: Boolean(evidenceRefs.productionSampleEvidenceRef),
+    approvedSpecialSeedCandidateRecorded: approvedCandidateEventIds.length > 0,
+    enabledLearningScopes: input.enabledLearningScopes,
+    runtimeConsumerUsesPublishedArtifact: Boolean(evidenceRefs.runtimeConsumerObservationRef),
+    specialSeedPublicationWriterReady,
+    seedVersionLineageRecorded,
+    releaseExitApproved: Boolean(evidenceRefs.publicationExecutionRef),
+    impactMonitoringReady: Boolean(evidenceRefs.impactMonitoringEvidenceRef),
+    rollbackTargetReady: Boolean(evidenceRefs.rollbackDrillEvidenceRef),
+    accuracyMetricsAvailable: Boolean(evidenceRefs.accuracyEvidenceRef),
+  })
+
+  return {
+    status: readiness.status === 'special_work_seed_live_learning_ready'
+      ? 'special_work_seed_publication_ready'
+      : 'special_work_seed_publication_not_ready',
+    liveLearningEvidence: readiness.liveLearningEvidence,
+    seedVersionLineage: {
+      seedType: 'special_work_duration',
+      seedVersionId,
+      runtimePublicationKey,
+      rollbackTarget,
+      approvedCandidateEventIds,
+      generatedEntityIds,
+      generatedRowCount,
+      retainedRowCount,
+      rejectedRowCount,
+      pendingRowCount,
+    },
+    missingReasons: readiness.missingReasons,
+    productionLineage,
   }
 }

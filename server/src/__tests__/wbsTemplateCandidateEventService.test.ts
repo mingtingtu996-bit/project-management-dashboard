@@ -38,6 +38,7 @@ vi.mock('../database.js', () => ({
 }))
 
 const {
+  buildSpecialWorkDurationSeedPublicationReadinessFromProductionRows,
   buildSpecialWorkDurationSeedPublicationReadiness,
   evaluateSpecialWorkDurationSeedLiveLearningEvidence,
   recordWbsTemplateCandidateEvent,
@@ -339,6 +340,103 @@ describe('wbsTemplateCandidateEventService', () => {
       'rollback_target_required',
       'accuracy_metrics_required',
     ]))
+  })
+
+  it('builds special seed publication readiness from production source rows without writing templates or tasks', () => {
+    const readiness = buildSpecialWorkDurationSeedPublicationReadinessFromProductionRows({
+      candidateOutcome: {
+        generatedRowCount: 10,
+        retainedRowCount: 7,
+        rejectedRowCount: 3,
+        pendingRowCount: 0,
+      },
+      approvedCandidateEventIds: ['algorithm-candidate-event-id'],
+      generatedEntityIds: ['task-1', 'task-2'],
+      enabledLearningScopes: ['system', 'segment_baseline', 'company', 'project'],
+      records: [{
+        assetKey: 'special_work_duration_seed',
+        evidenceKind: 'production_sample',
+        evidenceRef: 'network_outcomes:wbs-template-candidate-event-1',
+        evidenceStatus: 'accepted',
+      }],
+      sourceRows: [
+        {
+          sourceTable: 'wbs_template_runtime_publications',
+          row: {
+            publication_key: 'wbs_template_runtime:special-seed-version-v2',
+            asset_kind: 'special_work_duration_seed',
+            asset_version_id: 'special-seed-version-v2',
+            runtime_publication_status: 'runtime_published',
+            impact_monitoring: {
+              status: 'monitoring_armed',
+              eventRef: 'impact_monitoring:wbs_template_runtime:special-seed-version-v2:armed',
+            },
+            rollback_execution: {
+              status: 'rollback_verified',
+              eventRef: 'rollback:wbs_template_runtime:special-seed-version-v2:verified',
+            },
+          },
+        },
+        {
+          sourceTable: 'runtime_consumer_observations',
+          row: {
+            id: 'consumer-special-seed-1',
+            asset_key: 'special_work_duration_seed',
+            consumer_key: 'wbsTemplateGenerationService',
+            publication_key: 'wbs_template_runtime:special-seed-version-v2',
+            observation_status: 'observed',
+            writes_runtime_directly: false,
+            writes_fact_directly: false,
+          },
+        },
+        {
+          sourceTable: 'duration_algorithm_accuracy_events',
+          row: {
+            id: 'accuracy-special-seed-1',
+            absolute_error_days: 1,
+            prediction_context: {
+              assetKey: 'special_work_duration_seed',
+            },
+            actual_context: {
+              accuracyGateStatus: 'accuracy_passed',
+            },
+          },
+        },
+      ],
+    })
+
+    expect(readiness.status).toBe('special_work_seed_publication_ready')
+    expect(readiness.liveLearningEvidence).toEqual(expect.objectContaining({
+      predictionEventRecorded: true,
+      actualOutcomeEventRecorded: true,
+      approvedSpecialSeedCandidateRecorded: true,
+      specialSeedPublicationWriterReady: true,
+      seedVersionLineageRecorded: true,
+      runtimeConsumerUsesPublishedArtifact: true,
+      releaseExitApproved: true,
+      impactMonitoringReady: true,
+      rollbackTargetReady: true,
+      accuracyMetricsAvailable: true,
+    }))
+    expect(readiness.seedVersionLineage).toEqual(expect.objectContaining({
+      seedVersionId: 'special-seed-version-v2',
+      runtimePublicationKey: 'wbs_template_runtime:special-seed-version-v2',
+      rollbackTarget: 'rollback:wbs_template_runtime:special-seed-version-v2:verified',
+      approvedCandidateEventIds: ['algorithm-candidate-event-id'],
+      generatedEntityIds: ['task-1', 'task-2'],
+    }))
+    expect(readiness.productionLineage.evidenceRefs).toEqual(expect.objectContaining({
+      productionSampleEvidenceRef: 'network_outcomes:wbs-template-candidate-event-1',
+      publicationExecutionRef: 'wbs_template_runtime:special-seed-version-v2',
+      runtimeConsumerObservationRef: 'runtime_consumer:consumer-special-seed-1',
+      impactMonitoringEvidenceRef: 'impact_monitoring:wbs_template_runtime:special-seed-version-v2:armed',
+      rollbackDrillEvidenceRef: 'rollback:wbs_template_runtime:special-seed-version-v2:verified',
+      accuracyEvidenceRef: 'duration_algorithm_accuracy_events:accuracy-special-seed-1',
+    }))
+    expect(readiness.productionLineage.rejectedRows).toEqual([])
+    expect(readiness.productionLineage.rejectedRecords).toEqual([])
+    expect(mocks.from).not.toHaveBeenCalled()
+    expect(mocks.rawQuery).not.toHaveBeenCalled()
   })
 
   it('keeps special seed live learning not ready when candidate outcomes are pending or publication evidence is missing', () => {
