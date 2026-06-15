@@ -136,14 +136,44 @@ function buildPlanNetworkOutcomeRecords() {
 function rowsForSql(sql: string) {
   const normalized = sql.toLowerCase()
   if (normalized.includes('from public.duration_experience_samples')) {
-    return durationOutcomeAssetKeys.map((assetKey) => ({
-      id: `sample-${assetKey}`,
-      sample_status: 'active',
-      included_in_benchmark: true,
-      actual_duration: 8,
-      completed_at: '2026-06-01T00:00:00.000Z',
-      metadata: { liveLearningAssetKey: assetKey },
-    }))
+    const rows: Array<Record<string, unknown>> = []
+    for (const assetKey of durationOutcomeAssetKeys) {
+      if (assetKey === 'base_duration_benchmark') {
+        rows.push(...['global', 'industry', 'company', 'project'].map((learningScope) => ({
+          id: `sample-${assetKey}-${learningScope}`,
+          sample_status: 'active',
+          included_in_benchmark: true,
+          actual_duration: 8,
+          completed_at: '2026-06-01T00:00:00.000Z',
+          metadata: { liveLearningAssetKey: assetKey, learningScope },
+        })))
+        continue
+      }
+      if (assetKey === 'duration_cold_start_baseline') {
+        rows.push(...[
+          { id: `sample-${assetKey}-company-1`, learningScope: 'company' },
+          { id: `sample-${assetKey}-company-2`, learningScope: 'company' },
+          { id: `sample-${assetKey}-project-1`, learningScope: 'project' },
+        ].map(({ id, learningScope }) => ({
+          id,
+          sample_status: 'active',
+          included_in_benchmark: true,
+          actual_duration: 8,
+          completed_at: '2026-06-01T00:00:00.000Z',
+          metadata: { liveLearningAssetKey: assetKey, learningScope },
+        })))
+        continue
+      }
+      rows.push({
+        id: `sample-${assetKey}`,
+        sample_status: 'active',
+        included_in_benchmark: true,
+        actual_duration: 8,
+        completed_at: '2026-06-01T00:00:00.000Z',
+        metadata: { liveLearningAssetKey: assetKey, learningScope: 'company' },
+      })
+    }
+    return rows
   }
   if (normalized.includes('from public.algorithm_learnable_parameter_runtime_publications')) {
     return parameterPublicationAssetKeys.map((assetKey) => ({
@@ -330,12 +360,19 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
     })
 
     expect(audit.status).toBe('duration_live_learning_production_claim_not_ready')
+    expect(audit.completionAudit.status).toBe('duration_live_learning_completion_not_ready')
     expect(audit.evidenceRowCollection.rejectedRows).toEqual([])
     expect(audit.productionGate.status).toBe('duration_live_learning_production_evidence_not_ready')
-    expect(audit.productionGate.missingEvidenceByAsset).toEqual(planNetworkAssetKeys.map((assetKey) => ({
-      assetKey,
-      missingReasonCodes: ['production_sample_evidence_required'],
-    })))
+    expect(audit.productionGate.missingEvidenceByAsset).toEqual([
+      {
+        assetKey: 'base_duration_benchmark',
+        missingReasonCodes: ['completion_audit_ready_required'],
+      },
+      ...planNetworkAssetKeys.map((assetKey) => ({
+        assetKey,
+        missingReasonCodes: ['production_sample_evidence_required'],
+      })),
+    ])
   })
 
   it('builds the production claim audit from canonical read-only source queries', async () => {
@@ -397,6 +434,26 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
     expect(joinedSql).not.toMatch(/\binsert\b|\bupdate\b|\bdelete\b/)
     expect(joinedSql).not.toContain('task_baseline_items')
     expect(joinedSql).not.toContain('monthly_plan_items')
+  })
+
+  it('builds the DB completion audit from production source rows instead of caller supplied completion audit', async () => {
+    const {
+      buildDurationLiveLearningProductionClaimAuditFromDb,
+    } = await import('../services/durationLiveLearningProductionEvidenceReaderService.js')
+    const queryExec = async <T = Record<string, unknown>>(sql: string): Promise<T[]> =>
+      rowsForSql(sql) as T[]
+
+    const audit = await buildDurationLiveLearningProductionClaimAuditFromDb({
+      completionAudit: buildDurationLiveLearningCompletionAudit(),
+      queryExec,
+      maxRowsPerSourceTable: 200,
+      records: buildPlanNetworkOutcomeRecords(),
+    })
+
+    expect(audit.completionAudit.status).toBe('duration_live_learning_completion_ready')
+    expect(audit.productionGate.completionAuditStatus).toBe('duration_live_learning_completion_ready')
+    expect(audit.productionGate.missingEvidenceByAsset).toEqual([])
+    expect(audit.status).toBe('duration_live_learning_production_claim_ready')
   })
 
   it('loads real business path source files and allows the claim when runtime entries are integrated', async () => {

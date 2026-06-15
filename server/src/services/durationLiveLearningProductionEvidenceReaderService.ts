@@ -3,10 +3,22 @@ import type {
   DurationLiveLearningCompletionAudit,
 } from './durationLiveLearningCompletionAuditService.js'
 import {
+  buildDurationLiveLearningCompletionAudit,
+} from './durationLiveLearningCompletionAuditService.js'
+import type {
+  DurationLiveLearningAssetKey,
+  DurationLiveLearningEvidence,
+  DurationLiveLearningEvidenceOverride,
+  DurationLearningScope,
+} from './durationLiveLearningClosureService.js'
+import {
   buildDurationLiveLearningProductionClaimAudit,
+  collectDurationLiveLearningProductionEvidenceRecordsFromRows,
+  collectDurationLiveLearningProductionEvidenceRefs,
   listDurationLiveLearningProductionEvidenceSourcePlan,
   type DurationLiveLearningProductionClaimAudit,
   type DurationLiveLearningProductionEvidenceRecord,
+  type DurationLiveLearningProductionEvidenceRef,
   type DurationLiveLearningProductionEvidenceSourceRow,
   type DurationLiveLearningProductionEvidenceSourceTable,
 } from './durationLiveLearningProductionEvidenceGateService.js'
@@ -32,7 +44,7 @@ export interface DurationLiveLearningProductionEvidenceSourceQuery {
 
 export interface DurationLiveLearningProductionClaimAuditFromDbInput
   extends DurationLiveLearningProductionEvidenceSourceQueryInput {
-  completionAudit: DurationLiveLearningCompletionAudit
+  completionAudit?: DurationLiveLearningCompletionAudit
   records?: readonly DurationLiveLearningProductionEvidenceRecord[]
 }
 
@@ -42,6 +54,18 @@ export type DurationLiveLearningProductionClaimAuditFromDb =
   }
 
 const DEFAULT_MAX_ROWS_PER_SOURCE_TABLE = 500
+const FULL_TIERED_LEARNING_SCOPES: DurationLearningScope[] = ['global', 'industry', 'company', 'project']
+const FORECAST_SCOPE_EXCEPTION_SCOPES: DurationLearningScope[] = ['company', 'project']
+const FORECAST_SCOPE_EXCEPTION_ASSET_KEYS = new Set<DurationLiveLearningAssetKey>([
+  'forecast_residual_overlay',
+  'forecast_confidence_weight',
+])
+const PLAN_NETWORK_PRODUCTION_SAMPLE_ASSET_KEYS = new Set<DurationLiveLearningAssetKey>([
+  'special_work_duration_seed',
+  'wbs_reference_days',
+  'dependency_rule_candidate',
+  'critical_path_rule_candidate',
+])
 
 async function defaultQueryExec<T = Record<string, unknown>>(
   sql: string,
@@ -62,6 +86,140 @@ function canonicalSourceTables() {
   const sourcePlan = listDurationLiveLearningProductionEvidenceSourcePlan()
   const sourceTables = sourcePlan.flatMap((entry) => entry.sourceTables)
   return Array.from(new Set(sourceTables))
+}
+
+function normalizeText(value: unknown) {
+  return String(value ?? '').trim()
+}
+
+function readRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+}
+
+function readText(row: Record<string, unknown>, ...keys: string[]) {
+  for (const key of keys) {
+    const value = row[key]
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return ''
+}
+
+function normalizeLearningScope(value: unknown): DurationLearningScope | null {
+  const normalized = normalizeText(value).toLowerCase()
+  if (normalized === 'system' || normalized === 'global') return 'global'
+  if (normalized === 'industry' || normalized === 'industry_baseline' || normalized === 'segment_baseline') {
+    return 'industry'
+  }
+  if (normalized === 'company') return 'company'
+  if (normalized === 'project') return 'project'
+  return null
+}
+
+function durationSampleAssetKey(row: Record<string, unknown>) {
+  const metadata = readRecord(row.metadata)
+  return readText(row, 'asset_key', 'assetKey')
+    || readText(metadata, 'liveLearningAssetKey', 'live_learning_asset_key', 'assetKey', 'asset_key')
+}
+
+function durationSampleLearningScope(row: Record<string, unknown>) {
+  const metadata = readRecord(row.metadata)
+  return normalizeLearningScope(
+    readText(row, 'learning_scope', 'learningScope', 'sample_scope', 'sampleScope', 'scope')
+      || readText(metadata, 'learningScope', 'learning_scope', 'sampleScope', 'sample_scope', 'scope'),
+  )
+}
+
+function acceptedLearningScopesFromDurationSamples(
+  assetKey: DurationLiveLearningAssetKey,
+  sourceRows: readonly DurationLiveLearningProductionEvidenceSourceRow[],
+): DurationLearningScope[] {
+  const scopes = new Set<DurationLearningScope>()
+  for (const source of sourceRows) {
+    if (source.sourceTable !== 'duration_experience_samples') continue
+    if (durationSampleAssetKey(source.row) !== assetKey) continue
+    if (readText(source.row, 'sample_status', 'sampleStatus') !== 'active') continue
+    if (source.row.included_in_benchmark !== true) continue
+    if (typeof source.row.actual_duration !== 'number' || !Number.isFinite(source.row.actual_duration)) continue
+    if (!readText(source.row, 'completed_at', 'completedAt')) continue
+    const scope = durationSampleLearningScope(source.row)
+    if (scope) scopes.add(scope)
+  }
+  return FULL_TIERED_LEARNING_SCOPES.filter((scope) => scopes.has(scope))
+}
+
+function hasRef(value: string | null | undefined) {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
+function publicationRefMatchesObservedPublication(evidence: DurationLiveLearningProductionEvidenceRef) {
+  const publicationRef = normalizeText(evidence.publicationExecutionRef)
+  const observedPublicationKey = normalizeText(evidence.runtimeConsumerPublicationKey)
+  return Boolean(publicationRef && observedPublicationKey)
+    && (
+      publicationRef === observedPublicationKey
+      || publicationRef.endsWith(`:${observedPublicationKey}`)
+    )
+}
+
+function productionCompletionEvidenceForAsset(
+  evidence: DurationLiveLearningProductionEvidenceRef,
+  sourceRows: readonly DurationLiveLearningProductionEvidenceSourceRow[],
+): DurationLiveLearningEvidence {
+  const scopeExceptionApproved = FORECAST_SCOPE_EXCEPTION_ASSET_KEYS.has(evidence.assetKey)
+  const baseScopes = evidence.assetKey === 'base_duration_benchmark'
+    ? acceptedLearningScopesFromDurationSamples(evidence.assetKey, sourceRows)
+    : FULL_TIERED_LEARNING_SCOPES
+  const enabledLearningScopes = scopeExceptionApproved
+    ? FORECAST_SCOPE_EXCEPTION_SCOPES
+    : baseScopes
+  const hasTieredLearningPolicy = scopeExceptionApproved
+    || FULL_TIERED_LEARNING_SCOPES.every((scope) => enabledLearningScopes.includes(scope))
+
+  return {
+    assetClassificationRegistered: true,
+    predictionEventRecorded: hasRef(evidence.publicationExecutionRef) || hasRef(evidence.accuracyEvidenceRef),
+    actualOutcomeEventRecorded: hasRef(evidence.productionSampleEvidenceRef),
+    tieredLearningPolicyRegistered: hasTieredLearningPolicy,
+    enabledLearningScopes,
+    scopeExceptionApproved: scopeExceptionApproved ? true : undefined,
+    runtimeConsumerUsesPublishedArtifact: hasRef(evidence.runtimeConsumerObservationRef)
+      && publicationRefMatchesObservedPublication(evidence),
+    releaseExitApproved: hasRef(evidence.publicationExecutionRef),
+    impactMonitoringReady: hasRef(evidence.impactMonitoringEvidenceRef),
+    rollbackTargetReady: hasRef(evidence.rollbackDrillEvidenceRef),
+    accuracyMetricsAvailable: hasRef(evidence.accuracyEvidenceRef),
+  }
+}
+
+function planNetworkProductionSampleRecords(
+  records: readonly DurationLiveLearningProductionEvidenceRecord[] | undefined,
+) {
+  return (records ?? []).filter((record) =>
+    record.evidenceKind === 'production_sample'
+    && PLAN_NETWORK_PRODUCTION_SAMPLE_ASSET_KEYS.has(record.assetKey))
+}
+
+function buildDurationLiveLearningCompletionAuditFromProductionSources(input: {
+  sourceRows: readonly DurationLiveLearningProductionEvidenceSourceRow[]
+  records?: readonly DurationLiveLearningProductionEvidenceRecord[]
+}) {
+  const rowCollection = collectDurationLiveLearningProductionEvidenceRecordsFromRows({
+    rows: input.sourceRows,
+  })
+  const evidenceCollection = collectDurationLiveLearningProductionEvidenceRefs({
+    records: [
+      ...rowCollection.records,
+      ...planNetworkProductionSampleRecords(input.records),
+    ],
+  })
+  const evidenceOverrides: DurationLiveLearningEvidenceOverride[] = evidenceCollection.productionEvidence.map((evidence) => ({
+    assetKey: evidence.assetKey,
+    evidence: productionCompletionEvidenceForAsset(evidence, input.sourceRows),
+  }))
+
+  return buildDurationLiveLearningCompletionAudit({ evidenceOverrides })
 }
 
 function queryForSourceTable(sourceTable: DurationLiveLearningProductionEvidenceSourceTable) {
@@ -214,8 +372,12 @@ export async function buildDurationLiveLearningProductionClaimAuditFromDb(
 ): Promise<DurationLiveLearningProductionClaimAuditFromDb> {
   const sourceQuery = await loadDurationLiveLearningProductionEvidenceSourceRows(input)
   const runtimeConsumerBusinessPathSourceFiles = await loadDurationRuntimeConsumerBusinessPathSourceFiles()
+  const completionAudit = buildDurationLiveLearningCompletionAuditFromProductionSources({
+    sourceRows: sourceQuery.sourceRows,
+    records: input.records,
+  })
   const audit = buildDurationLiveLearningProductionClaimAudit({
-    completionAudit: input.completionAudit,
+    completionAudit,
     sourceRows: sourceQuery.sourceRows,
     records: input.records,
     runtimeConsumerBusinessPathSourceFiles,
