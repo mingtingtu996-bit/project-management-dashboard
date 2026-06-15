@@ -207,6 +207,16 @@ function standardWorkSeedProductionLineageFromProductionInput(
   }
 }
 
+function standardWorkSeedObservationMatchesPublication(
+  evidenceRefs: DurationLiveLearningProductionEvidenceRef,
+) {
+  const publicationKey = normalizeText(evidenceRefs.publicationExecutionRef)
+  const observedPublicationKey = normalizeText(evidenceRefs.runtimeConsumerPublicationKey)
+  return Boolean(publicationKey)
+    && Boolean(observedPublicationKey)
+    && publicationKey === observedPublicationKey
+}
+
 function buildCandidatePayload(
   report: StandardWorkDurationSeedReplayGovernanceReport,
   item: StandardWorkDurationSeedReplayCalibrationQueueItem,
@@ -412,6 +422,9 @@ export function buildStandardWorkDurationSeedPublicationReadinessFromProductionR
   const seedVersionId = findCurrentPublishedStandardWorkSeedVersionId(input.sourceRows)
   const runtimePublicationKey = normalizeText(evidenceRefs.publicationExecutionRef) || null
   const rollbackTarget = normalizeText(evidenceRefs.rollbackDrillEvidenceRef) || null
+  const hasRuntimeConsumerObservation = Boolean(evidenceRefs.runtimeConsumerObservationRef)
+  const runtimeConsumerObservationMatchesPublication = hasRuntimeConsumerObservation
+    && standardWorkSeedObservationMatchesPublication(evidenceRefs)
   const sourceSampleIds = buildPublicationSourceSampleIds(input.report)
   const seedPublicationWriterReady = Boolean(seedVersionId && runtimePublicationKey)
     && input.bridgeResult.candidateOnlyUpsertedCount > 0
@@ -424,7 +437,7 @@ export function buildStandardWorkDurationSeedPublicationReadinessFromProductionR
     actualOutcomeEventRecorded: Boolean(evidenceRefs.productionSampleEvidenceRef),
     approvedReplayCandidateRecorded: approvedCandidateIds.length > 0,
     enabledLearningScopes: input.enabledLearningScopes,
-    runtimeConsumerUsesPublishedArtifact: Boolean(evidenceRefs.runtimeConsumerObservationRef),
+    runtimeConsumerUsesPublishedArtifact: runtimeConsumerObservationMatchesPublication,
     seedPublicationWriterReady,
     seedVersionLineageRecorded,
     releaseExitApproved: Boolean(evidenceRefs.publicationExecutionRef),
@@ -448,7 +461,12 @@ export function buildStandardWorkDurationSeedPublicationReadinessFromProductionR
       approvedCandidateIds,
       sourceSampleIds,
     },
-    missingReasons: readiness.missingReasons,
+    missingReasons: Array.from(new Set([
+      ...readiness.missingReasons,
+      hasRuntimeConsumerObservation && !runtimeConsumerObservationMatchesPublication
+        ? 'runtime_consumer_publication_mismatch'
+        : '',
+    ].filter(Boolean))),
     productionLineage,
   }
 }
