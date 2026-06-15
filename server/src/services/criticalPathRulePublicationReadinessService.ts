@@ -20,6 +20,8 @@ export interface CriticalPathRulePublicationReadinessInput {
   approvedCandidateEventIds: readonly string[]
   criticalPathRuleVersionId?: string | null
   runtimePublicationKey?: string | null
+  runtimeConsumerObservationRef?: string | null
+  runtimeConsumerPublicationKey?: string | null
   rollbackTarget?: string | null
   enabledLearningScopes: readonly CriticalPathRuleLearningScopeEvidence[]
   releaseExitApproved: boolean
@@ -77,6 +79,20 @@ function normalizeStringList(values: readonly unknown[] | undefined): string[] {
   return [...new Set((values ?? [])
     .map((value) => String(value ?? '').trim())
     .filter(Boolean))]
+}
+
+function uniqueValues<T extends string>(values: T[]): T[] {
+  return [...new Set(values.filter(Boolean))]
+}
+
+function criticalPathRuleObservationMatchesPublication(
+  evidenceRefs: DurationLiveLearningProductionEvidenceRef,
+) {
+  const publicationKey = normalizeText(evidenceRefs.publicationExecutionRef)
+  const observedPublicationKey = normalizeText(evidenceRefs.runtimeConsumerPublicationKey)
+  return Boolean(publicationKey)
+    && Boolean(observedPublicationKey)
+    && publicationKey === observedPublicationKey
 }
 
 function readRowText(row: Record<string, unknown>, ...keys: string[]) {
@@ -151,6 +167,8 @@ export function buildCriticalPathRulePublicationReadiness(
   const approvedCandidateEventIds = normalizeStringList(input.approvedCandidateEventIds)
   const criticalPathRuleVersionId = normalizeText(input.criticalPathRuleVersionId)
   const runtimePublicationKey = normalizeText(input.runtimePublicationKey)
+  const runtimeConsumerObservationRef = normalizeText(input.runtimeConsumerObservationRef)
+  const runtimeConsumerPublicationKey = normalizeText(input.runtimeConsumerPublicationKey)
   const rollbackTarget = normalizeText(input.rollbackTarget)
   const criticalTaskIds = normalizeStringList([
     ...input.criticalPathSnapshot.autoTaskIds,
@@ -168,13 +186,25 @@ export function buildCriticalPathRulePublicationReadiness(
       && criticalPathInputHash
       && criticalSetHash,
   )
+  const runtimeConsumerPublicationMismatched = Boolean(
+    runtimeConsumerObservationRef
+      && runtimePublicationKey
+      && runtimeConsumerPublicationKey
+      && runtimeConsumerPublicationKey !== runtimePublicationKey,
+  )
+  const runtimeConsumerObservationMatchesPublication = Boolean(
+    runtimeConsumerObservationRef
+      && runtimePublicationKey
+      && runtimeConsumerPublicationKey
+      && runtimeConsumerPublicationKey === runtimePublicationKey,
+  )
 
   const readiness = evaluateCriticalPathRuleCandidateLiveLearningEvidence({
     criticalPathSnapshot: input.criticalPathSnapshot,
     criticalPathOutcomeEventRecorded: input.criticalPathOutcomeEventRecorded,
     approvedCriticalPathRuleCandidateRecorded: approvedCandidateEventIds.length > 0,
     enabledLearningScopes: input.enabledLearningScopes,
-    runtimeConsumerUsesPublishedArtifact: Boolean(runtimePublicationKey),
+    runtimeConsumerUsesPublishedArtifact: runtimeConsumerObservationMatchesPublication,
     criticalPathRulePublicationWriterReady,
     criticalPathRuleLineageRecorded,
     releaseExitApproved: input.releaseExitApproved,
@@ -200,7 +230,10 @@ export function buildCriticalPathRulePublicationReadiness(
       criticalTaskIds,
       projectDurationDays: input.criticalPathSnapshot.projectDurationDays,
     },
-    missingReasons: readiness.missingReasons,
+    missingReasons: uniqueValues([
+      ...readiness.missingReasons,
+      runtimeConsumerPublicationMismatched ? 'runtime_consumer_publication_mismatch' : '',
+    ]),
   }
 }
 
@@ -213,6 +246,9 @@ export function buildCriticalPathRulePublicationReadinessFromProductionRows(
   const criticalPathRuleVersionId = findCurrentPublishedCriticalPathRuleVersionId(input.sourceRows)
   const runtimePublicationKey = normalizeText(evidenceRefs.publicationExecutionRef)
   const rollbackTarget = normalizeText(evidenceRefs.rollbackDrillEvidenceRef)
+  const hasRuntimeConsumerObservation = Boolean(evidenceRefs.runtimeConsumerObservationRef)
+  const runtimeConsumerObservationMatchesPublication = hasRuntimeConsumerObservation
+    && criticalPathRuleObservationMatchesPublication(evidenceRefs)
   const criticalTaskIds = normalizeStringList([
     ...input.criticalPathSnapshot.autoTaskIds,
     ...input.criticalPathSnapshot.displayTaskIds,
@@ -235,7 +271,7 @@ export function buildCriticalPathRulePublicationReadinessFromProductionRows(
     criticalPathOutcomeEventRecorded: Boolean(evidenceRefs.productionSampleEvidenceRef),
     approvedCriticalPathRuleCandidateRecorded: approvedCandidateEventIds.length > 0,
     enabledLearningScopes: input.enabledLearningScopes,
-    runtimeConsumerUsesPublishedArtifact: Boolean(evidenceRefs.runtimeConsumerObservationRef),
+    runtimeConsumerUsesPublishedArtifact: runtimeConsumerObservationMatchesPublication,
     criticalPathRulePublicationWriterReady,
     criticalPathRuleLineageRecorded,
     releaseExitApproved: Boolean(evidenceRefs.publicationExecutionRef),
@@ -261,7 +297,12 @@ export function buildCriticalPathRulePublicationReadinessFromProductionRows(
       criticalTaskIds,
       projectDurationDays: input.criticalPathSnapshot.projectDurationDays,
     },
-    missingReasons: readiness.missingReasons,
+    missingReasons: uniqueValues([
+      ...readiness.missingReasons,
+      hasRuntimeConsumerObservation && !runtimeConsumerObservationMatchesPublication
+        ? 'runtime_consumer_publication_mismatch'
+        : '',
+    ]),
     productionLineage,
   }
 }

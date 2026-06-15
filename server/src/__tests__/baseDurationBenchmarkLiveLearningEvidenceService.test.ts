@@ -20,6 +20,8 @@ describe('baseDurationBenchmarkLiveLearningEvidenceService', () => {
         project: 6,
       },
       runtimePublicationKey: 'duration_benchmark_runtime:benchmark-blend-v2',
+      runtimeConsumerObservationRef: 'runtime_consumer:base-duration:observed',
+      runtimeConsumerPublicationKey: 'duration_benchmark_runtime:benchmark-blend-v2',
       rollbackTarget: 'duration_benchmark_runtime:benchmark-blend-v1',
       releaseExitApproved: true,
       impactMonitoringReady: true,
@@ -60,6 +62,33 @@ describe('baseDurationBenchmarkLiveLearningEvidenceService', () => {
     expect(manifest.assetEvaluations.find((asset) => asset.assetKey === 'base_duration_benchmark')).toEqual(
       expect.objectContaining({ status: 'live_self_learning_ready' }),
     )
+  })
+
+  it('blocks base duration benchmark evidence when consumer observes a different runtime publication', () => {
+    const decision = buildBaseDurationBenchmarkLiveLearningEvidence({
+      predictionEventRecorded: true,
+      actualOutcomeEventRecorded: true,
+      enabledLearningScopes: ['system', 'industry_baseline', 'company', 'project'],
+      acceptedSampleCounts: {
+        global: 80,
+        industry: 40,
+        company: 12,
+        project: 6,
+      },
+      runtimePublicationKey: 'duration_benchmark_runtime:benchmark-blend-v2',
+      runtimeConsumerObservationRef: 'runtime_consumer:base-duration:observed',
+      runtimeConsumerPublicationKey: 'duration_benchmark_runtime:benchmark-blend-v1',
+      rollbackTarget: 'duration_benchmark_runtime:benchmark-blend-v1',
+      releaseExitApproved: true,
+      impactMonitoringReady: true,
+      accuracyMetricsAvailable: true,
+    })
+
+    expect(decision.status).toBe('base_duration_benchmark_live_learning_not_ready')
+    expect(decision.liveLearningEvidence.runtimeConsumerUsesPublishedArtifact).toBe(false)
+    expect(decision.missingReasons).toEqual(expect.arrayContaining([
+      'runtime_consumer_publication_mismatch',
+    ]))
   })
 
   it('keeps base duration benchmark evidence not ready without scope samples, runtime publication, monitoring, and accuracy', () => {

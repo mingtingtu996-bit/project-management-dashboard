@@ -16,6 +16,8 @@ describe('forecastScopedRuntimeLiveLearningEvidenceService', () => {
       enabledLearningScopes: ['company', 'project'],
       scopeExceptionApprovalId: 'scope-exception-approval-1',
       runtimePublicationKey: 'forecast_residual_overlay_runtime:overlay-v2',
+      runtimeConsumerObservationRef: 'runtime_consumer:forecast-residual:observed',
+      runtimeConsumerPublicationKey: 'forecast_residual_overlay_runtime:overlay-v2',
       rollbackTarget: 'forecast_residual_overlay_runtime:overlay-v1',
       releaseExitApproved: true,
       impactMonitoringReady: true,
@@ -43,6 +45,29 @@ describe('forecastScopedRuntimeLiveLearningEvidenceService', () => {
       status: 'live_self_learning_ready',
       missingClosureConditions: [],
     }))
+  })
+
+  it('blocks forecast scoped runtime evidence when consumer observes a different runtime publication', () => {
+    const decision = buildForecastScopedRuntimeLiveLearningEvidence({
+      assetKey: 'forecast_residual_overlay',
+      predictionEventRecorded: true,
+      actualOutcomeEventRecorded: true,
+      enabledLearningScopes: ['company', 'project'],
+      scopeExceptionApprovalId: 'scope-exception-approval-1',
+      runtimePublicationKey: 'forecast_residual_overlay_runtime:overlay-v2',
+      runtimeConsumerObservationRef: 'runtime_consumer:forecast-residual:observed',
+      runtimeConsumerPublicationKey: 'forecast_residual_overlay_runtime:overlay-v1',
+      rollbackTarget: 'forecast_residual_overlay_runtime:overlay-v1',
+      releaseExitApproved: true,
+      impactMonitoringReady: true,
+      accuracyMetricsAvailable: true,
+    })
+
+    expect(decision.status).toBe('forecast_scoped_runtime_live_learning_not_ready')
+    expect(decision.liveLearningEvidence.runtimeConsumerUsesPublishedArtifact).toBe(false)
+    expect(decision.missingReasons).toEqual(expect.arrayContaining([
+      'runtime_consumer_publication_mismatch',
+    ]))
   })
 
   it('keeps confidence weight scope exception evidence closed without explicit approval and publication gates', () => {

@@ -26,6 +26,8 @@ export interface BaseDurationBenchmarkLiveLearningEvidenceInput {
   enabledLearningScopes: readonly BaseDurationBenchmarkLearningScopeEvidence[]
   acceptedSampleCounts: BaseDurationBenchmarkAcceptedSampleCounts
   runtimePublicationKey?: string | null
+  runtimeConsumerObservationRef?: string | null
+  runtimeConsumerPublicationKey?: string | null
   rollbackTarget?: string | null
   releaseExitApproved: boolean
   impactMonitoringReady: boolean
@@ -221,13 +223,26 @@ export function buildBaseDurationBenchmarkLiveLearningEvidence(
   input: BaseDurationBenchmarkLiveLearningEvidenceInput,
 ): BaseDurationBenchmarkLiveLearningEvidenceDecision {
   const runtimePublicationKey = normalizeText(input.runtimePublicationKey)
+  const runtimeConsumerObservationRef = normalizeText(input.runtimeConsumerObservationRef)
+  const runtimeConsumerPublicationKey = normalizeText(input.runtimeConsumerPublicationKey)
   const rollbackTarget = normalizeText(input.rollbackTarget)
   const enabledLearningScopes = normalizeEnabledScopes(input.enabledLearningScopes)
   const acceptedSampleCounts = normalizeSampleCounts(input.acceptedSampleCounts)
   const hasAllLearningScopes = BASE_DURATION_BENCHMARK_SCOPE_ORDER.every((scope) => enabledLearningScopes.includes(scope))
   const hasAllScopeSamples = BASE_DURATION_BENCHMARK_SCOPE_ORDER.every((scope) => acceptedSampleCounts[scope] > 0)
   const tieredLearningPolicyRegistered = hasAllLearningScopes && hasAllScopeSamples
-  const runtimeConsumerUsesPublishedArtifact = Boolean(runtimePublicationKey)
+  const runtimeConsumerPublicationMismatched = Boolean(
+    runtimeConsumerObservationRef
+      && runtimePublicationKey
+      && runtimeConsumerPublicationKey
+      && runtimeConsumerPublicationKey !== runtimePublicationKey,
+  )
+  const runtimeConsumerUsesPublishedArtifact = Boolean(
+    runtimeConsumerObservationRef
+      && runtimePublicationKey
+      && runtimeConsumerPublicationKey
+      && runtimeConsumerPublicationKey === runtimePublicationKey,
+  )
   const rollbackTargetReady = Boolean(rollbackTarget)
 
   const missingReasons: string[] = []
@@ -236,6 +251,7 @@ export function buildBaseDurationBenchmarkLiveLearningEvidence(
   if (!hasAllLearningScopes) missingReasons.push('global_industry_company_project_learning_scopes_required')
   if (!hasAllScopeSamples) missingReasons.push('base_duration_scope_sample_coverage_required')
   if (!runtimeConsumerUsesPublishedArtifact) missingReasons.push('runtime_consumer_publication_required')
+  if (runtimeConsumerPublicationMismatched) missingReasons.push('runtime_consumer_publication_mismatch')
   if (!input.releaseExitApproved) missingReasons.push('release_exit_required')
   if (!input.impactMonitoringReady) missingReasons.push('impact_monitoring_required')
   if (!rollbackTargetReady) missingReasons.push('rollback_target_required')
@@ -275,13 +291,15 @@ export function buildBaseDurationBenchmarkLiveLearningEvidenceFromProductionRows
   const productionLineage = baseDurationProductionLineageFromProductionInput(input)
   const evidenceRefs = productionLineage.evidenceRefs
   const rawRuntimePublicationKey = runtimePublicationKeyFromProductionRows(input.sourceRows)
-  const runtimePublicationKey = evidenceRefs.runtimeConsumerObservationRef ? rawRuntimePublicationKey : null
+  const runtimePublicationKey = rawRuntimePublicationKey
   const decision = buildBaseDurationBenchmarkLiveLearningEvidence({
     predictionEventRecorded: Boolean(evidenceRefs.accuracyEvidenceRef || evidenceRefs.publicationExecutionRef),
     actualOutcomeEventRecorded: Boolean(evidenceRefs.productionSampleEvidenceRef),
     enabledLearningScopes: input.enabledLearningScopes,
     acceptedSampleCounts,
     runtimePublicationKey,
+    runtimeConsumerObservationRef: evidenceRefs.runtimeConsumerObservationRef,
+    runtimeConsumerPublicationKey: evidenceRefs.runtimeConsumerPublicationKey,
     rollbackTarget: evidenceRefs.rollbackDrillEvidenceRef,
     releaseExitApproved: Boolean(evidenceRefs.publicationExecutionRef),
     impactMonitoringReady: Boolean(evidenceRefs.impactMonitoringEvidenceRef),

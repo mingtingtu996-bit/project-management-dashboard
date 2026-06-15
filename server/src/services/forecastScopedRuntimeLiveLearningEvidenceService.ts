@@ -26,6 +26,8 @@ export interface ForecastScopedRuntimeLiveLearningEvidenceInput {
   enabledLearningScopes: readonly DurationLearningScopeEvidence[]
   scopeExceptionApprovalId?: string | null
   runtimePublicationKey?: string | null
+  runtimeConsumerObservationRef?: string | null
+  runtimeConsumerPublicationKey?: string | null
   rollbackTarget?: string | null
   releaseExitApproved: boolean
   impactMonitoringReady: boolean
@@ -145,10 +147,23 @@ export function buildForecastScopedRuntimeLiveLearningEvidence(
   const enabledLearningScopes = normalizeEnabledScopes(input.enabledLearningScopes)
   const scopeExceptionApprovalId = normalizeText(input.scopeExceptionApprovalId)
   const runtimePublicationKey = normalizeText(input.runtimePublicationKey)
+  const runtimeConsumerObservationRef = normalizeText(input.runtimeConsumerObservationRef)
+  const runtimeConsumerPublicationKey = normalizeText(input.runtimeConsumerPublicationKey)
   const rollbackTarget = normalizeText(input.rollbackTarget)
   const hasCompanyProjectScope = enabledLearningScopes.includes('company') && enabledLearningScopes.includes('project')
   const scopeExceptionApproved = Boolean(scopeExceptionApprovalId && hasCompanyProjectScope)
-  const runtimeConsumerUsesPublishedArtifact = Boolean(runtimePublicationKey)
+  const runtimeConsumerPublicationMismatched = Boolean(
+    runtimeConsumerObservationRef
+      && runtimePublicationKey
+      && runtimeConsumerPublicationKey
+      && runtimeConsumerPublicationKey !== runtimePublicationKey,
+  )
+  const runtimeConsumerUsesPublishedArtifact = Boolean(
+    runtimeConsumerObservationRef
+      && runtimePublicationKey
+      && runtimeConsumerPublicationKey
+      && runtimeConsumerPublicationKey === runtimePublicationKey,
+  )
   const rollbackTargetReady = Boolean(rollbackTarget)
 
   const missingReasons: string[] = []
@@ -157,6 +172,7 @@ export function buildForecastScopedRuntimeLiveLearningEvidence(
   if (!hasCompanyProjectScope) missingReasons.push('company_project_scope_required')
   if (!scopeExceptionApproved) missingReasons.push('forecast_scope_exception_approval_required')
   if (!runtimeConsumerUsesPublishedArtifact) missingReasons.push('runtime_consumer_publication_required')
+  if (runtimeConsumerPublicationMismatched) missingReasons.push('runtime_consumer_publication_mismatch')
   if (!input.releaseExitApproved) missingReasons.push('release_exit_required')
   if (!input.impactMonitoringReady) missingReasons.push('impact_monitoring_required')
   if (!rollbackTargetReady) missingReasons.push('rollback_target_required')
@@ -196,7 +212,7 @@ export function buildForecastScopedRuntimeLiveLearningEvidenceFromProductionRows
   const productionLineage = forecastScopedRuntimeProductionLineageFromProductionInput(input)
   const evidenceRefs = productionLineage.evidenceRefs
   const rawRuntimePublicationKey = forecastScopedRuntimePublicationKeyFromProductionRows(input)
-  const runtimePublicationKey = evidenceRefs.runtimeConsumerObservationRef ? rawRuntimePublicationKey : null
+  const runtimePublicationKey = rawRuntimePublicationKey
   const decision = buildForecastScopedRuntimeLiveLearningEvidence({
     assetKey: input.assetKey,
     predictionEventRecorded: Boolean(evidenceRefs.accuracyEvidenceRef || evidenceRefs.publicationExecutionRef),
@@ -204,6 +220,8 @@ export function buildForecastScopedRuntimeLiveLearningEvidenceFromProductionRows
     enabledLearningScopes: input.enabledLearningScopes,
     scopeExceptionApprovalId: input.scopeExceptionApprovalId,
     runtimePublicationKey,
+    runtimeConsumerObservationRef: evidenceRefs.runtimeConsumerObservationRef,
+    runtimeConsumerPublicationKey: evidenceRefs.runtimeConsumerPublicationKey,
     rollbackTarget: evidenceRefs.rollbackDrillEvidenceRef,
     releaseExitApproved: Boolean(evidenceRefs.publicationExecutionRef),
     impactMonitoringReady: Boolean(evidenceRefs.impactMonitoringEvidenceRef),
