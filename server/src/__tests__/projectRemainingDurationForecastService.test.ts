@@ -18,6 +18,10 @@ function callsForTable(calls: Array<{ sql: string, params: unknown[] }>, tableNa
   return calls.filter((call) => call.sql.toLowerCase().includes(tableName))
 }
 
+async function flushRuntimeConsumerRecording() {
+  await new Promise((resolve) => setTimeout(resolve, 0))
+}
+
 function row(overrides: Partial<ScheduleAccelerationRow> = {}): ScheduleAccelerationRow {
   return {
     clientRowId: 'task-1',
@@ -468,6 +472,77 @@ describe('projectRemainingDurationForecastService', () => {
         latestCommitmentFinishDate: '2026-06-24',
       }),
     }))
+  })
+
+  it('records runtime consumer evidence from buildProjectRemainingDurationForecast when published artifacts are consumed', async () => {
+    const { calls, queryExec } = createRecordingQueryExec()
+
+    const forecast = buildProjectRemainingDurationForecast({
+      rows: [
+        row({
+          clientRowId: 'critical-structure',
+          values: {
+            ...row().values,
+            project_id: 'project-1',
+            planned_end_date: '2026-06-20',
+            forecast_finish_date: '2026-06-22',
+            total_float_days: 0,
+          },
+        }),
+      ],
+      asOfDate: '2026-06-10',
+      targetEndDate: '2026-06-25',
+      projectId: 'project-1',
+      runtimeConsumerObservationQueryExec: queryExec,
+      runtimeConsumerObservedAt: '2026-06-15T07:00:00.000Z',
+      runtimeArtifactPublications: [
+        {
+          assetKey: 'forecast_residual_overlay',
+          publicationKey: 'forecast_residual_overlay_runtime:overlay-v5',
+          publicationStatus: 'published',
+        },
+        {
+          assetKey: 'wbs_reference_days',
+          publicationKey: 'wbs_reference_days_runtime:reference-v5',
+          publicationStatus: 'runtime_published',
+        },
+        {
+          assetKey: 'critical_path_rule_candidate',
+          publicationKey: 'critical_path_rule_runtime:critical-v5',
+          publicationStatus: 'canary',
+        },
+        {
+          assetKey: 'dependency_rule_candidate',
+          publicationKey: 'dependency_rule_runtime:dependency-v5',
+          publicationStatus: 'published',
+        },
+      ],
+    })
+
+    expect(forecast.durationOutputCode).toBe('project_remaining_forecast')
+    await flushRuntimeConsumerRecording()
+
+    expect(callsForTable(calls, 'runtime_consumer_runtime_calls')).toHaveLength(1)
+    expect(callsForTable(calls, 'runtime_consumer_observations').map((call) => call.params.slice(0, 4))).toEqual([
+      [
+        'forecast_residual_overlay',
+        'forecast_residual_overlay_runtime:overlay-v5',
+        'projectRemainingDurationForecastService',
+        'remaining_duration_forecast',
+      ],
+      [
+        'wbs_reference_days',
+        'wbs_reference_days_runtime:reference-v5',
+        'projectRemainingDurationForecastService',
+        'remaining_duration_forecast',
+      ],
+      [
+        'critical_path_rule_candidate',
+        'critical_path_rule_runtime:critical-v5',
+        'projectRemainingDurationForecastService',
+        'remaining_duration_forecast',
+      ],
+    ])
   })
 
   it('records v1.4.22.5 runtime consumer evidence for project remaining forecast artifacts', async () => {

@@ -451,9 +451,14 @@ export function buildProjectRemainingDurationForecast(params: {
   rows: ScheduleAccelerationRow[]
   asOfDate?: string | null
   targetEndDate?: string | null
+  projectId?: string | null
   runtimeExecutionFacts?: RuntimeExecutionFacts | null
   monthlyCommitments?: ProjectMonthlyCommitmentSummary | null
   predictionEventRecorder?: (event: DurationAccuracyPredictionInput) => void
+  runtimeConsumerObservationQueryExec?: DurationRuntimeConsumerObservationQueryExec | null
+  runtimeArtifactPublications?: readonly ProjectRemainingDurationRuntimeArtifactPublication[] | null
+  runtimeConsumerObservedAt?: string | null
+  runtimeConsumerErrorHandler?: (error: unknown) => void
 }): ProjectRemainingDurationForecast {
   const asOfDate = normalizeDate(params.asOfDate) ?? new Date().toISOString().slice(0, 10)
   const scheduleRows = params.rows.filter(isScheduleRow)
@@ -572,6 +577,35 @@ export function buildProjectRemainingDurationForecast(params: {
     rows: scheduleRows,
     asOfDate,
   }))
+
+  const runtimeArtifactPublications = params.runtimeArtifactPublications ?? []
+  if (params.runtimeConsumerObservationQueryExec && runtimeArtifactPublications.length > 0) {
+    const projectId = normalizeText(params.projectId) || firstProjectId(scheduleRows)
+    void recordProjectRemainingDurationForecastConsumedArtifacts({
+      queryExec: params.runtimeConsumerObservationQueryExec,
+      observedAt: normalizeText(params.runtimeConsumerObservedAt) || undefined,
+      callContext: {
+        projectId: projectId || null,
+        durationOutputCode: forecast.durationOutputCode,
+        forecastFinishDate: forecast.forecastFinishDate,
+        projectRemainingForecastDays: forecast.projectRemainingForecastDays,
+      },
+      sourceEvidenceRefs: [
+        [
+          'project_remaining_forecast',
+          projectId || 'no_project',
+          forecast.forecastFinishDate ?? 'no_finish',
+        ].join(':'),
+      ],
+      artifacts: buildProjectRemainingDurationForecastConsumedArtifacts({
+        forecast,
+        runtimeArtifactPublications,
+        projectId,
+      }),
+    }).catch((error) => {
+      params.runtimeConsumerErrorHandler?.(error)
+    })
+  }
 
   return forecast
 }
