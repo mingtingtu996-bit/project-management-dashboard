@@ -215,7 +215,7 @@ function rowsForSql(sql: string, options: { includePlanNetworkOutcomes?: boolean
     return learnableAssetKeys.map((assetKey) => ({
       id: `accuracy-${assetKey}`,
       absolute_error_days: 1,
-      prediction_context: { assetKey },
+      prediction_context: { assetKey, publicationKey: publicationKeyForAsset(assetKey) },
       actual_context: { accuracyGateStatus: 'accuracy_passed' },
     }))
   }

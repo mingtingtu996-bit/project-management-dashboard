@@ -45,6 +45,7 @@ export interface DurationLiveLearningProductionEvidenceRef {
   rollbackDrillEvidenceRef?: string | null
   rollbackDrillPublicationKey?: string | null
   accuracyEvidenceRef?: string | null
+  accuracyPublicationKey?: string | null
 }
 
 export type DurationLiveLearningProductionEvidenceKind =
@@ -335,6 +336,7 @@ const REQUIRED_FIELDS_BY_SOURCE_TABLE: Record<DurationLiveLearningProductionEvid
     'id',
     'absolute_error_days',
     'prediction_context.assetKey',
+    'prediction_context.publicationKey',
     'actual_context.assetKey',
     'actual_context.accuracyGateStatus',
   ],
@@ -560,6 +562,14 @@ function accuracyGateStatus(row: Record<string, unknown>) {
     || readText(actualContext, 'accuracyGateStatus', 'accuracy_gate_status')
 }
 
+function accuracyPublicationKey(row: Record<string, unknown>) {
+  const predictionContext = readRecord(row.prediction_context ?? row.predictionContext)
+  const actualContext = readRecord(row.actual_context ?? row.actualContext)
+  return readText(row, 'publication_key', 'publicationKey')
+    || readText(predictionContext, 'publicationKey', 'publication_key', 'runtimePublicationKey', 'runtime_publication_key')
+    || readText(actualContext, 'publicationKey', 'publication_key', 'runtimePublicationKey', 'runtime_publication_key')
+}
+
 function publicationEvidenceStatus(row: Record<string, unknown>) {
   const status = readText(row, 'publication_status', 'publicationStatus')
   return status === 'published' || status === 'canary' ? status : ''
@@ -764,6 +774,10 @@ function assignEvidenceRef(
     if (normalizedPublicationKey) target.rollbackDrillPublicationKey ??= normalizedPublicationKey
   }
   if (kind === 'accuracy') target.accuracyEvidenceRef ??= evidenceRef
+  if (kind === 'accuracy') {
+    const normalizedPublicationKey = normalizeText(publicationKey)
+    if (normalizedPublicationKey) target.accuracyPublicationKey ??= normalizedPublicationKey
+  }
 }
 
 export function collectDurationLiveLearningProductionEvidenceRefs(
@@ -1051,15 +1065,27 @@ export function collectDurationLiveLearningProductionEvidenceRecordsFromRows(
 
     if (source.sourceTable === 'duration_algorithm_accuracy_events') {
       const id = readText(row, 'id')
+      const publicationKey = accuracyPublicationKey(row)
       if (!id) {
         pushRejectedRow(rejectedRows, source, 'production_source_row_id_required')
         continue
       }
-      if (accuracyGateStatus(row) !== 'accuracy_passed' || !hasNumber(row, 'absolute_error_days')) {
+      if (
+        accuracyGateStatus(row) !== 'accuracy_passed'
+        || !hasNumber(row, 'absolute_error_days')
+        || !isDurationRuntimeConsumerPublicationKeyAllowedForAsset(assetKey, publicationKey)
+      ) {
         pushRejectedRow(rejectedRows, source, 'production_source_row_not_evidence_ready')
         continue
       }
-      pushRecord(records, assetKey, 'accuracy', `duration_algorithm_accuracy_events:${id}`, 'accuracy_passed')
+      pushRecord(
+        records,
+        assetKey,
+        'accuracy',
+        `duration_algorithm_accuracy_events:${id}`,
+        'accuracy_passed',
+        publicationKey,
+      )
       continue
     }
 
@@ -1205,6 +1231,7 @@ function evaluateAssetEvidence(
   if (
     !hasRef(evidence?.accuracyEvidenceRef)
     || !hasAcceptedRefSource('accuracy', evidence.accuracyEvidenceRef, assetKey)
+    || !publicationRefMatchesPublicationKey(evidence.publicationExecutionRef, evidence.accuracyPublicationKey)
   ) {
     missingReasonCodes.push('accuracy_evidence_required')
   }
