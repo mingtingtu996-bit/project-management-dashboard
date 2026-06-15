@@ -491,6 +491,7 @@ export function buildAlgorithmAssetColdStartLiveLearningEvidenceFromProductionRo
     assetKey: COLD_START_BASELINE_ASSET_KEY,
   }
   const hasAcceptedOutcome = acceptedSampleCounts.company + acceptedSampleCounts.project > 0
+  const hasRuntimeConsumerObservation = Boolean(evidenceRefs.runtimeConsumerObservationRef)
   const decision = evaluateAlgorithmAssetColdStartLiveLearningEvidence({
     runtimeDecision: input.runtimeDecision,
     actualOutcomeRecorded: hasAcceptedOutcome,
@@ -504,9 +505,22 @@ export function buildAlgorithmAssetColdStartLiveLearningEvidenceFromProductionRo
     rollbackTargetReady: Boolean(evidenceRefs.rollbackDrillEvidenceRef),
     accuracyMetricsAvailable: Boolean(evidenceRefs.accuracyEvidenceRef),
   })
+  const missingReasons = hasRuntimeConsumerObservation
+    ? decision.missingReasons
+    : uniqueValues([...decision.missingReasons, 'runtime_consumer_observation_required'])
+  const liveLearningEvidence = {
+    ...decision.liveLearningEvidence,
+    runtimeConsumerUsesPublishedArtifact: decision.liveLearningEvidence.runtimeConsumerUsesPublishedArtifact
+      && hasRuntimeConsumerObservation,
+  }
 
   return {
     ...decision,
+    status: missingReasons.length === 0
+      ? 'cold_start_live_learning_ready'
+      : 'cold_start_live_learning_not_ready',
+    liveLearningEvidence,
+    missingReasons,
     productionLineage: {
       acceptedSampleCounts,
       evidenceRefs,
