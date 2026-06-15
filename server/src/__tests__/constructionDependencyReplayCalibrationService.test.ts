@@ -303,6 +303,8 @@ describe('construction dependency replay calibration service', () => {
       approvedCandidateEventIds: ['dependency-candidate-1', 'dependency-candidate-1'],
       dependencyRuleVersionId: 'dependency-rule-version-v2',
       runtimePublicationKey: 'dependency_rule_runtime:dependency-rule-version-v2',
+      runtimeConsumerObservationRef: 'runtime_consumer:consumer-dependency-rule-1',
+      runtimeConsumerPublicationKey: 'dependency_rule_runtime:dependency-rule-version-v2',
       rollbackTarget: 'dependency_rule_runtime:dependency-rule-version-v1',
       enabledLearningScopes: ['system', 'industry_baseline', 'company', 'project'],
       releaseExitApproved: true,

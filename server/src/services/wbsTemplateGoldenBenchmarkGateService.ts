@@ -154,6 +154,8 @@ export interface WbsReferenceDaysPublicationReadinessInput {
   approvedCandidateEventIds: readonly string[]
   referenceDaysVersionId?: string | null
   runtimePublicationKey?: string | null
+  runtimeConsumerObservationRef?: string | null
+  runtimeConsumerPublicationKey?: string | null
   rollbackTarget?: string | null
   enabledLearningScopes: readonly WbsReferenceDaysLearningScopeEvidence[]
   releaseExitApproved: boolean
@@ -620,18 +622,32 @@ export function buildWbsReferenceDaysPublicationReadiness(
   const approvedCandidateEventIds = uniqueStrings(input.approvedCandidateEventIds)
   const referenceDaysVersionId = normalizeText(input.referenceDaysVersionId)
   const runtimePublicationKey = normalizeText(input.runtimePublicationKey)
+  const runtimeConsumerObservationRef = normalizeText(input.runtimeConsumerObservationRef)
+  const runtimeConsumerPublicationKey = normalizeText(input.runtimeConsumerPublicationKey)
   const rollbackTarget = normalizeText(input.rollbackTarget)
   const referenceDaysPublicationWriterReady = Boolean(referenceDaysVersionId && runtimePublicationKey)
   const referenceDaysLineageRecorded = Boolean(referenceDaysVersionId)
     && approvedCandidateEventIds.length > 0
     && input.runtimeGate.resultCount > 0
+  const runtimeConsumerPublicationMismatched = Boolean(
+    runtimeConsumerObservationRef
+      && runtimePublicationKey
+      && runtimeConsumerPublicationKey
+      && runtimeConsumerPublicationKey !== runtimePublicationKey,
+  )
+  const runtimeConsumerObservationMatchesPublication = Boolean(
+    runtimeConsumerObservationRef
+      && runtimePublicationKey
+      && runtimeConsumerPublicationKey
+      && runtimeConsumerPublicationKey === runtimePublicationKey,
+  )
 
   const readiness = evaluateWbsReferenceDaysLiveLearningEvidence({
     runtimeGate: input.runtimeGate,
     templateReferenceDaysOutcomeRecorded: input.templateReferenceDaysOutcomeRecorded,
     approvedReferenceDaysCandidateRecorded: approvedCandidateEventIds.length > 0,
     enabledLearningScopes: input.enabledLearningScopes,
-    runtimeConsumerUsesPublishedArtifact: Boolean(runtimePublicationKey),
+    runtimeConsumerUsesPublishedArtifact: runtimeConsumerObservationMatchesPublication,
     referenceDaysPublicationWriterReady,
     referenceDaysLineageRecorded,
     releaseExitApproved: input.releaseExitApproved,
@@ -654,7 +670,10 @@ export function buildWbsReferenceDaysPublicationReadiness(
       benchmarkGateVersion: input.runtimeGate.version,
       benchmarkScenarioCount: input.runtimeGate.resultCount,
     },
-    missingReasons: readiness.missingReasons,
+    missingReasons: uniqueValues([
+      ...readiness.missingReasons,
+      runtimeConsumerPublicationMismatched ? 'runtime_consumer_publication_mismatch' : '',
+    ]),
   }
 }
 

@@ -196,6 +196,8 @@ describe('wbsTemplateGoldenBenchmarkGateService', () => {
       approvedCandidateEventIds: ['reference-candidate-1', 'reference-candidate-1'],
       referenceDaysVersionId: 'wbs-reference-days-v2',
       runtimePublicationKey: 'wbs_reference_days_runtime:wbs-reference-days-v2',
+      runtimeConsumerObservationRef: 'runtime_consumer:consumer-reference-days-1',
+      runtimeConsumerPublicationKey: 'wbs_reference_days_runtime:wbs-reference-days-v2',
       rollbackTarget: 'wbs_reference_days_runtime:wbs-reference-days-v1',
       enabledLearningScopes: ['system', 'industry_baseline', 'company', 'project'],
       releaseExitApproved: true,
@@ -228,6 +230,29 @@ describe('wbsTemplateGoldenBenchmarkGateService', () => {
       benchmarkScenarioCount: 13,
     })
     expect(readiness.missingReasons).toEqual([])
+  })
+
+  it('keeps direct WBS reference-days publication readiness blocked without consumer publication proof', () => {
+    const runtimeGate = evaluateWbsTemplateGoldenBenchmarkRunGate(buildPassingRuntimeResults())
+
+    const readiness = buildWbsReferenceDaysPublicationReadiness({
+      runtimeGate,
+      templateReferenceDaysOutcomeRecorded: true,
+      approvedCandidateEventIds: ['reference-candidate-1'],
+      referenceDaysVersionId: 'wbs-reference-days-v2',
+      runtimePublicationKey: 'wbs_reference_days_runtime:wbs-reference-days-v2',
+      rollbackTarget: 'wbs_reference_days_runtime:wbs-reference-days-v1',
+      enabledLearningScopes: ['system', 'industry_baseline', 'company', 'project'],
+      releaseExitApproved: true,
+      impactMonitoringReady: true,
+      accuracyMetricsAvailable: true,
+    })
+
+    expect(readiness.status).toBe('wbs_reference_days_publication_not_ready')
+    expect(readiness.liveLearningEvidence.runtimeConsumerUsesPublishedArtifact).toBe(false)
+    expect(readiness.missingReasons).toEqual(expect.arrayContaining([
+      'runtime_consumer_publication_required',
+    ]))
   })
 
   it('builds WBS reference-days publication readiness from production source rows', () => {

@@ -214,6 +214,8 @@ export interface ConstructionDependencyRulePublicationReadinessInput {
   approvedCandidateEventIds: readonly string[]
   dependencyRuleVersionId?: string | null
   runtimePublicationKey?: string | null
+  runtimeConsumerObservationRef?: string | null
+  runtimeConsumerPublicationKey?: string | null
   rollbackTarget?: string | null
   enabledLearningScopes: readonly ConstructionDependencyRuleLearningScopeEvidence[]
   releaseExitApproved: boolean
@@ -929,18 +931,32 @@ export function buildConstructionDependencyRulePublicationReadiness(
   const matchedSeedCodes = normalizeStringList(candidateQueues.map((candidate) => candidate.matchedSeedCode))
   const dependencyRuleVersionId = normalizeNullableText(input.dependencyRuleVersionId)
   const runtimePublicationKey = normalizeNullableText(input.runtimePublicationKey)
+  const runtimeConsumerObservationRef = normalizeNullableText(input.runtimeConsumerObservationRef)
+  const runtimeConsumerPublicationKey = normalizeNullableText(input.runtimeConsumerPublicationKey)
   const rollbackTarget = normalizeNullableText(input.rollbackTarget)
   const dependencyRulePublicationWriterReady = Boolean(dependencyRuleVersionId && runtimePublicationKey)
   const dependencyRuleLineageRecorded = Boolean(dependencyRuleVersionId)
     && approvedCandidateEventIds.length > 0
     && sourceDependencyIds.length > 0
+  const runtimeConsumerPublicationMismatched = Boolean(
+    runtimeConsumerObservationRef
+      && runtimePublicationKey
+      && runtimeConsumerPublicationKey
+      && runtimeConsumerPublicationKey !== runtimePublicationKey,
+  )
+  const runtimeConsumerObservationMatchesPublication = Boolean(
+    runtimeConsumerObservationRef
+      && runtimePublicationKey
+      && runtimeConsumerPublicationKey
+      && runtimeConsumerPublicationKey === runtimePublicationKey,
+  )
 
   const readiness = evaluateConstructionDependencyRuleCandidateLiveLearningEvidence({
     replayReport: input.replayReport,
     dependencyOutcomeEventRecorded: input.dependencyOutcomeEventRecorded,
     approvedDependencyRuleCandidateRecorded: approvedCandidateEventIds.length > 0,
     enabledLearningScopes: input.enabledLearningScopes,
-    runtimeConsumerUsesPublishedArtifact: Boolean(runtimePublicationKey),
+    runtimeConsumerUsesPublishedArtifact: runtimeConsumerObservationMatchesPublication,
     dependencyRulePublicationWriterReady,
     dependencyRuleLineageRecorded,
     releaseExitApproved: input.releaseExitApproved,
@@ -965,7 +981,10 @@ export function buildConstructionDependencyRulePublicationReadiness(
       replayReportCode: input.replayReport.reportCode,
       comparableActualDateCount: input.replayReport.summary.comparableActualDateCount,
     },
-    missingReasons: readiness.missingReasons,
+    missingReasons: uniqueValues([
+      ...readiness.missingReasons,
+      runtimeConsumerPublicationMismatched ? 'runtime_consumer_publication_mismatch' : '',
+    ]),
   }
 }
 
