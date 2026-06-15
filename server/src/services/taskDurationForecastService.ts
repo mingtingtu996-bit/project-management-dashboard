@@ -105,7 +105,7 @@ export interface TaskDurationForecastRuntimeArtifactPublication {
 }
 
 export interface RecordTaskDurationForecastRuntimeConsumptionInput {
-  queryExec: DurationRuntimeConsumerObservationQueryExec
+  queryExec?: DurationRuntimeConsumerObservationQueryExec
   forecast: TaskDurationForecast
   runtimeArtifactPublications: readonly TaskDurationForecastRuntimeArtifactPublication[]
   projectId?: string | null
@@ -444,6 +444,7 @@ export type ForecastTaskDurationOptions = {
   useCache?: boolean
   writePolicy?: ForecastWritePolicy
   dependencyDepth?: number
+  runtimeConsumerObservationQueryExec?: DurationRuntimeConsumerObservationQueryExec | null
 }
 
 type NormalizedForecastOptions = {
@@ -452,6 +453,7 @@ type NormalizedForecastOptions = {
   useCache: boolean
   writePolicy: ForecastWritePolicy
   dependencyDepth: number
+  runtimeConsumerObservationQueryExec?: DurationRuntimeConsumerObservationQueryExec | null
 }
 
 type DurationSuggestionResult = Awaited<ReturnType<typeof getTaskDurationSuggestion>>
@@ -718,6 +720,7 @@ function normalizeForecastOptions(options?: ForecastTaskDurationOptions): Normal
       ? rawWritePolicy
       : triggerDefaults.writePolicy ?? DEFAULT_FORECAST_OPTIONS.writePolicy,
     dependencyDepth,
+    runtimeConsumerObservationQueryExec: options?.runtimeConsumerObservationQueryExec ?? null,
   }
 }
 
@@ -757,6 +760,13 @@ function normalizeText(value: unknown) {
   return String(value ?? '').trim()
 }
 
+function buildTaskDurationForecastRuntimeConsumerObservationQueryExec(): DurationRuntimeConsumerObservationQueryExec {
+  return async <T = Record<string, unknown>>(sql: string, params: unknown[] = []) => {
+    const result = await rawQuery(sql, params as any[])
+    return result.rows as T[]
+  }
+}
+
 export function buildTaskDurationForecastConsumedArtifacts(input: {
   forecast: TaskDurationForecast
   runtimeArtifactPublications: readonly TaskDurationForecastRuntimeArtifactPublication[]
@@ -788,10 +798,11 @@ export function buildTaskDurationForecastConsumedArtifacts(input: {
 export function recordTaskDurationForecastRuntimeConsumption(
   input: RecordTaskDurationForecastRuntimeConsumptionInput,
 ): Promise<DurationRuntimeConsumerFacadeArtifactsResult> {
+  const queryExec = input.queryExec ?? buildTaskDurationForecastRuntimeConsumerObservationQueryExec()
   const projectId = normalizeText(input.projectId)
   const taskId = normalizeText(input.taskId || input.forecast.taskId)
   return recordTaskDurationForecastConsumedArtifacts({
-    queryExec: input.queryExec,
+    queryExec,
     observedAt: input.observedAt,
     callContext: {
       projectId: projectId || null,
@@ -817,6 +828,102 @@ export function recordTaskDurationForecastRuntimeConsumption(
       taskId,
     }),
   })
+}
+
+function isTaskDurationForecastRuntimePublicationStatus(value: unknown) {
+  const status = normalizeText(value)
+  return status === 'published' || status === 'canary' || status === 'runtime_published'
+}
+
+function runtimeGateParametersFromForecast(forecast: TaskDurationForecast) {
+  const sources = asRecord(forecast.forecastSources)
+  const gate = asRecord(sources?.learnableParameterRuntimeGate)
+  const parameters = gate?.parameters
+  return Array.isArray(parameters)
+    ? parameters.filter((parameter): parameter is Record<string, unknown> => Boolean(asRecord(parameter)))
+    : []
+}
+
+function buildTaskDurationForecastRuntimeArtifactPublications(
+  forecast: TaskDurationForecast,
+): TaskDurationForecastRuntimeArtifactPublication[] {
+  const publications: TaskDurationForecastRuntimeArtifactPublication[] = []
+  const seen = new Set<string>()
+  const push = (publication: TaskDurationForecastRuntimeArtifactPublication | null) => {
+    if (!publication) return
+    if (!normalizeText(publication.publicationKey)) return
+    if (!isTaskDurationForecastRuntimePublicationStatus(publication.publicationStatus)) return
+    const key = `${publication.assetKey}:${publication.publicationKey}`
+    if (seen.has(key)) return
+    seen.add(key)
+    publications.push(publication)
+  }
+
+  for (const parameter of runtimeGateParametersFromForecast(forecast)) {
+    if (parameter.parameterKey !== 'forecast.confidence_weight_multiplier') continue
+    if (parameter.runtimeConsumable !== true || parameter.appliedToForecast !== true) continue
+    const publicationKey = normalizeText(parameter.publicationKey)
+    push({
+      assetKey: 'forecast_confidence_weight',
+      publicationKey,
+      publicationStatus: normalizeText(parameter.publicationStatus),
+      sourceEvidenceRefs: [`algorithm_learnable_parameter_runtime_publications:${publicationKey}`],
+      observationContext: {
+        parameterKey: parameter.parameterKey,
+        scopeLevel: normalizeText(parameter.scopeLevel) || null,
+        runtimeValue: typeof parameter.runtimeValue === 'number' && Number.isFinite(parameter.runtimeValue)
+          ? parameter.runtimeValue
+          : null,
+      },
+    })
+  }
+
+  const residualOverlay = asRecord(asRecord(forecast.forecastSources)?.residualOverlay)
+  const residualOverlayPublicationKey = normalizeText(residualOverlay?.publicationKey)
+    || (normalizeText(residualOverlay?.overlayKey).startsWith('forecast_residual_overlay_runtime:')
+      ? normalizeText(residualOverlay?.overlayKey)
+      : '')
+  if (residualOverlay?.runtimeApplied === true && residualOverlayPublicationKey) {
+    push({
+      assetKey: 'forecast_residual_overlay',
+      publicationKey: residualOverlayPublicationKey,
+      publicationStatus: normalizeText(residualOverlay.runtimePublicationStatus),
+      sourceEvidenceRefs: [`duration_forecast_residual_overlays:${normalizeText(residualOverlay.overlayKey) || residualOverlayPublicationKey}`],
+      observationContext: {
+        overlayKey: normalizeText(residualOverlay.overlayKey) || null,
+        scopeLevel: normalizeText(residualOverlay.scopeLevel) || null,
+        residualCorrectionDays: typeof residualOverlay.residualCorrectionDays === 'number'
+          ? residualOverlay.residualCorrectionDays
+          : null,
+      },
+    })
+  }
+
+  return publications
+}
+
+async function recordTaskDurationForecastRuntimeConsumerEvidence(input: {
+  forecast: TaskDurationForecast
+  task: ForecastTaskRow | null
+  options: NormalizedForecastOptions
+}) {
+  const runtimeArtifactPublications = buildTaskDurationForecastRuntimeArtifactPublications(input.forecast)
+  if (runtimeArtifactPublications.length === 0) return
+  try {
+    await recordTaskDurationForecastRuntimeConsumption({
+      queryExec: input.options.runtimeConsumerObservationQueryExec ?? undefined,
+      projectId: input.task?.project_id ?? null,
+      taskId: input.forecast.taskId,
+      forecast: input.forecast,
+      runtimeArtifactPublications,
+    })
+  } catch (error) {
+    logger.warn('[taskDurationForecastService] failed to record task duration runtime consumer evidence', {
+      taskId: input.forecast.taskId,
+      projectId: input.task?.project_id ?? null,
+      error,
+    })
+  }
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -4854,7 +4961,7 @@ async function refreshTaskDurationForecast(
 
   logger.info('Duration forecast refreshed', { taskId, source: suggestion.forecastSource, triggerContext: options.triggerContext })
 
-  return withRemainingForecastOutputContract({
+  const forecast = withRemainingForecastOutputContract({
     taskId,
     recommendedDurationDays: executionReferenceDays,
     executionReferenceDays,
@@ -4879,6 +4986,12 @@ async function refreshTaskDurationForecast(
     businessFactorBadges: forecastDates.businessFactorBadges,
     forecastSources: forecastDates.forecastSources,
   })
+  await recordTaskDurationForecastRuntimeConsumerEvidence({
+    forecast,
+    task,
+    options,
+  })
+  return forecast
 }
 
 export async function forecastTaskDuration(taskId: string, options?: ForecastTaskDurationOptions): Promise<TaskDurationForecast> {

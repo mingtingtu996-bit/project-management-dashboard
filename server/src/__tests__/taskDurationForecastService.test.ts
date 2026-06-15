@@ -28,6 +28,11 @@ const mocks = vi.hoisted(() => ({
   recordDurationAccuracyPrediction: vi.fn(),
   loadAlgorithmAssetLearnableParameterRuntimeValue: vi.fn(),
   from: vi.fn(),
+  rawQuery: vi.fn(async () => ({ rows: [] })),
+}))
+
+vi.mock('../database.js', () => ({
+  query: mocks.rawQuery,
 }))
 
 function createBuilder(table: string) {
@@ -343,6 +348,88 @@ describe('taskDurationForecastService', () => {
         'taskDurationForecastService',
         'task_duration_forecast',
       ],
+      [
+        'forecast_confidence_weight',
+        'forecast_confidence_weight_runtime:weight-v8',
+        'taskDurationForecastService',
+        'task_duration_forecast',
+      ],
+    ])
+  })
+
+  it('records runtime consumer evidence from forecastTaskDuration when confidence weight artifacts are consumed', async () => {
+    const { calls, queryExec } = createRecordingQueryExec()
+    mocks.loadAlgorithmAssetLearnableParameterRuntimeValue.mockImplementation(async (input: any) => {
+      if (input.parameterKey === 'forecast.confidence_weight_multiplier') {
+        return {
+          status: 'runtime_parameter_consumable',
+          runtimeConsumable: true,
+          parameterKey: input.parameterKey,
+          runtimeValue: 0.5,
+          consumptionMode: input.consumptionMode ?? 'stable',
+          publicationKey: 'forecast_confidence_weight_runtime:weight-v8',
+          publicationStatus: 'published',
+          scopeLevel: 'company',
+          companyId: 'company-runtime',
+          projectId: null,
+          rollbackTarget: 'forecast_confidence_weight_runtime:weight-v7',
+          reasons: [],
+          writesSeedRuntimeDirectly: false,
+        }
+      }
+      return {
+        status: 'runtime_parameter_not_found',
+        runtimeConsumable: false,
+        parameterKey: input.parameterKey,
+        runtimeValue: null,
+        consumptionMode: input.consumptionMode ?? 'stable',
+        publicationKey: null,
+        publicationStatus: null,
+        scopeLevel: null,
+        companyId: input.companyId ?? null,
+        projectId: input.projectId ?? null,
+        rollbackTarget: null,
+        reasons: ['runtime_parameter_publication_not_found'],
+        writesSeedRuntimeDirectly: false,
+      }
+    })
+    state.projects = [{
+      id: 'project-runtime',
+      company_id: 'company-runtime',
+    }]
+    state.modelProfiles = [{
+      id: 'profile-runtime-confidence',
+      model_key: 'remaining_duration_forecast',
+      model_status: 'active',
+      confidence_weight: 1,
+      metadata: {
+        modelVersion: 'runtime_confidence_weight_contract_v1',
+        candidateWeights: {
+          L0: { reference_ratio: 1, spi_eac: 0, recent_velocity: 0, history_velocity: 0 },
+          L1: { reference_ratio: 1, spi_eac: 0, recent_velocity: 0, history_velocity: 0 },
+          L2: { reference_ratio: 1, spi_eac: 0, recent_velocity: 0, history_velocity: 0 },
+        },
+      },
+    }]
+    state.tasks = [{
+      id: 'task-runtime-confidence-observation',
+      project_id: 'project-runtime',
+      title: 'Runtime confidence observation task',
+      planned_start_date: '2026-05-18',
+      planned_end_date: '2026-05-27',
+      actual_start_date: '2026-05-18',
+      progress: 50,
+    }]
+
+    const forecast = await forecastTaskDuration('task-runtime-confidence-observation', {
+      runtimeConsumerObservationQueryExec: queryExec,
+    } as any)
+
+    expect(forecast.forecastSources?.learnableParameterRuntimeGate).toEqual(expect.objectContaining({
+      appliedRuntimeParameterCount: 1,
+    }))
+    expect(callsForTable(calls, 'runtime_consumer_runtime_calls')).toHaveLength(1)
+    expect(callsForTable(calls, 'runtime_consumer_observations').map((call) => call.params.slice(0, 4))).toEqual([
       [
         'forecast_confidence_weight',
         'forecast_confidence_weight_runtime:weight-v8',
