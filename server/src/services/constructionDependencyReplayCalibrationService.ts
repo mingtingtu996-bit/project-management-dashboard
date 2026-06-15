@@ -10,6 +10,15 @@ import {
 import { signedDurationDayDelta } from '../utils/durationDays.js'
 import { createAndPersistAlgorithmAssetCandidateEvent } from './algorithmAssetCandidateEventAdapterService.js'
 import type { AlgorithmAssetGovernanceQueryExec } from './algorithmAssetGovernancePersistenceService.js'
+import {
+  collectDurationLiveLearningProductionEvidenceRecordsFromRows,
+  collectDurationLiveLearningProductionEvidenceRefs,
+  type DurationLiveLearningProductionEvidenceRecord,
+  type DurationLiveLearningProductionEvidenceRef,
+  type DurationLiveLearningProductionEvidenceSourceRow,
+  type DurationLiveLearningRejectedProductionEvidenceRecord,
+  type DurationLiveLearningRejectedProductionEvidenceSourceRow,
+} from './durationLiveLearningProductionEvidenceGateService.js'
 
 type QueryRows = <T = Record<string, unknown>>(sql: string, params?: unknown[]) => Promise<T[]>
 
@@ -212,6 +221,14 @@ export interface ConstructionDependencyRulePublicationReadinessInput {
   accuracyMetricsAvailable: boolean
 }
 
+export interface ConstructionDependencyRulePublicationReadinessFromProductionRowsInput {
+  replayReport: ConstructionDependencyReplayCalibrationReport
+  approvedCandidateEventIds: readonly string[]
+  enabledLearningScopes: readonly ConstructionDependencyRuleLearningScopeEvidence[]
+  sourceRows?: readonly DurationLiveLearningProductionEvidenceSourceRow[]
+  records?: readonly DurationLiveLearningProductionEvidenceRecord[]
+}
+
 export interface ConstructionDependencyRuleLineage {
   assetType: 'dependency_rule_candidate'
   dependencyRuleVersionId: string | null
@@ -224,6 +241,12 @@ export interface ConstructionDependencyRuleLineage {
   comparableActualDateCount: number
 }
 
+export interface ConstructionDependencyRuleProductionLineage {
+  evidenceRefs: DurationLiveLearningProductionEvidenceRef
+  rejectedRows: DurationLiveLearningRejectedProductionEvidenceSourceRow[]
+  rejectedRecords: DurationLiveLearningRejectedProductionEvidenceRecord[]
+}
+
 export interface ConstructionDependencyRulePublicationReadiness {
   status: 'dependency_rule_publication_ready' | 'dependency_rule_publication_not_ready'
   liveLearningEvidence: ConstructionDependencyRuleCandidateLiveLearningEvidence
@@ -231,8 +254,14 @@ export interface ConstructionDependencyRulePublicationReadiness {
   missingReasons: string[]
 }
 
+export type ConstructionDependencyRuleProductionPublicationReadiness =
+  ConstructionDependencyRulePublicationReadiness & {
+    productionLineage: ConstructionDependencyRuleProductionLineage
+  }
+
 const DEFAULT_MAX_SAMPLES = 200
 const DEFAULT_ZERO_LAG_REVIEW_THRESHOLD_DAYS = 2
+const DEPENDENCY_RULE_CANDIDATE_ASSET_KEY = 'dependency_rule_candidate'
 
 function normalizeText(value: unknown) {
   return String(value ?? '').trim()
@@ -257,6 +286,63 @@ function uniqueValues<T extends string>(values: T[]): T[] {
 
 function normalizeStringList(values: readonly unknown[] | undefined): string[] {
   return uniqueValues((values ?? []).map((value) => normalizeText(value)).filter(Boolean))
+}
+
+function readRowText(row: Record<string, unknown>, ...keys: string[]) {
+  for (const key of keys) {
+    const value = row[key]
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return ''
+}
+
+function readRowRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+}
+
+function findCurrentPublishedDependencyRuleVersionId(
+  sourceRows: readonly DurationLiveLearningProductionEvidenceSourceRow[] | undefined,
+) {
+  for (const source of sourceRows ?? []) {
+    if (source.sourceTable !== 'construction_dependency_rule_runtime_publications') continue
+    const row = source.row
+    const lineage = readRowRecord(row.dependency_rule_lineage ?? row.dependencyRuleLineage)
+    const dependencyRuleVersionId = readRowText(row, 'dependency_rule_version_id', 'dependencyRuleVersionId')
+    if (
+      dependencyRuleVersionId
+      && readRowText(row, 'publication_key', 'publicationKey')
+      && readRowText(row, 'runtime_publication_status', 'runtimePublicationStatus') === 'runtime_published'
+      && readRowText(lineage, 'assetType', 'asset_type') === DEPENDENCY_RULE_CANDIDATE_ASSET_KEY
+    ) {
+      return dependencyRuleVersionId
+    }
+  }
+  return null
+}
+
+function dependencyRuleProductionLineageFromProductionInput(
+  input: Pick<ConstructionDependencyRulePublicationReadinessFromProductionRowsInput, 'sourceRows' | 'records'>,
+): ConstructionDependencyRuleProductionLineage {
+  const rowCollection = collectDurationLiveLearningProductionEvidenceRecordsFromRows({
+    rows: input.sourceRows,
+  })
+  const evidenceCollection = collectDurationLiveLearningProductionEvidenceRefs({
+    records: [
+      ...rowCollection.records,
+      ...(input.records ?? []),
+    ],
+  })
+  const evidenceRefs = evidenceCollection.productionEvidence.find((evidence) =>
+    evidence.assetKey === DEPENDENCY_RULE_CANDIDATE_ASSET_KEY)
+    ?? { assetKey: DEPENDENCY_RULE_CANDIDATE_ASSET_KEY }
+
+  return {
+    evidenceRefs,
+    rejectedRows: rowCollection.rejectedRows,
+    rejectedRecords: evidenceCollection.rejectedRecords,
+  }
 }
 
 const CONSTRUCTION_DEPENDENCY_RULE_LEARNING_SCOPE_ORDER = ['global', 'industry', 'company', 'project'] as const
@@ -870,5 +956,60 @@ export function buildConstructionDependencyRulePublicationReadiness(
       comparableActualDateCount: input.replayReport.summary.comparableActualDateCount,
     },
     missingReasons: readiness.missingReasons,
+  }
+}
+
+export function buildConstructionDependencyRulePublicationReadinessFromProductionRows(
+  input: ConstructionDependencyRulePublicationReadinessFromProductionRowsInput,
+): ConstructionDependencyRuleProductionPublicationReadiness {
+  const candidateQueues = [
+    ...input.replayReport.calibrationQueues.l3LagCalibrationCandidates,
+    ...input.replayReport.calibrationQueues.l4ConflictQuarantineCandidates,
+  ]
+  const approvedCandidateEventIds = normalizeStringList(input.approvedCandidateEventIds)
+  const sourceDependencyIds = normalizeStringList(candidateQueues.flatMap((candidate) => candidate.sampleDependencyIds))
+  const matchedSeedCodes = normalizeStringList(candidateQueues.map((candidate) => candidate.matchedSeedCode))
+  const productionLineage = dependencyRuleProductionLineageFromProductionInput(input)
+  const evidenceRefs = productionLineage.evidenceRefs
+  const dependencyRuleVersionId = findCurrentPublishedDependencyRuleVersionId(input.sourceRows)
+  const runtimePublicationKey = normalizeNullableText(evidenceRefs.publicationExecutionRef)
+  const rollbackTarget = normalizeNullableText(evidenceRefs.rollbackDrillEvidenceRef)
+  const dependencyRulePublicationWriterReady = Boolean(dependencyRuleVersionId && runtimePublicationKey)
+  const dependencyRuleLineageRecorded = Boolean(dependencyRuleVersionId)
+    && approvedCandidateEventIds.length > 0
+    && sourceDependencyIds.length > 0
+
+  const readiness = evaluateConstructionDependencyRuleCandidateLiveLearningEvidence({
+    replayReport: input.replayReport,
+    dependencyOutcomeEventRecorded: Boolean(evidenceRefs.productionSampleEvidenceRef),
+    approvedDependencyRuleCandidateRecorded: approvedCandidateEventIds.length > 0,
+    enabledLearningScopes: input.enabledLearningScopes,
+    runtimeConsumerUsesPublishedArtifact: Boolean(evidenceRefs.runtimeConsumerObservationRef),
+    dependencyRulePublicationWriterReady,
+    dependencyRuleLineageRecorded,
+    releaseExitApproved: Boolean(evidenceRefs.publicationExecutionRef),
+    impactMonitoringReady: Boolean(evidenceRefs.impactMonitoringEvidenceRef),
+    rollbackTargetReady: Boolean(evidenceRefs.rollbackDrillEvidenceRef),
+    accuracyMetricsAvailable: Boolean(evidenceRefs.accuracyEvidenceRef),
+  })
+
+  return {
+    status: readiness.status === 'dependency_rule_candidate_live_learning_ready'
+      ? 'dependency_rule_publication_ready'
+      : 'dependency_rule_publication_not_ready',
+    liveLearningEvidence: readiness.liveLearningEvidence,
+    dependencyRuleLineage: {
+      assetType: 'dependency_rule_candidate',
+      dependencyRuleVersionId,
+      runtimePublicationKey,
+      rollbackTarget,
+      approvedCandidateEventIds,
+      sourceDependencyIds,
+      matchedSeedCodes,
+      replayReportCode: input.replayReport.reportCode,
+      comparableActualDateCount: input.replayReport.summary.comparableActualDateCount,
+    },
+    missingReasons: readiness.missingReasons,
+    productionLineage,
   }
 }

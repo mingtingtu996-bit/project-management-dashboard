@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { V1475_EXPLICIT_BUSINESS_GATE_SOURCE_ID } from '../seeds/v1475DependencyIntentTemplates.js'
 import {
+  buildConstructionDependencyRulePublicationReadinessFromProductionRows,
   buildConstructionDependencyRulePublicationReadiness,
   collectConstructionDependencyReplayCalibrationReport,
   evaluateConstructionDependencyRuleCandidateLiveLearningEvidence,
@@ -336,6 +337,136 @@ describe('construction dependency replay calibration service', () => {
       comparableActualDateCount: 4,
     })
     expect(readiness.missingReasons).toEqual([])
+  })
+
+  it('builds dependency rule publication readiness from production source rows without writing task dependencies', () => {
+    const report = {
+      reportCode: 'construction_dependency_replay_calibration' as const,
+      generatedAt: '2026-06-14T00:00:00.000Z',
+      governancePolicy: {
+        replayMode: 'report_only' as const,
+        seedWritePolicy: 'never_write_seed_from_replay' as const,
+        taskDependencyWritePolicy: 'never_write_task_dependencies_from_replay' as const,
+        promotionPolicy: 'manual_seed_review_required' as const,
+      },
+      summary: {
+        inputDependencyCount: 4,
+        matchedDependencyCount: 4,
+        comparableActualDateCount: 4,
+        l3MatchedDependencyCount: 2,
+        l4MatchedDependencyCount: 2,
+        validatedDependencyCount: 2,
+        reviewRequiredDependencyCount: 1,
+        conflictDependencyCount: 0,
+        insufficientActualDateCount: 0,
+        unmatchedSeedCount: 0,
+      },
+      calibrationQueues: {
+        l3LagCalibrationCandidates: [{
+          matchedLayer: 'cross_item_workflow' as const,
+          matchedSeedCode: 'prefab_factory_to_site_hoist_handoff',
+          sampleCount: 3,
+          projectCount: 2,
+          conflictCount: 0,
+          seedLagDays: 2,
+          medianObservedWaitDays: 4,
+          suggestedLagDays: 4,
+          queueStatus: 'manual_review_required' as const,
+          recommendation: 'review_nonzero_lag_or_condition_profile' as const,
+          promotionPolicy: 'Manual seed review required before changing L3 lagDays.',
+          sampleDependencyIds: ['dep-1', 'dep-2', 'dep-3'],
+          projectIds: ['project-1', 'project-2'],
+        }],
+        l4ConflictQuarantineCandidates: [],
+        evidenceCollectionCandidates: [],
+      },
+      items: [],
+    }
+
+    const readiness = buildConstructionDependencyRulePublicationReadinessFromProductionRows({
+      replayReport: report,
+      approvedCandidateEventIds: ['dependency-candidate-1'],
+      enabledLearningScopes: ['system', 'industry_baseline', 'company', 'project'],
+      records: [{
+        assetKey: 'dependency_rule_candidate',
+        evidenceKind: 'production_sample',
+        evidenceRef: 'network_outcomes:dependency-rule-outcome-1',
+        evidenceStatus: 'accepted',
+      }],
+      sourceRows: [
+        {
+          sourceTable: 'construction_dependency_rule_runtime_publications',
+          row: {
+            publication_key: 'dependency_rule_runtime:dependency-rule-version-v2',
+            dependency_rule_version_id: 'dependency-rule-version-v2',
+            runtime_publication_status: 'runtime_published',
+            dependency_rule_lineage: { assetType: 'dependency_rule_candidate' },
+            impact_monitoring: {
+              status: 'monitoring_armed',
+              eventRef: 'impact_monitoring:dependency_rule_runtime:dependency-rule-version-v2:armed',
+            },
+            rollback_execution: {
+              status: 'rollback_verified',
+              eventRef: 'rollback:dependency_rule_runtime:dependency-rule-version-v2:verified',
+            },
+          },
+        },
+        {
+          sourceTable: 'runtime_consumer_observations',
+          row: {
+            id: 'consumer-dependency-rule-1',
+            asset_key: 'dependency_rule_candidate',
+            consumer_key: 'scheduleAccelerationService',
+            publication_key: 'dependency_rule_runtime:dependency-rule-version-v2',
+            observation_status: 'observed',
+            writes_runtime_directly: false,
+            writes_fact_directly: false,
+          },
+        },
+        {
+          sourceTable: 'duration_algorithm_accuracy_events',
+          row: {
+            id: 'accuracy-dependency-rule-1',
+            absolute_error_days: 1,
+            prediction_context: {
+              assetKey: 'dependency_rule_candidate',
+            },
+            actual_context: {
+              accuracyGateStatus: 'accuracy_passed',
+            },
+          },
+        },
+      ],
+    })
+
+    expect(readiness.status).toBe('dependency_rule_publication_ready')
+    expect(readiness.liveLearningEvidence).toEqual(expect.objectContaining({
+      actualOutcomeEventRecorded: true,
+      dependencyRulePublicationWriterReady: true,
+      dependencyRuleLineageRecorded: true,
+      runtimeConsumerUsesPublishedArtifact: true,
+      releaseExitApproved: true,
+      impactMonitoringReady: true,
+      rollbackTargetReady: true,
+      accuracyMetricsAvailable: true,
+    }))
+    expect(readiness.dependencyRuleLineage).toEqual(expect.objectContaining({
+      dependencyRuleVersionId: 'dependency-rule-version-v2',
+      runtimePublicationKey: 'dependency_rule_runtime:dependency-rule-version-v2',
+      rollbackTarget: 'rollback:dependency_rule_runtime:dependency-rule-version-v2:verified',
+      approvedCandidateEventIds: ['dependency-candidate-1'],
+      sourceDependencyIds: ['dep-1', 'dep-2', 'dep-3'],
+    }))
+    expect(readiness.productionLineage.evidenceRefs).toEqual(expect.objectContaining({
+      productionSampleEvidenceRef: 'network_outcomes:dependency-rule-outcome-1',
+      publicationExecutionRef: 'dependency_rule_runtime:dependency-rule-version-v2',
+      runtimeConsumerObservationRef: 'runtime_consumer:consumer-dependency-rule-1',
+      impactMonitoringEvidenceRef: 'impact_monitoring:dependency_rule_runtime:dependency-rule-version-v2:armed',
+      rollbackDrillEvidenceRef: 'rollback:dependency_rule_runtime:dependency-rule-version-v2:verified',
+      accuracyEvidenceRef: 'duration_algorithm_accuracy_events:accuracy-dependency-rule-1',
+    }))
+    expect(readiness.productionLineage.rejectedRows).toEqual([])
+    expect(readiness.productionLineage.rejectedRecords).toEqual([])
   })
 
   it('keeps dependency rule publication readiness closed without approved lineage, publication, and release evidence', () => {
