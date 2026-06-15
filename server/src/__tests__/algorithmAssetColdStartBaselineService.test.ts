@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  buildAlgorithmAssetColdStartLiveLearningEvidenceFromProductionRows,
   decideAlgorithmAssetColdStartRuntime,
   evaluateAlgorithmAssetColdStartBaselineUpdate,
   evaluateAlgorithmAssetColdStartLiveLearningEvidence,
 } from '../services/algorithmAssetColdStartBaselineService.js'
+import {
+  evaluateDurationLiveLearningExecutionPlan,
+} from '../services/durationLiveLearningClosureService.js'
 
 describe('algorithmAssetColdStartBaselineService', () => {
   it('uses an eligible anonymized segment baseline as reference when company samples are insufficient', () => {
@@ -327,5 +331,146 @@ describe('algorithmAssetColdStartBaselineService', () => {
       'rollback_target_required',
       'accuracy_metrics_required',
     ]))
+  })
+
+  it('builds cold-start live evidence override from production source rows', () => {
+    const runtimeDecision = decideAlgorithmAssetColdStartRuntime({
+      companyId: 'company-a',
+      projectId: 'project-a1',
+      workCode: 'WBS-001',
+      scenarioKeys: ['residential'],
+      systemSeedValue: 12,
+      companyAcceptedSampleCount: 2,
+      minCompanySamplesForOverride: 5,
+      baselines: [
+        {
+          baselineId: 'segment-residential',
+          baselineScope: 'segment_baseline',
+          value: 10,
+          applicableScenarioKeys: ['residential'],
+          disabledScenarioKeys: [],
+          anonymizationPolicy: 'k_anonymous_multi_company',
+          contributingCompanyCount: 5,
+          minCompanyCount: 3,
+          contributingProjectCount: 18,
+          minProjectCount: 10,
+          singleCompanyShare: 0.28,
+          maxSingleCompanyShare: 0.4,
+          sourceAggregation: 'aggregate_summary_only',
+          rollbackTarget: 'cold-start-baseline:v1',
+          runtimePublicationStatus: 'published',
+        },
+      ],
+    })
+
+    const decision = buildAlgorithmAssetColdStartLiveLearningEvidenceFromProductionRows({
+      runtimeDecision,
+      minCompanySamplesForOverride: 2,
+      minProjectSamplesForOverlay: 1,
+      sourceRows: [
+        {
+          sourceTable: 'duration_experience_samples',
+          row: {
+            id: 'sample-company-1',
+            sample_status: 'active',
+            included_in_benchmark: true,
+            actual_duration: 10,
+            completed_at: '2026-06-01T00:00:00.000Z',
+            metadata: {
+              liveLearningAssetKey: 'duration_cold_start_baseline',
+              learningScope: 'company',
+            },
+          },
+        },
+        {
+          sourceTable: 'duration_experience_samples',
+          row: {
+            id: 'sample-company-2',
+            sample_status: 'active',
+            included_in_benchmark: true,
+            actual_duration: 9,
+            completed_at: '2026-06-02T00:00:00.000Z',
+            metadata: {
+              liveLearningAssetKey: 'duration_cold_start_baseline',
+              learningScope: 'company',
+            },
+          },
+        },
+        {
+          sourceTable: 'duration_experience_samples',
+          row: {
+            id: 'sample-project-1',
+            sample_status: 'active',
+            included_in_benchmark: true,
+            actual_duration: 8,
+            completed_at: '2026-06-03T00:00:00.000Z',
+            metadata: {
+              liveLearningAssetKey: 'duration_cold_start_baseline',
+              learningScope: 'project',
+            },
+          },
+        },
+        {
+          sourceTable: 'algorithm_learnable_parameter_runtime_publications',
+          row: {
+            publication_key: 'cold_start_baseline_runtime:segment-v1',
+            asset_key: 'duration_cold_start_baseline',
+            publication_status: 'published',
+            impact_monitoring: {
+              status: 'monitoring_armed',
+              eventRef: 'impact_monitoring:cold_start_baseline_runtime:segment-v1',
+            },
+            rollback_execution: {
+              status: 'rollback_verified',
+              eventRef: 'rollback:cold_start_baseline_runtime:segment-v1',
+            },
+          },
+        },
+        {
+          sourceTable: 'duration_algorithm_accuracy_events',
+          row: {
+            id: 'accuracy-cold-start-1',
+            absolute_error_days: 1,
+            prediction_context: {
+              assetKey: 'duration_cold_start_baseline',
+            },
+            actual_context: {
+              accuracyGateStatus: 'accuracy_passed',
+            },
+          },
+        },
+      ],
+    })
+
+    expect(decision.status).toBe('cold_start_live_learning_ready')
+    expect(decision.liveLearningEvidence).toEqual(expect.objectContaining({
+      actualOutcomeEventRecorded: true,
+      tieredLearningPolicyRegistered: true,
+      runtimeConsumerUsesPublishedArtifact: true,
+      releaseExitApproved: true,
+      impactMonitoringReady: true,
+      rollbackTargetReady: true,
+      accuracyMetricsAvailable: true,
+    }))
+    expect(decision.productionLineage.acceptedSampleCounts).toEqual({
+      company: 2,
+      project: 1,
+    })
+    expect(decision.productionLineage.evidenceRefs).toEqual(expect.objectContaining({
+      productionSampleEvidenceRef: 'duration_samples:sample-company-1',
+      publicationExecutionRef: 'algorithm_learnable_parameter_runtime_publications:cold_start_baseline_runtime:segment-v1',
+      impactMonitoringEvidenceRef: 'impact_monitoring:cold_start_baseline_runtime:segment-v1',
+      rollbackDrillEvidenceRef: 'rollback:cold_start_baseline_runtime:segment-v1',
+      accuracyEvidenceRef: 'duration_algorithm_accuracy_events:accuracy-cold-start-1',
+    }))
+
+    const plan = evaluateDurationLiveLearningExecutionPlan(['duration_prediction_core_a'], [{
+      assetKey: 'duration_cold_start_baseline',
+      evidence: decision.liveLearningEvidence,
+    }])
+    expect(plan.gates.find((gate) => gate.gateKey === 'prediction_and_outcome_events')?.assetKeys)
+      .not.toContain('duration_cold_start_baseline')
+    expect(plan.gates.find((gate) => gate.gateKey === 'accuracy_metrics')?.assetKeys)
+      .not.toContain('duration_cold_start_baseline')
   })
 })

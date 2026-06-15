@@ -1,3 +1,11 @@
+import {
+  collectDurationLiveLearningProductionEvidenceRecordsFromRows,
+  collectDurationLiveLearningProductionEvidenceRefs,
+  type DurationLiveLearningProductionEvidenceRecord,
+  type DurationLiveLearningProductionEvidenceRef,
+  type DurationLiveLearningProductionEvidenceSourceRow,
+} from './durationLiveLearningProductionEvidenceGateService.js'
+
 export type AlgorithmAssetColdStartBaselineScope = 'industry_baseline' | 'segment_baseline'
 
 export type AlgorithmAssetColdStartAnonymizationPolicy =
@@ -131,13 +139,122 @@ export type AlgorithmAssetColdStartLiveLearningEvidenceDecision = {
   missingReasons: string[]
 }
 
+export type AlgorithmAssetColdStartProductionSampleScope = 'company' | 'project'
+
+export interface AlgorithmAssetColdStartProductionLiveLearningEvidenceInput {
+  runtimeDecision: AlgorithmAssetColdStartRuntimeDecision
+  sourceRows?: readonly DurationLiveLearningProductionEvidenceSourceRow[]
+  records?: readonly DurationLiveLearningProductionEvidenceRecord[]
+  minCompanySamplesForOverride: number
+  minProjectSamplesForOverlay: number
+}
+
+export interface AlgorithmAssetColdStartProductionLineage {
+  acceptedSampleCounts: Record<AlgorithmAssetColdStartProductionSampleScope, number>
+  evidenceRefs: DurationLiveLearningProductionEvidenceRef
+}
+
+export type AlgorithmAssetColdStartProductionLiveLearningEvidenceDecision =
+  AlgorithmAssetColdStartLiveLearningEvidenceDecision & {
+    productionLineage: AlgorithmAssetColdStartProductionLineage
+  }
+
 const VALID_ANONYMIZATION_POLICIES = new Set<AlgorithmAssetColdStartAnonymizationPolicy>([
   'k_anonymous_multi_company',
   'differential_privacy_aggregate',
 ])
 
+const COLD_START_BASELINE_ASSET_KEY = 'duration_cold_start_baseline'
+
 function normalizeKeys(keys: string[] | undefined) {
   return [...new Set((keys ?? []).map((key) => key.trim()).filter(Boolean))].sort()
+}
+
+function readRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+}
+
+function readText(row: Record<string, unknown>, ...keys: string[]) {
+  for (const key of keys) {
+    const value = row[key]
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return ''
+}
+
+function readBoolean(row: Record<string, unknown>, key: string) {
+  return row[key] === true
+}
+
+function hasFiniteNumber(row: Record<string, unknown>, key: string) {
+  const parsed = Number(row[key])
+  return Number.isFinite(parsed)
+}
+
+function coldStartAssetKeyFromSampleRow(row: Record<string, unknown>) {
+  const metadata = readRecord(row.metadata)
+  return readText(row, 'asset_key', 'assetKey')
+    || readText(metadata, 'liveLearningAssetKey', 'live_learning_asset_key', 'assetKey', 'asset_key')
+}
+
+function normalizeProductionSampleScope(value: unknown): AlgorithmAssetColdStartProductionSampleScope | null {
+  const normalized = String(value ?? '').trim().toLowerCase()
+  if (normalized === 'company' || normalized === 'company_override') return 'company'
+  if (normalized === 'project' || normalized === 'project_overlay') return 'project'
+  return null
+}
+
+function coldStartSampleScopeFromRow(row: Record<string, unknown>) {
+  const metadata = readRecord(row.metadata)
+  return normalizeProductionSampleScope(
+    row.learning_scope
+      ?? row.learningScope
+      ?? metadata.learningScope
+      ?? metadata.learning_scope
+      ?? metadata.liveLearningScope
+      ?? metadata.live_learning_scope,
+  )
+}
+
+function isAcceptedColdStartSampleRow(row: Record<string, unknown>) {
+  return coldStartAssetKeyFromSampleRow(row) === COLD_START_BASELINE_ASSET_KEY
+    && readText(row, 'sample_status', 'sampleStatus') === 'active'
+    && readBoolean(row, 'included_in_benchmark')
+    && hasFiniteNumber(row, 'actual_duration')
+    && Boolean(readText(row, 'completed_at', 'completedAt'))
+}
+
+function countAcceptedColdStartSamplesByScope(
+  rows: readonly DurationLiveLearningProductionEvidenceSourceRow[] | undefined,
+): Record<AlgorithmAssetColdStartProductionSampleScope, number> {
+  const counts: Record<AlgorithmAssetColdStartProductionSampleScope, number> = {
+    company: 0,
+    project: 0,
+  }
+  for (const source of rows ?? []) {
+    if (source.sourceTable !== 'duration_experience_samples') continue
+    if (!isAcceptedColdStartSampleRow(source.row)) continue
+    const scope = coldStartSampleScopeFromRow(source.row)
+    if (!scope) continue
+    counts[scope] += 1
+  }
+  return counts
+}
+
+function coldStartEvidenceRefsFromProductionInput(
+  input: Pick<AlgorithmAssetColdStartProductionLiveLearningEvidenceInput, 'sourceRows' | 'records'>,
+) {
+  const rowCollection = collectDurationLiveLearningProductionEvidenceRecordsFromRows({
+    rows: input.sourceRows,
+  })
+  return collectDurationLiveLearningProductionEvidenceRefs({
+    records: [
+      ...rowCollection.records,
+      ...(input.records ?? []),
+    ],
+  }).productionEvidence.find((evidence) => evidence.assetKey === COLD_START_BASELINE_ASSET_KEY)
 }
 
 function hasRollbackTarget(value: string | null | undefined) {
@@ -362,5 +479,36 @@ export function evaluateAlgorithmAssetColdStartLiveLearningEvidence(
       : 'cold_start_live_learning_not_ready',
     liveLearningEvidence,
     missingReasons: uniqueValues(missingReasons),
+  }
+}
+
+export function buildAlgorithmAssetColdStartLiveLearningEvidenceFromProductionRows(
+  input: AlgorithmAssetColdStartProductionLiveLearningEvidenceInput,
+): AlgorithmAssetColdStartProductionLiveLearningEvidenceDecision {
+  const acceptedSampleCounts = countAcceptedColdStartSamplesByScope(input.sourceRows)
+  const evidenceRefs = coldStartEvidenceRefsFromProductionInput(input) ?? {
+    assetKey: COLD_START_BASELINE_ASSET_KEY,
+  }
+  const hasAcceptedOutcome = acceptedSampleCounts.company + acceptedSampleCounts.project > 0
+  const decision = evaluateAlgorithmAssetColdStartLiveLearningEvidence({
+    runtimeDecision: input.runtimeDecision,
+    actualOutcomeRecorded: hasAcceptedOutcome,
+    actualSampleHealth: hasAcceptedOutcome ? 'accepted' : 'rejected',
+    companyAcceptedSampleCount: acceptedSampleCounts.company,
+    minCompanySamplesForOverride: input.minCompanySamplesForOverride,
+    projectAcceptedSampleCount: acceptedSampleCounts.project,
+    minProjectSamplesForOverlay: input.minProjectSamplesForOverlay,
+    releaseExitApproved: Boolean(evidenceRefs.publicationExecutionRef),
+    impactMonitoringReady: Boolean(evidenceRefs.impactMonitoringEvidenceRef),
+    rollbackTargetReady: Boolean(evidenceRefs.rollbackDrillEvidenceRef),
+    accuracyMetricsAvailable: Boolean(evidenceRefs.accuracyEvidenceRef),
+  })
+
+  return {
+    ...decision,
+    productionLineage: {
+      acceptedSampleCounts,
+      evidenceRefs,
+    },
   }
 }
