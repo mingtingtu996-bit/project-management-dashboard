@@ -42,6 +42,11 @@ export interface CriticalTaskSnapshot {
   title: string
   floatDays: number
   durationDays: number
+  p50DurationDays?: number
+  p80DurationDays?: number
+  standardDeviationDays?: number
+  confidenceBandWidthDays?: number
+  isHighVarianceNearCritical?: boolean
   isAutoCritical: boolean
   isManualAttention: boolean
   isManualInserted: boolean
@@ -53,6 +58,10 @@ export interface CriticalChainSnapshot {
   source: CriticalSource
   taskIds: string[]
   totalDurationDays: number
+  p80DurationDays?: number
+  standardDeviationDays?: number
+  confidenceBandWidthDays?: number
+  isHighVarianceNearCritical?: boolean
   displayLabel: string
 }
 
@@ -152,6 +161,9 @@ export interface CriticalPathRuleCandidateLiveLearningEvidenceDecision {
 }
 
 const CRITICAL_PATH_RULE_LEARNING_SCOPE_ORDER = ['global', 'industry', 'company', 'project'] as const
+const CRITICAL_PATH_RULE_CANDIDATE_ASSET_KEY = 'critical_path_rule_candidate'
+
+type CriticalPathPlanNetworkOutcomeStatus = 'accepted' | 'weak'
 
 function normalizeCriticalPathRuleLearningScopes(
   scopes: readonly CriticalPathRuleLearningScopeEvidence[] | undefined,
@@ -332,6 +344,10 @@ interface TaskNode {
   id: string
   name: string
   duration: number
+  p50DurationDays?: number
+  p80DurationDays?: number
+  standardDeviationDays?: number
+  confidenceBandWidthDays?: number
   startDate?: Date
   endDate?: Date
   durationSource?: 'planned_window' | 'e2_remaining_forecast'
@@ -546,6 +562,129 @@ function buildCompletedProjectActualSpan(rows: CriticalPathTaskRow[], calendar?:
   const actualDurationDays = cpmSpanDays(actualStartDate, actualFinishDate, calendar)
   if (!actualStartDate || !actualFinishDate || !actualDurationDays) return null
   return { actualStartDate, actualFinishDate, actualDurationDays }
+}
+
+function criticalPathOutcomeToleranceDays(predictedDurationDays: number) {
+  return Math.max(2, Math.round(Math.max(1, predictedDurationDays) * 0.2))
+}
+
+function criticalPathPlanNetworkOutcomeStatus(params: {
+  snapshot: CriticalPathSnapshot
+  actualDurationDays: number
+}): CriticalPathPlanNetworkOutcomeStatus {
+  const predictedDurationDays = Math.max(0, Math.round(params.snapshot.projectDurationDays))
+  const durationErrorDays = Math.abs(params.actualDurationDays - predictedDurationDays)
+  const toleranceDays = criticalPathOutcomeToleranceDays(predictedDurationDays)
+  return predictedDurationDays > 0
+    && params.snapshot.autoTaskIds.length > 0
+    && durationErrorDays <= toleranceDays
+    ? 'accepted'
+    : 'weak'
+}
+
+async function recordCriticalPathRulePlanNetworkOutcome(params: {
+  projectId: string
+  snapshot: CriticalPathSnapshot
+  actualSpan: {
+    actualStartDate: string
+    actualFinishDate: string
+    actualDurationDays: number
+  }
+}) {
+  const { projectId, snapshot, actualSpan } = params
+  const networkLineage = snapshot.networkLineage
+  if (
+    snapshot.calculationStatus !== 'fresh'
+    || !networkLineage?.criticalPathInputHash
+    || !networkLineage.criticalSetHash
+    || snapshot.projectDurationDays <= 0
+  ) {
+    return
+  }
+
+  const predictedDurationDays = Math.max(0, Math.round(snapshot.projectDurationDays))
+  const durationErrorDays = Math.abs(actualSpan.actualDurationDays - predictedDurationDays)
+  const outcomeToleranceDays = criticalPathOutcomeToleranceDays(predictedDurationDays)
+  const projectedFloatTaskCount = snapshot.tasks.filter((task) => Number.isFinite(task.floatDays)).length
+  const outcomeStatus = criticalPathPlanNetworkOutcomeStatus({
+    snapshot,
+    actualDurationDays: actualSpan.actualDurationDays,
+  })
+  const metadata = {
+    source: 'project_critical_path_cpm',
+    algorithm_version: networkLineage.criticalPathAlgorithmVersion,
+    prediction_duration_days: predictedDurationDays,
+    actual_duration_days: actualSpan.actualDurationDays,
+    duration_error_days: durationErrorDays,
+    outcome_tolerance_days: outcomeToleranceDays,
+    actual_start_date: actualSpan.actualStartDate,
+    actual_finish_date: actualSpan.actualFinishDate,
+    calculation_status: snapshot.calculationStatus,
+    calculated_at: snapshot.calculatedAt ?? null,
+    critical_path_input_hash: networkLineage.criticalPathInputHash,
+    critical_set_hash: networkLineage.criticalSetHash,
+    task_network_input_hash: networkLineage.taskNetworkInputHash,
+    dependency_input_hash: networkLineage.dependencyInputHash,
+    dependency_rule_version: networkLineage.dependencyRuleVersion,
+    baseline_version_ids: networkLineage.baselineVersionIds,
+    baseline_item_ids: networkLineage.baselineItemIds,
+    baseline_version_source: networkLineage.baselineVersionSource,
+    auto_task_ids: snapshot.autoTaskIds,
+    manual_attention_task_ids: snapshot.manualAttentionTaskIds,
+    manual_inserted_task_ids: snapshot.manualInsertedTaskIds,
+    primary_chain_task_ids: snapshot.primaryChain?.taskIds ?? [],
+    alternate_chain_count: snapshot.alternateChains.length,
+    edge_count: snapshot.edges.length,
+    critical_task_count: snapshot.autoTaskIds.length,
+    projected_float_task_count: projectedFloatTaskCount,
+    writes_runtime_directly: false,
+    writes_fact_directly: false,
+  }
+
+  try {
+    await rawQuery(
+      `INSERT INTO public.duration_plan_network_outcomes (
+        id,
+        asset_key,
+        outcome_status,
+        outcome_ref,
+        company_id,
+        project_id,
+        publication_key,
+        metadata,
+        writes_runtime_directly,
+        writes_fact_directly
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      ON CONFLICT (id) DO UPDATE SET
+        outcome_status = EXCLUDED.outcome_status,
+        outcome_ref = EXCLUDED.outcome_ref,
+        company_id = EXCLUDED.company_id,
+        project_id = EXCLUDED.project_id,
+        publication_key = EXCLUDED.publication_key,
+        observed_at = now(),
+        metadata = EXCLUDED.metadata,
+        writes_runtime_directly = false,
+        writes_fact_directly = false`,
+      [
+        `critical-path-cpm:${projectId}:${networkLineage.criticalSetHash}`,
+        CRITICAL_PATH_RULE_CANDIDATE_ASSET_KEY,
+        outcomeStatus,
+        `critical_path_cpm:${projectId}:${networkLineage.criticalPathInputHash}`,
+        null,
+        projectId,
+        null,
+        metadata,
+        false,
+        false,
+      ],
+    )
+  } catch (error) {
+    logger.warn('[projectCriticalPathService] failed to record critical path plan-network outcome', {
+      projectId,
+      criticalSetHash: networkLineage.criticalSetHash,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
 }
 
 function normalizeDependencyType(value: unknown): CriticalDependencyType {
@@ -967,10 +1106,16 @@ function buildTaskNodes(
   return eligibleTasks.map((task) => {
     const startDate = parseDate(task.start_date ?? task.planned_start_date)!
     const endDate = parseDate(task.end_date ?? task.planned_end_date)!
+    const currentForecast = currentForecasts.get(task.id)
+    const probabilityDuration = currentForecast?.probabilityDuration ?? null
     const forecastRemainingDays = isRuntimeInProgressRow(task)
-      ? readPositiveInt(currentForecasts.get(task.id)?.remainingDurationDays)
+      ? readPositiveInt(currentForecast?.remainingDurationDays)
       : null
     const duration = forecastRemainingDays ?? cpmSpanDays(startDate, endDate, calendar) ?? 1
+    const p50DurationDays = readPositiveInt((probabilityDuration as any)?.p50RemainingDays)
+    const p80DurationDays = readPositiveInt((probabilityDuration as any)?.p80RemainingDays)
+    const standardDeviationDays = readPositiveInt((probabilityDuration as any)?.standardDeviationDays)
+    const confidenceBandWidthDays = readPositiveInt((probabilityDuration as any)?.confidenceBandWidthDays)
     const resourceClass = readTaskResourceClass(task)
     const resourceCapacity = readTaskResourceCapacity(task, resourceClass)
 
@@ -978,6 +1123,10 @@ function buildTaskNodes(
       id: task.id,
       name: task.title || task.name || task.id,
       duration,
+      ...(p50DurationDays ? { p50DurationDays } : {}),
+      ...(p80DurationDays ? { p80DurationDays } : {}),
+      ...(standardDeviationDays ? { standardDeviationDays } : {}),
+      ...(confidenceBandWidthDays ? { confidenceBandWidthDays } : {}),
       startDate,
       endDate,
       durationSource: forecastRemainingDays ? 'e2_remaining_forecast' : 'planned_window',
@@ -1308,6 +1457,54 @@ function sortAutoCriticalChains(
     alternateChains: rankedChains.slice(1),
     orderedTaskIds: unique(rankedChains.flatMap((chain) => chain.taskIds)),
   }
+}
+
+function isHighVarianceNearCriticalNode(taskId: string, analysis: CPMResult, criticalTaskIds: Set<string>) {
+  if (criticalTaskIds.has(taskId)) return false
+  const node = analysis.taskMap.get(taskId)
+  if (!node?.p80DurationDays) return false
+  const floatDays = Math.max(0, analysis.float.get(taskId) ?? 0)
+  if (floatDays <= 0) return false
+  const p50DurationDays = node.p50DurationDays ?? node.duration
+  const spreadDays = Math.max(
+    0,
+    node.confidenceBandWidthDays ?? node.p80DurationDays - p50DurationDays,
+    node.p80DurationDays - p50DurationDays,
+    node.standardDeviationDays ?? 0,
+  )
+  if (spreadDays <= 0) return false
+  const earliestStart = analysis.earliestStart.get(taskId) ?? 0
+  const p80Finish = earliestStart + node.p80DurationDays
+  return floatDays <= Math.max(2, spreadDays) && p80Finish >= analysis.projectDuration
+}
+
+function buildHighVarianceNearCriticalChains(
+  projectId: string,
+  analysis: CPMResult,
+  criticalTaskIds: Set<string>,
+): CriticalChainSnapshot[] {
+  return analysis.orderedTaskIds
+    .filter((taskId) => isHighVarianceNearCriticalNode(taskId, analysis, criticalTaskIds))
+    .map((taskId, index) => {
+      const node = analysis.taskMap.get(taskId)!
+      const p50DurationDays = node.p50DurationDays ?? node.duration
+      const p80DurationDays = node.p80DurationDays ?? node.duration
+      return {
+        id: `${projectId}-near-critical-variance-${index + 1}`,
+        source: 'auto' as const,
+        taskIds: [taskId],
+        totalDurationDays: node.duration,
+        p80DurationDays,
+        standardDeviationDays: node.standardDeviationDays,
+        confidenceBandWidthDays: Math.max(
+          0,
+          node.confidenceBandWidthDays ?? p80DurationDays - p50DurationDays,
+          p80DurationDays - p50DurationDays,
+        ),
+        isHighVarianceNearCritical: true,
+        displayLabel: `楂樻柟宸繎鍏抽敭閾?${index + 1}`,
+      } satisfies CriticalChainSnapshot
+    })
 }
 
 function orderDisplayTaskIds(
@@ -1704,6 +1901,11 @@ export async function buildProjectCriticalPathSnapshot(
   const autoTaskIds = orderedAutoTaskIds.length > 0
     ? orderedAutoTaskIds
     : buildFallbackAutoTaskIds(rows)
+  const highVarianceNearCriticalChains = buildHighVarianceNearCriticalChains(
+    projectId,
+    analysis,
+    new Set(autoTaskIds),
+  )
   const manualAttentionTaskIds = unique(
     overrides.filter((override) => override.mode === 'manual_attention').map((override) => override.task_id),
   )
@@ -1714,6 +1916,7 @@ export async function buildProjectCriticalPathSnapshot(
     ...orderDisplayTaskIds(autoTaskIds, new Set(rows.map((row) => row.id)), manualInsertOverrides),
   ])
   const manualInsertChains = buildManualInsertChains(projectId, manualInsertOverrides, taskMap, constructionCalendar)
+  const combinedAlternateChains = [...autoAlternateChains, ...highVarianceNearCriticalChains, ...manualInsertChains]
   const edges = buildSnapshotEdges(primaryChain?.taskIds ?? autoTaskIds, analysis.dependencyEdges, manualInsertOverrides)
   const primaryChainIndex = new Map((primaryChain?.taskIds ?? []).map((taskId, index) => [taskId, index]))
   const networkLineage = buildCriticalPathNetworkLineage({
@@ -1726,11 +1929,16 @@ export async function buildProjectCriticalPathSnapshot(
     displayTaskIds,
     edges,
     primaryChain,
-    alternateChains: [...autoAlternateChains, ...manualInsertChains],
+    alternateChains: combinedAlternateChains,
   })
 
-  const tasks = displayTaskIds
-    .map((taskId) => {
+  const taskSnapshotIds = unique([
+    ...displayTaskIds,
+    ...highVarianceNearCriticalChains.flatMap((chain) => chain.taskIds),
+  ])
+  const highVarianceNearCriticalTaskIds = new Set(highVarianceNearCriticalChains.flatMap((chain) => chain.taskIds))
+  const tasks = taskSnapshotIds
+    .map((taskId): CriticalTaskSnapshot | null => {
       const row = taskMap.get(taskId)
       const node = analysis.taskMap.get(taskId)
       if (!row) return null
@@ -1740,6 +1948,11 @@ export async function buildProjectCriticalPathSnapshot(
         title: row.title || row.name || taskId,
         floatDays: analysis.float.get(taskId) ?? 0,
         durationDays: node?.duration ?? getTaskDurationDays(row, constructionCalendar),
+        ...(node?.p50DurationDays ? { p50DurationDays: node.p50DurationDays } : {}),
+        ...(node?.p80DurationDays ? { p80DurationDays: node.p80DurationDays } : {}),
+        ...(node?.standardDeviationDays ? { standardDeviationDays: node.standardDeviationDays } : {}),
+        ...(node?.confidenceBandWidthDays ? { confidenceBandWidthDays: node.confidenceBandWidthDays } : {}),
+        ...(highVarianceNearCriticalTaskIds.has(taskId) ? { isHighVarianceNearCritical: true } : {}),
         isAutoCritical: autoTaskIds.includes(taskId),
         isManualAttention: manualAttentionTaskIds.includes(taskId),
         isManualInserted: manualInsertedTaskIds.includes(taskId),
@@ -1755,7 +1968,7 @@ export async function buildProjectCriticalPathSnapshot(
     manualAttentionTaskIds,
     manualInsertedTaskIds,
     primaryChain,
-    alternateChains: [...autoAlternateChains, ...manualInsertChains],
+    alternateChains: combinedAlternateChains,
     displayTaskIds,
     watchedTaskIds: manualAttentionTaskIds,  // CP14: manual_attention 任务独立字段
     edges,
@@ -1763,7 +1976,7 @@ export async function buildProjectCriticalPathSnapshot(
     projectDurationDays: Math.max(
       analysis.projectDuration,
       primaryChain?.totalDurationDays ?? 0,
-      ...autoAlternateChains.map((chain) => chain.totalDurationDays),
+      ...combinedAlternateChains.map((chain) => chain.totalDurationDays),
     ),
     calculatedAt,
     lastSuccessfulCalculatedAt: calculatedAt,
@@ -1975,6 +2188,11 @@ export async function recalculateProjectCriticalPath(projectId: string): Promise
         skippedCurrentDedupeKey: cpmDedupeKey,
         taskCount: tasks.length,
       },
+    })
+    await recordCriticalPathRulePlanNetworkOutcome({
+      projectId,
+      snapshot,
+      actualSpan,
     })
   }
 

@@ -125,6 +125,8 @@ const mocks = vi.hoisted(() => {
     return []
   })
 
+  const rawQuery = vi.fn(async (_query: string, _params: any[] = []) => ({ rows: [] as Row[] }))
+
   return {
     tables,
     updates,
@@ -140,11 +142,16 @@ const mocks = vi.hoisted(() => {
     backtestEarliestPendingDurationAccuracyPrediction: vi.fn(),
     listCurrentTaskDurationForecasts: vi.fn(),
     resolveConstructionCalendarContext: vi.fn(),
+    rawQuery,
   }
 })
 
 vi.mock('../services/dbService.js', () => ({
   executeSQL: mocks.executeSQL,
+}))
+
+vi.mock('../database.js', () => ({
+  query: mocks.rawQuery,
 }))
 
 vi.mock('../middleware/logger.js', () => ({
@@ -440,6 +447,53 @@ describe('project critical path service', () => {
     }))
   })
 
+  it('records completed critical-path replay as a plan-network outcome without mutating facts or runtime artifacts', async () => {
+    mocks.tables.tasks = mocks.tables.tasks.map((row) => ({
+      ...row,
+      status: 'completed',
+      progress: 100,
+      actual_start_date: row.start_date,
+      actual_end_date: row.end_date,
+    }))
+
+    const result = await recalculateProjectCriticalPath('project-1')
+
+    expect(result.projectDuration).toBe(8)
+    const outcomeInsert = mocks.rawQuery.mock.calls.find((call) =>
+      String(call[0]).toLowerCase().includes('insert into public.duration_plan_network_outcomes'),
+    )
+
+    expect(outcomeInsert).toBeTruthy()
+    expect(String(outcomeInsert?.[0]).toLowerCase()).toContain('on conflict (id) do update')
+    expect(String(outcomeInsert?.[0]).toLowerCase()).not.toContain('insert into public.task_critical_overrides')
+    expect(String(outcomeInsert?.[0]).toLowerCase()).not.toContain('update public.task_critical_overrides')
+    expect(String(outcomeInsert?.[0]).toLowerCase()).not.toContain('insert into public.tasks')
+    expect(String(outcomeInsert?.[0]).toLowerCase()).not.toContain('update public.tasks')
+    expect(outcomeInsert?.[1]).toEqual([
+      expect.stringMatching(/^critical-path-cpm:project-1:sha256:/),
+      'critical_path_rule_candidate',
+      'accepted',
+      expect.stringMatching(/^critical_path_cpm:project-1:sha256:/),
+      null,
+      'project-1',
+      null,
+      expect.objectContaining({
+        source: 'project_critical_path_cpm',
+        algorithm_version: 'critical_path_cpm_v1',
+        prediction_duration_days: 8,
+        actual_duration_days: 8,
+        duration_error_days: 0,
+        outcome_tolerance_days: 2,
+        critical_task_count: 1,
+        projected_float_task_count: 1,
+        writes_runtime_directly: false,
+        writes_fact_directly: false,
+      }),
+      false,
+      false,
+    ])
+  })
+
   it('projects live CPM criticality and float fields back to task rows after recalculation', async () => {
     await recalculateProjectCriticalPath('project-1')
 
@@ -516,6 +570,75 @@ describe('project critical path service', () => {
     )
     expect(result.projectDuration).toBe(7)
     expect(result.snapshot.tasks.find((task) => task.taskId === 'task-running')?.durationDays).toBe(2)
+  })
+
+  it('flags high-variance near-critical chains from E2 probability duration windows', async () => {
+    mocks.tables.tasks = [
+      {
+        id: 'main-critical',
+        project_id: 'project-variance',
+        title: 'Main critical chain',
+        start_date: '2026-06-01',
+        end_date: '2026-06-10',
+        planned_end_date: '2026-06-10',
+        status: 'in_progress',
+        progress: 50,
+        actual_start_date: '2026-06-01',
+      },
+      {
+        id: 'near-critical-variable',
+        project_id: 'project-variance',
+        title: 'Near critical high variance work',
+        start_date: '2026-06-01',
+        end_date: '2026-06-09',
+        planned_end_date: '2026-06-09',
+        status: 'in_progress',
+        progress: 50,
+        actual_start_date: '2026-06-01',
+      },
+    ]
+    mocks.tables.task_dependencies = []
+    mocks.listCurrentTaskDurationForecasts.mockResolvedValue([
+      {
+        taskId: 'main-critical',
+        remainingDurationDays: 10,
+        probabilityDuration: {
+          p50RemainingDays: 10,
+          p80RemainingDays: 11,
+          standardDeviationDays: 1,
+          confidenceBandWidthDays: 1,
+        },
+      },
+      {
+        taskId: 'near-critical-variable',
+        remainingDurationDays: 9,
+        probabilityDuration: {
+          p50RemainingDays: 9,
+          p80RemainingDays: 16,
+          standardDeviationDays: 4,
+          confidenceBandWidthDays: 7,
+        },
+      },
+    ])
+
+    const snapshot = await getProjectCriticalPathSnapshot('project-variance')
+
+    const nearCriticalTask = snapshot.tasks.find((task) => task.taskId === 'near-critical-variable') as any
+    expect(nearCriticalTask).toEqual(expect.objectContaining({
+      isAutoCritical: false,
+      isHighVarianceNearCritical: true,
+      p80DurationDays: 16,
+      standardDeviationDays: 4,
+    }))
+    expect(snapshot.alternateChains).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        source: 'auto',
+        taskIds: ['near-critical-variable'],
+        totalDurationDays: 9,
+        p80DurationDays: 16,
+        isHighVarianceNearCritical: true,
+      }),
+    ]))
   })
 
   it('uses construction production days for planned CPM task durations', async () => {
