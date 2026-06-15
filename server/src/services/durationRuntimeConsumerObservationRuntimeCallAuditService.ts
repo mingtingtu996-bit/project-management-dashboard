@@ -8,6 +8,7 @@ import {
 export interface DurationRuntimeConsumerObservationRuntimeCallEvidence {
   consumerKey: string
   runtimeEntryRef: string
+  evidenceRef?: string | null
 }
 
 export interface DurationRuntimeConsumerObservationRuntimeCallIdentity {
@@ -18,13 +19,16 @@ export interface DurationRuntimeConsumerObservationRuntimeCallIdentity {
 export interface DurationRuntimeConsumerObservationObservedRuntimeCall
   extends DurationRuntimeConsumerObservationRuntimeCallIdentity {
   runtimeEntryRef: string
+  evidenceRef: string
 }
 
 export interface DurationRuntimeConsumerObservationRejectedRuntimeCall
-  extends DurationRuntimeConsumerObservationObservedRuntimeCall {
+  extends DurationRuntimeConsumerObservationRuntimeCallIdentity {
+  evidenceRef?: string
   reason:
     | 'runtime_consumer_observation_facade_consumer_not_declared'
     | 'runtime_consumer_observation_runtime_entry_ref_not_declared'
+    | 'runtime_consumer_observation_runtime_call_production_ref_required'
 }
 
 export interface DurationRuntimeConsumerObservationRuntimeCallCoverageInput {
@@ -47,6 +51,15 @@ function normalizeConsumerKey(value: string) {
 
 function normalizeText(value: string) {
   return value.trim()
+}
+
+function normalizeOptionalText(value: string | null | undefined) {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function isRuntimeConsumerRuntimeCallProductionEvidenceRef(value: string) {
+  return value.startsWith('runtime_consumer_runtime_calls:')
+    && value.slice('runtime_consumer_runtime_calls:'.length).trim().length > 0
 }
 
 export function listDurationRuntimeConsumerObservationRequiredRuntimeCalls():
@@ -76,11 +89,13 @@ export function evaluateDurationRuntimeConsumerObservationRuntimeCallCoverage(
   for (const evidence of input.runtimeCallEvidence ?? []) {
     const consumerKey = normalizeConsumerKey(evidence.consumerKey)
     const runtimeEntryRef = normalizeText(evidence.runtimeEntryRef)
+    const evidenceRef = normalizeOptionalText(evidence.evidenceRef)
     const requiredRuntimeCall = requiredRuntimeCallByConsumerKey.get(consumerKey)
     if (!requiredRuntimeCall) {
       rejectedRuntimeCalls.push({
         consumerKey,
         runtimeEntryRef,
+        ...(evidenceRef ? { evidenceRef } : {}),
         reason: 'runtime_consumer_observation_facade_consumer_not_declared',
       })
       continue
@@ -90,11 +105,21 @@ export function evaluateDurationRuntimeConsumerObservationRuntimeCallCoverage(
       rejectedRuntimeCalls.push({
         consumerKey,
         runtimeEntryRef,
+        ...(evidenceRef ? { evidenceRef } : {}),
         reason: 'runtime_consumer_observation_runtime_entry_ref_not_declared',
       })
       continue
     }
-    observedMap.set(consumerKey, { consumerKey, runtimeEntryRef })
+    if (!isRuntimeConsumerRuntimeCallProductionEvidenceRef(evidenceRef)) {
+      rejectedRuntimeCalls.push({
+        consumerKey,
+        runtimeEntryRef,
+        ...(evidenceRef ? { evidenceRef } : {}),
+        reason: 'runtime_consumer_observation_runtime_call_production_ref_required',
+      })
+      continue
+    }
+    observedMap.set(consumerKey, { consumerKey, runtimeEntryRef, evidenceRef })
   }
 
   const observedRuntimeCalls = [...observedMap.values()]

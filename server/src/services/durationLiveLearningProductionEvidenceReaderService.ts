@@ -11,9 +11,6 @@ import {
   type DurationLiveLearningProductionEvidenceSourceTable,
 } from './durationLiveLearningProductionEvidenceGateService.js'
 import type {
-  DurationRuntimeConsumerObservationRuntimeCallEvidence,
-} from './durationRuntimeConsumerObservationRuntimeCallAuditService.js'
-import type {
   DurationRuntimeConsumerBusinessPathSourceFile,
 } from './durationRuntimeConsumerBusinessPathIntegrationAuditService.js'
 import {
@@ -40,7 +37,6 @@ export interface DurationLiveLearningProductionClaimAuditFromDbInput
   extends DurationLiveLearningProductionEvidenceSourceQueryInput {
   completionAudit: DurationLiveLearningCompletionAudit
   records?: readonly DurationLiveLearningProductionEvidenceRecord[]
-  runtimeConsumerRuntimeCallEvidence?: readonly DurationRuntimeConsumerObservationRuntimeCallEvidence[]
   runtimeConsumerBusinessPathSourceFiles?: readonly DurationRuntimeConsumerBusinessPathSourceFile[]
 }
 
@@ -227,7 +223,6 @@ export async function buildDurationLiveLearningProductionClaimAuditFromDb(
     completionAudit: input.completionAudit,
     sourceRows: sourceQuery.sourceRows,
     records: input.records,
-    runtimeConsumerRuntimeCallEvidence: input.runtimeConsumerRuntimeCallEvidence,
     runtimeConsumerBusinessPathSourceFiles,
   })
 

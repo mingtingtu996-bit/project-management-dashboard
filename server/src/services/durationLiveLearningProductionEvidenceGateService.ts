@@ -167,7 +167,6 @@ export interface DurationLiveLearningProductionClaimAuditInput {
   records?: readonly DurationLiveLearningProductionEvidenceRecord[]
   sourceRows?: readonly DurationLiveLearningProductionEvidenceSourceRow[]
   runtimeConsumerAdapterRegistrations?: readonly DurationRuntimeConsumerObservationAdapterRegistration[]
-  runtimeConsumerRuntimeCallEvidence?: readonly DurationRuntimeConsumerObservationRuntimeCallEvidence[]
   runtimeConsumerBusinessPathSourceFiles?: readonly DurationRuntimeConsumerBusinessPathSourceFile[]
 }
 
@@ -1024,7 +1023,11 @@ function runtimeConsumerRuntimeCallEvidenceFromSourceRows(
     const consumerKey = readText(row, 'consumer_key', 'consumerKey')
     const runtimeEntryRef = readText(row, 'runtime_entry_ref', 'runtimeEntryRef')
     if (!consumerKey || !runtimeEntryRef) continue
-    evidence.push({ consumerKey, runtimeEntryRef })
+    evidence.push({
+      consumerKey,
+      runtimeEntryRef,
+      evidenceRef: `runtime_consumer_runtime_calls:${readText(row, 'id')}`,
+    })
   }
   return evidence
 }
@@ -1150,10 +1153,7 @@ export function buildDurationLiveLearningProductionClaimAudit(
         ?? listDurationRuntimeConsumerObservationFacadeRegistrations(),
     })
   const runtimeConsumerRuntimeCallCoverage = evaluateDurationRuntimeConsumerObservationRuntimeCallCoverage({
-    runtimeCallEvidence: [
-      ...runtimeConsumerRuntimeCallEvidenceFromSourceRows(input.sourceRows),
-      ...(input.runtimeConsumerRuntimeCallEvidence ?? []),
-    ],
+    runtimeCallEvidence: runtimeConsumerRuntimeCallEvidenceFromSourceRows(input.sourceRows),
   })
   const runtimeConsumerBusinessPathIntegrationCoverage =
     evaluateDurationRuntimeConsumerBusinessPathIntegrationCoverage({

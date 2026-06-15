@@ -1203,11 +1203,11 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
     expect(adapted.rejectedRows).toEqual([])
   })
 
-  it('builds the final production claim audit from completion audit plus typed production records', () => {
+  it('builds the final production claim audit from completion audit plus typed production records and runtime-call source rows', () => {
     const audit = buildDurationLiveLearningProductionClaimAudit({
       completionAudit: buildReadyCompletionAudit(),
       records: buildAllProductionEvidenceRecords(),
-      runtimeConsumerRuntimeCallEvidence: runtimeCallEvidence,
+      sourceRows: buildRuntimeConsumerRuntimeCallRows(),
       runtimeConsumerBusinessPathSourceFiles: buildReadyBusinessPathSourceFiles(),
     })
 
@@ -1224,6 +1224,27 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
     )
   })
 
+  it('blocks the final production claim when runtime-call evidence is supplied only as manual overrides', () => {
+    const input = {
+      completionAudit: buildReadyCompletionAudit(),
+      records: buildAllProductionEvidenceRecords(),
+      runtimeConsumerRuntimeCallEvidence: runtimeCallEvidence,
+      runtimeConsumerBusinessPathSourceFiles: buildReadyBusinessPathSourceFiles(),
+    } as Parameters<typeof buildDurationLiveLearningProductionClaimAudit>[0] & {
+      runtimeConsumerRuntimeCallEvidence: typeof runtimeCallEvidence
+    }
+    const audit = buildDurationLiveLearningProductionClaimAudit(input)
+
+    expect(audit.productionGate.status).toBe('duration_live_learning_production_evidence_ready')
+    expect(audit.runtimeConsumerObservationCoverage.status).toBe('runtime_consumer_observation_coverage_ready')
+    expect(audit.runtimeConsumerRuntimeCallCoverage.status)
+      .toBe('runtime_consumer_observation_runtime_calls_not_ready')
+    expect(audit.runtimeConsumerRuntimeCallCoverage.observedRuntimeCalls).toEqual([])
+    expect(audit.runtimeConsumerRuntimeCallCoverage.missingRuntimeCalls).toEqual(runtimeCallEvidence)
+    expect(audit.status).toBe('duration_live_learning_production_claim_not_ready')
+    expect(audit.allowedClaim).toBe('not_ready_for_live_self_learning_claim')
+  })
+
   it('blocks the final production claim when any declared runtime consumer has no observation', () => {
     const audit = buildDurationLiveLearningProductionClaimAudit({
       completionAudit: buildReadyCompletionAudit(),
@@ -1231,7 +1252,6 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
         record.assetKey !== 'forecast_residual_overlay'
         || record.evidenceKind !== 'runtime_consumer_observation'
         || record.consumerKey !== 'projectRemainingDurationForecastService'),
-      runtimeConsumerRuntimeCallEvidence: runtimeCallEvidence,
     })
 
     expect(audit.productionGate.status).toBe('duration_live_learning_production_evidence_ready')
