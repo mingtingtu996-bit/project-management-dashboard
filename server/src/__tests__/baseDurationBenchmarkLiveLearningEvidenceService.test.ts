@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  buildBaseDurationBenchmarkLiveLearningEvidenceFromProductionRows,
   buildBaseDurationBenchmarkLiveLearningEvidence,
 } from '../services/baseDurationBenchmarkLiveLearningEvidenceService.js'
 import {
@@ -97,5 +98,100 @@ describe('baseDurationBenchmarkLiveLearningEvidenceService', () => {
       'rollback_target_required',
       'accuracy_metrics_required',
     ]))
+  })
+
+  it('builds base duration benchmark live evidence from production source rows', () => {
+    const decision = buildBaseDurationBenchmarkLiveLearningEvidenceFromProductionRows({
+      enabledLearningScopes: ['system', 'industry_baseline', 'company', 'project'],
+      sourceRows: [
+        ...['global', 'industry', 'company', 'project'].map((learningScope, index) => ({
+          sourceTable: 'duration_experience_samples' as const,
+          row: {
+            id: `base-sample-${learningScope}`,
+            sample_status: 'active',
+            included_in_benchmark: true,
+            actual_duration: 6 + index,
+            completed_at: '2026-06-14T00:00:00.000Z',
+            metadata: {
+              liveLearningAssetKey: 'base_duration_benchmark',
+              learningScope,
+            },
+          },
+        })),
+        {
+          sourceTable: 'algorithm_learnable_parameter_runtime_publications',
+          row: {
+            publication_key: 'duration_benchmark_runtime:benchmark-blend-v2',
+            asset_key: 'base_duration_benchmark',
+            publication_status: 'published',
+            impact_monitoring: {
+              status: 'monitoring_armed',
+              eventRef: 'impact_monitoring:duration_benchmark_runtime:benchmark-blend-v2:armed',
+            },
+            rollback_execution: {
+              status: 'rollback_verified',
+              eventRef: 'rollback:duration_benchmark_runtime:benchmark-blend-v2:verified',
+            },
+          },
+        },
+        {
+          sourceTable: 'runtime_consumer_observations',
+          row: {
+            id: 'consumer-base-duration-1',
+            asset_key: 'base_duration_benchmark',
+            consumer_key: 'durationSuggestionService',
+            publication_key: 'duration_benchmark_runtime:benchmark-blend-v2',
+            observation_status: 'observed',
+            writes_runtime_directly: false,
+            writes_fact_directly: false,
+          },
+        },
+        {
+          sourceTable: 'duration_algorithm_accuracy_events',
+          row: {
+            id: 'accuracy-base-duration-1',
+            absolute_error_days: 1,
+            prediction_context: {
+              assetKey: 'base_duration_benchmark',
+            },
+            actual_context: {
+              accuracyGateStatus: 'accuracy_passed',
+            },
+          },
+        },
+      ],
+    })
+
+    expect(decision.status).toBe('base_duration_benchmark_live_learning_ready')
+    expect(decision.liveLearningEvidence).toEqual(expect.objectContaining({
+      predictionEventRecorded: true,
+      actualOutcomeEventRecorded: true,
+      tieredLearningPolicyRegistered: true,
+      runtimeConsumerUsesPublishedArtifact: true,
+      releaseExitApproved: true,
+      impactMonitoringReady: true,
+      rollbackTargetReady: true,
+      accuracyMetricsAvailable: true,
+    }))
+    expect(decision.benchmarkLineage).toEqual(expect.objectContaining({
+      runtimePublicationKey: 'duration_benchmark_runtime:benchmark-blend-v2',
+      rollbackTarget: 'rollback:duration_benchmark_runtime:benchmark-blend-v2:verified',
+      acceptedSampleCounts: {
+        global: 1,
+        industry: 1,
+        company: 1,
+        project: 1,
+      },
+    }))
+    expect(decision.productionLineage.evidenceRefs).toEqual(expect.objectContaining({
+      productionSampleEvidenceRef: 'duration_samples:base-sample-global',
+      publicationExecutionRef: 'algorithm_learnable_parameter_runtime_publications:duration_benchmark_runtime:benchmark-blend-v2',
+      runtimeConsumerObservationRef: 'runtime_consumer:consumer-base-duration-1',
+      impactMonitoringEvidenceRef: 'impact_monitoring:duration_benchmark_runtime:benchmark-blend-v2:armed',
+      rollbackDrillEvidenceRef: 'rollback:duration_benchmark_runtime:benchmark-blend-v2:verified',
+      accuracyEvidenceRef: 'duration_algorithm_accuracy_events:accuracy-base-duration-1',
+    }))
+    expect(decision.productionLineage.rejectedRows).toEqual([])
+    expect(decision.productionLineage.rejectedRecords).toEqual([])
   })
 })

@@ -3,6 +3,15 @@ import type {
   DurationLearningScopeEvidence,
   DurationLiveLearningEvidence,
 } from './durationLiveLearningClosureService.js'
+import {
+  collectDurationLiveLearningProductionEvidenceRecordsFromRows,
+  collectDurationLiveLearningProductionEvidenceRefs,
+  type DurationLiveLearningProductionEvidenceRecord,
+  type DurationLiveLearningProductionEvidenceRef,
+  type DurationLiveLearningProductionEvidenceSourceRow,
+  type DurationLiveLearningRejectedProductionEvidenceRecord,
+  type DurationLiveLearningRejectedProductionEvidenceSourceRow,
+} from './durationLiveLearningProductionEvidenceGateService.js'
 
 export type BaseDurationBenchmarkLearningScopeEvidence = DurationLearningScopeEvidence
 
@@ -23,12 +32,24 @@ export interface BaseDurationBenchmarkLiveLearningEvidenceInput {
   accuracyMetricsAvailable: boolean
 }
 
+export interface BaseDurationBenchmarkLiveLearningEvidenceFromProductionRowsInput {
+  enabledLearningScopes: readonly BaseDurationBenchmarkLearningScopeEvidence[]
+  sourceRows?: readonly DurationLiveLearningProductionEvidenceSourceRow[]
+  records?: readonly DurationLiveLearningProductionEvidenceRecord[]
+}
+
 export interface BaseDurationBenchmarkLineage {
   assetType: 'base_duration_benchmark'
   runtimePublicationKey: string | null
   rollbackTarget: string | null
   acceptedSampleCounts: Record<DurationLearningScope, number>
   enabledLearningScopes: DurationLearningScope[]
+}
+
+export interface BaseDurationBenchmarkProductionLineage {
+  evidenceRefs: DurationLiveLearningProductionEvidenceRef
+  rejectedRows: DurationLiveLearningRejectedProductionEvidenceSourceRow[]
+  rejectedRecords: DurationLiveLearningRejectedProductionEvidenceRecord[]
 }
 
 export interface BaseDurationBenchmarkLiveLearningEvidenceDecision {
@@ -38,11 +59,39 @@ export interface BaseDurationBenchmarkLiveLearningEvidenceDecision {
   missingReasons: string[]
 }
 
+export type BaseDurationBenchmarkProductionLiveLearningEvidenceDecision =
+  BaseDurationBenchmarkLiveLearningEvidenceDecision & {
+    productionLineage: BaseDurationBenchmarkProductionLineage
+  }
+
 const BASE_DURATION_BENCHMARK_SCOPE_ORDER: DurationLearningScope[] = ['global', 'industry', 'company', 'project']
+const BASE_DURATION_BENCHMARK_ASSET_KEY = 'base_duration_benchmark'
 
 function normalizeText(value: unknown): string | null {
   const normalized = String(value ?? '').trim()
   return normalized || null
+}
+
+function readRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+}
+
+function readText(row: Record<string, unknown>, ...keys: string[]) {
+  for (const key of keys) {
+    const value = row[key]
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return ''
+}
+
+function readBoolean(row: Record<string, unknown>, key: string) {
+  return row[key] === true
+}
+
+function hasFiniteNumber(row: Record<string, unknown>, key: string) {
+  return typeof row[key] === 'number' && Number.isFinite(row[key])
 }
 
 function normalizeScope(value: unknown): DurationLearningScope | null {
@@ -88,6 +137,84 @@ function normalizeSampleCounts(
   }
 
   return normalized
+}
+
+function baseDurationAssetKeyFromSampleRow(row: Record<string, unknown>) {
+  const metadata = readRecord(row.metadata)
+  return readText(row, 'asset_key', 'assetKey')
+    || readText(metadata, 'liveLearningAssetKey', 'live_learning_asset_key', 'assetKey', 'asset_key')
+}
+
+function baseDurationSampleScopeFromRow(row: Record<string, unknown>): DurationLearningScope | null {
+  const metadata = readRecord(row.metadata)
+  return normalizeScope(
+    readText(row, 'learning_scope', 'learningScope', 'sample_scope', 'sampleScope', 'scope')
+      || readText(metadata, 'learningScope', 'learning_scope', 'sampleScope', 'sample_scope', 'scope'),
+  )
+}
+
+function isAcceptedBaseDurationSampleRow(row: Record<string, unknown>) {
+  return baseDurationAssetKeyFromSampleRow(row) === BASE_DURATION_BENCHMARK_ASSET_KEY
+    && readText(row, 'sample_status', 'sampleStatus') === 'active'
+    && readBoolean(row, 'included_in_benchmark')
+    && hasFiniteNumber(row, 'actual_duration')
+    && Boolean(readText(row, 'completed_at', 'completedAt'))
+}
+
+function countAcceptedBaseDurationSamplesByScope(
+  rows: readonly DurationLiveLearningProductionEvidenceSourceRow[] | undefined,
+): Record<DurationLearningScope, number> {
+  const counts: Record<DurationLearningScope, number> = {
+    global: 0,
+    industry: 0,
+    company: 0,
+    project: 0,
+  }
+  for (const source of rows ?? []) {
+    if (source.sourceTable !== 'duration_experience_samples') continue
+    if (!isAcceptedBaseDurationSampleRow(source.row)) continue
+    const scope = baseDurationSampleScopeFromRow(source.row)
+    if (!scope) continue
+    counts[scope] += 1
+  }
+  return counts
+}
+
+function runtimePublicationKeyFromProductionRows(
+  rows: readonly DurationLiveLearningProductionEvidenceSourceRow[] | undefined,
+) {
+  for (const source of rows ?? []) {
+    if (source.sourceTable !== 'algorithm_learnable_parameter_runtime_publications') continue
+    const row = source.row
+    if (readText(row, 'asset_key', 'assetKey') !== BASE_DURATION_BENCHMARK_ASSET_KEY) continue
+    if (readText(row, 'publication_status', 'publicationStatus') !== 'published') continue
+    const publicationKey = readText(row, 'publication_key', 'publicationKey')
+    if (publicationKey) return publicationKey
+  }
+  return null
+}
+
+function baseDurationProductionLineageFromProductionInput(
+  input: Pick<BaseDurationBenchmarkLiveLearningEvidenceFromProductionRowsInput, 'sourceRows' | 'records'>,
+): BaseDurationBenchmarkProductionLineage {
+  const rowCollection = collectDurationLiveLearningProductionEvidenceRecordsFromRows({
+    rows: input.sourceRows,
+  })
+  const evidenceCollection = collectDurationLiveLearningProductionEvidenceRefs({
+    records: [
+      ...rowCollection.records,
+      ...(input.records ?? []),
+    ],
+  })
+  const evidenceRefs = evidenceCollection.productionEvidence.find((evidence) =>
+    evidence.assetKey === BASE_DURATION_BENCHMARK_ASSET_KEY)
+    ?? { assetKey: BASE_DURATION_BENCHMARK_ASSET_KEY }
+
+  return {
+    evidenceRefs,
+    rejectedRows: rowCollection.rejectedRows,
+    rejectedRecords: evidenceCollection.rejectedRecords,
+  }
 }
 
 export function buildBaseDurationBenchmarkLiveLearningEvidence(
@@ -138,5 +265,31 @@ export function buildBaseDurationBenchmarkLiveLearningEvidence(
       enabledLearningScopes,
     },
     missingReasons,
+  }
+}
+
+export function buildBaseDurationBenchmarkLiveLearningEvidenceFromProductionRows(
+  input: BaseDurationBenchmarkLiveLearningEvidenceFromProductionRowsInput,
+): BaseDurationBenchmarkProductionLiveLearningEvidenceDecision {
+  const acceptedSampleCounts = countAcceptedBaseDurationSamplesByScope(input.sourceRows)
+  const productionLineage = baseDurationProductionLineageFromProductionInput(input)
+  const evidenceRefs = productionLineage.evidenceRefs
+  const rawRuntimePublicationKey = runtimePublicationKeyFromProductionRows(input.sourceRows)
+  const runtimePublicationKey = evidenceRefs.runtimeConsumerObservationRef ? rawRuntimePublicationKey : null
+  const decision = buildBaseDurationBenchmarkLiveLearningEvidence({
+    predictionEventRecorded: Boolean(evidenceRefs.accuracyEvidenceRef || evidenceRefs.publicationExecutionRef),
+    actualOutcomeEventRecorded: Boolean(evidenceRefs.productionSampleEvidenceRef),
+    enabledLearningScopes: input.enabledLearningScopes,
+    acceptedSampleCounts,
+    runtimePublicationKey,
+    rollbackTarget: evidenceRefs.rollbackDrillEvidenceRef,
+    releaseExitApproved: Boolean(evidenceRefs.publicationExecutionRef),
+    impactMonitoringReady: Boolean(evidenceRefs.impactMonitoringEvidenceRef),
+    accuracyMetricsAvailable: Boolean(evidenceRefs.accuracyEvidenceRef),
+  })
+
+  return {
+    ...decision,
+    productionLineage,
   }
 }
