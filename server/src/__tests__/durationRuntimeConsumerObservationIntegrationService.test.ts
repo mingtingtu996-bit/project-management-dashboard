@@ -153,4 +153,68 @@ describe('durationRuntimeConsumerObservationIntegrationService', () => {
       consumerSurface: 'remaining_duration_forecast',
     })
   })
+
+  it('uses canonical facade registrations to prove adapter coverage before runtime observations exist', async () => {
+    const {
+      evaluateDurationRuntimeConsumerObservationIntegrationCoverage,
+    } = await import('../services/durationRuntimeConsumerObservationIntegrationService.js')
+
+    const {
+      listDurationRuntimeConsumerObservationFacadeRegistrations,
+    } = await import('../services/durationRuntimeConsumerObservationAdapterService.js')
+
+    const registrations = listDurationRuntimeConsumerObservationFacadeRegistrations()
+
+    expect(registrations).toEqual([
+      {
+        consumerKey: 'durationSuggestionService',
+        assetKeys: [
+          'base_duration_benchmark',
+          'duration_cold_start_baseline',
+          'standard_work_duration_seed',
+          'special_work_duration_seed',
+        ],
+      },
+      {
+        consumerKey: 'taskDurationForecastService',
+        assetKeys: [
+          'forecast_residual_overlay',
+          'forecast_confidence_weight',
+        ],
+      },
+      {
+        consumerKey: 'projectRemainingDurationForecastService',
+        assetKeys: [
+          'forecast_residual_overlay',
+          'wbs_reference_days',
+          'critical_path_rule_candidate',
+        ],
+      },
+      {
+        consumerKey: 'wbsTemplateGenerationService',
+        assetKeys: [
+          'special_work_duration_seed',
+          'wbs_reference_days',
+          'dependency_rule_candidate',
+        ],
+      },
+      {
+        consumerKey: 'scheduleAccelerationService',
+        assetKeys: ['dependency_rule_candidate'],
+      },
+      {
+        consumerKey: 'scheduleAccelerationRuntimeService',
+        assetKeys: ['critical_path_rule_candidate'],
+      },
+    ])
+
+    const audit = evaluateDurationRuntimeConsumerObservationIntegrationCoverage({
+      adapterRegistrations: registrations,
+    })
+
+    expect(audit.status).toBe('runtime_consumer_observation_integration_ready')
+    expect(audit.integratedContracts).toHaveLength(14)
+    expect(audit.missingContracts).toEqual([])
+    expect(audit.rejectedRegistrations).toEqual([])
+  })
 })

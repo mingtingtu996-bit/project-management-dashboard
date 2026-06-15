@@ -4,6 +4,9 @@ import {
   type DurationRuntimeConsumerObservationQueryExec,
   type DurationRuntimeConsumerObservedArtifactsResult,
 } from './durationRuntimeConsumerObservationService.js'
+import type {
+  DurationLiveLearningAssetKey,
+} from './durationLiveLearningClosureService.js'
 
 export interface RecordDurationRuntimeConsumerFacadeArtifactsInput {
   queryExec: DurationRuntimeConsumerObservationQueryExec
@@ -11,6 +14,62 @@ export interface RecordDurationRuntimeConsumerFacadeArtifactsInput {
   observedAt?: string
   writesRuntimeDirectly?: boolean
   writesFactDirectly?: boolean
+}
+
+export interface DurationRuntimeConsumerObservationFacadeRegistration {
+  consumerKey: string
+  assetKeys: readonly DurationLiveLearningAssetKey[]
+}
+
+const FACADE_REGISTRATIONS: DurationRuntimeConsumerObservationFacadeRegistration[] = [
+  {
+    consumerKey: 'durationSuggestionService',
+    assetKeys: [
+      'base_duration_benchmark',
+      'duration_cold_start_baseline',
+      'standard_work_duration_seed',
+      'special_work_duration_seed',
+    ],
+  },
+  {
+    consumerKey: 'taskDurationForecastService',
+    assetKeys: [
+      'forecast_residual_overlay',
+      'forecast_confidence_weight',
+    ],
+  },
+  {
+    consumerKey: 'projectRemainingDurationForecastService',
+    assetKeys: [
+      'forecast_residual_overlay',
+      'wbs_reference_days',
+      'critical_path_rule_candidate',
+    ],
+  },
+  {
+    consumerKey: 'wbsTemplateGenerationService',
+    assetKeys: [
+      'special_work_duration_seed',
+      'wbs_reference_days',
+      'dependency_rule_candidate',
+    ],
+  },
+  {
+    consumerKey: 'scheduleAccelerationService',
+    assetKeys: ['dependency_rule_candidate'],
+  },
+  {
+    consumerKey: 'scheduleAccelerationRuntimeService',
+    assetKeys: ['critical_path_rule_candidate'],
+  },
+]
+
+export function listDurationRuntimeConsumerObservationFacadeRegistrations():
+  DurationRuntimeConsumerObservationFacadeRegistration[] {
+  return FACADE_REGISTRATIONS.map((registration) => ({
+    consumerKey: registration.consumerKey,
+    assetKeys: [...registration.assetKeys],
+  }))
 }
 
 function recordConsumerArtifacts(
