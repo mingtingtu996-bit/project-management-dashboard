@@ -1353,4 +1353,29 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
     expect(audit.status).toBe('duration_live_learning_production_claim_not_ready')
     expect(audit.allowedClaim).toBe('not_ready_for_live_self_learning_claim')
   })
+
+  it('blocks runtime-call source rows that are not traceable to production row ids', () => {
+    const audit = buildDurationLiveLearningProductionClaimAudit({
+      completionAudit: buildReadyCompletionAudit(),
+      sourceRows: [
+        ...buildAllProductionSourceRows(),
+        ...buildRuntimeConsumerRuntimeCallRows().map((source) => ({
+          ...source,
+          row: {
+            ...source.row,
+            id: '',
+          },
+        })),
+      ],
+      records: buildPlanNetworkOutcomeRecords(),
+      runtimeConsumerBusinessPathSourceFiles: buildReadyBusinessPathSourceFiles(),
+    })
+
+    expect(audit.productionGate.status).toBe('duration_live_learning_production_evidence_ready')
+    expect(audit.runtimeConsumerObservationCoverage.status).toBe('runtime_consumer_observation_coverage_ready')
+    expect(audit.runtimeConsumerRuntimeCallCoverage.status)
+      .toBe('runtime_consumer_observation_runtime_calls_not_ready')
+    expect(audit.status).toBe('duration_live_learning_production_claim_not_ready')
+    expect(audit.allowedClaim).toBe('not_ready_for_live_self_learning_claim')
+  })
 })

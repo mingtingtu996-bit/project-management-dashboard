@@ -1017,6 +1017,7 @@ function runtimeConsumerRuntimeCallEvidenceFromSourceRows(
   for (const source of sourceRows ?? []) {
     if (source.sourceTable !== 'runtime_consumer_runtime_calls') continue
     const row = source.row
+    if (!readText(row, 'id')) continue
     if (readText(row, 'call_status', 'callStatus') !== 'called') continue
     if (readTrue(row, 'writes_runtime_directly', 'writesRuntimeDirectly')) continue
     if (readTrue(row, 'writes_fact_directly', 'writesFactDirectly')) continue
