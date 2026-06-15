@@ -31,6 +31,7 @@ import type {
   DurationRuntimeConsumerObservedArtifact,
 } from './durationRuntimeConsumerObservationService.js'
 import type { Task, TaskDependency } from '../types/db.js'
+import { logger } from '../middleware/logger.js'
 import { orderedInclusiveDurationDays, signedDurationDayDelta } from '../utils/durationDays.js'
 
 const CURRENT_EXECUTION_BASELINE_STATUSES = new Set(['confirmed', 'pending_realign'])
@@ -594,6 +595,10 @@ export async function evaluateRuntimeScheduleAcceleration(params: {
   asOfDate?: string | null
   mode?: ScheduleAccelerationMode
   context?: ScheduleAccelerationContext
+  runtimeConsumerObservationQueryExec?: DurationRuntimeConsumerObservationQueryExec | null
+  runtimeArtifactPublications?: readonly ScheduleAccelerationRuntimeArtifactPublication[] | null
+  runtimeConsumerObservedAt?: string | null
+  runtimeConsumerErrorHandler?: (error: unknown) => void
 }): Promise<{
   rowsEvaluated: number
   projectRemainingForecast: ProjectRemainingDurationForecast
@@ -640,6 +645,35 @@ export async function evaluateRuntimeScheduleAcceleration(params: {
     runtimeContext: mergedRuntimeContext,
     asOfDate: params.asOfDate,
   })
+  const runtimeArtifactPublications = params.runtimeArtifactPublications ?? []
+  if (params.runtimeConsumerObservationQueryExec && runtimeArtifactPublications.length > 0) {
+    try {
+      await recordScheduleAccelerationRuntimeConsumedArtifacts({
+        queryExec: params.runtimeConsumerObservationQueryExec,
+        observedAt: normalizeText(params.runtimeConsumerObservedAt) || undefined,
+        callContext: {
+          projectId: normalizeText(params.projectId) || null,
+          runtimeConsumer: 'scheduleAccelerationRuntimeService',
+        },
+        sourceEvidenceRefs: [
+          ['schedule_acceleration_runtime', normalizeText(params.projectId) || 'no_project'].join(':'),
+        ],
+        artifacts: buildScheduleAccelerationRuntimeConsumedArtifacts({
+          runtimeArtifactPublications,
+          projectId: params.projectId,
+        }),
+      })
+    } catch (error) {
+      if (params.runtimeConsumerErrorHandler) {
+        params.runtimeConsumerErrorHandler(error)
+      } else {
+        logger.warn('[scheduleAccelerationRuntimeService] failed to record schedule acceleration runtime consumer evidence', {
+          projectId: params.projectId,
+          error,
+        })
+      }
+    }
+  }
   return {
     rowsEvaluated: rows.length,
     projectRemainingForecast,

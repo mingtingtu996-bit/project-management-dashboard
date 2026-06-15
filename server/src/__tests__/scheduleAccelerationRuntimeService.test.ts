@@ -703,4 +703,39 @@ describe('scheduleAccelerationRuntimeService', () => {
       ],
     ])
   })
+
+  it('records runtime consumer evidence from evaluateRuntimeScheduleAcceleration when critical-path rules are consumed', async () => {
+    const { calls, queryExec } = createRecordingQueryExec()
+
+    const result = await evaluateRuntimeScheduleAcceleration({
+      projectId: 'project-1',
+      targetEndDate: '2026-06-25',
+      asOfDate: '2026-06-10',
+      runtimeConsumerObservationQueryExec: queryExec,
+      runtimeConsumerObservedAt: '2026-06-15T08:00:00.000Z',
+      runtimeArtifactPublications: [
+        {
+          assetKey: 'critical_path_rule_candidate',
+          publicationKey: 'critical_path_rule_runtime:critical-v6',
+          publicationStatus: 'runtime_published',
+        },
+        {
+          assetKey: 'dependency_rule_candidate',
+          publicationKey: 'dependency_rule_runtime:dependency-v6',
+          publicationStatus: 'published',
+        },
+      ],
+    })
+
+    expect(result.targetFeasibility?.scenario).toBe('runtime_delay_recovery')
+    expect(callsForTable(calls, 'runtime_consumer_runtime_calls')).toHaveLength(1)
+    expect(callsForTable(calls, 'runtime_consumer_observations').map((call) => call.params.slice(0, 4))).toEqual([
+      [
+        'critical_path_rule_candidate',
+        'critical_path_rule_runtime:critical-v6',
+        'scheduleAccelerationRuntimeService',
+        'schedule_acceleration_runtime',
+      ],
+    ])
+  })
 })
