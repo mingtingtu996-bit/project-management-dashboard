@@ -145,8 +145,7 @@ describe('durationLiveLearningClosureService', () => {
 
     expect(result).toEqual(expect.objectContaining({
       status: 'portfolio_live_self_learning_ready',
-      allowedClaim:
-        'all_learnable_duration_prediction_and_network_assets_are_live_self_learning;facts_and_commitments_remain_locked',
+      allowedClaim: 'not_ready_for_live_self_learning_claim',
       prohibitedClaim: 'all_duration_assets_are_live_self_learning',
     }))
     expect(result.learnableAssets.every((asset) => asset.allowedLiveLearningClaim)).toBe(true)

@@ -35,6 +35,9 @@ export type DurationLiveLearningProductionEvidenceReasonCode =
   | 'rollback_drill_evidence_required'
   | 'accuracy_evidence_required'
 
+const FINAL_DURATION_LIVE_LEARNING_ALLOWED_CLAIM =
+  'all_learnable_duration_prediction_and_network_assets_are_live_self_learning;facts_and_commitments_remain_locked' as const
+
 export interface DurationLiveLearningProductionEvidenceRef {
   assetKey: DurationLiveLearningAssetKey
   productionSampleEvidenceRef?: string | null
@@ -1550,7 +1553,7 @@ export function buildDurationLiveLearningProductionClaimAudit(
     status: ready
       ? 'duration_live_learning_production_claim_ready'
       : 'duration_live_learning_production_claim_not_ready',
-    allowedClaim: ready ? input.completionAudit.allowedClaim : 'not_ready_for_live_self_learning_claim',
+    allowedClaim: ready ? FINAL_DURATION_LIVE_LEARNING_ALLOWED_CLAIM : 'not_ready_for_live_self_learning_claim',
     prohibitedClaim: productionGate.prohibitedClaim,
     completionAudit: input.completionAudit,
     evidenceRowCollection,

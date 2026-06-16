@@ -79,9 +79,7 @@ describe('durationLiveLearningCompletionAuditService', () => {
     })
 
     expect(audit.status).toBe('duration_live_learning_completion_ready')
-    expect(audit.allowedClaim).toBe(
-      'all_learnable_duration_prediction_and_network_assets_are_live_self_learning;facts_and_commitments_remain_locked',
-    )
+    expect(audit.allowedClaim).toBe('not_ready_for_live_self_learning_claim')
     expect(audit.prohibitedClaim).toBe('all_duration_assets_are_live_self_learning')
     expect(audit.manifestEvaluations.map((manifest) => manifest.status)).toEqual([
       'manifest_live_self_learning_ready',
@@ -477,6 +475,7 @@ describe('durationLiveLearningCompletionAuditService', () => {
       'critical_path_rule_publication_ready',
     ])
     expect(audit.status).toBe('duration_live_learning_completion_ready')
+    expect(audit.allowedClaim).toBe('not_ready_for_live_self_learning_claim')
     expect(audit.blockedAssetKeys).toEqual([])
     expect(audit.factRewriteBlockedAssetKeys).toEqual([])
   })

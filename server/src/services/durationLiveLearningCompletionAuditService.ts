@@ -100,9 +100,7 @@ export function buildDurationLiveLearningCompletionAudit(
     status: ready
       ? 'duration_live_learning_completion_ready'
       : 'duration_live_learning_completion_not_ready',
-    allowedClaim: ready
-      ? 'all_learnable_duration_prediction_and_network_assets_are_live_self_learning;facts_and_commitments_remain_locked'
-      : 'not_ready_for_live_self_learning_claim',
+    allowedClaim: 'not_ready_for_live_self_learning_claim',
     prohibitedClaim: 'all_duration_assets_are_live_self_learning',
     manifestEvaluations,
     executionPlan,
