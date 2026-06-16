@@ -281,7 +281,7 @@ function rowsForSql(sql: string, options: { includePlanNetworkOutcomes?: boolean
       id: `accuracy-${assetKey}`,
       absolute_error_days: 1,
       prediction_context: { assetKey, publicationKey: publicationKeyForAsset(assetKey) },
-      actual_context: { accuracyGateStatus: 'accuracy_passed' },
+      actual_context: { assetKey, accuracyGateStatus: 'accuracy_passed' },
     }))
   }
   if (normalized.includes('from public.runtime_consumer_observations')) {

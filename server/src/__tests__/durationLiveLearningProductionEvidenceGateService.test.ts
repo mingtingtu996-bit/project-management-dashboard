@@ -385,7 +385,7 @@ function buildAllProductionSourceRows() {
           backtest_status: 'backtested',
           absolute_error_days: 1,
           prediction_context: { assetKey, publicationKey: publicationKeyForAsset(assetKey) },
-          actual_context: { accuracyGateStatus: 'accuracy_passed' },
+          actual_context: { assetKey, accuracyGateStatus: 'accuracy_passed' },
         },
       },
     ]),
@@ -1221,7 +1221,10 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
               assetKey: 'forecast_confidence_weight',
               publicationKey: 'forecast_confidence_weight_runtime:weight-v2',
             },
-            actual_context: { accuracyGateStatus: 'accuracy_passed' },
+            actual_context: {
+              assetKey: 'forecast_confidence_weight',
+              accuracyGateStatus: 'accuracy_passed',
+            },
           },
         },
         {
@@ -1851,6 +1854,93 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
     expect(audit.productionGate.status).toBe('duration_live_learning_production_evidence_not_ready')
     expect(audit.productionGate.missingEvidenceByAsset).toEqual(expect.arrayContaining([{
       assetKey: 'forecast_confidence_weight',
+      missingReasonCodes: expect.arrayContaining(['accuracy_evidence_required']),
+    }]))
+    expect(audit.allowedClaim).toBe('not_ready_for_live_self_learning_claim')
+  })
+
+  it('blocks the final production claim when accuracy evidence actual outcome belongs to another asset', () => {
+    const audit = buildDurationLiveLearningProductionClaimAudit({
+      completionAudit: buildReadyCompletionAudit(),
+      sourceRows: [
+        ...buildAllProductionSourceRows().map((source) => {
+          if (source.sourceTable !== 'duration_algorithm_accuracy_events') {
+            return source
+          }
+          const row = source.row as Record<string, unknown>
+          const predictionContext = row.prediction_context as Record<string, unknown> | undefined
+          if (predictionContext?.assetKey !== 'forecast_residual_overlay') {
+            return source
+          }
+          return {
+            ...source,
+            row: {
+              ...row,
+              actual_context: {
+                ...(row.actual_context as Record<string, unknown> | undefined),
+                assetKey: 'forecast_confidence_weight',
+              },
+            },
+          }
+        }),
+        ...buildRuntimeConsumerRuntimeCallRows(),
+      ],
+      records: buildPlanNetworkOutcomeRecords(),
+      runtimeConsumerBusinessPathSourceFiles: buildReadyBusinessPathSourceFiles(),
+    })
+
+    expect(audit.status).toBe('duration_live_learning_production_claim_not_ready')
+    expect(audit.productionGate.status).toBe('duration_live_learning_production_evidence_not_ready')
+    expect(audit.evidenceRowCollection.rejectedRows).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        sourceTable: 'duration_algorithm_accuracy_events',
+        reason: 'production_source_row_not_evidence_ready',
+      }),
+    ]))
+    expect(audit.productionGate.missingEvidenceByAsset).toEqual(expect.arrayContaining([{
+      assetKey: 'forecast_residual_overlay',
+      missingReasonCodes: expect.arrayContaining(['accuracy_evidence_required']),
+    }]))
+    expect(audit.allowedClaim).toBe('not_ready_for_live_self_learning_claim')
+  })
+
+  it('blocks the final production claim when accuracy evidence lacks actual outcome asset provenance', () => {
+    const audit = buildDurationLiveLearningProductionClaimAudit({
+      completionAudit: buildReadyCompletionAudit(),
+      sourceRows: [
+        ...buildAllProductionSourceRows().map((source) => {
+          if (source.sourceTable !== 'duration_algorithm_accuracy_events') {
+            return source
+          }
+          const row = source.row as Record<string, unknown>
+          const predictionContext = row.prediction_context as Record<string, unknown> | undefined
+          if (predictionContext?.assetKey !== 'forecast_residual_overlay') {
+            return source
+          }
+          return {
+            ...source,
+            row: {
+              ...row,
+              actual_context: { accuracyGateStatus: 'accuracy_passed' },
+            },
+          }
+        }),
+        ...buildRuntimeConsumerRuntimeCallRows(),
+      ],
+      records: buildPlanNetworkOutcomeRecords(),
+      runtimeConsumerBusinessPathSourceFiles: buildReadyBusinessPathSourceFiles(),
+    })
+
+    expect(audit.status).toBe('duration_live_learning_production_claim_not_ready')
+    expect(audit.productionGate.status).toBe('duration_live_learning_production_evidence_not_ready')
+    expect(audit.evidenceRowCollection.rejectedRows).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        sourceTable: 'duration_algorithm_accuracy_events',
+        reason: 'production_source_row_not_evidence_ready',
+      }),
+    ]))
+    expect(audit.productionGate.missingEvidenceByAsset).toEqual(expect.arrayContaining([{
+      assetKey: 'forecast_residual_overlay',
       missingReasonCodes: expect.arrayContaining(['accuracy_evidence_required']),
     }]))
     expect(audit.allowedClaim).toBe('not_ready_for_live_self_learning_claim')

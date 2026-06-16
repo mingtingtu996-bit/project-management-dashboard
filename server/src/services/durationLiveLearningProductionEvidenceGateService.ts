@@ -682,6 +682,19 @@ function accuracyPublicationKey(row: Record<string, unknown>) {
     || readText(actualContext, 'publicationKey', 'publication_key', 'runtimePublicationKey', 'runtime_publication_key')
 }
 
+function accuracyActualAssetKey(row: Record<string, unknown>) {
+  const actualContext = readRecord(row.actual_context ?? row.actualContext)
+  return readText(actualContext, 'liveLearningAssetKey', 'live_learning_asset_key', 'assetKey', 'asset_key')
+}
+
+function accuracyActualOutcomeMatchesAsset(
+  row: Record<string, unknown>,
+  assetKey: DurationLiveLearningAssetKey,
+) {
+  const actualAssetKey = accuracyActualAssetKey(row)
+  return actualAssetKey === assetKey
+}
+
 function publicationEvidenceStatus(row: Record<string, unknown>) {
   const status = readText(row, 'publication_status', 'publicationStatus')
   return status === 'published' || status === 'canary' ? status : ''
@@ -1284,6 +1297,7 @@ export function collectDurationLiveLearningProductionEvidenceRecordsFromRows(
       if (
         accuracyGateStatus(row) !== 'accuracy_passed'
         || !hasNumber(row, 'absolute_error_days')
+        || !accuracyActualOutcomeMatchesAsset(row, assetKey)
         || !isDurationRuntimeConsumerPublicationKeyAllowedForAsset(assetKey, publicationKey)
       ) {
         pushRejectedRow(rejectedRows, source, 'production_source_row_not_evidence_ready')
