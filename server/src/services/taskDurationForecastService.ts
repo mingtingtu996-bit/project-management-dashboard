@@ -376,6 +376,7 @@ type ForecastProjectOverlayRow = {
 type ForecastResidualOverlayRow = {
   id?: string | null
   overlay_key?: string | null
+  publication_key?: string | null
   asset_key?: string | null
   scope_level?: string | null
   company_id?: string | null
@@ -2266,7 +2267,7 @@ async function queryForecastResidualOverlays(filters: {
   try {
     let query = (supabase as any)
       .from('duration_forecast_residual_overlays')
-      .select('id, overlay_key, asset_key, scope_level, company_id, project_id, learning_target, learning_maturity, publish_anchor, automation_maturity, original_mae, overlay_mae, mae_improvement_ratio, overcompensation_ratio, residual_payload, writes_base_duration_seed, target_table, rollback_target, runtime_publication_status, rollback_execution, rolled_back_at, updated_at')
+      .select('id, overlay_key, publication_key, asset_key, scope_level, company_id, project_id, learning_target, learning_maturity, publish_anchor, automation_maturity, original_mae, overlay_mae, mae_improvement_ratio, overcompensation_ratio, residual_payload, writes_base_duration_seed, target_table, rollback_target, runtime_publication_status, rollback_execution, rolled_back_at, updated_at')
       .eq('learning_target', 'forecast_residual')
       .eq('target_table', 'duration_forecast_residual_overlays')
       .eq('writes_base_duration_seed', false)
@@ -2416,9 +2417,15 @@ function applyForecastResidualOverlay(params: {
     : startAnchor
   const forecastFinishDate = forecastFinish?.toISOString().slice(0, 10) ?? params.forecastDates.forecastFinishDate
   const forecastDelayDays = delayProductionDaysAfter(plannedEnd, forecastFinish, params.workCalendar)
+  const overlayKey = normalizeId(overlay.overlay_key)
+  const publicationKey = normalizeText(overlay.publication_key)
+    || (normalizeText(overlayKey).startsWith('forecast_residual_overlay_runtime:')
+      ? normalizeText(overlayKey)
+      : '')
   const residualOverlay = {
     runtimeApplied: true,
-    overlayKey: normalizeId(overlay.overlay_key),
+    overlayKey,
+    publicationKey: publicationKey || null,
     assetKey: normalizeId(overlay.asset_key),
     scopeLevel: normalizeId(overlay.scope_level),
     ignoredOverlayKeys,

@@ -440,6 +440,7 @@ describe('taskDurationForecastService', () => {
   })
 
   it('applies only published residual overlays to task remaining forecasts', async () => {
+    const { calls, queryExec } = createRecordingQueryExec()
     mocks.getTaskDurationSuggestion.mockResolvedValueOnce({
       ...baseSuggestion(),
       recommendedDurationDays: 20,
@@ -524,16 +525,20 @@ describe('taskDurationForecastService', () => {
       residual_payload: { residualCorrectionDays: 3 },
       writes_base_duration_seed: false,
       target_table: 'duration_forecast_residual_overlays',
+      publication_key: 'forecast_residual_overlay_runtime:overlay-plus-three-days-v2',
       rollback_target: { action: 'disable_overlay', overlayKey: 'published-overlay-plus-three-days' },
     }]
 
-    const forecast = await forecastTaskDuration('task-residual-overlay')
+    const forecast = await forecastTaskDuration('task-residual-overlay', {
+      runtimeConsumerObservationQueryExec: queryExec,
+    })
 
     expect(forecast.remainingDurationDays).toBe(13)
     expect(forecast.forecastFinishDate).toBe('2026-05-30')
     expect(forecast.forecastSources?.residualOverlay).toEqual(expect.objectContaining({
       runtimeApplied: true,
       overlayKey: 'published-overlay-plus-three-days',
+      publicationKey: 'forecast_residual_overlay_runtime:overlay-plus-three-days-v2',
       ignoredOverlayKeys: ['shadow-overlay-ignored', 'rolled-back-overlay-ignored'],
       beforeRemainingDurationDays: 10,
       afterRemainingDurationDays: 13,
@@ -556,6 +561,13 @@ describe('taskDurationForecastService', () => {
         }),
       }),
     }))
+    expect(callsForTable(calls, 'runtime_consumer_runtime_calls')).toHaveLength(1)
+    expect(callsForTable(calls, 'runtime_consumer_observations').map((call) => call.params.slice(0, 4))).toEqual([[
+      'forecast_residual_overlay',
+      'forecast_residual_overlay_runtime:overlay-plus-three-days-v2',
+      'taskDurationForecastService',
+      'task_duration_forecast',
+    ]])
   })
 
   it('records learnable parameter governance state with task remaining forecast predictions', async () => {
