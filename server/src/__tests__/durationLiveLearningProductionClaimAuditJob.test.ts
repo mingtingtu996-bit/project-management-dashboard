@@ -29,13 +29,34 @@ const mocks = vi.hoisted(() => ({
         { assetKey: 'forecast_residual_overlay', consumerKey: 'projectRemainingDurationForecastService' },
       ],
     },
+    runtimeConsumerObservationIntegrationCoverage: {
+      status: 'runtime_consumer_observation_integration_ready',
+      missingContracts: [],
+      rejectedRegistrations: [],
+    },
     runtimeConsumerRuntimeCallCoverage: {
-      status: 'runtime_consumer_observation_runtime_calls_ready',
-      missingRuntimeCalls: [],
+      status: 'runtime_consumer_observation_runtime_calls_not_ready',
+      missingRuntimeCalls: [
+        {
+          consumerKey: 'projectRemainingDurationForecastService',
+          runtimeEntryRef: 'projectRemainingDurationForecastService:buildProjectRemainingDurationForecast',
+        },
+      ],
+      rejectedRuntimeCalls: [],
+      unlinkedConsumerObservations: [],
     },
     runtimeConsumerBusinessPathIntegrationCoverage: {
-      status: 'runtime_consumer_business_path_integration_ready',
-      missingIntegrations: [],
+      status: 'runtime_consumer_business_path_integration_not_ready',
+      missingIntegrations: [
+        {
+          consumerKey: 'projectRemainingDurationForecastService',
+          sourcePath: 'server/src/services/projectRemainingDurationForecastService.ts',
+          facadeFunctionName: 'recordProjectRemainingDurationForecastConsumedArtifacts',
+          runtimeEntryRef: 'projectRemainingDurationForecastService:buildProjectRemainingDurationForecast',
+          requiredAssetKeys: ['forecast_residual_overlay', 'forecast_confidence_weight'],
+          missingAssetKeys: ['forecast_residual_overlay'],
+        },
+      ],
     },
     sourceRowsProvenanceGate: {
       status: 'canonical_source_rows_provenance_ready',
@@ -103,10 +124,41 @@ describe('durationLiveLearningProductionClaimAuditJob', () => {
       blockedAssetCount: 2,
       missingProductionEvidenceAssetCount: 2,
       missingRuntimeConsumerObservationCount: 1,
-      missingRuntimeCallCount: 0,
-      missingBusinessPathIntegrationCount: 0,
+      missingRuntimeCallCount: 1,
+      missingBusinessPathIntegrationCount: 1,
       sourceRowsProvenanceStatus: 'canonical_source_rows_provenance_ready',
       factRewriteBlockedAssetCount: 0,
+      blockedAssets: ['forecast_residual_overlay', 'critical_path_rule_candidate'],
+      missingProductionEvidence: [
+        {
+          assetKey: 'forecast_residual_overlay',
+          missingReasonCodes: ['impact_monitoring_evidence_required'],
+        },
+        {
+          assetKey: 'critical_path_rule_candidate',
+          missingReasonCodes: ['rollback_drill_evidence_required'],
+        },
+      ],
+      missingRuntimeConsumerObservations: [
+        { assetKey: 'forecast_residual_overlay', consumerKey: 'projectRemainingDurationForecastService' },
+      ],
+      missingRuntimeCalls: [
+        {
+          consumerKey: 'projectRemainingDurationForecastService',
+          runtimeEntryRef: 'projectRemainingDurationForecastService:buildProjectRemainingDurationForecast',
+        },
+      ],
+      missingBusinessPathIntegrations: [
+        {
+          consumerKey: 'projectRemainingDurationForecastService',
+          sourcePath: 'server/src/services/projectRemainingDurationForecastService.ts',
+          facadeFunctionName: 'recordProjectRemainingDurationForecastConsumedArtifacts',
+          runtimeEntryRef: 'projectRemainingDurationForecastService:buildProjectRemainingDurationForecast',
+          requiredAssetKeys: ['forecast_residual_overlay', 'forecast_confidence_weight'],
+          missingAssetKeys: ['forecast_residual_overlay'],
+        },
+      ],
+      factRewriteBlockedAssets: [],
     })
   })
 

@@ -36,6 +36,16 @@ export interface DurationLiveLearningProductionClaimAuditJobResult {
   missingBusinessPathIntegrationCount: number
   sourceRowsProvenanceStatus: DurationLiveLearningProductionClaimAuditFromDb['sourceRowsProvenanceGate']['status']
   factRewriteBlockedAssetCount: number
+  blockedAssets: DurationLiveLearningProductionClaimAuditFromDb['completionAudit']['blockedAssetKeys']
+  missingProductionEvidence: DurationLiveLearningProductionClaimAuditFromDb['productionGate']['missingEvidenceByAsset']
+  missingRuntimeConsumerObservations:
+    DurationLiveLearningProductionClaimAuditFromDb['runtimeConsumerObservationCoverage']['missingConsumerObservations']
+  missingRuntimeCalls:
+    DurationLiveLearningProductionClaimAuditFromDb['runtimeConsumerRuntimeCallCoverage']['missingRuntimeCalls']
+  missingBusinessPathIntegrations:
+    DurationLiveLearningProductionClaimAuditFromDb['runtimeConsumerBusinessPathIntegrationCoverage']['missingIntegrations']
+  factRewriteBlockedAssets:
+    DurationLiveLearningProductionClaimAuditFromDb['completionAudit']['factRewriteBlockedAssetKeys']
 }
 
 function countArray(value: unknown) {
@@ -64,6 +74,13 @@ function summarizeAudit(
     ),
     sourceRowsProvenanceStatus: audit.sourceRowsProvenanceGate.status,
     factRewriteBlockedAssetCount: audit.completionAudit.factRewriteBlockedAssetKeys.length,
+    blockedAssets: audit.completionAudit.blockedAssetKeys,
+    missingProductionEvidence: audit.productionGate.missingEvidenceByAsset,
+    missingRuntimeConsumerObservations: audit.runtimeConsumerObservationCoverage.missingConsumerObservations,
+    missingRuntimeCalls: audit.runtimeConsumerRuntimeCallCoverage.missingRuntimeCalls,
+    missingBusinessPathIntegrations:
+      audit.runtimeConsumerBusinessPathIntegrationCoverage.missingIntegrations,
+    factRewriteBlockedAssets: audit.completionAudit.factRewriteBlockedAssetKeys,
   }
 }
 
