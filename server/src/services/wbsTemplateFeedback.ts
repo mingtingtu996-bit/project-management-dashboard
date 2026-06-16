@@ -443,17 +443,19 @@ async function recordWbsReferenceDaysPlanNetworkOutcome(
         outcome_status,
         outcome_ref,
         learning_scope,
+        learning_scope_source,
         company_id,
         project_id,
         publication_key,
         metadata,
         writes_runtime_directly,
         writes_fact_directly
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
       ON CONFLICT (id) DO UPDATE SET
         outcome_status = EXCLUDED.outcome_status,
         outcome_ref = EXCLUDED.outcome_ref,
         learning_scope = EXCLUDED.learning_scope,
+        learning_scope_source = EXCLUDED.learning_scope_source,
         company_id = EXCLUDED.company_id,
         project_id = EXCLUDED.project_id,
         publication_key = EXCLUDED.publication_key,
@@ -467,6 +469,7 @@ async function recordWbsReferenceDaysPlanNetworkOutcome(
         outcomeStatus,
         `wbs_template_feedback:${report.template_id}`,
         'project',
+        'project_business_outcome_writer',
         normalizeId(options.companyId),
         projectId,
         null,

@@ -213,6 +213,7 @@ describe('wbsTemplateCandidateEventService', () => {
         outcome_status: 'accepted',
         outcome_ref: 'wbs_template_candidate_event:batch-1',
         learning_scope: 'project',
+        learning_scope_source: 'project_business_outcome_writer',
         company_id: '10000000-0000-4000-8000-000000000001',
         project_id: '00000000-0000-4000-8000-000000000001',
         publication_key: null,

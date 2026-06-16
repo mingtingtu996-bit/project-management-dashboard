@@ -1227,7 +1227,9 @@ describe('wbs template governance', () => {
     )
     expect(outcomeInsert).toBeTruthy()
     expect(outcomeInsert?.[1]?.[1]).toBe('wbs_reference_days')
-    expect(outcomeInsert?.[1]?.[4]).toBe('company-1')
+    expect(outcomeInsert?.[1]?.[4]).toBe('project')
+    expect(outcomeInsert?.[1]?.[5]).toBe('project_business_outcome_writer')
+    expect(outcomeInsert?.[1]?.[6]).toBe('company-1')
   })
 
   it('rejects company-scoped templates outside the current company', async () => {

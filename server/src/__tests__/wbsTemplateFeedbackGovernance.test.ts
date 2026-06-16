@@ -124,12 +124,14 @@ describe('wbsTemplateFeedback governance bridge', () => {
 
     expect(outcomeInsert).toBeTruthy()
     expect(String(outcomeInsert?.[0]).toLowerCase()).toContain('on conflict (id) do update')
+    expect(String(outcomeInsert?.[0]).toLowerCase()).toContain('learning_scope_source')
     expect(outcomeInsert?.[1]).toEqual([
       'wbs-reference-days:template-1:project-1',
       'wbs_reference_days',
       'weak',
       'wbs_template_feedback:template-1',
       'project',
+      'project_business_outcome_writer',
       '10000000-0000-4000-8000-000000000001',
       'project-1',
       null,

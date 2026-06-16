@@ -344,6 +344,7 @@ async function recordSpecialWorkDurationPlanNetworkOutcome(
         ? `wbs_template_candidate_event:${generationBatchId}`
         : `wbs_template_candidate_event:${outcomeId}`,
       learning_scope: 'project',
+      learning_scope_source: 'project_business_outcome_writer',
       company_id: normalizeString(input.companyId),
       project_id: input.projectId,
       publication_key: readRuntimePublicationKeyFromMetadata(metadata),

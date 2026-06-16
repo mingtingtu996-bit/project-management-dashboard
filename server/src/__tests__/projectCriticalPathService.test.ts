@@ -465,6 +465,7 @@ describe('project critical path service', () => {
 
     expect(outcomeInsert).toBeTruthy()
     expect(String(outcomeInsert?.[0]).toLowerCase()).toContain('on conflict (id) do update')
+    expect(String(outcomeInsert?.[0]).toLowerCase()).toContain('learning_scope_source')
     expect(String(outcomeInsert?.[0]).toLowerCase()).not.toContain('insert into public.task_critical_overrides')
     expect(String(outcomeInsert?.[0]).toLowerCase()).not.toContain('update public.task_critical_overrides')
     expect(String(outcomeInsert?.[0]).toLowerCase()).not.toContain('insert into public.tasks')
@@ -475,6 +476,7 @@ describe('project critical path service', () => {
       'accepted',
       expect.stringMatching(/^critical_path_cpm:project-1:sha256:/),
       'project',
+      'project_business_outcome_writer',
       null,
       'project-1',
       null,

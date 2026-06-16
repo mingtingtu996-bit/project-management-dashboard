@@ -226,6 +226,7 @@ describe('construction dependency replay calibration service', () => {
 
     expect(outcomeInsert).toBeTruthy()
     expect(outcomeInsert?.sql.toLowerCase()).toContain('on conflict (id) do update')
+    expect(outcomeInsert?.sql.toLowerCase()).toContain('learning_scope_source')
     expect(outcomeInsert?.sql.toLowerCase()).not.toContain('insert into public.task_dependencies')
     expect(outcomeInsert?.sql.toLowerCase()).not.toContain('update public.task_dependencies')
     expect(outcomeInsert?.params).toEqual([
@@ -234,6 +235,7 @@ describe('construction dependency replay calibration service', () => {
       'weak',
       'construction_dependency_replay_calibration:cross_item_workflow:prefab_factory_to_site_hoist_handoff',
       'project',
+      'project_business_outcome_writer',
       '10000000-0000-4000-8000-000000000001',
       null,
       null,
