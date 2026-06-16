@@ -747,6 +747,96 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
     ])
   })
 
+  it('keeps same-publication evidence when stale publication-bound records appear first', () => {
+    const collected = collectDurationLiveLearningProductionEvidenceRefs({
+      records: [
+        {
+          assetKey: 'base_duration_benchmark',
+          evidenceKind: 'production_sample',
+          evidenceRef: 'duration_samples:base:accepted',
+          evidenceStatus: 'accepted',
+        },
+        {
+          assetKey: 'base_duration_benchmark',
+          evidenceKind: 'runtime_consumer_observation',
+          evidenceRef: 'runtime_consumer:base:old-observation',
+          publicationKey: 'duration_benchmark_runtime:base-v1',
+          evidenceStatus: 'observed',
+        },
+        {
+          assetKey: 'base_duration_benchmark',
+          evidenceKind: 'impact_monitoring',
+          evidenceRef: 'impact_monitoring:duration_benchmark_runtime:base-v1:monitoring_armed',
+          publicationKey: 'duration_benchmark_runtime:base-v1',
+          evidenceStatus: 'monitoring_armed',
+        },
+        {
+          assetKey: 'base_duration_benchmark',
+          evidenceKind: 'rollback_drill',
+          evidenceRef: 'rollback:duration_benchmark_runtime:base-v1:rollback_verified',
+          publicationKey: 'duration_benchmark_runtime:base-v1',
+          evidenceStatus: 'rollback_verified',
+        },
+        {
+          assetKey: 'base_duration_benchmark',
+          evidenceKind: 'accuracy',
+          evidenceRef: 'duration_algorithm_accuracy_events:base-v1',
+          publicationKey: 'duration_benchmark_runtime:base-v1',
+          evidenceStatus: 'accuracy_passed',
+        },
+        {
+          assetKey: 'base_duration_benchmark',
+          evidenceKind: 'runtime_consumer_observation',
+          evidenceRef: 'runtime_consumer:base:current-observation',
+          publicationKey: 'duration_benchmark_runtime:base-v2',
+          evidenceStatus: 'observed',
+        },
+        {
+          assetKey: 'base_duration_benchmark',
+          evidenceKind: 'impact_monitoring',
+          evidenceRef: 'impact_monitoring:duration_benchmark_runtime:base-v2:monitoring_armed',
+          publicationKey: 'duration_benchmark_runtime:base-v2',
+          evidenceStatus: 'monitoring_armed',
+        },
+        {
+          assetKey: 'base_duration_benchmark',
+          evidenceKind: 'rollback_drill',
+          evidenceRef: 'rollback:duration_benchmark_runtime:base-v2:rollback_verified',
+          publicationKey: 'duration_benchmark_runtime:base-v2',
+          evidenceStatus: 'rollback_verified',
+        },
+        {
+          assetKey: 'base_duration_benchmark',
+          evidenceKind: 'accuracy',
+          evidenceRef: 'duration_algorithm_accuracy_events:base-v2',
+          publicationKey: 'duration_benchmark_runtime:base-v2',
+          evidenceStatus: 'accuracy_passed',
+        },
+        {
+          assetKey: 'base_duration_benchmark',
+          evidenceKind: 'publication_execution',
+          evidenceRef: 'algorithm_learnable_parameter_runtime_publications:duration_benchmark_runtime:base-v2',
+          evidenceStatus: 'published',
+        },
+      ],
+    })
+
+    expect(collected.productionEvidence).toEqual([{
+      assetKey: 'base_duration_benchmark',
+      productionSampleEvidenceRef: 'duration_samples:base:accepted',
+      publicationExecutionRef: 'algorithm_learnable_parameter_runtime_publications:duration_benchmark_runtime:base-v2',
+      runtimeConsumerObservationRef: 'runtime_consumer:base:current-observation',
+      runtimeConsumerPublicationKey: 'duration_benchmark_runtime:base-v2',
+      impactMonitoringEvidenceRef: 'impact_monitoring:duration_benchmark_runtime:base-v2:monitoring_armed',
+      impactMonitoringPublicationKey: 'duration_benchmark_runtime:base-v2',
+      rollbackDrillEvidenceRef: 'rollback:duration_benchmark_runtime:base-v2:rollback_verified',
+      rollbackDrillPublicationKey: 'duration_benchmark_runtime:base-v2',
+      accuracyEvidenceRef: 'duration_algorithm_accuracy_events:base-v2',
+      accuracyPublicationKey: 'duration_benchmark_runtime:base-v2',
+    }])
+    expect(collected.rejectedRecords).toEqual([])
+  })
+
   it('blocks direct production evidence when runtime consumer publication provenance is missing', () => {
     const gate = evaluateDurationLiveLearningProductionEvidenceGate({
       completionAudit: buildReadyCompletionAudit(),

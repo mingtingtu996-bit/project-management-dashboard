@@ -787,10 +787,51 @@ function assignEvidenceRef(
   }
 }
 
+function evidenceRecordMatchesPublicationExecution(
+  record: DurationLiveLearningProductionEvidenceRecord,
+  publicationExecutionRef: string | null | undefined,
+) {
+  if (!PUBLICATION_BOUND_EVIDENCE_KINDS.has(record.evidenceKind)) return true
+  if (!hasRef(publicationExecutionRef)) return true
+  return publicationRefMatchesPublicationKey(publicationExecutionRef, record.publicationKey)
+}
+
+function assignFirstMatchingEvidenceRecord(
+  target: DurationLiveLearningProductionEvidenceRef,
+  records: readonly DurationLiveLearningProductionEvidenceRecord[],
+  kind: DurationLiveLearningProductionEvidenceKind,
+) {
+  const sameKindRecords = records.filter((record) => record.evidenceKind === kind)
+  const matchingRecord = sameKindRecords.find((record) =>
+    evidenceRecordMatchesPublicationExecution(record, target.publicationExecutionRef))
+    ?? sameKindRecords[0]
+  if (!matchingRecord) return
+  assignEvidenceRef(
+    target,
+    kind,
+    normalizeText(matchingRecord.evidenceRef),
+    matchingRecord.publicationKey,
+  )
+}
+
+function buildProductionEvidenceForAsset(
+  assetKey: DurationLiveLearningAssetKey,
+  records: readonly DurationLiveLearningProductionEvidenceRecord[],
+): DurationLiveLearningProductionEvidenceRef {
+  const target: DurationLiveLearningProductionEvidenceRef = { assetKey }
+  assignFirstMatchingEvidenceRecord(target, records, 'production_sample')
+  assignFirstMatchingEvidenceRecord(target, records, 'publication_execution')
+  assignFirstMatchingEvidenceRecord(target, records, 'runtime_consumer_observation')
+  assignFirstMatchingEvidenceRecord(target, records, 'impact_monitoring')
+  assignFirstMatchingEvidenceRecord(target, records, 'rollback_drill')
+  assignFirstMatchingEvidenceRecord(target, records, 'accuracy')
+  return target
+}
+
 export function collectDurationLiveLearningProductionEvidenceRefs(
   input: DurationLiveLearningProductionEvidenceCollectionInput,
 ): DurationLiveLearningProductionEvidenceCollection {
-  const evidenceByAssetKey = new Map<DurationLiveLearningAssetKey, DurationLiveLearningProductionEvidenceRef>()
+  const recordsByAssetKey = new Map<DurationLiveLearningAssetKey, DurationLiveLearningProductionEvidenceRecord[]>()
   const rejectedRecords: DurationLiveLearningRejectedProductionEvidenceRecord[] = []
 
   for (const record of input.records ?? []) {
@@ -817,13 +858,14 @@ export function collectDurationLiveLearningProductionEvidenceRefs(
       continue
     }
 
-    const current = evidenceByAssetKey.get(record.assetKey) ?? { assetKey: record.assetKey }
-    assignEvidenceRef(current, record.evidenceKind, evidenceRef, record.publicationKey)
-    evidenceByAssetKey.set(record.assetKey, current)
+    const recordsForAsset = recordsByAssetKey.get(record.assetKey) ?? []
+    recordsForAsset.push({ ...record, evidenceRef })
+    recordsByAssetKey.set(record.assetKey, recordsForAsset)
   }
 
   return {
-    productionEvidence: [...evidenceByAssetKey.values()],
+    productionEvidence: [...recordsByAssetKey.entries()]
+      .map(([assetKey, records]) => buildProductionEvidenceForAsset(assetKey, records)),
     rejectedRecords,
   }
 }
