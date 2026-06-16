@@ -216,6 +216,37 @@ describe('durationRuntimeConsumerBusinessPathIntegrationAuditService', () => {
     }))
   })
 
+  it('does not count uncalled local helper facade calls as business path integration', async () => {
+    const {
+      evaluateDurationRuntimeConsumerBusinessPathIntegrationCoverage,
+    } = await import('../services/durationRuntimeConsumerBusinessPathIntegrationAuditService.js')
+
+    const coverage = evaluateDurationRuntimeConsumerBusinessPathIntegrationCoverage({
+      sourceFiles: [
+        {
+          sourcePath: 'server/src/services/projectRemainingDurationForecastService.ts',
+          sourceText: `
+            import { recordProjectRemainingDurationForecastConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
+            export function buildProjectRemainingDurationForecast() {
+              const recordRuntimeConsumption = async () => {
+                await recordProjectRemainingDurationForecastConsumedArtifacts({ queryExec, artifacts: [] })
+              }
+              return { recordRuntimeConsumption }
+            }
+          `,
+        },
+      ],
+    })
+
+    expect(coverage.status).toBe('runtime_consumer_business_path_integration_not_ready')
+    expect(coverage.observedIntegrations).toEqual([])
+    expect(coverage.missingIntegrations).toContainEqual(expect.objectContaining({
+      consumerKey: 'projectRemainingDurationForecastService',
+      runtimeEntryRef: 'projectRemainingDurationForecastService:buildProjectRemainingDurationForecast',
+      facadeFunctionName: 'recordProjectRemainingDurationForecastConsumedArtifacts',
+    }))
+  })
+
   it('recognizes facade calls inside typed TypeScript runtime entries', async () => {
     const {
       evaluateDurationRuntimeConsumerBusinessPathIntegrationCoverage,

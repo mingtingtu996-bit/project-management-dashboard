@@ -103,6 +103,68 @@ function stripCommentsAndStringLiterals(sourceText: string) {
     .replace(/(['"`])(?:\\[\s\S]|(?!\1)[^\\])*\1/g, '')
 }
 
+interface NamedNestedFunctionLikeRange {
+  name: string
+  start: number
+  end: number
+  sourceText: string
+}
+
+function findMatchingBrace(sourceText: string, openBraceIndex: number) {
+  let depth = 0
+  for (let index = openBraceIndex; index < sourceText.length; index += 1) {
+    const char = sourceText[index]
+    if (char === '{') depth += 1
+    if (char === '}') {
+      depth -= 1
+      if (depth === 0) return index
+    }
+  }
+  return -1
+}
+
+function collectNamedNestedFunctionLikeRanges(
+  runtimeEntryBody: string,
+  runtimeEntryRef: string,
+) {
+  const entryFunctionName = runtimeEntryFunctionName(runtimeEntryRef)
+  const ranges: NamedNestedFunctionLikeRange[] = []
+  const patterns = [
+    /\bfunction\s+([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{/g,
+    /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>\s*\{/g,
+    /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?function\b[^{]*\{/g,
+  ]
+
+  for (const pattern of patterns) {
+    for (const match of runtimeEntryBody.matchAll(pattern)) {
+      const name = match[1]?.trim()
+      if (!name || name === entryFunctionName) continue
+      const start = match.index ?? -1
+      const openBraceIndex = runtimeEntryBody.indexOf('{', start + match[0].length - 1)
+      const end = openBraceIndex >= 0 ? findMatchingBrace(runtimeEntryBody, openBraceIndex) : -1
+      if (start < 0 || end < 0) continue
+      ranges.push({
+        name,
+        start,
+        end,
+        sourceText: runtimeEntryBody.slice(start, end + 1),
+      })
+    }
+  }
+
+  return ranges.sort((left, right) => left.start - right.start)
+}
+
+function maskRanges(sourceText: string, ranges: readonly NamedNestedFunctionLikeRange[]) {
+  const chars = sourceText.split('')
+  for (const range of ranges) {
+    for (let index = range.start; index <= range.end; index += 1) {
+      chars[index] = ' '
+    }
+  }
+  return chars.join('')
+}
+
 function findRuntimeEntryBody(sourceText: string, runtimeEntryRef: string) {
   const entryFunctionName = runtimeEntryFunctionName(runtimeEntryRef)
   if (!entryFunctionName) return ''
@@ -132,9 +194,17 @@ function hasFacadeCallInRuntimeEntry(
   const callPattern = new RegExp(`\\b${escapeRegExp(facadeFunctionName)}\\s*\\(`)
   const executableSourceText = stripCommentsAndStringLiterals(sourceText)
   const runtimeEntryBody = findRuntimeEntryBody(executableSourceText, runtimeEntryRef)
+  const nestedFunctionLikeRanges = collectNamedNestedFunctionLikeRanges(runtimeEntryBody, runtimeEntryRef)
+  const runtimeEntryBodyWithoutNestedHelpers = maskRanges(runtimeEntryBody, nestedFunctionLikeRanges)
+  const directFacadeCall = callPattern.test(runtimeEntryBodyWithoutNestedHelpers)
+  const facadeCallThroughInvokedLocalHelper = nestedFunctionLikeRanges.some((range) => {
+    if (!callPattern.test(range.sourceText)) return false
+    const helperCallPattern = new RegExp(`\\b${escapeRegExp(range.name)}\\s*\\(`)
+    return helperCallPattern.test(runtimeEntryBodyWithoutNestedHelpers)
+  })
   return sourceText.includes(facadeFunctionName)
     && sourceText.includes('durationRuntimeConsumerObservationAdapterService')
-    && callPattern.test(runtimeEntryBody)
+    && (directFacadeCall || facadeCallThroughInvokedLocalHelper)
 }
 
 export function listDurationRuntimeConsumerBusinessPathRequiredIntegrations():
