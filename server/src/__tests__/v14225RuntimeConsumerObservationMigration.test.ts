@@ -23,6 +23,7 @@ describe('v1.4.22.5 runtime consumer observation migration', () => {
     expect(fileNames).toContain('204_v14225_runtime_consumer_observations.sql')
     expect(fileNames).toContain('205_v14225_runtime_consumer_runtime_calls.sql')
     expect(fileNames).toContain('207_v14225_plan_network_outcomes.sql')
+    expect(fileNames).toContain('209_v14225_forecast_residual_overlay_publication_key.sql')
     expect(fileNames).not.toContain('202_v14225_runtime_consumer_observations.sql')
     expect(fileNames).toContain('202_v14223_dependency_rule_runtime_publications.sql')
     expect(fileNames).toContain('203_v14223_wbs_template_runtime_publications.sql')
@@ -115,5 +116,19 @@ describe('v1.4.22.5 runtime consumer observation migration', () => {
     expect(source).toContain('scopeExceptionApprovalId')
     expect(source).toContain('scopeExceptionApprovalStatus')
     expect(source).toContain('forecast_scope_exception_approval_required')
+  })
+
+  it('binds forecast residual overlays to runtime publication lineage', () => {
+    const source = allMigrationSource()
+
+    expect(source).toContain('ALTER TABLE public.duration_forecast_residual_overlays')
+    expect(source).toContain('ADD COLUMN IF NOT EXISTS publication_key TEXT NULL')
+    expect(source).toContain("overlay_key LIKE 'forecast_residual_overlay_runtime:%'")
+    expect(source).toContain("'forecast_residual_overlay_runtime:' || overlay_key")
+    expect(source).toContain('idx_duration_forecast_residual_overlays_publication_key')
+    expect(source).toContain('set_duration_forecast_residual_overlay_publication_key')
+    expect(source).toContain('trg_set_duration_forecast_residual_overlay_publication_key')
+    expect(source).toContain('duration_forecast_residual_overlays.publication_key')
+    expect(source).toContain('not a business fact or seed writer')
   })
 })
