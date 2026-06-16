@@ -91,4 +91,13 @@ describe('v1.4.22.5 runtime consumer observation migration', () => {
     expect(source).toContain('idx_duration_experience_samples_learning_scope')
     expect(source).toContain('duration_experience_samples.learning_scope')
   })
+
+  it('documents forecast scope-exception approval evidence on learnable parameter publications', () => {
+    const source = allMigrationSource()
+
+    expect(source).toContain('algorithm_learnable_parameter_runtime_publications.release_package')
+    expect(source).toContain('scopeExceptionApprovalId')
+    expect(source).toContain('scopeExceptionApprovalStatus')
+    expect(source).toContain('forecast_scope_exception_approval_required')
+  })
 })

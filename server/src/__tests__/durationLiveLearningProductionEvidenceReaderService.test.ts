@@ -193,6 +193,12 @@ function rowsForSql(sql: string, options: { includePlanNetworkOutcomes?: boolean
       publication_key: publicationKeyForAsset(assetKey),
       asset_key: assetKey,
       publication_status: 'published',
+      release_package: assetKey === 'forecast_residual_overlay' || assetKey === 'forecast_confidence_weight'
+        ? {
+            scopeExceptionApprovalId: `scope-exception-${assetKey}`,
+            scopeExceptionApprovalStatus: 'approved',
+          }
+        : {},
       impact_monitoring: { status: 'monitoring_armed' },
       rollback_execution: { status: 'rollback_verified' },
       writes_seed_runtime_directly: false,
@@ -311,6 +317,35 @@ function rowsForSqlWithoutCompanyProjectDurationScopes(sql: string) {
       return true
     }
     return metadata.learningScope === 'global' || metadata.learningScope === 'industry'
+  })
+}
+
+function rowsForSqlWithoutForecastScopeExceptionApproval(sql: string) {
+  const normalized = sql.toLowerCase()
+  if (normalized.includes('from public.duration_experience_samples')) {
+    return rowsForSql(sql).filter((row) => {
+      const metadata = row.metadata as { liveLearningAssetKey?: string, learningScope?: string } | undefined
+      if (
+        metadata?.liveLearningAssetKey !== 'forecast_residual_overlay'
+        && metadata?.liveLearningAssetKey !== 'forecast_confidence_weight'
+      ) {
+        return true
+      }
+      return metadata.learningScope === 'company' || metadata.learningScope === 'project'
+    })
+  }
+  if (!normalized.includes('from public.algorithm_learnable_parameter_runtime_publications')) {
+    return rowsForSql(sql)
+  }
+  return rowsForSql(sql).map((row) => {
+    const assetKey = row.asset_key
+    if (assetKey !== 'forecast_residual_overlay' && assetKey !== 'forecast_confidence_weight') {
+      return row
+    }
+    return {
+      ...row,
+      release_package: {},
+    }
   })
 }
 
@@ -521,6 +556,41 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
       }),
       expect.objectContaining({
         assetKey: 'standard_work_duration_seed',
+        missingClosureConditions: expect.arrayContaining([
+          'global_industry_company_project_learning_scopes_required',
+        ]),
+      }),
+    ]))
+  })
+
+  it('keeps forecast scoped runtime assets blocked without production scope-exception approval', async () => {
+    const {
+      buildDurationLiveLearningProductionClaimAuditFromDb,
+    } = await import('../services/durationLiveLearningProductionEvidenceReaderService.js')
+    const queryExec = async <T = Record<string, unknown>>(sql: string): Promise<T[]> =>
+      rowsForSqlWithoutForecastScopeExceptionApproval(sql) as T[]
+
+    const audit = await buildDurationLiveLearningProductionClaimAuditFromDb({
+      completionAudit: buildReadyCompletionAudit(),
+      queryExec,
+      maxRowsPerSourceTable: 200,
+    })
+
+    expect(audit.status).toBe('duration_live_learning_production_claim_not_ready')
+    expect(audit.completionAudit.status).toBe('duration_live_learning_completion_not_ready')
+    expect(audit.completionAudit.blockedAssetKeys).toEqual(expect.arrayContaining([
+      'forecast_residual_overlay',
+      'forecast_confidence_weight',
+    ]))
+    expect(audit.completionAudit.portfolio.learnableAssets).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        assetKey: 'forecast_residual_overlay',
+        missingClosureConditions: expect.arrayContaining([
+          'global_industry_company_project_learning_scopes_required',
+        ]),
+      }),
+      expect.objectContaining({
+        assetKey: 'forecast_confidence_weight',
         missingClosureConditions: expect.arrayContaining([
           'global_industry_company_project_learning_scopes_required',
         ]),

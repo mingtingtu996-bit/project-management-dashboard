@@ -487,6 +487,8 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
         'publication_key',
         'asset_key',
         'publication_status',
+        'release_package.scopeExceptionApprovalId',
+        'release_package.scopeExceptionApprovalStatus',
         'impact_monitoring.status',
         'rollback_execution.status',
       ]))

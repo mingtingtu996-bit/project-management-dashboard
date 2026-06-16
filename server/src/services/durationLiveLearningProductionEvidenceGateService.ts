@@ -295,6 +295,8 @@ const REQUIRED_FIELDS_BY_SOURCE_TABLE: Record<DurationLiveLearningProductionEvid
     'publication_key',
     'asset_key',
     'publication_status',
+    'release_package.scopeExceptionApprovalId',
+    'release_package.scopeExceptionApprovalStatus',
     'impact_monitoring.status',
     'impact_monitoring.eventRef',
     'rollback_execution.status',

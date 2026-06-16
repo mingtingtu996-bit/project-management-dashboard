@@ -186,11 +186,73 @@ function publicationRefMatchesObservedPublication(evidence: DurationLiveLearning
     )
 }
 
+function publicationRefMatchesPublicationKey(
+  publicationExecutionRef: string | null | undefined,
+  publicationKey: string | null | undefined,
+) {
+  const publicationRef = normalizeText(publicationExecutionRef)
+  const normalizedPublicationKey = normalizeText(publicationKey)
+  return Boolean(publicationRef && normalizedPublicationKey)
+    && (
+      publicationRef === normalizedPublicationKey
+      || publicationRef.endsWith(`:${normalizedPublicationKey}`)
+    )
+}
+
+function forecastScopeExceptionApprovalRecord(row: Record<string, unknown>) {
+  const releasePackage = readRecord(row.release_package ?? row.releasePackage)
+  const nestedApproval = readRecord(
+    releasePackage.scopeExceptionApproval
+      ?? releasePackage.scope_exception_approval
+      ?? releasePackage.scope_exception,
+  )
+  const approvalId = readText(
+    releasePackage,
+    'scopeExceptionApprovalId',
+    'scope_exception_approval_id',
+    'scopeExceptionApprovalRef',
+    'scope_exception_approval_ref',
+  ) || readText(nestedApproval, 'id', 'approvalId', 'approval_id', 'ref', 'reference')
+  const status = readText(
+    releasePackage,
+    'scopeExceptionApprovalStatus',
+    'scope_exception_approval_status',
+  ) || readText(nestedApproval, 'status', 'approvalStatus', 'approval_status')
+  const approved = releasePackage.scopeExceptionApproved === true
+    || releasePackage.scope_exception_approved === true
+    || nestedApproval.approved === true
+    || status === 'approved'
+    || status === 'scope_exception_approved'
+  return {
+    approvalId,
+    approved,
+  }
+}
+
+function hasForecastScopeExceptionApprovalFromProductionPublication(
+  evidence: DurationLiveLearningProductionEvidenceRef,
+  sourceRows: readonly DurationLiveLearningProductionEvidenceSourceRow[],
+) {
+  if (!FORECAST_SCOPE_EXCEPTION_ASSET_KEYS.has(evidence.assetKey)) return false
+  for (const source of sourceRows) {
+    if (source.sourceTable !== 'algorithm_learnable_parameter_runtime_publications') continue
+    const row = source.row
+    if (readText(row, 'asset_key', 'assetKey') !== evidence.assetKey) continue
+    const publicationKey = readText(row, 'publication_key', 'publicationKey')
+    if (!publicationRefMatchesPublicationKey(evidence.publicationExecutionRef, publicationKey)) continue
+    const publicationStatus = readText(row, 'publication_status', 'publicationStatus')
+    if (publicationStatus !== 'published' && publicationStatus !== 'canary') continue
+    const approval = forecastScopeExceptionApprovalRecord(row)
+    if (approval.approvalId && approval.approved) return true
+  }
+  return false
+}
+
 function productionCompletionEvidenceForAsset(
   evidence: DurationLiveLearningProductionEvidenceRef,
   sourceRows: readonly DurationLiveLearningProductionEvidenceSourceRow[],
 ): DurationLiveLearningEvidence {
-  const scopeExceptionApproved = FORECAST_SCOPE_EXCEPTION_ASSET_KEYS.has(evidence.assetKey)
+  const scopeExceptionApproved = hasForecastScopeExceptionApprovalFromProductionPublication(evidence, sourceRows)
   const productionSampleScopes = acceptedLearningScopesFromProductionSamples(evidence.assetKey, sourceRows)
   const enabledLearningScopes = scopeExceptionApproved
     ? FORECAST_SCOPE_EXCEPTION_SCOPES
