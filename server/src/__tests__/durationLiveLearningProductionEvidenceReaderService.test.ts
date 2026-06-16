@@ -134,14 +134,16 @@ function buildPlanNetworkOutcomeRecords() {
 }
 
 function buildPlanNetworkOutcomeRows() {
-  return planNetworkAssetKeys.map((assetKey) => ({
-    id: `outcome-${assetKey}`,
-    asset_key: assetKey,
-    outcome_status: 'accepted',
-    outcome_ref: `network_outcomes:${assetKey}:accepted`,
-    writes_runtime_directly: false,
-    writes_fact_directly: false,
-  }))
+  return planNetworkAssetKeys.flatMap((assetKey) =>
+    ['global', 'industry', 'company', 'project'].map((learningScope) => ({
+      id: `outcome-${assetKey}-${learningScope}`,
+      asset_key: assetKey,
+      outcome_status: 'accepted',
+      outcome_ref: `network_outcomes:${assetKey}:${learningScope}:accepted`,
+      metadata: { learningScope },
+      writes_runtime_directly: false,
+      writes_fact_directly: false,
+    })))
 }
 
 function rowsForSql(sql: string, options: { includePlanNetworkOutcomes?: boolean } = {}) {
@@ -165,12 +167,8 @@ function rowsForSql(sql: string, options: { includePlanNetworkOutcomes?: boolean
         continue
       }
       if (assetKey === 'duration_cold_start_baseline') {
-        rows.push(...[
-          { id: `sample-${assetKey}-company-1`, learningScope: 'company' },
-          { id: `sample-${assetKey}-company-2`, learningScope: 'company' },
-          { id: `sample-${assetKey}-project-1`, learningScope: 'project' },
-        ].map(({ id, learningScope }) => ({
-          id,
+        rows.push(...['global', 'industry', 'company', 'project'].map((learningScope) => ({
+          id: `sample-${assetKey}-${learningScope}`,
           sample_status: 'active',
           included_in_benchmark: true,
           actual_duration: 8,
@@ -179,14 +177,14 @@ function rowsForSql(sql: string, options: { includePlanNetworkOutcomes?: boolean
         })))
         continue
       }
-      rows.push({
-        id: `sample-${assetKey}`,
+      rows.push(...['global', 'industry', 'company', 'project'].map((learningScope) => ({
+        id: `sample-${assetKey}-${learningScope}`,
         sample_status: 'active',
         included_in_benchmark: true,
         actual_duration: 8,
         completed_at: '2026-06-01T00:00:00.000Z',
-        metadata: { liveLearningAssetKey: assetKey, learningScope: 'company' },
-      })
+        metadata: { liveLearningAssetKey: assetKey, learningScope },
+      })))
     }
     return rows
   }
@@ -299,6 +297,21 @@ function rowsForSql(sql: string, options: { includePlanNetworkOutcomes?: boolean
     ]
   }
   throw new Error(`unexpected query: ${sql}`)
+}
+
+function rowsForSqlWithoutCompanyProjectDurationScopes(sql: string) {
+  const normalized = sql.toLowerCase()
+  if (!normalized.includes('from public.duration_experience_samples')) return rowsForSql(sql)
+  return rowsForSql(sql).filter((row) => {
+    const metadata = row.metadata as { liveLearningAssetKey?: string, learningScope?: string } | undefined
+    if (
+      metadata?.liveLearningAssetKey !== 'duration_cold_start_baseline'
+      && metadata?.liveLearningAssetKey !== 'standard_work_duration_seed'
+    ) {
+      return true
+    }
+    return metadata.learningScope === 'global' || metadata.learningScope === 'industry'
+  })
 }
 
 function buildReadyBusinessPathSourceFiles() {
@@ -474,8 +487,45 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
       .toEqual(expect.arrayContaining(planNetworkAssetKeys.map((assetKey) =>
         expect.objectContaining({
           assetKey,
-          productionSampleEvidenceRef: `network_outcomes:outcome-${assetKey}`,
+          productionSampleEvidenceRef: expect.stringMatching(
+            new RegExp(`^network_outcomes:outcome-${assetKey}-`),
+          ),
         }))))
+  })
+
+  it('keeps the DB production claim blocked when non-forecast assets lack company/project learning scopes', async () => {
+    const {
+      buildDurationLiveLearningProductionClaimAuditFromDb,
+    } = await import('../services/durationLiveLearningProductionEvidenceReaderService.js')
+    const queryExec = async <T = Record<string, unknown>>(sql: string): Promise<T[]> =>
+      rowsForSqlWithoutCompanyProjectDurationScopes(sql) as T[]
+
+    const audit = await buildDurationLiveLearningProductionClaimAuditFromDb({
+      completionAudit: buildReadyCompletionAudit(),
+      queryExec,
+      maxRowsPerSourceTable: 200,
+    })
+
+    expect(audit.status).toBe('duration_live_learning_production_claim_not_ready')
+    expect(audit.completionAudit.status).toBe('duration_live_learning_completion_not_ready')
+    expect(audit.completionAudit.blockedAssetKeys).toEqual(expect.arrayContaining([
+      'duration_cold_start_baseline',
+      'standard_work_duration_seed',
+    ]))
+    expect(audit.completionAudit.portfolio.learnableAssets).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        assetKey: 'duration_cold_start_baseline',
+        missingClosureConditions: expect.arrayContaining([
+          'global_industry_company_project_learning_scopes_required',
+        ]),
+      }),
+      expect.objectContaining({
+        assetKey: 'standard_work_duration_seed',
+        missingClosureConditions: expect.arrayContaining([
+          'global_industry_company_project_learning_scopes_required',
+        ]),
+      }),
+    ]))
   })
 
   it('builds the DB completion audit from production source rows instead of caller supplied completion audit', async () => {

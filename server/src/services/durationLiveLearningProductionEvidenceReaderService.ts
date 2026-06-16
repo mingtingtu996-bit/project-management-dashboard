@@ -131,20 +131,42 @@ function durationSampleLearningScope(row: Record<string, unknown>) {
   )
 }
 
-function acceptedLearningScopesFromDurationSamples(
+function planNetworkOutcomeLearningScope(row: Record<string, unknown>) {
+  const metadata = readRecord(row.metadata)
+  const explicitScope = normalizeLearningScope(
+    readText(row, 'learning_scope', 'learningScope', 'sample_scope', 'sampleScope', 'scope')
+      || readText(metadata, 'learningScope', 'learning_scope', 'sampleScope', 'sample_scope', 'scope'),
+  )
+  if (explicitScope) return explicitScope
+  if (readText(row, 'project_id', 'projectId')) return 'project'
+  if (readText(row, 'company_id', 'companyId')) return 'company'
+  return null
+}
+
+function acceptedLearningScopesFromProductionSamples(
   assetKey: DurationLiveLearningAssetKey,
   sourceRows: readonly DurationLiveLearningProductionEvidenceSourceRow[],
 ): DurationLearningScope[] {
   const scopes = new Set<DurationLearningScope>()
   for (const source of sourceRows) {
-    if (source.sourceTable !== 'duration_experience_samples') continue
-    if (durationSampleAssetKey(source.row) !== assetKey) continue
-    if (readText(source.row, 'sample_status', 'sampleStatus') !== 'active') continue
-    if (source.row.included_in_benchmark !== true) continue
-    if (typeof source.row.actual_duration !== 'number' || !Number.isFinite(source.row.actual_duration)) continue
-    if (!readText(source.row, 'completed_at', 'completedAt')) continue
-    const scope = durationSampleLearningScope(source.row)
-    if (scope) scopes.add(scope)
+    if (source.sourceTable === 'duration_experience_samples') {
+      if (durationSampleAssetKey(source.row) !== assetKey) continue
+      if (readText(source.row, 'sample_status', 'sampleStatus') !== 'active') continue
+      if (source.row.included_in_benchmark !== true) continue
+      if (typeof source.row.actual_duration !== 'number' || !Number.isFinite(source.row.actual_duration)) continue
+      if (!readText(source.row, 'completed_at', 'completedAt')) continue
+      const scope = durationSampleLearningScope(source.row)
+      if (scope) scopes.add(scope)
+      continue
+    }
+
+    if (source.sourceTable === 'duration_plan_network_outcomes') {
+      if (readText(source.row, 'asset_key', 'assetKey') !== assetKey) continue
+      if (readText(source.row, 'outcome_status', 'outcomeStatus') !== 'accepted') continue
+      if (source.row.writes_runtime_directly === true || source.row.writes_fact_directly === true) continue
+      const scope = planNetworkOutcomeLearningScope(source.row)
+      if (scope) scopes.add(scope)
+    }
   }
   return FULL_TIERED_LEARNING_SCOPES.filter((scope) => scopes.has(scope))
 }
@@ -168,12 +190,10 @@ function productionCompletionEvidenceForAsset(
   sourceRows: readonly DurationLiveLearningProductionEvidenceSourceRow[],
 ): DurationLiveLearningEvidence {
   const scopeExceptionApproved = FORECAST_SCOPE_EXCEPTION_ASSET_KEYS.has(evidence.assetKey)
-  const baseScopes = evidence.assetKey === 'base_duration_benchmark'
-    ? acceptedLearningScopesFromDurationSamples(evidence.assetKey, sourceRows)
-    : FULL_TIERED_LEARNING_SCOPES
+  const productionSampleScopes = acceptedLearningScopesFromProductionSamples(evidence.assetKey, sourceRows)
   const enabledLearningScopes = scopeExceptionApproved
     ? FORECAST_SCOPE_EXCEPTION_SCOPES
-    : baseScopes
+    : productionSampleScopes
   const hasTieredLearningPolicy = scopeExceptionApproved
     || FULL_TIERED_LEARNING_SCOPES.every((scope) => enabledLearningScopes.includes(scope))
 
