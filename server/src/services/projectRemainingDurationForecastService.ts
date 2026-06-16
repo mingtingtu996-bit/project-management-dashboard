@@ -5,6 +5,7 @@ import {
 } from './algorithmFactContextService.js'
 import type { DurationAccuracyPredictionInput } from './durationAlgorithmAccuracyService.js'
 import { getDurationOutputContract } from './durationOutputGovernanceService.js'
+import type { CriticalPathSnapshot } from './projectCriticalPathService.js'
 import type { ScheduleAccelerationRow } from './scheduleAccelerationService.js'
 import {
   recordProjectRemainingDurationForecastConsumedArtifacts,
@@ -307,6 +308,34 @@ function isExternalHardGateRow(row: ScheduleAccelerationRow) {
     || row.values.material_required === true
 }
 
+function applyFreshCriticalPathSnapshotToRows(
+  rows: ScheduleAccelerationRow[],
+  snapshot: CriticalPathSnapshot | null | undefined,
+) {
+  if (!snapshot || snapshot.calculationStatus !== 'fresh') return rows
+  const criticalTaskIds = new Set([
+    ...(snapshot.displayTaskIds ?? []),
+    ...(snapshot.autoTaskIds ?? []),
+  ].map(normalizeText).filter(Boolean))
+  const criticalTaskById = new Map((snapshot.tasks ?? []).map((task) => [normalizeText(task.taskId), task]))
+  if (criticalTaskIds.size === 0 && criticalTaskById.size === 0) return rows
+
+  return rows.map((row) => {
+    const taskId = normalizeText(row.clientRowId)
+    const criticalTask = criticalTaskById.get(taskId)
+    const isCritical = criticalTaskIds.has(taskId)
+    return {
+      ...row,
+      values: {
+        ...row.values,
+        is_critical: isCritical,
+        total_float_days: criticalTask?.floatDays ?? (isCritical ? 0 : undefined),
+        free_float_days: isCritical ? 0 : undefined,
+      },
+    }
+  })
+}
+
 function buildDurationOutputContractSummary() {
   const contract = getDurationOutputContract('project_remaining_forecast')
   if (!contract) return null
@@ -452,6 +481,7 @@ export function buildProjectRemainingDurationForecast(params: {
   asOfDate?: string | null
   targetEndDate?: string | null
   projectId?: string | null
+  criticalPathSnapshot?: CriticalPathSnapshot | null
   runtimeExecutionFacts?: RuntimeExecutionFacts | null
   monthlyCommitments?: ProjectMonthlyCommitmentSummary | null
   predictionEventRecorder?: (event: DurationAccuracyPredictionInput) => void
@@ -461,7 +491,7 @@ export function buildProjectRemainingDurationForecast(params: {
   runtimeConsumerErrorHandler?: (error: unknown) => void
 }): ProjectRemainingDurationForecast {
   const asOfDate = normalizeDate(params.asOfDate) ?? new Date().toISOString().slice(0, 10)
-  const scheduleRows = params.rows.filter(isScheduleRow)
+  const scheduleRows = applyFreshCriticalPathSnapshotToRows(params.rows.filter(isScheduleRow), params.criticalPathSnapshot)
   const remainingRows = scheduleRows.filter((row) => !isCompletedRow(row))
   const criticalRows = remainingRows.filter(isCriticalOrNearCriticalRow)
   const externalGateRows = remainingRows.filter(isExternalHardGateRow)

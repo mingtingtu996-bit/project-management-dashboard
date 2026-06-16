@@ -149,6 +149,67 @@ describe('projectRemainingDurationForecastService', () => {
     }))
   })
 
+  it('uses a fresh E3 critical-path snapshot instead of stale row-level critical flags', () => {
+    const forecast = buildProjectRemainingDurationForecast({
+      rows: [
+        row({
+          clientRowId: 'stale-row-critical',
+          values: {
+            ...row().values,
+            title: 'Stale row projection',
+            planned_end_date: '2026-06-30',
+            is_critical: true,
+            total_float_days: 0,
+            free_float_days: 0,
+          },
+        }),
+        row({
+          clientRowId: 'fresh-e3-critical',
+          values: {
+            ...row().values,
+            title: 'Fresh E3 critical task',
+            planned_end_date: '2026-06-18',
+            is_critical: false,
+            total_float_days: 12,
+            free_float_days: 8,
+          },
+        }),
+      ],
+      asOfDate: '2026-06-10',
+      targetEndDate: '2026-06-25',
+      criticalPathSnapshot: {
+        projectId: 'project-1',
+        autoTaskIds: ['fresh-e3-critical'],
+        displayTaskIds: ['fresh-e3-critical'],
+        manualAttentionTaskIds: [],
+        manualInsertedTaskIds: [],
+        watchedTaskIds: [],
+        edges: [],
+        tasks: [
+          {
+            taskId: 'fresh-e3-critical',
+            title: 'Fresh E3 critical task',
+            floatDays: 0,
+            durationDays: 9,
+            isAutoCritical: true,
+            isManualAttention: false,
+            isManualInserted: false,
+          },
+        ],
+        primaryChain: null,
+        alternateChains: [],
+        projectDurationDays: 9,
+        calculationStatus: 'fresh',
+        calculatedAt: '2026-06-10T00:00:00.000Z',
+      },
+    })
+
+    expect(forecast.calculationContext.criticalPath).toEqual(expect.objectContaining({
+      remainingTaskCount: 1,
+      latestCriticalFinishDate: '2026-06-18',
+    }))
+  })
+
   it('uses E2 task forecast finish dates as row governing finish when present', () => {
     const forecast = buildProjectRemainingDurationForecast({
       rows: [
