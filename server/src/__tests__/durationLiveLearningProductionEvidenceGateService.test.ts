@@ -1689,10 +1689,34 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
     expect(audit.allowedClaim).toBe('not_ready_for_live_self_learning_claim')
   })
 
-  it('builds the final production claim audit from canonical production source rows', () => {
+  it('does not let low-level callers forge DB provenance for the final production claim', () => {
+    const forgedInput = {
+      completionAudit: buildReadyCompletionAudit(),
+      sourceRows: [
+        ...buildAllProductionSourceRows(),
+        ...buildRuntimeConsumerRuntimeCallRows(),
+      ],
+      sourceRowsProvenance: 'canonical_db_reader',
+      runtimeConsumerBusinessPathSourceFiles: buildReadyBusinessPathSourceFiles(),
+    } as Parameters<typeof buildDurationLiveLearningProductionClaimAudit>[0] & {
+      sourceRowsProvenance: 'canonical_db_reader'
+    }
+
+    const audit = buildDurationLiveLearningProductionClaimAudit(forgedInput)
+
+    expect(audit.productionGate.status).toBe('duration_live_learning_production_evidence_ready')
+    expect(audit.runtimeConsumerObservationCoverage.status).toBe('runtime_consumer_observation_coverage_ready')
+    expect(audit.runtimeConsumerRuntimeCallCoverage.status)
+      .toBe('runtime_consumer_observation_runtime_calls_ready')
+    expect(audit.sourceRowsProvenanceGate.status).toBe('canonical_source_rows_provenance_not_ready')
+    expect(audit.sourceRowsProvenanceGate.actualProvenance).toBe('direct_source_rows_diagnostic')
+    expect(audit.status).toBe('duration_live_learning_production_claim_not_ready')
+    expect(audit.allowedClaim).toBe('not_ready_for_live_self_learning_claim')
+  })
+
+  it('keeps the low-level production claim diagnostic closed even when source rows are complete', () => {
     const audit = buildDurationLiveLearningProductionClaimAudit({
       completionAudit: buildReadyCompletionAudit(),
-      sourceRowsProvenance: 'canonical_db_reader',
       sourceRows: [
         ...buildAllProductionSourceRows(),
         ...buildRuntimeConsumerRuntimeCallRows(),
@@ -1700,10 +1724,8 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
       runtimeConsumerBusinessPathSourceFiles: buildReadyBusinessPathSourceFiles(),
     })
 
-    expect(audit.status).toBe('duration_live_learning_production_claim_ready')
-    expect(audit.allowedClaim).toBe(
-      'all_learnable_duration_prediction_and_network_assets_are_live_self_learning;facts_and_commitments_remain_locked',
-    )
+    expect(audit.status).toBe('duration_live_learning_production_claim_not_ready')
+    expect(audit.allowedClaim).toBe('not_ready_for_live_self_learning_claim')
     expect(audit.evidenceRowCollection.rejectedRows).toEqual([])
     expect(audit.evidenceCollection.rejectedRecords).toEqual([])
     expect(audit.productionGate.status).toBe('duration_live_learning_production_evidence_ready')
@@ -1712,6 +1734,7 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
       .toBe('runtime_consumer_observation_runtime_calls_ready')
     expect(audit.runtimeConsumerBusinessPathIntegrationCoverage.status)
       .toBe('runtime_consumer_business_path_integration_ready')
+    expect(audit.sourceRowsProvenanceGate.status).toBe('canonical_source_rows_provenance_not_ready')
   })
 
   it('blocks the final production claim when monitoring and rollback belong to a different publication than the consumed artifact', () => {

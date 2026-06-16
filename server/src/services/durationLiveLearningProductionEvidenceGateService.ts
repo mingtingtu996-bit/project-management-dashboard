@@ -187,7 +187,6 @@ export interface DurationLiveLearningProductionClaimAuditInput {
   completionAudit: DurationLiveLearningCompletionAudit
   records?: readonly DurationLiveLearningProductionEvidenceRecord[]
   sourceRows?: readonly DurationLiveLearningProductionEvidenceSourceRow[]
-  sourceRowsProvenance?: 'canonical_db_reader'
   runtimeConsumerAdapterRegistrations?: readonly DurationRuntimeConsumerObservationAdapterRegistration[]
   runtimeConsumerBusinessPathSourceFiles?: readonly DurationRuntimeConsumerBusinessPathSourceFile[]
 }
@@ -1510,8 +1509,9 @@ export function evaluateDurationLiveLearningProductionEvidenceGate(
   }
 }
 
-export function buildDurationLiveLearningProductionClaimAudit(
+function buildDurationLiveLearningProductionClaimAuditInternal(
   input: DurationLiveLearningProductionClaimAuditInput,
+  canonicalDbReaderSourceRows: boolean,
 ): DurationLiveLearningProductionClaimAudit {
   const evidenceRowCollection = collectDurationLiveLearningProductionEvidenceRecordsFromRows({
     rows: input.sourceRows,
@@ -1554,11 +1554,11 @@ export function buildDurationLiveLearningProductionClaimAudit(
       sourceFiles: input.runtimeConsumerBusinessPathSourceFiles,
     })
   const sourceRowsProvenanceGate: DurationLiveLearningSourceRowsProvenanceGate = {
-    status: input.sourceRowsProvenance === 'canonical_db_reader'
+    status: canonicalDbReaderSourceRows
       ? 'canonical_source_rows_provenance_ready'
       : 'canonical_source_rows_provenance_not_ready',
     requiredProvenance: 'canonical_db_reader',
-    actualProvenance: input.sourceRowsProvenance ?? 'direct_source_rows_diagnostic',
+    actualProvenance: canonicalDbReaderSourceRows ? 'canonical_db_reader' : 'direct_source_rows_diagnostic',
   }
   const ready = productionGate.status === 'duration_live_learning_production_evidence_ready'
     && runtimeConsumerObservationCoverage.status === 'runtime_consumer_observation_coverage_ready'
@@ -1583,4 +1583,16 @@ export function buildDurationLiveLearningProductionClaimAudit(
     runtimeConsumerBusinessPathIntegrationCoverage,
     sourceRowsProvenanceGate,
   }
+}
+
+export function buildDurationLiveLearningProductionClaimAudit(
+  input: DurationLiveLearningProductionClaimAuditInput,
+): DurationLiveLearningProductionClaimAudit {
+  return buildDurationLiveLearningProductionClaimAuditInternal(input, false)
+}
+
+export function buildDurationLiveLearningProductionClaimAuditFromCanonicalDbSourceRows(
+  input: DurationLiveLearningProductionClaimAuditInput,
+): DurationLiveLearningProductionClaimAudit {
+  return buildDurationLiveLearningProductionClaimAuditInternal(input, true)
 }

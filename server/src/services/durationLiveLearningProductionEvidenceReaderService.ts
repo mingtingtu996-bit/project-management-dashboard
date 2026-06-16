@@ -9,7 +9,7 @@ import type {
   DurationLearningScope,
 } from './durationLiveLearningClosureService.js'
 import {
-  buildDurationLiveLearningProductionClaimAudit,
+  buildDurationLiveLearningProductionClaimAuditFromCanonicalDbSourceRows,
   collectDurationLiveLearningProductionEvidenceRecordsFromRows,
   collectDurationLiveLearningProductionEvidenceRefs,
   listDurationLiveLearningProductionEvidenceSourcePlan,
@@ -472,10 +472,9 @@ export async function buildDurationLiveLearningProductionClaimAuditFromDb(
     sourceRows: sourceQuery.sourceRows,
     requestedFactRewriteAssetKeys: input.requestedFactRewriteAssetKeys,
   })
-  const audit = buildDurationLiveLearningProductionClaimAudit({
+  const audit = buildDurationLiveLearningProductionClaimAuditFromCanonicalDbSourceRows({
     completionAudit,
     sourceRows: sourceQuery.sourceRows,
-    sourceRowsProvenance: 'canonical_db_reader',
     runtimeConsumerBusinessPathSourceFiles,
   })
 
