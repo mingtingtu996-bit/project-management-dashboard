@@ -1,7 +1,4 @@
 import { query as rawQuery } from '../database.js'
-import type {
-  DurationLiveLearningCompletionAudit,
-} from './durationLiveLearningCompletionAuditService.js'
 import {
   buildDurationLiveLearningCompletionAudit,
 } from './durationLiveLearningCompletionAuditService.js'
@@ -43,7 +40,6 @@ export interface DurationLiveLearningProductionEvidenceSourceQuery {
 
 export interface DurationLiveLearningProductionClaimAuditFromDbInput
   extends DurationLiveLearningProductionEvidenceSourceQueryInput {
-  completionAudit?: DurationLiveLearningCompletionAudit
   requestedFactRewriteAssetKeys?: readonly DurationLiveLearningAssetKey[]
 }
 

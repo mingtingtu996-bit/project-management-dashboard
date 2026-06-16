@@ -4,6 +4,9 @@ import {
   buildDurationLiveLearningCompletionAudit,
 } from '../services/durationLiveLearningCompletionAuditService.js'
 import type {
+  DurationLiveLearningProductionClaimAuditFromDbInput,
+} from '../services/durationLiveLearningProductionEvidenceReaderService.js'
+import type {
   DurationLiveLearningAssetKey,
   DurationLiveLearningEvidence,
   DurationLiveLearningEvidenceOverride,
@@ -21,6 +24,12 @@ const readyEvidence: DurationLiveLearningEvidence = {
   rollbackTargetReady: true,
   accuracyMetricsAvailable: true,
 }
+
+const dbClaimInputRejectsCallerCompletionAudit: DurationLiveLearningProductionClaimAuditFromDbInput = {
+  // @ts-expect-error DB production claims must derive completion audit from canonical source rows.
+  completionAudit: null,
+}
+void dbClaimInputRejectsCallerCompletionAudit
 
 const learnableAssetKeys: DurationLiveLearningAssetKey[] = [
   'base_duration_benchmark',
@@ -526,7 +535,6 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
       rowsForSql(sql, { includePlanNetworkOutcomes: false }) as T[]
 
     const audit = await buildDurationLiveLearningProductionClaimAuditFromDb({
-      completionAudit: buildReadyCompletionAudit(),
       queryExec,
       maxRowsPerSourceTable: 200,
     })
@@ -558,7 +566,6 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
     }
 
     const audit = await buildDurationLiveLearningProductionClaimAuditFromDb({
-      completionAudit: buildReadyCompletionAudit(),
       queryExec,
       maxRowsPerSourceTable: 200,
     })
@@ -617,7 +624,6 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
       rowsForSql(sql) as T[]
 
     const audit = await buildDurationLiveLearningProductionClaimAuditFromDb({
-      completionAudit: buildReadyCompletionAudit(),
       queryExec,
       maxRowsPerSourceTable: 200,
     })
@@ -644,7 +650,6 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
       rowsForSqlWithPlanNetworkScopesButNoOutcomeIds(sql) as T[]
 
     const audit = await buildDurationLiveLearningProductionClaimAuditFromDb({
-      completionAudit: buildReadyCompletionAudit(),
       queryExec,
       maxRowsPerSourceTable: 200,
       records: buildPlanNetworkOutcomeRecords(),
@@ -676,7 +681,6 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
       rowsForSqlWithoutCompanyProjectDurationScopes(sql) as T[]
 
     const audit = await buildDurationLiveLearningProductionClaimAuditFromDb({
-      completionAudit: buildReadyCompletionAudit(),
       queryExec,
       maxRowsPerSourceTable: 200,
     })
@@ -711,7 +715,6 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
       rowsForSqlWithMetadataOnlyDurationScopes(sql) as T[]
 
     const audit = await buildDurationLiveLearningProductionClaimAuditFromDb({
-      completionAudit: buildReadyCompletionAudit(),
       queryExec,
       maxRowsPerSourceTable: 200,
     })
@@ -741,7 +744,6 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
       rowsForSqlWithImplicitPlanNetworkScopes(sql) as T[]
 
     const audit = await buildDurationLiveLearningProductionClaimAuditFromDb({
-      completionAudit: buildReadyCompletionAudit(),
       queryExec,
       maxRowsPerSourceTable: 200,
     })
@@ -772,7 +774,6 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
       rowsForSqlWithForgedUpperLearningScopes(sql) as T[]
 
     const audit = await buildDurationLiveLearningProductionClaimAuditFromDb({
-      completionAudit: buildReadyCompletionAudit(),
       queryExec,
       maxRowsPerSourceTable: 200,
     })
@@ -812,7 +813,6 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
       rowsForSqlWithMissingProjectLearningScopeSources(sql) as T[]
 
     const audit = await buildDurationLiveLearningProductionClaimAuditFromDb({
-      completionAudit: buildReadyCompletionAudit(),
       queryExec,
       maxRowsPerSourceTable: 200,
     })
@@ -843,7 +843,6 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
       rowsForSqlWithoutForecastScopeExceptionApproval(sql) as T[]
 
     const audit = await buildDurationLiveLearningProductionClaimAuditFromDb({
-      completionAudit: buildReadyCompletionAudit(),
       queryExec,
       maxRowsPerSourceTable: 200,
     })
@@ -878,7 +877,6 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
       rowsForSql(sql) as T[]
 
     const audit = await buildDurationLiveLearningProductionClaimAuditFromDb({
-      completionAudit: buildReadyCompletionAudit(),
       queryExec,
       maxRowsPerSourceTable: 200,
       requestedFactRewriteAssetKeys: ['baseline_commitment'],
@@ -899,11 +897,15 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
     const queryExec = async <T = Record<string, unknown>>(sql: string): Promise<T[]> =>
       rowsForSql(sql) as T[]
 
-    const audit = await buildDurationLiveLearningProductionClaimAuditFromDb({
+    const illegalCallerInput = {
       completionAudit: buildDurationLiveLearningCompletionAudit(),
       queryExec,
       maxRowsPerSourceTable: 200,
-    })
+    } as Parameters<typeof buildDurationLiveLearningProductionClaimAuditFromDb>[0] & {
+      completionAudit: ReturnType<typeof buildDurationLiveLearningCompletionAudit>
+    }
+
+    const audit = await buildDurationLiveLearningProductionClaimAuditFromDb(illegalCallerInput)
 
     expect(audit.completionAudit.status).toBe('duration_live_learning_completion_ready')
     expect(audit.productionGate.completionAuditStatus).toBe('duration_live_learning_completion_ready')
@@ -919,7 +921,6 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
       rowsForSql(sql) as T[]
 
     const audit = await buildDurationLiveLearningProductionClaimAuditFromDb({
-      completionAudit: buildReadyCompletionAudit(),
       queryExec,
       maxRowsPerSourceTable: 200,
     })
@@ -941,7 +942,6 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
       sourceText: 'export function placeholderWithoutRuntimeConsumerFacade() { return null }',
     }))
     const input = {
-      completionAudit: buildReadyCompletionAudit(),
       queryExec,
       maxRowsPerSourceTable: 200,
       runtimeConsumerBusinessPathSourceFiles: fakeSourceFiles,
