@@ -1458,9 +1458,7 @@ export function evaluateDurationLiveLearningProductionEvidenceGate(
     status: ready
       ? 'duration_live_learning_production_evidence_ready'
       : 'duration_live_learning_production_evidence_not_ready',
-    allowedClaim: ready
-      ? input.completionAudit.allowedClaim
-      : 'not_ready_for_live_self_learning_claim',
+    allowedClaim: 'not_ready_for_live_self_learning_claim',
     prohibitedClaim: input.completionAudit.prohibitedClaim,
     completionAuditStatus: input.completionAudit.status,
     productionEvidenceAssetKeys: claimAssetKeys.filter((assetKey) =>
@@ -1522,7 +1520,7 @@ export function buildDurationLiveLearningProductionClaimAudit(
     status: ready
       ? 'duration_live_learning_production_claim_ready'
       : 'duration_live_learning_production_claim_not_ready',
-    allowedClaim: ready ? productionGate.allowedClaim : 'not_ready_for_live_self_learning_claim',
+    allowedClaim: ready ? input.completionAudit.allowedClaim : 'not_ready_for_live_self_learning_claim',
     prohibitedClaim: productionGate.prohibitedClaim,
     completionAudit: input.completionAudit,
     evidenceRowCollection,

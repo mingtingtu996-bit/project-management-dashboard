@@ -584,7 +584,7 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
     })
   })
 
-  it('allows the production claim only when every learnable asset has production evidence refs', () => {
+  it('marks production evidence ready without issuing the final live claim', () => {
     const gate = evaluateDurationLiveLearningProductionEvidenceGate({
       completionAudit: buildReadyCompletionAudit(),
       productionEvidence: learnableAssetKeys.map((assetKey) => ({
@@ -603,9 +603,7 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
     })
 
     expect(gate.status).toBe('duration_live_learning_production_evidence_ready')
-    expect(gate.allowedClaim).toBe(
-      'all_learnable_duration_prediction_and_network_assets_are_live_self_learning;facts_and_commitments_remain_locked',
-    )
+    expect(gate.allowedClaim).toBe('not_ready_for_live_self_learning_claim')
     expect(gate.missingEvidenceByAsset).toEqual([])
     expect(gate.productionEvidenceAssetKeys).toEqual(learnableAssetKeys)
   })
@@ -1683,6 +1681,9 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
     })
 
     expect(audit.status).toBe('duration_live_learning_production_claim_ready')
+    expect(audit.allowedClaim).toBe(
+      'all_learnable_duration_prediction_and_network_assets_are_live_self_learning;facts_and_commitments_remain_locked',
+    )
     expect(audit.evidenceRowCollection.rejectedRows).toEqual([])
     expect(audit.evidenceCollection.rejectedRecords).toEqual([])
     expect(audit.productionGate.status).toBe('duration_live_learning_production_evidence_ready')
