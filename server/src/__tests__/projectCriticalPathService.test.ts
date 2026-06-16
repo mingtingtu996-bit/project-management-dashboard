@@ -142,6 +142,7 @@ const mocks = vi.hoisted(() => {
     backtestEarliestPendingDurationAccuracyPrediction: vi.fn(),
     listCurrentTaskDurationForecasts: vi.fn(),
     resolveConstructionCalendarContext: vi.fn(),
+    readLiveProjectGenerationFacts: vi.fn(),
     rawQuery,
   }
 })
@@ -176,6 +177,10 @@ vi.mock('../services/constructionCalendar.js', async () => {
     resolveConstructionCalendarContext: mocks.resolveConstructionCalendarContext,
   }
 })
+
+vi.mock('../services/projectGenerationFactsStoreService.js', () => ({
+  readLiveProjectGenerationFacts: mocks.readLiveProjectGenerationFacts,
+}))
 
 const {
   createCriticalPathOverride,
@@ -237,6 +242,7 @@ describe('project critical path service', () => {
     mocks.backtestEarliestPendingDurationAccuracyPrediction.mockResolvedValue(null)
     mocks.listCurrentTaskDurationForecasts.mockResolvedValue([])
     mocks.resolveConstructionCalendarContext.mockResolvedValue({ basis: 'calendar_day', windows: [] })
+    mocks.readLiveProjectGenerationFacts.mockResolvedValue({})
   })
 
   it('recomputes critical tasks from CPM without reading legacy task flags', async () => {
@@ -1202,6 +1208,113 @@ describe('project critical path service', () => {
       expect.objectContaining({
         fromTaskId: 'pour-a',
         toTaskId: 'pour-b',
+        source: 'resource_constraint',
+        dependencyType: 'FS',
+        lagDays: 0,
+      }),
+    ]))
+  })
+
+  it('uses spatial daily limits as RCPSP resource constraints even when broad parallel capacity is high', async () => {
+    const resourceProfile = {
+      resourceClass: 'electrical',
+      parallelCapacity: 'high',
+      sameBuildingDailyLimit: 3,
+      sameUnitDailyLimit: 3,
+      sameFloorDailyLimit: 1,
+      sameZoneDailyLimit: 3,
+      sameSystemDailyLimit: 3,
+    }
+    mocks.tables.tasks = [
+      {
+        id: 'electrical-a',
+        project_id: 'project-spatial-resource',
+        title: 'Electrical rough-in A',
+        standard_work_code: 'electrical_rough_in',
+        start_date: '2026-04-01',
+        end_date: '2026-04-03',
+        planned_start_date: '2026-04-01',
+        planned_end_date: '2026-04-03',
+        floor_object_id: 'floor-12',
+        building_object_id: 'building-1',
+        metadata: { resourceProfile },
+      },
+      {
+        id: 'electrical-b',
+        project_id: 'project-spatial-resource',
+        title: 'Electrical rough-in B',
+        standard_work_code: 'electrical_rough_in',
+        start_date: '2026-04-01',
+        end_date: '2026-04-03',
+        planned_start_date: '2026-04-01',
+        planned_end_date: '2026-04-03',
+        floor_object_id: 'floor-12',
+        building_object_id: 'building-1',
+        metadata: { resourceProfile },
+      },
+    ]
+    mocks.tables.task_dependencies = []
+
+    const snapshot = await getProjectCriticalPathSnapshot('project-spatial-resource')
+
+    expect(snapshot.projectDurationDays).toBe(6)
+    expect(snapshot.edges).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        fromTaskId: 'electrical-a',
+        toTaskId: 'electrical-b',
+        source: 'resource_constraint',
+        dependencyType: 'FS',
+        lagDays: 0,
+      }),
+    ]))
+  })
+
+  it('uses towerCraneCount project facts as the tower crane resource capacity ceiling', async () => {
+    mocks.readLiveProjectGenerationFacts.mockResolvedValue({ towerCraneCount: 2 })
+    mocks.tables.tasks = [
+      {
+        id: 'crane-a',
+        project_id: 'project-tower-crane',
+        title: 'Tower crane lift A',
+        standard_work_code: 'tower_crane_lift',
+        start_date: '2026-04-01',
+        end_date: '2026-04-05',
+        planned_start_date: '2026-04-01',
+        planned_end_date: '2026-04-05',
+        metadata: { resourceProfile: { resourceClass: 'tower_crane' } },
+      },
+      {
+        id: 'crane-b',
+        project_id: 'project-tower-crane',
+        title: 'Tower crane lift B',
+        standard_work_code: 'tower_crane_lift',
+        start_date: '2026-04-01',
+        end_date: '2026-04-05',
+        planned_start_date: '2026-04-01',
+        planned_end_date: '2026-04-05',
+        metadata: { resourceProfile: { resourceClass: 'tower_crane' } },
+      },
+      {
+        id: 'crane-c',
+        project_id: 'project-tower-crane',
+        title: 'Tower crane lift C',
+        standard_work_code: 'tower_crane_lift',
+        start_date: '2026-04-01',
+        end_date: '2026-04-05',
+        planned_start_date: '2026-04-01',
+        planned_end_date: '2026-04-05',
+        metadata: { resourceProfile: { resourceClass: 'tower_crane' } },
+      },
+    ]
+    mocks.tables.task_dependencies = []
+
+    const snapshot = await getProjectCriticalPathSnapshot('project-tower-crane')
+
+    expect(snapshot.projectDurationDays).toBe(10)
+    expect(snapshot.edges).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        fromTaskId: 'crane-a',
+        toTaskId: 'crane-c',
         source: 'resource_constraint',
         dependencyType: 'FS',
         lagDays: 0,

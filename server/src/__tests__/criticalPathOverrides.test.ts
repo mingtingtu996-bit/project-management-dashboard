@@ -46,6 +46,10 @@ vi.mock('../middleware/auth.js', () => ({
     void getProjectId(req)
     next()
   }),
+  requireProjectMember: vi.fn((getProjectId: (req: any) => string) => (req: any, _res: any, next: () => void) => {
+    void getProjectId(req)
+    next()
+  }),
 }))
 
 vi.mock('../middleware/logger.js', () => ({
@@ -64,6 +68,18 @@ vi.mock('../services/projectCriticalPathService.js', () => ({
   listCriticalPathOverrides: serviceMocks.listCriticalPathOverrides,
   createCriticalPathOverride: serviceMocks.createCriticalPathOverride,
   deleteCriticalPathOverride: serviceMocks.deleteCriticalPathOverride,
+}))
+
+vi.mock('../services/deletionRetentionGovernanceService.js', () => ({
+  enforceRetentionOrBlock: vi.fn(async () => ({ blocked: false, reason: null, result: null })),
+  buildRetentionBlockedApiError: vi.fn((message: string, details: unknown) => ({
+    code: 'RETENTION_CONFIRMATION_REQUIRED',
+    message,
+    details,
+  })),
+  buildRetentionBlockedHttpStatus: vi.fn((result: Record<string, unknown>) => (
+    result.requiresUserConfirmation ? 409 : 422
+  )),
 }))
 
 const { default: criticalPathRouter } = await import('../routes/critical-paths.js')

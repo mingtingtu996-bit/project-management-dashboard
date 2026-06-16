@@ -21,6 +21,8 @@ import {
   resolveConstructionCalendarContext,
   type ConstructionCalendarContext,
 } from './constructionCalendar.js'
+import { listActiveProjectIds } from './activeProjectService.js'
+import { readLiveProjectGenerationFacts } from './projectGenerationFactsStoreService.js'
 
 const criticalPathSnapshotCache = new Map<string, CriticalPathSnapshot>()
 
@@ -108,6 +110,17 @@ export interface ProjectCriticalPathResult {
   criticalTaskIds: string[]
   projectDuration: number
   snapshot: CriticalPathSnapshot
+}
+
+export interface CriticalPathRefreshSweepResult {
+  scannedProjects: number
+  refreshedProjects: number
+  failedProjects: number
+  skippedProjects: number
+  failures: Array<{
+    projectId: string
+    error: string
+  }>
 }
 
 export type CriticalPathRuleLearningScopeEvidence =
@@ -319,6 +332,11 @@ interface CriticalPathTaskRow {
   is_milestone?: boolean | null
   milestone_level?: number | null
   wbs_level?: number | null
+  building_object_id?: string | null
+  floor_object_id?: string | null
+  physical_zone_object_id?: string | null
+  functional_area_object_id?: string | null
+  participant_unit_id?: string | null
   standard_work_code?: string | null
   execution_lane?: string | null
   metadata?: Record<string, unknown> | null
@@ -353,6 +371,25 @@ interface TaskNode {
   durationSource?: 'planned_window' | 'e2_remaining_forecast'
   resourceClass?: string | null
   resourceCapacity?: number | null
+  resourceLimits?: ResourceConstraintLimits | null
+  scopeKeys?: ResourceConstraintScopeKeys
+}
+
+interface ResourceConstraintLimits {
+  parallelCapacity: number
+  sameBuildingDailyLimit: number | null
+  sameUnitDailyLimit: number | null
+  sameFloorDailyLimit: number | null
+  sameZoneDailyLimit: number | null
+  sameSystemDailyLimit: number | null
+}
+
+interface ResourceConstraintScopeKeys {
+  building: string | null
+  unit: string | null
+  floor: string | null
+  zone: string | null
+  system: string | null
 }
 
 interface CriticalDependencyEdge {
@@ -377,6 +414,11 @@ interface CPMResult {
   float: Map<string, number>
   orderedTaskIds: string[]
   taskMap: Map<string, TaskNode>
+}
+
+interface CriticalPathProjectResourceFacts {
+  towerCraneCount?: number | null
+  constructionHoistCount?: number | null
 }
 
 type ProjectOwnerRow = {
@@ -799,25 +841,95 @@ function readTaskResourceClass(row: CriticalPathTaskRow) {
   return lane || null
 }
 
-function readTaskResourceCapacity(row: CriticalPathTaskRow, resourceClass: string | null) {
+function readPositiveLimit(...values: unknown[]): number | null {
+  for (const value of values) {
+    const parsed = Number(value)
+    if (Number.isFinite(parsed) && parsed > 0) return Math.ceil(parsed)
+  }
+  return null
+}
+
+function readTaskResourceProfile(row: CriticalPathTaskRow) {
   const metadata = readRecord(row.metadata)
   const standardTaskMetadata = readRecord(row.standard_task_metadata)
-  const resourceProfile = readRecord(metadata.resourceProfile ?? metadata.resource_profile ?? standardTaskMetadata.resourceProfile ?? standardTaskMetadata.resource_profile)
+  return readRecord(metadata.resourceProfile ?? metadata.resource_profile ?? standardTaskMetadata.resourceProfile ?? standardTaskMetadata.resource_profile)
+}
+
+function readTaskResourceCapacity(row: CriticalPathTaskRow, resourceClass: string | null, projectResourceFacts: CriticalPathProjectResourceFacts = {}) {
+  const metadata = readRecord(row.metadata)
+  const resourceProfile = readTaskResourceProfile(row)
   const raw = resourceProfile.parallelCapacity
     ?? resourceProfile.parallel_capacity
     ?? resourceProfile.capacity
     ?? metadata.parallelCapacity
     ?? metadata.parallel_capacity
   const numeric = Number(raw)
-  if (Number.isFinite(numeric) && numeric > 0) return Math.ceil(numeric)
+  const projectFactCapacity = resourceClass === 'tower_crane'
+    ? readPositiveLimit(projectResourceFacts.towerCraneCount)
+    : resourceClass === 'construction_hoist'
+      ? readPositiveLimit(projectResourceFacts.constructionHoistCount)
+      : null
+  if (Number.isFinite(numeric) && numeric > 0) return Math.max(Math.ceil(numeric), projectFactCapacity ?? 0)
   const normalized = normalizeText(raw).toLowerCase()
-  if (normalized === 'low') return 1
-  if (normalized === 'medium') return 2
-  if (normalized === 'high') return 3
+  if (normalized === 'low') return Math.max(1, projectFactCapacity ?? 0)
+  if (normalized === 'medium') return Math.max(2, projectFactCapacity ?? 0)
+  if (normalized === 'high') return Math.max(3, projectFactCapacity ?? 0)
   if (!resourceClass) return null
-  if (['concrete_pour', 'tower_crane', 'waterproof'].includes(resourceClass)) return 1
-  if (['rebar', 'formwork', 'plaster', 'hvac', 'electrical'].includes(resourceClass)) return 2
-  return 3
+  if (['concrete_pour', 'tower_crane', 'waterproof'].includes(resourceClass)) return Math.max(1, projectFactCapacity ?? 0)
+  if (['rebar', 'formwork', 'plaster', 'hvac', 'electrical'].includes(resourceClass)) return Math.max(2, projectFactCapacity ?? 0)
+  return Math.max(3, projectFactCapacity ?? 0)
+}
+
+function readTaskResourceLimits(
+  row: CriticalPathTaskRow,
+  resourceClass: string | null,
+  projectResourceFacts: CriticalPathProjectResourceFacts = {},
+): ResourceConstraintLimits | null {
+  const parallelCapacity = readTaskResourceCapacity(row, resourceClass, projectResourceFacts)
+  if (!parallelCapacity) return null
+  const resourceProfile = readTaskResourceProfile(row)
+  const sameFloorDailyLimit = readPositiveLimit(resourceProfile.sameFloorDailyLimit, resourceProfile.same_floor_daily_limit)
+  return {
+    parallelCapacity,
+    sameBuildingDailyLimit: readPositiveLimit(resourceProfile.sameBuildingDailyLimit, resourceProfile.same_building_daily_limit),
+    sameUnitDailyLimit: readPositiveLimit(resourceProfile.sameUnitDailyLimit, resourceProfile.same_unit_daily_limit),
+    sameFloorDailyLimit,
+    sameZoneDailyLimit: readPositiveLimit(
+      resourceProfile.sameZoneDailyLimit,
+      resourceProfile.same_zone_daily_limit,
+      resourceProfile.sameFunctionalAreaDailyLimit,
+      resourceProfile.same_functional_area_daily_limit,
+    ) ?? sameFloorDailyLimit,
+    sameSystemDailyLimit: readPositiveLimit(resourceProfile.sameSystemDailyLimit, resourceProfile.same_system_daily_limit),
+  }
+}
+
+function readScopeKeyFromMetadata(row: CriticalPathTaskRow, ...keys: string[]) {
+  const metadata = readRecord(row.metadata)
+  const standardTaskMetadata = readRecord(row.standard_task_metadata)
+  const rowRecord = row as unknown as Record<string, unknown>
+  for (const key of keys) {
+    const value = normalizeText(rowRecord[key] ?? metadata[key] ?? standardTaskMetadata[key])
+    if (value) return value
+  }
+  return null
+}
+
+function readTaskResourceScopeKeys(row: CriticalPathTaskRow): ResourceConstraintScopeKeys {
+  return {
+    building: readScopeKeyFromMetadata(row, 'building_object_id', 'buildingObjectId', 'building_object_id'),
+    unit: readScopeKeyFromMetadata(row, 'participant_unit_id', 'participantUnitId', 'responsibleUnitId', 'responsible_unit_id'),
+    floor: readScopeKeyFromMetadata(row, 'floor_object_id', 'floorObjectId', 'floor_object_id'),
+    zone: readScopeKeyFromMetadata(
+      row,
+      'physical_zone_object_id',
+      'physicalZoneObjectId',
+      'functional_area_object_id',
+      'functionalAreaObjectId',
+      'zoneObjectId',
+    ),
+    system: readScopeKeyFromMetadata(row, 'system_object_id', 'systemObjectId', 'mepSystemObjectId', 'mep_system_object_id'),
+  }
 }
 
 function wouldCreateDependencyCycle(edges: CriticalDependencyEdge[], fromTaskId: string, toTaskId: string) {
@@ -837,43 +949,91 @@ function wouldCreateDependencyCycle(edges: CriticalDependencyEdge[], fromTaskId:
   return false
 }
 
+function appendResourceConstraintEdges(
+  edges: CriticalDependencyEdge[],
+  resourceEdges: CriticalDependencyEdge[],
+  seen: Set<string>,
+  bucketKey: string,
+  resourceTasks: TaskNode[],
+  capacity: number,
+) {
+  const sorted = [...resourceTasks].sort((left, right) => {
+    const leftStart = left.startDate?.getTime() ?? 0
+    const rightStart = right.startDate?.getTime() ?? 0
+    if (leftStart !== rightStart) return leftStart - rightStart
+    return left.id.localeCompare(right.id)
+  })
+  const normalizedCapacity = Math.max(1, Math.ceil(capacity))
+  if (sorted.length <= normalizedCapacity) return
+  for (let index = normalizedCapacity; index < sorted.length; index += 1) {
+    const fromTask = sorted[index - normalizedCapacity]
+    const toTask = sorted[index]
+    const key = `${fromTask.id}->${toTask.id}`
+    if (seen.has(key) || wouldCreateDependencyCycle(edges, fromTask.id, toTask.id)) continue
+    const edge: CriticalDependencyEdge = {
+      id: `resource:${bucketKey}:${fromTask.id}:${toTask.id}`,
+      fromTaskId: fromTask.id,
+      toTaskId: toTask.id,
+      dependencyType: 'FS',
+      lagDays: 0,
+      weight: fromTask.duration,
+      source: 'resource_constraint',
+    }
+    resourceEdges.push(edge)
+    edges.push(edge)
+    seen.add(key)
+  }
+}
+
+function addSpatialResourceBucket(
+  buckets: Map<string, { tasks: TaskNode[], capacity: number }>,
+  resourceClass: string,
+  axis: keyof ResourceConstraintScopeKeys,
+  scopeValue: string | null | undefined,
+  limit: number | null | undefined,
+  task: TaskNode,
+) {
+  if (!scopeValue || !limit || limit <= 0) return
+  const key = `${resourceClass}:${axis}:${scopeValue}`
+  const existing = buckets.get(key)
+  if (existing) {
+    existing.tasks.push(task)
+    existing.capacity = Math.min(existing.capacity, limit)
+    return
+  }
+  buckets.set(key, { tasks: [task], capacity: limit })
+}
+
 function buildResourceConstraintEdges(tasks: TaskNode[], existingEdges: CriticalDependencyEdge[]): CriticalDependencyEdge[] {
-  const byResource = new Map<string, TaskNode[]>()
+  const globalBuckets = new Map<string, { tasks: TaskNode[], capacity: number }>()
+  const spatialBuckets = new Map<string, { tasks: TaskNode[], capacity: number }>()
   for (const task of tasks) {
-    if (!task.resourceClass || !task.resourceCapacity || task.resourceCapacity <= 0) continue
-    byResource.set(task.resourceClass, [...(byResource.get(task.resourceClass) ?? []), task])
+    const resourceClass = task.resourceClass
+    const resourceLimits = task.resourceLimits
+    if (!resourceClass || !resourceLimits?.parallelCapacity || resourceLimits.parallelCapacity <= 0) continue
+    const global = globalBuckets.get(resourceClass)
+    if (global) {
+      global.tasks.push(task)
+      global.capacity = Math.min(global.capacity, resourceLimits.parallelCapacity)
+    } else {
+      globalBuckets.set(resourceClass, { tasks: [task], capacity: resourceLimits.parallelCapacity })
+    }
+    const scopeKeys = task.scopeKeys ?? { building: null, unit: null, floor: null, zone: null, system: null }
+    addSpatialResourceBucket(spatialBuckets, resourceClass, 'building', scopeKeys.building, resourceLimits.sameBuildingDailyLimit, task)
+    addSpatialResourceBucket(spatialBuckets, resourceClass, 'unit', scopeKeys.unit, resourceLimits.sameUnitDailyLimit, task)
+    addSpatialResourceBucket(spatialBuckets, resourceClass, 'floor', scopeKeys.floor, resourceLimits.sameFloorDailyLimit, task)
+    addSpatialResourceBucket(spatialBuckets, resourceClass, 'zone', scopeKeys.zone, resourceLimits.sameZoneDailyLimit, task)
+    addSpatialResourceBucket(spatialBuckets, resourceClass, 'system', scopeKeys.system, resourceLimits.sameSystemDailyLimit, task)
   }
 
   const edges = [...existingEdges]
   const resourceEdges: CriticalDependencyEdge[] = []
   const seen = new Set(existingEdges.map((edge) => `${edge.fromTaskId}->${edge.toTaskId}`))
-  for (const [resourceClass, resourceTasks] of byResource.entries()) {
-    const sorted = [...resourceTasks].sort((left, right) => {
-      const leftStart = left.startDate?.getTime() ?? 0
-      const rightStart = right.startDate?.getTime() ?? 0
-      if (leftStart !== rightStart) return leftStart - rightStart
-      return left.id.localeCompare(right.id)
-    })
-    const capacity = Math.max(1, Math.min(...sorted.map((task) => task.resourceCapacity ?? 1)))
-    if (sorted.length <= capacity) continue
-    for (let index = capacity; index < sorted.length; index += 1) {
-      const fromTask = sorted[index - capacity]
-      const toTask = sorted[index]
-      const key = `${fromTask.id}->${toTask.id}`
-      if (seen.has(key) || wouldCreateDependencyCycle(edges, fromTask.id, toTask.id)) continue
-      const edge: CriticalDependencyEdge = {
-        id: `resource:${resourceClass}:${fromTask.id}:${toTask.id}`,
-        fromTaskId: fromTask.id,
-        toTaskId: toTask.id,
-        dependencyType: 'FS',
-        lagDays: 0,
-        weight: fromTask.duration,
-        source: 'resource_constraint',
-      }
-      resourceEdges.push(edge)
-      edges.push(edge)
-      seen.add(key)
-    }
+  for (const [bucketKey, bucket] of globalBuckets.entries()) {
+    appendResourceConstraintEdges(edges, resourceEdges, seen, bucketKey, bucket.tasks, bucket.capacity)
+  }
+  for (const [bucketKey, bucket] of spatialBuckets.entries()) {
+    appendResourceConstraintEdges(edges, resourceEdges, seen, bucketKey, bucket.tasks, bucket.capacity)
   }
   return resourceEdges
 }
@@ -1102,6 +1262,7 @@ function buildTaskNodes(
   rows: CriticalPathTaskRow[],
   currentForecasts = new Map<string, TaskDurationForecast>(),
   calendar?: ConstructionCalendarContext | null,
+  projectResourceFacts: CriticalPathProjectResourceFacts = {},
 ): TaskNode[] {
   const eligibleTasks = rows.filter((row) => {
     const startDate = parseDate(row.start_date ?? row.planned_start_date)
@@ -1123,7 +1284,8 @@ function buildTaskNodes(
     const standardDeviationDays = readPositiveInt((probabilityDuration as any)?.standardDeviationDays)
     const confidenceBandWidthDays = readPositiveInt((probabilityDuration as any)?.confidenceBandWidthDays)
     const resourceClass = readTaskResourceClass(task)
-    const resourceCapacity = readTaskResourceCapacity(task, resourceClass)
+    const resourceLimits = readTaskResourceLimits(task, resourceClass, projectResourceFacts)
+    const resourceCapacity = resourceLimits?.parallelCapacity ?? null
 
     return {
       id: task.id,
@@ -1138,6 +1300,8 @@ function buildTaskNodes(
       durationSource: forecastRemainingDays ? 'e2_remaining_forecast' : 'planned_window',
       resourceClass,
       resourceCapacity,
+      resourceLimits,
+      scopeKeys: readTaskResourceScopeKeys(task),
     }
   })
 }
@@ -1153,6 +1317,22 @@ async function loadCurrentForecastMapForCriticalPath(rows: CriticalPathTaskRow[]
       error: error instanceof Error ? error.message : String(error),
     })
     return new Map<string, TaskDurationForecast>()
+  }
+}
+
+async function loadCriticalPathProjectResourceFacts(projectId: string): Promise<CriticalPathProjectResourceFacts> {
+  try {
+    const facts = await readLiveProjectGenerationFacts(projectId)
+    return {
+      towerCraneCount: readPositiveLimit(facts.towerCraneCount),
+      constructionHoistCount: readPositiveLimit(facts.constructionHoistCount),
+    }
+  } catch (error) {
+    logger.warn('[projectCriticalPathService] failed to load project resource facts for CPM', {
+      projectId,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return {}
   }
 }
 
@@ -1197,7 +1377,9 @@ async function loadCriticalPathTaskRows(projectId: string): Promise<CriticalPath
       const result = await rawQuery(
         `SELECT id, project_id, title, NULL::text AS name, start_date, end_date, planned_start_date, planned_end_date,
                 actual_start_date, actual_end_date, status, progress,
-                is_milestone, milestone_level, wbs_level, standard_work_code, standard_task_metadata, created_at
+                is_milestone, milestone_level, wbs_level,
+                building_object_id, floor_object_id, physical_zone_object_id, functional_area_object_id, participant_unit_id,
+                standard_work_code, execution_lane, metadata, standard_task_metadata, created_at
            FROM public.tasks
           WHERE project_id = $1
           ORDER BY created_at ASC`,
@@ -1838,7 +2020,8 @@ export async function buildProjectCriticalPathSnapshot(
   const constructionCalendar = await resolveCriticalPathConstructionCalendar(projectId)
   const dependencyRows = await loadCriticalPathDependencyRows(projectId, rows)
   const currentForecasts = await loadCurrentForecastMapForCriticalPath(rows)
-  const taskNodes = buildTaskNodes(rows, currentForecasts, constructionCalendar)
+  const projectResourceFacts = await loadCriticalPathProjectResourceFacts(projectId)
+  const taskNodes = buildTaskNodes(rows, currentForecasts, constructionCalendar, projectResourceFacts)
   let analysis: CPMResult
   let hasCycleDetected = false
   let cycleTaskIds: string[] = []
@@ -2218,4 +2401,34 @@ export async function recalculateProjectCriticalPath(projectId: string): Promise
     projectDuration: snapshot.projectDurationDays,
     snapshot,
   }
+}
+
+export async function refreshActiveProjectCriticalPathSnapshots(projectIds?: string[] | null): Promise<CriticalPathRefreshSweepResult> {
+  const activeProjectIds = await listActiveProjectIds(projectIds)
+  const result: CriticalPathRefreshSweepResult = {
+    scannedProjects: activeProjectIds.length,
+    refreshedProjects: 0,
+    failedProjects: 0,
+    skippedProjects: 0,
+    failures: [],
+  }
+
+  for (const projectId of activeProjectIds) {
+    try {
+      const refreshed = await recalculateProjectCriticalPath(projectId)
+      if (refreshed.snapshot.calculationStatus === 'fresh') {
+        result.refreshedProjects += 1
+      } else {
+        result.skippedProjects += 1
+      }
+    } catch (error) {
+      result.failedProjects += 1
+      result.failures.push({
+        projectId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
+  return result
 }
