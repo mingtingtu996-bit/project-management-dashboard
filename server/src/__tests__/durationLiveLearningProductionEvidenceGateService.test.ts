@@ -345,7 +345,18 @@ function buildAllProductionSourceRows() {
   return [
     ...learnableAssetKeys.flatMap((assetKey) => [
       ...(planNetworkAssetKeys.includes(assetKey)
-        ? []
+        ? [{
+            sourceTable: 'duration_plan_network_outcomes' as const,
+            row: {
+              id: `outcome-${assetKey}`,
+              asset_key: assetKey,
+              outcome_status: 'accepted',
+              learning_scope: 'project',
+              learning_scope_source: 'project_business_outcome_writer',
+              writes_runtime_directly: false,
+              writes_fact_directly: false,
+            },
+          }]
         : [{
             sourceTable: 'duration_experience_samples' as const,
             row: {
@@ -1608,9 +1619,11 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
     const audit = buildDurationLiveLearningProductionClaimAudit({
       completionAudit: buildReadyCompletionAudit(),
       sourceRows: [
-        ...buildAllProductionSourceRows(),
+        ...buildAllProductionSourceRows().filter((source) =>
+          source.sourceTable !== 'duration_plan_network_outcomes'),
         ...buildRuntimeConsumerRuntimeCallRows(),
       ],
+      records: buildPlanNetworkOutcomeRecords(),
       runtimeConsumerBusinessPathSourceFiles: buildReadyBusinessPathSourceFiles(),
     })
 
@@ -1621,16 +1634,19 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
       assetKey,
       missingReasonCodes: ['production_sample_evidence_required'],
     })))
+    expect(audit.evidenceCollection.rejectedRecords).toEqual(buildPlanNetworkOutcomeRecords().map((record) => ({
+      ...record,
+      reason: 'production_evidence_direct_record_not_allowed_for_final_claim',
+    })))
   })
 
-  it('builds the final production claim audit from production source rows plus typed network outcomes', () => {
+  it('builds the final production claim audit from canonical production source rows', () => {
     const audit = buildDurationLiveLearningProductionClaimAudit({
       completionAudit: buildReadyCompletionAudit(),
       sourceRows: [
         ...buildAllProductionSourceRows(),
         ...buildRuntimeConsumerRuntimeCallRows(),
       ],
-      records: buildPlanNetworkOutcomeRecords(),
       runtimeConsumerBusinessPathSourceFiles: buildReadyBusinessPathSourceFiles(),
     })
 

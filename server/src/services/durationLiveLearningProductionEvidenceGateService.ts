@@ -1326,13 +1326,6 @@ function splitFinalClaimDirectProductionEvidenceRecords(
   const rejectedRecords: DurationLiveLearningRejectedProductionEvidenceRecord[] = []
 
   for (const record of records ?? []) {
-    if (
-      record.evidenceKind === 'production_sample'
-      && PLAN_NETWORK_PRODUCTION_SAMPLE_ASSET_KEYS.has(record.assetKey)
-    ) {
-      allowedRecords.push(record)
-      continue
-    }
     rejectedRecords.push({
       ...record,
       reason: 'production_evidence_direct_record_not_allowed_for_final_claim',
