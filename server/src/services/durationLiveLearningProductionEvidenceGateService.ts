@@ -602,7 +602,6 @@ function hasMatchingLearningScopeSource(
   const scope = normalizeLearningScope(readText(row, 'learning_scope', 'learningScope'))
   if (!scope) return false
   const source = readText(row, 'learning_scope_source', 'learningScopeSource')
-  if (!source && scope === 'project') return true
   return source === expectedSourcesByScope[scope]
 }
 

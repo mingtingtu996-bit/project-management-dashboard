@@ -427,6 +427,31 @@ function rowsForSqlWithForgedUpperLearningScopes(sql: string) {
   return rowsForSql(sql)
 }
 
+function rowsForSqlWithMissingProjectLearningScopeSources(sql: string) {
+  const normalized = sql.toLowerCase()
+  if (normalized.includes('from public.duration_experience_samples')) {
+    return rowsForSql(sql).map((row) => {
+      const scope = String(row.learning_scope ?? '')
+      if (scope === 'project') {
+        const { learning_scope_source, ...withoutSource } = row
+        return withoutSource
+      }
+      return row
+    })
+  }
+  if (normalized.includes('from public.duration_plan_network_outcomes')) {
+    return rowsForSql(sql).map((row) => {
+      const scope = String(row.learning_scope ?? '')
+      if (scope === 'project') {
+        const { learning_scope_source, ...withoutSource } = row
+        return withoutSource
+      }
+      return row
+    })
+  }
+  return rowsForSql(sql)
+}
+
 function buildReadyBusinessPathSourceFiles() {
   return [
     {
@@ -770,6 +795,37 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
           'global_industry_company_project_learning_scopes_required',
         ]),
       }),
+    ]))
+  })
+
+  it('keeps project learning scopes blocked when scope provenance is missing', async () => {
+    const {
+      buildDurationLiveLearningProductionClaimAuditFromDb,
+    } = await import('../services/durationLiveLearningProductionEvidenceReaderService.js')
+    const queryExec = async <T = Record<string, unknown>>(sql: string): Promise<T[]> =>
+      rowsForSqlWithMissingProjectLearningScopeSources(sql) as T[]
+
+    const audit = await buildDurationLiveLearningProductionClaimAuditFromDb({
+      completionAudit: buildReadyCompletionAudit(),
+      queryExec,
+      maxRowsPerSourceTable: 200,
+    })
+
+    expect(audit.status).toBe('duration_live_learning_production_claim_not_ready')
+    expect(audit.completionAudit.status).toBe('duration_live_learning_completion_not_ready')
+    expect(audit.evidenceRowCollection.rejectedRows).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        sourceTable: 'duration_experience_samples',
+        reason: 'production_source_row_not_evidence_ready',
+      }),
+      expect.objectContaining({
+        sourceTable: 'duration_plan_network_outcomes',
+        reason: 'production_source_row_not_evidence_ready',
+      }),
+    ]))
+    expect(audit.completionAudit.blockedAssetKeys).toEqual(expect.arrayContaining([
+      'base_duration_benchmark',
+      'special_work_duration_seed',
     ]))
   })
 

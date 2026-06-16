@@ -121,7 +121,6 @@ function durationSampleLearningScope(row: Record<string, unknown>) {
   )
   if (!scope) return null
   const source = readText(row, 'learning_scope_source', 'learningScopeSource')
-  if (!source && scope === 'project') return scope
   const expectedSourceByScope: Record<DurationLearningScope, string> = {
     global: 'global_shared_baseline_job',
     industry: 'industry_shared_baseline_job',
@@ -137,7 +136,6 @@ function planNetworkOutcomeLearningScope(row: Record<string, unknown>) {
   )
   if (!scope) return null
   const source = readText(row, 'learning_scope_source', 'learningScopeSource')
-  if (!source && scope === 'project') return scope
   const expectedSourceByScope: Record<DurationLearningScope, string> = {
     global: 'plan_network_global_baseline_job',
     industry: 'plan_network_industry_baseline_job',
