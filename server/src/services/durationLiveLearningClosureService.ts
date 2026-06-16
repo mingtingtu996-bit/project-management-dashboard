@@ -133,9 +133,8 @@ export type DurationLiveLearningManifestEvaluation = {
   rolloutBatch: DurationLiveLearningRolloutBatch
   status: 'manifest_live_self_learning_ready' | 'manifest_not_ready'
   allowedClaim:
-    | 'first_batch_live_self_learning_ready_for_learnable_assets'
+    | 'not_ready_for_live_self_learning_claim'
     | 'first_batch_manifest_established_not_ready_for_live_self_learning_claim'
-    | 'batch_live_self_learning_ready_for_learnable_assets'
     | 'batch_manifest_established_not_ready_for_live_self_learning_claim'
   prohibitedClaim: 'all_duration_assets_are_live_self_learning'
   totalAssets: number
@@ -941,10 +940,10 @@ export function evaluateDurationLiveLearningManifest(
     status: ready ? 'manifest_live_self_learning_ready' : 'manifest_not_ready',
     allowedClaim: rolloutBatch === 'duration_prediction_core_a'
       ? ready
-        ? 'first_batch_live_self_learning_ready_for_learnable_assets'
+        ? 'not_ready_for_live_self_learning_claim'
         : 'first_batch_manifest_established_not_ready_for_live_self_learning_claim'
       : ready
-        ? 'batch_live_self_learning_ready_for_learnable_assets'
+        ? 'not_ready_for_live_self_learning_claim'
         : 'batch_manifest_established_not_ready_for_live_self_learning_claim',
     prohibitedClaim: 'all_duration_assets_are_live_self_learning',
     totalAssets: manifests.length,

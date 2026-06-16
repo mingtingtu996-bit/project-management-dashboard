@@ -235,6 +235,20 @@ describe('durationLiveLearningClosureService', () => {
     ]))
   })
 
+  it('keeps a ready first-batch manifest from issuing the final live self-learning claim', () => {
+    const result = evaluateDurationLiveLearningManifest('duration_prediction_core_a', [
+      { assetKey: 'base_duration_benchmark', evidence: completeLiveEvidence },
+      { assetKey: 'duration_cold_start_baseline', evidence: completeLiveEvidence },
+      { assetKey: 'forecast_residual_overlay', evidence: completeLiveEvidence },
+      { assetKey: 'forecast_confidence_weight', evidence: completeLiveEvidence },
+    ])
+
+    expect(result.status).toBe('manifest_live_self_learning_ready')
+    expect(result.readyAssets).toBe(4)
+    expect(result.allowedClaim).toBe('not_ready_for_live_self_learning_claim')
+    expect(result.prohibitedClaim).toBe('all_duration_assets_are_live_self_learning')
+  })
+
   it('allows explicit company-project scope exceptions only for residual overlay and confidence weight assets', () => {
     const companyProjectScopedEvidence = {
       assetClassificationRegistered: true,
@@ -322,6 +336,21 @@ describe('durationLiveLearningClosureService', () => {
       'release_exit_required',
       'rollback_target_required',
     ]))
+  })
+
+  it('keeps a ready plan-network manifest from issuing the final live self-learning claim', () => {
+    const result = evaluateDurationLiveLearningManifest('plan_network_core_b', [
+      { assetKey: 'standard_work_duration_seed', evidence: completeLiveEvidence },
+      { assetKey: 'special_work_duration_seed', evidence: completeLiveEvidence },
+      { assetKey: 'wbs_reference_days', evidence: completeLiveEvidence },
+      { assetKey: 'dependency_rule_candidate', evidence: completeLiveEvidence },
+      { assetKey: 'critical_path_rule_candidate', evidence: completeLiveEvidence },
+    ])
+
+    expect(result.status).toBe('manifest_live_self_learning_ready')
+    expect(result.readyAssets).toBe(5)
+    expect(result.allowedClaim).toBe('not_ready_for_live_self_learning_claim')
+    expect(result.prohibitedClaim).toBe('all_duration_assets_are_live_self_learning')
   })
 
   it('groups manifest gaps into executable gates and recommends the next assets to unblock', () => {
