@@ -322,14 +322,38 @@ describe('durationLiveLearningClosureService', () => {
         ]),
       }),
     }))
+    expect(manifests.find((manifest) => manifest.assetKey === 'special_work_duration_seed')).toEqual(expect.objectContaining({
+      implementationAnchors: expect.objectContaining({
+        releaseGateAnchors: expect.arrayContaining([
+          'wbsTemplateCandidateEventService.ts',
+          'wbsTemplateRuntimePublicationService.ts',
+        ]),
+      }),
+    }))
+    expect(manifests.find((manifest) => manifest.assetKey === 'wbs_reference_days')).toEqual(expect.objectContaining({
+      implementationAnchors: expect.objectContaining({
+        releaseGateAnchors: expect.arrayContaining([
+          'wbsTemplateGoldenBenchmarkGateService.ts',
+          'wbsTemplateRuntimePublicationService.ts',
+        ]),
+      }),
+    }))
+    expect(manifests.find((manifest) => manifest.assetKey === 'wbs_reference_days')?.nextRuntimeSteps)
+      .not.toContain('create_wbs_reference_days_runtime_writer')
     expect(manifests.find((manifest) => manifest.assetKey === 'dependency_rule_candidate')).toEqual(expect.objectContaining({
       implementationAnchors: expect.objectContaining({
         primaryService: 'constructionDependencyReplayCalibrationService.ts',
         runtimeConsumers: expect.arrayContaining(['wbsTemplateGenerationService.ts']),
         predictionEventAnchors: expect.arrayContaining(['network_prediction_events'],
         ),
+        releaseGateAnchors: expect.arrayContaining([
+          'constructionDependencyReplayCalibrationService.ts',
+          'constructionDependencyRuleRuntimePublicationService.ts',
+        ]),
       }),
     }))
+    expect(manifests.find((manifest) => manifest.assetKey === 'dependency_rule_candidate')?.nextRuntimeSteps)
+      .not.toContain('create_dependency_rule_runtime_writer_after_replay_candidate_approval')
   })
 
   it('keeps the second-batch plan-network manifest not ready until writers and network outcomes exist', () => {

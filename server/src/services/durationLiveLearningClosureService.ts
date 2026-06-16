@@ -592,7 +592,10 @@ const DURATION_LIVE_LEARNING_MANIFESTS: DurationLiveLearningManifest[] = [
       runtimeConsumers: ['wbsTemplateGenerationService.ts', 'durationSuggestionService.ts'],
       predictionEventAnchors: ['network_prediction_events', 'wbs_template_generation_trace'],
       outcomeEventAnchors: ['wbsTemplateFeedbackGovernance.test.ts'],
-      releaseGateAnchors: ['wbsTemplateCandidateEventService.ts'],
+      releaseGateAnchors: [
+        'wbsTemplateCandidateEventService.ts',
+        'wbsTemplateRuntimePublicationService.ts',
+      ],
     },
     currentEvidence: {
       assetClassificationRegistered: true,
@@ -609,7 +612,8 @@ const DURATION_LIVE_LEARNING_MANIFESTS: DurationLiveLearningManifest[] = [
     nextRuntimeSteps: [
       'record_special_work_network_prediction_event',
       'record_user_keep_delete_adjust_outcome_for_special_seed_rows',
-      'publish_special_seed_candidates_through_release_exit_before_runtime_consumption',
+      'record_runtime_consumer_observation_for_published_special_seed',
+      'bind_special_seed_accuracy_to_release_exit_and_rollback',
     ],
   },
   {
@@ -621,7 +625,10 @@ const DURATION_LIVE_LEARNING_MANIFESTS: DurationLiveLearningManifest[] = [
       runtimeConsumers: ['wbsTemplateGenerationService.ts', 'projectRemainingDurationForecastService.ts'],
       predictionEventAnchors: ['network_prediction_events', 'wbs_reference_days_lineage'],
       outcomeEventAnchors: ['wbsTemplateFeedbackGovernance.test.ts', 'durationAccuracyReplayAcceptanceService.ts'],
-      releaseGateAnchors: ['wbsTemplateGoldenBenchmarkGateService.ts'],
+      releaseGateAnchors: [
+        'wbsTemplateGoldenBenchmarkGateService.ts',
+        'wbsTemplateRuntimePublicationService.ts',
+      ],
     },
     currentEvidence: {
       assetClassificationRegistered: true,
@@ -636,8 +643,8 @@ const DURATION_LIVE_LEARNING_MANIFESTS: DurationLiveLearningManifest[] = [
       accuracyMetricsAvailable: false,
     },
     nextRuntimeSteps: [
-      'create_wbs_reference_days_runtime_writer',
       'record_template_reference_days_prediction_and_outcome_events',
+      'record_runtime_consumer_observation_for_published_wbs_reference_days',
       'bind_template_feedback_to_accuracy_metrics_without_seed_silent_rewrite',
     ],
   },
@@ -650,7 +657,10 @@ const DURATION_LIVE_LEARNING_MANIFESTS: DurationLiveLearningManifest[] = [
       runtimeConsumers: ['wbsTemplateGenerationService.ts', 'scheduleAccelerationService.ts'],
       predictionEventAnchors: ['network_prediction_events', 'dependency_replay_calibration'],
       outcomeEventAnchors: ['constructionDependencyReplayCalibrationJob.ts'],
-      releaseGateAnchors: ['constructionDependencyReplayCalibrationService.ts'],
+      releaseGateAnchors: [
+        'constructionDependencyReplayCalibrationService.ts',
+        'constructionDependencyRuleRuntimePublicationService.ts',
+      ],
     },
     currentEvidence: {
       assetClassificationRegistered: true,
@@ -665,8 +675,8 @@ const DURATION_LIVE_LEARNING_MANIFESTS: DurationLiveLearningManifest[] = [
       accuracyMetricsAvailable: false,
     },
     nextRuntimeSteps: [
-      'create_dependency_rule_runtime_writer_after_replay_candidate_approval',
       'record_dependency_prediction_event_and_actual_predecessor_fulfillment_outcome',
+      'record_runtime_consumer_observation_for_published_dependency_rule',
       'bind_dependency_accuracy_to_release_exit_and_rollback',
     ],
   },
