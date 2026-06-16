@@ -522,7 +522,7 @@ describe('taskDurationForecastService', () => {
       overlay_mae: 4,
       mae_improvement_ratio: 0.5,
       overcompensation_ratio: 0.12,
-      residual_payload: { residualCorrectionDays: 3 },
+      residual_payload: { residualCorrectionDays: 3, sampleCount: 8 },
       writes_base_duration_seed: false,
       target_table: 'duration_forecast_residual_overlays',
       publication_key: 'forecast_residual_overlay_runtime:overlay-plus-three-days-v2',
@@ -543,6 +543,8 @@ describe('taskDurationForecastService', () => {
       beforeRemainingDurationDays: 10,
       afterRemainingDurationDays: 13,
       residualCorrectionDays: 3,
+      sampleCount: 8,
+      minSampleCount: 5,
       learningMaturity: 'guarded_live_tuning',
       publishAnchor: 'guarded_runtime_auto_publish',
       automationMaturity: 'auto_canary',
@@ -568,6 +570,71 @@ describe('taskDurationForecastService', () => {
       'taskDurationForecastService',
       'task_duration_forecast',
     ]])
+  })
+
+  it('does not apply residual overlays before the minimum runtime sample gate is met', async () => {
+    mocks.getTaskDurationSuggestion.mockResolvedValueOnce({
+      ...baseSuggestion(),
+      recommendedDurationDays: 20,
+      conservativeDurationDays: 26,
+    })
+    state.modelProfiles = [{
+      id: 'profile-residual-overlay-thin',
+      model_key: 'remaining_duration_forecast',
+      model_status: 'active',
+      confidence_weight: 1,
+      metadata: {
+        modelVersion: 'residual_overlay_contract_v1',
+        candidateWeights: {
+          L0: { reference_ratio: 1, spi_eac: 0, recent_velocity: 0, history_velocity: 0 },
+          L1: { reference_ratio: 1, spi_eac: 0, recent_velocity: 0, history_velocity: 0 },
+          L2: { reference_ratio: 1, spi_eac: 0, recent_velocity: 0, history_velocity: 0 },
+        },
+      },
+    }]
+    state.tasks = [{
+      id: 'task-thin-residual-overlay',
+      project_id: 'project-thin-overlay',
+      title: 'Generic linear task',
+      standard_work_code: 'generic_linear_task',
+      planned_start_date: '2026-05-18',
+      planned_end_date: '2026-06-06',
+      actual_start_date: '2026-05-18',
+      progress: 50,
+    }]
+    state.residualOverlays = [{
+      overlay_key: 'thin-overlay-must-not-apply',
+      asset_key: 'task_remaining_forecast',
+      scope_level: 'project',
+      company_id: 'company-1',
+      project_id: 'project-thin-overlay',
+      learning_target: 'forecast_residual',
+      learning_maturity: 'guarded_live_tuning',
+      publish_anchor: 'guarded_runtime_auto_publish',
+      automation_maturity: 'auto_canary',
+      runtime_publication_status: 'canary',
+      original_mae: 8,
+      overlay_mae: 4,
+      mae_improvement_ratio: 0.5,
+      overcompensation_ratio: 0.12,
+      residual_payload: { residualCorrectionDays: 3, sampleCount: 1 },
+      writes_base_duration_seed: false,
+      target_table: 'duration_forecast_residual_overlays',
+      publication_key: 'forecast_residual_overlay_runtime:thin-overlay-v1',
+      rollback_target: { action: 'disable_overlay', overlayKey: 'thin-overlay-must-not-apply' },
+    }]
+
+    const forecast = await forecastTaskDuration('task-thin-residual-overlay')
+
+    expect(forecast.remainingDurationDays).toBe(10)
+    expect(forecast.forecastSources?.residualOverlay).toEqual(expect.objectContaining({
+      runtimeApplied: false,
+      ignoredOverlayKeys: ['thin-overlay-must-not-apply'],
+    }))
+    expect(mocks.recordDurationAccuracyPrediction).toHaveBeenCalledWith(expect.objectContaining({
+      taskId: 'task-thin-residual-overlay',
+      predictedDurationDays: 10,
+    }))
   })
 
   it('records learnable parameter governance state with task remaining forecast predictions', async () => {

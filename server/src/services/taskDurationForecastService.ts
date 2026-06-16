@@ -399,6 +399,9 @@ type ForecastResidualOverlayRow = {
   updated_at?: string | null
 }
 
+const RESIDUAL_OVERLAY_MIN_PROJECT_SAMPLE_COUNT = 5
+const RESIDUAL_OVERLAY_MIN_COMPANY_SAMPLE_COUNT = 10
+
 type ForecastModelProfile = {
   id: string | null
   modelKey: string
@@ -2440,6 +2443,29 @@ function residualOverlayCorrectionDays(row: ForecastResidualOverlayRow): number 
   return round(clamp(rawCorrection, -MAX_RUNTIME_RESIDUAL_CORRECTION_DAYS, MAX_RUNTIME_RESIDUAL_CORRECTION_DAYS))
 }
 
+function residualOverlaySampleCount(row: ForecastResidualOverlayRow) {
+  const payload = asRecord(row.residual_payload) ?? {}
+  const evidence = asRecord(payload.evidence)
+  return Math.max(
+    0,
+    Math.floor(
+      readNullableNumber(
+        payload.sampleCount
+          ?? payload.sample_count
+          ?? evidence?.sampleCount
+          ?? evidence?.sample_count
+          ?? 0,
+      ) ?? 0,
+    ),
+  )
+}
+
+function residualOverlayMeetsSampleGate(row: ForecastResidualOverlayRow) {
+  const sampleCount = residualOverlaySampleCount(row)
+  if (normalizeId(row.scope_level) === 'company') return sampleCount >= RESIDUAL_OVERLAY_MIN_COMPANY_SAMPLE_COUNT
+  return sampleCount >= RESIDUAL_OVERLAY_MIN_PROJECT_SAMPLE_COUNT
+}
+
 function isRuntimeConsumableResidualOverlay(row: ForecastResidualOverlayRow) {
   const learningMaturity = normalizeId(row.learning_maturity)
   const publishAnchor = normalizeId(row.publish_anchor)
@@ -2468,11 +2494,11 @@ function isRuntimeConsumableResidualOverlay(row: ForecastResidualOverlayRow) {
 
 function chooseRuntimeResidualOverlay(rows: ForecastResidualOverlayRow[]) {
   const ignoredOverlayKeys = rows
-    .filter((row) => !isRuntimeConsumableResidualOverlay(row))
+    .filter((row) => !isRuntimeConsumableResidualOverlay(row) || !residualOverlayMeetsSampleGate(row))
     .map((row) => normalizeId(row.overlay_key))
     .filter((key): key is string => Boolean(key))
   const eligible = rows
-    .filter(isRuntimeConsumableResidualOverlay)
+    .filter((row) => isRuntimeConsumableResidualOverlay(row) && residualOverlayMeetsSampleGate(row))
     .sort((left, right) => {
       const leftScopeRank = normalizeId(left.scope_level) === 'project' ? 2 : 1
       const rightScopeRank = normalizeId(right.scope_level) === 'project' ? 2 : 1
@@ -2553,6 +2579,10 @@ function applyForecastResidualOverlay(params: {
     publicationKey: publicationKey || null,
     assetKey: normalizeId(overlay.asset_key),
     scopeLevel: normalizeId(overlay.scope_level),
+    sampleCount: residualOverlaySampleCount(overlay),
+    minSampleCount: normalizeId(overlay.scope_level) === 'company'
+      ? RESIDUAL_OVERLAY_MIN_COMPANY_SAMPLE_COUNT
+      : RESIDUAL_OVERLAY_MIN_PROJECT_SAMPLE_COUNT,
     ignoredOverlayKeys,
     beforeRemainingDurationDays,
     afterRemainingDurationDays,
