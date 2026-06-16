@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
 describe('durationRuntimeConsumerObservationRuntimeCallAuditService', () => {
+  function runtimeSourceRef(consumerKey: string) {
+    return `runtime-consumption:${consumerKey}:live-path`
+  }
+
   it('reports all facade-backed consumers as missing when no runtime call evidence is registered', async () => {
     const {
       evaluateDurationRuntimeConsumerObservationRuntimeCallCoverage,
@@ -40,6 +44,7 @@ describe('durationRuntimeConsumerObservationRuntimeCallAuditService', () => {
           consumerKey: 'durationSuggestionService',
           runtimeEntryRef: 'durationSuggestionService:getTaskDurationSuggestion',
           evidenceRef: 'runtime_consumer_runtime_calls:runtime-call-duration-suggestion',
+          sourceEvidenceRefs: [runtimeSourceRef('durationSuggestionService')],
         },
         {
           consumerKey: 'taskDurationForecastService',
@@ -56,6 +61,10 @@ describe('durationRuntimeConsumerObservationRuntimeCallAuditService', () => {
           evidenceRef: 'runtime_consumer_runtime_calls:runtime-call-unknown',
         },
       ],
+      observedConsumerObservations: [{
+        consumerKey: 'durationSuggestionService',
+        sourceEvidenceRefs: [runtimeSourceRef('durationSuggestionService')],
+      }],
     })
 
     expect(audit.status).toBe('runtime_consumer_observation_runtime_calls_not_ready')
@@ -91,5 +100,33 @@ describe('durationRuntimeConsumerObservationRuntimeCallAuditService', () => {
       consumerKey: 'taskDurationForecastService',
       runtimeEntryRef: 'taskDurationForecastService:forecastTaskDuration',
     })
+  })
+
+  it('rejects runtime calls that are not linked to a matching consumer observation source ref', async () => {
+    const {
+      evaluateDurationRuntimeConsumerObservationRuntimeCallCoverage,
+    } = await import('../services/durationRuntimeConsumerObservationRuntimeCallAuditService.js')
+
+    const audit = evaluateDurationRuntimeConsumerObservationRuntimeCallCoverage({
+      runtimeCallEvidence: [{
+        consumerKey: 'durationSuggestionService',
+        runtimeEntryRef: 'durationSuggestionService:getTaskDurationSuggestion',
+        evidenceRef: 'runtime_consumer_runtime_calls:runtime-call-duration-suggestion',
+        sourceEvidenceRefs: ['runtime-consumption:durationSuggestionService:old-path'],
+      }],
+      observedConsumerObservations: [{
+        consumerKey: 'durationSuggestionService',
+        sourceEvidenceRefs: ['runtime-consumption:durationSuggestionService:new-path'],
+      }],
+    })
+
+    expect(audit.status).toBe('runtime_consumer_observation_runtime_calls_not_ready')
+    expect(audit.observedRuntimeCalls).toEqual([])
+    expect(audit.rejectedRuntimeCalls).toEqual([{
+      consumerKey: 'durationSuggestionService',
+      runtimeEntryRef: 'durationSuggestionService:getTaskDurationSuggestion',
+      evidenceRef: 'runtime_consumer_runtime_calls:runtime-call-duration-suggestion',
+      reason: 'runtime_consumer_observation_runtime_call_not_linked_to_observation',
+    }])
   })
 })

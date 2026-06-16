@@ -110,6 +110,10 @@ const runtimeCallEvidence = [
   },
 ]
 
+function runtimeConsumerSourceEvidenceRef(consumerKey: string) {
+  return `runtime-consumption:${consumerKey}:live-path`
+}
+
 function buildReadyCompletionAudit() {
   const evidenceOverrides: DurationLiveLearningEvidenceOverride[] = learnableAssetKeys.map((assetKey) => ({
     assetKey,
@@ -252,6 +256,7 @@ function rowsForSql(sql: string, options: { includePlanNetworkOutcomes?: boolean
       publication_key: publicationKeyForAsset(assetKey),
       consumer_key: consumerKey,
       observation_status: 'observed',
+      source_evidence_refs: [runtimeConsumerSourceEvidenceRef(consumerKey)],
       writes_runtime_directly: false,
       writes_fact_directly: false,
     }))
@@ -262,6 +267,7 @@ function rowsForSql(sql: string, options: { includePlanNetworkOutcomes?: boolean
       consumer_key: consumerKey,
       runtime_entry_ref: runtimeEntryRef,
       call_status: 'called',
+      source_evidence_refs: [runtimeConsumerSourceEvidenceRef(consumerKey)],
       writes_runtime_directly: false,
       writes_fact_directly: false,
     }))

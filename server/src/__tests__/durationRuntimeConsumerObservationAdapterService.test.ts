@@ -23,12 +23,14 @@ describe('durationRuntimeConsumerObservationAdapterService', () => {
     const result = await recordProjectRemainingDurationForecastConsumedArtifacts({
       queryExec,
       observedAt: '2026-06-15T05:20:00.000Z',
+      sourceEvidenceRefs: ['project_remaining_forecast:project-a:2026-06-30'],
       artifacts: [
         {
           assetKey: 'forecast_residual_overlay',
           publicationKey: 'forecast_residual_overlay_runtime:overlay-v4',
           publicationStatus: 'published',
           observationContext: { projectId: 'project-a' },
+          sourceEvidenceRefs: ['artifact-lineage:overlay-v4'],
         },
         {
           assetKey: 'critical_path_rule_candidate',
@@ -54,6 +56,9 @@ describe('durationRuntimeConsumerObservationAdapterService', () => {
       'projectRemainingDurationForecastService',
       'projectRemainingDurationForecastService:buildProjectRemainingDurationForecast',
     ])
+    expect(callsForTable(calls, 'runtime_consumer_runtime_calls')[0].params[4]).toEqual([
+      'project_remaining_forecast:project-a:2026-06-30',
+    ])
     expect(callsForTable(calls, 'runtime_consumer_observations').map((call) => call.params.slice(0, 4))).toEqual([
       [
         'forecast_residual_overlay',
@@ -67,6 +72,13 @@ describe('durationRuntimeConsumerObservationAdapterService', () => {
         'projectRemainingDurationForecastService',
         'remaining_duration_forecast',
       ],
+    ])
+    expect(callsForTable(calls, 'runtime_consumer_observations').map((call) => call.params[6])).toEqual([
+      [
+        'project_remaining_forecast:project-a:2026-06-30',
+        'artifact-lineage:overlay-v4',
+      ],
+      ['project_remaining_forecast:project-a:2026-06-30'],
     ])
   })
 

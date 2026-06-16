@@ -71,12 +71,14 @@ export interface DurationLiveLearningProductionEvidenceRecord {
   evidenceStatus?: string | null
   publicationKey?: string | null
   consumerKey?: string | null
+  sourceEvidenceRefs?: readonly string[] | null
 }
 
 export interface DurationRuntimeConsumerObservationIdentity {
   assetKey: DurationLiveLearningAssetKey
   consumerKey: string
   publicationKey?: string | null
+  sourceEvidenceRefs?: readonly string[]
 }
 
 export interface DurationRuntimeConsumerObservationCoverage {
@@ -362,6 +364,7 @@ const REQUIRED_FIELDS_BY_SOURCE_TABLE: Record<DurationLiveLearningProductionEvid
     'publication_key',
     'consumer_key',
     'observation_status',
+    'source_evidence_refs',
     'writes_runtime_directly',
     'writes_fact_directly',
   ],
@@ -370,6 +373,7 @@ const REQUIRED_FIELDS_BY_SOURCE_TABLE: Record<DurationLiveLearningProductionEvid
     'consumer_key',
     'runtime_entry_ref',
     'call_status',
+    'source_evidence_refs',
     'writes_runtime_directly',
     'writes_fact_directly',
   ],
@@ -453,6 +457,27 @@ function readRecord(value: unknown): Record<string, unknown> {
     : {}
 }
 
+function normalizeStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return Array.from(new Set(value
+      .map((item) => normalizeText(typeof item === 'string' ? item : null))
+      .filter(Boolean)))
+  }
+  if (typeof value === 'string') {
+    try {
+      return normalizeStringArray(JSON.parse(value))
+    } catch {
+      const normalized = normalizeText(value)
+      return normalized ? [normalized] : []
+    }
+  }
+  return []
+}
+
+function readSourceEvidenceRefs(row: Record<string, unknown>) {
+  return normalizeStringArray(row.source_evidence_refs ?? row.sourceEvidenceRefs)
+}
+
 function readRuntimePublicationFromPayload(row: Record<string, unknown>) {
   const payload = readRecord(row.event_payload ?? row.eventPayload)
   return readRecord(payload.runtimePublication ?? payload.runtime_publication)
@@ -498,10 +523,23 @@ function uniqueConsumerObservations(
     const consumerKey = normalizeConsumerKey(value.consumerKey)
     if (!consumerKey) continue
     const publicationKey = normalizeText(value.publicationKey)
+    const sourceEvidenceRefs = normalizeStringArray(value.sourceEvidenceRefs)
+    const existing = map.get(consumerObservationKey({
+      assetKey: value.assetKey,
+      consumerKey,
+    }))
     const normalized = {
       assetKey: value.assetKey,
       consumerKey,
       ...(publicationKey ? { publicationKey } : {}),
+      ...(sourceEvidenceRefs.length > 0 || existing?.sourceEvidenceRefs?.length
+        ? {
+            sourceEvidenceRefs: Array.from(new Set([
+              ...(existing?.sourceEvidenceRefs ?? []),
+              ...sourceEvidenceRefs,
+            ])),
+          }
+        : {}),
     }
     map.set(consumerObservationKey(normalized), normalized)
   }
@@ -767,7 +805,12 @@ function observedRuntimeConsumerObservationsFromRecords(
     if (!acceptedStatusesFor(record.evidenceKind).has(normalizeText(record.evidenceStatus))) continue
     if (!evidenceRef || !hasAcceptedRefSource(record.evidenceKind, evidenceRef, record.assetKey)) continue
     if (!isDurationRuntimeConsumerPublicationKeyAllowedForAsset(record.assetKey, record.publicationKey)) continue
-    observed.push({ assetKey: record.assetKey, consumerKey, publicationKey: record.publicationKey })
+    observed.push({
+      assetKey: record.assetKey,
+      consumerKey,
+      publicationKey: record.publicationKey,
+      sourceEvidenceRefs: normalizeStringArray(record.sourceEvidenceRefs),
+    })
   }
   return observed
 }
@@ -787,7 +830,12 @@ function observedRuntimeConsumerObservationsFromSourceRows(
     if (!isDurationRuntimeConsumerPublicationKeyAllowedForAsset(assetKey, publicationKey)) continue
     if (readTrue(row, 'writes_runtime_directly', 'writesRuntimeDirectly')) continue
     if (readTrue(row, 'writes_fact_directly', 'writesFactDirectly')) continue
-    observed.push({ assetKey, consumerKey, publicationKey })
+    observed.push({
+      assetKey,
+      consumerKey,
+      publicationKey,
+      sourceEvidenceRefs: readSourceEvidenceRefs(row),
+    })
   }
   return observed
 }
@@ -1265,6 +1313,7 @@ function runtimeConsumerRuntimeCallEvidenceFromSourceRows(
       consumerKey,
       runtimeEntryRef,
       evidenceRef: `runtime_consumer_runtime_calls:${readText(row, 'id')}`,
+      sourceEvidenceRefs: readSourceEvidenceRefs(row),
     })
   }
   return evidence
@@ -1463,6 +1512,7 @@ export function buildDurationLiveLearningProductionClaimAudit(
     })
   const runtimeConsumerRuntimeCallCoverage = evaluateDurationRuntimeConsumerObservationRuntimeCallCoverage({
     runtimeCallEvidence: runtimeConsumerRuntimeCallEvidenceFromSourceRows(input.sourceRows),
+    observedConsumerObservations: runtimeConsumerObservationCoverage.observedConsumerObservations,
   })
   const runtimeConsumerBusinessPathIntegrationCoverage =
     evaluateDurationRuntimeConsumerBusinessPathIntegrationCoverage({

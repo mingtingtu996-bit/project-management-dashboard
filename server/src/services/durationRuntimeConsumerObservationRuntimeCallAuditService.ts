@@ -9,6 +9,12 @@ export interface DurationRuntimeConsumerObservationRuntimeCallEvidence {
   consumerKey: string
   runtimeEntryRef: string
   evidenceRef?: string | null
+  sourceEvidenceRefs?: readonly string[] | null
+}
+
+export interface DurationRuntimeConsumerObservationEvidence {
+  consumerKey: string
+  sourceEvidenceRefs?: readonly string[] | null
 }
 
 export interface DurationRuntimeConsumerObservationRuntimeCallIdentity {
@@ -29,10 +35,12 @@ export interface DurationRuntimeConsumerObservationRejectedRuntimeCall
     | 'runtime_consumer_observation_facade_consumer_not_declared'
     | 'runtime_consumer_observation_runtime_entry_ref_not_declared'
     | 'runtime_consumer_observation_runtime_call_production_ref_required'
+    | 'runtime_consumer_observation_runtime_call_not_linked_to_observation'
 }
 
 export interface DurationRuntimeConsumerObservationRuntimeCallCoverageInput {
   runtimeCallEvidence?: readonly DurationRuntimeConsumerObservationRuntimeCallEvidence[]
+  observedConsumerObservations?: readonly DurationRuntimeConsumerObservationEvidence[]
 }
 
 export interface DurationRuntimeConsumerObservationRuntimeCallCoverage {
@@ -62,6 +70,38 @@ function isRuntimeConsumerRuntimeCallProductionEvidenceRef(value: string) {
     && value.slice('runtime_consumer_runtime_calls:'.length).trim().length > 0
 }
 
+function normalizeSourceEvidenceRefs(value: readonly string[] | null | undefined) {
+  return Array.from(new Set((value ?? [])
+    .map((item) => normalizeOptionalText(item))
+    .filter(Boolean)))
+}
+
+function buildObservationSourceRefsByConsumerKey(
+  observations: readonly DurationRuntimeConsumerObservationEvidence[] | undefined,
+) {
+  const refsByConsumerKey = new Map<string, Set<string>>()
+  for (const observation of observations ?? []) {
+    const consumerKey = normalizeConsumerKey(observation.consumerKey)
+    const refs = normalizeSourceEvidenceRefs(observation.sourceEvidenceRefs)
+    if (!consumerKey || refs.length === 0) continue
+    const existing = refsByConsumerKey.get(consumerKey) ?? new Set<string>()
+    for (const ref of refs) existing.add(ref)
+    refsByConsumerKey.set(consumerKey, existing)
+  }
+  return refsByConsumerKey
+}
+
+function hasLinkedObservationSourceRef(
+  consumerKey: string,
+  callSourceEvidenceRefs: readonly string[],
+  observationSourceRefsByConsumerKey: Map<string, Set<string>>,
+) {
+  if (callSourceEvidenceRefs.length === 0) return false
+  const observationRefs = observationSourceRefsByConsumerKey.get(consumerKey)
+  if (!observationRefs || observationRefs.size === 0) return false
+  return callSourceEvidenceRefs.some((ref) => observationRefs.has(ref))
+}
+
 export function listDurationRuntimeConsumerObservationRequiredRuntimeCalls():
   DurationRuntimeConsumerObservationRuntimeCallIdentity[] {
   const declaredFacadeConsumers = new Set(
@@ -83,6 +123,9 @@ export function evaluateDurationRuntimeConsumerObservationRuntimeCallCoverage(
   const requiredRuntimeCallByConsumerKey = new Map(
     requiredRuntimeCalls.map((item) => [item.consumerKey, item]),
   )
+  const observationSourceRefsByConsumerKey = buildObservationSourceRefsByConsumerKey(
+    input.observedConsumerObservations,
+  )
   const observedMap = new Map<string, DurationRuntimeConsumerObservationObservedRuntimeCall>()
   const rejectedRuntimeCalls: DurationRuntimeConsumerObservationRejectedRuntimeCall[] = []
 
@@ -90,6 +133,7 @@ export function evaluateDurationRuntimeConsumerObservationRuntimeCallCoverage(
     const consumerKey = normalizeConsumerKey(evidence.consumerKey)
     const runtimeEntryRef = normalizeText(evidence.runtimeEntryRef)
     const evidenceRef = normalizeOptionalText(evidence.evidenceRef)
+    const sourceEvidenceRefs = normalizeSourceEvidenceRefs(evidence.sourceEvidenceRefs)
     const requiredRuntimeCall = requiredRuntimeCallByConsumerKey.get(consumerKey)
     if (!requiredRuntimeCall) {
       rejectedRuntimeCalls.push({
@@ -116,6 +160,19 @@ export function evaluateDurationRuntimeConsumerObservationRuntimeCallCoverage(
         runtimeEntryRef,
         ...(evidenceRef ? { evidenceRef } : {}),
         reason: 'runtime_consumer_observation_runtime_call_production_ref_required',
+      })
+      continue
+    }
+    if (!hasLinkedObservationSourceRef(
+      consumerKey,
+      sourceEvidenceRefs,
+      observationSourceRefsByConsumerKey,
+    )) {
+      rejectedRuntimeCalls.push({
+        consumerKey,
+        runtimeEntryRef,
+        evidenceRef,
+        reason: 'runtime_consumer_observation_runtime_call_not_linked_to_observation',
       })
       continue
     }
