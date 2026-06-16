@@ -1509,7 +1509,7 @@ export function evaluateDurationLiveLearningProductionEvidenceGate(
   }
 }
 
-function buildDurationLiveLearningProductionClaimAuditInternal(
+function buildDurationLiveLearningProductionClaimAuditDiagnostic(
   input: DurationLiveLearningProductionClaimAuditInput,
   canonicalDbReaderSourceRows: boolean,
 ): DurationLiveLearningProductionClaimAudit {
@@ -1588,11 +1588,5 @@ function buildDurationLiveLearningProductionClaimAuditInternal(
 export function buildDurationLiveLearningProductionClaimAudit(
   input: DurationLiveLearningProductionClaimAuditInput,
 ): DurationLiveLearningProductionClaimAudit {
-  return buildDurationLiveLearningProductionClaimAuditInternal(input, false)
-}
-
-export function buildDurationLiveLearningProductionClaimAuditFromCanonicalDbSourceRows(
-  input: DurationLiveLearningProductionClaimAuditInput,
-): DurationLiveLearningProductionClaimAudit {
-  return buildDurationLiveLearningProductionClaimAuditInternal(input, true)
+  return buildDurationLiveLearningProductionClaimAuditDiagnostic(input, false)
 }

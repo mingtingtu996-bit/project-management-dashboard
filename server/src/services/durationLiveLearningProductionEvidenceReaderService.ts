@@ -9,7 +9,7 @@ import type {
   DurationLearningScope,
 } from './durationLiveLearningClosureService.js'
 import {
-  buildDurationLiveLearningProductionClaimAuditFromCanonicalDbSourceRows,
+  buildDurationLiveLearningProductionClaimAudit,
   collectDurationLiveLearningProductionEvidenceRecordsFromRows,
   collectDurationLiveLearningProductionEvidenceRefs,
   listDurationLiveLearningProductionEvidenceSourcePlan,
@@ -49,6 +49,34 @@ export type DurationLiveLearningProductionClaimAuditFromDb =
   }
 
 const DEFAULT_MAX_ROWS_PER_SOURCE_TABLE = 500
+
+const FINAL_DURATION_LIVE_LEARNING_ALLOWED_CLAIM =
+  'all_learnable_duration_prediction_and_network_assets_are_live_self_learning;facts_and_commitments_remain_locked' as const
+
+function promoteDiagnosticAuditToCanonicalDbClaim(
+  audit: DurationLiveLearningProductionClaimAudit,
+): DurationLiveLearningProductionClaimAudit {
+  const sourceRowsProvenanceGate: DurationLiveLearningProductionClaimAudit['sourceRowsProvenanceGate'] = {
+    status: 'canonical_source_rows_provenance_ready',
+    requiredProvenance: 'canonical_db_reader',
+    actualProvenance: 'canonical_db_reader',
+  }
+  const ready = audit.productionGate.status === 'duration_live_learning_production_evidence_ready'
+    && audit.runtimeConsumerObservationCoverage.status === 'runtime_consumer_observation_coverage_ready'
+    && audit.runtimeConsumerObservationIntegrationCoverage.status === 'runtime_consumer_observation_integration_ready'
+    && audit.runtimeConsumerRuntimeCallCoverage.status === 'runtime_consumer_observation_runtime_calls_ready'
+    && audit.runtimeConsumerBusinessPathIntegrationCoverage.status === 'runtime_consumer_business_path_integration_ready'
+    && sourceRowsProvenanceGate.status === 'canonical_source_rows_provenance_ready'
+
+  return {
+    ...audit,
+    status: ready
+      ? 'duration_live_learning_production_claim_ready'
+      : 'duration_live_learning_production_claim_not_ready',
+    allowedClaim: ready ? FINAL_DURATION_LIVE_LEARNING_ALLOWED_CLAIM : 'not_ready_for_live_self_learning_claim',
+    sourceRowsProvenanceGate,
+  }
+}
 const FULL_TIERED_LEARNING_SCOPES: DurationLearningScope[] = ['global', 'industry', 'company', 'project']
 const FORECAST_SCOPE_EXCEPTION_SCOPES: DurationLearningScope[] = ['company', 'project']
 const FORECAST_SCOPE_EXCEPTION_ASSET_KEYS = new Set<DurationLiveLearningAssetKey>([
@@ -472,11 +500,11 @@ export async function buildDurationLiveLearningProductionClaimAuditFromDb(
     sourceRows: sourceQuery.sourceRows,
     requestedFactRewriteAssetKeys: input.requestedFactRewriteAssetKeys,
   })
-  const audit = buildDurationLiveLearningProductionClaimAuditFromCanonicalDbSourceRows({
+  const audit = promoteDiagnosticAuditToCanonicalDbClaim(buildDurationLiveLearningProductionClaimAudit({
     completionAudit,
     sourceRows: sourceQuery.sourceRows,
     runtimeConsumerBusinessPathSourceFiles,
-  })
+  }))
 
   return {
     ...audit,
