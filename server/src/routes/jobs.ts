@@ -1,6 +1,7 @@
 import express from 'express'
 import { z } from 'zod'
 
+import { constructionDependencyReplayCalibrationJob } from '../jobs/constructionDependencyReplayCalibrationJob.js'
 import { dataRetentionJob } from '../jobs/dataRetentionJob.js'
 import { planningDraftLockTimeoutJob } from '../jobs/planningDraftLockTimeoutJob.js'
 import { responsibilityAlertJob } from '../jobs/responsibilityAlertJob.js'
@@ -53,6 +54,7 @@ function buildJobStatusViews(): JobStatusView[] {
   const riskJobStatus = riskStatisticsJob.getStatus()
   const draftLockStatus = planningDraftLockTimeoutJob.getStatus()
   const dataRetentionStatus = dataRetentionJob.getStatus()
+  const constructionDependencyReplayCalibrationStatus = constructionDependencyReplayCalibrationJob.getStatus()
   const responsibilityAlertStatus = responsibilityAlertJob.getStatus()
 
   return [
@@ -187,6 +189,18 @@ function buildJobStatusViews(): JobStatusView[] {
       nextRun: dataRetentionStatus.nextRun,
       status: buildStatus(dataRetentionStatus.isRunning, dataRetentionStatus.isScheduled),
       description: '按保留周期清理高增长日志与快照表。',
+    },
+    {
+      name: 'constructionDependencyReplayCalibrationJob',
+      displayName: 'Construction dependency replay calibration job',
+      isRunning: constructionDependencyReplayCalibrationStatus.isRunning,
+      isScheduled: constructionDependencyReplayCalibrationStatus.isScheduled,
+      schedule: '30 6 * * *',
+      lastRun: constructionDependencyReplayCalibrationStatus.lastRun,
+      nextRun: constructionDependencyReplayCalibrationStatus.nextRun,
+      status: buildStatus(constructionDependencyReplayCalibrationStatus.isRunning, constructionDependencyReplayCalibrationStatus.isScheduled),
+      description:
+        'Runs report-only L3/L4 dependency replay calibration queues from real project task dependencies; seeds and task dependencies are never written by this job.',
     },
     {
       name: 'weeklyDigestJob',
@@ -386,6 +400,12 @@ async function executeJob(jobName: string) {
         jobId: createJobId(),
         attempts: 1,
         result: await dataRetentionJob.executeNow(),
+      }
+    case 'constructionDependencyReplayCalibrationJob':
+      return {
+        jobId: createJobId(),
+        attempts: 1,
+        result: await constructionDependencyReplayCalibrationJob.executeNow(),
       }
     case 'weeklyDigestJob':
       return executeWeeklyDigestJob()

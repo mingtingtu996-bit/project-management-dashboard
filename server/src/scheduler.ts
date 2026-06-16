@@ -1,3 +1,4 @@
+import { constructionDependencyReplayCalibrationJob } from './jobs/constructionDependencyReplayCalibrationJob.js'
 import { dataRetentionJob } from './jobs/dataRetentionJob.js'
 import { planningDraftLockTimeoutJob } from './jobs/planningDraftLockTimeoutJob.js'
 import { responsibilityAlertJob } from './jobs/responsibilityAlertJob.js'
@@ -808,6 +809,9 @@ function startAllJobs() {
   dataRetentionJob.start()
   console.log('Data retention job started (monthly 1st 04:15)')
 
+  constructionDependencyReplayCalibrationJob.start()
+  console.log('Construction dependency replay calibration job started (daily 06:30)')
+
   weeklyDigestJob.start()
   console.log('Weekly digest job started (every Monday 09:00)')
 
@@ -830,6 +834,7 @@ function startAllJobs() {
     operationalNotificationJob.stop()
     notificationLifecycleJob.stop()
     dataRetentionJob.stop()
+    constructionDependencyReplayCalibrationJob.stop()
     weeklyDigestJob.stop()
     materialArrivalReminderJob.stop()
     console.log('All jobs stopped')
