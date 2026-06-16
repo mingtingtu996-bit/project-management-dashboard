@@ -35,6 +35,12 @@ describe('durationRuntimeConsumerBusinessPathIntegrationAuditService', () => {
           sourcePath: 'server/src/services/durationSuggestionService.ts',
           sourceText: `
             import { recordDurationSuggestionConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
+            const DURATION_SUGGESTION_CONSUMER_ASSET_KEYS = new Set([
+              'base_duration_benchmark',
+              'duration_cold_start_baseline',
+              'standard_work_duration_seed',
+              'special_work_duration_seed',
+            ])
             export async function getTaskDurationSuggestion() {
               await recordDurationSuggestionConsumedArtifacts({ queryExec, artifacts: [] })
             }
@@ -44,6 +50,10 @@ describe('durationRuntimeConsumerBusinessPathIntegrationAuditService', () => {
           sourcePath: 'server/src/services/taskDurationForecastService.ts',
           sourceText: `
             import { recordTaskDurationForecastConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
+            const TASK_DURATION_FORECAST_CONSUMER_ASSET_KEYS = new Set([
+              'forecast_residual_overlay',
+              'forecast_confidence_weight',
+            ])
             export async function forecastTaskDuration() {
               await recordTaskDurationForecastConsumedArtifacts({ queryExec, artifacts: [] })
             }
@@ -53,6 +63,11 @@ describe('durationRuntimeConsumerBusinessPathIntegrationAuditService', () => {
           sourcePath: 'server/src/services/projectRemainingDurationForecastService.ts',
           sourceText: `
             import { recordProjectRemainingDurationForecastConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
+            const PROJECT_REMAINING_RUNTIME_CONSUMER_ASSET_KEYS = new Set([
+              'forecast_residual_overlay',
+              'wbs_reference_days',
+              'critical_path_rule_candidate',
+            ])
             export function buildProjectRemainingDurationForecast() {
               await recordProjectRemainingDurationForecastConsumedArtifacts({ queryExec, artifacts: [] })
             }
@@ -62,6 +77,11 @@ describe('durationRuntimeConsumerBusinessPathIntegrationAuditService', () => {
           sourcePath: 'server/src/services/wbsTemplateGenerationService.ts',
           sourceText: `
             import { recordWbsTemplateGenerationConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
+            const WBS_TEMPLATE_GENERATION_CONSUMER_ASSET_KEYS = new Set([
+              'special_work_duration_seed',
+              'wbs_reference_days',
+              'dependency_rule_candidate',
+            ])
             export async function generateWbsTemplateRows() {
               await recordWbsTemplateGenerationConsumedArtifacts({ queryExec, artifacts: [] })
             }
@@ -71,6 +91,9 @@ describe('durationRuntimeConsumerBusinessPathIntegrationAuditService', () => {
           sourcePath: 'server/src/services/scheduleAccelerationService.ts',
           sourceText: `
             import { recordScheduleAccelerationConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
+            const SCHEDULE_ACCELERATION_CONSUMER_ASSET_KEYS = new Set([
+              'dependency_rule_candidate',
+            ])
             export async function evaluateRuntimeDelayRecoveryWithCriticalPath() {
               await recordScheduleAccelerationConsumedArtifacts({ queryExec, artifacts: [] })
             }
@@ -80,6 +103,9 @@ describe('durationRuntimeConsumerBusinessPathIntegrationAuditService', () => {
           sourcePath: 'server/src/services/scheduleAccelerationRuntimeService.ts',
           sourceText: `
             import { recordScheduleAccelerationRuntimeConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
+            const SCHEDULE_ACCELERATION_RUNTIME_CONSUMER_ASSET_KEYS = new Set([
+              'critical_path_rule_candidate',
+            ])
             export async function evaluateRuntimeScheduleAcceleration() {
               await recordScheduleAccelerationRuntimeConsumedArtifacts({ queryExec, artifacts: [] })
             }
@@ -258,6 +284,9 @@ describe('durationRuntimeConsumerBusinessPathIntegrationAuditService', () => {
           sourcePath: 'server/src/services/scheduleAccelerationRuntimeService.ts',
           sourceText: `
             import { recordScheduleAccelerationRuntimeConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
+            const SCHEDULE_ACCELERATION_RUNTIME_CONSUMER_ASSET_KEYS = new Set([
+              'critical_path_rule_candidate',
+            ])
             export async function evaluateRuntimeScheduleAcceleration(params: {
               projectId: string
               runtimeConsumerErrorHandler?: (error: unknown) => void
@@ -279,6 +308,76 @@ describe('durationRuntimeConsumerBusinessPathIntegrationAuditService', () => {
     }))
     expect(coverage.missingIntegrations).not.toContainEqual(expect.objectContaining({
       consumerKey: 'scheduleAccelerationRuntimeService',
+    }))
+  })
+
+  it('blocks facade-backed paths when the source omits a registered learnable asset key', async () => {
+    const {
+      evaluateDurationRuntimeConsumerBusinessPathIntegrationCoverage,
+    } = await import('../services/durationRuntimeConsumerBusinessPathIntegrationAuditService.js')
+
+    const coverage = evaluateDurationRuntimeConsumerBusinessPathIntegrationCoverage({
+      sourceFiles: [
+        {
+          sourcePath: 'server/src/services/durationSuggestionService.ts',
+          sourceText: `
+            import { recordDurationSuggestionConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
+            const DURATION_SUGGESTION_CONSUMER_ASSET_KEYS = new Set([
+              'base_duration_benchmark',
+              'duration_cold_start_baseline',
+              'standard_work_duration_seed',
+            ])
+            export async function getTaskDurationSuggestion() {
+              await recordDurationSuggestionConsumedArtifacts({ queryExec, artifacts: [] })
+            }
+          `,
+        },
+      ],
+    })
+
+    expect(coverage.status).toBe('runtime_consumer_business_path_integration_not_ready')
+    expect(coverage.observedIntegrations).not.toContainEqual(expect.objectContaining({
+      consumerKey: 'durationSuggestionService',
+    }))
+    expect(coverage.missingIntegrations).toContainEqual(expect.objectContaining({
+      consumerKey: 'durationSuggestionService',
+      facadeFunctionName: 'recordDurationSuggestionConsumedArtifacts',
+      missingAssetKeys: ['special_work_duration_seed'],
+    }))
+  })
+
+  it('does not count commented asset keys as business path asset coverage', async () => {
+    const {
+      evaluateDurationRuntimeConsumerBusinessPathIntegrationCoverage,
+    } = await import('../services/durationRuntimeConsumerBusinessPathIntegrationAuditService.js')
+
+    const coverage = evaluateDurationRuntimeConsumerBusinessPathIntegrationCoverage({
+      sourceFiles: [
+        {
+          sourcePath: 'server/src/services/durationSuggestionService.ts',
+          sourceText: `
+            import { recordDurationSuggestionConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
+            const DURATION_SUGGESTION_CONSUMER_ASSET_KEYS = new Set([
+              'base_duration_benchmark',
+              'duration_cold_start_baseline',
+              'standard_work_duration_seed',
+            ])
+            // TODO: special_work_duration_seed
+            export async function getTaskDurationSuggestion() {
+              await recordDurationSuggestionConsumedArtifacts({ queryExec, artifacts: [] })
+            }
+          `,
+        },
+      ],
+    })
+
+    expect(coverage.status).toBe('runtime_consumer_business_path_integration_not_ready')
+    expect(coverage.observedIntegrations).not.toContainEqual(expect.objectContaining({
+      consumerKey: 'durationSuggestionService',
+    }))
+    expect(coverage.missingIntegrations).toContainEqual(expect.objectContaining({
+      consumerKey: 'durationSuggestionService',
+      missingAssetKeys: ['special_work_duration_seed'],
     }))
   })
 

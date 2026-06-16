@@ -1,6 +1,12 @@
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import {
+  listDurationRuntimeConsumerObservationFacadeRegistrations,
+} from './durationRuntimeConsumerObservationAdapterService.js'
+import type {
+  DurationLiveLearningAssetKey,
+} from './durationLiveLearningClosureService.js'
 
 export interface DurationRuntimeConsumerBusinessPathSourceFile {
   sourcePath: string
@@ -19,6 +25,8 @@ export interface DurationRuntimeConsumerBusinessPathIntegration {
   sourcePath: string
   facadeFunctionName: string
   runtimeEntryRef: string
+  requiredAssetKeys?: DurationLiveLearningAssetKey[]
+  missingAssetKeys?: DurationLiveLearningAssetKey[]
 }
 
 export interface DurationRuntimeConsumerObservedBusinessPathIntegration
@@ -101,6 +109,12 @@ function stripCommentsAndStringLiterals(sourceText: string) {
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/\/\/[^\n\r]*/g, '')
     .replace(/(['"`])(?:\\[\s\S]|(?!\1)[^\\])*\1/g, '')
+}
+
+function stripComments(sourceText: string) {
+  return sourceText
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/[^\n\r]*/g, '')
 }
 
 interface NamedNestedFunctionLikeRange {
@@ -207,9 +221,42 @@ function hasFacadeCallInRuntimeEntry(
     && (directFacadeCall || facadeCallThroughInvokedLocalHelper)
 }
 
+function assetKeysRequiredByConsumerKey() {
+  return new Map(
+    listDurationRuntimeConsumerObservationFacadeRegistrations()
+      .map((registration) => [registration.consumerKey, [...registration.assetKeys]]),
+  )
+}
+
+function missingRequiredAssetKeysForSource(
+  sourceText: string,
+  requiredAssetKeys: readonly DurationLiveLearningAssetKey[],
+) {
+  const executableSourceText = stripComments(sourceText)
+  return requiredAssetKeys.filter((assetKey) => !executableSourceText.includes(assetKey))
+}
+
+function missingIntegrationForSource(
+  required: DurationRuntimeConsumerBusinessPathIntegration,
+  sourceFiles: readonly DurationRuntimeConsumerBusinessPathSourceFile[] | undefined,
+) {
+  const matchingSource = (sourceFiles ?? []).find((source) =>
+    sourcePathMatches(source.sourcePath, required.sourcePath))
+  const missingAssetKeys = matchingSource
+    ? missingRequiredAssetKeysForSource(matchingSource.sourceText, required.requiredAssetKeys ?? [])
+    : []
+  return missingAssetKeys.length > 0
+    ? { ...required, missingAssetKeys }
+    : required
+}
+
 export function listDurationRuntimeConsumerBusinessPathRequiredIntegrations():
   DurationRuntimeConsumerBusinessPathIntegration[] {
-  return REQUIRED_BUSINESS_PATH_INTEGRATIONS.map((item) => ({ ...item }))
+  const requiredAssetKeysByConsumerKey = assetKeysRequiredByConsumerKey()
+  return REQUIRED_BUSINESS_PATH_INTEGRATIONS.map((item) => ({
+    ...item,
+    requiredAssetKeys: [...(requiredAssetKeysByConsumerKey.get(item.consumerKey) ?? [])],
+  }))
 }
 
 export async function loadDurationRuntimeConsumerBusinessPathSourceFiles(
@@ -235,6 +282,11 @@ export function evaluateDurationRuntimeConsumerBusinessPathIntegrationCoverage(
     const matchingSource = (input.sourceFiles ?? []).find((source) =>
       sourcePathMatches(source.sourcePath, required.sourcePath))
     if (!matchingSource) continue
+    const requiredAssetKeys = required.requiredAssetKeys ?? []
+    const missingAssetKeys = missingRequiredAssetKeysForSource(matchingSource.sourceText, requiredAssetKeys)
+    if (missingAssetKeys.length > 0) {
+      continue
+    }
     if (!hasFacadeCallInRuntimeEntry(
       matchingSource.sourceText,
       required.facadeFunctionName,
@@ -249,6 +301,7 @@ export function evaluateDurationRuntimeConsumerBusinessPathIntegrationCoverage(
   const observedConsumerKeys = new Set(observedIntegrations.map((item) => item.consumerKey))
   const missingIntegrations = requiredIntegrations.filter((required) =>
     !observedConsumerKeys.has(required.consumerKey))
+    .map((required) => missingIntegrationForSource(required, input.sourceFiles))
 
   return {
     status: missingIntegrations.length === 0
