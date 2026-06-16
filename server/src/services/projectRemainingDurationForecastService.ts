@@ -16,6 +16,12 @@ import type {
   DurationRuntimeConsumerObservedArtifact,
 } from './durationRuntimeConsumerObservationService.js'
 import { normalizeDurationDateUtc, orderedInclusiveDurationDays, signedDurationDayDelta } from '../utils/durationDays.js'
+import {
+  addConstructionProductionDays,
+  parseConstructionCalendarDate,
+  productionDaysBetweenInclusive,
+  type ConstructionCalendarContext,
+} from './constructionCalendar.js'
 
 export type ProjectMonthlyCommitmentSummary = {
   activeCommitmentCount?: number | null
@@ -134,13 +140,65 @@ function addCalendarDays(date: string | null | undefined, days: number) {
   return formatDurationDateUtc(next)
 }
 
-function addInclusiveRemainingDays(anchorDate: string | null | undefined, days: number | null | undefined) {
+function hasConstructionCalendarRules(calendar?: ConstructionCalendarContext | null) {
+  return Boolean(calendar?.windows?.length)
+}
+
+function addProductionDays(
+  anchorDate: string | null | undefined,
+  days: number | null | undefined,
+  calendar?: ConstructionCalendarContext | null,
+) {
   const anchor = normalizeDurationDateUtc(anchorDate)
   const normalizedDays = Math.max(0, Math.ceil(Number(days ?? 0)))
   if (!anchor || normalizedDays <= 0) return normalizeDate(anchorDate)
+  if (hasConstructionCalendarRules(calendar)) {
+    return addConstructionProductionDays(anchor, normalizedDays, calendar)
+  }
   const next = new Date(anchor)
   next.setUTCDate(next.getUTCDate() + normalizedDays - 1)
   return formatDurationDateUtc(next)
+}
+
+function addExtraProductionDays(
+  date: string | null | undefined,
+  days: number,
+  calendar?: ConstructionCalendarContext | null,
+) {
+  if (!date || days <= 0) return normalizeDate(date)
+  if (hasConstructionCalendarRules(calendar)) {
+    return addProductionDays(date, days + 1, calendar)
+  }
+  return addCalendarDays(date, days)
+}
+
+function projectRemainingDurationDays(
+  startDate: string | null | undefined,
+  finishDate: string | null | undefined,
+  calendar?: ConstructionCalendarContext | null,
+) {
+  if (!hasConstructionCalendarRules(calendar)) return orderedInclusiveDurationDays(startDate, finishDate) ?? 0
+  const start = parseConstructionCalendarDate(startDate)
+  const finish = parseConstructionCalendarDate(finishDate)
+  if (!start || !finish) return 0
+  return productionDaysBetweenInclusive(start, finish, calendar)
+}
+
+function projectRemainingGapDays(
+  targetEndDate: string | null | undefined,
+  forecastFinishDate: string | null | undefined,
+  calendar?: ConstructionCalendarContext | null,
+) {
+  if (!targetEndDate || !forecastFinishDate) return null
+  if (!hasConstructionCalendarRules(calendar)) {
+    return Math.max(0, signedDurationDayDelta(targetEndDate, forecastFinishDate) ?? 0)
+  }
+  const target = parseConstructionCalendarDate(targetEndDate)
+  const forecast = parseConstructionCalendarDate(forecastFinishDate)
+  if (!target || !forecast || forecast <= target) return 0
+  const next = new Date(target)
+  next.setUTCDate(next.getUTCDate() + 1)
+  return productionDaysBetweenInclusive(next, forecast, calendar)
 }
 
 function readRecord(value: unknown): Record<string, unknown> {
@@ -216,13 +274,17 @@ function readRowCriticalPathSpanDays(row: ScheduleAccelerationRow) {
   )
 }
 
-function readRowGoverningFinish(row: ScheduleAccelerationRow, asOfDate?: string | null) {
+function readRowGoverningFinish(
+  row: ScheduleAccelerationRow,
+  asOfDate?: string | null,
+  calendar?: ConstructionCalendarContext | null,
+) {
   const forecastFinish = readRowForecastFinish(row)
   if (forecastFinish) return forecastFinish
 
   const remainingDays = readRowRemainingDurationDays(row)
   if (remainingDays !== null && remainingDays > 0 && normalizeDate(asOfDate)) {
-    return addInclusiveRemainingDays(asOfDate, remainingDays)
+    return addProductionDays(asOfDate, remainingDays, calendar)
   }
 
   return normalizeDate(
@@ -232,7 +294,11 @@ function readRowGoverningFinish(row: ScheduleAccelerationRow, asOfDate?: string 
   )
 }
 
-function readExternalGateFinishDate(row: ScheduleAccelerationRow, asOfDate: string) {
+function readExternalGateFinishDate(
+  row: ScheduleAccelerationRow,
+  asOfDate: string,
+  calendar?: ConstructionCalendarContext | null,
+) {
   const explicitFinishDate = normalizeDate(
     row.values.forecast_finish_date
       ?? row.values.forecastFinishDate
@@ -245,32 +311,40 @@ function readExternalGateFinishDate(row: ScheduleAccelerationRow, asOfDate: stri
   )
   const remainingDays = readRowRemainingDurationDays(row)
   const remainingFinishDate = remainingDays !== null && remainingDays > 0
-    ? addInclusiveRemainingDays(asOfDate, remainingDays)
+    ? addProductionDays(asOfDate, remainingDays, calendar)
     : null
   return latestDate([explicitFinishDate, remainingFinishDate])
 }
 
-function readExternalGateRemainingDays(row: ScheduleAccelerationRow, asOfDate: string) {
+function readExternalGateRemainingDays(
+  row: ScheduleAccelerationRow,
+  asOfDate: string,
+  calendar?: ConstructionCalendarContext | null,
+) {
   const explicitRemainingDays = readRowRemainingDurationDays(row)
   if (explicitRemainingDays !== null && explicitRemainingDays > 0) return Math.ceil(explicitRemainingDays)
 
-  const finishDate = readRowGoverningFinish(row, asOfDate)
+  const finishDate = readRowGoverningFinish(row, asOfDate, calendar)
   if (!finishDate) return 0
   const plannedStartDate = normalizeDate(row.values.planned_start_date ?? row.values.start_date)
   const startDate = plannedStartDate && (signedDurationDayDelta(asOfDate, plannedStartDate) ?? 0) > 0
     ? plannedStartDate
     : asOfDate
-  return orderedInclusiveDurationDays(startDate, finishDate) ?? 0
+  return projectRemainingDurationDays(startDate, finishDate, calendar)
 }
 
-function computeCriticalMergeBiasDays(rows: ScheduleAccelerationRow[], asOfDate: string) {
+function computeCriticalMergeBiasDays(
+  rows: ScheduleAccelerationRow[],
+  asOfDate: string,
+  calendar?: ConstructionCalendarContext | null,
+) {
   const evaluatedCriticalChainCount = rows.length
   const spreads = rows
     .map((row) => {
-      const medianFinish = readRowGoverningFinish(row, asOfDate)
+      const medianFinish = readRowGoverningFinish(row, asOfDate, calendar)
       const confidenceFinish = readRowConfidenceBandFinish(row)
       if (!medianFinish || !confidenceFinish) return null
-      const spread = signedDurationDayDelta(medianFinish, confidenceFinish)
+      const spread = projectRemainingGapDays(medianFinish, confidenceFinish, calendar)
       return spread !== null && spread > 0 ? spread : null
     })
     .filter((value): value is number => value !== null)
@@ -357,6 +431,14 @@ function isExternalHardGateRow(row: ScheduleAccelerationRow) {
   const metadata = readRecord(row.values.standard_task_metadata ?? row.values.metadata)
   const contributionMode = normalizeText(row.values.duration_contribution_mode ?? metadata.durationContributionMode ?? metadata.duration_contribution_mode).toLowerCase()
   const constraintType = normalizeText(metadata.constraintType ?? metadata.constraint_type).toLowerCase()
+  const gateRelation = normalizeText(
+    row.values.gateRelation
+      ?? row.values.gate_relation
+      ?? metadata.gateRelation
+      ?? metadata.gate_relation
+      ?? metadata.internalFlowRelationKind
+      ?? metadata.internal_flow_relation_kind,
+  ).toLowerCase()
   const externalInterfaces = [
     ...readArray(metadata.externalInterfaceCodes),
     ...readArray(metadata.external_interface_codes),
@@ -368,7 +450,15 @@ function isExternalHardGateRow(row: ScheduleAccelerationRow) {
     ...readArray(metadata.hard_constraint_codes),
   ].map(normalizeText).filter(Boolean)
   return contributionMode.includes('external')
+    || gateRelation.includes('acceptance')
+    || gateRelation.includes('certificate')
+    || gateRelation.includes('permit')
+    || gateRelation.includes('handover')
     || constraintType.includes('external')
+    || constraintType.includes('acceptance')
+    || constraintType.includes('certificate')
+    || constraintType.includes('permit')
+    || constraintType.includes('handover')
     || externalInterfaces.length > 0
     || hardConstraints.length > 0
     || row.values.acceptance_required === true
@@ -551,6 +641,7 @@ export function buildProjectRemainingDurationForecast(params: {
   criticalPathSnapshot?: CriticalPathSnapshot | null
   runtimeExecutionFacts?: RuntimeExecutionFacts | null
   monthlyCommitments?: ProjectMonthlyCommitmentSummary | null
+  constructionCalendar?: ConstructionCalendarContext | null
   predictionEventRecorder?: (event: DurationAccuracyPredictionInput) => void
   runtimeConsumerObservationQueryExec?: DurationRuntimeConsumerObservationQueryExec | null
   runtimeArtifactPublications?: readonly ProjectRemainingDurationRuntimeArtifactPublication[] | null
@@ -558,6 +649,7 @@ export function buildProjectRemainingDurationForecast(params: {
   runtimeConsumerErrorHandler?: (error: unknown) => void
 }): ProjectRemainingDurationForecast {
   const asOfDate = normalizeDate(params.asOfDate) ?? new Date().toISOString().slice(0, 10)
+  const constructionCalendar = params.constructionCalendar ?? null
   const scheduleRows = applyFreshCriticalPathSnapshotToRows(params.rows.filter(isScheduleRow), params.criticalPathSnapshot)
   const remainingRows = scheduleRows.filter((row) => !isCompletedRow(row))
   const criticalRows = remainingRows.filter(isCriticalOrNearCriticalRow)
@@ -565,19 +657,19 @@ export function buildProjectRemainingDurationForecast(params: {
   const internalRemainingRows = remainingRows.filter((row) => !isExternalHardGateRow(row))
   const internalCriticalRows = criticalRows.filter((row) => !isExternalHardGateRow(row))
   const monthlyCommitments = params.monthlyCommitments ?? {}
-  const latestRemainingFinishDate = latestDate(internalRemainingRows.map((row) => readRowGoverningFinish(row, asOfDate)))
-  const latestCriticalFinishDate = latestDate(internalCriticalRows.map((row) => readRowGoverningFinish(row, asOfDate)))
+  const latestRemainingFinishDate = latestDate(internalRemainingRows.map((row) => readRowGoverningFinish(row, asOfDate, constructionCalendar)))
+  const latestCriticalFinishDate = latestDate(internalCriticalRows.map((row) => readRowGoverningFinish(row, asOfDate, constructionCalendar)))
   const optimisticBandFinishDate = latestDate(internalCriticalRows.map(readRowOptimisticBandFinish))
   const confidenceBandFinishDate = latestDate(internalCriticalRows.map(readRowConfidenceBandFinish))
   const criticalPathSpanDays = internalCriticalRows
     .map(readRowCriticalPathSpanDays)
     .filter((days): days is number => days !== null && days > 0)
   const criticalPathSpanFinishDate = criticalPathSpanDays.length > 0
-    ? addInclusiveRemainingDays(asOfDate, Math.max(...criticalPathSpanDays))
+    ? addProductionDays(asOfDate, Math.max(...criticalPathSpanDays), constructionCalendar)
     : null
-  const latestGateFinishDate = latestDate(externalGateRows.map((row) => readExternalGateFinishDate(row, asOfDate)))
+  const latestGateFinishDate = latestDate(externalGateRows.map((row) => readExternalGateFinishDate(row, asOfDate, constructionCalendar)))
   const latestCommitmentFinishDate = normalizeDate(monthlyCommitments.latestCommitmentFinishDate)
-  const mergeBias = computeCriticalMergeBiasDays(internalCriticalRows, asOfDate)
+  const mergeBias = computeCriticalMergeBiasDays(internalCriticalRows, asOfDate, constructionCalendar)
   const deterministicInternalFinishDate = latestDate([
     latestRemainingFinishDate,
     latestCriticalFinishDate,
@@ -585,7 +677,7 @@ export function buildProjectRemainingDurationForecast(params: {
     asOfDate,
   ])
   const mergeBiasedFinishDate = mergeBias.mergeBiasDays > 0
-    ? addCalendarDays(deterministicInternalFinishDate, mergeBias.mergeBiasDays)
+    ? addExtraProductionDays(deterministicInternalFinishDate, mergeBias.mergeBiasDays, constructionCalendar)
     : deterministicInternalFinishDate
   const confidenceBandDecision = buildConfidenceBandDecision({
     deterministicFinishDate: deterministicInternalFinishDate,
@@ -596,7 +688,7 @@ export function buildProjectRemainingDurationForecast(params: {
   const rawInternalWorkFinishDate = confidenceBandDecision.governingFinishDate
   const pressureProgressExtraDays = computeRuntimePressureExtraDays(params.runtimeExecutionFacts, internalCriticalRows.length)
   const adjustedInternalFinishDate = pressureProgressExtraDays > 0
-    ? addCalendarDays(rawInternalWorkFinishDate, pressureProgressExtraDays)
+    ? addExtraProductionDays(rawInternalWorkFinishDate, pressureProgressExtraDays, constructionCalendar)
     : rawInternalWorkFinishDate
   const internalWorkFinishDate = adjustedInternalFinishDate
   const externalGateRemainingDays = externalGateRows
@@ -606,7 +698,7 @@ export function buildProjectRemainingDurationForecast(params: {
     ? Math.max(...externalGateRemainingDays)
     : 0
   const gateRemainingFinishDate = overlappedRemainingDays > 0
-    ? addInclusiveRemainingDays(asOfDate, overlappedRemainingDays)
+    ? addProductionDays(asOfDate, overlappedRemainingDays, constructionCalendar)
     : null
   const overlappedGateFinishDate = latestDate([latestGateFinishDate, gateRemainingFinishDate])
   const gateTailDaysAfterInternal = internalWorkFinishDate && overlappedGateFinishDate
@@ -633,10 +725,10 @@ export function buildProjectRemainingDurationForecast(params: {
     durationOutputCode: 'project_remaining_forecast',
     durationOutputSemanticFieldName: 'projectRemainingForecastDays',
     durationOutputContract,
-    projectRemainingForecastDays: orderedInclusiveDurationDays(asOfDate, forecastFinishDate) ?? 0,
+    projectRemainingForecastDays: projectRemainingDurationDays(asOfDate, forecastFinishDate, constructionCalendar),
     forecastFinishDate,
     targetEndDate,
-    targetGapDays: targetEndDate && forecastFinishDate ? Math.max(0, signedDurationDayDelta(targetEndDate, forecastFinishDate) ?? 0) : null,
+    targetGapDays: projectRemainingGapDays(targetEndDate, forecastFinishDate, constructionCalendar),
     rowsEvaluated: scheduleRows.length,
     calculationContext: {
       primaryLayer: factContext.primaryLayer,

@@ -74,7 +74,6 @@ const RUNTIME_TASK_COLUMNS = [
   'standard_work_name',
   'is_milestone',
   'is_critical',
-  'baseline_is_critical',
   'total_float_days',
   'free_float_days',
   'standard_task_metadata',
@@ -255,7 +254,6 @@ export async function buildRuntimeScheduleAccelerationRows(projectId: string): P
         wbs_node_type: task.wbs_node_type ?? null,
         is_milestone: task.is_milestone ?? false,
         is_critical: task.is_critical ?? false,
-        baseline_is_critical: task.baseline_is_critical ?? false,
         phase_object_id: task.phase_object_id ?? null,
         total_float_days: readOptionalNumber(task.total_float_days),
         free_float_days: readOptionalNumber(task.free_float_days),
@@ -273,15 +271,18 @@ export async function buildRuntimeScheduleAccelerationRows(projectId: string): P
 }
 
 async function buildRuntimeForecastInputs(projectId: string, context?: ScheduleAccelerationContext, asOfDate?: string | null) {
-  const rows = await hydrateRuntimeRowsWithEngineSignals(projectId, await buildRuntimeScheduleAccelerationRows(projectId), asOfDate)
-  const runtimeContext = await buildRuntimeRecoveryContext(projectId, rows)
+  const hydrated = await hydrateRuntimeRowsWithEngineSignals(projectId, await buildRuntimeScheduleAccelerationRows(projectId), asOfDate)
+  const runtimeContext = await buildRuntimeRecoveryContext(projectId, hydrated.rows)
   const mergedRuntimeContext = {
     ...runtimeContext,
     ...context?.runtime,
   }
   const monthlyCommitments = await loadRuntimeMonthlyCommitmentSummary(projectId)
+  const constructionCalendar = context?.constructionCalendar ?? context?.workCalendar ?? null
   return {
-    rows,
+    rows: hydrated.rows,
+    criticalPathSnapshot: hydrated.criticalPathSnapshot,
+    constructionCalendar,
     mergedRuntimeContext,
     monthlyCommitments,
   }
@@ -319,7 +320,12 @@ async function loadRuntimeDurationSuggestion(projectId: string, row: ScheduleAcc
 
 async function hydrateRuntimeRowsWithEngineSignals(projectId: string, rows: ScheduleAccelerationRow[], asOfDate?: string | null) {
   const taskIds = rows.map((row) => normalizeText(row.clientRowId)).filter(Boolean)
-  if (taskIds.length === 0) return rows
+  if (taskIds.length === 0) {
+    return {
+      rows,
+      criticalPathSnapshot: null as Awaited<ReturnType<typeof getProjectCriticalPathSnapshot>> | null,
+    }
+  }
 
   const [criticalPathResult, forecastsResult] = await Promise.allSettled([
     getProjectCriticalPathSnapshot(projectId),
@@ -347,7 +353,7 @@ async function hydrateRuntimeRowsWithEngineSignals(projectId: string, rows: Sche
   const primaryChainSpanDays = readOptionalNumber(criticalPath?.primaryChain?.totalDurationDays)
   const hasCriticalPathProjection = criticalTaskIds.size > 0 || criticalTaskById.size > 0
 
-  return rows.map((row) => {
+  const hydratedRows = rows.map((row) => {
     const taskId = normalizeText(row.clientRowId)
     const forecast = forecastByTaskId.get(taskId)
     const suggestion = suggestionByTaskId.get(taskId)
@@ -377,6 +383,11 @@ async function hydrateRuntimeRowsWithEngineSignals(projectId: string, rows: Sche
       values,
     }
   })
+
+  return {
+    rows: hydratedRows,
+    criticalPathSnapshot: criticalPath,
+  }
 }
 
 function isCompletedScheduleAccelerationRow(row: ScheduleAccelerationRow) {
@@ -606,6 +617,8 @@ export async function evaluateRuntimeScheduleAcceleration(params: {
 }> {
   const {
     rows,
+    criticalPathSnapshot,
+    constructionCalendar,
     mergedRuntimeContext,
     monthlyCommitments,
   } = await buildRuntimeForecastInputs(params.projectId, params.context, params.asOfDate)
@@ -614,6 +627,8 @@ export async function evaluateRuntimeScheduleAcceleration(params: {
     rows,
     asOfDate: params.asOfDate,
     targetEndDate,
+    criticalPathSnapshot,
+    constructionCalendar,
     runtimeExecutionFacts: mergedRuntimeContext,
     monthlyCommitments,
   })
@@ -692,6 +707,8 @@ export async function buildRuntimeProjectRemainingDurationForecast(params: {
 }> {
   const {
     rows,
+    criticalPathSnapshot,
+    constructionCalendar,
     mergedRuntimeContext,
     monthlyCommitments,
   } = await buildRuntimeForecastInputs(params.projectId, params.context, params.asOfDate)
@@ -700,6 +717,8 @@ export async function buildRuntimeProjectRemainingDurationForecast(params: {
     rows,
     asOfDate: params.asOfDate,
     targetEndDate,
+    criticalPathSnapshot,
+    constructionCalendar,
     runtimeExecutionFacts: mergedRuntimeContext,
     monthlyCommitments,
   })

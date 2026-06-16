@@ -176,8 +176,11 @@ describe('scheduleAccelerationRuntimeService', () => {
       externalInterfaces: expect.objectContaining({
         hardGateCount: 1,
         latestGateFinishDate: '2026-06-28',
-        serialRemainingDays: 11,
-        serializedGateFinishDate: '2026-06-30',
+        overlappedRemainingDays: 11,
+        overlappedGateFinishDate: '2026-06-28',
+        gateTailDaysAfterInternal: 8,
+        serialRemainingDays: 8,
+        serializedGateFinishDate: '2026-06-28',
       }),
     }))
     expect(result.targetFeasibility?.scenario).toBe('runtime_delay_recovery')
@@ -201,6 +204,60 @@ describe('scheduleAccelerationRuntimeService', () => {
         'runtime_inference_advisory_only',
       ]),
     }))
+  })
+
+  it('passes construction calendar context into E4 project remaining forecasts', async () => {
+    mocks.getTasks.mockResolvedValue([
+      {
+        id: 'shutdown-sensitive',
+        project_id: 'project-1',
+        title: 'Shutdown-sensitive critical work',
+        planned_start_date: '2026-02-14',
+        planned_end_date: '2026-02-15',
+        status: 'todo',
+        progress: 0,
+        is_critical: true,
+        total_float_days: 0,
+        free_float_days: 0,
+        standard_task_metadata: {
+          durationContributionMode: 'duration_bearing',
+          rowProjectionMode: 'schedule_row',
+        },
+      },
+    ])
+    mocks.listCurrentTaskDurationForecasts.mockResolvedValue([
+      {
+        taskId: 'shutdown-sensitive',
+        remainingDurationDays: 2,
+      },
+    ])
+    mocks.executeSQL.mockImplementation(async (sql: string) => {
+      if (sql.includes('task_dependencies')) return []
+      if (sql.includes('monthly_plan_items')) return []
+      return []
+    })
+
+    const result = await buildRuntimeProjectRemainingDurationForecast({
+      projectId: 'project-1',
+      asOfDate: '2026-02-14',
+      targetEndDate: '2026-02-15',
+      context: {
+        constructionCalendar: {
+          basis: 'official_construction_calendar_seed',
+          windows: [{
+            holidayCode: 'spring_festival_2026',
+            holidayName: 'Spring Festival construction shutdown',
+            startDate: '2026-02-15',
+            endDate: '2026-02-17',
+            counts_as_construction_shutdown: true,
+          }],
+        },
+      },
+    })
+
+    expect(result.projectRemainingForecast.forecastFinishDate).toBe('2026-02-18')
+    expect(result.projectRemainingForecast.projectRemainingForecastDays).toBe(2)
+    expect(result.projectRemainingForecast.targetGapDays).toBe(1)
   })
 
   it('records project remaining and acceleration prediction snapshots for later accuracy backtest', async () => {

@@ -806,6 +806,62 @@ describe('scheduleAccelerationService', () => {
     ]))
   })
 
+  it('does not generate hold-point fast-track drafts before acceptance gates are released', () => {
+    const feasibility = evaluateScheduleTargetFeasibility({
+      rows: [
+        buildRow({
+          clientRowId: 'rough-in',
+          values: {
+            ...buildRow().values,
+            title: 'MEP rough-in',
+            planned_start_date: '2026-06-01',
+            planned_end_date: '2026-06-20',
+            duration_contribution_mode: 'duration_bearing',
+            row_projection_mode: 'schedule_row',
+            standard_task_metadata: {
+              criticalPathEligible: true,
+              executionPhase: 'mep_rough_in',
+              resourceProfile: { resourceClass: 'electrical' },
+            },
+          },
+          predecessorDependencies: [],
+        }),
+        buildRow({
+          clientRowId: 'concealed-acceptance',
+          values: {
+            ...buildRow().values,
+            title: '隐蔽验收',
+            planned_start_date: '2026-06-21',
+            planned_end_date: '2026-06-22',
+            duration_contribution_mode: 'duration_bearing',
+            row_projection_mode: 'schedule_row',
+            standard_task_metadata: {
+              gateRelation: 'acceptance_gate',
+              qualityControlRole: 'acceptance_gate',
+              criticalPathEligible: true,
+              executionPhase: 'hidden_acceptance',
+              resourceProfile: { resourceClass: 'electrical' },
+            },
+          },
+          predecessorDependencies: [{
+            clientRowId: 'rough-in',
+            dependencyType: 'FS',
+            lagDays: 0,
+            source: 'dependency_intent_template',
+            relationRole: 'inspection',
+          }],
+        }),
+      ],
+      targetEndDate: '2026-06-15',
+      mode: 'compression_preview',
+    })
+
+    const fastTrack = feasibility?.accelerationProposal?.actions.find((action) => action.type === 'fast_track') as any
+    const crashing = feasibility?.accelerationProposal?.actions.find((action) => action.type === 'crashing') as any
+    expect(fastTrack?.affectedRowIds ?? []).not.toContain('concealed-acceptance')
+    expect(crashing?.durationAdjustments?.map((adjustment: any) => adjustment.clientRowId) ?? []).not.toContain('concealed-acceptance')
+  })
+
   it('discounts fast-track recoverable days for overlap rework risk instead of taking the full lag delta', () => {
     const feasibility = evaluateScheduleTargetFeasibility({
       rows: [
@@ -912,6 +968,41 @@ describe('scheduleAccelerationService', () => {
       expectedDays: feasibility.accelerationProposal.accelerationTargetDays,
       basis: 'schedule_acceleration_target_uncertainty_band',
     }))
+  })
+
+  it('uses the conservative recoverable band when deciding target feasibility', () => {
+    const feasibility = evaluateScheduleTargetFeasibility({
+      rows: [
+        buildRow({
+          clientRowId: 'long-critical-terminal',
+          values: {
+            ...buildRow().values,
+            title: 'Long critical terminal work',
+            planned_start_date: '2026-01-01',
+            planned_end_date: '2026-12-31',
+            duration_contribution_mode: 'duration_bearing',
+            row_projection_mode: 'schedule_row',
+            is_critical: true,
+            total_float_days: 0,
+            free_float_days: 0,
+            standard_task_metadata: {
+              criticalPathEligible: true,
+              executionPhase: 'superstructure',
+              resourceProfile: { resourceClass: 'rebar' },
+            },
+          },
+          predecessorDependencies: [],
+        }),
+      ],
+      targetEndDate: '2026-11-21',
+      mode: 'compression_preview',
+    }) as any
+
+    expect(feasibility.overshootDays).toBeGreaterThan(30)
+    expect(feasibility.unrecoverableDays).toBe(0)
+    expect(feasibility.recoverableDaysConfidenceBand.conservativeDays).toBeLessThan(feasibility.overshootDays)
+    expect(feasibility.verdict).toBe('requires_scope_change')
+    expect(feasibility.accelerationProposal?.verdict).toBe('needs_scope_decision')
   })
 
   it('downgrades null-network fallback instead of trusting summed raw recovery', () => {

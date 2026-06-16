@@ -66,6 +66,7 @@ import type {
   DurationRuntimeConsumerObservationQueryExec,
   DurationRuntimeConsumerObservedArtifact,
 } from './durationRuntimeConsumerObservationService.js'
+import { resolveLiveTaskCriticalityProjection } from './taskCriticalityProjectionService.js'
 
 export interface TaskDurationForecast {
   taskId: string
@@ -156,7 +157,6 @@ type ForecastTaskRow = {
   functional_area_object_id?: string | null
   participant_unit_id?: string | null
   is_critical?: boolean | null
-  baseline_is_critical?: boolean | null
   total_float_days?: number | string | null
   free_float_days?: number | string | null
   successor_count?: number | string | null
@@ -1010,6 +1010,34 @@ function candidateDays(value: number | null | undefined) {
   return Math.max(1, Math.min(365, Math.ceil(Number(value))))
 }
 
+function smoothStep(value: number) {
+  const x = clamp(value, 0, 1)
+  return x * x * (3 - 2 * x)
+}
+
+function inverseSmoothStep(progressRatio: number) {
+  const target = clamp(progressRatio, 0, 1)
+  let low = 0
+  let high = 1
+  for (let index = 0; index < 24; index += 1) {
+    const mid = (low + high) / 2
+    if (smoothStep(mid) < target) low = mid
+    else high = mid
+  }
+  return (low + high) / 2
+}
+
+function backHeavyRemainingEffortRatio(linearRemaining: number) {
+  if (linearRemaining <= 0) return 0
+  const structuralTailRatio = 0.1
+  const variableRatio = 1 - structuralTailRatio
+  return clamp(
+    structuralTailRatio + variableRatio * (linearRemaining ** 0.75),
+    linearRemaining,
+    1,
+  )
+}
+
 function remainingEffortRatioForCurve(curveType: ProgressCurveType, progress: number) {
   const linearRemaining = clamp((100 - progress) / 100, 0, 1)
   if (linearRemaining <= 0) return 0
@@ -1018,14 +1046,20 @@ function remainingEffortRatioForCurve(curveType: ProgressCurveType, progress: nu
     return clamp(linearRemaining ** 1.15, 0.02, 1)
   }
   if (curveType === 'back_heavy') {
-    return clamp(linearRemaining ** 0.72, linearRemaining, 1)
+    return backHeavyRemainingEffortRatio(linearRemaining)
   }
   if (curveType === 's_curve') {
-    if (progress >= 85) return clamp(linearRemaining ** 0.8, linearRemaining, 1)
-    if (progress <= 20) return clamp(linearRemaining ** 0.92, linearRemaining, 1)
-    return linearRemaining
+    const elapsedRatio = inverseSmoothStep(clamp(progress / 100, 0, 1))
+    return clamp(1 - elapsedRatio, 0.02, 1)
   }
   return linearRemaining
+}
+
+function curveAwareVelocityDays(linearRemainingDays: number, curveType: ProgressCurveType, progress: number) {
+  const linearRemaining = clamp((100 - progress) / 100, 0, 1)
+  if (linearRemaining <= 0) return linearRemainingDays
+  const curveRemaining = remainingEffortRatioForCurve(curveType, progress)
+  return linearRemainingDays * clamp(curveRemaining / linearRemaining, 0.5, 2)
 }
 
 function readPositiveFiniteNumber(value: unknown): number | null {
@@ -1171,10 +1205,99 @@ function plannedProductionDurationDays(task: ForecastTaskRow | null, calendar?: 
   return null
 }
 
+function readTaskSemanticMetadata(task: ForecastTaskRow | null | undefined) {
+  const metadata = asRecord(task?.standard_task_metadata)
+  const controlRoles = asRecord(metadata?.controlRoles)
+  const legacyControlRoles = asRecord(metadata?.control_roles)
+  const durationContributionMode = normalizeId(
+    metadata?.durationContributionMode
+      ?? metadata?.duration_contribution_mode
+      ?? metadata?.durationMode
+      ?? metadata?.duration_mode,
+  )
+  const qualityControlRole = normalizeId(
+    metadata?.qualityControlRole
+      ?? metadata?.quality_control_role
+      ?? controlRoles?.qualityControlRole
+      ?? legacyControlRoles?.quality_control_role,
+  )
+  const inspectionAcceptanceRole = normalizeId(
+    metadata?.inspectionAcceptanceRole
+      ?? metadata?.inspection_acceptance_role
+      ?? controlRoles?.inspectionAcceptanceRole
+      ?? legacyControlRoles?.inspection_acceptance_role,
+  )
+  const documentEvidenceRole = normalizeId(
+    metadata?.documentEvidenceRole
+      ?? metadata?.document_evidence_role
+      ?? controlRoles?.documentEvidenceRole
+      ?? legacyControlRoles?.document_evidence_role,
+  )
+
+  return {
+    metadata,
+    durationContributionMode,
+    qualityControlRole,
+    inspectionAcceptanceRole,
+    documentEvidenceRole,
+  }
+}
+
+function includesTextAny(text: string, terms: string[]) {
+  const normalized = text.toLowerCase()
+  return terms.some((term) => normalized.includes(term.toLowerCase()))
+}
+
+function resolveTaskGateStatusDateSemantic(task: ForecastTaskRow | null | undefined) {
+  const semantic = readTaskSemanticMetadata(task)
+  const title = String(task?.title ?? task?.standard_work_name ?? '').trim()
+  const text = `${title} ${semantic.durationContributionMode ?? ''} ${semantic.qualityControlRole ?? ''} ${semantic.inspectionAcceptanceRole ?? ''} ${semantic.documentEvidenceRole ?? ''}`
+  const gateMode = ['quality_gate', 'handover_marker', 'external_wait', 'record_only'].includes(semantic.durationContributionMode ?? '')
+  const gateRole = semantic.qualityControlRole === 'acceptance_gate'
+    || semantic.inspectionAcceptanceRole === 'hidden_acceptance'
+    || semantic.inspectionAcceptanceRole === 'special_acceptance'
+    || semantic.inspectionAcceptanceRole === 'completion_acceptance'
+    || semantic.documentEvidenceRole === 'handover_document'
+    || semantic.documentEvidenceRole === 'inspection_record'
+    || semantic.documentEvidenceRole === 'test_report'
+  const gateText = includesTextAny(text, [
+    'acceptance',
+    'handover',
+    'archive',
+    'filing',
+    'permit',
+    'certificate',
+    '验收',
+    '移交',
+    '交接',
+    '交付',
+    '资料',
+    '归档',
+    '组卷',
+    '备案',
+    '签认',
+    '报告',
+    '记录',
+    '放行',
+    '合格',
+  ])
+  const applies = Boolean((gateMode || gateRole || task?.acceptance_required) && gateText)
+
+  return {
+    applies,
+    taskSemanticMode: applies ? 'gate_status_date' as const : 'execution_progress' as const,
+    gateRelation: applies ? 'acceptance_gate' as const : null,
+    durationContributionMode: semantic.durationContributionMode,
+    qualityControlRole: semantic.qualityControlRole,
+    inspectionAcceptanceRole: semantic.inspectionAcceptanceRole,
+    documentEvidenceRole: semantic.documentEvidenceRole,
+  }
+}
+
 async function loadTask(taskId: string): Promise<ForecastTaskRow | null> {
   const { data, error } = await (supabase as any)
     .from('tasks')
-    .select('id, project_id, template_node_id, wbs_node_type, engineering_category_id, standard_work_code, standard_work_name, title, planned_start_date, planned_end_date, start_date, end_date, actual_start_date, actual_end_date, status, progress, ready_for_start, dependency_status, condition_status, obstacle_status, progress_impact_level, blocked_for_progress, readiness_summary, building_object_id, basement_object_id, floor_object_id, physical_zone_object_id, functional_area_object_id, participant_unit_id, is_critical, baseline_is_critical, total_float_days, free_float_days, successor_count, milestone_distance_days, downstream_milestone_distance_days, criticality_weight, acceptance_required, material_required, standard_task_metadata')
+    .select('id, project_id, template_node_id, wbs_node_type, engineering_category_id, standard_work_code, standard_work_name, title, planned_start_date, planned_end_date, start_date, end_date, actual_start_date, actual_end_date, status, progress, ready_for_start, dependency_status, condition_status, obstacle_status, progress_impact_level, blocked_for_progress, readiness_summary, building_object_id, basement_object_id, floor_object_id, physical_zone_object_id, functional_area_object_id, participant_unit_id, is_critical, total_float_days, free_float_days, successor_count, milestone_distance_days, downstream_milestone_distance_days, criticality_weight, acceptance_required, material_required, standard_task_metadata')
     .eq('id', taskId)
     .maybeSingle()
 
@@ -1205,6 +1328,7 @@ function buildForecastRuntimeExecutionFacts(
   obstacles?: ForecastObstacleRow[] | null,
 ) {
   const progress = typeof task?.progress === 'number' ? task.progress : Number(task?.progress ?? 0)
+  const criticalProjection = resolveLiveTaskCriticalityProjection(task)
   const hardObstacleCount = obstacles?.filter((row) => {
     const severity = normalizeId(row.severity).toLowerCase()
     return severity.includes('critical')
@@ -1222,7 +1346,7 @@ function buildForecastRuntimeExecutionFacts(
     evidenceCodes: [
       snapshots && snapshots.length > 0 ? 'progress_snapshots' : null,
       obstacles && obstacles.length > 0 ? 'open_obstacles' : null,
-      task?.is_critical || task?.baseline_is_critical ? 'critical_task' : null,
+      criticalProjection.isCritical ? 'critical_task' : null,
     ].filter((item): item is string => Boolean(item)),
   }
 }
@@ -1481,7 +1605,8 @@ function buildTaskRemainingForecastNetworkLineage(task: ForecastTaskRow | null, 
     ? dependencyPropagation as Record<string, unknown>
     : {}
   const templateNodeId = normalizeId(task?.template_node_id)
-  const criticalPathMembership = Boolean(task?.is_critical ?? task?.baseline_is_critical)
+  const criticalProjection = resolveLiveTaskCriticalityProjection(task)
+  const criticalPathMembership = criticalProjection.isCritical
   return {
     wbsTemplateVersion: templateNodeId ? `template-node:${templateNodeId}` : null,
     wbsNodeType: normalizeId(task?.wbs_node_type),
@@ -2511,6 +2636,7 @@ function buildSpiCandidate(
   progress: number,
   now: Date,
   calendar?: WorkCalendarContext | null,
+  curveType: ProgressCurveType = 'linear',
 ): ForecastCandidate | null {
   if (progress <= 0 || progress >= 100) return null
   const actualStart = parseDate(task?.actual_start_date)
@@ -2524,16 +2650,21 @@ function buildSpiCandidate(
   const plannedValue = clamp((elapsedDays / plannedTotal) * 100, 1, 100)
   const spi = clamp(progress / plannedValue, 0.1, 2)
   const estimatedAtCompletionDays = plannedTotal / spi
-  const remaining = candidateDays(estimatedAtCompletionDays - elapsedDays)
+  const linearRemaining = candidateDays(estimatedAtCompletionDays - elapsedDays)
     ?? (plannedValue >= 100 && progress < 100
       ? candidateDays(plannedTotal * ((100 - progress) / 100))
       : null)
+  const remaining = linearRemaining === null
+    ? null
+    : candidateDays(curveAwareVelocityDays(linearRemaining, curveType, progress))
   if (!remaining) return null
 
   return {
     key: 'spi_eac',
     days: remaining,
-    reason: `SPI/EAC forecast, SPI=${round(spi)}`,
+    reason: curveType === 'linear'
+      ? `SPI/EAC forecast, SPI=${round(spi)}`
+      : `SPI/EAC forecast, SPI=${round(spi)}, adjusted by ${curveType} progress curve.`,
   }
 }
 
@@ -2543,6 +2674,7 @@ function buildRecentVelocityCandidate(
   progress: number,
   now: Date,
   calendar?: WorkCalendarContext | null,
+  curveType: ProgressCurveType = 'linear',
 ): ForecastCandidate | null {
   if (progress <= 0 || progress >= 100) return null
   if (anomalySignals.some((signal) => signal.code === 'month_end_burst' || signal.code === 'progress_jump')) {
@@ -2568,13 +2700,15 @@ function buildRecentVelocityCandidate(
   const dailySpeed = progressDelta / dayGap
   if (!Number.isFinite(dailySpeed) || dailySpeed < 0.05) return null
 
-  const remaining = candidateDays((100 - progress) / dailySpeed)
+  const remaining = candidateDays(curveAwareVelocityDays((100 - progress) / dailySpeed, curveType, progress))
   if (!remaining) return null
 
   return {
     key: 'recent_velocity',
     days: remaining,
-    reason: `Recent progress velocity ${round(dailySpeed)} percentage points/day.`,
+    reason: curveType === 'linear'
+      ? `Recent progress velocity ${round(dailySpeed)} percentage points/day.`
+      : `Recent progress velocity ${round(dailySpeed)} percentage points/day adjusted by ${curveType} progress curve.`,
   }
 }
 
@@ -3307,6 +3441,7 @@ function buildExternalReadinessImpactSignals(
     })
   })
 
+  const criticalProjection = resolveLiveTaskCriticalityProjection(task)
   return summarizeDelayImpactSignals([
     ...conditionSignals,
     ...obstacleSignals,
@@ -3317,13 +3452,13 @@ function buildExternalReadinessImpactSignals(
       + Number(obstacleImpact.criticalWithoutResolveDateCount ?? 0),
     staleKnownDateCount: Number(externalImpact.staleKnownDateCandidateCount ?? 0),
     taskCriticality: {
-      isCritical: Boolean(task?.is_critical || task?.baseline_is_critical),
+      isCritical: criticalProjection.isCritical,
       totalFloatDays: task?.total_float_days ?? null,
       freeFloatDays: task?.free_float_days ?? null,
       successorCount: task?.successor_count ?? null,
       milestoneDistanceDays: task?.milestone_distance_days ?? task?.downstream_milestone_distance_days ?? null,
       criticalityWeight: task?.criticality_weight,
-      basis: task?.baseline_is_critical ? 'baseline_critical_path' : task?.is_critical ? 'task_critical_path' : 'not_critical_path',
+      basis: criticalProjection.basis,
     },
   })
 }
@@ -3447,8 +3582,8 @@ function biasAwareTailCandidates(
   referenceCandidate: ForecastCandidate | null,
 ) {
   if (!referenceCandidate) return candidates
-  if (progress < 85) return candidates
-  if (curveType !== 'back_heavy' && curveType !== 's_curve') return candidates
+  const shouldReserveTail = curveType === 'back_heavy' || (curveType === 's_curve' && progress >= 85)
+  if (!shouldReserveTail) return candidates
   const floorDays = referenceCandidate.days
   const filtered = candidates.filter((candidate) => (
     candidate.key === 'reference_ratio'
@@ -4297,13 +4432,15 @@ async function buildRemainingForecastModel(params: {
   const referenceCandidate = buildReferenceRatioCandidate(referenceTotal, progress, curveType)
   const rawCandidates = [
     referenceCandidate,
-    buildSpiCandidate(params.task, referenceTotal, progress, now, params.workCalendar),
-    buildRecentVelocityCandidate(params.snapshots, anomalySignals, progress, now, params.workCalendar),
+    buildSpiCandidate(params.task, referenceTotal, progress, now, params.workCalendar, curveType),
+    buildRecentVelocityCandidate(params.snapshots, anomalySignals, progress, now, params.workCalendar, curveType),
     buildHistoryVelocityCandidate(referenceCandidate, params.velocityLearning),
   ].filter((candidate): candidate is ForecastCandidate => Boolean(candidate))
   const contextImpact = contextImpactFromFactorSummary(params.factorSummary)
-  const candidatePool = contextImpact.planReferenceFallbackRecommended
-    ? rawCandidates.filter((candidate) => candidate.key === 'reference_ratio')
+  const taskSemantic = resolveTaskGateStatusDateSemantic(params.task)
+  const referenceOnlyCandidates = rawCandidates.filter((candidate) => candidate.key === 'reference_ratio')
+  const candidatePool = contextImpact.planReferenceFallbackRecommended || taskSemantic.applies
+    ? referenceOnlyCandidates
     : rawCandidates
   const candidates = biasAwareTailCandidates(candidatePool, curveType, progress, referenceCandidate)
 
@@ -4605,6 +4742,18 @@ async function buildRemainingForecastModel(params: {
 
   const forecastSources = {
     dataMaturity: maturity,
+    taskSemanticMode: taskSemantic.taskSemanticMode,
+    gateRelation: taskSemantic.gateRelation,
+    taskSemanticBasis: {
+      durationContributionMode: taskSemantic.durationContributionMode,
+      qualityControlRole: taskSemantic.qualityControlRole,
+      inspectionAcceptanceRole: taskSemantic.inspectionAcceptanceRole,
+      documentEvidenceRole: taskSemantic.documentEvidenceRole,
+      linearExecutionCandidatesSuppressed: taskSemantic.applies,
+      suppressionPolicy: taskSemantic.applies
+        ? 'gate_status_date_semantics_do_not_use_spi_eac_or_velocity_extrapolation'
+        : null,
+    },
     candidates: candidates.map((candidate) => ({ key: candidate.key, days: candidate.days, reason: candidate.reason })),
     candidateSpread,
     weights: weighted?.weights ?? [],

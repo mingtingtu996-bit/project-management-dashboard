@@ -1041,6 +1041,88 @@ function getHardConstraintReason(row: ScheduleAccelerationRow) {
     ?? null
 }
 
+function includesAny(text: string, terms: string[]) {
+  const normalized = text.toLowerCase()
+  return terms.some((term) => normalized.includes(term.toLowerCase()))
+}
+
+function isGateReleased(row: ScheduleAccelerationRow) {
+  const metadata = readRowMetadata(row)
+  const status = normalizeText(
+    row.values.gate_status
+      ?? row.values.acceptance_status
+      ?? row.values.inspection_status
+      ?? metadata.gateStatus
+      ?? metadata.gate_status
+      ?? metadata.acceptanceStatus
+      ?? metadata.acceptance_status
+      ?? metadata.inspectionStatus
+      ?? metadata.inspection_status,
+  ).toLowerCase()
+  if (['passed', 'approved', 'accepted', 'completed', 'closed', 'released', 'qualified'].includes(status)) return true
+  if (row.values.acceptance_passed === true || row.values.gate_released === true) return true
+  if (metadata.acceptancePassed === true || metadata.gateReleased === true) return true
+  return false
+}
+
+function hasUnreleasedHoldPoint(row: ScheduleAccelerationRow) {
+  if (isGateReleased(row)) return false
+  const metadata = readRowMetadata(row)
+  const title = getGeneratedRowTitle(row)
+  const contributionMode = normalizeDurationContributionMode(row.values.duration_contribution_mode ?? metadata.durationContributionMode)
+  const gateRelation = normalizeText(
+    row.values.gateRelation
+      ?? row.values.gate_relation
+      ?? metadata.gateRelation
+      ?? metadata.gate_relation
+      ?? metadata.internalFlowRelationKind
+      ?? metadata.internal_flow_relation_kind,
+  ).toLowerCase()
+  const controlRoles = readRecord(metadata.controlRoles ?? metadata.control_roles)
+  const roleText = [
+    metadata.qualityControlRole,
+    metadata.quality_control_role,
+    metadata.inspectionAcceptanceRole,
+    metadata.inspection_acceptance_role,
+    metadata.documentEvidenceRole,
+    metadata.document_evidence_role,
+    controlRoles.qualityControlRole,
+    controlRoles.inspectionAcceptanceRole,
+    controlRoles.documentEvidenceRole,
+  ].map(normalizeText).join(' ').toLowerCase()
+  const text = [
+    title,
+    normalizeText(row.values.standard_work_name),
+    normalizeText(row.values.standard_work_code),
+    normalizeText(metadata.standardWorkName),
+    normalizeText(metadata.standardWorkCode),
+    contributionMode,
+    gateRelation,
+    roleText,
+  ].join(' ')
+
+  if (contributionMode === 'quality_gate' || gateRelation === 'acceptance_gate') return true
+  if (includesAny(roleText, ['hidden_acceptance', 'acceptance_gate', 'special_acceptance', 'completion_acceptance', 'test_report'])) return true
+  return includesAny(text, [
+    'hidden_acceptance',
+    'concealed',
+    'pressure_test',
+    'water_test',
+    'closure',
+    'seal',
+    'firestop',
+    'quality_gate',
+    '隐蔽',
+    '试压',
+    '水压',
+    '闭水',
+    '封板',
+    '封闭',
+    '封堵',
+    '验收',
+  ])
+}
+
 function getCompressibleTargetRows(
   rows: ScheduleAccelerationRow[],
   profileCode = 'general_building',
@@ -1051,6 +1133,7 @@ function getCompressibleTargetRows(
       isTargetScheduleRow(row)
       && isTargetDurationBearingRow(row)
       && !getHardConstraintReason(row)
+      && !hasUnreleasedHoldPoint(row)
       && readGeneratedRowPlanDurationDays(row, calendar) >= 3
     ))
     .sort((left, right) => {
@@ -1217,6 +1300,19 @@ function resolveTargetFeasibilityVerdict(params: {
             : 'infeasible'
 }
 
+function confidenceAdjustedUnrecoverableDays(params: {
+  overshootDays: number
+  deterministicUnrecoverableDays: number
+  recoverableBand?: ScheduleAccelerationConfidenceBand | null
+}) {
+  const conservativeRecoverableDays = params.recoverableBand?.conservativeDays
+  if (conservativeRecoverableDays == null) return params.deterministicUnrecoverableDays
+  return Math.max(
+    params.deterministicUnrecoverableDays,
+    Math.max(0, params.overshootDays - conservativeRecoverableDays),
+  )
+}
+
 function getGeneratedRowTitle(row: ScheduleAccelerationRow) {
   return normalizeText(row.values.title ?? row.values.name ?? row.clientRowId)
 }
@@ -1251,6 +1347,7 @@ function buildFastTrackProposalAction(params: {
       if (dependency.dependencyType !== 'FS' && dependency.dependencyType !== 'SS') return false
       const predecessor = rowById.get(dependency.clientRowId)
       if (predecessor && getHardConstraintReason(predecessor)) return false
+      if (hasUnreleasedHoldPoint(row) || (predecessor && hasUnreleasedHoldPoint(predecessor))) return false
       return getDependencyAccelerationPriority(dependency) >= 2
     })
     .sort((left, right) => (
@@ -1850,6 +1947,11 @@ function buildTargetAccelerationProposal(params: {
     totalRecoverDays,
     terminalRecovery.networkFallbackPolicy,
   )
+  const confidenceRemainingGapDays = confidenceAdjustedUnrecoverableDays({
+    overshootDays: params.overshootDays,
+    deterministicUnrecoverableDays: remainingGapDays,
+    recoverableBand: recoverableDaysConfidenceBand,
+  })
   const accelerationTargetConfidenceBand = buildAccelerationTargetConfidenceBand({
     naturalDurationDays: params.budget.naturalDurationDays,
     accelerationTargetDays,
@@ -1907,7 +2009,7 @@ function buildTargetAccelerationProposal(params: {
     accelerationTargetDays,
     recoverableDaysConfidenceBand,
     accelerationTargetConfidenceBand,
-    verdict: remainingGapDays === 0
+    verdict: remainingGapDays === 0 && confidenceRemainingGapDays === 0
       ? 'draft_recoverable'
       : params.verdict === 'infeasible'
         ? 'infeasible'
@@ -1993,11 +2095,18 @@ function evaluateScheduleTargetFeasibilityInternal(params: {
     ? accelerationProposal.totalRecoverDays
     : recoverableBudgetDays
   const unrecoverableDays = Math.max(0, overshootDays - recoverableDays)
+  const recoverableDaysConfidenceBand = accelerationProposal?.recoverableDaysConfidenceBand
+    ?? buildRecoverableDaysConfidenceBand(recoverableDays, null)
+  const verdictUnrecoverableDays = confidenceAdjustedUnrecoverableDays({
+    overshootDays,
+    deterministicUnrecoverableDays: unrecoverableDays,
+    recoverableBand: recoverableDaysConfidenceBand,
+  })
   const verdict = resolveTargetFeasibilityVerdict({
     overshootDays,
     targetBeforeStart,
     naturalDurationDays,
-    unrecoverableDays,
+    unrecoverableDays: verdictUnrecoverableDays,
   })
   const result: ScheduleTargetFeasibility = {
     mode: params.mode ?? 'compare_only',
@@ -2016,8 +2125,7 @@ function evaluateScheduleTargetFeasibilityInternal(params: {
       budget,
       proposal: accelerationProposal,
     }),
-    recoverableDaysConfidenceBand: accelerationProposal?.recoverableDaysConfidenceBand
-      ?? buildRecoverableDaysConfidenceBand(recoverableDays, null),
+    recoverableDaysConfidenceBand,
   }
   result.accelerationProposal = accelerationProposal
   if (result.accelerationProposal) {

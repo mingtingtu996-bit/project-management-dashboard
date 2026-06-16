@@ -928,6 +928,67 @@ describe('taskDurationForecastService', () => {
     expect(state.insertedForecasts[0]?.confidence_score).toBe(forecast.confidenceScore)
   })
 
+  it('routes gate-style acceptance and handover tasks away from SPI/EAC extrapolation', async () => {
+    state.tasks = [{
+      id: 'task-gate-style',
+      project_id: 'project-1',
+      title: '系统调试验收资料移交',
+      planned_start_date: '2026-05-01',
+      planned_end_date: '2026-05-12',
+      actual_start_date: '2026-05-01',
+      progress: 20,
+      acceptance_required: true,
+      material_required: true,
+      standard_task_metadata: {
+        durationContributionMode: 'quality_gate',
+        qualityControlRole: 'acceptance_gate',
+        inspectionAcceptanceRole: 'special_acceptance',
+        documentEvidenceRole: 'handover_document',
+      },
+    }]
+    state.conditions = [{
+      id: 'condition-1',
+      project_id: 'project-1',
+      task_id: 'task-gate-style',
+      condition_type: 'acceptance',
+      name: '系统调试验收移交资料',
+      status: 'pending',
+      is_satisfied: false,
+      required_for_start: true,
+      blocking_level: 'hard',
+      target_date: '2026-05-25',
+    }]
+    state.acceptancePlans = [{
+      id: 'acceptance-plan-1',
+      project_id: 'project-1',
+      task_id: 'task-gate-style',
+      status: 'pending',
+      planned_date: '2026-05-24',
+      actual_date: null,
+      gate_hint: 'acceptance',
+      blocked_requirement_count: 1,
+      upstream_unfinished_count: 1,
+      requirement_ready_percent: 40,
+      is_overdue: false,
+    }]
+
+    const forecast = await forecastTaskDuration('task-gate-style')
+
+    const candidateKeys = (forecast.forecastSources?.candidates as Array<{ key: string }> | undefined)
+      ?.map((candidate) => candidate.key) ?? []
+
+    expect(candidateKeys).toEqual(expect.arrayContaining(['reference_ratio']))
+    expect(candidateKeys).not.toContain('spi_eac')
+    expect(candidateKeys).not.toContain('recent_velocity')
+    expect(candidateKeys).not.toContain('history_velocity')
+    expect(forecast.forecastSources).toEqual(expect.objectContaining({
+      taskSemanticMode: 'gate_status_date',
+      gateRelation: 'acceptance_gate',
+    }))
+    expect(Number(forecast.forecastSources?.acceptanceFinishWaitDays ?? 0)).toBeGreaterThan(0)
+    expect(Number(forecast.forecastSources?.acceptanceFinishRemainingDays ?? 0)).toBeGreaterThan(0)
+  })
+
   it('passes projectGenerationFacts snapshot into remaining duration reference suggestion', async () => {
     state.tasks = [{
       id: 'task-facts-forecast',
@@ -1150,6 +1211,32 @@ describe('taskDurationForecastService', () => {
 
     expect(forecast.forecastSources?.candidates).toEqual(expect.arrayContaining([
       expect.objectContaining({ key: 'spi_eac', days: 19 }),
+    ]))
+  })
+
+  it('applies the progress curve to SPI/EAC so it cannot dilute an S-curve body', async () => {
+    mocks.getTaskDurationSuggestion.mockResolvedValueOnce({
+      ...baseSuggestion(),
+      recommendedDurationDays: 20,
+      conservativeDurationDays: 28,
+    })
+    state.tasks = [{
+      id: 'task-spi-s-curve',
+      project_id: 'project-1',
+      title: 'MEP installation task',
+      standard_work_code: 'mep_installation_task',
+      planned_start_date: '2026-05-01',
+      planned_end_date: '2026-05-20',
+      actual_start_date: '2026-05-01',
+      progress: 70,
+    }]
+
+    const forecast = await forecastTaskDuration('task-spi-s-curve')
+
+    expect(forecast.forecastSources?.curveType).toBe('s_curve')
+    expect(forecast.forecastSources?.candidates).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: 'reference_ratio', days: 8 }),
+      expect.objectContaining({ key: 'spi_eac', days: 10 }),
     ]))
   })
 
@@ -2916,14 +3003,14 @@ describe('taskDurationForecastService', () => {
 
     expect(forecast.forecastSources?.curveType).toBe('back_heavy')
     expect(forecast.forecastSources?.curveMultiplier).toBe(1.5)
-    expect(forecast.remainingDurationDays).toBe(5)
+    expect(forecast.remainingDurationDays).toBe(6)
     expect(forecast.forecastSources?.candidates).toEqual(expect.arrayContaining([
-      expect.objectContaining({ key: 'reference_ratio', days: 3 }),
+      expect.objectContaining({ key: 'reference_ratio', days: 4 }),
     ]))
     expect((forecast.forecastSources?.candidates as Array<{ key: string }>).map((candidate) => candidate.key)).not.toContain('spi_eac')
     expect(probabilityDuration).toEqual(expect.objectContaining({
-      p50RemainingDays: 5,
-      p80RemainingDays: 6,
+      p50RemainingDays: 6,
+      p80RemainingDays: 11,
     }))
   })
 
@@ -3025,13 +3112,151 @@ describe('taskDurationForecastService', () => {
 
     expect(forecast.forecastSources?.curveType).toBe('back_heavy')
     expect(forecast.forecastSources?.candidates).toEqual(expect.arrayContaining([
-      expect.objectContaining({ key: 'reference_ratio', days: 3 }),
-      expect.objectContaining({ key: 'history_velocity', days: 4 }),
+      expect.objectContaining({ key: 'reference_ratio', days: 4 }),
+      expect.objectContaining({ key: 'history_velocity', days: 5 }),
     ]))
     expect(forecast.forecastSources?.weights).toEqual([
-      expect.objectContaining({ key: 'history_velocity', days: 4, weight: 1 }),
+      expect.objectContaining({ key: 'history_velocity', days: 5, weight: 1 }),
     ])
-    expect(forecast.remainingDurationDays).toBe(6)
+    expect(forecast.remainingDurationDays).toBe(8)
+  })
+
+  it('uses the non-linear S-curve body for reference and history velocity candidates', async () => {
+    mocks.getTaskDurationSuggestion.mockResolvedValueOnce({
+      ...baseSuggestion(),
+      recommendedDurationDays: 20,
+      conservativeDurationDays: 28,
+    })
+    mocks.buildProjectProgressVelocityLearning.mockResolvedValueOnce({
+      durationRatio: 1.2,
+      multiplier: 1.2,
+      confidenceLevel: 'high',
+      confidenceScore: 84,
+      confidenceDelta: 4,
+      actionPolicy: 'auto_apply',
+      sampleCount: 8,
+      variance: 0.06,
+      groupKey: 'standard_work:mep_installation_task',
+      excludedAnomalyTaskCount: 0,
+      reason: 'Similar completed installation tasks multiplier 1.2.',
+      metadata: { matchLevel: 'standard_work' },
+    })
+    state.modelProfiles = [{
+      id: 'profile-history-velocity-s-curve-body',
+      model_key: 'remaining_duration_forecast',
+      model_status: 'active',
+      confidence_weight: 1,
+      metadata: {
+        modelVersion: 'history_velocity_s_curve_body_contract_v1',
+        candidateWeights: {
+          L2: { reference_ratio: 0, spi_eac: 0, recent_velocity: 0, history_velocity: 1 },
+        },
+      },
+    }]
+    state.tasks = [{
+      id: 'task-history-velocity-s-curve-body',
+      project_id: 'project-1',
+      title: 'MEP installation task',
+      standard_work_code: 'mep_installation_task',
+      planned_start_date: '2026-05-01',
+      planned_end_date: '2026-05-20',
+      actual_start_date: '2026-05-01',
+      progress: 70,
+    }]
+
+    const forecast = await forecastTaskDuration('task-history-velocity-s-curve-body')
+
+    expect(forecast.forecastSources?.curveType).toBe('s_curve')
+    expect(forecast.forecastSources?.candidates).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: 'reference_ratio', days: 8 }),
+      expect.objectContaining({ key: 'history_velocity', days: 10 }),
+    ]))
+    expect(forecast.forecastSources?.weightedBaseRemainingDays).toBe(10)
+    expect(forecast.remainingDurationDays).toBe(10)
+  })
+
+  it('keeps a structural tail reserve for back-heavy work before the finishing plateau', async () => {
+    mocks.getTaskDurationSuggestion.mockResolvedValueOnce({
+      ...baseSuggestion(),
+      recommendedDurationDays: 20,
+      conservativeDurationDays: 28,
+    })
+    state.modelProfiles = [{
+      id: 'profile-back-heavy-mid-tail-reserve',
+      model_key: 'remaining_duration_forecast',
+      model_status: 'active',
+      confidence_weight: 1,
+      metadata: {
+        modelVersion: 'back_heavy_mid_tail_reserve_contract_v1',
+        candidateWeights: {
+          L1: { reference_ratio: 0, spi_eac: 0, recent_velocity: 1, history_velocity: 0 },
+        },
+      },
+    }]
+    state.tasks = [{
+      id: 'task-back-heavy-mid-tail-reserve',
+      project_id: 'project-1',
+      title: 'Commissioning task',
+      standard_work_code: 'commissioning_task',
+      planned_start_date: '2026-05-01',
+      planned_end_date: '2026-05-20',
+      actual_start_date: '2026-05-01',
+      progress: 50,
+    }]
+    state.snapshots = [
+      { task_id: 'task-back-heavy-mid-tail-reserve', progress: 10, snapshot_date: '2026-05-16', created_at: '2026-05-16T08:00:00.000Z' },
+      { task_id: 'task-back-heavy-mid-tail-reserve', progress: 30, snapshot_date: '2026-05-17', created_at: '2026-05-17T08:00:00.000Z' },
+      { task_id: 'task-back-heavy-mid-tail-reserve', progress: 50, snapshot_date: '2026-05-18', created_at: '2026-05-18T08:00:00.000Z' },
+    ]
+
+    const forecast = await forecastTaskDuration('task-back-heavy-mid-tail-reserve')
+    const candidateKeys = (forecast.forecastSources?.candidates as Array<{ key: string }>).map((candidate) => candidate.key)
+
+    expect(forecast.forecastSources?.curveType).toBe('back_heavy')
+    expect(forecast.forecastSources?.candidates).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: 'reference_ratio', days: 13 }),
+    ]))
+    expect(candidateKeys).not.toContain('recent_velocity')
+    expect(forecast.forecastSources?.weightedBaseRemainingDays).toBe(13)
+    expect(forecast.remainingDurationDays).toBe(17)
+  })
+
+  it('adds a structural tail reserve to back-heavy work before any stuck signal appears', async () => {
+    mocks.getTaskDurationSuggestion.mockResolvedValueOnce({
+      ...baseSuggestion(),
+      recommendedDurationDays: 20,
+      conservativeDurationDays: 28,
+    })
+    state.modelProfiles = [{
+      id: 'profile-back-heavy-structural-tail',
+      model_key: 'remaining_duration_forecast',
+      model_status: 'active',
+      confidence_weight: 1,
+      metadata: {
+        modelVersion: 'back_heavy_structural_tail_contract_v1',
+        candidateWeights: {
+          L1: { reference_ratio: 1, spi_eac: 0, recent_velocity: 0, history_velocity: 0 },
+        },
+      },
+    }]
+    state.tasks = [{
+      id: 'task-back-heavy-structural-tail',
+      project_id: 'project-1',
+      title: 'Commissioning task',
+      standard_work_code: 'commissioning_task',
+      planned_start_date: '2026-05-01',
+      planned_end_date: '2026-05-20',
+      actual_start_date: '2026-05-01',
+      progress: 70,
+    }]
+
+    const forecast = await forecastTaskDuration('task-back-heavy-structural-tail')
+
+    expect(forecast.forecastSources?.curveType).toBe('back_heavy')
+    expect(forecast.forecastSources?.candidates).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: 'reference_ratio', days: 10 }),
+    ]))
+    expect(forecast.forecastSources?.weightedBaseRemainingDays).toBe(10)
   })
 
   it('applies project schedule state acceleration as a short-term remaining-duration correction', async () => {
@@ -3204,7 +3429,7 @@ describe('taskDurationForecastService', () => {
     })
   })
 
-  it('sharpens the optimistic probability side from benchmark variance sidecar when explicit P20 is absent', async () => {
+  it('sharpens the optimistic probability side from benchmark variance when explicit P20 is absent', async () => {
     mocks.getTaskDurationSuggestion.mockResolvedValueOnce({
       ...baseSuggestion(),
       recommendedDurationDays: 20,
@@ -3218,7 +3443,7 @@ describe('taskDurationForecastService', () => {
     state.tasks = [{
       id: 'task-probability-variance',
       project_id: 'project-1',
-      title: 'Concrete pour with variance sidecar',
+      title: 'Concrete pour with benchmark variance',
       standard_work_code: 'cast_in_place_concrete',
       planned_start_date: '2026-05-01',
       planned_end_date: '2026-05-20',

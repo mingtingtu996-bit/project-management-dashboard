@@ -441,6 +441,41 @@ describe('projectRemainingDurationForecastService', () => {
     expect(forecast.calculationContext.criticalPath.latestCriticalFinishDate).toBe('2026-06-13')
   })
 
+  it('projects remaining finish dates on construction production days when a shutdown calendar is supplied', () => {
+    const forecast = buildProjectRemainingDurationForecast({
+      rows: [
+        row({
+          clientRowId: 'shutdown-critical',
+          values: {
+            ...row().values,
+            planned_end_date: '2026-02-15',
+            remaining_duration_days: 2,
+            is_critical: true,
+            total_float_days: 0,
+            free_float_days: 0,
+          },
+        }),
+      ],
+      asOfDate: '2026-02-14',
+      targetEndDate: '2026-02-15',
+      constructionCalendar: {
+        basis: 'official_construction_calendar_seed',
+        windows: [{
+          holidayCode: 'spring_festival_2026',
+          holidayName: 'Spring Festival construction shutdown',
+          startDate: '2026-02-15',
+          endDate: '2026-02-17',
+          counts_as_construction_shutdown: true,
+        }],
+      },
+    })
+
+    expect(forecast.forecastFinishDate).toBe('2026-02-18')
+    expect(forecast.projectRemainingForecastDays).toBe(2)
+    expect(forecast.targetGapDays).toBe(1)
+    expect(forecast.calculationContext.criticalPath.latestCriticalFinishDate).toBe('2026-02-18')
+  })
+
   it('overlaps external hard-gate remaining windows with internal work', () => {
     const forecast = buildProjectRemainingDurationForecast({
       rows: [
@@ -485,6 +520,52 @@ describe('projectRemainingDurationForecastService', () => {
       overlappedGateFinishDate: '2026-06-22',
       gateTailDaysAfterInternal: 0,
       serializedGateFinishDate: null,
+    }))
+  })
+
+  it('derives external gate treatment from acceptance gate taxonomy even when the row is not marked external_wait', () => {
+    const forecast = buildProjectRemainingDurationForecast({
+      rows: [
+        row({
+          clientRowId: 'internal-critical',
+          values: {
+            ...row().values,
+            planned_end_date: '2026-06-20',
+            is_critical: true,
+            total_float_days: 0,
+            free_float_days: 0,
+          },
+        }),
+        row({
+          clientRowId: 'certificate-acceptance-gate',
+          values: {
+            title: 'Certificate acceptance release',
+            planned_start_date: '2026-06-18',
+            planned_end_date: '2026-06-25',
+            progress: 0,
+            status: 'todo',
+            duration_contribution_mode: 'quality_gate',
+            standard_task_metadata: {
+              gateRelation: 'acceptance_gate',
+              qualityControlRole: 'acceptance_gate',
+            },
+          },
+        }),
+      ],
+      asOfDate: '2026-06-10',
+      targetEndDate: '2026-06-24',
+    })
+
+    expect(forecast.forecastFinishDate).toBe('2026-06-25')
+    expect(forecast.calculationContext.externalInterfaces).toEqual(expect.objectContaining({
+      hardGateCount: 1,
+      latestGateFinishDate: '2026-06-25',
+      overlappedGateFinishDate: '2026-06-25',
+      serializedGateFinishDate: '2026-06-25',
+    }))
+    expect(forecast.calculationContext.criticalPath).toEqual(expect.objectContaining({
+      remainingTaskCount: 1,
+      latestCriticalFinishDate: '2026-06-20',
     }))
   })
 
