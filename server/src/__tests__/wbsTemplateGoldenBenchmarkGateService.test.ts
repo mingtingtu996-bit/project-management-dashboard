@@ -305,8 +305,10 @@ describe('wbsTemplateGoldenBenchmarkGateService', () => {
             absolute_error_days: 1,
             prediction_context: {
               assetKey: 'wbs_reference_days',
+              publicationKey: 'wbs_reference_days_runtime:wbs-reference-days-v2',
             },
             actual_context: {
+              assetKey: 'wbs_reference_days',
               accuracyGateStatus: 'accuracy_passed',
             },
           },

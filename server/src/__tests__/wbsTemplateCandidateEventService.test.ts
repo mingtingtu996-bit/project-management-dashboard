@@ -451,8 +451,10 @@ describe('wbsTemplateCandidateEventService', () => {
             absolute_error_days: 1,
             prediction_context: {
               assetKey: 'special_work_duration_seed',
+              publicationKey: 'wbs_template_runtime:special-seed-version-v2',
             },
             actual_context: {
+              assetKey: 'special_work_duration_seed',
               accuracyGateStatus: 'accuracy_passed',
             },
           },

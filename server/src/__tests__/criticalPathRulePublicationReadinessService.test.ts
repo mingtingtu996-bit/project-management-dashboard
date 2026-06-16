@@ -145,8 +145,10 @@ describe('criticalPathRulePublicationReadinessService', () => {
             absolute_error_days: 1,
             prediction_context: {
               assetKey: 'critical_path_rule_candidate',
+              publicationKey: 'critical_path_rule_runtime:critical-path-rule-version-v2',
             },
             actual_context: {
+              assetKey: 'critical_path_rule_candidate',
               accuracyGateStatus: 'accuracy_passed',
             },
           },

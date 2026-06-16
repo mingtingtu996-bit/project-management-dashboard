@@ -516,8 +516,10 @@ describe('construction dependency replay calibration service', () => {
             absolute_error_days: 1,
             prediction_context: {
               assetKey: 'dependency_rule_candidate',
+              publicationKey: 'dependency_rule_runtime:dependency-rule-version-v2',
             },
             actual_context: {
+              assetKey: 'dependency_rule_candidate',
               accuracyGateStatus: 'accuracy_passed',
             },
           },

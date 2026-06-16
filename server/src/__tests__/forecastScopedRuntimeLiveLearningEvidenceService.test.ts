@@ -161,9 +161,11 @@ describe('forecastScopedRuntimeLiveLearningEvidenceService', () => {
               absolute_error_days: 1,
               prediction_context: {
                 assetKey: asset.assetKey,
+                publicationKey: asset.publicationKey,
               },
               actual_context: {
                 assetKey: asset.assetKey,
+                publicationKey: asset.publicationKey,
                 accuracyGateStatus: 'accuracy_passed',
               },
             },
