@@ -219,6 +219,21 @@ function coldStartSampleScopeFromRow(row: Record<string, unknown>) {
   )
 }
 
+function expectedColdStartSampleScopeSource(scope: AlgorithmAssetColdStartProductionSampleScope | null) {
+  if (scope === 'company') return 'company_aggregate_evidence_job'
+  if (scope === 'project') return 'task_completion_writer'
+  return null
+}
+
+function coldStartSampleHasMatchingScopeSource(
+  row: Record<string, unknown>,
+  scope: AlgorithmAssetColdStartProductionSampleScope | null,
+) {
+  const expectedSource = expectedColdStartSampleScopeSource(scope)
+  if (!expectedSource) return false
+  return readText(row, 'learning_scope_source', 'learningScopeSource') === expectedSource
+}
+
 function isAcceptedColdStartSampleRow(row: Record<string, unknown>) {
   return coldStartAssetKeyFromSampleRow(row) === COLD_START_BASELINE_ASSET_KEY
     && readText(row, 'sample_status', 'sampleStatus') === 'active'
@@ -239,6 +254,7 @@ function countAcceptedColdStartSamplesByScope(
     if (!isAcceptedColdStartSampleRow(source.row)) continue
     const scope = coldStartSampleScopeFromRow(source.row)
     if (!scope) continue
+    if (!coldStartSampleHasMatchingScopeSource(source.row, scope)) continue
     counts[scope] += 1
   }
   return counts

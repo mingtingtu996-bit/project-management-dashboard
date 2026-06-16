@@ -234,4 +234,74 @@ describe('baseDurationBenchmarkLiveLearningEvidenceService', () => {
     expect(decision.productionLineage.rejectedRows).toEqual([])
     expect(decision.productionLineage.rejectedRecords).toEqual([])
   })
+
+  it('does not count mismatched learning scope sources toward base duration scope maturity', () => {
+    const decision = buildBaseDurationBenchmarkLiveLearningEvidenceFromProductionRows({
+      enabledLearningScopes: ['system', 'industry_baseline', 'company', 'project'],
+      sourceRows: [
+        ...['global', 'industry', 'company', 'project'].map((learningScope, index) => ({
+          sourceTable: 'duration_experience_samples' as const,
+          row: {
+            id: `forged-base-sample-${learningScope}`,
+            sample_status: 'active',
+            included_in_benchmark: true,
+            actual_duration: 6 + index,
+            completed_at: '2026-06-14T00:00:00.000Z',
+            learning_scope: learningScope,
+            learning_scope_source: 'task_completion_writer',
+            metadata: {
+              liveLearningAssetKey: 'base_duration_benchmark',
+              learningScope,
+            },
+          },
+        })),
+        {
+          sourceTable: 'algorithm_learnable_parameter_runtime_publications',
+          row: {
+            publication_key: 'duration_benchmark_runtime:benchmark-blend-v2',
+            asset_key: 'base_duration_benchmark',
+            publication_status: 'published',
+            impact_monitoring: { status: 'monitoring_armed' },
+            rollback_execution: { status: 'rollback_verified' },
+          },
+        },
+        {
+          sourceTable: 'runtime_consumer_observations',
+          row: {
+            id: 'consumer-base-duration-1',
+            asset_key: 'base_duration_benchmark',
+            consumer_key: 'durationSuggestionService',
+            publication_key: 'duration_benchmark_runtime:benchmark-blend-v2',
+            observation_status: 'observed',
+            writes_runtime_directly: false,
+            writes_fact_directly: false,
+          },
+        },
+        {
+          sourceTable: 'duration_algorithm_accuracy_events',
+          row: {
+            id: 'accuracy-base-duration-1',
+            absolute_error_days: 1,
+            prediction_context: {
+              assetKey: 'base_duration_benchmark',
+              publicationKey: 'duration_benchmark_runtime:benchmark-blend-v2',
+            },
+            actual_context: {
+              assetKey: 'base_duration_benchmark',
+              accuracyGateStatus: 'accuracy_passed',
+            },
+          },
+        },
+      ],
+    })
+
+    expect(decision.status).toBe('base_duration_benchmark_live_learning_not_ready')
+    expect(decision.benchmarkLineage.acceptedSampleCounts).toEqual({
+      global: 0,
+      industry: 0,
+      company: 0,
+      project: 1,
+    })
+    expect(decision.missingReasons).toContain('base_duration_scope_sample_coverage_required')
+  })
 })

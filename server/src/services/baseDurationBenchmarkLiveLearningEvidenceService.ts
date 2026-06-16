@@ -155,6 +155,20 @@ function baseDurationSampleScopeFromRow(row: Record<string, unknown>): DurationL
   )
 }
 
+function expectedDurationSampleScopeSource(scope: DurationLearningScope | null) {
+  if (scope === 'project') return 'task_completion_writer'
+  if (scope === 'company') return 'company_aggregate_evidence_job'
+  if (scope === 'industry') return 'industry_shared_baseline_job'
+  if (scope === 'global') return 'global_shared_baseline_job'
+  return null
+}
+
+function baseDurationSampleHasMatchingScopeSource(row: Record<string, unknown>, scope: DurationLearningScope | null) {
+  const expectedSource = expectedDurationSampleScopeSource(scope)
+  if (!expectedSource) return false
+  return readText(row, 'learning_scope_source', 'learningScopeSource') === expectedSource
+}
+
 function isAcceptedBaseDurationSampleRow(row: Record<string, unknown>) {
   return baseDurationAssetKeyFromSampleRow(row) === BASE_DURATION_BENCHMARK_ASSET_KEY
     && readText(row, 'sample_status', 'sampleStatus') === 'active'
@@ -177,6 +191,7 @@ function countAcceptedBaseDurationSamplesByScope(
     if (!isAcceptedBaseDurationSampleRow(source.row)) continue
     const scope = baseDurationSampleScopeFromRow(source.row)
     if (!scope) continue
+    if (!baseDurationSampleHasMatchingScopeSource(source.row, scope)) continue
     counts[scope] += 1
   }
   return counts
