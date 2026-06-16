@@ -96,6 +96,13 @@ function runtimeEntryFunctionName(runtimeEntryRef: string) {
   return runtimeEntryRef.split(':')[1]?.trim() ?? ''
 }
 
+function stripCommentsAndStringLiterals(sourceText: string) {
+  return sourceText
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/[^\n\r]*/g, '')
+    .replace(/(['"`])(?:\\[\s\S]|(?!\1)[^\\])*\1/g, '')
+}
+
 function findRuntimeEntryBody(sourceText: string, runtimeEntryRef: string) {
   const entryFunctionName = runtimeEntryFunctionName(runtimeEntryRef)
   if (!entryFunctionName) return ''
@@ -123,7 +130,8 @@ function hasFacadeCallInRuntimeEntry(
   runtimeEntryRef: string,
 ) {
   const callPattern = new RegExp(`\\b${escapeRegExp(facadeFunctionName)}\\s*\\(`)
-  const runtimeEntryBody = findRuntimeEntryBody(sourceText, runtimeEntryRef)
+  const executableSourceText = stripCommentsAndStringLiterals(sourceText)
+  const runtimeEntryBody = findRuntimeEntryBody(executableSourceText, runtimeEntryRef)
   return sourceText.includes(facadeFunctionName)
     && sourceText.includes('durationRuntimeConsumerObservationAdapterService')
     && callPattern.test(runtimeEntryBody)
