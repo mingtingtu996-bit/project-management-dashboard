@@ -1430,6 +1430,42 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
     expect(audit.allowedClaim).toBe('not_ready_for_live_self_learning_claim')
   })
 
+  it('blocks the final production claim when any declared runtime consumer observes a stale publication', () => {
+    const audit = buildDurationLiveLearningProductionClaimAudit({
+      completionAudit: buildReadyCompletionAudit(),
+      sourceRows: [
+        ...buildAllProductionSourceRows().map((source) => {
+          if (
+            source.sourceTable !== 'runtime_consumer_observations'
+            || source.row.asset_key !== 'forecast_residual_overlay'
+            || source.row.consumer_key !== 'projectRemainingDurationForecastService'
+          ) {
+            return source
+          }
+          return {
+            ...source,
+            row: {
+              ...source.row,
+              publication_key: 'forecast_residual_overlay_runtime:overlay-v1',
+            },
+          }
+        }),
+        ...buildRuntimeConsumerRuntimeCallRows(),
+      ],
+      records: buildPlanNetworkOutcomeRecords(),
+      runtimeConsumerBusinessPathSourceFiles: buildReadyBusinessPathSourceFiles(),
+    })
+
+    expect(audit.productionGate.status).toBe('duration_live_learning_production_evidence_ready')
+    expect(audit.runtimeConsumerObservationCoverage.status).toBe('runtime_consumer_observation_coverage_not_ready')
+    expect(audit.runtimeConsumerObservationCoverage.missingConsumerObservations).toEqual([{
+      assetKey: 'forecast_residual_overlay',
+      consumerKey: 'projectRemainingDurationForecastService',
+    }])
+    expect(audit.status).toBe('duration_live_learning_production_claim_not_ready')
+    expect(audit.allowedClaim).toBe('not_ready_for_live_self_learning_claim')
+  })
+
   it('keeps the source-row production claim blocked until typed network outcomes are supplied', () => {
     const audit = buildDurationLiveLearningProductionClaimAudit({
       completionAudit: buildReadyCompletionAudit(),

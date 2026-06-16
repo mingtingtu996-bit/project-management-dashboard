@@ -75,6 +75,7 @@ export interface DurationLiveLearningProductionEvidenceRecord {
 export interface DurationRuntimeConsumerObservationIdentity {
   assetKey: DurationLiveLearningAssetKey
   consumerKey: string
+  publicationKey?: string | null
 }
 
 export interface DurationRuntimeConsumerObservationCoverage {
@@ -488,7 +489,12 @@ function uniqueConsumerObservations(
   for (const value of values) {
     const consumerKey = normalizeConsumerKey(value.consumerKey)
     if (!consumerKey) continue
-    const normalized = { assetKey: value.assetKey, consumerKey }
+    const publicationKey = normalizeText(value.publicationKey)
+    const normalized = {
+      assetKey: value.assetKey,
+      consumerKey,
+      ...(publicationKey ? { publicationKey } : {}),
+    }
     map.set(consumerObservationKey(normalized), normalized)
   }
   return [...map.values()]
@@ -710,7 +716,7 @@ function observedRuntimeConsumerObservationsFromRecords(
     if (!acceptedStatusesFor(record.evidenceKind).has(normalizeText(record.evidenceStatus))) continue
     if (!evidenceRef || !hasAcceptedRefSource(record.evidenceKind, evidenceRef, record.assetKey)) continue
     if (!isDurationRuntimeConsumerPublicationKeyAllowedForAsset(record.assetKey, record.publicationKey)) continue
-    observed.push({ assetKey: record.assetKey, consumerKey })
+    observed.push({ assetKey: record.assetKey, consumerKey, publicationKey: record.publicationKey })
   }
   return observed
 }
@@ -730,20 +736,37 @@ function observedRuntimeConsumerObservationsFromSourceRows(
     if (!isDurationRuntimeConsumerPublicationKeyAllowedForAsset(assetKey, publicationKey)) continue
     if (readTrue(row, 'writes_runtime_directly', 'writesRuntimeDirectly')) continue
     if (readTrue(row, 'writes_fact_directly', 'writesFactDirectly')) continue
-    observed.push({ assetKey, consumerKey })
+    observed.push({ assetKey, consumerKey, publicationKey })
   }
   return observed
+}
+
+function runtimeConsumerObservationMatchesProductionPublication(
+  observation: DurationRuntimeConsumerObservationIdentity,
+  productionEvidence: DurationLiveLearningProductionEvidenceRef | undefined,
+) {
+  if (!productionEvidence) return true
+  return publicationRefMatchesPublicationKey(
+    productionEvidence.publicationExecutionRef,
+    observation.publicationKey,
+  )
 }
 
 export function evaluateDurationRuntimeConsumerObservationCoverage(input: {
   records?: readonly DurationLiveLearningProductionEvidenceRecord[]
   sourceRows?: readonly DurationLiveLearningProductionEvidenceSourceRow[]
+  productionEvidence?: readonly DurationLiveLearningProductionEvidenceRef[]
 } = {}): DurationRuntimeConsumerObservationCoverage {
   const requiredConsumerObservations = listDurationLiveLearningExpectedRuntimeConsumerObservations()
+  const productionEvidenceMap = buildProductionEvidenceMap(input.productionEvidence)
   const observedConsumerObservations = uniqueConsumerObservations([
     ...observedRuntimeConsumerObservationsFromRecords(input.records),
     ...observedRuntimeConsumerObservationsFromSourceRows(input.sourceRows),
-  ])
+  ].filter((observation) =>
+    runtimeConsumerObservationMatchesProductionPublication(
+      observation,
+      productionEvidenceMap.get(observation.assetKey),
+    )))
   const observedKeys = new Set(observedConsumerObservations.map(consumerObservationKey))
   const missingConsumerObservations = requiredConsumerObservations
     .filter((item) => !observedKeys.has(consumerObservationKey(item)))
@@ -1352,6 +1375,7 @@ export function buildDurationLiveLearningProductionClaimAudit(
   const runtimeConsumerObservationCoverage = evaluateDurationRuntimeConsumerObservationCoverage({
     records: claimEvidenceRecords,
     sourceRows: input.sourceRows,
+    productionEvidence: evidenceCollection.productionEvidence,
   })
   const runtimeConsumerObservationIntegrationCoverage =
     evaluateDurationRuntimeConsumerObservationIntegrationCoverage({
