@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   buildDurationLiveLearningCompletionAudit,
@@ -11,6 +11,26 @@ import type {
   DurationLiveLearningEvidence,
   DurationLiveLearningEvidenceOverride,
 } from '../services/durationLiveLearningClosureService.js'
+
+type ReaderRowProvider = (sql: string, params?: unknown[]) => Record<string, unknown>[]
+
+const databaseMock = vi.hoisted(() => {
+  const state = {
+    calls: [] as Array<{ sql: string, params: unknown[] }>,
+    rowProvider: ((() => []) as ReaderRowProvider),
+    query: vi.fn(),
+  }
+  state.query.mockImplementation(async (sql: string, params: unknown[] = []) => {
+    state.calls.push({ sql, params })
+    const rows = state.rowProvider(sql, params)
+    return { rows, rowCount: rows.length }
+  })
+  return state
+})
+
+vi.mock('../database.js', () => ({
+  query: databaseMock.query,
+}))
 
 const readyEvidence: DurationLiveLearningEvidence = {
   assetClassificationRegistered: true,
@@ -30,6 +50,12 @@ const dbClaimInputRejectsCallerCompletionAudit: DurationLiveLearningProductionCl
   completionAudit: null,
 }
 void dbClaimInputRejectsCallerCompletionAudit
+
+const dbClaimInputRejectsCallerQueryExec: DurationLiveLearningProductionClaimAuditFromDbInput = {
+  // @ts-expect-error DB production claims must use the canonical database reader, not caller-supplied query sources.
+  queryExec: async () => [],
+}
+void dbClaimInputRejectsCallerQueryExec
 
 const learnableAssetKeys: DurationLiveLearningAssetKey[] = [
   'base_duration_benchmark',
@@ -467,6 +493,11 @@ function rowsForSqlWithMissingProjectLearningScopeSources(sql: string) {
   return rowsForSql(sql)
 }
 
+function useCanonicalDbRows(rowProvider: ReaderRowProvider) {
+  databaseMock.calls.length = 0
+  databaseMock.rowProvider = rowProvider
+}
+
 function buildReadyBusinessPathSourceFiles() {
   return [
     {
@@ -527,15 +558,17 @@ function buildReadyBusinessPathSourceFiles() {
 }
 
 describe('durationLiveLearningProductionEvidenceReaderService', () => {
+  beforeEach(() => {
+    useCanonicalDbRows((sql) => rowsForSql(sql))
+  })
+
   it('keeps the DB-only production claim blocked when typed network outcomes are absent', async () => {
     const {
       buildDurationLiveLearningProductionClaimAuditFromDb,
     } = await import('../services/durationLiveLearningProductionEvidenceReaderService.js')
-    const queryExec = async <T = Record<string, unknown>>(sql: string): Promise<T[]> =>
-      rowsForSql(sql, { includePlanNetworkOutcomes: false }) as T[]
+    useCanonicalDbRows((sql) => rowsForSql(sql, { includePlanNetworkOutcomes: false }))
 
     const audit = await buildDurationLiveLearningProductionClaimAuditFromDb({
-      queryExec,
       maxRowsPerSourceTable: 200,
     })
 
@@ -559,14 +592,9 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
     const {
       buildDurationLiveLearningProductionClaimAuditFromDb,
     } = await import('../services/durationLiveLearningProductionEvidenceReaderService.js')
-    const calls: Array<{ sql: string, params: unknown[] }> = []
-    const queryExec = async <T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<T[]> => {
-      calls.push({ sql, params })
-      return rowsForSql(sql) as T[]
-    }
+    useCanonicalDbRows((sql) => rowsForSql(sql))
 
     const audit = await buildDurationLiveLearningProductionClaimAuditFromDb({
-      queryExec,
       maxRowsPerSourceTable: 200,
     })
 
@@ -597,7 +625,7 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
     expect(audit.evidenceRowCollection.rejectedRows).toEqual([])
     expect(audit.evidenceCollection.rejectedRecords).toEqual([])
 
-    const joinedSql = calls.map((call) => call.sql.toLowerCase()).join('\n')
+    const joinedSql = databaseMock.calls.map((call) => call.sql.toLowerCase()).join('\n')
     expect(joinedSql).toContain('from public.duration_experience_samples')
     expect(joinedSql).toContain('from public.algorithm_learnable_parameter_runtime_publications')
     expect(joinedSql).toContain('from public.algorithm_seed_versions')
@@ -620,11 +648,8 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
     const {
       buildDurationLiveLearningProductionClaimAuditFromDb,
     } = await import('../services/durationLiveLearningProductionEvidenceReaderService.js')
-    const queryExec = async <T = Record<string, unknown>>(sql: string): Promise<T[]> =>
-      rowsForSql(sql) as T[]
 
     const audit = await buildDurationLiveLearningProductionClaimAuditFromDb({
-      queryExec,
       maxRowsPerSourceTable: 200,
     })
 
@@ -646,11 +671,9 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
     const {
       buildDurationLiveLearningProductionClaimAuditFromDb,
     } = await import('../services/durationLiveLearningProductionEvidenceReaderService.js')
-    const queryExec = async <T = Record<string, unknown>>(sql: string): Promise<T[]> =>
-      rowsForSqlWithPlanNetworkScopesButNoOutcomeIds(sql) as T[]
+    useCanonicalDbRows((sql) => rowsForSqlWithPlanNetworkScopesButNoOutcomeIds(sql))
 
     const audit = await buildDurationLiveLearningProductionClaimAuditFromDb({
-      queryExec,
       maxRowsPerSourceTable: 200,
       records: buildPlanNetworkOutcomeRecords(),
     } as Parameters<typeof buildDurationLiveLearningProductionClaimAuditFromDb>[0] & {
@@ -677,11 +700,9 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
     const {
       buildDurationLiveLearningProductionClaimAuditFromDb,
     } = await import('../services/durationLiveLearningProductionEvidenceReaderService.js')
-    const queryExec = async <T = Record<string, unknown>>(sql: string): Promise<T[]> =>
-      rowsForSqlWithoutCompanyProjectDurationScopes(sql) as T[]
+    useCanonicalDbRows((sql) => rowsForSqlWithoutCompanyProjectDurationScopes(sql))
 
     const audit = await buildDurationLiveLearningProductionClaimAuditFromDb({
-      queryExec,
       maxRowsPerSourceTable: 200,
     })
 
@@ -711,11 +732,9 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
     const {
       buildDurationLiveLearningProductionClaimAuditFromDb,
     } = await import('../services/durationLiveLearningProductionEvidenceReaderService.js')
-    const queryExec = async <T = Record<string, unknown>>(sql: string): Promise<T[]> =>
-      rowsForSqlWithMetadataOnlyDurationScopes(sql) as T[]
+    useCanonicalDbRows((sql) => rowsForSqlWithMetadataOnlyDurationScopes(sql))
 
     const audit = await buildDurationLiveLearningProductionClaimAuditFromDb({
-      queryExec,
       maxRowsPerSourceTable: 200,
     })
 
@@ -740,11 +759,9 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
     const {
       buildDurationLiveLearningProductionClaimAuditFromDb,
     } = await import('../services/durationLiveLearningProductionEvidenceReaderService.js')
-    const queryExec = async <T = Record<string, unknown>>(sql: string): Promise<T[]> =>
-      rowsForSqlWithImplicitPlanNetworkScopes(sql) as T[]
+    useCanonicalDbRows((sql) => rowsForSqlWithImplicitPlanNetworkScopes(sql))
 
     const audit = await buildDurationLiveLearningProductionClaimAuditFromDb({
-      queryExec,
       maxRowsPerSourceTable: 200,
     })
 
@@ -770,11 +787,9 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
     const {
       buildDurationLiveLearningProductionClaimAuditFromDb,
     } = await import('../services/durationLiveLearningProductionEvidenceReaderService.js')
-    const queryExec = async <T = Record<string, unknown>>(sql: string): Promise<T[]> =>
-      rowsForSqlWithForgedUpperLearningScopes(sql) as T[]
+    useCanonicalDbRows((sql) => rowsForSqlWithForgedUpperLearningScopes(sql))
 
     const audit = await buildDurationLiveLearningProductionClaimAuditFromDb({
-      queryExec,
       maxRowsPerSourceTable: 200,
     })
 
@@ -809,11 +824,9 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
     const {
       buildDurationLiveLearningProductionClaimAuditFromDb,
     } = await import('../services/durationLiveLearningProductionEvidenceReaderService.js')
-    const queryExec = async <T = Record<string, unknown>>(sql: string): Promise<T[]> =>
-      rowsForSqlWithMissingProjectLearningScopeSources(sql) as T[]
+    useCanonicalDbRows((sql) => rowsForSqlWithMissingProjectLearningScopeSources(sql))
 
     const audit = await buildDurationLiveLearningProductionClaimAuditFromDb({
-      queryExec,
       maxRowsPerSourceTable: 200,
     })
 
@@ -839,11 +852,9 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
     const {
       buildDurationLiveLearningProductionClaimAuditFromDb,
     } = await import('../services/durationLiveLearningProductionEvidenceReaderService.js')
-    const queryExec = async <T = Record<string, unknown>>(sql: string): Promise<T[]> =>
-      rowsForSqlWithoutForecastScopeExceptionApproval(sql) as T[]
+    useCanonicalDbRows((sql) => rowsForSqlWithoutForecastScopeExceptionApproval(sql))
 
     const audit = await buildDurationLiveLearningProductionClaimAuditFromDb({
-      queryExec,
       maxRowsPerSourceTable: 200,
     })
 
@@ -873,11 +884,8 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
     const {
       buildDurationLiveLearningProductionClaimAuditFromDb,
     } = await import('../services/durationLiveLearningProductionEvidenceReaderService.js')
-    const queryExec = async <T = Record<string, unknown>>(sql: string): Promise<T[]> =>
-      rowsForSql(sql) as T[]
 
     const audit = await buildDurationLiveLearningProductionClaimAuditFromDb({
-      queryExec,
       maxRowsPerSourceTable: 200,
       requestedFactRewriteAssetKeys: ['baseline_commitment'],
     })
@@ -894,12 +902,9 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
     const {
       buildDurationLiveLearningProductionClaimAuditFromDb,
     } = await import('../services/durationLiveLearningProductionEvidenceReaderService.js')
-    const queryExec = async <T = Record<string, unknown>>(sql: string): Promise<T[]> =>
-      rowsForSql(sql) as T[]
 
     const illegalCallerInput = {
       completionAudit: buildDurationLiveLearningCompletionAudit(),
-      queryExec,
       maxRowsPerSourceTable: 200,
     } as Parameters<typeof buildDurationLiveLearningProductionClaimAuditFromDb>[0] & {
       completionAudit: ReturnType<typeof buildDurationLiveLearningCompletionAudit>
@@ -913,15 +918,30 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
     expect(audit.status).toBe('duration_live_learning_production_claim_ready')
   })
 
+  it('ignores caller-supplied queryExec even when runtime callers force it onto the DB claim input', async () => {
+    const {
+      buildDurationLiveLearningProductionClaimAuditFromDb,
+    } = await import('../services/durationLiveLearningProductionEvidenceReaderService.js')
+    const injectedQueryExec = vi.fn(async () => [])
+
+    const audit = await buildDurationLiveLearningProductionClaimAuditFromDb({
+      queryExec: injectedQueryExec,
+      maxRowsPerSourceTable: 200,
+    } as Parameters<typeof buildDurationLiveLearningProductionClaimAuditFromDb>[0] & {
+      queryExec: typeof injectedQueryExec
+    })
+
+    expect(injectedQueryExec).not.toHaveBeenCalled()
+    expect(databaseMock.calls.length).toBeGreaterThan(0)
+    expect(audit.status).toBe('duration_live_learning_production_claim_ready')
+  })
+
   it('loads real business path source files and allows the claim when runtime entries are integrated', async () => {
     const {
       buildDurationLiveLearningProductionClaimAuditFromDb,
     } = await import('../services/durationLiveLearningProductionEvidenceReaderService.js')
-    const queryExec = async <T = Record<string, unknown>>(sql: string): Promise<T[]> =>
-      rowsForSql(sql) as T[]
 
     const audit = await buildDurationLiveLearningProductionClaimAuditFromDb({
-      queryExec,
       maxRowsPerSourceTable: 200,
     })
 
@@ -936,14 +956,11 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
     const {
       buildDurationLiveLearningProductionClaimAuditFromDb,
     } = await import('../services/durationLiveLearningProductionEvidenceReaderService.js')
-    const queryExec = async <T = Record<string, unknown>>(sql: string): Promise<T[]> =>
-      rowsForSql(sql) as T[]
     const fakeSourceFiles = buildReadyBusinessPathSourceFiles().map((sourceFile) => ({
       ...sourceFile,
       sourceText: 'export function placeholderWithoutRuntimeConsumerFacade() { return null }',
     }))
     const input = {
-      queryExec,
       maxRowsPerSourceTable: 200,
       runtimeConsumerBusinessPathSourceFiles: fakeSourceFiles,
     } as Parameters<typeof buildDurationLiveLearningProductionClaimAuditFromDb>[0] & {

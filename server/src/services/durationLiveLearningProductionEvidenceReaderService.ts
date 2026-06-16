@@ -38,8 +38,8 @@ export interface DurationLiveLearningProductionEvidenceSourceQuery {
   sourceRows: DurationLiveLearningProductionEvidenceSourceRow[]
 }
 
-export interface DurationLiveLearningProductionClaimAuditFromDbInput
-  extends DurationLiveLearningProductionEvidenceSourceQueryInput {
+export interface DurationLiveLearningProductionClaimAuditFromDbInput {
+  maxRowsPerSourceTable?: number
   requestedFactRewriteAssetKeys?: readonly DurationLiveLearningAssetKey[]
 }
 
@@ -494,7 +494,9 @@ export async function loadDurationLiveLearningProductionEvidenceSourceRows(
 export async function buildDurationLiveLearningProductionClaimAuditFromDb(
   input: DurationLiveLearningProductionClaimAuditFromDbInput,
 ): Promise<DurationLiveLearningProductionClaimAuditFromDb> {
-  const sourceQuery = await loadDurationLiveLearningProductionEvidenceSourceRows(input)
+  const sourceQuery = await loadDurationLiveLearningProductionEvidenceSourceRows({
+    maxRowsPerSourceTable: input.maxRowsPerSourceTable,
+  })
   const runtimeConsumerBusinessPathSourceFiles = await loadDurationRuntimeConsumerBusinessPathSourceFiles()
   const completionAudit = buildDurationLiveLearningCompletionAuditFromProductionSources({
     sourceRows: sourceQuery.sourceRows,
