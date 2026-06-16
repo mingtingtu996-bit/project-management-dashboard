@@ -311,6 +311,8 @@ const REQUIRED_FIELDS_BY_SOURCE_TABLE: Record<DurationLiveLearningProductionEvid
     'publication_key',
     'asset_key',
     'publication_status',
+    'writes_seed_runtime_directly',
+    'target_runtime_table',
     'release_package.scopeExceptionApprovalId',
     'release_package.scopeExceptionApprovalStatus',
     'impact_monitoring.status',
@@ -703,6 +705,11 @@ function publicationEvidenceStatus(row: Record<string, unknown>) {
 function runtimePublicationEvidenceStatus(row: Record<string, unknown>) {
   const status = readText(row, 'runtime_publication_status', 'runtimePublicationStatus')
   return status === 'runtime_published' ? 'published' : ''
+}
+
+function parameterRuntimePublicationIsEvidenceReady(row: Record<string, unknown>) {
+  return !readTrue(row, 'writes_seed_runtime_directly', 'writesSeedRuntimeDirectly')
+    && readText(row, 'target_runtime_table', 'targetRuntimeTable') === 'algorithm_learnable_parameter_runtime_publications'
 }
 
 function impactMonitoringStatus(value: unknown) {
@@ -1108,7 +1115,7 @@ export function collectDurationLiveLearningProductionEvidenceRecordsFromRows(
         pushRejectedRow(rejectedRows, source, 'production_source_row_id_required')
         continue
       }
-      if (!publicationStatus) {
+      if (!publicationStatus || !parameterRuntimePublicationIsEvidenceReady(row)) {
         pushRejectedRow(rejectedRows, source, 'production_source_row_not_evidence_ready')
         continue
       }

@@ -284,6 +284,8 @@ function publicationSourceRowsForAsset(assetKey: DurationLiveLearningAssetKey) {
         publication_key: publicationKey,
         asset_key: assetKey,
         publication_status: 'published',
+        writes_seed_runtime_directly: false,
+        target_runtime_table: 'algorithm_learnable_parameter_runtime_publications',
         impact_monitoring: { status: 'monitoring_armed' },
         rollback_execution: { status: 'rollback_verified' },
       },
@@ -550,6 +552,8 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
         'publication_key',
         'asset_key',
         'publication_status',
+        'writes_seed_runtime_directly',
+        'target_runtime_table',
         'release_package.scopeExceptionApprovalId',
         'release_package.scopeExceptionApprovalStatus',
         'impact_monitoring.status',
@@ -1181,6 +1185,8 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
             publication_key: 'forecast_confidence_weight_runtime:weight-v2',
             asset_key: 'forecast_confidence_weight',
             publication_status: 'published',
+            writes_seed_runtime_directly: false,
+            target_runtime_table: 'algorithm_learnable_parameter_runtime_publications',
             impact_monitoring: {
               status: 'monitoring_armed',
               eventRef: 'impact_monitoring:forecast_confidence_weight_runtime:weight-v2:armed',
@@ -1942,6 +1948,50 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
     expect(audit.productionGate.missingEvidenceByAsset).toEqual(expect.arrayContaining([{
       assetKey: 'forecast_residual_overlay',
       missingReasonCodes: expect.arrayContaining(['accuracy_evidence_required']),
+    }]))
+    expect(audit.allowedClaim).toBe('not_ready_for_live_self_learning_claim')
+  })
+
+  it('blocks parameter runtime publication rows that write seed runtime directly', () => {
+    const audit = buildDurationLiveLearningProductionClaimAudit({
+      completionAudit: buildReadyCompletionAudit(),
+      sourceRows: [
+        ...buildAllProductionSourceRows().map((source) => {
+          if (
+            source.sourceTable !== 'algorithm_learnable_parameter_runtime_publications'
+            || source.row.asset_key !== 'base_duration_benchmark'
+          ) {
+            return source
+          }
+          return {
+            ...source,
+            row: {
+              ...source.row,
+              writes_seed_runtime_directly: true,
+            },
+          }
+        }),
+        ...buildRuntimeConsumerRuntimeCallRows(),
+      ],
+      records: buildPlanNetworkOutcomeRecords(),
+      runtimeConsumerBusinessPathSourceFiles: buildReadyBusinessPathSourceFiles(),
+    })
+
+    expect(audit.status).toBe('duration_live_learning_production_claim_not_ready')
+    expect(audit.productionGate.status).toBe('duration_live_learning_production_evidence_not_ready')
+    expect(audit.evidenceRowCollection.rejectedRows).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        sourceTable: 'algorithm_learnable_parameter_runtime_publications',
+        reason: 'production_source_row_not_evidence_ready',
+      }),
+    ]))
+    expect(audit.productionGate.missingEvidenceByAsset).toEqual(expect.arrayContaining([{
+      assetKey: 'base_duration_benchmark',
+      missingReasonCodes: expect.arrayContaining([
+        'publication_execution_evidence_required',
+        'impact_monitoring_evidence_required',
+        'rollback_drill_evidence_required',
+      ]),
     }]))
     expect(audit.allowedClaim).toBe('not_ready_for_live_self_learning_claim')
   })
