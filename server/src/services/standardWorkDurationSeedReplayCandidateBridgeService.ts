@@ -18,6 +18,7 @@ import type {
 import {
   collectDurationLiveLearningProductionEvidenceRecordsFromRows,
   collectDurationLiveLearningProductionEvidenceRefs,
+  splitPublicationReadinessDirectProductionEvidenceRecords,
   type DurationLiveLearningProductionEvidenceRecord,
   type DurationLiveLearningProductionEvidenceRef,
   type DurationLiveLearningProductionEvidenceSourceRow,
@@ -192,10 +193,11 @@ function standardWorkSeedProductionLineageFromProductionInput(
   const rowCollection = collectDurationLiveLearningProductionEvidenceRecordsFromRows({
     rows: input.sourceRows,
   })
+  const directRecordCollection = splitPublicationReadinessDirectProductionEvidenceRecords(input.records)
   const evidenceCollection = collectDurationLiveLearningProductionEvidenceRefs({
     records: [
       ...rowCollection.records,
-      ...(input.records ?? []),
+      ...directRecordCollection.allowedRecords,
     ],
   })
   const evidenceRefs = evidenceCollection.productionEvidence.find((evidence) =>
@@ -205,7 +207,10 @@ function standardWorkSeedProductionLineageFromProductionInput(
   return {
     evidenceRefs,
     rejectedRows: rowCollection.rejectedRows,
-    rejectedRecords: evidenceCollection.rejectedRecords,
+    rejectedRecords: [
+      ...evidenceCollection.rejectedRecords,
+      ...directRecordCollection.rejectedRecords,
+    ],
   }
 }
 

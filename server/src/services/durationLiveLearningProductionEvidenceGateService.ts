@@ -99,6 +99,7 @@ export interface DurationLiveLearningRejectedProductionEvidenceRecord {
     | 'production_evidence_ref_source_not_allowed'
     | 'production_evidence_publication_key_not_allowed_for_asset'
     | 'production_evidence_direct_record_not_allowed_for_final_claim'
+    | 'production_evidence_direct_record_not_allowed_for_publication_readiness'
 }
 
 export interface DurationLiveLearningProductionEvidenceCollectionInput {
@@ -1287,6 +1288,29 @@ function splitFinalClaimDirectProductionEvidenceRecords(
     rejectedRecords.push({
       ...record,
       reason: 'production_evidence_direct_record_not_allowed_for_final_claim',
+    })
+  }
+
+  return { allowedRecords, rejectedRecords }
+}
+
+export function splitPublicationReadinessDirectProductionEvidenceRecords(
+  records: readonly DurationLiveLearningProductionEvidenceRecord[] | undefined,
+) {
+  const allowedRecords: DurationLiveLearningProductionEvidenceRecord[] = []
+  const rejectedRecords: DurationLiveLearningRejectedProductionEvidenceRecord[] = []
+
+  for (const record of records ?? []) {
+    if (
+      record.evidenceKind === 'production_sample'
+      && PLAN_NETWORK_PRODUCTION_SAMPLE_ASSET_KEYS.has(record.assetKey)
+    ) {
+      allowedRecords.push(record)
+      continue
+    }
+    rejectedRecords.push({
+      ...record,
+      reason: 'production_evidence_direct_record_not_allowed_for_publication_readiness',
     })
   }
 

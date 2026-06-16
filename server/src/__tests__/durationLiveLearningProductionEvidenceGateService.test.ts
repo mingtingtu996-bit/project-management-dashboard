@@ -14,6 +14,7 @@ import {
   collectDurationLiveLearningProductionEvidenceRefs,
   evaluateDurationLiveLearningProductionEvidenceGate,
   listDurationLiveLearningProductionEvidenceSourcePlan,
+  splitPublicationReadinessDirectProductionEvidenceRecords,
 } from '../services/durationLiveLearningProductionEvidenceGateService.js'
 import { listDurationRuntimeConsumerObservationFacadeRegistrations } from '../services/durationRuntimeConsumerObservationAdapterService.js'
 import type { DurationRuntimeConsumerObservationRuntimeCallEvidence } from '../services/durationRuntimeConsumerObservationRuntimeCallAuditService.js'
@@ -1419,6 +1420,69 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
       }),
     ]))
     expect(audit.allowedClaim).toBe('not_ready_for_live_self_learning_claim')
+  })
+
+  it('rejects non-network direct typed records for publication-readiness bridges', () => {
+    const collection = splitPublicationReadinessDirectProductionEvidenceRecords([
+      {
+        assetKey: 'standard_work_duration_seed',
+        evidenceKind: 'production_sample',
+        evidenceRef: 'duration_samples:manual-standard-seed-sample',
+        evidenceStatus: 'accepted',
+      },
+      {
+        assetKey: 'forecast_residual_overlay',
+        evidenceKind: 'accuracy',
+        evidenceRef: 'duration_algorithm_accuracy_events:manual-accuracy',
+        evidenceStatus: 'accepted',
+      },
+    ])
+
+    expect(collection.allowedRecords).toEqual([])
+    expect(collection.rejectedRecords).toEqual([
+      expect.objectContaining({
+        assetKey: 'standard_work_duration_seed',
+        evidenceKind: 'production_sample',
+        reason: 'production_evidence_direct_record_not_allowed_for_publication_readiness',
+      }),
+      expect.objectContaining({
+        assetKey: 'forecast_residual_overlay',
+        evidenceKind: 'accuracy',
+        reason: 'production_evidence_direct_record_not_allowed_for_publication_readiness',
+      }),
+    ])
+  })
+
+  it('keeps plan-network direct outcome samples as publication-readiness compatibility records', () => {
+    const collection = splitPublicationReadinessDirectProductionEvidenceRecords([
+      {
+        assetKey: 'wbs_reference_days',
+        evidenceKind: 'production_sample',
+        evidenceRef: 'network_outcomes:wbs-reference-days-candidate-1',
+        evidenceStatus: 'accepted',
+      },
+      {
+        assetKey: 'wbs_reference_days',
+        evidenceKind: 'accuracy',
+        evidenceRef: 'duration_algorithm_accuracy_events:manual-reference-days-accuracy',
+        evidenceStatus: 'accepted',
+      },
+    ])
+
+    expect(collection.allowedRecords).toEqual([
+      expect.objectContaining({
+        assetKey: 'wbs_reference_days',
+        evidenceKind: 'production_sample',
+        evidenceRef: 'network_outcomes:wbs-reference-days-candidate-1',
+      }),
+    ])
+    expect(collection.rejectedRecords).toEqual([
+      expect.objectContaining({
+        assetKey: 'wbs_reference_days',
+        evidenceKind: 'accuracy',
+        reason: 'production_evidence_direct_record_not_allowed_for_publication_readiness',
+      }),
+    ])
   })
 
   it('blocks the final production claim when runtime-call evidence is supplied only as manual overrides', () => {

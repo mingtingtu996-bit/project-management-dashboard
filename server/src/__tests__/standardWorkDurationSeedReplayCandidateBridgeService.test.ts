@@ -419,6 +419,86 @@ describe('standardWorkDurationSeedReplayCandidateBridgeService', () => {
     expect(mocks.createAlgorithmSeedUpgradeCandidate).not.toHaveBeenCalled()
   })
 
+  it('keeps production readiness blocked when non-network evidence is supplied only as direct typed records', () => {
+    const readiness = buildStandardWorkDurationSeedPublicationReadinessFromProductionRows({
+      report: governanceReport,
+      bridgeResult: {
+        attemptedCandidateCount: 2,
+        candidateOnlyUpsertedCount: 2,
+        p50ReviewCandidateOnlyCount: 1,
+        missingSeedCandidateOnlyCount: 1,
+        evidenceCollectionSkippedCount: 1,
+        failedCandidateCount: 0,
+        seedWritesBlocked: 1,
+        failed: [],
+      },
+      approvedCandidateIds: ['candidate-process_duration:cast_in_place_concrete'],
+      enabledLearningScopes: ['system', 'industry_baseline', 'company', 'project'],
+      records: [
+        {
+          assetKey: 'standard_work_duration_seed',
+          evidenceKind: 'production_sample',
+          evidenceRef: 'duration_samples:manual-standard-seed-sample',
+          evidenceStatus: 'accepted',
+        },
+        {
+          assetKey: 'standard_work_duration_seed',
+          evidenceKind: 'publication_execution',
+          evidenceRef: 'algorithm_seed_versions:seed-version-standard-work-duration-v2',
+          evidenceStatus: 'accepted',
+        },
+        {
+          assetKey: 'standard_work_duration_seed',
+          evidenceKind: 'runtime_consumer_observation',
+          evidenceRef: 'runtime_consumer:manual-standard-seed-observation',
+          evidenceStatus: 'accepted',
+          publicationKey: 'algorithm_seed_versions:seed-version-standard-work-duration-v2',
+        },
+        {
+          assetKey: 'standard_work_duration_seed',
+          evidenceKind: 'impact_monitoring',
+          evidenceRef: 'impact_monitoring:manual-standard-seed-monitoring',
+          evidenceStatus: 'accepted',
+        },
+        {
+          assetKey: 'standard_work_duration_seed',
+          evidenceKind: 'rollback_drill',
+          evidenceRef: 'rollback:manual-standard-seed-rollback',
+          evidenceStatus: 'accepted',
+        },
+        {
+          assetKey: 'standard_work_duration_seed',
+          evidenceKind: 'accuracy',
+          evidenceRef: 'duration_algorithm_accuracy_events:manual-standard-seed-accuracy',
+          evidenceStatus: 'accepted',
+        },
+      ],
+    })
+
+    expect(readiness.status).toBe('standard_work_seed_publication_not_ready')
+    expect(readiness.liveLearningEvidence).toEqual(expect.objectContaining({
+      actualOutcomeEventRecorded: false,
+      runtimeConsumerUsesPublishedArtifact: false,
+      releaseExitApproved: false,
+      impactMonitoringReady: false,
+      rollbackTargetReady: false,
+      accuracyMetricsAvailable: false,
+    }))
+    expect(readiness.productionLineage.evidenceRefs).toEqual({
+      assetKey: 'standard_work_duration_seed',
+    })
+    expect(readiness.productionLineage.rejectedRecords).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        evidenceKind: 'production_sample',
+        reason: 'production_evidence_direct_record_not_allowed_for_publication_readiness',
+      }),
+      expect.objectContaining({
+        evidenceKind: 'accuracy',
+        reason: 'production_evidence_direct_record_not_allowed_for_publication_readiness',
+      }),
+    ]))
+  })
+
   it('keeps production readiness blocked when consumer observes a different seed version', () => {
     const readiness = buildStandardWorkDurationSeedPublicationReadinessFromProductionRows({
       report: governanceReport,

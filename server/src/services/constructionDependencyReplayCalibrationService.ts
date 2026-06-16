@@ -14,6 +14,7 @@ import type { AlgorithmAssetGovernanceQueryExec } from './algorithmAssetGovernan
 import {
   collectDurationLiveLearningProductionEvidenceRecordsFromRows,
   collectDurationLiveLearningProductionEvidenceRefs,
+  splitPublicationReadinessDirectProductionEvidenceRecords,
   type DurationLiveLearningProductionEvidenceRecord,
   type DurationLiveLearningProductionEvidenceRef,
   type DurationLiveLearningProductionEvidenceSourceRow,
@@ -342,10 +343,11 @@ function dependencyRuleProductionLineageFromProductionInput(
   const rowCollection = collectDurationLiveLearningProductionEvidenceRecordsFromRows({
     rows: input.sourceRows,
   })
+  const directRecordCollection = splitPublicationReadinessDirectProductionEvidenceRecords(input.records)
   const evidenceCollection = collectDurationLiveLearningProductionEvidenceRefs({
     records: [
       ...rowCollection.records,
-      ...(input.records ?? []),
+      ...directRecordCollection.allowedRecords,
     ],
   })
   const evidenceRefs = evidenceCollection.productionEvidence.find((evidence) =>
@@ -355,7 +357,10 @@ function dependencyRuleProductionLineageFromProductionInput(
   return {
     evidenceRefs,
     rejectedRows: rowCollection.rejectedRows,
-    rejectedRecords: evidenceCollection.rejectedRecords,
+    rejectedRecords: [
+      ...evidenceCollection.rejectedRecords,
+      ...directRecordCollection.rejectedRecords,
+    ],
   }
 }
 
