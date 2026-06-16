@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { constructionDependencyReplayCalibrationJob } from '../jobs/constructionDependencyReplayCalibrationJob.js'
 import { standardWorkDurationSeedReplayJob } from '../jobs/standardWorkDurationSeedReplayJob.js'
 import { dataRetentionJob } from '../jobs/dataRetentionJob.js'
+import { durationLiveLearningProductionClaimAuditJob } from '../jobs/durationLiveLearningProductionClaimAuditJob.js'
 import { planningDraftLockTimeoutJob } from '../jobs/planningDraftLockTimeoutJob.js'
 import { responsibilityAlertJob } from '../jobs/responsibilityAlertJob.js'
 import { riskStatisticsJob } from '../jobs/riskStatisticsJob.js'
@@ -58,6 +59,7 @@ function buildJobStatusViews(): JobStatusView[] {
   const constructionDependencyReplayCalibrationStatus = constructionDependencyReplayCalibrationJob.getStatus()
   const standardWorkDurationSeedReplayStatus = standardWorkDurationSeedReplayJob.getStatus()
   const responsibilityAlertStatus = responsibilityAlertJob.getStatus()
+  const durationLiveLearningProductionClaimAuditStatus = durationLiveLearningProductionClaimAuditJob.getStatus()
 
   return [
     {
@@ -215,6 +217,21 @@ function buildJobStatusViews(): JobStatusView[] {
       status: buildStatus(constructionDependencyReplayCalibrationStatus.isRunning, constructionDependencyReplayCalibrationStatus.isScheduled),
       description:
         'Runs report-only L3/L4 dependency replay calibration queues from real project task dependencies; seeds and task dependencies are never written by this job.',
+    },
+    {
+      name: 'durationLiveLearningProductionClaimAuditJob',
+      displayName: 'Duration live learning production claim audit job',
+      isRunning: durationLiveLearningProductionClaimAuditStatus.isRunning,
+      isScheduled: durationLiveLearningProductionClaimAuditStatus.isScheduled,
+      schedule: '45 6 * * *',
+      lastRun: durationLiveLearningProductionClaimAuditStatus.lastRun,
+      nextRun: durationLiveLearningProductionClaimAuditStatus.nextRun,
+      status: buildStatus(
+        durationLiveLearningProductionClaimAuditStatus.isRunning,
+        durationLiveLearningProductionClaimAuditStatus.isScheduled,
+      ),
+      description:
+        'Runs the canonical DB production claim audit for v1.4.22.5 duration live learning; it is audit-only and never publishes runtime artifacts or rewrites facts.',
     },
     {
       name: 'weeklyDigestJob',
@@ -426,6 +443,12 @@ async function executeJob(jobName: string) {
         jobId: createJobId(),
         attempts: 1,
         result: await constructionDependencyReplayCalibrationJob.executeNow(),
+      }
+    case 'durationLiveLearningProductionClaimAuditJob':
+      return {
+        jobId: createJobId(),
+        attempts: 1,
+        result: await durationLiveLearningProductionClaimAuditJob.executeNow(),
       }
     case 'weeklyDigestJob':
       return executeWeeklyDigestJob()
