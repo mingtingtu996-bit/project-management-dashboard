@@ -38,6 +38,7 @@ export type DurationLiveLearningProductionEvidenceReasonCode =
 export interface DurationLiveLearningProductionEvidenceRef {
   assetKey: DurationLiveLearningAssetKey
   productionSampleEvidenceRef?: string | null
+  productionSamplePublicationKey?: string | null
   publicationExecutionRef?: string | null
   runtimeConsumerObservationRef?: string | null
   runtimeConsumerPublicationKey?: string | null
@@ -886,7 +887,11 @@ function assignEvidenceRef(
   evidenceRef: string,
   publicationKey?: string | null,
 ) {
-  if (kind === 'production_sample') target.productionSampleEvidenceRef ??= evidenceRef
+  if (kind === 'production_sample') {
+    target.productionSampleEvidenceRef ??= evidenceRef
+    const normalizedPublicationKey = normalizeText(publicationKey)
+    if (normalizedPublicationKey) target.productionSamplePublicationKey ??= normalizedPublicationKey
+  }
   if (kind === 'publication_execution') target.publicationExecutionRef ??= evidenceRef
   if (kind === 'runtime_consumer_observation') {
     target.runtimeConsumerObservationRef ??= evidenceRef
@@ -913,6 +918,10 @@ function evidenceRecordMatchesPublicationExecution(
   record: DurationLiveLearningProductionEvidenceRecord,
   publicationExecutionRef: string | null | undefined,
 ) {
+  if (record.evidenceKind === 'production_sample' && normalizeText(record.publicationKey)) {
+    if (!hasRef(publicationExecutionRef)) return true
+    return publicationRefMatchesPublicationKey(publicationExecutionRef, record.publicationKey)
+  }
   if (!PUBLICATION_BOUND_EVIDENCE_KINDS.has(record.evidenceKind)) return true
   if (!hasRef(publicationExecutionRef)) return true
   return publicationRefMatchesPublicationKey(publicationExecutionRef, record.publicationKey)
@@ -941,8 +950,8 @@ function buildProductionEvidenceForAsset(
   records: readonly DurationLiveLearningProductionEvidenceRecord[],
 ): DurationLiveLearningProductionEvidenceRef {
   const target: DurationLiveLearningProductionEvidenceRef = { assetKey }
-  assignFirstMatchingEvidenceRecord(target, records, 'production_sample')
   assignFirstMatchingEvidenceRecord(target, records, 'publication_execution')
+  assignFirstMatchingEvidenceRecord(target, records, 'production_sample')
   assignFirstMatchingEvidenceRecord(target, records, 'runtime_consumer_observation')
   assignFirstMatchingEvidenceRecord(target, records, 'impact_monitoring')
   assignFirstMatchingEvidenceRecord(target, records, 'rollback_drill')
@@ -973,7 +982,10 @@ export function collectDurationLiveLearningProductionEvidenceRefs(
       continue
     }
     if (
-      PUBLICATION_BOUND_EVIDENCE_KINDS.has(record.evidenceKind)
+      (
+        PUBLICATION_BOUND_EVIDENCE_KINDS.has(record.evidenceKind)
+        || normalizeText(record.publicationKey)
+      )
       && !isDurationRuntimeConsumerPublicationKeyAllowedForAsset(record.assetKey, record.publicationKey)
     ) {
       rejectedRecords.push({ ...record, reason: 'production_evidence_publication_key_not_allowed_for_asset' })
@@ -1029,7 +1041,14 @@ export function collectDurationLiveLearningProductionEvidenceRecordsFromRows(
         pushRejectedRow(rejectedRows, source, 'production_source_row_not_evidence_ready')
         continue
       }
-      pushRecord(records, assetKey, 'production_sample', `duration_samples:${id}`, sampleEvidenceStatus(row))
+      pushRecord(
+        records,
+        assetKey,
+        'production_sample',
+        `duration_samples:${id}`,
+        sampleEvidenceStatus(row),
+        readText(row, 'publication_key', 'publicationKey'),
+      )
       continue
     }
 
@@ -1049,7 +1068,14 @@ export function collectDurationLiveLearningProductionEvidenceRecordsFromRows(
         pushRejectedRow(rejectedRows, source, 'production_source_row_not_evidence_ready')
         continue
       }
-      pushRecord(records, assetKey, 'production_sample', `network_outcomes:${id}`, outcomeStatus)
+      pushRecord(
+        records,
+        assetKey,
+        'production_sample',
+        `network_outcomes:${id}`,
+        outcomeStatus,
+        readText(row, 'publication_key', 'publicationKey'),
+      )
       continue
     }
 
@@ -1391,6 +1417,10 @@ function evaluateAssetEvidence(
   if (
     !hasRef(evidence?.productionSampleEvidenceRef)
     || !hasAcceptedRefSource('production_sample', evidence.productionSampleEvidenceRef, assetKey)
+    || (
+      normalizeText(evidence.productionSamplePublicationKey)
+      && !publicationRefMatchesPublicationKey(evidence.publicationExecutionRef, evidence.productionSamplePublicationKey)
+    )
   ) {
     missingReasonCodes.push('production_sample_evidence_required')
   }

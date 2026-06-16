@@ -1772,6 +1772,37 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
     expect(audit.allowedClaim).toBe('not_ready_for_live_self_learning_claim')
   })
 
+  it('blocks the final production claim when production outcome evidence belongs to a different publication', () => {
+    const staleOutcomePublicationKey = 'wbs_reference_days_runtime:wbs-reference-days-v1'
+    const audit = buildDurationLiveLearningProductionClaimAudit({
+      completionAudit: buildReadyCompletionAudit(),
+      sourceRows: [
+        ...buildAllProductionSourceRows().map((source) => {
+          if (source.sourceTable !== 'duration_plan_network_outcomes') return source
+          const row = source.row as Record<string, unknown>
+          if (row.asset_key !== 'wbs_reference_days') return source
+          return {
+            ...source,
+            row: {
+              ...row,
+              publication_key: staleOutcomePublicationKey,
+            },
+          }
+        }),
+        ...buildRuntimeConsumerRuntimeCallRows(),
+      ],
+      runtimeConsumerBusinessPathSourceFiles: buildReadyBusinessPathSourceFiles(),
+    })
+
+    expect(audit.status).toBe('duration_live_learning_production_claim_not_ready')
+    expect(audit.productionGate.status).toBe('duration_live_learning_production_evidence_not_ready')
+    expect(audit.productionGate.missingEvidenceByAsset).toEqual(expect.arrayContaining([{
+      assetKey: 'wbs_reference_days',
+      missingReasonCodes: expect.arrayContaining(['production_sample_evidence_required']),
+    }]))
+    expect(audit.allowedClaim).toBe('not_ready_for_live_self_learning_claim')
+  })
+
   it('blocks the final production claim when runtime consumer evidence observes a different publication than the executed artifact', () => {
     const staleConsumerPublicationKey = 'algorithm_seed_versions:seed-version-standard-work-duration-v1'
     const audit = buildDurationLiveLearningProductionClaimAudit({
