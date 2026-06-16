@@ -56,6 +56,13 @@ export type DurationLiveLearningProductionEvidenceKind =
   | 'rollback_drill'
   | 'accuracy'
 
+const PUBLICATION_BOUND_EVIDENCE_KINDS = new Set<DurationLiveLearningProductionEvidenceKind>([
+  'runtime_consumer_observation',
+  'impact_monitoring',
+  'rollback_drill',
+  'accuracy',
+])
+
 export interface DurationLiveLearningProductionEvidenceRecord {
   assetKey: DurationLiveLearningAssetKey
   evidenceKind: DurationLiveLearningProductionEvidenceKind
@@ -803,7 +810,7 @@ export function collectDurationLiveLearningProductionEvidenceRefs(
       continue
     }
     if (
-      record.evidenceKind === 'runtime_consumer_observation'
+      PUBLICATION_BOUND_EVIDENCE_KINDS.has(record.evidenceKind)
       && !isDurationRuntimeConsumerPublicationKeyAllowedForAsset(record.assetKey, record.publicationKey)
     ) {
       rejectedRecords.push({ ...record, reason: 'production_evidence_publication_key_not_allowed_for_asset' })
@@ -1181,8 +1188,8 @@ function publicationRefMatchesPublicationKey(
 ) {
   const publicationRef = normalizeText(publicationExecutionRef)
   const normalizedPublicationKey = normalizeText(publicationKey)
-  if (!normalizedPublicationKey) return true
   return Boolean(publicationRef)
+    && Boolean(normalizedPublicationKey)
     && (
       publicationRef === normalizedPublicationKey
       || publicationRef.endsWith(`:${normalizedPublicationKey}`)

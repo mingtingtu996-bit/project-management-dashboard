@@ -568,8 +568,11 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
         runtimeConsumerObservationRef: `runtime_consumer:${assetKey}:observed`,
         runtimeConsumerPublicationKey: publicationKeyForAsset(assetKey),
         impactMonitoringEvidenceRef: `impact_monitoring:${assetKey}:armed`,
+        impactMonitoringPublicationKey: publicationKeyForAsset(assetKey),
         rollbackDrillEvidenceRef: `rollback:${assetKey}:verified`,
+        rollbackDrillPublicationKey: publicationKeyForAsset(assetKey),
         accuracyEvidenceRef: `accuracy:${assetKey}:mae-bias-ok`,
+        accuracyPublicationKey: publicationKeyForAsset(assetKey),
       })),
     })
 
@@ -589,23 +592,27 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
         productionSampleEvidenceRef: 'duration_samples:critical-path:accepted',
         publicationExecutionRef: 'release_execution:critical_path_rule_candidate:published',
         runtimeConsumerObservationRef: 'runtime_consumer:critical-path:observed',
+        runtimeConsumerPublicationKey: publicationKeyForAsset('critical_path_rule_candidate'),
         impactMonitoringEvidenceRef: 'impact_monitoring:critical-path:armed',
+        impactMonitoringPublicationKey: publicationKeyForAsset('critical_path_rule_candidate'),
         rollbackDrillEvidenceRef: 'rollback:critical-path:verified',
+        rollbackDrillPublicationKey: publicationKeyForAsset('critical_path_rule_candidate'),
         accuracyEvidenceRef: 'spreadsheet-upload:critical-path:mae-ok',
+        accuracyPublicationKey: publicationKeyForAsset('critical_path_rule_candidate'),
       }],
     })
 
     expect(gate.status).toBe('duration_live_learning_production_evidence_not_ready')
     expect(gate.allowedClaim).toBe('not_ready_for_live_self_learning_claim')
-    expect(gate.missingEvidenceByAsset).toContainEqual({
+    expect(gate.missingEvidenceByAsset).toEqual(expect.arrayContaining([{
       assetKey: 'critical_path_rule_candidate',
-      missingReasonCodes: [
+      missingReasonCodes: expect.arrayContaining([
         'production_sample_evidence_required',
         'publication_execution_evidence_required',
         'runtime_consumer_observation_required',
         'accuracy_evidence_required',
-      ],
-    })
+      ]),
+    }]))
   })
 
   it('collects gate-ready production refs from typed evidence records and ignores non-production states', () => {
@@ -634,18 +641,21 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
           assetKey: 'base_duration_benchmark',
           evidenceKind: 'impact_monitoring',
           evidenceRef: 'impact_monitoring:base:armed',
+          publicationKey: 'duration_benchmark_runtime:base-v2',
           evidenceStatus: 'monitoring_armed',
         },
         {
           assetKey: 'base_duration_benchmark',
           evidenceKind: 'rollback_drill',
           evidenceRef: 'rollback:base:verified',
+          publicationKey: 'duration_benchmark_runtime:base-v2',
           evidenceStatus: 'rollback_verified',
         },
         {
           assetKey: 'base_duration_benchmark',
           evidenceKind: 'accuracy',
           evidenceRef: 'accuracy:base:mae-bias-ok',
+          publicationKey: 'duration_benchmark_runtime:base-v2',
           evidenceStatus: 'accuracy_passed',
         },
         {
@@ -670,8 +680,11 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
       runtimeConsumerObservationRef: 'runtime_consumer:base:observed',
       runtimeConsumerPublicationKey: 'duration_benchmark_runtime:base-v2',
       impactMonitoringEvidenceRef: 'impact_monitoring:base:armed',
+      impactMonitoringPublicationKey: 'duration_benchmark_runtime:base-v2',
       rollbackDrillEvidenceRef: 'rollback:base:verified',
+      rollbackDrillPublicationKey: 'duration_benchmark_runtime:base-v2',
       accuracyEvidenceRef: 'accuracy:base:mae-bias-ok',
+      accuracyPublicationKey: 'duration_benchmark_runtime:base-v2',
     }])
     expect(collected.rejectedRecords).toEqual([
       {
@@ -743,8 +756,11 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
         publicationExecutionRef: publicationEvidenceRefForAsset(assetKey),
         runtimeConsumerObservationRef: `runtime_consumer:${assetKey}:observed`,
         impactMonitoringEvidenceRef: `impact_monitoring:${assetKey}:armed`,
+        impactMonitoringPublicationKey: publicationKeyForAsset(assetKey),
         rollbackDrillEvidenceRef: `rollback:${assetKey}:verified`,
+        rollbackDrillPublicationKey: publicationKeyForAsset(assetKey),
         accuracyEvidenceRef: `accuracy:${assetKey}:mae-bias-ok`,
+        accuracyPublicationKey: publicationKeyForAsset(assetKey),
       })),
     })
 
@@ -752,8 +768,38 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
     expect(gate.allowedClaim).toBe('not_ready_for_live_self_learning_claim')
     expect(gate.missingEvidenceByAsset).toEqual(learnableAssetKeys.map((assetKey) => ({
       assetKey,
-      missingReasonCodes: ['runtime_consumer_observation_required'],
+      missingReasonCodes: [
+        'runtime_consumer_observation_required',
+      ],
     })))
+  })
+
+  it('blocks direct production evidence when safety evidence publication provenance is missing', () => {
+    const assetKey = 'base_duration_benchmark'
+    const gate = evaluateDurationLiveLearningProductionEvidenceGate({
+      completionAudit: buildReadyCompletionAudit(),
+      productionEvidence: [{
+        assetKey,
+        productionSampleEvidenceRef: productionSampleEvidenceRefForAsset(assetKey),
+        publicationExecutionRef: publicationEvidenceRefForAsset(assetKey),
+        runtimeConsumerObservationRef: `runtime_consumer:${assetKey}:observed`,
+        runtimeConsumerPublicationKey: publicationKeyForAsset(assetKey),
+        impactMonitoringEvidenceRef: `impact_monitoring:${assetKey}:armed`,
+        rollbackDrillEvidenceRef: `rollback:${assetKey}:verified`,
+        accuracyEvidenceRef: `accuracy:${assetKey}:mae-bias-ok`,
+      }],
+    })
+
+    expect(gate.status).toBe('duration_live_learning_production_evidence_not_ready')
+    expect(gate.allowedClaim).toBe('not_ready_for_live_self_learning_claim')
+    expect(gate.missingEvidenceByAsset).toEqual(expect.arrayContaining([{
+      assetKey,
+      missingReasonCodes: [
+        'impact_monitoring_evidence_required',
+        'rollback_drill_evidence_required',
+        'accuracy_evidence_required',
+      ],
+    }]))
   })
 
   it('rejects accepted production evidence records when their refs do not match the evidence source allowlist', () => {
@@ -1447,6 +1493,47 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
       missingReasonCodes: expect.arrayContaining(['runtime_consumer_observation_required']),
     }]))
     expect(audit.allowedClaim).toBe('not_ready_for_live_self_learning_claim')
+  })
+
+  it('rejects typed publication-bound safety evidence without asset-bound publication provenance', () => {
+    const collection = collectDurationLiveLearningProductionEvidenceRefs({
+      records: [
+        {
+          assetKey: 'forecast_confidence_weight',
+          evidenceKind: 'impact_monitoring',
+          evidenceRef: 'impact_monitoring:forecast_confidence_weight_runtime:weight-v2:armed',
+          evidenceStatus: 'monitoring_armed',
+        },
+        {
+          assetKey: 'forecast_confidence_weight',
+          evidenceKind: 'rollback_drill',
+          evidenceRef: 'rollback:forecast_confidence_weight_runtime:weight-v2:verified',
+          evidenceStatus: 'rollback_verified',
+        },
+        {
+          assetKey: 'forecast_confidence_weight',
+          evidenceKind: 'accuracy',
+          evidenceRef: 'accuracy:forecast_confidence_weight_runtime:weight-v2:mae-ok',
+          evidenceStatus: 'accuracy_passed',
+        },
+      ],
+    })
+
+    expect(collection.productionEvidence).toEqual([])
+    expect(collection.rejectedRecords).toEqual([
+      expect.objectContaining({
+        evidenceKind: 'impact_monitoring',
+        reason: 'production_evidence_publication_key_not_allowed_for_asset',
+      }),
+      expect.objectContaining({
+        evidenceKind: 'rollback_drill',
+        reason: 'production_evidence_publication_key_not_allowed_for_asset',
+      }),
+      expect.objectContaining({
+        evidenceKind: 'accuracy',
+        reason: 'production_evidence_publication_key_not_allowed_for_asset',
+      }),
+    ])
   })
 
   it('blocks the final production claim when facade-backed business paths are not integrated', () => {
