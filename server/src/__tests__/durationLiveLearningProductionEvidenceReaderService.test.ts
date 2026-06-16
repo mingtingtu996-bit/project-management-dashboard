@@ -528,6 +528,28 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
     ]))
   })
 
+  it('keeps the DB production claim blocked when callers request fact-layer rewrites', async () => {
+    const {
+      buildDurationLiveLearningProductionClaimAuditFromDb,
+    } = await import('../services/durationLiveLearningProductionEvidenceReaderService.js')
+    const queryExec = async <T = Record<string, unknown>>(sql: string): Promise<T[]> =>
+      rowsForSql(sql) as T[]
+
+    const audit = await buildDurationLiveLearningProductionClaimAuditFromDb({
+      completionAudit: buildReadyCompletionAudit(),
+      queryExec,
+      maxRowsPerSourceTable: 200,
+      requestedFactRewriteAssetKeys: ['baseline_commitment'],
+    })
+
+    expect(audit.status).toBe('duration_live_learning_production_claim_not_ready')
+    expect(audit.completionAudit.status).toBe('duration_live_learning_completion_not_ready')
+    expect(audit.completionAudit.factRewriteBlockedAssetKeys).toEqual(['baseline_commitment'])
+    expect(audit.productionGate.status).toBe('duration_live_learning_production_evidence_not_ready')
+    expect(audit.allowedClaim).toBe('not_ready_for_live_self_learning_claim')
+    expect(audit.prohibitedClaim).toBe('all_duration_assets_are_live_self_learning')
+  })
+
   it('builds the DB completion audit from production source rows instead of caller supplied completion audit', async () => {
     const {
       buildDurationLiveLearningProductionClaimAuditFromDb,

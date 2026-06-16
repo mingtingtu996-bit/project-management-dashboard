@@ -46,6 +46,7 @@ export interface DurationLiveLearningProductionClaimAuditFromDbInput
   extends DurationLiveLearningProductionEvidenceSourceQueryInput {
   completionAudit?: DurationLiveLearningCompletionAudit
   records?: readonly DurationLiveLearningProductionEvidenceRecord[]
+  requestedFactRewriteAssetKeys?: readonly DurationLiveLearningAssetKey[]
 }
 
 export type DurationLiveLearningProductionClaimAuditFromDb =
@@ -224,6 +225,7 @@ function planNetworkProductionSampleRecords(
 function buildDurationLiveLearningCompletionAuditFromProductionSources(input: {
   sourceRows: readonly DurationLiveLearningProductionEvidenceSourceRow[]
   records?: readonly DurationLiveLearningProductionEvidenceRecord[]
+  requestedFactRewriteAssetKeys?: readonly DurationLiveLearningAssetKey[]
 }) {
   const rowCollection = collectDurationLiveLearningProductionEvidenceRecordsFromRows({
     rows: input.sourceRows,
@@ -239,7 +241,10 @@ function buildDurationLiveLearningCompletionAuditFromProductionSources(input: {
     evidence: productionCompletionEvidenceForAsset(evidence, input.sourceRows),
   }))
 
-  return buildDurationLiveLearningCompletionAudit({ evidenceOverrides })
+  return buildDurationLiveLearningCompletionAudit({
+    evidenceOverrides,
+    requestedFactRewriteAssetKeys: input.requestedFactRewriteAssetKeys,
+  })
 }
 
 function queryForSourceTable(sourceTable: DurationLiveLearningProductionEvidenceSourceTable) {
@@ -407,6 +412,7 @@ export async function buildDurationLiveLearningProductionClaimAuditFromDb(
   const completionAudit = buildDurationLiveLearningCompletionAuditFromProductionSources({
     sourceRows: sourceQuery.sourceRows,
     records: input.records,
+    requestedFactRewriteAssetKeys: input.requestedFactRewriteAssetKeys,
   })
   const audit = buildDurationLiveLearningProductionClaimAudit({
     completionAudit,
