@@ -167,7 +167,7 @@ function publicationEvidenceRefForAsset(assetKey: DurationLiveLearningAssetKey) 
     return 'algorithm_learnable_parameter_runtime_publications:duration_benchmark_runtime:base-v2'
   }
   if (assetKey === 'duration_cold_start_baseline') {
-    return 'algorithm_learnable_parameter_runtime_publications:duration_cold_start_baseline_runtime:cold-v2'
+    return 'algorithm_learnable_parameter_runtime_publications:cold_start_baseline_runtime:segment-v2'
   }
   if (assetKey === 'forecast_residual_overlay') {
     return 'algorithm_learnable_parameter_runtime_publications:forecast_residual_overlay_runtime:overlay-v2'
@@ -1409,6 +1409,42 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
     expect(audit.productionGate.missingEvidenceByAsset).toEqual(expect.arrayContaining([{
       assetKey: 'forecast_confidence_weight',
       missingReasonCodes: expect.arrayContaining(['accuracy_evidence_required']),
+    }]))
+    expect(audit.allowedClaim).toBe('not_ready_for_live_self_learning_claim')
+  })
+
+  it('blocks the final production claim when runtime consumer evidence observes a different publication than the executed artifact', () => {
+    const staleConsumerPublicationKey = 'algorithm_seed_versions:seed-version-standard-work-duration-v1'
+    const audit = buildDurationLiveLearningProductionClaimAudit({
+      completionAudit: buildReadyCompletionAudit(),
+      sourceRows: [
+        ...buildAllProductionSourceRows().map((source) => {
+          if (source.sourceTable !== 'runtime_consumer_observations') {
+            return source
+          }
+          const row = source.row as Record<string, unknown>
+          if (row.asset_key !== 'standard_work_duration_seed') {
+            return source
+          }
+          return {
+            ...source,
+            row: {
+              ...row,
+              publication_key: staleConsumerPublicationKey,
+            },
+          }
+        }),
+        ...buildRuntimeConsumerRuntimeCallRows(),
+      ],
+      records: buildPlanNetworkOutcomeRecords(),
+      runtimeConsumerBusinessPathSourceFiles: buildReadyBusinessPathSourceFiles(),
+    })
+
+    expect(audit.status).toBe('duration_live_learning_production_claim_not_ready')
+    expect(audit.productionGate.status).toBe('duration_live_learning_production_evidence_not_ready')
+    expect(audit.productionGate.missingEvidenceByAsset).toEqual(expect.arrayContaining([{
+      assetKey: 'standard_work_duration_seed',
+      missingReasonCodes: expect.arrayContaining(['runtime_consumer_observation_required']),
     }]))
     expect(audit.allowedClaim).toBe('not_ready_for_live_self_learning_claim')
   })

@@ -204,6 +204,8 @@ describe('standardWorkDurationSeedReplayCandidateBridgeService', () => {
       approvedCandidateIds: ['candidate-process_duration:cast_in_place_concrete'],
       seedVersionId: 'seed-version-standard-work-duration-v2',
       runtimePublicationKey: 'algorithm_seed_versions:seed-version-standard-work-duration-v2',
+      runtimeConsumerObservationRef: 'runtime_consumer:consumer-standard-seed-1',
+      runtimeConsumerPublicationKey: 'algorithm_seed_versions:seed-version-standard-work-duration-v2',
       rollbackTarget: 'algorithm_seed_versions:seed-version-standard-work-duration-v1',
       enabledLearningScopes: ['system', 'industry_baseline', 'company', 'project'],
       releaseExitApproved: true,
@@ -375,8 +377,10 @@ describe('standardWorkDurationSeedReplayCandidateBridgeService', () => {
             absolute_error_days: 1,
             prediction_context: {
               assetKey: 'standard_work_duration_seed',
+              publicationKey: 'algorithm_seed_versions:seed-version-standard-work-duration-v2',
             },
             actual_context: {
+              assetKey: 'standard_work_duration_seed',
               accuracyGateStatus: 'accuracy_passed',
             },
           },

@@ -1211,6 +1211,7 @@ function evaluateAssetEvidence(
     !hasRef(evidence?.runtimeConsumerObservationRef)
     || !hasAcceptedRefSource('runtime_consumer_observation', evidence.runtimeConsumerObservationRef, assetKey)
     || !isDurationRuntimeConsumerPublicationKeyAllowedForAsset(assetKey, evidence.runtimeConsumerPublicationKey)
+    || !publicationRefMatchesPublicationKey(evidence.publicationExecutionRef, evidence.runtimeConsumerPublicationKey)
   ) {
     missingReasonCodes.push('runtime_consumer_observation_required')
   }

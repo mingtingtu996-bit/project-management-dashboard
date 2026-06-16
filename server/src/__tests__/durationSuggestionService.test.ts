@@ -177,6 +177,7 @@ function isSystemBenchmarkScope() {
 describe('durationSuggestionService', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mocks.query.select.mockImplementation(() => mocks.query)
     mocks.query.maybeSingle.mockImplementation(async () => ({
       data: mocks.from.mock.calls.at(-1)?.[0] === 'projects'
         ? mocks.state.projectsData[0] ?? null
@@ -1483,6 +1484,11 @@ describe('durationSuggestionService', () => {
   })
 
   it('derives conservative P80 from benchmark variance when explicit benchmark P80 is unavailable', async () => {
+    const benchmarkSelects: string[] = []
+    mocks.query.select.mockImplementation((columns?: string) => {
+      if (isDurationBenchmarkQuery() && typeof columns === 'string') benchmarkSelects.push(columns)
+      return mocks.query
+    })
     mocks.query.maybeSingle.mockImplementation(async () => {
       if (isCompanyBenchmarkScope('company-1')) {
         return {
@@ -1534,6 +1540,8 @@ describe('durationSuggestionService', () => {
         source: 'duration_benchmarks',
       }),
     }))
+    expect(benchmarkSelects.some((columns) => columns.includes('variance'))).toBe(true)
+    expect(benchmarkSelects.some((columns) => columns.includes('coefficient_of_variation'))).toBe(true)
   })
 
   it('does not cap explicit quantity scaling at 3x for very large scoped work', async () => {

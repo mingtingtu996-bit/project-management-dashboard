@@ -1498,7 +1498,7 @@ async function mergeSuggestionTaskContext(input: DurationSuggestionInput): Promi
 async function findBenchmark(benchKey: string, companyId: string | null): Promise<BenchmarkLookupResult> {
   let query = (supabase as any)
     .from('duration_benchmarks')
-    .select('p50_days, p75_days, p80_days, mean_days, sample_count, confidence_level, confidence_score, company_id, metadata')
+    .select('p50_days, p75_days, p80_days, mean_days, sample_count, variance, coefficient_of_variation, confidence_level, confidence_score, company_id, metadata')
     .eq('benchmark_key', benchKey)
     .eq('is_current', true)
     .eq('is_active', true)
@@ -1523,7 +1523,7 @@ async function findProjectBenchmark(benchKey: string, projectId: string | null):
 
   const { data, error } = await (supabase as any)
     .from('duration_benchmarks')
-    .select('p50_days, p75_days, p80_days, mean_days, sample_count, confidence_level, confidence_score, company_id, metadata')
+    .select('p50_days, p75_days, p80_days, mean_days, sample_count, variance, coefficient_of_variation, confidence_level, confidence_score, company_id, metadata')
     .eq('benchmark_key', benchKey)
     .eq('project_id', normalizedProjectId)
     .eq('is_current', true)
@@ -1562,7 +1562,7 @@ function isTemplateUsableForContext(
 async function findLegacyBenchmark(benchKey: string) {
   const { data, error } = await (supabase as any)
     .from('duration_benchmarks')
-    .select('p50_days, p75_days, p80_days, mean_days, sample_count, confidence_level, confidence_score, company_id, metadata')
+    .select('p50_days, p75_days, p80_days, mean_days, sample_count, variance, coefficient_of_variation, confidence_level, confidence_score, company_id, metadata')
     .eq('benchmark_key', benchKey)
     .eq('is_current', true)
     .eq('is_active', true)

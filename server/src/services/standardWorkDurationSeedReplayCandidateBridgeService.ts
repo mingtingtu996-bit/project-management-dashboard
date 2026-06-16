@@ -42,6 +42,8 @@ export interface StandardWorkDurationSeedPublicationReadinessInput {
   approvedCandidateIds: readonly string[]
   seedVersionId?: string | null
   runtimePublicationKey?: string | null
+  runtimeConsumerObservationRef?: string | null
+  runtimeConsumerPublicationKey?: string | null
   rollbackTarget?: string | null
   enabledLearningScopes: readonly StandardWorkDurationSeedLearningScopeEvidence[]
   releaseExitApproved: boolean
@@ -370,6 +372,8 @@ export function buildStandardWorkDurationSeedPublicationReadiness(
   const approvedCandidateIds = Array.from(new Set(input.approvedCandidateIds.map(normalizeText).filter(Boolean)))
   const seedVersionId = normalizeText(input.seedVersionId) || null
   const runtimePublicationKey = normalizeText(input.runtimePublicationKey) || null
+  const runtimeConsumerObservationRef = normalizeText(input.runtimeConsumerObservationRef) || null
+  const runtimeConsumerPublicationKey = normalizeText(input.runtimeConsumerPublicationKey) || null
   const rollbackTarget = normalizeText(input.rollbackTarget) || null
   const sourceSampleIds = buildPublicationSourceSampleIds(input.report)
   const seedPublicationWriterReady = Boolean(seedVersionId && runtimePublicationKey)
@@ -378,13 +382,25 @@ export function buildStandardWorkDurationSeedPublicationReadiness(
   const seedVersionLineageRecorded = Boolean(seedVersionId)
     && approvedCandidateIds.length > 0
     && sourceSampleIds.length > 0
+  const runtimeConsumerPublicationMismatched = Boolean(
+    runtimeConsumerObservationRef
+      && runtimePublicationKey
+      && runtimeConsumerPublicationKey
+      && runtimeConsumerPublicationKey !== runtimePublicationKey,
+  )
+  const runtimeConsumerObservationMatchesPublication = Boolean(
+    runtimeConsumerObservationRef
+      && runtimePublicationKey
+      && runtimeConsumerPublicationKey
+      && runtimeConsumerPublicationKey === runtimePublicationKey,
+  )
   const readiness = evaluateStandardWorkDurationSeedLiveLearningEvidence({
     replayReport: input.report.replay,
     actualOutcomeEventRecorded: input.report.replay.summary.eligibleSampleCount > 0
       && input.report.replay.summary.evaluatedCodeCount > 0,
     approvedReplayCandidateRecorded: approvedCandidateIds.length > 0,
     enabledLearningScopes: input.enabledLearningScopes,
-    runtimeConsumerUsesPublishedArtifact: Boolean(runtimePublicationKey),
+    runtimeConsumerUsesPublishedArtifact: runtimeConsumerObservationMatchesPublication,
     seedPublicationWriterReady,
     seedVersionLineageRecorded,
     releaseExitApproved: input.releaseExitApproved,
@@ -408,7 +424,10 @@ export function buildStandardWorkDurationSeedPublicationReadiness(
       approvedCandidateIds,
       sourceSampleIds,
     },
-    missingReasons: readiness.missingReasons,
+    missingReasons: Array.from(new Set([
+      ...readiness.missingReasons,
+      runtimeConsumerPublicationMismatched ? 'runtime_consumer_publication_mismatch' : '',
+    ].filter(Boolean))),
   }
 }
 
