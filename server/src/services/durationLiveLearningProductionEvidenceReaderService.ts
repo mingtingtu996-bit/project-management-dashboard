@@ -17,7 +17,6 @@ import {
   collectDurationLiveLearningProductionEvidenceRefs,
   listDurationLiveLearningProductionEvidenceSourcePlan,
   type DurationLiveLearningProductionClaimAudit,
-  type DurationLiveLearningProductionEvidenceRecord,
   type DurationLiveLearningProductionEvidenceRef,
   type DurationLiveLearningProductionEvidenceSourceRow,
   type DurationLiveLearningProductionEvidenceSourceTable,
@@ -45,7 +44,6 @@ export interface DurationLiveLearningProductionEvidenceSourceQuery {
 export interface DurationLiveLearningProductionClaimAuditFromDbInput
   extends DurationLiveLearningProductionEvidenceSourceQueryInput {
   completionAudit?: DurationLiveLearningCompletionAudit
-  records?: readonly DurationLiveLearningProductionEvidenceRecord[]
   requestedFactRewriteAssetKeys?: readonly DurationLiveLearningAssetKey[]
 }
 
@@ -61,13 +59,6 @@ const FORECAST_SCOPE_EXCEPTION_ASSET_KEYS = new Set<DurationLiveLearningAssetKey
   'forecast_residual_overlay',
   'forecast_confidence_weight',
 ])
-const PLAN_NETWORK_PRODUCTION_SAMPLE_ASSET_KEYS = new Set<DurationLiveLearningAssetKey>([
-  'special_work_duration_seed',
-  'wbs_reference_days',
-  'dependency_rule_candidate',
-  'critical_path_rule_candidate',
-])
-
 async function defaultQueryExec<T = Record<string, unknown>>(
   sql: string,
   params: unknown[] = [],
@@ -125,23 +116,15 @@ function durationSampleAssetKey(row: Record<string, unknown>) {
 }
 
 function durationSampleLearningScope(row: Record<string, unknown>) {
-  const metadata = readRecord(row.metadata)
   return normalizeLearningScope(
-    readText(row, 'learning_scope', 'learningScope', 'sample_scope', 'sampleScope', 'scope')
-      || readText(metadata, 'learningScope', 'learning_scope', 'sampleScope', 'sample_scope', 'scope'),
+    readText(row, 'learning_scope', 'learningScope', 'sample_scope', 'sampleScope', 'scope'),
   )
 }
 
 function planNetworkOutcomeLearningScope(row: Record<string, unknown>) {
-  const metadata = readRecord(row.metadata)
-  const explicitScope = normalizeLearningScope(
-    readText(row, 'learning_scope', 'learningScope', 'sample_scope', 'sampleScope', 'scope')
-      || readText(metadata, 'learningScope', 'learning_scope', 'sampleScope', 'sample_scope', 'scope'),
+  return normalizeLearningScope(
+    readText(row, 'learning_scope', 'learningScope', 'sample_scope', 'sampleScope', 'scope'),
   )
-  if (explicitScope) return explicitScope
-  if (readText(row, 'project_id', 'projectId')) return 'project'
-  if (readText(row, 'company_id', 'companyId')) return 'company'
-  return null
 }
 
 function acceptedLearningScopesFromProductionSamples(
@@ -276,27 +259,15 @@ function productionCompletionEvidenceForAsset(
   }
 }
 
-function planNetworkProductionSampleRecords(
-  records: readonly DurationLiveLearningProductionEvidenceRecord[] | undefined,
-) {
-  return (records ?? []).filter((record) =>
-    record.evidenceKind === 'production_sample'
-    && PLAN_NETWORK_PRODUCTION_SAMPLE_ASSET_KEYS.has(record.assetKey))
-}
-
 function buildDurationLiveLearningCompletionAuditFromProductionSources(input: {
   sourceRows: readonly DurationLiveLearningProductionEvidenceSourceRow[]
-  records?: readonly DurationLiveLearningProductionEvidenceRecord[]
   requestedFactRewriteAssetKeys?: readonly DurationLiveLearningAssetKey[]
 }) {
   const rowCollection = collectDurationLiveLearningProductionEvidenceRecordsFromRows({
     rows: input.sourceRows,
   })
   const evidenceCollection = collectDurationLiveLearningProductionEvidenceRefs({
-    records: [
-      ...rowCollection.records,
-      ...planNetworkProductionSampleRecords(input.records),
-    ],
+    records: rowCollection.records,
   })
   const evidenceOverrides: DurationLiveLearningEvidenceOverride[] = evidenceCollection.productionEvidence.map((evidence) => ({
     assetKey: evidence.assetKey,
@@ -473,13 +444,11 @@ export async function buildDurationLiveLearningProductionClaimAuditFromDb(
   const runtimeConsumerBusinessPathSourceFiles = await loadDurationRuntimeConsumerBusinessPathSourceFiles()
   const completionAudit = buildDurationLiveLearningCompletionAuditFromProductionSources({
     sourceRows: sourceQuery.sourceRows,
-    records: input.records,
     requestedFactRewriteAssetKeys: input.requestedFactRewriteAssetKeys,
   })
   const audit = buildDurationLiveLearningProductionClaimAudit({
     completionAudit,
     sourceRows: sourceQuery.sourceRows,
-    records: input.records,
     runtimeConsumerBusinessPathSourceFiles,
   })
 

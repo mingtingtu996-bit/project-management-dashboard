@@ -140,6 +140,7 @@ function buildPlanNetworkOutcomeRows() {
       asset_key: assetKey,
       outcome_status: 'accepted',
       outcome_ref: `network_outcomes:${assetKey}:${learningScope}:accepted`,
+      learning_scope: learningScope,
       metadata: { learningScope },
       writes_runtime_directly: false,
       writes_fact_directly: false,
@@ -162,6 +163,7 @@ function rowsForSql(sql: string, options: { includePlanNetworkOutcomes?: boolean
           included_in_benchmark: true,
           actual_duration: 8,
           completed_at: '2026-06-01T00:00:00.000Z',
+          learning_scope: learningScope,
           metadata: { liveLearningAssetKey: assetKey, learningScope },
         })))
         continue
@@ -173,6 +175,7 @@ function rowsForSql(sql: string, options: { includePlanNetworkOutcomes?: boolean
           included_in_benchmark: true,
           actual_duration: 8,
           completed_at: '2026-06-01T00:00:00.000Z',
+          learning_scope: learningScope,
           metadata: { liveLearningAssetKey: assetKey, learningScope },
         })))
         continue
@@ -183,6 +186,7 @@ function rowsForSql(sql: string, options: { includePlanNetworkOutcomes?: boolean
         included_in_benchmark: true,
         actual_duration: 8,
         completed_at: '2026-06-01T00:00:00.000Z',
+        learning_scope: learningScope,
         metadata: { liveLearningAssetKey: assetKey, learningScope },
       })))
     }
@@ -349,6 +353,39 @@ function rowsForSqlWithoutForecastScopeExceptionApproval(sql: string) {
   })
 }
 
+function rowsForSqlWithMetadataOnlyDurationScopes(sql: string) {
+  const normalized = sql.toLowerCase()
+  if (!normalized.includes('from public.duration_experience_samples')) return rowsForSql(sql)
+  return rowsForSql(sql).map((row) => {
+    const metadata = row.metadata as Record<string, unknown> | undefined
+    if (!metadata?.learningScope) return row
+    const { learning_scope, ...withoutSchemaScope } = row
+    return withoutSchemaScope
+  })
+}
+
+function rowsForSqlWithImplicitPlanNetworkScopes(sql: string) {
+  const normalized = sql.toLowerCase()
+  if (!normalized.includes('from public.duration_plan_network_outcomes')) return rowsForSql(sql)
+  return buildPlanNetworkOutcomeRows().map((row) => {
+    const { learning_scope, ...withoutSchemaScope } = row
+    return {
+      ...withoutSchemaScope,
+      company_id: 'company-live-learning',
+      project_id: 'project-live-learning',
+    }
+  })
+}
+
+function rowsForSqlWithPlanNetworkScopesButNoOutcomeIds(sql: string) {
+  const normalized = sql.toLowerCase()
+  if (!normalized.includes('from public.duration_plan_network_outcomes')) return rowsForSql(sql)
+  return buildPlanNetworkOutcomeRows().map((row) => {
+    const { id, ...withoutId } = row
+    return withoutId
+  })
+}
+
 function buildReadyBusinessPathSourceFiles() {
   return [
     {
@@ -452,7 +489,6 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
       completionAudit: buildReadyCompletionAudit(),
       queryExec,
       maxRowsPerSourceTable: 200,
-      records: buildPlanNetworkOutcomeRecords(),
     })
 
     expect(audit.status).toBe('duration_live_learning_production_claim_ready')
@@ -528,6 +564,38 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
         }))))
   })
 
+  it('does not let typed plan-network records repair invalid DB outcome rows', async () => {
+    const {
+      buildDurationLiveLearningProductionClaimAuditFromDb,
+    } = await import('../services/durationLiveLearningProductionEvidenceReaderService.js')
+    const queryExec = async <T = Record<string, unknown>>(sql: string): Promise<T[]> =>
+      rowsForSqlWithPlanNetworkScopesButNoOutcomeIds(sql) as T[]
+
+    const audit = await buildDurationLiveLearningProductionClaimAuditFromDb({
+      completionAudit: buildReadyCompletionAudit(),
+      queryExec,
+      maxRowsPerSourceTable: 200,
+      records: buildPlanNetworkOutcomeRecords(),
+    } as Parameters<typeof buildDurationLiveLearningProductionClaimAuditFromDb>[0] & {
+      records: ReturnType<typeof buildPlanNetworkOutcomeRecords>
+    })
+
+    expect(audit.status).toBe('duration_live_learning_production_claim_not_ready')
+    expect(audit.evidenceRowCollection.rejectedRows).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        sourceTable: 'duration_plan_network_outcomes',
+        reason: 'production_source_row_id_required',
+      }),
+    ]))
+    expect(audit.evidenceCollection.rejectedRecords).toEqual([])
+    expect(audit.productionGate.missingEvidenceByAsset).toEqual(expect.arrayContaining(
+      planNetworkAssetKeys.map((assetKey) => ({
+        assetKey,
+        missingReasonCodes: ['production_sample_evidence_required'],
+      })),
+    ))
+  })
+
   it('keeps the DB production claim blocked when non-forecast assets lack company/project learning scopes', async () => {
     const {
       buildDurationLiveLearningProductionClaimAuditFromDb,
@@ -556,6 +624,67 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
       }),
       expect.objectContaining({
         assetKey: 'standard_work_duration_seed',
+        missingClosureConditions: expect.arrayContaining([
+          'global_industry_company_project_learning_scopes_required',
+        ]),
+      }),
+    ]))
+  })
+
+  it('keeps duration-outcome scopes blocked when scope only exists in metadata', async () => {
+    const {
+      buildDurationLiveLearningProductionClaimAuditFromDb,
+    } = await import('../services/durationLiveLearningProductionEvidenceReaderService.js')
+    const queryExec = async <T = Record<string, unknown>>(sql: string): Promise<T[]> =>
+      rowsForSqlWithMetadataOnlyDurationScopes(sql) as T[]
+
+    const audit = await buildDurationLiveLearningProductionClaimAuditFromDb({
+      completionAudit: buildReadyCompletionAudit(),
+      queryExec,
+      maxRowsPerSourceTable: 200,
+    })
+
+    expect(audit.status).toBe('duration_live_learning_production_claim_not_ready')
+    expect(audit.completionAudit.status).toBe('duration_live_learning_completion_not_ready')
+    expect(audit.completionAudit.blockedAssetKeys).toEqual(expect.arrayContaining([
+      'base_duration_benchmark',
+      'duration_cold_start_baseline',
+      'standard_work_duration_seed',
+    ]))
+    expect(audit.completionAudit.portfolio.learnableAssets).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        assetKey: 'base_duration_benchmark',
+        missingClosureConditions: expect.arrayContaining([
+          'global_industry_company_project_learning_scopes_required',
+        ]),
+      }),
+    ]))
+  })
+
+  it('keeps plan-network scopes blocked when scope is inferred only from company or project ids', async () => {
+    const {
+      buildDurationLiveLearningProductionClaimAuditFromDb,
+    } = await import('../services/durationLiveLearningProductionEvidenceReaderService.js')
+    const queryExec = async <T = Record<string, unknown>>(sql: string): Promise<T[]> =>
+      rowsForSqlWithImplicitPlanNetworkScopes(sql) as T[]
+
+    const audit = await buildDurationLiveLearningProductionClaimAuditFromDb({
+      completionAudit: buildReadyCompletionAudit(),
+      queryExec,
+      maxRowsPerSourceTable: 200,
+    })
+
+    expect(audit.status).toBe('duration_live_learning_production_claim_not_ready')
+    expect(audit.completionAudit.status).toBe('duration_live_learning_completion_not_ready')
+    expect(audit.completionAudit.blockedAssetKeys).toEqual(expect.arrayContaining([
+      'special_work_duration_seed',
+      'wbs_reference_days',
+      'dependency_rule_candidate',
+      'critical_path_rule_candidate',
+    ]))
+    expect(audit.completionAudit.portfolio.learnableAssets).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        assetKey: 'special_work_duration_seed',
         missingClosureConditions: expect.arrayContaining([
           'global_industry_company_project_learning_scopes_required',
         ]),
@@ -631,7 +760,6 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
       completionAudit: buildDurationLiveLearningCompletionAudit(),
       queryExec,
       maxRowsPerSourceTable: 200,
-      records: buildPlanNetworkOutcomeRecords(),
     })
 
     expect(audit.completionAudit.status).toBe('duration_live_learning_completion_ready')
@@ -651,7 +779,6 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
       completionAudit: buildReadyCompletionAudit(),
       queryExec,
       maxRowsPerSourceTable: 200,
-      records: buildPlanNetworkOutcomeRecords(),
     })
 
     expect(audit.status).toBe('duration_live_learning_production_claim_ready')
@@ -674,7 +801,6 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
       completionAudit: buildReadyCompletionAudit(),
       queryExec,
       maxRowsPerSourceTable: 200,
-      records: buildPlanNetworkOutcomeRecords(),
       runtimeConsumerBusinessPathSourceFiles: fakeSourceFiles,
     } as Parameters<typeof buildDurationLiveLearningProductionClaimAuditFromDb>[0] & {
       runtimeConsumerBusinessPathSourceFiles: typeof fakeSourceFiles
