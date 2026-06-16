@@ -1439,13 +1439,14 @@ export function evaluateDurationLiveLearningProductionEvidenceGate(
   input: DurationLiveLearningProductionEvidenceGateInput,
 ): DurationLiveLearningProductionEvidenceGate {
   const productionEvidenceMap = buildProductionEvidenceMap(input.productionEvidence)
-  const missingEvidenceByAsset = input.completionAudit.learnableAssetKeys
+  const claimAssetKeys = LEARNABLE_DURATION_LIVE_LEARNING_ASSET_KEYS
+  const missingEvidenceByAsset = claimAssetKeys
     .map((assetKey) => evaluateAssetEvidence(assetKey, productionEvidenceMap.get(assetKey)))
     .filter((gap): gap is DurationLiveLearningProductionEvidenceGap => Boolean(gap))
 
   if (input.completionAudit.status !== 'duration_live_learning_completion_ready') {
     missingEvidenceByAsset.unshift({
-      assetKey: input.completionAudit.learnableAssetKeys[0] ?? 'base_duration_benchmark',
+      assetKey: claimAssetKeys[0] ?? 'base_duration_benchmark',
       missingReasonCodes: ['completion_audit_ready_required'],
     })
   }
@@ -1462,7 +1463,7 @@ export function evaluateDurationLiveLearningProductionEvidenceGate(
       : 'not_ready_for_live_self_learning_claim',
     prohibitedClaim: input.completionAudit.prohibitedClaim,
     completionAuditStatus: input.completionAudit.status,
-    productionEvidenceAssetKeys: input.completionAudit.learnableAssetKeys.filter((assetKey) =>
+    productionEvidenceAssetKeys: claimAssetKeys.filter((assetKey) =>
       productionEvidenceMap.has(assetKey)),
     missingEvidenceByAsset,
   }

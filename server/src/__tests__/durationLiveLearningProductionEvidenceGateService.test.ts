@@ -610,6 +610,38 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
     expect(gate.productionEvidenceAssetKeys).toEqual(learnableAssetKeys)
   })
 
+  it('rejects completion audits that narrow the learnable asset universe', () => {
+    const narrowCompletionAudit = {
+      ...buildReadyCompletionAudit(),
+      learnableAssetKeys: ['base_duration_benchmark' as const],
+    }
+    const gate = evaluateDurationLiveLearningProductionEvidenceGate({
+      completionAudit: narrowCompletionAudit,
+      productionEvidence: [{
+        assetKey: 'base_duration_benchmark',
+        productionSampleEvidenceRef: productionSampleEvidenceRefForAsset('base_duration_benchmark'),
+        publicationExecutionRef: publicationEvidenceRefForAsset('base_duration_benchmark'),
+        runtimeConsumerObservationRef: 'runtime_consumer:base_duration_benchmark:observed',
+        runtimeConsumerPublicationKey: publicationKeyForAsset('base_duration_benchmark'),
+        impactMonitoringEvidenceRef: 'impact_monitoring:base_duration_benchmark:armed',
+        impactMonitoringPublicationKey: publicationKeyForAsset('base_duration_benchmark'),
+        rollbackDrillEvidenceRef: 'rollback:base_duration_benchmark:verified',
+        rollbackDrillPublicationKey: publicationKeyForAsset('base_duration_benchmark'),
+        accuracyEvidenceRef: 'accuracy:base_duration_benchmark:mae-bias-ok',
+        accuracyPublicationKey: publicationKeyForAsset('base_duration_benchmark'),
+      }],
+    })
+
+    expect(gate.status).toBe('duration_live_learning_production_evidence_not_ready')
+    expect(gate.allowedClaim).toBe('not_ready_for_live_self_learning_claim')
+    expect(gate.missingEvidenceByAsset).toEqual(expect.arrayContaining(
+      learnableAssetKeys.slice(1).map((assetKey) => ({
+        assetKey,
+        missingReasonCodes: expect.arrayContaining(['production_sample_evidence_required']),
+      })),
+    ))
+  })
+
   it('blocks direct production evidence refs when their source prefixes are not allowed for the asset', () => {
     const gate = evaluateDurationLiveLearningProductionEvidenceGate({
       completionAudit: buildReadyCompletionAudit(),
