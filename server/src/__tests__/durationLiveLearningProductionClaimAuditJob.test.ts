@@ -209,6 +209,7 @@ describe('durationLiveLearningProductionClaimAuditJob', () => {
       isScheduled: false,
       lastRun: null,
       nextRun: null,
+      lastResult: null,
     })
 
     const result = await job.executeNow()
@@ -218,6 +219,17 @@ describe('durationLiveLearningProductionClaimAuditJob', () => {
       isRunning: false,
       isScheduled: false,
       lastRun: expect.any(String),
+      lastResult: expect.objectContaining({
+        status: 'duration_live_learning_production_claim_not_ready',
+        allowedClaim: 'not_ready_for_live_self_learning_claim',
+        prohibitedClaim: 'all_duration_assets_are_live_self_learning',
+        missingProductionEvidence: expect.arrayContaining([
+          expect.objectContaining({ assetKey: 'forecast_residual_overlay' }),
+        ]),
+        rejectedProductionSourceRows: expect.arrayContaining([
+          expect.objectContaining({ reason: 'production_source_row_not_evidence_ready' }),
+        ]),
+      }),
     }))
   })
 }

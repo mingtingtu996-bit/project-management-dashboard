@@ -110,6 +110,7 @@ export class DurationLiveLearningProductionClaimAuditJob {
   private isRunning = false
   private lastRun: Date | null = null
   private nextRun: Date | null = null
+  private lastResult: DurationLiveLearningProductionClaimAuditJobResult | null = null
 
   start() {
     if (this.timer || this.startTimer) {
@@ -155,6 +156,7 @@ export class DurationLiveLearningProductionClaimAuditJob {
       isScheduled: this.timer !== null || this.startTimer !== null,
       lastRun: this.lastRun ? this.lastRun.toISOString() : null,
       nextRun: this.nextRun ? this.nextRun.toISOString() : null,
+      lastResult: this.lastResult,
     }
   }
 
@@ -187,6 +189,7 @@ export class DurationLiveLearningProductionClaimAuditJob {
         attempts,
         ...value,
       })
+      this.lastResult = value
       return value
     } catch (error) {
       logger.error('durationLiveLearningProductionClaimAuditJob failed', {
