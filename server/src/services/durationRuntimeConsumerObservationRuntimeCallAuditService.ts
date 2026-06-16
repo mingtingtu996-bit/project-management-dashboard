@@ -22,6 +22,12 @@ export interface DurationRuntimeConsumerObservationRuntimeCallIdentity {
   runtimeEntryRef: string
 }
 
+export interface DurationRuntimeConsumerObservationUnlinkedObservation {
+  consumerKey: string
+  sourceEvidenceRefs: string[]
+  reason: 'runtime_consumer_observation_not_linked_to_runtime_call'
+}
+
 export interface DurationRuntimeConsumerObservationObservedRuntimeCall
   extends DurationRuntimeConsumerObservationRuntimeCallIdentity {
   runtimeEntryRef: string
@@ -51,6 +57,7 @@ export interface DurationRuntimeConsumerObservationRuntimeCallCoverage {
   observedRuntimeCalls: DurationRuntimeConsumerObservationObservedRuntimeCall[]
   missingRuntimeCalls: DurationRuntimeConsumerObservationRuntimeCallIdentity[]
   rejectedRuntimeCalls: DurationRuntimeConsumerObservationRejectedRuntimeCall[]
+  unlinkedConsumerObservations: DurationRuntimeConsumerObservationUnlinkedObservation[]
 }
 
 function normalizeConsumerKey(value: string) {
@@ -102,6 +109,29 @@ function hasLinkedObservationSourceRef(
   return callSourceEvidenceRefs.some((ref) => observationRefs.has(ref))
 }
 
+function findUnlinkedConsumerObservations(
+  observations: readonly DurationRuntimeConsumerObservationEvidence[] | undefined,
+  runtimeCallSourceRefsByConsumerKey: Map<string, Set<string>>,
+) {
+  const unlinked: DurationRuntimeConsumerObservationUnlinkedObservation[] = []
+  for (const observation of observations ?? []) {
+    const consumerKey = normalizeConsumerKey(observation.consumerKey)
+    if (!consumerKey) continue
+    const sourceEvidenceRefs = normalizeSourceEvidenceRefs(observation.sourceEvidenceRefs)
+    const runtimeCallRefs = runtimeCallSourceRefsByConsumerKey.get(consumerKey)
+    const linked = sourceEvidenceRefs.length > 0
+      && Boolean(runtimeCallRefs?.size)
+      && sourceEvidenceRefs.some((ref) => runtimeCallRefs?.has(ref))
+    if (linked) continue
+    unlinked.push({
+      consumerKey,
+      sourceEvidenceRefs,
+      reason: 'runtime_consumer_observation_not_linked_to_runtime_call',
+    })
+  }
+  return unlinked
+}
+
 export function listDurationRuntimeConsumerObservationRequiredRuntimeCalls():
   DurationRuntimeConsumerObservationRuntimeCallIdentity[] {
   const declaredFacadeConsumers = new Set(
@@ -127,6 +157,7 @@ export function evaluateDurationRuntimeConsumerObservationRuntimeCallCoverage(
     input.observedConsumerObservations,
   )
   const observedMap = new Map<string, DurationRuntimeConsumerObservationObservedRuntimeCall>()
+  const runtimeCallSourceRefsByConsumerKey = new Map<string, Set<string>>()
   const rejectedRuntimeCalls: DurationRuntimeConsumerObservationRejectedRuntimeCall[] = []
 
   for (const evidence of input.runtimeCallEvidence ?? []) {
@@ -177,20 +208,28 @@ export function evaluateDurationRuntimeConsumerObservationRuntimeCallCoverage(
       continue
     }
     observedMap.set(consumerKey, { consumerKey, runtimeEntryRef, evidenceRef })
+    const existingSourceRefs = runtimeCallSourceRefsByConsumerKey.get(consumerKey) ?? new Set<string>()
+    for (const ref of sourceEvidenceRefs) existingSourceRefs.add(ref)
+    runtimeCallSourceRefsByConsumerKey.set(consumerKey, existingSourceRefs)
   }
 
   const observedRuntimeCalls = [...observedMap.values()]
   const observedConsumerKeys = new Set(observedRuntimeCalls.map((item) => item.consumerKey))
   const missingRuntimeCalls = requiredRuntimeCalls
     .filter((item) => !observedConsumerKeys.has(item.consumerKey))
+  const unlinkedConsumerObservations = findUnlinkedConsumerObservations(
+    input.observedConsumerObservations,
+    runtimeCallSourceRefsByConsumerKey,
+  )
 
   return {
-    status: missingRuntimeCalls.length === 0
+    status: missingRuntimeCalls.length === 0 && unlinkedConsumerObservations.length === 0
       ? 'runtime_consumer_observation_runtime_calls_ready'
       : 'runtime_consumer_observation_runtime_calls_not_ready',
     requiredRuntimeCalls,
     observedRuntimeCalls,
     missingRuntimeCalls,
     rejectedRuntimeCalls,
+    unlinkedConsumerObservations,
   }
 }

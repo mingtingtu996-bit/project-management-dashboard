@@ -1932,4 +1932,44 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
     expect(audit.status).toBe('duration_live_learning_production_claim_not_ready')
     expect(audit.allowedClaim).toBe('not_ready_for_live_self_learning_claim')
   })
+
+  it('blocks the final production claim when a multi-asset consumer has an uncalled observation source', () => {
+    const staleSeedSourceRef = 'runtime-consumption:durationSuggestionService:stale-standard-seed'
+    const audit = buildDurationLiveLearningProductionClaimAudit({
+      completionAudit: buildReadyCompletionAudit(),
+      sourceRows: [
+        ...buildAllProductionSourceRows().map((source) => {
+          if (
+            source.sourceTable !== 'runtime_consumer_observations'
+            || source.row.consumer_key !== 'durationSuggestionService'
+            || source.row.asset_key !== 'standard_work_duration_seed'
+          ) {
+            return source
+          }
+          return {
+            ...source,
+            row: {
+              ...source.row,
+              source_evidence_refs: [staleSeedSourceRef],
+            },
+          }
+        }),
+        ...buildRuntimeConsumerRuntimeCallRows(),
+      ],
+      records: buildPlanNetworkOutcomeRecords(),
+      runtimeConsumerBusinessPathSourceFiles: buildReadyBusinessPathSourceFiles(),
+    })
+
+    expect(audit.productionGate.status).toBe('duration_live_learning_production_evidence_ready')
+    expect(audit.runtimeConsumerObservationCoverage.status).toBe('runtime_consumer_observation_coverage_ready')
+    expect(audit.runtimeConsumerRuntimeCallCoverage.status)
+      .toBe('runtime_consumer_observation_runtime_calls_not_ready')
+    expect(audit.runtimeConsumerRuntimeCallCoverage.unlinkedConsumerObservations).toEqual([{
+      consumerKey: 'durationSuggestionService',
+      sourceEvidenceRefs: [staleSeedSourceRef],
+      reason: 'runtime_consumer_observation_not_linked_to_runtime_call',
+    }])
+    expect(audit.status).toBe('duration_live_learning_production_claim_not_ready')
+    expect(audit.allowedClaim).toBe('not_ready_for_live_self_learning_claim')
+  })
 })

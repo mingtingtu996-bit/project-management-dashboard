@@ -129,4 +129,83 @@ describe('durationRuntimeConsumerObservationRuntimeCallAuditService', () => {
       reason: 'runtime_consumer_observation_runtime_call_not_linked_to_observation',
     }])
   })
+
+  it('keeps coverage blocked when only one observation for a consumer is linked to the runtime call', async () => {
+    const {
+      evaluateDurationRuntimeConsumerObservationRuntimeCallCoverage,
+    } = await import('../services/durationRuntimeConsumerObservationRuntimeCallAuditService.js')
+
+    const audit = evaluateDurationRuntimeConsumerObservationRuntimeCallCoverage({
+      runtimeCallEvidence: [{
+        consumerKey: 'durationSuggestionService',
+        runtimeEntryRef: 'durationSuggestionService:getTaskDurationSuggestion',
+        evidenceRef: 'runtime_consumer_runtime_calls:runtime-call-duration-suggestion',
+        sourceEvidenceRefs: [runtimeSourceRef('durationSuggestionService')],
+      }],
+      observedConsumerObservations: [
+        {
+          consumerKey: 'durationSuggestionService',
+          sourceEvidenceRefs: [runtimeSourceRef('durationSuggestionService')],
+        },
+        {
+          consumerKey: 'durationSuggestionService',
+          sourceEvidenceRefs: ['runtime-consumption:durationSuggestionService:stale-standard-seed'],
+        },
+      ],
+    })
+
+    expect(audit.status).toBe('runtime_consumer_observation_runtime_calls_not_ready')
+    expect(audit.observedRuntimeCalls).toEqual([{
+      consumerKey: 'durationSuggestionService',
+      runtimeEntryRef: 'durationSuggestionService:getTaskDurationSuggestion',
+      evidenceRef: 'runtime_consumer_runtime_calls:runtime-call-duration-suggestion',
+    }])
+    expect(audit.unlinkedConsumerObservations).toEqual([{
+      consumerKey: 'durationSuggestionService',
+      sourceEvidenceRefs: ['runtime-consumption:durationSuggestionService:stale-standard-seed'],
+      reason: 'runtime_consumer_observation_not_linked_to_runtime_call',
+    }])
+  })
+
+  it('accepts multiple runtime calls that link separate observations for the same consumer', async () => {
+    const {
+      evaluateDurationRuntimeConsumerObservationRuntimeCallCoverage,
+    } = await import('../services/durationRuntimeConsumerObservationRuntimeCallAuditService.js')
+
+    const audit = evaluateDurationRuntimeConsumerObservationRuntimeCallCoverage({
+      runtimeCallEvidence: [
+        {
+          consumerKey: 'durationSuggestionService',
+          runtimeEntryRef: 'durationSuggestionService:getTaskDurationSuggestion',
+          evidenceRef: 'runtime_consumer_runtime_calls:runtime-call-duration-suggestion-base',
+          sourceEvidenceRefs: ['runtime-consumption:durationSuggestionService:base'],
+        },
+        {
+          consumerKey: 'durationSuggestionService',
+          runtimeEntryRef: 'durationSuggestionService:getTaskDurationSuggestion',
+          evidenceRef: 'runtime_consumer_runtime_calls:runtime-call-duration-suggestion-seed',
+          sourceEvidenceRefs: ['runtime-consumption:durationSuggestionService:seed'],
+        },
+      ],
+      observedConsumerObservations: [
+        {
+          consumerKey: 'durationSuggestionService',
+          sourceEvidenceRefs: ['runtime-consumption:durationSuggestionService:base'],
+        },
+        {
+          consumerKey: 'durationSuggestionService',
+          sourceEvidenceRefs: ['runtime-consumption:durationSuggestionService:seed'],
+        },
+      ],
+    })
+
+    expect(audit.status).toBe('runtime_consumer_observation_runtime_calls_not_ready')
+    expect(audit.unlinkedConsumerObservations).toEqual([])
+    expect(audit.rejectedRuntimeCalls).toEqual([])
+    expect(audit.observedRuntimeCalls).toEqual([{
+      consumerKey: 'durationSuggestionService',
+      runtimeEntryRef: 'durationSuggestionService:getTaskDurationSuggestion',
+      evidenceRef: 'runtime_consumer_runtime_calls:runtime-call-duration-suggestion-seed',
+    }])
+  })
 })
