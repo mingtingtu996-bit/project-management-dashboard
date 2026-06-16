@@ -343,12 +343,76 @@ describe('projectRemainingDurationForecastService', () => {
       asOfDate: '2026-06-10',
     })
 
-    expect(forecast.forecastFinishDate).toBe('2026-07-02')
+    expect(forecast.forecastFinishDate).toBe('2026-07-04')
     expect(forecast.calculationContext.criticalPath).toEqual(expect.objectContaining({
       mergeBiasDays: 2,
       mergeBiasChainCount: 3,
       confidenceBandFinishDate: '2026-07-04',
       mergeBiasedFinishDate: '2026-07-02',
+      confidenceBandDecision: expect.objectContaining({
+        status: 'applied',
+        governingFinishSource: 'confidence_band',
+        governingFinishDate: '2026-07-04',
+      }),
+    }))
+  })
+
+  it('lets the confidence band govern when it is later than merge bias', () => {
+    const forecast = buildProjectRemainingDurationForecast({
+      rows: ['chain-a', 'chain-b', 'chain-c'].map((clientRowId) => row({
+        clientRowId,
+        values: {
+          ...row().values,
+          title: `Parallel critical chain ${clientRowId}`,
+          forecast_finish_date: '2026-06-30',
+          forecast_p80_finish_date: '2026-07-04',
+          is_critical: true,
+          total_float_days: 0,
+          free_float_days: 0,
+        },
+      })),
+      asOfDate: '2026-06-10',
+    })
+
+    expect(forecast.forecastFinishDate).toBe('2026-07-04')
+    expect(forecast.calculationContext.criticalPath).toEqual(expect.objectContaining({
+      mergeBiasDays: 2,
+      mergeBiasedFinishDate: '2026-07-02',
+      confidenceBandFinishDate: '2026-07-04',
+      confidenceBandDecision: expect.objectContaining({
+        status: 'applied',
+        governingFinishSource: 'confidence_band',
+        governingFinishDate: '2026-07-04',
+        mergeBiasApplied: true,
+      }),
+    }))
+  })
+
+  it('marks merge-bias confidence evidence as unavailable when critical rows have no confidence bands', () => {
+    const forecast = buildProjectRemainingDurationForecast({
+      rows: ['chain-a', 'chain-b'].map((clientRowId) => row({
+        clientRowId,
+        values: {
+          ...row().values,
+          title: `Parallel critical chain ${clientRowId}`,
+          forecast_finish_date: '2026-06-30',
+          is_critical: true,
+          total_float_days: 0,
+          free_float_days: 0,
+        },
+      })),
+      asOfDate: '2026-06-10',
+    })
+
+    expect(forecast.forecastFinishDate).toBe('2026-06-30')
+    expect(forecast.calculationContext.criticalPath).toEqual(expect.objectContaining({
+      confidenceBandFinishDate: null,
+      mergeBiasDays: 0,
+      confidenceBandDecision: expect.objectContaining({
+        status: 'missing_confidence_band',
+        governingFinishSource: 'deterministic_finish',
+        confidenceBandMissingCount: 2,
+      }),
     }))
   })
 
@@ -377,7 +441,7 @@ describe('projectRemainingDurationForecastService', () => {
     expect(forecast.calculationContext.criticalPath.latestCriticalFinishDate).toBe('2026-06-13')
   })
 
-  it('serializes external hard-gate remaining windows after the internal governing finish', () => {
+  it('overlaps external hard-gate remaining windows with internal work', () => {
     const forecast = buildProjectRemainingDurationForecast({
       rows: [
         row({
@@ -410,14 +474,61 @@ describe('projectRemainingDurationForecastService', () => {
       targetEndDate: '2026-07-02',
     })
 
-    expect(forecast.forecastFinishDate).toBe('2026-07-04')
-    expect(forecast.projectRemainingForecastDays).toBe(25)
-    expect(forecast.targetGapDays).toBe(2)
+    expect(forecast.forecastFinishDate).toBe('2026-06-30')
+    expect(forecast.projectRemainingForecastDays).toBe(21)
+    expect(forecast.targetGapDays).toBe(0)
     expect(forecast.calculationContext.externalInterfaces).toEqual(expect.objectContaining({
       hardGateCount: 1,
       latestGateFinishDate: '2026-06-22',
-      serialRemainingDays: 5,
-      serializedGateFinishDate: '2026-07-04',
+      serialRemainingDays: 0,
+      overlappedRemainingDays: 5,
+      overlappedGateFinishDate: '2026-06-22',
+      gateTailDaysAfterInternal: 0,
+      serializedGateFinishDate: null,
+    }))
+  })
+
+  it('overlaps an external hard-gate window with internal work instead of appending the full gate after it', () => {
+    const forecast = buildProjectRemainingDurationForecast({
+      rows: [
+        row({
+          clientRowId: 'internal-critical',
+          values: {
+            ...row().values,
+            planned_end_date: '2026-06-30',
+            is_critical: true,
+            total_float_days: 0,
+            free_float_days: 0,
+          },
+        }),
+        row({
+          clientRowId: 'external-archive',
+          values: {
+            title: 'Archive acceptance',
+            planned_start_date: '2026-06-18',
+            planned_end_date: '2026-06-22',
+            progress: 0,
+            status: 'todo',
+            duration_contribution_mode: 'external_wait',
+            standard_task_metadata: {
+              constraintType: 'external_interface_wait',
+              externalInterfaceCodes: ['archive_acceptance'],
+            },
+          },
+        }),
+      ],
+      asOfDate: '2026-06-10',
+      targetEndDate: '2026-07-02',
+    })
+
+    expect(forecast.forecastFinishDate).toBe('2026-06-30')
+    expect(forecast.projectRemainingForecastDays).toBe(21)
+    expect(forecast.calculationContext.externalInterfaces).toEqual(expect.objectContaining({
+      hardGateCount: 1,
+      latestGateFinishDate: '2026-06-22',
+      overlappedRemainingDays: 5,
+      overlappedGateFinishDate: '2026-06-22',
+      gateTailDaysAfterInternal: 0,
     }))
   })
 
@@ -471,13 +582,16 @@ describe('projectRemainingDurationForecastService', () => {
       targetEndDate: '2026-07-02',
     })
 
-    expect(forecast.forecastFinishDate).toBe('2026-07-06')
-    expect(forecast.projectRemainingForecastDays).toBe(27)
+    expect(forecast.forecastFinishDate).toBe('2026-07-08')
+    expect(forecast.projectRemainingForecastDays).toBe(29)
     expect(forecast.calculationContext.externalInterfaces).toEqual(expect.objectContaining({
       hardGateCount: 2,
-      serialRemainingDays: 7,
+      latestGateFinishDate: '2026-07-08',
+      serialRemainingDays: 8,
       overlappedRemainingDays: 7,
-      serializedGateFinishDate: '2026-07-06',
+      overlappedGateFinishDate: '2026-07-08',
+      gateTailDaysAfterInternal: 8,
+      serializedGateFinishDate: '2026-07-08',
     }))
   })
 

@@ -49,6 +49,14 @@ export type ProjectRemainingDurationForecast = {
       mergeBiasDays?: number
       mergeBiasChainCount?: number
       mergeBiasedFinishDate?: string | null
+      confidenceBandDecision?: {
+        status: 'applied' | 'observed' | 'missing_confidence_band' | 'not_applicable'
+        governingFinishSource: 'confidence_band' | 'merge_bias' | 'deterministic_finish'
+        governingFinishDate: string | null
+        mergeBiasApplied: boolean
+        confidenceBandAvailableCount: number
+        confidenceBandMissingCount: number
+      }
     }
     runtimeAdjustment?: {
       pressureProgressExtraDays: number
@@ -66,6 +74,8 @@ export type ProjectRemainingDurationForecast = {
       latestGateFinishDate: string | null
       serialRemainingDays?: number
       overlappedRemainingDays?: number
+      overlappedGateFinishDate?: string | null
+      gateTailDaysAfterInternal?: number
       serializedGateFinishDate?: string | null
     }
     boundaryPolicy: string[]
@@ -222,6 +232,24 @@ function readRowGoverningFinish(row: ScheduleAccelerationRow, asOfDate?: string 
   )
 }
 
+function readExternalGateFinishDate(row: ScheduleAccelerationRow, asOfDate: string) {
+  const explicitFinishDate = normalizeDate(
+    row.values.forecast_finish_date
+      ?? row.values.forecastFinishDate
+      ?? row.values.duration_forecast_finish_date
+      ?? readRecord(row.values.durationForecast).forecastFinishDate
+      ?? readRecord(row.values.duration_forecast).forecast_finish_date
+      ?? row.values.planned_finish_date
+      ?? row.values.planned_end_date
+      ?? row.values.end_date,
+  )
+  const remainingDays = readRowRemainingDurationDays(row)
+  const remainingFinishDate = remainingDays !== null && remainingDays > 0
+    ? addInclusiveRemainingDays(asOfDate, remainingDays)
+    : null
+  return latestDate([explicitFinishDate, remainingFinishDate])
+}
+
 function readExternalGateRemainingDays(row: ScheduleAccelerationRow, asOfDate: string) {
   const explicitRemainingDays = readRowRemainingDurationDays(row)
   if (explicitRemainingDays !== null && explicitRemainingDays > 0) return Math.ceil(explicitRemainingDays)
@@ -236,6 +264,7 @@ function readExternalGateRemainingDays(row: ScheduleAccelerationRow, asOfDate: s
 }
 
 function computeCriticalMergeBiasDays(rows: ScheduleAccelerationRow[], asOfDate: string) {
+  const evaluatedCriticalChainCount = rows.length
   const spreads = rows
     .map((row) => {
       const medianFinish = readRowGoverningFinish(row, asOfDate)
@@ -250,6 +279,9 @@ function computeCriticalMergeBiasDays(rows: ScheduleAccelerationRow[], asOfDate:
     return {
       mergeBiasDays: 0,
       mergeBiasChainCount: spreads.length,
+      evaluatedCriticalChainCount,
+      confidenceBandAvailableCount: spreads.length,
+      confidenceBandMissingCount: Math.max(0, evaluatedCriticalChainCount - spreads.length),
     }
   }
 
@@ -258,6 +290,41 @@ function computeCriticalMergeBiasDays(rows: ScheduleAccelerationRow[], asOfDate:
   return {
     mergeBiasDays: Math.max(1, Math.ceil(averageSpread * mergeFactor)),
     mergeBiasChainCount: spreads.length,
+    evaluatedCriticalChainCount,
+    confidenceBandAvailableCount: spreads.length,
+    confidenceBandMissingCount: Math.max(0, evaluatedCriticalChainCount - spreads.length),
+  }
+}
+
+function buildConfidenceBandDecision(params: {
+  deterministicFinishDate: string | null
+  mergeBiasedFinishDate: string | null
+  confidenceBandFinishDate: string | null
+  mergeBias: ReturnType<typeof computeCriticalMergeBiasDays>
+}) {
+  const mergeBiasApplied = Number(params.mergeBias.mergeBiasDays ?? 0) > 0
+  const governingCandidates = [
+    { source: 'deterministic_finish' as const, date: params.deterministicFinishDate },
+    { source: 'merge_bias' as const, date: mergeBiasApplied ? params.mergeBiasedFinishDate : null },
+    { source: 'confidence_band' as const, date: params.confidenceBandFinishDate },
+  ].filter((item): item is { source: 'confidence_band' | 'merge_bias' | 'deterministic_finish'; date: string } => Boolean(item.date))
+
+  const governing = governingCandidates
+    .sort((left, right) => signedDurationDayDelta(right.date, left.date) ?? 0)
+    .at(-1) ?? { source: 'deterministic_finish' as const, date: params.deterministicFinishDate }
+
+  const hasConfidenceBand = Boolean(params.confidenceBandFinishDate)
+  const status = hasConfidenceBand
+    ? governing.source === 'confidence_band' ? 'applied' as const : 'observed' as const
+    : params.mergeBias.evaluatedCriticalChainCount > 1 ? 'missing_confidence_band' as const : 'not_applicable' as const
+
+  return {
+    status,
+    governingFinishSource: governing.source,
+    governingFinishDate: governing.date ?? params.deterministicFinishDate,
+    mergeBiasApplied,
+    confidenceBandAvailableCount: params.mergeBias.confidenceBandAvailableCount,
+    confidenceBandMissingCount: params.mergeBias.confidenceBandMissingCount,
   }
 }
 
@@ -508,24 +575,29 @@ export function buildProjectRemainingDurationForecast(params: {
   const criticalPathSpanFinishDate = criticalPathSpanDays.length > 0
     ? addInclusiveRemainingDays(asOfDate, Math.max(...criticalPathSpanDays))
     : null
-  const latestGateFinishDate = latestDate(externalGateRows.map((row) => readRowGoverningFinish(row, asOfDate)))
+  const latestGateFinishDate = latestDate(externalGateRows.map((row) => readExternalGateFinishDate(row, asOfDate)))
   const latestCommitmentFinishDate = normalizeDate(monthlyCommitments.latestCommitmentFinishDate)
   const mergeBias = computeCriticalMergeBiasDays(internalCriticalRows, asOfDate)
-  const confidenceBandGoverningFinishDate = mergeBias.mergeBiasDays > 0 ? null : confidenceBandFinishDate
-  const rawInternalWorkFinishDate = latestDate([
+  const deterministicInternalFinishDate = latestDate([
     latestRemainingFinishDate,
     latestCriticalFinishDate,
-    confidenceBandGoverningFinishDate,
     criticalPathSpanFinishDate,
     asOfDate,
   ])
   const mergeBiasedFinishDate = mergeBias.mergeBiasDays > 0
-    ? addCalendarDays(rawInternalWorkFinishDate, mergeBias.mergeBiasDays)
-    : rawInternalWorkFinishDate
+    ? addCalendarDays(deterministicInternalFinishDate, mergeBias.mergeBiasDays)
+    : deterministicInternalFinishDate
+  const confidenceBandDecision = buildConfidenceBandDecision({
+    deterministicFinishDate: deterministicInternalFinishDate,
+    mergeBiasedFinishDate,
+    confidenceBandFinishDate,
+    mergeBias,
+  })
+  const rawInternalWorkFinishDate = confidenceBandDecision.governingFinishDate
   const pressureProgressExtraDays = computeRuntimePressureExtraDays(params.runtimeExecutionFacts, internalCriticalRows.length)
   const adjustedInternalFinishDate = pressureProgressExtraDays > 0
-    ? addCalendarDays(mergeBiasedFinishDate, pressureProgressExtraDays)
-    : mergeBiasedFinishDate
+    ? addCalendarDays(rawInternalWorkFinishDate, pressureProgressExtraDays)
+    : rawInternalWorkFinishDate
   const internalWorkFinishDate = adjustedInternalFinishDate
   const externalGateRemainingDays = externalGateRows
     .map((row) => readExternalGateRemainingDays(row, asOfDate))
@@ -533,13 +605,18 @@ export function buildProjectRemainingDurationForecast(params: {
   const overlappedRemainingDays = externalGateRemainingDays.length > 0
     ? Math.max(...externalGateRemainingDays)
     : 0
-  const serialRemainingDays = overlappedRemainingDays
-  const serializedGateFinishDate = overlappedRemainingDays > 0
-    ? addInclusiveRemainingDays(internalWorkFinishDate, overlappedRemainingDays)
+  const gateRemainingFinishDate = overlappedRemainingDays > 0
+    ? addInclusiveRemainingDays(asOfDate, overlappedRemainingDays)
     : null
+  const overlappedGateFinishDate = latestDate([latestGateFinishDate, gateRemainingFinishDate])
+  const gateTailDaysAfterInternal = internalWorkFinishDate && overlappedGateFinishDate
+    ? Math.max(0, signedDurationDayDelta(internalWorkFinishDate, overlappedGateFinishDate) ?? 0)
+    : 0
+  const serialRemainingDays = gateTailDaysAfterInternal
+  const serializedGateFinishDate = gateTailDaysAfterInternal > 0 ? overlappedGateFinishDate : null
   const forecastFinishDate = latestDate([
     internalWorkFinishDate,
-    serializedGateFinishDate,
+    overlappedGateFinishDate,
     latestCommitmentFinishDate,
     asOfDate,
   ])
@@ -575,6 +652,7 @@ export function buildProjectRemainingDurationForecast(params: {
         mergeBiasDays: mergeBias.mergeBiasDays,
         mergeBiasChainCount: mergeBias.mergeBiasChainCount,
         mergeBiasedFinishDate,
+        confidenceBandDecision,
       },
       runtimeAdjustment: {
         pressureProgressExtraDays,
@@ -592,12 +670,14 @@ export function buildProjectRemainingDurationForecast(params: {
         latestGateFinishDate,
         serialRemainingDays,
         overlappedRemainingDays,
+        overlappedGateFinishDate,
+        gateTailDaysAfterInternal,
         serializedGateFinishDate,
       },
       boundaryPolicy: [
         ...(durationOutputContract?.boundaryPolicy ?? []),
-        'project_remaining_window_adds_merge_bias_for_parallel_near_critical_uncertainty',
-        'external_hard_gates_overlap_by_max_remaining_window_after_internal_finish',
+        'project_remaining_window_arbitrates_deterministic_merge_bias_and_confidence_band_finish',
+        'external_hard_gates_overlap_with_internal_work_and_only_tail_after_internal_finish_extends_project',
       ],
     },
   }
