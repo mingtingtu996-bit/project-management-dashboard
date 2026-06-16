@@ -918,6 +918,28 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
     }])
   })
 
+  it('rejects weak production samples for the final live-learning claim', () => {
+    const collected = collectDurationLiveLearningProductionEvidenceRefs({
+      records: [
+        {
+          assetKey: 'forecast_residual_overlay',
+          evidenceKind: 'production_sample',
+          evidenceRef: 'duration_samples:forecast-residual:weak',
+          evidenceStatus: 'weak',
+        },
+      ],
+    })
+
+    expect(collected.productionEvidence).toEqual([])
+    expect(collected.rejectedRecords).toEqual([{
+      assetKey: 'forecast_residual_overlay',
+      evidenceKind: 'production_sample',
+      evidenceRef: 'duration_samples:forecast-residual:weak',
+      evidenceStatus: 'weak',
+      reason: 'production_evidence_status_not_accepted',
+    }])
+  })
+
   it('rejects generic release-execution publication refs for typed seed and plan-network records', () => {
     const collected = collectDurationLiveLearningProductionEvidenceRefs({
       records: [
@@ -1408,6 +1430,38 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
     expect(audit.runtimeConsumerRuntimeCallCoverage.observedRuntimeCalls).toEqual([])
     expect(audit.runtimeConsumerRuntimeCallCoverage.missingRuntimeCalls).toEqual(runtimeCallEvidence)
     expect(audit.status).toBe('duration_live_learning_production_claim_not_ready')
+    expect(audit.allowedClaim).toBe('not_ready_for_live_self_learning_claim')
+  })
+
+  it('blocks the final production claim when only weak outcome samples are available', () => {
+    const audit = buildDurationLiveLearningProductionClaimAudit({
+      completionAudit: buildReadyCompletionAudit(),
+      sourceRows: [
+        ...buildAllProductionSourceRows().map((source) => {
+          if (
+            source.sourceTable !== 'duration_experience_samples'
+            || source.row.metadata?.liveLearningAssetKey !== 'forecast_residual_overlay'
+          ) {
+            return source
+          }
+          const { completed_at, ...weakSampleRow } = source.row
+          return {
+            ...source,
+            row: weakSampleRow,
+          }
+        }),
+        ...buildRuntimeConsumerRuntimeCallRows(),
+      ],
+      records: buildPlanNetworkOutcomeRecords(),
+      runtimeConsumerBusinessPathSourceFiles: buildReadyBusinessPathSourceFiles(),
+    })
+
+    expect(audit.status).toBe('duration_live_learning_production_claim_not_ready')
+    expect(audit.productionGate.status).toBe('duration_live_learning_production_evidence_not_ready')
+    expect(audit.productionGate.missingEvidenceByAsset).toEqual(expect.arrayContaining([{
+      assetKey: 'forecast_residual_overlay',
+      missingReasonCodes: expect.arrayContaining(['production_sample_evidence_required']),
+    }]))
     expect(audit.allowedClaim).toBe('not_ready_for_live_self_learning_claim')
   })
 

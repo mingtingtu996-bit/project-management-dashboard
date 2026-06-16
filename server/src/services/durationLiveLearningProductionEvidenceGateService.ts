@@ -637,7 +637,7 @@ function pushRecord(
 }
 
 function acceptedStatusesFor(kind: DurationLiveLearningProductionEvidenceKind) {
-  if (kind === 'production_sample') return new Set(['accepted', 'weak'])
+  if (kind === 'production_sample') return new Set(['accepted'])
   if (kind === 'publication_execution') return new Set(['published', 'canary'])
   if (kind === 'runtime_consumer_observation') return new Set(['observed'])
   if (kind === 'impact_monitoring') return new Set(['monitoring_armed', 'monitoring_running', 'monitoring_passed'])
