@@ -1,9 +1,12 @@
 import {
   collectDurationLiveLearningProductionEvidenceRecordsFromRows,
   collectDurationLiveLearningProductionEvidenceRefs,
+  splitPublicationReadinessDirectProductionEvidenceRecords,
   type DurationLiveLearningProductionEvidenceRecord,
   type DurationLiveLearningProductionEvidenceRef,
   type DurationLiveLearningProductionEvidenceSourceRow,
+  type DurationLiveLearningRejectedProductionEvidenceRecord,
+  type DurationLiveLearningRejectedProductionEvidenceSourceRow,
 } from './durationLiveLearningProductionEvidenceGateService.js'
 
 export type AlgorithmAssetColdStartBaselineScope = 'industry_baseline' | 'segment_baseline'
@@ -153,6 +156,8 @@ export interface AlgorithmAssetColdStartProductionLiveLearningEvidenceInput {
 export interface AlgorithmAssetColdStartProductionLineage {
   acceptedSampleCounts: Record<AlgorithmAssetColdStartProductionSampleScope, number>
   evidenceRefs: DurationLiveLearningProductionEvidenceRef
+  rejectedRows: DurationLiveLearningRejectedProductionEvidenceSourceRow[]
+  rejectedRecords: DurationLiveLearningRejectedProductionEvidenceRecord[]
 }
 
 export type AlgorithmAssetColdStartProductionLiveLearningEvidenceDecision =
@@ -266,12 +271,23 @@ function coldStartEvidenceRefsFromProductionInput(
   const rowCollection = collectDurationLiveLearningProductionEvidenceRecordsFromRows({
     rows: input.sourceRows,
   })
-  return collectDurationLiveLearningProductionEvidenceRefs({
+  const directRecordCollection = splitPublicationReadinessDirectProductionEvidenceRecords(input.records)
+  const evidenceCollection = collectDurationLiveLearningProductionEvidenceRefs({
     records: [
       ...rowCollection.records,
-      ...(input.records ?? []),
+      ...directRecordCollection.allowedRecords,
     ],
-  }).productionEvidence.find((evidence) => evidence.assetKey === COLD_START_BASELINE_ASSET_KEY)
+  })
+  return {
+    evidenceRefs: evidenceCollection.productionEvidence.find((evidence) =>
+      evidence.assetKey === COLD_START_BASELINE_ASSET_KEY)
+      ?? { assetKey: COLD_START_BASELINE_ASSET_KEY },
+    rejectedRows: rowCollection.rejectedRows,
+    rejectedRecords: [
+      ...evidenceCollection.rejectedRecords,
+      ...directRecordCollection.rejectedRecords,
+    ],
+  }
 }
 
 function runtimePublicationKeyFromEvidenceRef(value: unknown) {
@@ -521,9 +537,8 @@ export function buildAlgorithmAssetColdStartLiveLearningEvidenceFromProductionRo
   input: AlgorithmAssetColdStartProductionLiveLearningEvidenceInput,
 ): AlgorithmAssetColdStartProductionLiveLearningEvidenceDecision {
   const acceptedSampleCounts = countAcceptedColdStartSamplesByScope(input.sourceRows)
-  const evidenceRefs = coldStartEvidenceRefsFromProductionInput(input) ?? {
-    assetKey: COLD_START_BASELINE_ASSET_KEY,
-  }
+  const productionLineage = coldStartEvidenceRefsFromProductionInput(input)
+  const evidenceRefs = productionLineage.evidenceRefs
   const hasAcceptedOutcome = acceptedSampleCounts.company + acceptedSampleCounts.project > 0
   const hasRuntimeConsumerObservation = Boolean(evidenceRefs.runtimeConsumerObservationRef)
   const runtimeConsumerObservationMatchesPublication = hasRuntimeConsumerObservation
@@ -564,6 +579,8 @@ export function buildAlgorithmAssetColdStartLiveLearningEvidenceFromProductionRo
     productionLineage: {
       acceptedSampleCounts,
       evidenceRefs,
+      rejectedRows: productionLineage.rejectedRows,
+      rejectedRecords: productionLineage.rejectedRecords,
     },
   }
 }

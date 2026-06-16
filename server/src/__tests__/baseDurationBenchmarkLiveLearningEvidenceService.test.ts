@@ -235,6 +235,77 @@ describe('baseDurationBenchmarkLiveLearningEvidenceService', () => {
     expect(decision.productionLineage.rejectedRecords).toEqual([])
   })
 
+  it('keeps base duration benchmark not ready when production evidence is supplied only as direct typed records', () => {
+    const decision = buildBaseDurationBenchmarkLiveLearningEvidenceFromProductionRows({
+      enabledLearningScopes: ['system', 'industry_baseline', 'company', 'project'],
+      records: [
+        {
+          assetKey: 'base_duration_benchmark',
+          evidenceKind: 'production_sample',
+          evidenceRef: 'duration_samples:manual-base-sample',
+          evidenceStatus: 'accepted',
+        },
+        {
+          assetKey: 'base_duration_benchmark',
+          evidenceKind: 'publication_execution',
+          evidenceRef: 'algorithm_learnable_parameter_runtime_publications:duration_benchmark_runtime:benchmark-blend-v2',
+          evidenceStatus: 'published',
+        },
+        {
+          assetKey: 'base_duration_benchmark',
+          evidenceKind: 'runtime_consumer_observation',
+          evidenceRef: 'runtime_consumer:manual-base-consumer',
+          evidenceStatus: 'observed',
+          publicationKey: 'duration_benchmark_runtime:benchmark-blend-v2',
+        },
+        {
+          assetKey: 'base_duration_benchmark',
+          evidenceKind: 'impact_monitoring',
+          evidenceRef: 'impact_monitoring:duration_benchmark_runtime:benchmark-blend-v2:armed',
+          evidenceStatus: 'monitoring_armed',
+          publicationKey: 'duration_benchmark_runtime:benchmark-blend-v2',
+        },
+        {
+          assetKey: 'base_duration_benchmark',
+          evidenceKind: 'rollback_drill',
+          evidenceRef: 'rollback:duration_benchmark_runtime:benchmark-blend-v2:verified',
+          evidenceStatus: 'rollback_verified',
+          publicationKey: 'duration_benchmark_runtime:benchmark-blend-v2',
+        },
+        {
+          assetKey: 'base_duration_benchmark',
+          evidenceKind: 'accuracy',
+          evidenceRef: 'duration_algorithm_accuracy_events:manual-base-accuracy',
+          evidenceStatus: 'accuracy_passed',
+          publicationKey: 'duration_benchmark_runtime:benchmark-blend-v2',
+        },
+      ],
+    })
+
+    expect(decision.status).toBe('base_duration_benchmark_live_learning_not_ready')
+    expect(decision.liveLearningEvidence).toEqual(expect.objectContaining({
+      actualOutcomeEventRecorded: false,
+      runtimeConsumerUsesPublishedArtifact: false,
+      releaseExitApproved: false,
+      impactMonitoringReady: false,
+      rollbackTargetReady: false,
+      accuracyMetricsAvailable: false,
+    }))
+    expect(decision.productionLineage.evidenceRefs).toEqual({
+      assetKey: 'base_duration_benchmark',
+    })
+    expect(decision.productionLineage.rejectedRecords).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        evidenceKind: 'production_sample',
+        reason: 'production_evidence_direct_record_not_allowed_for_publication_readiness',
+      }),
+      expect.objectContaining({
+        evidenceKind: 'accuracy',
+        reason: 'production_evidence_direct_record_not_allowed_for_publication_readiness',
+      }),
+    ]))
+  })
+
   it('does not count mismatched learning scope sources toward base duration scope maturity', () => {
     const decision = buildBaseDurationBenchmarkLiveLearningEvidenceFromProductionRows({
       enabledLearningScopes: ['system', 'industry_baseline', 'company', 'project'],
