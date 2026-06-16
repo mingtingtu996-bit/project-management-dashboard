@@ -563,6 +563,7 @@ const DURATION_LIVE_LEARNING_MANIFESTS: DurationLiveLearningManifest[] = [
       releaseGateAnchors: [
         'standardWorkDurationSeedReplayGovernanceService.ts',
         'standardWorkDurationSeedReplayCandidateBridgeService.ts',
+        'standardWorkDurationSeedPublicationService.ts',
       ],
     },
     currentEvidence: {
@@ -578,8 +579,7 @@ const DURATION_LIVE_LEARNING_MANIFESTS: DurationLiveLearningManifest[] = [
       accuracyMetricsAvailable: false,
     },
     nextRuntimeSteps: [
-      'add_dedicated_seed_publication_writer_after_replay_candidate_approval',
-      'record_seed_version_lineage_in_duration_prediction_events',
+      'record_runtime_consumer_observation_for_published_seed_version',
       'bind_seed_replay_accuracy_to_release_exit_and_rollback',
     ],
   },
@@ -679,7 +679,11 @@ const DURATION_LIVE_LEARNING_MANIFESTS: DurationLiveLearningManifest[] = [
       runtimeConsumers: ['projectRemainingDurationForecastService.ts', 'scheduleAccelerationRuntimeService.ts'],
       predictionEventAnchors: ['network_prediction_events', 'critical_path_projection_lineage'],
       outcomeEventAnchors: ['projectDailySnapshotService.ts', 'projectExecutionSummaryService.ts'],
-      releaseGateAnchors: ['durationAccuracyReplayAcceptanceService.ts'],
+      releaseGateAnchors: [
+        'durationAccuracyReplayAcceptanceService.ts',
+        'criticalPathRulePublicationReadinessService.ts',
+        'criticalPathRuleRuntimePublicationService.ts',
+      ],
     },
     currentEvidence: {
       assetClassificationRegistered: true,
@@ -696,7 +700,8 @@ const DURATION_LIVE_LEARNING_MANIFESTS: DurationLiveLearningManifest[] = [
     nextRuntimeSteps: [
       'record_critical_path_prediction_event_and_float_outcome',
       'separate_user_confirmed_critical_path_fact_from_learned_projection_candidate',
-      'publish_critical_path_rule_candidate_only_after_release_exit',
+      'record_runtime_consumer_observation_for_published_critical_path_rule',
+      'bind_critical_path_accuracy_to_release_exit_and_rollback',
     ],
   },
 ]

@@ -304,10 +304,23 @@ describe('durationLiveLearningClosureService', () => {
         primaryService: 'standardWorkDurationSeedReplayService.ts',
         runtimeConsumers: expect.arrayContaining(['durationSuggestionService.ts']),
         outcomeEventAnchors: expect.arrayContaining(['durationExperienceService.ts']),
+        releaseGateAnchors: expect.arrayContaining(['standardWorkDurationSeedPublicationService.ts']),
       }),
-      nextRuntimeSteps: expect.arrayContaining([
-        'add_dedicated_seed_publication_writer_after_replay_candidate_approval',
-      ]),
+    }))
+    expect(manifests.find((manifest) => manifest.assetKey === 'standard_work_duration_seed')?.nextRuntimeSteps)
+      .not.toContain('add_dedicated_seed_publication_writer_after_replay_candidate_approval')
+    expect(manifests.find((manifest) => manifest.assetKey === 'standard_work_duration_seed')?.nextRuntimeSteps)
+      .toEqual(expect.arrayContaining([
+        'record_runtime_consumer_observation_for_published_seed_version',
+        'bind_seed_replay_accuracy_to_release_exit_and_rollback',
+      ]))
+    expect(manifests.find((manifest) => manifest.assetKey === 'critical_path_rule_candidate')).toEqual(expect.objectContaining({
+      implementationAnchors: expect.objectContaining({
+        releaseGateAnchors: expect.arrayContaining([
+          'criticalPathRulePublicationReadinessService.ts',
+          'criticalPathRuleRuntimePublicationService.ts',
+        ]),
+      }),
     }))
     expect(manifests.find((manifest) => manifest.assetKey === 'dependency_rule_candidate')).toEqual(expect.objectContaining({
       implementationAnchors: expect.objectContaining({
