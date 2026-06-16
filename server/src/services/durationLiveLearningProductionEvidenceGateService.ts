@@ -35,9 +35,6 @@ export type DurationLiveLearningProductionEvidenceReasonCode =
   | 'rollback_drill_evidence_required'
   | 'accuracy_evidence_required'
 
-const FINAL_DURATION_LIVE_LEARNING_ALLOWED_CLAIM =
-  'all_learnable_duration_prediction_and_network_assets_are_live_self_learning;facts_and_commitments_remain_locked' as const
-
 export interface DurationLiveLearningProductionEvidenceRef {
   assetKey: DurationLiveLearningAssetKey
   productionSampleEvidenceRef?: string | null
@@ -1511,7 +1508,6 @@ export function evaluateDurationLiveLearningProductionEvidenceGate(
 
 function buildDurationLiveLearningProductionClaimAuditDiagnostic(
   input: DurationLiveLearningProductionClaimAuditInput,
-  canonicalDbReaderSourceRows: boolean,
 ): DurationLiveLearningProductionClaimAudit {
   const evidenceRowCollection = collectDurationLiveLearningProductionEvidenceRecordsFromRows({
     rows: input.sourceRows,
@@ -1554,11 +1550,9 @@ function buildDurationLiveLearningProductionClaimAuditDiagnostic(
       sourceFiles: input.runtimeConsumerBusinessPathSourceFiles,
     })
   const sourceRowsProvenanceGate: DurationLiveLearningSourceRowsProvenanceGate = {
-    status: canonicalDbReaderSourceRows
-      ? 'canonical_source_rows_provenance_ready'
-      : 'canonical_source_rows_provenance_not_ready',
+    status: 'canonical_source_rows_provenance_not_ready',
     requiredProvenance: 'canonical_db_reader',
-    actualProvenance: canonicalDbReaderSourceRows ? 'canonical_db_reader' : 'direct_source_rows_diagnostic',
+    actualProvenance: 'direct_source_rows_diagnostic',
   }
   const ready = productionGate.status === 'duration_live_learning_production_evidence_ready'
     && runtimeConsumerObservationCoverage.status === 'runtime_consumer_observation_coverage_ready'
@@ -1571,7 +1565,7 @@ function buildDurationLiveLearningProductionClaimAuditDiagnostic(
     status: ready
       ? 'duration_live_learning_production_claim_ready'
       : 'duration_live_learning_production_claim_not_ready',
-    allowedClaim: ready ? FINAL_DURATION_LIVE_LEARNING_ALLOWED_CLAIM : 'not_ready_for_live_self_learning_claim',
+    allowedClaim: 'not_ready_for_live_self_learning_claim',
     prohibitedClaim: productionGate.prohibitedClaim,
     completionAudit: input.completionAudit,
     evidenceRowCollection,
@@ -1588,5 +1582,5 @@ function buildDurationLiveLearningProductionClaimAuditDiagnostic(
 export function buildDurationLiveLearningProductionClaimAudit(
   input: DurationLiveLearningProductionClaimAuditInput,
 ): DurationLiveLearningProductionClaimAudit {
-  return buildDurationLiveLearningProductionClaimAuditDiagnostic(input, false)
+  return buildDurationLiveLearningProductionClaimAuditDiagnostic(input)
 }

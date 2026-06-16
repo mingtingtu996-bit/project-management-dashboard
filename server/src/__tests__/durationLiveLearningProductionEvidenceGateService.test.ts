@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 
 import {
   buildDurationLiveLearningCompletionAudit,
@@ -43,6 +45,11 @@ const learnableAssetKeys: DurationLiveLearningAssetKey[] = [
   'dependency_rule_candidate',
   'critical_path_rule_candidate',
 ]
+
+const serviceSourcePath = resolve(
+  process.cwd(),
+  'server/src/services/durationLiveLearningProductionEvidenceGateService.ts',
+)
 
 const durationOutcomeProductionSourceTables = [
   'duration_experience_samples',
@@ -473,6 +480,14 @@ function buildReadyBusinessPathSourceFiles() {
 }
 
 describe('durationLiveLearningProductionEvidenceGateService', () => {
+  it('keeps the final public claim phrase out of the low-level production gate service', () => {
+    const sourceText = readFileSync(serviceSourcePath, 'utf8')
+
+    expect(sourceText).not.toContain(
+      'all_learnable_duration_prediction_and_network_assets_are_live_self_learning;facts_and_commitments_remain_locked',
+    )
+  })
+
   it('lists the canonical production evidence source plan for every learnable asset', () => {
     const sourcePlan = listDurationLiveLearningProductionEvidenceSourcePlan()
 
