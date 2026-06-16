@@ -684,17 +684,23 @@ function accuracyPublicationKey(row: Record<string, unknown>) {
     || readText(actualContext, 'publicationKey', 'publication_key', 'runtimePublicationKey', 'runtime_publication_key')
 }
 
+function accuracyPredictionAssetKey(row: Record<string, unknown>) {
+  const predictionContext = readRecord(row.prediction_context ?? row.predictionContext)
+  return readText(predictionContext, 'liveLearningAssetKey', 'live_learning_asset_key', 'assetKey', 'asset_key')
+}
+
 function accuracyActualAssetKey(row: Record<string, unknown>) {
   const actualContext = readRecord(row.actual_context ?? row.actualContext)
   return readText(actualContext, 'liveLearningAssetKey', 'live_learning_asset_key', 'assetKey', 'asset_key')
 }
 
-function accuracyActualOutcomeMatchesAsset(
+function accuracyOutcomeMatchesAsset(
   row: Record<string, unknown>,
   assetKey: DurationLiveLearningAssetKey,
 ) {
+  const predictionAssetKey = accuracyPredictionAssetKey(row)
   const actualAssetKey = accuracyActualAssetKey(row)
-  return actualAssetKey === assetKey
+  return predictionAssetKey === assetKey && actualAssetKey === assetKey
 }
 
 function publicationEvidenceStatus(row: Record<string, unknown>) {
@@ -1304,7 +1310,7 @@ export function collectDurationLiveLearningProductionEvidenceRecordsFromRows(
       if (
         accuracyGateStatus(row) !== 'accuracy_passed'
         || !hasNumber(row, 'absolute_error_days')
-        || !accuracyActualOutcomeMatchesAsset(row, assetKey)
+        || !accuracyOutcomeMatchesAsset(row, assetKey)
         || !isDurationRuntimeConsumerPublicationKeyAllowedForAsset(assetKey, publicationKey)
       ) {
         pushRejectedRow(rejectedRows, source, 'production_source_row_not_evidence_ready')

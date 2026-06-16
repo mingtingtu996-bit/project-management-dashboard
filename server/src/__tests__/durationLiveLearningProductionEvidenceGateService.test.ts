@@ -585,6 +585,8 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
         'id',
         'absolute_error_days',
         'prediction_context.assetKey',
+        'prediction_context.publicationKey',
+        'actual_context.assetKey',
         'actual_context.accuracyGateStatus',
       ]))
       expect(entry.requiredFieldsBySourceTable.runtime_consumer_observations).toEqual(expect.arrayContaining([
@@ -1885,6 +1887,56 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
               actual_context: {
                 ...(row.actual_context as Record<string, unknown> | undefined),
                 assetKey: 'forecast_confidence_weight',
+              },
+            },
+          }
+        }),
+        ...buildRuntimeConsumerRuntimeCallRows(),
+      ],
+      records: buildPlanNetworkOutcomeRecords(),
+      runtimeConsumerBusinessPathSourceFiles: buildReadyBusinessPathSourceFiles(),
+    })
+
+    expect(audit.status).toBe('duration_live_learning_production_claim_not_ready')
+    expect(audit.productionGate.status).toBe('duration_live_learning_production_evidence_not_ready')
+    expect(audit.evidenceRowCollection.rejectedRows).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        sourceTable: 'duration_algorithm_accuracy_events',
+        reason: 'production_source_row_not_evidence_ready',
+      }),
+    ]))
+    expect(audit.productionGate.missingEvidenceByAsset).toEqual(expect.arrayContaining([{
+      assetKey: 'forecast_residual_overlay',
+      missingReasonCodes: expect.arrayContaining(['accuracy_evidence_required']),
+    }]))
+    expect(audit.allowedClaim).toBe('not_ready_for_live_self_learning_claim')
+  })
+
+  it('blocks the final production claim when accuracy evidence prediction belongs to another asset', () => {
+    const audit = buildDurationLiveLearningProductionClaimAudit({
+      completionAudit: buildReadyCompletionAudit(),
+      sourceRows: [
+        ...buildAllProductionSourceRows().map((source) => {
+          if (source.sourceTable !== 'duration_algorithm_accuracy_events') {
+            return source
+          }
+          const row = source.row as Record<string, unknown>
+          const predictionContext = row.prediction_context as Record<string, unknown> | undefined
+          if (predictionContext?.assetKey !== 'forecast_residual_overlay') {
+            return source
+          }
+          return {
+            ...source,
+            row: {
+              ...row,
+              asset_key: 'forecast_residual_overlay',
+              prediction_context: {
+                ...predictionContext,
+                assetKey: 'forecast_confidence_weight',
+              },
+              actual_context: {
+                ...(row.actual_context as Record<string, unknown> | undefined),
+                assetKey: 'forecast_residual_overlay',
               },
             },
           }
