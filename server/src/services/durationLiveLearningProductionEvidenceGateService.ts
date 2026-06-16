@@ -280,6 +280,7 @@ const REQUIRED_FIELDS_BY_SOURCE_TABLE: Record<DurationLiveLearningProductionEvid
     'included_in_benchmark',
     'actual_duration',
     'completed_at',
+    'learning_scope',
     'metadata.liveLearningAssetKey',
   ],
   duration_plan_network_outcomes: [

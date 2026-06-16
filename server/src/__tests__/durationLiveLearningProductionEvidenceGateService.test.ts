@@ -472,6 +472,7 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
         'sample_status',
         'included_in_benchmark',
         'actual_duration',
+        'learning_scope',
         'metadata.liveLearningAssetKey',
       ]))
       expect(entry.requiredFieldsBySourceTable.duration_plan_network_outcomes).toEqual(expect.arrayContaining([

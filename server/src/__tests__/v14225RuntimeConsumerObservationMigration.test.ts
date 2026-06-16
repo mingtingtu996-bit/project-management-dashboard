@@ -81,4 +81,14 @@ describe('v1.4.22.5 runtime consumer observation migration', () => {
     expect(source).toContain('idx_duration_plan_network_outcomes_scope')
     expect(source).toContain('idx_duration_plan_network_outcomes_publication')
   })
+
+  it('adds explicit learning scope to duration experience samples used as production evidence', () => {
+    const source = allMigrationSource()
+
+    expect(source).toContain('ALTER TABLE public.duration_experience_samples')
+    expect(source).toContain('learning_scope TEXT NOT NULL DEFAULT')
+    expect(source).toContain("CHECK (learning_scope IN ('global', 'industry', 'company', 'project'))")
+    expect(source).toContain('idx_duration_experience_samples_learning_scope')
+    expect(source).toContain('duration_experience_samples.learning_scope')
+  })
 })
