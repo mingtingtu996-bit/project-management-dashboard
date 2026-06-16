@@ -599,6 +599,9 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
     })
 
     expect(audit.status).toBe('duration_live_learning_production_claim_ready')
+    expect(audit.allowedClaim)
+      .toBe('all_learnable_duration_prediction_and_network_assets_are_live_self_learning;facts_and_commitments_remain_locked')
+    expect(audit.prohibitedClaim).toBe('all_duration_assets_are_live_self_learning')
     expect(audit.runtimeConsumerObservationCoverage.status).toBe('runtime_consumer_observation_coverage_ready')
     expect(audit.runtimeConsumerObservationIntegrationCoverage.status)
       .toBe('runtime_consumer_observation_integration_ready')
@@ -654,6 +657,9 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
     })
 
     expect(audit.status).toBe('duration_live_learning_production_claim_ready')
+    expect(audit.allowedClaim)
+      .toBe('all_learnable_duration_prediction_and_network_assets_are_live_self_learning;facts_and_commitments_remain_locked')
+    expect(audit.prohibitedClaim).toBe('all_duration_assets_are_live_self_learning')
     expect(audit.completionAudit.status).toBe('duration_live_learning_completion_ready')
     expect(audit.evidenceRowCollection.rejectedRows).toEqual([])
     expect(audit.productionGate.missingEvidenceByAsset).toEqual([])
