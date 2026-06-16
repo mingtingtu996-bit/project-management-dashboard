@@ -286,6 +286,7 @@ const REQUIRED_FIELDS_BY_SOURCE_TABLE: Record<DurationLiveLearningProductionEvid
     'id',
     'asset_key',
     'outcome_status',
+    'learning_scope',
     'writes_runtime_directly',
     'writes_fact_directly',
   ],

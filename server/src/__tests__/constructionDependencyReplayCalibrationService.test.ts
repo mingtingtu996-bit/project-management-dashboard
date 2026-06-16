@@ -233,6 +233,7 @@ describe('construction dependency replay calibration service', () => {
       'dependency_rule_candidate',
       'weak',
       'construction_dependency_replay_calibration:cross_item_workflow:prefab_factory_to_site_hoist_handoff',
+      'project',
       '10000000-0000-4000-8000-000000000001',
       null,
       null,

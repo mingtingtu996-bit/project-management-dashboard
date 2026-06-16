@@ -478,6 +478,7 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
         'id',
         'asset_key',
         'outcome_status',
+        'learning_scope',
         'writes_runtime_directly',
         'writes_fact_directly',
       ]))

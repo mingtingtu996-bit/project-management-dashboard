@@ -129,6 +129,7 @@ describe('wbsTemplateFeedback governance bridge', () => {
       'wbs_reference_days',
       'weak',
       'wbs_template_feedback:template-1',
+      'project',
       '10000000-0000-4000-8000-000000000001',
       'project-1',
       null,

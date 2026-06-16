@@ -212,6 +212,7 @@ describe('wbsTemplateCandidateEventService', () => {
         asset_key: 'special_work_duration_seed',
         outcome_status: 'accepted',
         outcome_ref: 'wbs_template_candidate_event:batch-1',
+        learning_scope: 'project',
         company_id: '10000000-0000-4000-8000-000000000001',
         project_id: '00000000-0000-4000-8000-000000000001',
         publication_key: null,

@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS public.duration_plan_network_outcomes (
   asset_key TEXT NOT NULL,
   outcome_status TEXT NOT NULL,
   outcome_ref TEXT,
+  learning_scope TEXT NOT NULL DEFAULT 'project',
   company_id UUID,
   project_id UUID,
   publication_key TEXT,
@@ -22,6 +23,8 @@ CREATE TABLE IF NOT EXISTS public.duration_plan_network_outcomes (
     )),
   CONSTRAINT duration_plan_network_outcomes_status_check
     CHECK (outcome_status IN ('accepted', 'weak', 'rejected')),
+  CONSTRAINT duration_plan_network_outcomes_learning_scope_check
+    CHECK (learning_scope IN ('global', 'industry', 'company', 'project')),
   CONSTRAINT duration_plan_network_outcomes_no_runtime_writes
     CHECK (writes_runtime_directly = false),
   CONSTRAINT duration_plan_network_outcomes_no_fact_writes
@@ -33,6 +36,9 @@ CREATE INDEX IF NOT EXISTS idx_duration_plan_network_outcomes_asset
 
 CREATE INDEX IF NOT EXISTS idx_duration_plan_network_outcomes_project
   ON public.duration_plan_network_outcomes (project_id, observed_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_duration_plan_network_outcomes_scope
+  ON public.duration_plan_network_outcomes (learning_scope, asset_key, outcome_status, observed_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_duration_plan_network_outcomes_publication
   ON public.duration_plan_network_outcomes (publication_key, observed_at DESC);

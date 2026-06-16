@@ -474,6 +474,7 @@ describe('project critical path service', () => {
       'critical_path_rule_candidate',
       'accepted',
       expect.stringMatching(/^critical_path_cpm:project-1:sha256:/),
+      'project',
       null,
       'project-1',
       null,
