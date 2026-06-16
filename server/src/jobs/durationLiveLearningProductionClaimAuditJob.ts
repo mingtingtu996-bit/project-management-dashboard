@@ -36,6 +36,8 @@ export interface DurationLiveLearningProductionClaimAuditJobResult {
   missingBusinessPathIntegrationCount: number
   sourceRowsProvenanceStatus: DurationLiveLearningProductionClaimAuditFromDb['sourceRowsProvenanceGate']['status']
   factRewriteBlockedAssetCount: number
+  rejectedProductionSourceRowCount: number
+  rejectedProductionEvidenceRecordCount: number
   blockedAssets: DurationLiveLearningProductionClaimAuditFromDb['completionAudit']['blockedAssetKeys']
   missingProductionEvidence: DurationLiveLearningProductionClaimAuditFromDb['productionGate']['missingEvidenceByAsset']
   missingRuntimeConsumerObservations:
@@ -46,6 +48,10 @@ export interface DurationLiveLearningProductionClaimAuditJobResult {
     DurationLiveLearningProductionClaimAuditFromDb['runtimeConsumerBusinessPathIntegrationCoverage']['missingIntegrations']
   factRewriteBlockedAssets:
     DurationLiveLearningProductionClaimAuditFromDb['completionAudit']['factRewriteBlockedAssetKeys']
+  rejectedProductionSourceRows:
+    DurationLiveLearningProductionClaimAuditFromDb['evidenceRowCollection']['rejectedRows']
+  rejectedProductionEvidenceRecords:
+    DurationLiveLearningProductionClaimAuditFromDb['evidenceCollection']['rejectedRecords']
 }
 
 function countArray(value: unknown) {
@@ -74,6 +80,8 @@ function summarizeAudit(
     ),
     sourceRowsProvenanceStatus: audit.sourceRowsProvenanceGate.status,
     factRewriteBlockedAssetCount: audit.completionAudit.factRewriteBlockedAssetKeys.length,
+    rejectedProductionSourceRowCount: audit.evidenceRowCollection.rejectedRows.length,
+    rejectedProductionEvidenceRecordCount: audit.evidenceCollection.rejectedRecords.length,
     blockedAssets: audit.completionAudit.blockedAssetKeys,
     missingProductionEvidence: audit.productionGate.missingEvidenceByAsset,
     missingRuntimeConsumerObservations: audit.runtimeConsumerObservationCoverage.missingConsumerObservations,
@@ -81,6 +89,8 @@ function summarizeAudit(
     missingBusinessPathIntegrations:
       audit.runtimeConsumerBusinessPathIntegrationCoverage.missingIntegrations,
     factRewriteBlockedAssets: audit.completionAudit.factRewriteBlockedAssetKeys,
+    rejectedProductionSourceRows: audit.evidenceRowCollection.rejectedRows,
+    rejectedProductionEvidenceRecords: audit.evidenceCollection.rejectedRecords,
   }
 }
 

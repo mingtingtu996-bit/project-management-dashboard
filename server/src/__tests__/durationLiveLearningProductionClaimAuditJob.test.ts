@@ -61,6 +61,25 @@ const mocks = vi.hoisted(() => ({
     sourceRowsProvenanceGate: {
       status: 'canonical_source_rows_provenance_ready',
     },
+    evidenceRowCollection: {
+      rejectedRows: [
+        {
+          sourceTable: 'duration_experience_samples',
+          row: { id: 'bad-sample-1', asset_key: 'forecast_residual_overlay' },
+          reason: 'production_source_row_not_evidence_ready',
+        },
+      ],
+    },
+    evidenceCollection: {
+      rejectedRecords: [
+        {
+          assetKey: 'forecast_residual_overlay',
+          evidenceKind: 'accuracy',
+          evidenceRef: 'manual-upload:forecast-residual-overlay-accuracy',
+          reason: 'production_evidence_ref_source_not_allowed',
+        },
+      ],
+    },
     sourceQuery: {
       sourceRows: Array.from({ length: 12 }, (_, index) => ({
         sourceTable: 'duration_experience_samples',
@@ -128,6 +147,8 @@ describe('durationLiveLearningProductionClaimAuditJob', () => {
       missingBusinessPathIntegrationCount: 1,
       sourceRowsProvenanceStatus: 'canonical_source_rows_provenance_ready',
       factRewriteBlockedAssetCount: 0,
+      rejectedProductionSourceRowCount: 1,
+      rejectedProductionEvidenceRecordCount: 1,
       blockedAssets: ['forecast_residual_overlay', 'critical_path_rule_candidate'],
       missingProductionEvidence: [
         {
@@ -159,6 +180,21 @@ describe('durationLiveLearningProductionClaimAuditJob', () => {
         },
       ],
       factRewriteBlockedAssets: [],
+      rejectedProductionSourceRows: [
+        {
+          sourceTable: 'duration_experience_samples',
+          row: { id: 'bad-sample-1', asset_key: 'forecast_residual_overlay' },
+          reason: 'production_source_row_not_evidence_ready',
+        },
+      ],
+      rejectedProductionEvidenceRecords: [
+        {
+          assetKey: 'forecast_residual_overlay',
+          evidenceKind: 'accuracy',
+          evidenceRef: 'manual-upload:forecast-residual-overlay-accuracy',
+          reason: 'production_evidence_ref_source_not_allowed',
+        },
+      ],
     })
   })
 
