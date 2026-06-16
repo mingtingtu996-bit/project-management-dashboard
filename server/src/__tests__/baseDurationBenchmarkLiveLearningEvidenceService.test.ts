@@ -7,6 +7,13 @@ import {
   evaluateDurationLiveLearningManifest,
 } from '../services/durationLiveLearningClosureService.js'
 
+function durationLearningScopeSource(learningScope: string) {
+  if (learningScope === 'global') return 'global_shared_baseline_job'
+  if (learningScope === 'industry') return 'industry_shared_baseline_job'
+  if (learningScope === 'company') return 'company_aggregate_evidence_job'
+  return 'task_completion_writer'
+}
+
 describe('baseDurationBenchmarkLiveLearningEvidenceService', () => {
   it('builds live-learning evidence for base duration benchmark when all learning scopes and release gates are present', () => {
     const decision = buildBaseDurationBenchmarkLiveLearningEvidence({
@@ -141,6 +148,8 @@ describe('baseDurationBenchmarkLiveLearningEvidenceService', () => {
             included_in_benchmark: true,
             actual_duration: 6 + index,
             completed_at: '2026-06-14T00:00:00.000Z',
+            learning_scope: learningScope,
+            learning_scope_source: durationLearningScopeSource(learningScope),
             metadata: {
               liveLearningAssetKey: 'base_duration_benchmark',
               learningScope,
@@ -182,8 +191,10 @@ describe('baseDurationBenchmarkLiveLearningEvidenceService', () => {
             absolute_error_days: 1,
             prediction_context: {
               assetKey: 'base_duration_benchmark',
+              publicationKey: 'duration_benchmark_runtime:benchmark-blend-v2',
             },
             actual_context: {
+              assetKey: 'base_duration_benchmark',
               accuracyGateStatus: 'accuracy_passed',
             },
           },

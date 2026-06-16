@@ -116,15 +116,35 @@ function durationSampleAssetKey(row: Record<string, unknown>) {
 }
 
 function durationSampleLearningScope(row: Record<string, unknown>) {
-  return normalizeLearningScope(
+  const scope = normalizeLearningScope(
     readText(row, 'learning_scope', 'learningScope', 'sample_scope', 'sampleScope', 'scope'),
   )
+  if (!scope) return null
+  const source = readText(row, 'learning_scope_source', 'learningScopeSource')
+  if (!source && scope === 'project') return scope
+  const expectedSourceByScope: Record<DurationLearningScope, string> = {
+    global: 'global_shared_baseline_job',
+    industry: 'industry_shared_baseline_job',
+    company: 'company_aggregate_evidence_job',
+    project: 'task_completion_writer',
+  }
+  return source === expectedSourceByScope[scope] ? scope : null
 }
 
 function planNetworkOutcomeLearningScope(row: Record<string, unknown>) {
-  return normalizeLearningScope(
+  const scope = normalizeLearningScope(
     readText(row, 'learning_scope', 'learningScope', 'sample_scope', 'sampleScope', 'scope'),
   )
+  if (!scope) return null
+  const source = readText(row, 'learning_scope_source', 'learningScopeSource')
+  if (!source && scope === 'project') return scope
+  const expectedSourceByScope: Record<DurationLearningScope, string> = {
+    global: 'plan_network_global_baseline_job',
+    industry: 'plan_network_industry_baseline_job',
+    company: 'plan_network_company_aggregate_job',
+    project: 'project_business_outcome_writer',
+  }
+  return source === expectedSourceByScope[scope] ? scope : null
 }
 
 function acceptedLearningScopesFromProductionSamples(
@@ -288,6 +308,12 @@ function queryForSourceTable(sourceTable: DurationLiveLearningProductionEvidence
       where sample_status = 'active'
         and included_in_benchmark = true
         and actual_duration is not null
+        and (
+          (learning_scope = 'project' and learning_scope_source = 'task_completion_writer')
+          or (learning_scope = 'company' and learning_scope_source = 'company_aggregate_evidence_job')
+          or (learning_scope = 'industry' and learning_scope_source = 'industry_shared_baseline_job')
+          or (learning_scope = 'global' and learning_scope_source = 'global_shared_baseline_job')
+        )
       order by completed_at desc nulls last, created_at desc
       limit $1
     `
@@ -300,6 +326,12 @@ function queryForSourceTable(sourceTable: DurationLiveLearningProductionEvidence
       where outcome_status in ('accepted', 'weak')
         and writes_runtime_directly = false
         and writes_fact_directly = false
+        and (
+          (learning_scope = 'project' and learning_scope_source = 'project_business_outcome_writer')
+          or (learning_scope = 'company' and learning_scope_source = 'plan_network_company_aggregate_job')
+          or (learning_scope = 'industry' and learning_scope_source = 'plan_network_industry_baseline_job')
+          or (learning_scope = 'global' and learning_scope_source = 'plan_network_global_baseline_job')
+        )
       order by observed_at desc nulls last, created_at desc
       limit $1
     `

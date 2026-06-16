@@ -92,6 +92,22 @@ describe('v1.4.22.5 runtime consumer observation migration', () => {
     expect(source).toContain('duration_experience_samples.learning_scope')
   })
 
+  it('adds explicit learning scope provenance to duration production evidence sources', () => {
+    const source = allMigrationSource()
+
+    expect(source).toContain('learning_scope_source TEXT NOT NULL DEFAULT')
+    expect(source).toContain('duration_experience_samples_learning_scope_source_check')
+    expect(source).toContain('duration_plan_network_outcomes_learning_scope_source_check')
+    expect(source).toContain("'task_completion_writer'")
+    expect(source).toContain("'company_aggregate_evidence_job'")
+    expect(source).toContain("'industry_shared_baseline_job'")
+    expect(source).toContain("'global_shared_baseline_job'")
+    expect(source).toContain("'project_business_outcome_writer'")
+    expect(source).toContain("'plan_network_company_aggregate_job'")
+    expect(source).toContain("'plan_network_industry_baseline_job'")
+    expect(source).toContain("'plan_network_global_baseline_job'")
+  })
+
   it('documents forecast scope-exception approval evidence on learnable parameter publications', () => {
     const source = allMigrationSource()
 

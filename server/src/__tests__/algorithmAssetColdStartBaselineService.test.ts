@@ -10,6 +10,13 @@ import {
   evaluateDurationLiveLearningExecutionPlan,
 } from '../services/durationLiveLearningClosureService.js'
 
+function durationLearningScopeSource(learningScope: string) {
+  if (learningScope === 'company') return 'company_aggregate_evidence_job'
+  if (learningScope === 'industry') return 'industry_shared_baseline_job'
+  if (learningScope === 'global') return 'global_shared_baseline_job'
+  return 'task_completion_writer'
+}
+
 describe('algorithmAssetColdStartBaselineService', () => {
   it('uses an eligible anonymized segment baseline as reference when company samples are insufficient', () => {
     const decision = decideAlgorithmAssetColdStartRuntime({
@@ -376,6 +383,8 @@ describe('algorithmAssetColdStartBaselineService', () => {
             included_in_benchmark: true,
             actual_duration: 10,
             completed_at: '2026-06-01T00:00:00.000Z',
+            learning_scope: 'company',
+            learning_scope_source: durationLearningScopeSource('company'),
             metadata: {
               liveLearningAssetKey: 'duration_cold_start_baseline',
               learningScope: 'company',
@@ -390,6 +399,8 @@ describe('algorithmAssetColdStartBaselineService', () => {
             included_in_benchmark: true,
             actual_duration: 9,
             completed_at: '2026-06-02T00:00:00.000Z',
+            learning_scope: 'company',
+            learning_scope_source: durationLearningScopeSource('company'),
             metadata: {
               liveLearningAssetKey: 'duration_cold_start_baseline',
               learningScope: 'company',
@@ -404,6 +415,8 @@ describe('algorithmAssetColdStartBaselineService', () => {
             included_in_benchmark: true,
             actual_duration: 8,
             completed_at: '2026-06-03T00:00:00.000Z',
+            learning_scope: 'project',
+            learning_scope_source: durationLearningScopeSource('project'),
             metadata: {
               liveLearningAssetKey: 'duration_cold_start_baseline',
               learningScope: 'project',
@@ -445,8 +458,10 @@ describe('algorithmAssetColdStartBaselineService', () => {
             absolute_error_days: 1,
             prediction_context: {
               assetKey: 'duration_cold_start_baseline',
+              publicationKey: 'cold_start_baseline_runtime:segment-v1',
             },
             actual_context: {
+              assetKey: 'duration_cold_start_baseline',
               accuracyGateStatus: 'accuracy_passed',
             },
           },
@@ -531,6 +546,8 @@ describe('algorithmAssetColdStartBaselineService', () => {
             included_in_benchmark: true,
             actual_duration: 10,
             completed_at: '2026-06-01T00:00:00.000Z',
+            learning_scope: 'company',
+            learning_scope_source: durationLearningScopeSource('company'),
             metadata: {
               liveLearningAssetKey: 'duration_cold_start_baseline',
               learningScope: 'company',
@@ -545,6 +562,8 @@ describe('algorithmAssetColdStartBaselineService', () => {
             included_in_benchmark: true,
             actual_duration: 8,
             completed_at: '2026-06-03T00:00:00.000Z',
+            learning_scope: 'project',
+            learning_scope_source: durationLearningScopeSource('project'),
             metadata: {
               liveLearningAssetKey: 'duration_cold_start_baseline',
               learningScope: 'project',
@@ -631,6 +650,8 @@ describe('algorithmAssetColdStartBaselineService', () => {
             included_in_benchmark: true,
             actual_duration: 10,
             completed_at: '2026-06-01T00:00:00.000Z',
+            learning_scope: 'company',
+            learning_scope_source: durationLearningScopeSource('company'),
             metadata: {
               liveLearningAssetKey: 'duration_cold_start_baseline',
               learningScope: 'company',
@@ -645,6 +666,8 @@ describe('algorithmAssetColdStartBaselineService', () => {
             included_in_benchmark: true,
             actual_duration: 8,
             completed_at: '2026-06-03T00:00:00.000Z',
+            learning_scope: 'project',
+            learning_scope_source: durationLearningScopeSource('project'),
             metadata: {
               liveLearningAssetKey: 'duration_cold_start_baseline',
               learningScope: 'project',

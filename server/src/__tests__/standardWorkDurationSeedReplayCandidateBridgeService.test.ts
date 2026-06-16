@@ -320,6 +320,8 @@ describe('standardWorkDurationSeedReplayCandidateBridgeService', () => {
             included_in_benchmark: true,
             actual_duration: 9,
             completed_at: '2026-06-14T00:00:00.000Z',
+            learning_scope: 'project',
+            learning_scope_source: 'task_completion_writer',
             metadata: {
               liveLearningAssetKey: 'standard_work_duration_seed',
             },
@@ -441,6 +443,8 @@ describe('standardWorkDurationSeedReplayCandidateBridgeService', () => {
             included_in_benchmark: true,
             actual_duration: 9,
             completed_at: '2026-06-14T00:00:00.000Z',
+            learning_scope: 'project',
+            learning_scope_source: 'task_completion_writer',
             metadata: {
               liveLearningAssetKey: 'standard_work_duration_seed',
             },

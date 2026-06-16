@@ -4,6 +4,7 @@ import type {
 import {
   listDurationLiveLearningManifests,
   type DurationLiveLearningAssetKey,
+  type DurationLearningScope,
 } from './durationLiveLearningClosureService.js'
 import {
   evaluateDurationRuntimeConsumerObservationIntegrationCoverage,
@@ -281,6 +282,7 @@ const REQUIRED_FIELDS_BY_SOURCE_TABLE: Record<DurationLiveLearningProductionEvid
     'actual_duration',
     'completed_at',
     'learning_scope',
+    'learning_scope_source',
     'metadata.liveLearningAssetKey',
   ],
   duration_plan_network_outcomes: [
@@ -288,6 +290,7 @@ const REQUIRED_FIELDS_BY_SOURCE_TABLE: Record<DurationLiveLearningProductionEvid
     'asset_key',
     'outcome_status',
     'learning_scope',
+    'learning_scope_source',
     'writes_runtime_directly',
     'writes_fact_directly',
   ],
@@ -564,6 +567,50 @@ function sampleEvidenceStatus(row: Record<string, unknown>) {
 function planNetworkOutcomeEvidenceStatus(row: Record<string, unknown>) {
   const status = readText(row, 'outcome_status', 'outcomeStatus')
   return status === 'accepted' || status === 'weak' ? status : ''
+}
+
+function normalizeLearningScope(value: string | null | undefined): DurationLearningScope | null {
+  const normalized = normalizeText(value).toLowerCase()
+  if (normalized === 'system' || normalized === 'global') return 'global'
+  if (normalized === 'industry' || normalized === 'industry_baseline' || normalized === 'segment_baseline') {
+    return 'industry'
+  }
+  if (normalized === 'company') return 'company'
+  if (normalized === 'project') return 'project'
+  return null
+}
+
+const DURATION_SAMPLE_SCOPE_SOURCE_BY_SCOPE: Record<DurationLearningScope, string> = {
+  global: 'global_shared_baseline_job',
+  industry: 'industry_shared_baseline_job',
+  company: 'company_aggregate_evidence_job',
+  project: 'task_completion_writer',
+}
+
+const PLAN_NETWORK_SCOPE_SOURCE_BY_SCOPE: Record<DurationLearningScope, string> = {
+  global: 'plan_network_global_baseline_job',
+  industry: 'plan_network_industry_baseline_job',
+  company: 'plan_network_company_aggregate_job',
+  project: 'project_business_outcome_writer',
+}
+
+function hasMatchingLearningScopeSource(
+  row: Record<string, unknown>,
+  expectedSourcesByScope: Record<DurationLearningScope, string>,
+) {
+  const scope = normalizeLearningScope(readText(row, 'learning_scope', 'learningScope'))
+  if (!scope) return false
+  const source = readText(row, 'learning_scope_source', 'learningScopeSource')
+  if (!source && scope === 'project') return true
+  return source === expectedSourcesByScope[scope]
+}
+
+function durationSampleHasMatchingLearningScopeSource(row: Record<string, unknown>) {
+  return hasMatchingLearningScopeSource(row, DURATION_SAMPLE_SCOPE_SOURCE_BY_SCOPE)
+}
+
+function planNetworkOutcomeHasMatchingLearningScopeSource(row: Record<string, unknown>) {
+  return hasMatchingLearningScopeSource(row, PLAN_NETWORK_SCOPE_SOURCE_BY_SCOPE)
 }
 
 function sourceTableAllowedForAssetKey(
@@ -930,6 +977,10 @@ export function collectDurationLiveLearningProductionEvidenceRecordsFromRows(
         pushRejectedRow(rejectedRows, source, 'production_source_row_not_evidence_ready')
         continue
       }
+      if (!durationSampleHasMatchingLearningScopeSource(row)) {
+        pushRejectedRow(rejectedRows, source, 'production_source_row_not_evidence_ready')
+        continue
+      }
       pushRecord(records, assetKey, 'production_sample', `duration_samples:${id}`, sampleEvidenceStatus(row))
       continue
     }
@@ -945,6 +996,7 @@ export function collectDurationLiveLearningProductionEvidenceRecordsFromRows(
         !outcomeStatus
         || readTrue(row, 'writes_runtime_directly', 'writesRuntimeDirectly')
         || readTrue(row, 'writes_fact_directly', 'writesFactDirectly')
+        || !planNetworkOutcomeHasMatchingLearningScopeSource(row)
       ) {
         pushRejectedRow(rejectedRows, source, 'production_source_row_not_evidence_ready')
         continue
