@@ -2,6 +2,7 @@ import express from 'express'
 import { z } from 'zod'
 
 import { constructionDependencyReplayCalibrationJob } from '../jobs/constructionDependencyReplayCalibrationJob.js'
+import { standardWorkDurationSeedReplayJob } from '../jobs/standardWorkDurationSeedReplayJob.js'
 import { dataRetentionJob } from '../jobs/dataRetentionJob.js'
 import { planningDraftLockTimeoutJob } from '../jobs/planningDraftLockTimeoutJob.js'
 import { responsibilityAlertJob } from '../jobs/responsibilityAlertJob.js'
@@ -55,6 +56,7 @@ function buildJobStatusViews(): JobStatusView[] {
   const draftLockStatus = planningDraftLockTimeoutJob.getStatus()
   const dataRetentionStatus = dataRetentionJob.getStatus()
   const constructionDependencyReplayCalibrationStatus = constructionDependencyReplayCalibrationJob.getStatus()
+  const standardWorkDurationSeedReplayStatus = standardWorkDurationSeedReplayJob.getStatus()
   const responsibilityAlertStatus = responsibilityAlertJob.getStatus()
 
   return [
@@ -189,6 +191,18 @@ function buildJobStatusViews(): JobStatusView[] {
       nextRun: dataRetentionStatus.nextRun,
       status: buildStatus(dataRetentionStatus.isRunning, dataRetentionStatus.isScheduled),
       description: '按保留周期清理高增长日志与快照表。',
+    },
+    {
+      name: 'standardWorkDurationSeedReplayJob',
+      displayName: 'Standard work duration seed replay job',
+      isRunning: standardWorkDurationSeedReplayStatus.isRunning,
+      isScheduled: standardWorkDurationSeedReplayStatus.isScheduled,
+      schedule: '15 6 * * *',
+      lastRun: standardWorkDurationSeedReplayStatus.lastRun,
+      nextRun: standardWorkDurationSeedReplayStatus.nextRun,
+      status: buildStatus(standardWorkDurationSeedReplayStatus.isRunning, standardWorkDurationSeedReplayStatus.isScheduled),
+      description:
+        'Runs report-only P50 replay from duration experience samples for standard work duration seed governance; seed values are never written by this job.',
     },
     {
       name: 'constructionDependencyReplayCalibrationJob',
@@ -400,6 +414,12 @@ async function executeJob(jobName: string) {
         jobId: createJobId(),
         attempts: 1,
         result: await dataRetentionJob.executeNow(),
+      }
+    case 'standardWorkDurationSeedReplayJob':
+      return {
+        jobId: createJobId(),
+        attempts: 1,
+        result: await standardWorkDurationSeedReplayJob.executeNow(),
       }
     case 'constructionDependencyReplayCalibrationJob':
       return {
