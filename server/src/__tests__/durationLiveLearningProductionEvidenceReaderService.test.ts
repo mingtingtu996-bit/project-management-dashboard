@@ -926,6 +926,7 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
     })
 
     expect(audit.status).toBe('duration_live_learning_production_claim_ready')
+    expect(audit.sourceRowsProvenanceGate.status).toBe('canonical_source_rows_provenance_ready')
     expect(audit.runtimeConsumerBusinessPathIntegrationCoverage.status)
       .toBe('runtime_consumer_business_path_integration_ready')
     expect(audit.runtimeConsumerBusinessPathIntegrationCoverage.missingIntegrations).toEqual([])

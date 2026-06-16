@@ -1670,9 +1670,29 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
     })))
   })
 
+  it('keeps direct source-row diagnostics from releasing the final production claim without DB provenance', () => {
+    const audit = buildDurationLiveLearningProductionClaimAudit({
+      completionAudit: buildReadyCompletionAudit(),
+      sourceRows: [
+        ...buildAllProductionSourceRows(),
+        ...buildRuntimeConsumerRuntimeCallRows(),
+      ],
+      runtimeConsumerBusinessPathSourceFiles: buildReadyBusinessPathSourceFiles(),
+    })
+
+    expect(audit.productionGate.status).toBe('duration_live_learning_production_evidence_ready')
+    expect(audit.runtimeConsumerObservationCoverage.status).toBe('runtime_consumer_observation_coverage_ready')
+    expect(audit.runtimeConsumerRuntimeCallCoverage.status)
+      .toBe('runtime_consumer_observation_runtime_calls_ready')
+    expect(audit.sourceRowsProvenanceGate.status).toBe('canonical_source_rows_provenance_not_ready')
+    expect(audit.status).toBe('duration_live_learning_production_claim_not_ready')
+    expect(audit.allowedClaim).toBe('not_ready_for_live_self_learning_claim')
+  })
+
   it('builds the final production claim audit from canonical production source rows', () => {
     const audit = buildDurationLiveLearningProductionClaimAudit({
       completionAudit: buildReadyCompletionAudit(),
+      sourceRowsProvenance: 'canonical_db_reader',
       sourceRows: [
         ...buildAllProductionSourceRows(),
         ...buildRuntimeConsumerRuntimeCallRows(),

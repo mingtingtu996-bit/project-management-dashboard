@@ -475,6 +475,7 @@ export async function buildDurationLiveLearningProductionClaimAuditFromDb(
   const audit = buildDurationLiveLearningProductionClaimAudit({
     completionAudit,
     sourceRows: sourceQuery.sourceRows,
+    sourceRowsProvenance: 'canonical_db_reader',
     runtimeConsumerBusinessPathSourceFiles,
   })
 

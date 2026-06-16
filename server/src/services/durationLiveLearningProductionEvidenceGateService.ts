@@ -187,8 +187,17 @@ export interface DurationLiveLearningProductionClaimAuditInput {
   completionAudit: DurationLiveLearningCompletionAudit
   records?: readonly DurationLiveLearningProductionEvidenceRecord[]
   sourceRows?: readonly DurationLiveLearningProductionEvidenceSourceRow[]
+  sourceRowsProvenance?: 'canonical_db_reader'
   runtimeConsumerAdapterRegistrations?: readonly DurationRuntimeConsumerObservationAdapterRegistration[]
   runtimeConsumerBusinessPathSourceFiles?: readonly DurationRuntimeConsumerBusinessPathSourceFile[]
+}
+
+export interface DurationLiveLearningSourceRowsProvenanceGate {
+  status:
+    | 'canonical_source_rows_provenance_ready'
+    | 'canonical_source_rows_provenance_not_ready'
+  requiredProvenance: 'canonical_db_reader'
+  actualProvenance: 'canonical_db_reader' | 'direct_source_rows_diagnostic'
 }
 
 export interface DurationLiveLearningProductionClaimAudit {
@@ -205,6 +214,7 @@ export interface DurationLiveLearningProductionClaimAudit {
   runtimeConsumerObservationIntegrationCoverage: DurationRuntimeConsumerObservationIntegrationCoverage
   runtimeConsumerRuntimeCallCoverage: DurationRuntimeConsumerObservationRuntimeCallCoverage
   runtimeConsumerBusinessPathIntegrationCoverage: DurationRuntimeConsumerBusinessPathIntegrationCoverage
+  sourceRowsProvenanceGate: DurationLiveLearningSourceRowsProvenanceGate
 }
 
 const LEARNABLE_DURATION_LIVE_LEARNING_ASSET_KEYS: DurationLiveLearningAssetKey[] = [
@@ -1543,11 +1553,19 @@ export function buildDurationLiveLearningProductionClaimAudit(
     evaluateDurationRuntimeConsumerBusinessPathIntegrationCoverage({
       sourceFiles: input.runtimeConsumerBusinessPathSourceFiles,
     })
+  const sourceRowsProvenanceGate: DurationLiveLearningSourceRowsProvenanceGate = {
+    status: input.sourceRowsProvenance === 'canonical_db_reader'
+      ? 'canonical_source_rows_provenance_ready'
+      : 'canonical_source_rows_provenance_not_ready',
+    requiredProvenance: 'canonical_db_reader',
+    actualProvenance: input.sourceRowsProvenance ?? 'direct_source_rows_diagnostic',
+  }
   const ready = productionGate.status === 'duration_live_learning_production_evidence_ready'
     && runtimeConsumerObservationCoverage.status === 'runtime_consumer_observation_coverage_ready'
     && runtimeConsumerObservationIntegrationCoverage.status === 'runtime_consumer_observation_integration_ready'
     && runtimeConsumerRuntimeCallCoverage.status === 'runtime_consumer_observation_runtime_calls_ready'
     && runtimeConsumerBusinessPathIntegrationCoverage.status === 'runtime_consumer_business_path_integration_ready'
+    && sourceRowsProvenanceGate.status === 'canonical_source_rows_provenance_ready'
 
   return {
     status: ready
@@ -1563,5 +1581,6 @@ export function buildDurationLiveLearningProductionClaimAudit(
     runtimeConsumerObservationIntegrationCoverage,
     runtimeConsumerRuntimeCallCoverage,
     runtimeConsumerBusinessPathIntegrationCoverage,
+    sourceRowsProvenanceGate,
   }
 }
