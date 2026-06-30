@@ -25,7 +25,7 @@ const DEFAULT_GATE_IDS = [
 
 export function parseArgs(argv = process.argv.slice(2)) {
   const options = {
-    envFile: 'deploy/env/server.production.env',
+    productionEnvRef: 'deploy/env/server.production.env',
     outputRoot: null,
     baseUrl: '',
     projectId: '',
@@ -55,8 +55,10 @@ export function parseArgs(argv = process.argv.slice(2)) {
       return value;
     };
 
-    if (arg === '--env-file') {
-      options.envFile = nextValue();
+    if (arg === '--production-env-ref') {
+      options.productionEnvRef = nextValue();
+    } else if (arg === '--env-file') {
+      throw new Error('--env-file conflicts with the Node.js runtime option; use --production-env-ref instead');
     } else if (arg === '--output-root') {
       options.outputRoot = nextValue();
     } else if (arg === '--base-url') {
@@ -103,9 +105,10 @@ export function parseArgs(argv = process.argv.slice(2)) {
 
 export async function prepareProductionCloseoutReadiness(options = {}) {
   const outputRoot = path.resolve(REPO_ROOT, options.outputRoot);
-  const envFile = normalizeRepoPath(options.envFile);
   const serverSignals = options.serverSignalsFile ? await readServerSignals(options.serverSignalsFile) : null;
+  const envFile = normalizeProductionEnvRef(options.productionEnvRef, serverSignals);
   const artifactRoot = normalizeRepoPath(path.join(options.outputRoot, 'artifacts'));
+  const databaseTargetRef = resolveDatabaseTargetRef(envFile, serverSignals);
   const operator = options.operator || 'production-closeout-operator';
   const approvalRef = options.approvalRef || `github-actions://${process.env.GITHUB_RUN_ID || 'manual-run'}`;
   const sampleCohortRef = options.sampleCohortRef || `${artifactRoot}/c15-sample-cohort-readback.json`;
@@ -213,7 +216,7 @@ export async function prepareProductionCloseoutReadiness(options = {}) {
       },
       'old-object-physical-drop-closeout': {
         db: {
-          databaseTargetRef: `env://${envFile}#SUPABASE_MIGRATION_URL`,
+          databaseTargetRef,
           databaseReadinessOwner: operator,
           noSafeCandidateCloseoutRef: `${artifactRoot}/old-object-no-safe-candidate-closeout.json`,
           backupLocationRef: `${artifactRoot}/db-backup-reference.json`,
@@ -236,7 +239,7 @@ export async function prepareProductionCloseoutReadiness(options = {}) {
   const readinessPath = path.join(outputRoot, 'handoff-readiness.json');
   const statusPath = path.join(outputRoot, 'closeout-status-index.json');
   const selectionPath = path.join(outputRoot, 'production-gate-selection.generated.json');
-  const envInventory = await buildEnvInventory(path.resolve(REPO_ROOT, envFile), { serverSignals });
+  const envInventory = await buildEnvInventory(envFile, { serverSignals });
   handoff.envPresence = buildHandoffEnvPresence(envInventory);
   await writeFile(handoffPath, `${JSON.stringify(handoff, null, 2)}\n`, 'utf8');
   await writeFile(selectionPath, `${JSON.stringify(handoff.gateSelection, null, 2)}\n`, 'utf8');
@@ -312,16 +315,37 @@ async function readServerSignals(serverSignalsFile) {
   return JSON.parse(raw);
 }
 
-async function buildEnvInventory(envFilePath, { serverSignals = null } = {}) {
+function normalizeProductionEnvRef(productionEnvRef, serverSignals) {
+  const fromSignals = normalizeEnvFileRef(serverSignals?.envFileRef);
+  return fromSignals || normalizeRepoPath(productionEnvRef || 'deploy/env/server.production.env');
+}
+
+function normalizeEnvFileRef(envFileRef) {
+  const raw = String(envFileRef ?? '').trim();
+  if (!raw) return '';
+  return raw.replace(/^path:\/\//u, '').replaceAll('\\', '/').replace(/^\/+/u, '');
+}
+
+function resolveDatabaseTargetRef(envFile, serverSignals) {
+  const fromSignals = String(serverSignals?.connectivity?.db?.databaseTargetRef ?? '').trim();
+  if (fromSignals.startsWith('env://')) return fromSignals;
+  const status = serverSignals?.envPresence ?? {};
+  if (normalizeServerEnvPresence(status.SUPABASE_MIGRATION_URL).nonEmpty) {
+    return `env://${envFile}#SUPABASE_MIGRATION_URL`;
+  }
+  return `env://${envFile}#DB_CONNECTION_STRING`;
+}
+
+async function buildEnvInventory(envFile, { serverSignals = null } = {}) {
   const requiredKeys = [
     'SUPABASE_URL',
     'SUPABASE_ANON_KEY',
     'SUPABASE_SERVICE_KEY',
-    'SUPABASE_MIGRATION_URL',
     'DB_CONNECTION_STRING',
     'JWT_SECRET',
   ];
   const recommendedKeys = [
+    'SUPABASE_MIGRATION_URL',
     'SUPABASE_SERVICE_ROLE_KEY',
     'DIRECT_DATABASE_URL',
     'DATABASE_URL',
@@ -329,6 +353,7 @@ async function buildEnvInventory(envFilePath, { serverSignals = null } = {}) {
     'VITE_SUPABASE_ANON_KEY',
   ];
   const source = serverSignals ? 'server-side-sanitized-signals' : 'repo-env-file';
+  const envFilePath = path.resolve(REPO_ROOT, envFile);
   const env = serverSignals ? null : parseEnvFile(await readFile(envFilePath, 'utf8'));
   const keyStatus = Object.fromEntries([...requiredKeys, ...recommendedKeys].map((key) => [
     key,
@@ -344,7 +369,7 @@ async function buildEnvInventory(envFilePath, { serverSignals = null } = {}) {
     schemaVersion: 'workbuddy-production-env-key-readiness/v1',
     generatedAt: new Date().toISOString(),
     source,
-    envFile: normalizeRepoPath(envFilePath),
+    envFile,
     requiredKeys,
     recommendedKeys,
     keyStatus,
@@ -424,7 +449,7 @@ function normalizeRepoPath(filePath) {
 function renderHelp() {
   return `
 Usage:
-  node project-testing/tools/prepare-production-closeout-readiness.mjs --output-root <report-dir> --base-url <url> --company-id <id> --project-id <id> --plan-id <id> --candidate-id <id> [--gate <gate-id>] [--server-signals-file <signals.json>]
+  node project-testing/tools/prepare-production-closeout-readiness.mjs --output-root <report-dir> --base-url <url> --company-id <id> --project-id <id> --plan-id <id> --candidate-id <id> [--gate <gate-id>] [--production-env-ref <relative-env-path>] [--server-signals-file <signals.json>]
 
 This tool creates a handoff declaration with env:// refs, runs the read-only readiness checker,
 and writes sanitized reports. It does not run live diagnostics or DB mutations.

@@ -293,7 +293,7 @@ jobs:
           source "$OUTPUT_ROOT/production-readiness-inputs.env"
 
           args=(
-            --env-file deploy/env/server.production.env
+            --production-env-ref deploy/env/server.production.env
             --server-signals-file "$OUTPUT_ROOT/server-handoff-signals.json"
             --output-root "$OUTPUT_ROOT"
           )
