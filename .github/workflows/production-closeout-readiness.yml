@@ -4,28 +4,34 @@ on:
   workflow_dispatch:
     inputs:
       base_url:
-        description: Production public base URL, for example https://example.com
-        required: true
+        description: Production public base URL. Leave blank to use WORKBUDDY_LIVE_BASE_URL/API_BASE_URL from server env, then GitHub deployment URL.
+        required: false
+        default: ''
         type: string
       company_id:
-        description: Production company id for controlled closeout readiness
-        required: true
+        description: Production company id for controlled closeout readiness. Leave blank for read-only DB discovery.
+        required: false
+        default: ''
         type: string
       project_id:
-        description: Production project id for controlled closeout readiness
-        required: true
+        description: Production project id for controlled closeout readiness. Leave blank for read-only DB discovery.
+        required: false
+        default: ''
         type: string
       plan_id:
-        description: Production plan id for C18 diagnostics readiness
-        required: true
+        description: Production plan id for C18 diagnostics readiness. Leave blank for read-only DB discovery.
+        required: false
+        default: ''
         type: string
       candidate_id:
-        description: Production C15 candidate id for readiness; use a governed candidate only
-        required: true
+        description: Production C15 candidate id for readiness; use a governed candidate only. Leave blank for read-only DB discovery.
+        required: false
+        default: ''
         type: string
       approval_ref:
         description: Approval or change-ticket reference authorizing readiness evaluation
-        required: true
+        required: false
+        default: ''
         type: string
       sample_cohort_ref:
         description: Optional C15 sample cohort evidence reference
@@ -75,6 +81,10 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: '20'
+          cache: npm
+
+      - name: Install readiness dependencies
+        run: npm ci
 
       - name: Configure SSH
         env:
@@ -122,6 +132,7 @@ jobs:
         env:
           OUTPUT_ROOT: project-testing/reports/production-closeout-readiness-${{ github.run_id }}
           BASE_URL: ${{ inputs.base_url }}
+          DEPLOYMENT_URL: ${{ github.event.repository.homepage }}
           COMPANY_ID: ${{ inputs.company_id }}
           PROJECT_ID: ${{ inputs.project_id }}
           PLAN_ID: ${{ inputs.plan_id }}
@@ -135,6 +146,56 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$OUTPUT_ROOT"
+
+          node project-testing/tools/collect-release-handoff-signals.mjs \
+            --env-file deploy/env/server.production.env \
+            --output-dir "$OUTPUT_ROOT" \
+            --include-live \
+            --confirm-live-handoff \
+            --include-db \
+            --confirm-db-ready \
+            --environment-owner github-actions-production-closeout \
+            --write-approval-ref "${APPROVAL_REF:-github-actions://run/${GITHUB_RUN_ID}}" \
+            --manual-approval-ref "${APPROVAL_REF:-github-actions://run/${GITHUB_RUN_ID}}" \
+            --monitoring-owner github-actions-production-closeout \
+            --rollback-owner github-actions-production-closeout \
+            --cleanup-owner github-actions-production-closeout \
+            --migration-owner github-actions-production-closeout \
+            --runtime-publication-owner github-actions-production-closeout \
+            --consumer-observation-owner github-actions-production-closeout
+
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const outputRoot = process.env.OUTPUT_ROOT;
+          const signals = JSON.parse(readFileSync(`${outputRoot}/handoff-signals.json`, 'utf8'));
+          const discovered = signals.discoveredTargets ?? {};
+          const env = process.env;
+          const fill = (key, fallback = '') => String(env[key] || discovered[key] || fallback || '').trim();
+          const baseUrl = String(env.BASE_URL || '').trim()
+            || String(signals.baseUrl || '').trim()
+            || String(env.DEPLOYMENT_URL || '').trim();
+          const monitoringWindow = String(env.MONITORING_WINDOW || '').trim()
+            || `${new Date().toISOString()}/PT30M`;
+          const values = {
+            BASE_URL: baseUrl,
+            COMPANY_ID: fill('COMPANY_ID'),
+            PROJECT_ID: fill('PROJECT_ID'),
+            PLAN_ID: fill('PLAN_ID'),
+            CANDIDATE_ID: fill('CANDIDATE_ID'),
+            APPROVAL_REF: String(env.APPROVAL_REF || `github-actions://run/${env.GITHUB_RUN_ID}`).trim(),
+            SAMPLE_COHORT_REF: fill('SAMPLE_COHORT_REF', discovered.sampleCohortRef),
+            MONITORING_WINDOW: monitoringWindow,
+          };
+          const shellQuote = (value) => `'${String(value).replace(/'/g, `'\\''`).replace(/\n/g, '')}'`;
+          writeFileSync(
+            `${outputRoot}/production-readiness-inputs.env`,
+            Object.entries(values).map(([key, value]) => `${key}=${shellQuote(value)}`).join('\n') + '\n',
+          );
+          NODE
+
+          # shellcheck disable=SC1090
+          source "$OUTPUT_ROOT/production-readiness-inputs.env"
+
           args=(
             --env-file deploy/env/server.production.env
             --output-root "$OUTPUT_ROOT"
