@@ -128,6 +128,82 @@ jobs:
             "$DEPLOY_USER@$DEPLOY_HOST:$remote_env" deploy/env/server.production.env
           test -s deploy/env/server.production.env
 
+      - name: Collect server-side discovery signals
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          OUTPUT_ROOT: project-testing/reports/production-closeout-readiness-${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUTPUT_ROOT"
+          local_blocked_signals="$OUTPUT_ROOT/server-handoff-signals.json"
+          local_collector="project-testing/tools/collect-release-handoff-signals.mjs"
+          remote_root="$DEPLOY_PATH/.workbuddy-production-closeout-readiness/${GITHUB_RUN_ID}"
+          remote_collector_host="$remote_root/collect-release-handoff-signals.mjs"
+          remote_collector_container="/tmp/workbuddy-production-closeout-readiness-${GITHUB_RUN_ID}.mjs"
+          remote_signals_host="$remote_root/handoff-signals.json"
+          remote_env="$DEPLOY_PATH/deploy/env/server.production.env"
+
+          write_blocked_signals() {
+            node --input-type=module <<'NODE'
+          import { writeFileSync } from 'node:fs';
+          const reason = String(process.env.BLOCKED_REASON || 'server-side discovery failed')
+            .replace(/[\r\n]/g, ' ')
+            .slice(0, 200);
+          const output = process.env.BLOCKED_SIGNALS_FILE;
+          writeFileSync(output, `${JSON.stringify({
+            schemaVersion: 'workbuddy-release-handoff-signals/v1',
+            generatedAt: new Date().toISOString(),
+            connectivity: {
+              db: {
+                ok: false,
+                databaseTargetRef: 'env://deploy/env/server.production.env#SUPABASE_MIGRATION_URL',
+                error: reason,
+                discoverySource: 'server-side-ssh-discovery',
+              },
+            },
+            tableCounts: {},
+            columns: {},
+            discoveredTargets: {
+              companyId: '',
+              projectId: '',
+              planId: '',
+              candidateId: '',
+              sampleCohortRef: '',
+            },
+            boundary: {
+              noSecretValuesWritten: true,
+              liveMutation: false,
+              dbMutation: false,
+              note: 'Server-side discovery failed before target IDs could be read. This file is sanitized and contains no env values.',
+            },
+          }, null, 2)}\n`);
+          NODE
+          }
+
+          if ssh -i ~/.ssh/workbuddy-production-closeout -p "$DEPLOY_PORT" -o IdentitiesOnly=yes "$DEPLOY_USER@$DEPLOY_HOST" \
+            "mkdir -p '$remote_root' && test -s '$remote_env' && (docker ps --format '{{.Names}}' 2>/dev/null || sudo -n docker ps --format '{{.Names}}') | grep -qx 'project-management-api'"; then
+            scp -i ~/.ssh/workbuddy-production-closeout -P "$DEPLOY_PORT" -o IdentitiesOnly=yes \
+              "$local_collector" "$DEPLOY_USER@$DEPLOY_HOST:$remote_collector_host"
+
+            if ssh -i ~/.ssh/workbuddy-production-closeout -p "$DEPLOY_PORT" -o IdentitiesOnly=yes "$DEPLOY_USER@$DEPLOY_HOST" \
+              "set -e; if docker info >/dev/null 2>&1; then docker_cmd='docker'; elif sudo -n docker info >/dev/null 2>&1; then docker_cmd='sudo -n docker'; else exit 1; fi; \$docker_cmd cp '$remote_collector_host' project-management-api:'$remote_collector_container'; \$docker_cmd exec project-management-api sh -lc \"mkdir -p /tmp/workbuddy-production-closeout-readiness-${GITHUB_RUN_ID} && node '$remote_collector_container' --env-source process --env-file deploy/env/server.production.env --output-dir /tmp/workbuddy-production-closeout-readiness-${GITHUB_RUN_ID} --include-live --confirm-live-handoff --include-db --confirm-db-ready --environment-owner github-actions-production-closeout --write-approval-ref 'github-actions://run/${GITHUB_RUN_ID}' --manual-approval-ref 'github-actions://run/${GITHUB_RUN_ID}' --monitoring-owner github-actions-production-closeout --rollback-owner github-actions-production-closeout --cleanup-owner github-actions-production-closeout --migration-owner github-actions-production-closeout --runtime-publication-owner github-actions-production-closeout --consumer-observation-owner github-actions-production-closeout >/dev/null\"; \$docker_cmd cp project-management-api:/tmp/workbuddy-production-closeout-readiness-${GITHUB_RUN_ID}/handoff-signals.json '$remote_signals_host'; \$docker_cmd exec project-management-api sh -lc \"rm -rf /tmp/workbuddy-production-closeout-readiness-${GITHUB_RUN_ID} '$remote_collector_container'\""; then
+              scp -i ~/.ssh/workbuddy-production-closeout -P "$DEPLOY_PORT" -o IdentitiesOnly=yes \
+                "$DEPLOY_USER@$DEPLOY_HOST:$remote_signals_host" "$local_blocked_signals"
+            else
+              BLOCKED_REASON="server-side discovery command failed" BLOCKED_SIGNALS_FILE="$local_blocked_signals" write_blocked_signals
+            fi
+
+            ssh -i ~/.ssh/workbuddy-production-closeout -p "$DEPLOY_PORT" -o IdentitiesOnly=yes "$DEPLOY_USER@$DEPLOY_HOST" \
+              "rm -rf '$remote_root'" >/dev/null 2>&1 || true
+          else
+            BLOCKED_REASON="server-side discovery setup failed" BLOCKED_SIGNALS_FILE="$local_blocked_signals" write_blocked_signals
+          fi
+
+          test -s "$local_blocked_signals"
+
       - name: Generate production readiness report
         env:
           OUTPUT_ROOT: project-testing/reports/production-closeout-readiness-${{ github.run_id }}
@@ -150,6 +226,7 @@ jobs:
           node project-testing/tools/collect-release-handoff-signals.mjs \
             --env-file deploy/env/server.production.env \
             --output-dir "$OUTPUT_ROOT" \
+            --server-signals-file "$OUTPUT_ROOT/server-handoff-signals.json" \
             --include-live \
             --confirm-live-handoff \
             --include-db \
