@@ -199,13 +199,25 @@ jobs:
           args=(
             --env-file deploy/env/server.production.env
             --output-root "$OUTPUT_ROOT"
-            --base-url "$BASE_URL"
-            --company-id "$COMPANY_ID"
-            --project-id "$PROJECT_ID"
-            --plan-id "$PLAN_ID"
-            --candidate-id "$CANDIDATE_ID"
-            --approval-ref "$APPROVAL_REF"
           )
+          if [ -n "$BASE_URL" ]; then
+            args+=(--base-url "$BASE_URL")
+          fi
+          if [ -n "$COMPANY_ID" ]; then
+            args+=(--company-id "$COMPANY_ID")
+          fi
+          if [ -n "$PROJECT_ID" ]; then
+            args+=(--project-id "$PROJECT_ID")
+          fi
+          if [ -n "$PLAN_ID" ]; then
+            args+=(--plan-id "$PLAN_ID")
+          fi
+          if [ -n "$CANDIDATE_ID" ]; then
+            args+=(--candidate-id "$CANDIDATE_ID")
+          fi
+          if [ -n "$APPROVAL_REF" ]; then
+            args+=(--approval-ref "$APPROVAL_REF")
+          fi
           if [ -n "$SAMPLE_COHORT_REF" ]; then
             args+=(--sample-cohort-ref "$SAMPLE_COHORT_REF")
           fi
