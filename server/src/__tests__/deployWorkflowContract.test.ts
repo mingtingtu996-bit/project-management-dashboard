@@ -133,6 +133,7 @@ describe('deploy workflow contract', () => {
     expect(workflow).toContain('>/dev/null 2>&1 || true')
     expect(workflow).toContain("node -- '$remote_collector_container' --env-source process --env-file deploy/env/server.production.env")
     expect(workflow).toContain('--env-source process')
+    expect(workflow).toContain('--discovery-source server-side-ssh-discovery')
     expect(workflow).toContain('--production-env-ref deploy/env/server.production.env')
     expect(workflow).toContain('--server-signals-file "$OUTPUT_ROOT/server-handoff-signals.json"')
     expect(workflow).not.toMatch(/args=\(\s+--env-file deploy\/env\/server\.production\.env/u)

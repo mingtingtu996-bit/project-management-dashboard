@@ -171,3 +171,50 @@ test('handoff signal collector can read env from process for server-side contain
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+
+test('handoff signal collector labels server-side SSH discovery when requested', async () => {
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'workbuddy-handoff-discovery-source-'));
+  try {
+    const outputDir = path.join(tempDir, 'reports');
+
+    const result = spawnSync(process.execPath, [
+      '--',
+      collectorPath,
+      '--env-source', 'process',
+      '--env-file', 'deploy/env/server.production.env',
+      '--output-dir', outputDir,
+      '--discovery-source', 'server-side-ssh-discovery',
+      '--include-live',
+      '--confirm-live-handoff',
+      '--include-db',
+      '--confirm-db-ready',
+      '--environment-owner', 'github-actions-production-closeout',
+      '--write-approval-ref', 'github-actions://run/test',
+      '--manual-approval-ref', 'github-actions://run/test',
+      '--monitoring-owner', 'github-actions-production-closeout',
+      '--rollback-owner', 'github-actions-production-closeout',
+      '--cleanup-owner', 'github-actions-production-closeout',
+      '--migration-owner', 'github-actions-production-closeout',
+      '--runtime-publication-owner', 'github-actions-production-closeout',
+      '--consumer-observation-owner', 'github-actions-production-closeout',
+    ], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        SUPABASE_URL: 'https://example.supabase.co',
+        SUPABASE_ANON_KEY: 'anon-ref',
+        SUPABASE_SERVICE_KEY: 'service-ref',
+        JWT_SECRET: 'jwt-ref',
+        DB_CONNECTION_STRING: '',
+      },
+    });
+
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const signals = JSON.parse(await readFile(path.join(outputDir, 'handoff-signals.json'), 'utf8'));
+    assert.equal(signals.connectivity.db.ok, false);
+    assert.equal(signals.connectivity.db.discoverySource, 'server-side-ssh-discovery');
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});

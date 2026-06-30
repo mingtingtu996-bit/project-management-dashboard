@@ -74,6 +74,7 @@ function parseArgs(argv = process.argv.slice(2)) {
     consumerObservationOwner: '',
     serverSignalsFile: '',
     envSource: 'file',
+    discoverySource: '',
     help: false,
   };
 
@@ -140,6 +141,9 @@ function parseArgs(argv = process.argv.slice(2)) {
         throw new Error('--env-source must be file or process');
       }
       index += 1;
+    } else if (arg === '--discovery-source') {
+      options.discoverySource = readValue(argv, index, arg);
+      index += 1;
     } else if (arg === '--help' || arg === '-h') {
       options.help = true;
     } else {
@@ -173,6 +177,7 @@ Options:
   --consumer-observation-owner <ref> Fill C-19 consumer observation owner.
   --server-signals-file <path>      Use sanitized server-side discovery signals instead of probing DB locally.
   --env-source <file|process>       Read env keys from a dotenv file or process.env. Defaults to file.
+  --discovery-source <label>        Override DB discovery source label for sanitized reports.
 `);
 }
 
@@ -631,7 +636,7 @@ async function main() {
         ok: dbProbe.ok,
         databaseTargetRef: dbProbe.databaseTargetRef,
         error: dbProbe.error ?? null,
-        discoverySource: dbProbe.discoverySource ?? 'runner-local-db-probe',
+        discoverySource: options.discoverySource || dbProbe.discoverySource || 'runner-local-db-probe',
       },
     },
     tableCounts: dbProbe.tableCounts ?? {},
