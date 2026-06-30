@@ -119,4 +119,24 @@ describe('deploy workflow contract', () => {
     expect(workflowGuard).toContain('npm ci --workspaces=false')
     expect(workflowGuard).toContain('npm test -- src/__tests__/deployWorkflowContract.test.ts')
   })
+
+  it('keeps production closeout target discovery on the self-hosted production side', () => {
+    const workflow = readFileSync(resolve(workspaceRoot, '.github', 'workflows', 'production-closeout-readiness.yml'), 'utf8')
+    const workflowGuard = readFileSync(resolve(workspaceRoot, '.github', 'workflows', 'workflow-guard.yml'), 'utf8')
+
+    expect(workflow).toContain('Collect server-side discovery signals')
+    expect(workflow).toContain('project-management-api')
+    expect(workflow).toContain("docker_cmd='sudo -n docker'")
+    expect(workflow).toContain('$docker_cmd exec project-management-api')
+    expect(workflow).toContain('--env-source process')
+    expect(workflow).toContain('--server-signals-file "$OUTPUT_ROOT/server-handoff-signals.json"')
+    expect(workflow).toContain('server-side discovery command failed')
+    expect(workflow).toContain('server-side discovery setup failed')
+    expect(workflow).toContain('noSecretValuesWritten')
+    expect(workflow).not.toContain('connect ENETUNREACH')
+
+    expect(workflowGuard).toContain('.github/workflows/production-closeout-readiness.yml')
+    expect(workflowGuard).toContain('project-testing/tools/collect-release-handoff-signals.test.mjs')
+    expect(workflowGuard).toContain('project-testing/tools/prepare-production-closeout-readiness.mjs')
+  })
 })
