@@ -113,26 +113,6 @@ jobs:
             ssh-keyscan -p "$DEPLOY_PORT" "$DEPLOY_HOST" >> ~/.ssh/known_hosts
           fi
 
-      - name: Fetch production env from self-hosted server
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
-          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
-        run: |
-          set -euo pipefail
-          if [ -z "$DEPLOY_HOST" ] || [ -z "$DEPLOY_USER" ] || [ -z "$DEPLOY_PATH" ]; then
-            echo "Missing required deploy location secrets." >&2
-            exit 1
-          fi
-          mkdir -p deploy/env
-          remote_env="$DEPLOY_PATH/deploy/env/server.production.env"
-          ssh -i ~/.ssh/workbuddy-production-closeout -p "$DEPLOY_PORT" -o IdentitiesOnly=yes "$DEPLOY_USER@$DEPLOY_HOST" \
-            "test -s '$remote_env'"
-          scp -i ~/.ssh/workbuddy-production-closeout -P "$DEPLOY_PORT" -o IdentitiesOnly=yes \
-            "$DEPLOY_USER@$DEPLOY_HOST:$remote_env" deploy/env/server.production.env
-          test -s deploy/env/server.production.env
-
       - name: Collect server-side discovery signals
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
@@ -161,6 +141,7 @@ jobs:
           writeFileSync(output, `${JSON.stringify({
             schemaVersion: 'workbuddy-release-handoff-signals/v1',
             generatedAt: new Date().toISOString(),
+            envPresence: {},
             connectivity: {
               db: {
                 ok: false,
@@ -229,28 +210,11 @@ jobs:
           set -euo pipefail
           mkdir -p "$OUTPUT_ROOT"
 
-          node project-testing/tools/collect-release-handoff-signals.mjs \
-            --env-file deploy/env/server.production.env \
-            --output-dir "$OUTPUT_ROOT" \
-            --server-signals-file "$OUTPUT_ROOT/server-handoff-signals.json" \
-            --include-live \
-            --confirm-live-handoff \
-            --include-db \
-            --confirm-db-ready \
-            --environment-owner github-actions-production-closeout \
-            --write-approval-ref "${APPROVAL_REF:-github-actions://run/${GITHUB_RUN_ID}}" \
-            --manual-approval-ref "${APPROVAL_REF:-github-actions://run/${GITHUB_RUN_ID}}" \
-            --monitoring-owner github-actions-production-closeout \
-            --rollback-owner github-actions-production-closeout \
-            --cleanup-owner github-actions-production-closeout \
-            --migration-owner github-actions-production-closeout \
-            --runtime-publication-owner github-actions-production-closeout \
-            --consumer-observation-owner github-actions-production-closeout
-
           node --input-type=module <<'NODE'
           import { readFileSync, writeFileSync } from 'node:fs';
           const outputRoot = process.env.OUTPUT_ROOT;
-          const signals = JSON.parse(readFileSync(`${outputRoot}/handoff-signals.json`, 'utf8'));
+          const signals = JSON.parse(readFileSync(`${outputRoot}/server-handoff-signals.json`, 'utf8'));
+          writeFileSync(`${outputRoot}/handoff-signals.json`, `${JSON.stringify(signals, null, 2)}\n`);
           const discovered = signals.discoveredTargets ?? {};
           const discoveredTargets = {
             COMPANY_ID: discovered.companyId,
@@ -330,6 +294,7 @@ jobs:
 
           args=(
             --env-file deploy/env/server.production.env
+            --server-signals-file "$OUTPUT_ROOT/server-handoff-signals.json"
             --output-root "$OUTPUT_ROOT"
           )
           if [ -n "$BASE_URL" ]; then
@@ -390,10 +355,9 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: Remove production env from runner
+      - name: Remove SSH key from runner
         if: always()
         run: |
-          rm -f deploy/env/server.production.env
           rm -f ~/.ssh/workbuddy-production-closeout
 
       - name: Upload sanitized readiness reports
