@@ -16,6 +16,12 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, '../..');
+const DEFAULT_GATE_IDS = [
+  'c18-l07-l15-live-diagnostics',
+  'c15-live-learning-closeout',
+  'c19-runtime-publication-release-rollback',
+  'old-object-physical-drop-closeout',
+];
 
 export function parseArgs(argv = process.argv.slice(2)) {
   const options = {
@@ -33,6 +39,7 @@ export function parseArgs(argv = process.argv.slice(2)) {
     monitoringWindow: '',
     approvalRef: '',
     operator: 'production-closeout-operator',
+    gateIds: [],
     help: false,
   };
 
@@ -75,6 +82,8 @@ export function parseArgs(argv = process.argv.slice(2)) {
       options.approvalRef = nextValue();
     } else if (arg === '--operator') {
       options.operator = nextValue();
+    } else if (arg === '--gate') {
+      options.gateIds.push(nextValue());
     } else if (arg === '--help' || arg === '-h') {
       options.help = true;
     } else {
@@ -100,6 +109,8 @@ export async function prepareProductionCloseoutReadiness(options = {}) {
   const releaseClosureArtifactRef = options.releaseClosureArtifactRef || `${artifactRoot}/c19-release-closure-artifact.json`;
   const rollbackTargetRef = options.rollbackTargetRef || `${artifactRoot}/c19-runtime-rollback-target.json`;
   const monitoringWindow = options.monitoringWindow || 'production-observation-window-required';
+  const selectedGateIds = normalizeGateIds(options.gateIds);
+  const notSelectedGateIds = DEFAULT_GATE_IDS.filter((gateId) => !selectedGateIds.includes(gateId));
 
   await mkdir(outputRoot, { recursive: true });
 
@@ -118,6 +129,11 @@ export async function prepareProductionCloseoutReadiness(options = {}) {
       confirmLiveHandoff: true,
       includeDb: true,
       confirmDbReady: true,
+    },
+    gateSelection: {
+      selectedGateIds,
+      notSelectedGateIds,
+      note: 'Readiness is evaluated only for selected gates. Not-selected gates are not marked ready and still require a separate handoff/readiness run before live or DB execution.',
     },
     gates: {
       'c18-l07-l15-live-diagnostics': {
@@ -213,13 +229,16 @@ export async function prepareProductionCloseoutReadiness(options = {}) {
   const handoffPath = path.join(outputRoot, 'production-handoff.generated.json');
   const readinessPath = path.join(outputRoot, 'handoff-readiness.json');
   const statusPath = path.join(outputRoot, 'closeout-status-index.json');
+  const selectionPath = path.join(outputRoot, 'production-gate-selection.generated.json');
   const envInventory = await buildEnvInventory(path.resolve(REPO_ROOT, envFile));
   await writeFile(handoffPath, `${JSON.stringify(handoff, null, 2)}\n`, 'utf8');
+  await writeFile(selectionPath, `${JSON.stringify(handoff.gateSelection, null, 2)}\n`, 'utf8');
   await writeFile(path.join(outputRoot, 'env-key-readiness.json'), `${JSON.stringify(envInventory, null, 2)}\n`, 'utf8');
   await writeFile(path.join(outputRoot, 'env-key-readiness.md'), renderEnvInventoryMarkdown(envInventory), 'utf8');
 
   const readiness = await checkReleaseHandoffReadiness({
     handoffFile: handoffPath,
+    gateIds: selectedGateIds,
   });
   const readinessOutputs = await writeHandoffReadinessReport({
     report: readiness,
@@ -247,6 +266,9 @@ export async function prepareProductionCloseoutReadiness(options = {}) {
     handoffFile: normalizeRepoPath(handoffPath),
     readinessFile: normalizeRepoPath(readinessOutputs.jsonPath),
     statusFile: normalizeRepoPath(statusOutputs.jsonPath),
+    selectedGateIds,
+    notSelectedGateIds,
+    gateSelectionFile: normalizeRepoPath(selectionPath),
     boundary: handoff.boundary,
   }, null, 2)}\n`, 'utf8');
 
@@ -254,8 +276,27 @@ export async function prepareProductionCloseoutReadiness(options = {}) {
     handoffPath,
     readinessPath: readinessOutputs.jsonPath,
     statusPath: statusOutputs.jsonPath,
+    selectionPath,
     readiness,
   };
+}
+
+function normalizeGateIds(gateIds = []) {
+  const selected = [];
+  for (const gateId of gateIds.length > 0 ? gateIds : DEFAULT_GATE_IDS) {
+    const normalized = String(gateId ?? '').trim();
+    if (!normalized) continue;
+    if (!DEFAULT_GATE_IDS.includes(normalized)) {
+      throw new Error(`Unknown gate: ${normalized}`);
+    }
+    if (!selected.includes(normalized)) {
+      selected.push(normalized);
+    }
+  }
+  if (selected.length === 0) {
+    throw new Error('At least one --gate is required when gate selection is provided');
+  }
+  return selected;
 }
 
 async function buildEnvInventory(envFilePath) {
@@ -344,7 +385,7 @@ function normalizeRepoPath(filePath) {
 function renderHelp() {
   return `
 Usage:
-  node project-testing/tools/prepare-production-closeout-readiness.mjs --output-root <report-dir> --base-url <url> --company-id <id> --project-id <id> --plan-id <id> --candidate-id <id>
+  node project-testing/tools/prepare-production-closeout-readiness.mjs --output-root <report-dir> --base-url <url> --company-id <id> --project-id <id> --plan-id <id> --candidate-id <id> [--gate <gate-id>]
 
 This tool creates a handoff declaration with env:// refs, runs the read-only readiness checker,
 and writes sanitized reports. It does not run live diagnostics or DB mutations.
