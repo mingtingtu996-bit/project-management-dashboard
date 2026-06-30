@@ -58,6 +58,11 @@ on:
         required: false
         default: ''
         type: string
+      gate_ids:
+        description: Optional comma or space separated gate IDs. Leave blank for auto; C15 is selected only when a candidate id exists.
+        required: false
+        default: ''
+        type: string
 
 concurrency:
   group: production-closeout-readiness-${{ github.ref }}
@@ -219,6 +224,7 @@ jobs:
           RELEASE_CLOSURE_ARTIFACT_REF: ${{ inputs.release_closure_artifact_ref }}
           ROLLBACK_TARGET_REF: ${{ inputs.rollback_target_ref }}
           MONITORING_WINDOW: ${{ inputs.monitoring_window }}
+          GATE_IDS: ${{ inputs.gate_ids }}
         run: |
           set -euo pipefail
           mkdir -p "$OUTPUT_ROOT"
@@ -255,22 +261,64 @@ jobs:
           };
           const env = process.env;
           const fill = (key, fallback = '') => String(env[key] || discoveredTargets[key] || fallback || '').trim();
+          const allGateIds = [
+            'c18-l07-l15-live-diagnostics',
+            'c15-live-learning-closeout',
+            'c19-runtime-publication-release-rollback',
+            'old-object-physical-drop-closeout',
+          ];
+          const requestedGateIds = String(env.GATE_IDS || '')
+            .split(/[\s,]+/u)
+            .map((gateId) => gateId.trim())
+            .filter(Boolean);
           const baseUrl = String(env.BASE_URL || '').trim()
             || String(signals.baseUrl || '').trim()
             || String(env.DEPLOYMENT_URL || '').trim();
           const monitoringWindow = String(env.MONITORING_WINDOW || '').trim()
             || `${new Date().toISOString()}/PT30M`;
+          const candidateId = fill('CANDIDATE_ID');
+          const selectedGateIds = requestedGateIds.length > 0
+            ? requestedGateIds
+            : [
+                'c18-l07-l15-live-diagnostics',
+                ...(candidateId ? ['c15-live-learning-closeout'] : []),
+                'c19-runtime-publication-release-rollback',
+                'old-object-physical-drop-closeout',
+              ];
+          const notSelectedGateIds = allGateIds.filter((gateId) => !selectedGateIds.includes(gateId));
+          const gateSelection = {
+            schemaVersion: 'workbuddy-production-gate-selection/v1',
+            generatedAt: new Date().toISOString(),
+            mode: requestedGateIds.length > 0 ? 'manual-input' : 'auto-from-server-side-discovery',
+            selectedGateIds,
+            notSelectedGateIds,
+            reasons: Object.fromEntries(notSelectedGateIds.map((gateId) => [
+              gateId,
+              gateId === 'c15-live-learning-closeout' && !candidateId
+                ? 'no duration_context_policy_canary_candidates row was discovered; C15 is not ready and requires a separate candidate-backed handoff'
+                : 'not selected for this readiness run',
+            ])),
+            boundary: {
+              readinessOnly: true,
+              liveOrDbCommandsExecuted: 0,
+            },
+          };
           const values = {
             BASE_URL: baseUrl,
             COMPANY_ID: fill('COMPANY_ID'),
             PROJECT_ID: fill('PROJECT_ID'),
             PLAN_ID: fill('PLAN_ID'),
-            CANDIDATE_ID: fill('CANDIDATE_ID'),
+            CANDIDATE_ID: candidateId,
             APPROVAL_REF: String(env.APPROVAL_REF || `github-actions://run/${env.GITHUB_RUN_ID}`).trim(),
             SAMPLE_COHORT_REF: fill('SAMPLE_COHORT_REF'),
             MONITORING_WINDOW: monitoringWindow,
+            GATE_IDS: selectedGateIds.join(' '),
           };
           const shellQuote = (value) => `'${String(value).replace(/'/g, `'\\''`).replace(/\n/g, '')}'`;
+          writeFileSync(
+            `${outputRoot}/production-gate-selection.input.json`,
+            `${JSON.stringify(gateSelection, null, 2)}\n`,
+          );
           writeFileSync(
             `${outputRoot}/production-readiness-inputs.env`,
             Object.entries(values).map(([key, value]) => `${key}=${shellQuote(value)}`).join('\n') + '\n',
@@ -316,6 +364,11 @@ jobs:
           fi
           if [ -n "$MONITORING_WINDOW" ]; then
             args+=(--monitoring-window "$MONITORING_WINDOW")
+          fi
+          if [ -n "$GATE_IDS" ]; then
+            for gate_id in $GATE_IDS; do
+              args+=(--gate "$gate_id")
+            done
           fi
           node project-testing/tools/prepare-production-closeout-readiness.mjs "${args[@]}"
 
