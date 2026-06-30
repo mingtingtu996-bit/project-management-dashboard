@@ -1,0 +1,198 @@
+name: Production Closeout Readiness
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: Production public base URL, for example https://example.com
+        required: true
+        type: string
+      company_id:
+        description: Production company id for controlled closeout readiness
+        required: true
+        type: string
+      project_id:
+        description: Production project id for controlled closeout readiness
+        required: true
+        type: string
+      plan_id:
+        description: Production plan id for C18 diagnostics readiness
+        required: true
+        type: string
+      candidate_id:
+        description: Production C15 candidate id for readiness; use a governed candidate only
+        required: true
+        type: string
+      approval_ref:
+        description: Approval or change-ticket reference authorizing readiness evaluation
+        required: true
+        type: string
+      sample_cohort_ref:
+        description: Optional C15 sample cohort evidence reference
+        required: false
+        default: ''
+        type: string
+      phase1_l5_ref:
+        description: Optional C19 phase-1/L5 handoff evidence reference
+        required: false
+        default: ''
+        type: string
+      release_closure_artifact_ref:
+        description: Optional C19 release closure artifact reference
+        required: false
+        default: ''
+        type: string
+      rollback_target_ref:
+        description: Optional C19 rollback target reference
+        required: false
+        default: ''
+        type: string
+      monitoring_window:
+        description: Optional production observation window, for example 2026-06-30T21:00:00+08:00/PT30M
+        required: false
+        default: ''
+        type: string
+
+concurrency:
+  group: production-closeout-readiness-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  readiness:
+    name: Readiness Only
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: Production
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+
+      - name: Configure SSH
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
+          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          if [ -z "$DEPLOY_HOST" ] || [ -z "$DEPLOY_SSH_PRIVATE_KEY" ]; then
+            echo "Missing required deploy SSH secrets." >&2
+            exit 1
+          fi
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_PRIVATE_KEY" > ~/.ssh/workbuddy-production-closeout
+          chmod 600 ~/.ssh/workbuddy-production-closeout
+          if [ -n "$DEPLOY_KNOWN_HOSTS" ]; then
+            printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$DEPLOY_PORT" "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+          fi
+
+      - name: Fetch production env from self-hosted server
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          if [ -z "$DEPLOY_HOST" ] || [ -z "$DEPLOY_USER" ] || [ -z "$DEPLOY_PATH" ]; then
+            echo "Missing required deploy location secrets." >&2
+            exit 1
+          fi
+          mkdir -p deploy/env
+          remote_env="$DEPLOY_PATH/deploy/env/server.production.env"
+          ssh -i ~/.ssh/workbuddy-production-closeout -p "$DEPLOY_PORT" -o IdentitiesOnly=yes "$DEPLOY_USER@$DEPLOY_HOST" \
+            "test -s '$remote_env'"
+          scp -i ~/.ssh/workbuddy-production-closeout -P "$DEPLOY_PORT" -o IdentitiesOnly=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST:$remote_env" deploy/env/server.production.env
+          test -s deploy/env/server.production.env
+
+      - name: Generate production readiness report
+        env:
+          OUTPUT_ROOT: project-testing/reports/production-closeout-readiness-${{ github.run_id }}
+          BASE_URL: ${{ inputs.base_url }}
+          COMPANY_ID: ${{ inputs.company_id }}
+          PROJECT_ID: ${{ inputs.project_id }}
+          PLAN_ID: ${{ inputs.plan_id }}
+          CANDIDATE_ID: ${{ inputs.candidate_id }}
+          APPROVAL_REF: ${{ inputs.approval_ref }}
+          SAMPLE_COHORT_REF: ${{ inputs.sample_cohort_ref }}
+          PHASE1_L5_REF: ${{ inputs.phase1_l5_ref }}
+          RELEASE_CLOSURE_ARTIFACT_REF: ${{ inputs.release_closure_artifact_ref }}
+          ROLLBACK_TARGET_REF: ${{ inputs.rollback_target_ref }}
+          MONITORING_WINDOW: ${{ inputs.monitoring_window }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUTPUT_ROOT"
+          args=(
+            --env-file deploy/env/server.production.env
+            --output-root "$OUTPUT_ROOT"
+            --base-url "$BASE_URL"
+            --company-id "$COMPANY_ID"
+            --project-id "$PROJECT_ID"
+            --plan-id "$PLAN_ID"
+            --candidate-id "$CANDIDATE_ID"
+            --approval-ref "$APPROVAL_REF"
+          )
+          if [ -n "$SAMPLE_COHORT_REF" ]; then
+            args+=(--sample-cohort-ref "$SAMPLE_COHORT_REF")
+          fi
+          if [ -n "$PHASE1_L5_REF" ]; then
+            args+=(--phase1-l5-ref "$PHASE1_L5_REF")
+          fi
+          if [ -n "$RELEASE_CLOSURE_ARTIFACT_REF" ]; then
+            args+=(--release-closure-artifact-ref "$RELEASE_CLOSURE_ARTIFACT_REF")
+          fi
+          if [ -n "$ROLLBACK_TARGET_REF" ]; then
+            args+=(--rollback-target-ref "$ROLLBACK_TARGET_REF")
+          fi
+          if [ -n "$MONITORING_WINDOW" ]; then
+            args+=(--monitoring-window "$MONITORING_WINDOW")
+          fi
+          node project-testing/tools/prepare-production-closeout-readiness.mjs "${args[@]}"
+
+      - name: Publish readiness summary
+        if: always()
+        env:
+          OUTPUT_ROOT: project-testing/reports/production-closeout-readiness-${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ -f "$OUTPUT_ROOT/handoff-readiness.md" ]; then
+            cat "$OUTPUT_ROOT/handoff-readiness.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ -f "$OUTPUT_ROOT/closeout-status-index.md" ]; then
+            {
+              echo ""
+              echo "## Closeout Status Index"
+              echo ""
+              cat "$OUTPUT_ROOT/closeout-status-index.md"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Remove production env from runner
+        if: always()
+        run: |
+          rm -f deploy/env/server.production.env
+          rm -f ~/.ssh/workbuddy-production-closeout
+
+      - name: Upload sanitized readiness reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: production-closeout-readiness-${{ github.run_id }}
+          path: |
+            project-testing/reports/production-closeout-readiness-${{ github.run_id }}/**/*
+            !project-testing/reports/production-closeout-readiness-${{ github.run_id }}/**/*.env
+          if-no-files-found: error
+          retention-days: 14
