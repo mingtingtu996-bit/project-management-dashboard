@@ -246,8 +246,15 @@ jobs:
           const outputRoot = process.env.OUTPUT_ROOT;
           const signals = JSON.parse(readFileSync(`${outputRoot}/handoff-signals.json`, 'utf8'));
           const discovered = signals.discoveredTargets ?? {};
+          const discoveredTargets = {
+            COMPANY_ID: discovered.companyId,
+            PROJECT_ID: discovered.projectId,
+            PLAN_ID: discovered.planId,
+            CANDIDATE_ID: discovered.candidateId,
+            SAMPLE_COHORT_REF: discovered.sampleCohortRef,
+          };
           const env = process.env;
-          const fill = (key, fallback = '') => String(env[key] || discovered[key] || fallback || '').trim();
+          const fill = (key, fallback = '') => String(env[key] || discoveredTargets[key] || fallback || '').trim();
           const baseUrl = String(env.BASE_URL || '').trim()
             || String(signals.baseUrl || '').trim()
             || String(env.DEPLOYMENT_URL || '').trim();
@@ -260,7 +267,7 @@ jobs:
             PLAN_ID: fill('PLAN_ID'),
             CANDIDATE_ID: fill('CANDIDATE_ID'),
             APPROVAL_REF: String(env.APPROVAL_REF || `github-actions://run/${env.GITHUB_RUN_ID}`).trim(),
-            SAMPLE_COHORT_REF: fill('SAMPLE_COHORT_REF', discovered.sampleCohortRef),
+            SAMPLE_COHORT_REF: fill('SAMPLE_COHORT_REF'),
             MONITORING_WINDOW: monitoringWindow,
           };
           const shellQuote = (value) => `'${String(value).replace(/'/g, `'\\''`).replace(/\n/g, '')}'`;
