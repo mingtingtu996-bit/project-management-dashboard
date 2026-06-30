@@ -128,6 +128,7 @@ describe('deploy workflow contract', () => {
     expect(workflow).toContain('project-management-api')
     expect(workflow).toContain("docker_cmd='sudo -n docker'")
     expect(workflow).toContain('$docker_cmd exec project-management-api')
+    expect(workflow).toContain("node -- '$remote_collector_container' --env-source process --env-file deploy/env/server.production.env")
     expect(workflow).toContain('--env-source process')
     expect(workflow).toContain('--server-signals-file "$OUTPUT_ROOT/server-handoff-signals.json"')
     expect(workflow).toContain('server-side discovery command failed')
