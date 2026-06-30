@@ -1,4 +1,8 @@
+import { constructionDependencyReplayCalibrationJob } from './jobs/constructionDependencyReplayCalibrationJob.js'
+import { standardWorkDurationSeedReplayJob } from './jobs/standardWorkDurationSeedReplayJob.js'
 import { dataRetentionJob } from './jobs/dataRetentionJob.js'
+import { durationContextPolicyLearningJob } from './jobs/durationContextPolicyLearningJob.js'
+import { durationLiveLearningProductionClaimAuditJob } from './jobs/durationLiveLearningProductionClaimAuditJob.js'
 import { planningDraftLockTimeoutJob } from './jobs/planningDraftLockTimeoutJob.js'
 import { responsibilityAlertJob } from './jobs/responsibilityAlertJob.js'
 import { riskStatisticsJob } from './jobs/riskStatisticsJob.js'
@@ -808,6 +812,18 @@ function startAllJobs() {
   dataRetentionJob.start()
   console.log('Data retention job started (monthly 1st 04:15)')
 
+  standardWorkDurationSeedReplayJob.start()
+  console.log('Standard work duration seed replay job started (daily 06:15)')
+
+  durationContextPolicyLearningJob.start()
+  console.log('Duration context policy learning job started (daily 06:20)')
+
+  constructionDependencyReplayCalibrationJob.start()
+  console.log('Construction dependency replay calibration job started (daily 06:30)')
+
+  durationLiveLearningProductionClaimAuditJob.start()
+  console.log('Duration live learning production claim audit job started (daily 06:45)')
+
   weeklyDigestJob.start()
   console.log('Weekly digest job started (every Monday 09:00)')
 
@@ -830,6 +846,10 @@ function startAllJobs() {
     operationalNotificationJob.stop()
     notificationLifecycleJob.stop()
     dataRetentionJob.stop()
+    standardWorkDurationSeedReplayJob.stop()
+    durationContextPolicyLearningJob.stop()
+    constructionDependencyReplayCalibrationJob.stop()
+    durationLiveLearningProductionClaimAuditJob.stop()
     weeklyDigestJob.stop()
     materialArrivalReminderJob.stop()
     console.log('All jobs stopped')

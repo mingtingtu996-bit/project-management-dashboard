@@ -310,6 +310,22 @@ describe('§4.10.12 projectDailySnapshotJob', () => {
     expect(avgHistorySection).toContain("from('project_daily_snapshot')")
     expect(avgHistorySection).not.toContain("from('project_health_history')")
   })
+
+  it('durationContextPolicyLearningJob automatically runs the report-only sweep at 06:20 and stops on shutdown', () => {
+    const schedulerSource = readServerFile('src', 'scheduler.ts')
+    const jobSource = readServerFile('src', 'jobs', 'durationContextPolicyLearningJob.ts')
+
+    expect(schedulerSource).toContain("import { durationContextPolicyLearningJob } from './jobs/durationContextPolicyLearningJob.js'")
+    expect(schedulerSource).toContain('durationContextPolicyLearningJob.start()')
+    expect(schedulerSource).toContain('Duration context policy learning job started (daily 06:20)')
+    expect(schedulerSource).toContain('durationContextPolicyLearningJob.stop()')
+
+    expect(jobSource).toContain('nextDailyRunAt(6, 20)')
+    expect(jobSource).toContain("trigger: 'daily_06_20'")
+    expect(jobSource).toContain("runtimeMutationPolicy: 'none_candidate_report_only'")
+    expect(jobSource).toContain('persistDecisions: false')
+    expect(jobSource).toContain('persist: false')
+  })
 })
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -1,7 +1,10 @@
 import express from 'express'
 import { z } from 'zod'
 
+import { constructionDependencyReplayCalibrationJob } from '../jobs/constructionDependencyReplayCalibrationJob.js'
+import { standardWorkDurationSeedReplayJob } from '../jobs/standardWorkDurationSeedReplayJob.js'
 import { dataRetentionJob } from '../jobs/dataRetentionJob.js'
+import { durationLiveLearningProductionClaimAuditJob } from '../jobs/durationLiveLearningProductionClaimAuditJob.js'
 import { planningDraftLockTimeoutJob } from '../jobs/planningDraftLockTimeoutJob.js'
 import { responsibilityAlertJob } from '../jobs/responsibilityAlertJob.js'
 import { riskStatisticsJob } from '../jobs/riskStatisticsJob.js'
@@ -53,7 +56,10 @@ function buildJobStatusViews(): JobStatusView[] {
   const riskJobStatus = riskStatisticsJob.getStatus()
   const draftLockStatus = planningDraftLockTimeoutJob.getStatus()
   const dataRetentionStatus = dataRetentionJob.getStatus()
+  const constructionDependencyReplayCalibrationStatus = constructionDependencyReplayCalibrationJob.getStatus()
+  const standardWorkDurationSeedReplayStatus = standardWorkDurationSeedReplayJob.getStatus()
   const responsibilityAlertStatus = responsibilityAlertJob.getStatus()
+  const durationLiveLearningProductionClaimAuditStatus = durationLiveLearningProductionClaimAuditJob.getStatus()
 
   return [
     {
@@ -187,6 +193,45 @@ function buildJobStatusViews(): JobStatusView[] {
       nextRun: dataRetentionStatus.nextRun,
       status: buildStatus(dataRetentionStatus.isRunning, dataRetentionStatus.isScheduled),
       description: '按保留周期清理高增长日志与快照表。',
+    },
+    {
+      name: 'standardWorkDurationSeedReplayJob',
+      displayName: 'Standard work duration seed replay job',
+      isRunning: standardWorkDurationSeedReplayStatus.isRunning,
+      isScheduled: standardWorkDurationSeedReplayStatus.isScheduled,
+      schedule: '15 6 * * *',
+      lastRun: standardWorkDurationSeedReplayStatus.lastRun,
+      nextRun: standardWorkDurationSeedReplayStatus.nextRun,
+      status: buildStatus(standardWorkDurationSeedReplayStatus.isRunning, standardWorkDurationSeedReplayStatus.isScheduled),
+      description:
+        'Runs report-only P50 replay from duration experience samples for standard work duration seed governance; seed values are never written by this job.',
+    },
+    {
+      name: 'constructionDependencyReplayCalibrationJob',
+      displayName: 'Construction dependency replay calibration job',
+      isRunning: constructionDependencyReplayCalibrationStatus.isRunning,
+      isScheduled: constructionDependencyReplayCalibrationStatus.isScheduled,
+      schedule: '30 6 * * *',
+      lastRun: constructionDependencyReplayCalibrationStatus.lastRun,
+      nextRun: constructionDependencyReplayCalibrationStatus.nextRun,
+      status: buildStatus(constructionDependencyReplayCalibrationStatus.isRunning, constructionDependencyReplayCalibrationStatus.isScheduled),
+      description:
+        'Runs report-only L3/L4 dependency replay calibration queues from real project task dependencies; seeds and task dependencies are never written by this job.',
+    },
+    {
+      name: 'durationLiveLearningProductionClaimAuditJob',
+      displayName: 'Duration live learning production claim audit job',
+      isRunning: durationLiveLearningProductionClaimAuditStatus.isRunning,
+      isScheduled: durationLiveLearningProductionClaimAuditStatus.isScheduled,
+      schedule: '45 6 * * *',
+      lastRun: durationLiveLearningProductionClaimAuditStatus.lastRun,
+      nextRun: durationLiveLearningProductionClaimAuditStatus.nextRun,
+      status: buildStatus(
+        durationLiveLearningProductionClaimAuditStatus.isRunning,
+        durationLiveLearningProductionClaimAuditStatus.isScheduled,
+      ),
+      description:
+        'Runs the canonical DB production claim audit for v1.4.22.5 duration live learning; it is audit-only and never publishes runtime artifacts or rewrites facts.',
     },
     {
       name: 'weeklyDigestJob',
@@ -386,6 +431,24 @@ async function executeJob(jobName: string) {
         jobId: createJobId(),
         attempts: 1,
         result: await dataRetentionJob.executeNow(),
+      }
+    case 'standardWorkDurationSeedReplayJob':
+      return {
+        jobId: createJobId(),
+        attempts: 1,
+        result: await standardWorkDurationSeedReplayJob.executeNow(),
+      }
+    case 'constructionDependencyReplayCalibrationJob':
+      return {
+        jobId: createJobId(),
+        attempts: 1,
+        result: await constructionDependencyReplayCalibrationJob.executeNow(),
+      }
+    case 'durationLiveLearningProductionClaimAuditJob':
+      return {
+        jobId: createJobId(),
+        attempts: 1,
+        result: await durationLiveLearningProductionClaimAuditJob.executeNow(),
       }
     case 'weeklyDigestJob':
       return executeWeeklyDigestJob()
