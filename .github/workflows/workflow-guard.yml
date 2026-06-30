@@ -5,6 +5,7 @@ on:
     branches: [main, master]
     paths:
       - '.github/workflows/deploy.yml'
+      - '.github/workflows/production-closeout-readiness.yml'
       - '.github/workflows/workflow-guard.yml'
       - 'server/src/__tests__/deployWorkflowContract.test.ts'
       - 'package.json'
@@ -15,6 +16,7 @@ on:
   pull_request:
     paths:
       - '.github/workflows/deploy.yml'
+      - '.github/workflows/production-closeout-readiness.yml'
       - '.github/workflows/workflow-guard.yml'
       - 'server/src/__tests__/deployWorkflowContract.test.ts'
       - 'package.json'
