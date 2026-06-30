@@ -82,3 +82,75 @@ test('production readiness can select only candidate-backed gates and leave C15 
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('production readiness can consume server-side sanitized signals without copying production env to the runner', async () => {
+  const root = await mkdtemp(path.join(repoRoot, 'project-testing', 'tmp-production-readiness-server-signals-'));
+  const outputRoot = path.join(root, 'reports');
+  const serverSignalsFile = path.join(root, 'server-handoff-signals.json');
+
+  try {
+    await writeFile(serverSignalsFile, JSON.stringify({
+      schemaVersion: 'workbuddy-release-handoff-signals/v1',
+      envPresence: {
+        SUPABASE_URL: true,
+        SUPABASE_ANON_KEY: true,
+        SUPABASE_SERVICE_KEY: true,
+        SUPABASE_MIGRATION_URL: true,
+        DB_CONNECTION_STRING: true,
+        JWT_SECRET: true,
+      },
+      connectivity: {
+        db: {
+          ok: true,
+          databaseTargetRef: 'env://deploy/env/server.production.env#SUPABASE_MIGRATION_URL',
+          discoverySource: 'server-side-sanitized-signals',
+        },
+      },
+      discoveredTargets: {
+        companyId: 'company-prod-1',
+        projectId: 'project-prod-1',
+        planId: 'plan-prod-1',
+        candidateId: '',
+        sampleCohortRef: 'db-sample://project/project-prod-1/duration-context-policy-canary-candidates',
+      },
+      boundary: {
+        noSecretValuesWritten: true,
+        liveMutation: false,
+        dbMutation: false,
+      },
+    }, null, 2), 'utf8');
+
+    const result = await prepareProductionCloseoutReadiness({
+      envFile: 'deploy/env/server.production.env',
+      serverSignalsFile,
+      outputRoot,
+      baseUrl: 'https://project-management-dashboard-hazel-nine.vercel.app',
+      companyId: 'company-prod-1',
+      projectId: 'project-prod-1',
+      planId: 'plan-prod-1',
+      candidateId: '',
+      sampleCohortRef: 'db-sample://project/project-prod-1/duration-context-policy-canary-candidates',
+      approvalRef: 'github-actions://run/test',
+      monitoringWindow: '2026-07-01T00:00:00Z/PT30M',
+      gateIds: [
+        'c18-l07-l15-live-diagnostics',
+        'c19-runtime-publication-release-rollback',
+        'old-object-physical-drop-closeout',
+      ],
+    });
+
+    assert.equal(result.readiness.status, 'pass');
+    assert.equal(result.readiness.refIssueCount, 0);
+
+    const handoff = JSON.parse(await readFile(result.handoffPath, 'utf8'));
+    assert.equal(handoff.boundary.serverSideDiscovery, true);
+    assert.equal(handoff.boundary.envFileUploaded, false);
+    assert.equal(handoff.envPresence.source, 'server-side-sanitized-signals');
+
+    const envInventory = JSON.parse(await readFile(path.join(outputRoot, 'env-key-readiness.json'), 'utf8'));
+    assert.deepEqual(envInventory.missingRequiredKeys, []);
+    assert.equal(envInventory.boundary.valuesIncluded, false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

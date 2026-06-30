@@ -125,6 +125,7 @@ describe('deploy workflow contract', () => {
     const workflowGuard = readFileSync(resolve(workspaceRoot, '.github', 'workflows', 'workflow-guard.yml'), 'utf8')
 
     expect(workflow).toContain('Collect server-side discovery signals')
+    expect(workflow).not.toContain('Fetch production env from self-hosted server')
     expect(workflow).toContain('project-management-api')
     expect(workflow).toContain("docker_cmd='sudo -n docker'")
     expect(workflow).toContain('$docker_cmd exec project-management-api')
@@ -133,6 +134,9 @@ describe('deploy workflow contract', () => {
     expect(workflow).toContain("node -- '$remote_collector_container' --env-source process --env-file deploy/env/server.production.env")
     expect(workflow).toContain('--env-source process')
     expect(workflow).toContain('--server-signals-file "$OUTPUT_ROOT/server-handoff-signals.json"')
+    expect(workflow).toContain('node project-testing/tools/prepare-production-closeout-readiness.mjs "${args[@]}"')
+    expect(workflow).not.toContain('node project-testing/tools/collect-release-handoff-signals.mjs \\')
+    expect(workflow).not.toContain('"$DEPLOY_USER@$DEPLOY_HOST:$remote_env" deploy/env/server.production.env')
     expect(workflow).toContain('const discoveredTargets = {')
     expect(workflow).toContain('COMPANY_ID: discovered.companyId')
     expect(workflow).toContain('PROJECT_ID: discovered.projectId')

@@ -40,6 +40,7 @@ export function parseArgs(argv = process.argv.slice(2)) {
     approvalRef: '',
     operator: 'production-closeout-operator',
     gateIds: [],
+    serverSignalsFile: '',
     help: false,
   };
 
@@ -84,6 +85,8 @@ export function parseArgs(argv = process.argv.slice(2)) {
       options.operator = nextValue();
     } else if (arg === '--gate') {
       options.gateIds.push(nextValue());
+    } else if (arg === '--server-signals-file') {
+      options.serverSignalsFile = nextValue();
     } else if (arg === '--help' || arg === '-h') {
       options.help = true;
     } else {
@@ -101,6 +104,7 @@ export function parseArgs(argv = process.argv.slice(2)) {
 export async function prepareProductionCloseoutReadiness(options = {}) {
   const outputRoot = path.resolve(REPO_ROOT, options.outputRoot);
   const envFile = normalizeRepoPath(options.envFile);
+  const serverSignals = options.serverSignalsFile ? await readServerSignals(options.serverSignalsFile) : null;
   const artifactRoot = normalizeRepoPath(path.join(options.outputRoot, 'artifacts'));
   const operator = options.operator || 'production-closeout-operator';
   const approvalRef = options.approvalRef || `github-actions://${process.env.GITHUB_RUN_ID || 'manual-run'}`;
@@ -121,6 +125,7 @@ export async function prepareProductionCloseoutReadiness(options = {}) {
     boundary: {
       secretsEmbedded: false,
       envFileUploaded: false,
+      serverSideDiscovery: Boolean(serverSignals),
       readinessOnly: true,
       liveOrDbCommandsExecuted: 0,
     },
@@ -135,6 +140,7 @@ export async function prepareProductionCloseoutReadiness(options = {}) {
       notSelectedGateIds,
       note: 'Readiness is evaluated only for selected gates. Not-selected gates are not marked ready and still require a separate handoff/readiness run before live or DB execution.',
     },
+    envPresence: null,
     gates: {
       'c18-l07-l15-live-diagnostics': {
         live: {
@@ -230,7 +236,8 @@ export async function prepareProductionCloseoutReadiness(options = {}) {
   const readinessPath = path.join(outputRoot, 'handoff-readiness.json');
   const statusPath = path.join(outputRoot, 'closeout-status-index.json');
   const selectionPath = path.join(outputRoot, 'production-gate-selection.generated.json');
-  const envInventory = await buildEnvInventory(path.resolve(REPO_ROOT, envFile));
+  const envInventory = await buildEnvInventory(path.resolve(REPO_ROOT, envFile), { serverSignals });
+  handoff.envPresence = buildHandoffEnvPresence(envInventory);
   await writeFile(handoffPath, `${JSON.stringify(handoff, null, 2)}\n`, 'utf8');
   await writeFile(selectionPath, `${JSON.stringify(handoff.gateSelection, null, 2)}\n`, 'utf8');
   await writeFile(path.join(outputRoot, 'env-key-readiness.json'), `${JSON.stringify(envInventory, null, 2)}\n`, 'utf8');
@@ -269,6 +276,7 @@ export async function prepareProductionCloseoutReadiness(options = {}) {
     selectedGateIds,
     notSelectedGateIds,
     gateSelectionFile: normalizeRepoPath(selectionPath),
+    serverSignalsFile: serverSignals ? normalizeRepoPath(options.serverSignalsFile) : '',
     boundary: handoff.boundary,
   }, null, 2)}\n`, 'utf8');
 
@@ -299,9 +307,12 @@ function normalizeGateIds(gateIds = []) {
   return selected;
 }
 
-async function buildEnvInventory(envFilePath) {
-  const raw = await readFile(envFilePath, 'utf8');
-  const env = parseEnvFile(raw);
+async function readServerSignals(serverSignalsFile) {
+  const raw = await readFile(path.resolve(REPO_ROOT, serverSignalsFile), 'utf8');
+  return JSON.parse(raw);
+}
+
+async function buildEnvInventory(envFilePath, { serverSignals = null } = {}) {
   const requiredKeys = [
     'SUPABASE_URL',
     'SUPABASE_ANON_KEY',
@@ -317,17 +328,22 @@ async function buildEnvInventory(envFilePath) {
     'VITE_SUPABASE_URL',
     'VITE_SUPABASE_ANON_KEY',
   ];
+  const source = serverSignals ? 'server-side-sanitized-signals' : 'repo-env-file';
+  const env = serverSignals ? null : parseEnvFile(await readFile(envFilePath, 'utf8'));
   const keyStatus = Object.fromEntries([...requiredKeys, ...recommendedKeys].map((key) => [
     key,
-    {
-      present: Object.prototype.hasOwnProperty.call(env, key),
-      nonEmpty: String(env[key] ?? '').trim().length > 0,
-    },
+    serverSignals
+      ? normalizeServerEnvPresence(serverSignals.envPresence?.[key])
+      : {
+          present: Object.prototype.hasOwnProperty.call(env, key),
+          nonEmpty: String(env[key] ?? '').trim().length > 0,
+        },
   ]));
 
   return {
     schemaVersion: 'workbuddy-production-env-key-readiness/v1',
     generatedAt: new Date().toISOString(),
+    source,
     envFile: normalizeRepoPath(envFilePath),
     requiredKeys,
     recommendedKeys,
@@ -337,7 +353,30 @@ async function buildEnvInventory(envFilePath) {
     boundary: {
       valuesIncluded: false,
       valuesPrinted: false,
+      serverSideDiscovery: Boolean(serverSignals),
     },
+  };
+}
+
+function normalizeServerEnvPresence(value) {
+  if (typeof value === 'boolean') {
+    return { present: value, nonEmpty: value };
+  }
+  if (!value || typeof value !== 'object') {
+    return { present: false, nonEmpty: false };
+  }
+  return {
+    present: value.present === true || value.nonEmpty === true,
+    nonEmpty: value.nonEmpty === true || value.present === true,
+  };
+}
+
+function buildHandoffEnvPresence(inventory) {
+  return {
+    source: inventory.source,
+    envFile: inventory.envFile,
+    keyStatus: inventory.keyStatus,
+    valuesIncluded: false,
   };
 }
 
@@ -385,7 +424,7 @@ function normalizeRepoPath(filePath) {
 function renderHelp() {
   return `
 Usage:
-  node project-testing/tools/prepare-production-closeout-readiness.mjs --output-root <report-dir> --base-url <url> --company-id <id> --project-id <id> --plan-id <id> --candidate-id <id> [--gate <gate-id>]
+  node project-testing/tools/prepare-production-closeout-readiness.mjs --output-root <report-dir> --base-url <url> --company-id <id> --project-id <id> --plan-id <id> --candidate-id <id> [--gate <gate-id>] [--server-signals-file <signals.json>]
 
 This tool creates a handoff declaration with env:// refs, runs the read-only readiness checker,
 and writes sanitized reports. It does not run live diagnostics or DB mutations.

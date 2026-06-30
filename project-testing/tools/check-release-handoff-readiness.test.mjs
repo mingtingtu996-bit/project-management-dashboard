@@ -177,6 +177,44 @@ test('readiness check supports scoped gate selection and argument parsing', asyn
   }
 });
 
+test('readiness check accepts server-side sanitized env presence without a runner-local production env file', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'workbuddy-handoff-server-env-'));
+  const handoffFile = path.join(root, 'handoff.json');
+  const handoff = completeHandoff();
+  handoff.boundary = {
+    serverSideDiscovery: true,
+    envFileUploaded: false,
+  };
+  handoff.envPresence = {
+    source: 'server-side-sanitized-signals',
+    envFile: 'deploy/env/server.production.env',
+    keyStatus: {
+      SUPABASE_SERVICE_KEY: { present: true, nonEmpty: true },
+      SUPABASE_MIGRATION_URL: { present: true, nonEmpty: true },
+    },
+  };
+  handoff.gates['c18-l07-l15-live-diagnostics'].live.authTokenRef = 'env://deploy/env/server.production.env#SUPABASE_SERVICE_KEY';
+  handoff.gates['old-object-physical-drop-closeout'].db.databaseTargetRef = 'env://deploy/env/server.production.env#SUPABASE_MIGRATION_URL';
+
+  try {
+    await writeJson(handoffFile, handoff);
+
+    const report = await checkReleaseHandoffReadiness({
+      handoffFile,
+      matrixPath,
+      gateIds: [
+        'c18-l07-l15-live-diagnostics',
+        'old-object-physical-drop-closeout',
+      ],
+    });
+
+    assert.equal(report.status, 'pass');
+    assert.equal(report.refIssueCount, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('old-object readiness accepts no-safe-candidate closeout refs without physical DROP refs', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'workbuddy-handoff-no-safe-'));
   const handoffFile = path.join(root, 'handoff.json');
