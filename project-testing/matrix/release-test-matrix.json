@@ -1,0 +1,699 @@
+{
+  "schemaVersion": "workbuddy-release-test-matrix/v1",
+  "generatedAt": "2026-06-29T01:45:00+08:00",
+  "scope": "Release dashboard inventory for local gates plus deferred live/db closeout gates. Local profiles are runnable when dependencies and target environments are available; real-environment gates still require explicit unlock and evidence discipline.",
+  "concurrencyPolicy": {
+    "activeLiveThread": false,
+    "doNotModify": [
+      "scripts/",
+      ".github/",
+      "package.json",
+      "client/runtime code",
+      "server/runtime code",
+      "migrations",
+      "live database state"
+    ],
+    "allowedNow": [
+      "project-testing/**"
+    ]
+  },
+  "statusLegend": {
+    "ready": "Can be run when normal local dependencies are installed and no live thread owns the target environment.",
+    "deferred_live": "Requires explicit live environment handoff before running.",
+    "blocked_db": "Requires database recovery or a safe test database.",
+    "inventory_only": "Recorded as a gate group; exact run policy should be resolved by the future orchestrator."
+  },
+  "gateGroups": [
+    {
+      "id": "static-build-typecheck",
+      "tier": "local_static",
+      "status": "ready",
+      "purpose": "Compile and type-safety checks without live service mutation.",
+      "commands": [
+        "npm run build --workspace=client",
+        "npm run build --workspace=server",
+        "npx tsc -p client/tsconfig.json --noEmit",
+        "npx tsc -p server/tsconfig.json --noEmit"
+      ],
+      "mutationBoundary": "no production writes"
+    },
+    {
+      "id": "unit-and-contract",
+      "tier": "local_static",
+      "status": "ready",
+      "purpose": "Vitest unit, route, contract, and governance tests.",
+      "commands": [
+        "npx vitest run --config client/vitest.config.ts",
+        "npx vitest run --config server/vitest.config.ts",
+        "npm run acceptance:v1"
+      ],
+      "mutationBoundary": "test harness only"
+    },
+    {
+      "id": "backend-governance-guards",
+      "tier": "local_static",
+      "status": "ready",
+      "purpose": "Architecture, route, metric, status, RLS, and production-claim guards.",
+      "commands": [
+        "npm run guard:execute-sql --workspace=server",
+        "npm run guard:route-aggregation --workspace=server",
+        "npm run guard:summary-service-aggregation --workspace=server",
+        "npm run guard:route-auth --workspace=server",
+        "npm run guard:route-ownership --workspace=server",
+        "npm run guard:metric-ssot --workspace=server",
+        "npm run guard:production-ready-claims --workspace=server",
+        "npm run verify:workflow-contract"
+      ],
+      "mutationBoundary": "guard scripts only"
+    },
+    {
+      "id": "browser-suite-shell-and-collab",
+      "tier": "local_browser",
+      "status": "ready",
+      "purpose": "Local browser smoke for dashboard shell, collaboration, notifications, task summary, team and join flows.",
+      "commands": [
+        "npm run verify:browser-suite:shell-and-collab"
+      ],
+      "expandsTo": [
+        "verify:company-cockpit",
+        "verify:responsibility",
+        "verify:dashboard",
+        "verify:notifications",
+        "verify:task-summary",
+        "verify:team-members",
+        "verify:join-project"
+      ],
+      "artifactRoot": "project-testing/artifacts/browser-checks",
+      "mutationBoundary": "local browser/test API behavior only"
+    },
+    {
+      "id": "browser-suite-project-chains",
+      "tier": "local_browser",
+      "status": "ready",
+      "purpose": "Local browser smoke for core project chains and reporting/risk pages.",
+      "commands": [
+        "npm run verify:browser-suite:project-chains"
+      ],
+      "expandsTo": [
+        "verify:gantt",
+        "verify:gantt-change-log",
+        "verify:drawings",
+        "verify:acceptance",
+        "verify:reports",
+        "verify:risk-management",
+        "verify:risk-guard",
+        "verify:pre-milestones",
+        "verify:milestones"
+      ],
+      "artifactRoot": "project-testing/artifacts/browser-checks",
+      "mutationBoundary": "local browser/test API behavior only"
+    },
+    {
+      "id": "browser-suite-planning-and-tooling",
+      "tier": "local_browser",
+      "status": "ready",
+      "purpose": "Local browser smoke for planning, templates, scope modeling, and monitoring surfaces.",
+      "commands": [
+        "npm run verify:browser-suite:planning-and-tooling"
+      ],
+      "expandsTo": [
+        "verify:planning-monthly",
+        "verify:planning-baseline",
+        "verify:planning-closeout",
+        "verify:planning-revision",
+        "verify:planning-deviation",
+        "verify:planning-confirm-failure",
+        "verify:planning-fine-flows",
+        "verify:wbs-templates",
+        "verify:scope-modeling",
+        "verify:monitoring"
+      ],
+      "artifactRoot": "project-testing/artifacts/browser-checks",
+      "mutationBoundary": "local browser/test API behavior only"
+    },
+    {
+      "id": "uiux-predeploy",
+      "tier": "local_browser",
+      "status": "ready",
+      "purpose": "UI/UX visual, overlap, accessibility, performance, and release smoke gates.",
+      "commands": [
+        "npm run verify:uiux-visual",
+        "npm run verify:uiux-overlap",
+        "npm run verify:uiux-a11y",
+        "npm run verify:uiux-performance",
+        "npm run verify:uiux-release-smoke",
+        "npm run verify:uiux-predeploy-gates"
+      ],
+      "mutationBoundary": "built client and browser verification only"
+    },
+    {
+      "id": "bundle-and-performance-evidence",
+      "tier": "local_static",
+      "status": "ready",
+      "purpose": "Bundle budget and performance-evidence summaries.",
+      "commands": [
+        "npm run verify:client-bundle-budget",
+        "npm run verify:performance-evidence:unit"
+      ],
+      "onlineCommands": [
+        "npm run verify:performance-evidence -- --url <performance-summary-url>"
+      ],
+      "blockingPrerequisites": [
+        "PERFORMANCE_EVIDENCE_SUMMARY_URL or --url is required before running the online performance summary check."
+      ],
+      "mutationBoundary": "artifact inspection only"
+    },
+    {
+      "id": "v14231-closeout-local",
+      "tier": "local_static",
+      "status": "ready",
+      "purpose": "Non-live v1.4.23.1 closeout contracts and client contracts.",
+      "commands": [
+        "npm run verify:v14231-non-live-closeout",
+        "npm run verify:v14231-client-contracts",
+        "npm run verify:v14231-closeout"
+      ],
+      "mutationBoundary": "non-live closeout contract verification"
+    },
+    {
+      "id": "testing-tool-readiness",
+      "tier": "tooling_readiness",
+      "status": "ready",
+      "purpose": "Phase 4 read-only testing tool inventory and boundary check for CloakBrowser, Yingdao RPA, Playwright MCP, and future specialized test tools.",
+      "commands": [
+        "node project-testing/tools/check-testing-tools.mjs --output project-testing/reports/tool-readiness-summary.json"
+      ],
+      "artifactRoot": "project-testing/reports",
+      "mutationBoundary": "read-only local file/env/package inspection; no app, live, DB, or browser execution"
+    },
+    {
+      "id": "live-evidence-and-workspace-isolation",
+      "tier": "live_only",
+      "status": "deferred_live",
+      "purpose": "Live evidence inventory, workspace isolation, C18 evidence contracts, live diagnostics.",
+      "commands": [
+        "npm run verify:workspace-isolation:live",
+        "npm run verify:v14231-closeout-with-c18-live-evidence-contracts",
+        "npm run verify:c18-live-evidence-contracts --workspace=server",
+        "npm run verify:v14231-live-evidence-inventory --workspace=server"
+      ],
+      "mutationBoundary": "requires live environment ownership handoff and explicit live unlock before execution"
+    },
+    {
+      "id": "c18-l07-l15-live-diagnostics",
+      "tier": "live_only",
+      "status": "deferred_live",
+      "purpose": "C-18.L07/L08/L09/L10/L11/L12/L14/L15 real concurrency, pressure, query-log, malicious-file, and replay evidence.",
+      "closeoutTargets": [
+        "C-18.L07",
+        "C-18.L08",
+        "C-18.L09",
+        "C-18.L10",
+        "C-18.L11",
+        "C-18.L12",
+        "C-18.L14",
+        "C-18.L15"
+      ],
+      "unlockPolicy": {
+        "profile": "live",
+        "requiredFlags": [
+          "--include-live",
+          "--confirm-live-handoff"
+        ],
+        "liveHandoffRequired": true,
+        "dbReadyRequired": false,
+        "writeApprovalRequired": true,
+        "operationMode": "live_disposable_write",
+        "hardPassFromBrowserOnlyAllowed": false,
+        "hardPassFromMcpOnlyAllowed": false
+      },
+      "artifactValidationPolicy": {
+        "requiredMetadata": [
+          "environment",
+          "diagnosticRunId",
+          "command",
+          "exitCode",
+          "artifactPath",
+          "targetIds",
+          "startedAt",
+          "finishedAt",
+          "cleanupReadback"
+        ],
+        "rejectIf": [
+          "dry-run-only",
+          "local-only",
+          "synthetic-only",
+          "manual-assisted-only",
+          "missing-db-query-log-or-lock-telemetry-for-db-backed-diagnostics"
+        ],
+        "requiredArtifactPatterns": [
+          "c18-l07-*.json",
+          "c18-l08-*.json",
+          "c18-l09-*.json",
+          "c18-l10-*.json",
+          "c18-l11-*.json",
+          "c18-l12-*.json",
+          "c18-l14-*.json",
+          "c18-l15-*.json"
+        ]
+      },
+      "commands": [
+        "npm run verify:c18-live-evidence-contracts --workspace=server",
+        "npm run verify:v14231-live-evidence-inventory --workspace=server"
+      ],
+      "commandTemplates": [
+        "npm run diagnose:critical-path-concurrency-live --workspace=server -- --allow-write --base-url=<server-url> --auth-token=<jwt> --project-id=<project-id> --lock-telemetry-file=<json> --output-file=<json>",
+        "npm run diagnose:acceptance-status-concurrency-live --workspace=server -- --allow-write --base-url=<server-url> --auth-token=<jwt> --plan-id=<plan-id> --output-file=<json>",
+        "npm run diagnose:wizard-commit-live --workspace=server -- --allow-write --base-url=<server-url> --auth-token=<jwt> --create-disposable-draft --payload-file=<json> --create-failure-injection-evidence --output-file=<json>",
+        "npm run profile:wbs-generation --workspace=server -- --require-live-evidence --route-evidence-file=<json> --output-file=<json>",
+        "npm run diagnose:warning-sync-live --workspace=server -- --allow-write --project-id=<project-id> --db-query-log-file=<json> --output-file=<json>",
+        "npm run profile:critical-path-network --workspace=server -- --require-live-evidence --db-evidence-file=<json> --output-file=<json>",
+        "npm run profile:company-summary --workspace=server -- --require-live-evidence --route-evidence-file=<json> --output-file=<json>",
+        "npm run diagnose:spreadsheet-migration-live --workspace=server -- --allow-write --base-url=<server-url> --auth-token=<jwt> --project-id=<project-id> --workbook-file=<xlsx-or-csv> --import-pressure-evidence-file=<json> --migration-replay-evidence-file=<json> --output-file=<json>"
+      ],
+      "requiredEvidence": [
+        "CloakBrowser or scripted browser/API route evidence may support route health only.",
+        "DB query log, lock telemetry, catalog/readback, scale metrics, cleanup, and archived JSON are required for closeout.",
+        "Yingdao RPA evidence is manual-assisted only and cannot replace automated pass/fail assertions."
+      ],
+      "handoffChecklist": [
+        "Live environment ownership is explicitly handed off and no other thread is running live diagnostics.",
+        "Base URL, auth token, company/project/plan identifiers, and disposable test-data boundaries are recorded.",
+        "Write approval covers only disposable live evidence paths and includes cleanup owner and retention location.",
+        "Artifact root under project-testing/reports/release-*/ is reserved before commands run."
+      ],
+      "blockingPrerequisites": [
+        "Missing --include-live or --confirm-live-handoff flags.",
+        "Missing live auth token, target IDs, writable disposable data scope, or cleanup owner.",
+        "No place to archive DB query log, lock telemetry, pressure metrics, PoC output, and cleanup readback.",
+        "Attempt to count CloakBrowser, Yingdao, or MCP-only observation as hard pass evidence."
+      ],
+      "passCriteria": [
+        "C-18.L07/L08/L09/L10/L11/L12/L14/L15 each has command, exit code 0, artifact path, timestamp, target IDs, and cleanup/readback evidence.",
+        "Concurrency and pressure runs include DB/lock/query telemetry, threshold summary, no data corruption, and no orphan test records outside the disposable scope.",
+        "PoC and failure-injection items show the expected guarded failure or recovery path, not just successful route rendering.",
+        "Browser or RPA evidence is marked supporting/manual-assisted unless converted into scripted assertions."
+      ],
+      "expectedArtifacts": [
+        "c18-l07-critical-path-concurrency-live.json",
+        "c18-l08-acceptance-status-concurrency-live.json",
+        "c18-l09-wizard-commit-live.json",
+        "c18-l10-wbs-generation-pressure.json",
+        "c18-l11-warning-sync-query-log.json",
+        "c18-l12-critical-path-network-pressure.json",
+        "c18-l14-company-summary-pressure.json",
+        "c18-l15-spreadsheet-migration-replay.json",
+        "c18-live-evidence-summary.json"
+      ],
+      "evidenceOwners": [
+        "live-environment-owner",
+        "backend-diagnostics-owner",
+        "database-evidence-owner",
+        "browser-evidence-owner",
+        "cleanup-owner"
+      ],
+      "mutationBoundary": "requires live environment ownership handoff, disposable project/test data, auth token, and explicit write approval"
+    },
+    {
+      "id": "c15-live-learning-closeout",
+      "tier": "live_only",
+      "status": "deferred_live",
+      "purpose": "C-15 learning loop live closeout: real samples, strict reward/MAE improvement, pending prediction closure, tenant isolation, canary/stable/rollback evidence.",
+      "closeoutTargets": [
+        "C-15.real-sample-cohort",
+        "C-15.reward-mae-readback",
+        "C-15.pending-prediction-closure",
+        "C-15.tenant-isolation",
+        "C-15.canary-stable-rollback"
+      ],
+      "unlockPolicy": {
+        "profile": "live",
+        "requiredFlags": [
+          "--include-live",
+          "--confirm-live-handoff"
+        ],
+        "liveHandoffRequired": true,
+        "dbReadyRequired": false,
+        "writeApprovalRequired": true,
+        "manualApprovalRequired": true,
+        "operationMode": "live_canary_or_stable_policy_write"
+      },
+      "artifactValidationPolicy": {
+        "requiredMetadata": [
+          "environment",
+          "companyId",
+          "projectId",
+          "candidateId",
+          "sampleCohortRef",
+          "metricWindow",
+          "approvalRef",
+          "rollbackRef",
+          "tenantIsolationReadback"
+        ],
+        "rejectIf": [
+          "dry-run-only",
+          "local-scheduler-only",
+          "missing-real-sample-cohort",
+          "missing-tenant-isolation-readback",
+          "manual-assisted-only"
+        ],
+        "requiredArtifactPatterns": [
+          "c15-sample-*.json",
+          "c15-reward-mae-*.json",
+          "c15-pending-*.json",
+          "c15-policy-version-*.json",
+          "c15-canary-*.json",
+          "c15-rollback-*.json"
+        ]
+      },
+      "commands": [
+        "npm run diagnose:duration-canary-approval-live --workspace=server -- --allow-write --create-disposable-candidate --output-file=<artifact-root-from-server>/c15-canary-approval-monitoring.json"
+      ],
+      "commandTemplates": [
+        "npm run diagnose:duration-canary-approval-live --workspace=server -- --allow-write --company-id=<company-id> --project-id=<project-id> --candidate-id=<candidate-id> --output-file=<json>",
+        "node project-testing/tools/check-c15-writer-result.mjs --handoff-file <handoff.json> --writer-result-file <c15-writer-result.json> --metric-window <metric-window> --output <c15-writer-result-check.json>",
+        "node project-testing/tools/run-c15-live-learning-evidence.mjs --handoff-file <handoff.json> --artifact-root <artifact-root> --include-live --confirm-live-handoff --allow-write --metric-window <metric-window> --writer-result-file <c15-writer-result.json>",
+        "npm run summarize:v14231-live-evidence --workspace=server -- --input-root=<artifact-root> --output-file=<json>"
+      ],
+      "requiredEvidence": [
+        "Production-like sample cohort and reward/MAE readback with maeAfter strictly lower than maeBefore and evaluatedDecisionCount > 0.",
+        "Pending prediction closure and policy version uniqueness evidence.",
+        "Canary approval, monitoring, rollback/supersede, and tenant isolation readback."
+      ],
+      "handoffChecklist": [
+        "Live environment ownership is handed off with company/project/candidate identifiers recorded.",
+        "Real sample cohort source, tenant boundary, and privacy-safe artifact path are confirmed.",
+        "Manual canary/stable approval authority and rollback owner are named before mutation.",
+        "Monitoring window and observation owner are recorded before canary approval runs."
+      ],
+      "blockingPrerequisites": [
+        "Missing live handoff flags or approval reference.",
+        "No production-like cohort, reward/MAE improvement readback path, or pending prediction inventory.",
+        "Policy version uniqueness, tenant isolation, canary monitoring, or rollback owner cannot be proven.",
+        "Only local scheduler wiring or dry-run output is available."
+      ],
+      "passCriteria": [
+        "Real sample cohort, reward/MAE quality with maeAfter < maeBefore and evaluatedDecisionCount > 0, pending prediction closure, and policy version uniqueness are archived with command output.",
+        "Tenant isolation readback proves the sample and policy evidence does not cross tenant/company boundaries.",
+        "Canary approval, monitoring observation, rollback or supersede path, and stable production observation all have artifact paths.",
+        "Summary explicitly marks any Yingdao evidence as manual-assisted and does not use it as the only pass signal."
+      ],
+      "expectedArtifacts": [
+        "c15-sample-cohort-readback.json",
+        "c15-reward-mae-quality-readback.json",
+        "c15-pending-prediction-closure.json",
+        "c15-policy-version-tenant-isolation.json",
+        "c15-canary-approval-monitoring.json",
+        "c15-rollback-or-supersede.json",
+        "c15-live-evidence-summary.json"
+      ],
+      "evidenceOwners": [
+        "live-environment-owner",
+        "learning-loop-owner",
+        "database-evidence-owner",
+        "approval-owner",
+        "monitoring-and-rollback-owner"
+      ],
+      "mutationBoundary": "requires live environment ownership handoff and explicit approval before any canary/stable mutation"
+    },
+    {
+      "id": "c19-runtime-publication-release-rollback",
+      "tier": "live_only",
+      "status": "deferred_live",
+      "purpose": "C-19 runtime publication closeout for T2 rhythm and construction organization: replay, release package, manual approval, apply, impact monitoring, monitoring, rollback.",
+      "closeoutTargets": [
+        "C-19.replay-samples",
+        "C-19.phase1-l5-release-closure",
+        "C-19.manual-approval",
+        "C-19.runtime-publication-apply",
+        "C-19.impact-monitoring",
+        "C-19.monitoring-rollback",
+        "C-19.construction-organization-e1-e3-e5"
+      ],
+      "unlockPolicy": {
+        "profile": "live",
+        "requiredFlags": [
+          "--include-live",
+          "--confirm-live-handoff"
+        ],
+        "liveHandoffRequired": true,
+        "dbReadyRequired": false,
+        "writeApprovalRequired": true,
+        "manualApprovalRequired": true,
+        "monitoringOwnerRequired": true,
+        "rollbackOwnerRequired": true,
+        "operationMode": "runtime_publication_apply_with_rollback"
+      },
+      "artifactValidationPolicy": {
+        "requiredMetadata": [
+          "environment",
+          "projectId",
+          "releasePackageId",
+          "phase1L5Ref",
+          "approvalRef",
+          "runtimePublicationId",
+          "monitoringWindow",
+          "rollbackRef",
+          "consumerObservationRef"
+        ],
+        "rejectIf": [
+          "dry-run-only",
+          "generated-package-only",
+          "missing-manual-approval",
+          "missing-runtime-apply",
+          "missing-impact-monitoring",
+          "missing-rollback-or-saved-outcome"
+        ],
+        "requiredArtifactPatterns": [
+          "c19-t2-rhythm-live-replay.json",
+          "c19-release-closure-*.json",
+          "c19-runtime-publication-*.json",
+          "c19-impact-monitoring-*.json",
+          "c19-runtime-rollback-*.json",
+          "c19-construction-organization-*.json"
+        ]
+      },
+      "commands": [
+        "npm run diagnose:t2-rhythm-live-replay --workspace=server -- --allow-live --project-id=<project-id> --environment=staging --evidence-ref=release-dashboard-live-profile --output-file=<artifact-root-from-server>/c19-t2-rhythm-live-replay.json",
+        "npm run generate:t2-rhythm-release-closure --workspace=server -- --live-replay-evidence-file=<artifact-root-from-server>/c19-t2-rhythm-live-replay.json --phase1-selection-gate-file=<artifact-root-from-server>/phase1-evaluation.json --l5-release-gate-file=<artifact-root-from-server>/l5-release-gate.json --output-file=<artifact-root-from-server>/c19-release-closure-artifact.json",
+        "npm run verify:t2-rhythm-release-closure --workspace=server -- --artifact-file=<artifact-root-from-server>/c19-release-closure-artifact.json --output-file=<artifact-root-from-server>/c19-release-closure-verification.json",
+        "npm run preflight:t2-rhythm-release-review --workspace=server -- --artifact-file=<artifact-root-from-server>/c19-release-closure-artifact.json --verification-file=<artifact-root-from-server>/c19-release-closure-verification.json --output-file=<artifact-root-from-server>/c19-manual-approval-preflight.json",
+        "npm run package:t2-rhythm-release-review --workspace=server -- --artifact-file=<artifact-root-from-server>/c19-release-closure-artifact.json --verification-file=<artifact-root-from-server>/c19-release-closure-verification.json --live-replay-evidence-file=<artifact-root-from-server>/c19-t2-rhythm-live-replay.json --phase1-selection-gate-file=<artifact-root-from-server>/phase1-evaluation.json --l5-release-gate-file=<artifact-root-from-server>/l5-release-gate.json --output-dir=<artifact-root>/c19-release-review-package",
+        "npm run diagnose:construction-organization-closeout-live --workspace=server -- --company-id=<company-id> --project-id=<project-id> --output-file=<artifact-root-from-server>/c19-construction-organization-e1-e3-e5.json"
+      ],
+      "commandTemplates": [
+        "npm run diagnose:t2-rhythm-live-replay --workspace=server -- --project-id=<project-id> --output-file=<json>",
+        "npm run generate:t2-rhythm-release-closure --workspace=server -- --live-replay-evidence-file=<c19-t2-rhythm-live-replay.json> --phase1-selection-gate-file=<phase1-selection-gate.json> --l5-release-gate-file=<l5-release-gate.json> --output-file=<c19-release-closure-artifact.json>",
+        "npm run verify:t2-rhythm-release-closure --workspace=server -- --artifact-file=<c19-release-closure-artifact.json> --output-file=<c19-release-closure-verification.json>",
+        "npm run preflight:t2-rhythm-release-review --workspace=server -- --artifact-file=<c19-release-closure-artifact.json> --verification-file=<c19-release-closure-verification.json> --output-file=<c19-manual-approval-preflight.json>",
+        "npm run package:t2-rhythm-release-review --workspace=server -- --artifact-file=<c19-release-closure-artifact.json> --verification-file=<c19-release-closure-verification.json> --live-replay-evidence-file=<c19-t2-rhythm-live-replay.json> --phase1-selection-gate-file=<phase1-selection-gate.json> --l5-release-gate-file=<l5-release-gate.json> --output-dir=<dir>",
+        "node project-testing/tools/check-c19-runtime-input.mjs --handoff-file <handoff.json> --runtime-input-file <runtime-input.json> --output <c19-runtime-input-check.json>",
+        "node project-testing/tools/run-c19-runtime-publication-evidence.mjs --handoff-file <handoff.json> --artifact-root <artifact-root> --include-live --confirm-live-handoff --allow-write --release-artifact-file <c19-release-closure-artifact.json> --release-verification-file <c19-release-closure-verification.json> --phase1-evaluation-file <phase1-evaluation.json> --runtime-input-file <runtime-input.json> --migration-governance-file <migration-governance.json>",
+        "npm run diagnose:construction-organization-closeout-live --workspace=server -- --company-id=<company-id> --project-id=<project-id> --output-file=<c19-construction-organization-e1-e3-e5.json>"
+      ],
+      "requiredEvidence": [
+        "Replay samples, phase-1/L5 handoff, release closure artifact, verification pass, and manual approval.",
+        "Runtime publication apply evidence, impact monitoring, consumer observation, monitoring, rollback, and saved outcome.",
+        "Construction organization E1/E3/E5 runtime evidence and release-exit evidence."
+      ],
+      "handoffChecklist": [
+        "Live environment ownership is handed off with target project/company and artifact root recorded.",
+        "Phase-1/L5 handoff, release closure artifact, verification command, and manual approval reference are available before apply.",
+        "Publication apply owner, consumer observation owner, monitoring owner, and rollback owner are named.",
+        "Rollback target and impact monitoring window are recorded before runtime publication apply."
+      ],
+      "blockingPrerequisites": [
+        "Missing live handoff flags, phase-1/L5 evidence, release closure artifact, verification pass, or manual approval reference.",
+        "No approved runtime publication apply window, impact-monitoring plan, or rollback owner.",
+        "No consumer observation path for published T2 rhythm or construction organization runtime output.",
+        "Generated package exists without apply, monitoring, rollback, and saved-outcome evidence."
+      ],
+      "passCriteria": [
+        "Replay samples, phase-1/L5 handoff, release closure artifact, verification pass, and approval reference are archived together.",
+        "Runtime publication apply produces apply evidence, consumer observation, impact monitoring, monitoring outcome, rollback evidence, and saved outcome.",
+        "Construction organization E1/E3/E5 runtime evidence and release-exit evidence are present and linked to the same release package.",
+        "Any manual-assisted UAT evidence is labeled supporting evidence and does not replace apply/monitoring/rollback artifacts."
+      ],
+      "expectedArtifacts": [
+        "c19-t2-rhythm-live-replay.json",
+        "c19-release-closure-artifact.json",
+        "c19-release-closure-verification.json",
+        "c19-manual-approval-preflight.json",
+        "c19-runtime-publication-apply.json",
+        "c19-impact-monitoring-observation.json",
+        "c19-runtime-rollback-saved-outcome.json",
+        "c19-construction-organization-e1-e3-e5.json",
+        "c19-live-evidence-summary.json"
+      ],
+      "evidenceOwners": [
+        "live-environment-owner",
+        "runtime-publication-owner",
+        "approval-owner",
+        "consumer-observation-owner",
+        "monitoring-owner",
+        "rollback-owner"
+      ],
+      "mutationBoundary": "requires live environment ownership handoff, manual approval, monitoring owner, and rollback owner before publication apply"
+    },
+    {
+      "id": "database-migration-and-recovery",
+      "tier": "db_dependent",
+      "status": "blocked_db",
+      "purpose": "Migration safety, pending migrations, schema drift, production governance, and DB recovery checks.",
+      "commands": [
+        "npm run migrate:check --workspace=server",
+        "npm run migrate:diagnose --workspace=server",
+        "npm run migrate:drift --workspace=server",
+        "npm run migrate:production-governance:evidence --workspace=server -- --output-file <artifact-root-from-server>/production-migration-governance-evidence.json --operator release-dashboard-db-profile",
+        "npm run migrate:production-governance --workspace=server -- --evidence-file <artifact-root-from-server>/production-migration-governance-evidence.json"
+      ],
+      "mutationBoundary": "database access required; may be read-only or migration-affecting depending on command"
+    },
+    {
+      "id": "old-object-physical-drop-closeout",
+      "tier": "db_dependent",
+      "status": "blocked_db",
+      "purpose": "Old-object cleanup closeout: either controlled physical deletion for approved candidates, or a DB-backed no-safe-candidate closeout when full catalog discovery finds nothing eligible to drop.",
+      "closeoutTargets": [
+        "old-object.live-rowcount-zero",
+        "old-object.catalog-dependency-readback",
+        "old-object.rollback-plan",
+        "old-object.controlled-drop-migration",
+        "old-object.post-drop-catalog-smoke",
+        "old-object.post-drop-api-browser-smoke"
+      ],
+      "unlockPolicy": {
+        "profile": "db",
+        "requiredFlags": [
+          "--include-db",
+          "--confirm-db-ready"
+        ],
+        "liveHandoffRequired": false,
+        "dbReadyRequired": true,
+        "writeApprovalRequired": true,
+        "manualApprovalRequired": true,
+        "rollbackOwnerRequired": true,
+        "operationMode": "controlled_physical_drop_after_approval_or_no_safe_candidate_noop"
+      },
+      "artifactValidationPolicy": {
+        "requiredMetadata": [
+          "databaseTarget",
+          "candidateObject",
+          "rowCount",
+          "catalogReadback",
+          "dependencyReadback",
+          "ddlExportPath",
+          "rollbackPath",
+          "approvalRef",
+          "migrationWindow",
+          "postDropSmokePath"
+        ],
+        "rejectIf": [
+          "row-count-nonzero",
+          "dependency-readback-missing",
+          "runtime-reference-present",
+          "ddl-export-missing",
+          "rollback-plan-missing",
+          "approval-missing",
+          "post-drop-smoke-missing",
+          "retired-object-audit-only"
+        ],
+        "requiredArtifactPatterns": [
+          "old-object-drop-candidates.json",
+          "old-object-rowcount-and-catalog-readback.json",
+          "old-object-dependency-readback.json",
+          "old-object-ddl-export.sql",
+          "old-object-rollback-*.sql",
+          "old-object-controlled-drop-*.sql",
+          "old-object-post-drop-*.json"
+        ]
+      },
+      "commands": [
+        "npm run audit:retired-object-references --workspace=server",
+        "node project-testing/tools/discover-old-object-drop-candidates.mjs --env-file deploy/env/staging.env --output <artifact-root>/old-object-candidate-discovery.all.json",
+        "node project-testing/tools/discover-old-object-drop-candidates.mjs --env-file deploy/env/staging.env --min-name-hint --output <artifact-root>/old-object-candidate-discovery.json",
+        "npm run guard:legacy-object-drop --workspace=server -- --ci-no-drop-candidates-ok --output-file <artifact-root-from-server>/legacy-object-drop-guard.initial.json",
+        "node project-testing/tools/write-old-object-no-safe-candidate-closeout.mjs --artifact-root <artifact-root>",
+        "node project-testing/tools/validate-release-evidence.mjs --gate old-object-physical-drop-closeout --evidence-root <artifact-root> --output <artifact-root>/old-object-physical-drop-closeout-evidence-validation.json"
+      ],
+      "commandTemplates": [
+        "node project-testing/tools/discover-old-object-drop-candidates.mjs --output <artifact-root>/old-object-candidate-discovery.all.json",
+        "node project-testing/tools/discover-old-object-drop-candidates.mjs --min-name-hint --output <artifact-root>/old-object-candidate-discovery.json",
+        "node project-testing/tools/write-old-object-no-safe-candidate-closeout.mjs --artifact-root <artifact-root>",
+        "npm run guard:legacy-object-drop --workspace=server -- --candidates-file=<drop-candidates.json> --require-archived-evidence --scan-migration-drops --output-file=<json>",
+        "node project-testing/tools/check-old-object-candidate-bundle.mjs --candidate-bundle <drop-candidates.json> --ddl-export-file <old-object-ddl-export.sql> --rollback-plan-file <old-object-rollback-plan.sql> --controlled-drop-file <old-object-controlled-drop-migration.sql> --output <old-object-candidate-bundle-check.json>",
+        "node project-testing/tools/run-old-object-physical-drop-evidence.mjs --handoff-file <handoff.json> --artifact-root <artifact-root> --include-db --confirm-db-ready --allow-drop --candidate-bundle <drop-candidates.json> --executor-result-file <old-object-drop-executor-result.json>",
+        "npm run migrate:production-governance --workspace=server -- --evidence-file=<production-migration-governance-evidence.json>"
+      ],
+      "requiredEvidence": [
+        "Object-level rowCount=0 is required but insufficient.",
+        "If full catalog discovery finds candidateCount=0, archive old-object-no-safe-candidate-closeout.json and do not execute DROP.",
+        "pg_catalog/pg_depend/view/function/trigger/FK/RLS/policy/job/seed/migration dependency readback.",
+        "DDL structure export, rollback plan, controlled drop migration, post-drop catalog readback, and post-drop API/browser smoke.",
+        "Manual approval and production migration window record."
+      ],
+      "handoffChecklist": [
+        "Database recovery or safe test database readiness is confirmed before db profile selection.",
+        "Drop candidate bundle includes object inventory, rowCount=0 readback, dependency scan, and migration-window owner.",
+        "DDL export, backup location, rollback script, and manual approval reference are recorded before any DROP migration.",
+        "Post-drop catalog/API/browser smoke owner and rollback decision window are recorded."
+      ],
+      "blockingPrerequisites": [
+        "Missing --include-db or --confirm-db-ready flags.",
+        "Candidate object has rows, unresolved pg_depend/catalog references, runtime references, or unknown ownership.",
+        "No DDL export, backup, rollback plan, manual approval, or migration window record.",
+        "Attempt to close from retired-object audit or rowCount=0 alone."
+      ],
+      "passCriteria": [
+        "Physical DROP path: every drop candidate has live rowCount=0 plus pg_catalog/pg_depend/view/function/trigger/FK/RLS/policy/job/seed/migration/import/readback evidence.",
+        "Physical DROP path: controlled drop migration, rollback script, approval reference, and migration window record are archived before execution.",
+        "Physical DROP path: post-drop catalog readback proves objects are absent and dependencies remain clean, and post-drop API/browser smoke proves runtime surfaces still work.",
+        "No-safe-candidate path: full catalog discovery status=no_safe_candidate, candidateCount=0, candidates=[], inspectedCount>0, no DB mutation, and supporting drop guard evidence are archived; this closes only the cleanup obligation, not a physical DROP execution claim."
+      ],
+      "expectedArtifacts": [
+        "old-object-drop-candidates.json",
+        "old-object-rowcount-and-catalog-readback.json",
+        "old-object-dependency-readback.json",
+        "old-object-ddl-export.sql",
+        "old-object-rollback-plan.sql",
+        "old-object-controlled-drop-migration.sql",
+        "old-object-post-drop-catalog-readback.json",
+        "old-object-post-drop-api-browser-smoke.json",
+        "old-object-physical-drop-summary.json"
+      ],
+      "evidenceOwners": [
+        "database-readiness-owner",
+        "migration-owner",
+        "approval-owner",
+        "rollback-owner",
+        "post-drop-smoke-owner"
+      ],
+      "mutationBoundary": "database access required; physical DROP must not run without candidate bundle, backup, approval, rollback, and post-drop readback plan"
+    },
+    {
+      "id": "future-api-contract-fuzzing",
+      "tier": "planned",
+      "status": "inventory_only",
+      "purpose": "Future Schemathesis/OpenAPI fuzz and contract testing after an authoritative OpenAPI artifact exists.",
+      "commands": [],
+      "recommendedTools": [
+        "schemathesis",
+        "OpenAPI generation from Express/Zod contracts"
+      ],
+      "mutationBoundary": "future read/fuzz against test API only"
+    },
+    {
+      "id": "future-visual-review-dashboard",
+      "tier": "planned",
+      "status": "inventory_only",
+      "purpose": "Future PR visual review workflow if Playwright screenshots become too large for local review.",
+      "commands": [],
+      "recommendedTools": [
+        "Playwright toHaveScreenshot",
+        "Argos",
+        "Lost Pixel"
+      ],
+      "mutationBoundary": "visual artifacts only"
+    }
+  ]
+}
