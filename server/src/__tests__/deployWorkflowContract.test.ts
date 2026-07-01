@@ -25,6 +25,7 @@ describe('deploy workflow contract', () => {
     expect(workflow).toContain('corepack prepare pnpm@9 --activate')
     expect(workflow).toContain('pnpm --dir client run lint')
     expect(workflow).toContain('pnpm --dir client run test:run')
+    expect(workflow).toContain('VITE_STORAGE_MODE: backend')
     expect(workflow).toContain('Browser Checks (${{ matrix.suite.name }})')
     expect(workflow).toContain('fail-fast: false')
     expect(workflow).toContain('verify:browser-suite:shell-and-collab')
