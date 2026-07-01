@@ -362,21 +362,40 @@ jobs:
           )
 
           RELEASE_BUNDLE=""
-          if [ "${DEPLOY_USE_RELEASE_BUNDLE}" = "true" ]; then
+          create_release_bundle() {
             RELEASE_BUNDLE="/tmp/project-management-${RELEASE_SHA}.bundle"
             echo "Creating minimal release bundle for ${RELEASE_SHA}"
             git bundle create "$RELEASE_BUNDLE" HEAD
             timeout 120s scp "${SCP_OPTS[@]}" "$RELEASE_BUNDLE" "$DEPLOY_USER@$DEPLOY_HOST:$RELEASE_BUNDLE"
+          }
+
+          run_remote_deploy() {
+            remote_env="APP_DIR=\"$DEPLOY_PATH\" RELEASE_SHA=\"$RELEASE_SHA\" HEALTH_URL=\"${DEPLOY_HEALTH_URL:-http://127.0.0.1/api/health}\""
+            if [ -n "$RELEASE_BUNDLE" ]; then
+              remote_env="$remote_env RELEASE_BUNDLE=\"$RELEASE_BUNDLE\""
+            fi
+
+            ssh "${SSH_OPTS[@]}" "$DEPLOY_USER@$DEPLOY_HOST" "$remote_env bash -s" < scripts/deploy-lighthouse-server.sh
+          }
+
+          if [ "${DEPLOY_USE_RELEASE_BUNDLE}" = "true" ]; then
+            create_release_bundle
           else
             echo "Using production server git fetch for ${RELEASE_SHA}"
           fi
 
-          remote_env="APP_DIR=\"$DEPLOY_PATH\" RELEASE_SHA=\"$RELEASE_SHA\" HEALTH_URL=\"${DEPLOY_HEALTH_URL:-http://127.0.0.1/api/health}\""
-          if [ -n "$RELEASE_BUNDLE" ]; then
-            remote_env="$remote_env RELEASE_BUNDLE=\"$RELEASE_BUNDLE\""
-          fi
+          set +e
+          run_remote_deploy
+          deploy_status=$?
+          set -e
 
-          ssh "${SSH_OPTS[@]}" "$DEPLOY_USER@$DEPLOY_HOST" "$remote_env bash -s" < scripts/deploy-lighthouse-server.sh
+          if [ "$deploy_status" -eq 86 ] && [ "${DEPLOY_USE_RELEASE_BUNDLE}" != "true" ]; then
+            echo "Server-side git fetch failed; retrying with minimal release bundle"
+            create_release_bundle
+            run_remote_deploy
+          else
+            exit "$deploy_status"
+          fi
 
       - name: Send deployment notification
         if: ${{ env.HAS_SLACK_WEBHOOK == 'true' }}
