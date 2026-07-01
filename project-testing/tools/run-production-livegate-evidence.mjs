@@ -1522,13 +1522,27 @@ function c19Boundary() {
 
 async function createPgClient({ connectionString, env }) {
   const pgModule = await importDependency('pg');
+  const ssl = env.PGSSLMODE === 'disable' ? false : { rejectUnauthorized: false };
   return new pgModule.default.Client({
-    connectionString,
-    ssl: env.PGSSLMODE === 'disable' ? false : { rejectUnauthorized: false },
+    connectionString: normalizePgConnectionStringForLivegate(connectionString, ssl),
+    ssl,
     connectionTimeoutMillis: 12000,
     query_timeout: 30000,
     statement_timeout: 30000,
   });
+}
+
+export function normalizePgConnectionStringForLivegate(value, ssl) {
+  if (!ssl) return value;
+  try {
+    const parsed = new URL(value);
+    if (parsed.searchParams.get('sslmode') !== 'no-verify') {
+      parsed.searchParams.set('sslmode', 'no-verify');
+    }
+    return parsed.toString();
+  } catch {
+    return value;
+  }
 }
 
 async function importDependency(packageName) {

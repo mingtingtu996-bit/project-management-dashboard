@@ -17,6 +17,14 @@ test('handoff signal collector discovers C15 candidates from the live canary can
   assert.match(collectorSource, /duration-context-policy-canary-candidates/);
 });
 
+test('handoff signal collector normalizes sslmode=require for non-verifying Supabase pg discovery', async () => {
+  const collectorSource = await readFile(collectorPath, 'utf8');
+
+  assert.match(collectorSource, /function normalizePgConnectionStringForHandoff/u);
+  assert.match(collectorSource, /sslmode', 'no-verify'/u);
+  assert.doesNotMatch(collectorSource, /connectionString,\s*\n\s*ssl: \{ rejectUnauthorized: false \}/u);
+});
+
 test('handoff signal collector can hydrate targets from sanitized server-side discovery output', async () => {
   const tempDir = await mkdtemp(path.join(tmpdir(), 'workbuddy-handoff-signals-'));
   try {

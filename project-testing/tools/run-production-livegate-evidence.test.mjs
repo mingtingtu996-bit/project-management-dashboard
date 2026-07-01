@@ -4,7 +4,22 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { runProductionLivegateEvidence } from './run-production-livegate-evidence.mjs';
+import {
+  normalizePgConnectionStringForLivegate,
+  runProductionLivegateEvidence,
+} from './run-production-livegate-evidence.mjs';
+
+test('production livegate normalizes sslmode=require before opening a non-verifying Supabase pg connection', () => {
+  const normalized = normalizePgConnectionStringForLivegate(
+    'postgres://user:secret@example.invalid:6543/postgres?sslmode=require&application_name=workbuddy',
+    { rejectUnauthorized: false },
+  );
+
+  assert.equal(
+    normalized,
+    'postgres://user:secret@example.invalid:6543/postgres?sslmode=no-verify&application_name=workbuddy',
+  );
+});
 
 test('production livegate writes DB-backed C18/C19 evidence and no-safe old-object closeout', async () => {
   const artifactRoot = await mkdtemp(path.join(tmpdir(), 'workbuddy-production-livegate-'));
