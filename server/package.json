@@ -12,6 +12,7 @@
     "test:watch": "vitest",
     "health:snapshot": "tsx -r dotenv/config run-health-history-snapshot.ts",
     "migrate:pending": "tsx -r dotenv/config src/scripts/run-pending-migrations.ts",
+    "migrate:pending:prod": "node dist/scripts/run-pending-migrations.js",
     "migrate:plan": "tsx -r dotenv/config src/scripts/run-pending-migrations.ts --plan",
     "migrate:adopt-baseline": "tsx -r dotenv/config src/scripts/adopt-migration-baseline.ts --through 084",
     "migrate:adopt-baseline:plan": "tsx -r dotenv/config src/scripts/adopt-migration-baseline.ts --through 084 --plan"

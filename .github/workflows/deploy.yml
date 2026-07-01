@@ -255,7 +255,7 @@ jobs:
               echo ""
               echo "- Missing \`SUPABASE_MIGRATION_URL\` GitHub secret."
               echo "- Hosted GitHub runners cannot reach the current IPv6-only direct Supabase database host."
-              echo "- Deployment will continue without applying migrations in CI."
+              echo "- CI will not apply migrations directly; the self-hosted deployment step must run pending migrations from the production server env before starting the release."
             } >> "$GITHUB_STEP_SUMMARY"
           fi
         env:
@@ -339,12 +339,21 @@ jobs:
           DEPLOY_HEALTH_URL: ${{ secrets.DEPLOY_HEALTH_URL }}
           RELEASE_SHA: ${{ github.sha }}
         run: |
+          RELEASE_BUNDLE="/tmp/project-management-${RELEASE_SHA}.bundle"
+          git bundle create "$RELEASE_BUNDLE" --all
+          scp \
+            -i ~/.ssh/project-management-deploy \
+            -P "$DEPLOY_PORT" \
+            -o IdentitiesOnly=yes \
+            "$RELEASE_BUNDLE" \
+            "$DEPLOY_USER@$DEPLOY_HOST:$RELEASE_BUNDLE"
+
           ssh \
             -i ~/.ssh/project-management-deploy \
             -p "$DEPLOY_PORT" \
             -o IdentitiesOnly=yes \
             "$DEPLOY_USER@$DEPLOY_HOST" \
-            "APP_DIR=\"$DEPLOY_PATH\" RELEASE_SHA=\"$RELEASE_SHA\" HEALTH_URL=\"${DEPLOY_HEALTH_URL:-http://127.0.0.1/api/health}\" bash -s" < scripts/deploy-lighthouse-server.sh
+            "APP_DIR=\"$DEPLOY_PATH\" RELEASE_SHA=\"$RELEASE_SHA\" RELEASE_BUNDLE=\"$RELEASE_BUNDLE\" HEALTH_URL=\"${DEPLOY_HEALTH_URL:-http://127.0.0.1/api/health}\" bash -s" < scripts/deploy-lighthouse-server.sh
 
       - name: Send deployment notification
         if: ${{ env.HAS_SLACK_WEBHOOK == 'true' }}

@@ -1,5 +1,6 @@
 services:
   api:
+    image: project-management-api:latest
     build:
       context: ../server
       dockerfile: Dockerfile
@@ -22,6 +23,15 @@ services:
       timeout: 10s
       retries: 3
       start_period: 20s
+
+  migration:
+    image: project-management-api:latest
+    network_mode: host
+    env_file:
+      - ./env/server.production.env
+    environment:
+      NODE_ENV: production
+    command: ["npm", "run", "migrate:pending:prod"]
 
   web:
     build:
