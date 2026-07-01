@@ -69,6 +69,22 @@ describe('migration runner contract', () => {
     expect(calculateMigrationChecksum(sql)).toBe(calculateMigrationChecksum(sql))
   })
 
+  it('keeps the production RLS helper ACL migration broad enough for Supabase anon startup reads', () => {
+    const sql = readFileSync(
+      resolve(serverRoot, 'migrations', '116_grant_rls_helper_execute_to_runtime_roles.sql'),
+      'utf8',
+    )
+
+    expect(sql).toContain("p.proname = 'is_active_company_member'")
+    expect(sql).toContain("'anon'")
+    expect(sql).toContain("'authenticated'")
+    expect(sql).toContain("'service_role'")
+    expect(sql).toContain("'workbuddy_runtime'")
+    expect(sql).toContain("'workbuddy_runtime_login'")
+    expect(sql).toContain("format('GRANT EXECUTE ON FUNCTION %s TO %I'")
+    expect(sql).toContain('ALTER ROLE workbuddy_runtime_login WITH INHERIT NOBYPASSRLS')
+  })
+
   it('supports baseline selection and version ordering with numeric and suffixed versions', () => {
     expect(compareMigrationVersions('009', '009b')).toBeLessThan(0)
     expect(compareMigrationVersions('083a', '084')).toBeLessThan(0)
