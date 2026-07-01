@@ -288,6 +288,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Check server deployment credentials
         id: deployment-eligibility
