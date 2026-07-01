@@ -110,7 +110,31 @@ git checkout --force "$RELEASE_SHA"
 
 mkdir -p deploy/data/logs
 
-run_docker_compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" build api
+run_docker_builder_prune() {
+  if [ "$USE_SUDO_DOCKER" = "1" ]; then
+    sudo -n docker builder prune -af
+  else
+    docker builder prune -af
+  fi
+}
+
+run_api_build_with_cache_repair() {
+  build_log="/tmp/project-management-build-api.log"
+  if run_docker_compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" build api 2>&1 | tee "$build_log"; then
+    return 0
+  fi
+
+  if grep -Eq 'failed to prepare extraction snapshot|parent snapshot .* does not exist' "$build_log"; then
+    echo "Docker build cache snapshot corruption detected; pruning builder cache and retrying once." >&2
+    run_docker_builder_prune
+    run_docker_compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" build api
+    return $?
+  fi
+
+  return 1
+}
+
+run_api_build_with_cache_repair
 run_docker_compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" run --rm --no-deps migration
 run_docker_compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --build --remove-orphans
 run_docker_compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" ps
