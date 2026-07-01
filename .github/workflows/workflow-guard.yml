@@ -10,6 +10,8 @@ on:
       - '.github/workflows/production-server-worktree-maintenance.yml'
       - '.github/workflows/workflow-guard.yml'
       - 'server/src/__tests__/deployWorkflowContract.test.ts'
+      - 'server/src/__tests__/migrationRunner.test.ts'
+      - 'server/src/services/migrationRunner.ts'
       - 'package.json'
       - 'project-testing/tools/collect-release-handoff-signals.mjs'
       - 'project-testing/tools/collect-release-handoff-signals.test.mjs'
@@ -32,6 +34,8 @@ on:
       - '.github/workflows/production-server-worktree-maintenance.yml'
       - '.github/workflows/workflow-guard.yml'
       - 'server/src/__tests__/deployWorkflowContract.test.ts'
+      - 'server/src/__tests__/migrationRunner.test.ts'
+      - 'server/src/services/migrationRunner.ts'
       - 'package.json'
       - 'project-testing/tools/collect-release-handoff-signals.mjs'
       - 'project-testing/tools/collect-release-handoff-signals.test.mjs'
@@ -77,4 +81,4 @@ jobs:
         run: npm ci --workspaces=false
 
       - name: Verify deploy workflow contract
-        run: npm test -- src/__tests__/deployWorkflowContract.test.ts
+        run: npm test -- src/__tests__/deployWorkflowContract.test.ts src/__tests__/migrationRunner.test.ts
