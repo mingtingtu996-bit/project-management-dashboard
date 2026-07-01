@@ -133,7 +133,17 @@ describe('migration runner contract', () => {
     process.env.SUPABASE_MIGRATION_URL = 'postgresql://postgres:other@db.other.supabase.co:5432/postgres'
 
     expect(resolveMigrationConnectionConfig()).toEqual({
-      connectionString: 'postgresql://postgres:secret@db.example.supabase.co:5432/postgres',
+      connectionString: 'postgresql://postgres:secret@db.example.supabase.co:5432/postgres?sslmode=no-verify',
+      family: 4,
+      ssl: { rejectUnauthorized: false },
+    })
+  })
+
+  it('normalizes migration connection-string sslmode so pg keeps non-verifying TLS for Supabase pooler certificates', () => {
+    process.env.DATABASE_URL = 'postgresql://postgres:secret@db.example.supabase.co:5432/postgres?sslmode=require'
+
+    expect(resolveMigrationConnectionConfig()).toEqual({
+      connectionString: 'postgresql://postgres:secret@db.example.supabase.co:5432/postgres?sslmode=no-verify',
       family: 4,
       ssl: { rejectUnauthorized: false },
     })
@@ -146,21 +156,21 @@ describe('migration runner contract', () => {
     process.env.DB_CONNECTION_STRING = 'postgresql://runtime:runtime@db.runtime.supabase.co:6543/postgres'
 
     expect(resolveMigrationConnectionConfig()).toEqual({
-      connectionString: 'postgresql://postgres:migration@db.migration.supabase.co:5432/postgres',
+      connectionString: 'postgresql://postgres:migration@db.migration.supabase.co:5432/postgres?sslmode=no-verify',
       family: 4,
       ssl: { rejectUnauthorized: false },
     })
 
     delete process.env.SUPABASE_MIGRATION_URL
     expect(resolveMigrationConnectionConfig()).toEqual({
-      connectionString: 'postgresql://postgres:direct@db.direct.supabase.co:5432/postgres',
+      connectionString: 'postgresql://postgres:direct@db.direct.supabase.co:5432/postgres?sslmode=no-verify',
       family: 4,
       ssl: { rejectUnauthorized: false },
     })
 
     delete process.env.DIRECT_DATABASE_URL
     expect(resolveMigrationConnectionConfig()).toEqual({
-      connectionString: 'postgresql://runtime:runtime@db.runtime.supabase.co:6543/postgres',
+      connectionString: 'postgresql://runtime:runtime@db.runtime.supabase.co:6543/postgres?sslmode=no-verify',
       family: 4,
       ssl: { rejectUnauthorized: false },
     })
@@ -218,7 +228,7 @@ describe('migration runner contract', () => {
     }
 
     await expect(resolveMigrationRuntimeConnectionConfig(dnsLookup)).resolves.toEqual({
-      connectionString: 'postgresql://postgres:secret@203.0.113.42:5432/postgres',
+      connectionString: 'postgresql://postgres:secret@203.0.113.42:5432/postgres?sslmode=no-verify',
       family: 4,
       ssl: { rejectUnauthorized: false },
     })
@@ -234,7 +244,7 @@ describe('migration runner contract', () => {
     }
 
     await expect(resolveMigrationRuntimeConnectionConfig(dnsLookup)).resolves.toEqual({
-      connectionString: 'postgresql://postgres:secret@db.ipv6-only.supabase.co:5432/postgres',
+      connectionString: 'postgresql://postgres:secret@db.ipv6-only.supabase.co:5432/postgres?sslmode=no-verify',
       ssl: { rejectUnauthorized: false },
     })
     expect(warnSpy).toHaveBeenCalledOnce()

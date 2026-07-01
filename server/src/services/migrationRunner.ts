@@ -167,6 +167,19 @@ function deriveSupabaseHostFromUrl(value?: string | null) {
   }
 }
 
+function normalizeMigrationConnectionString(value: string, ssl: false | { rejectUnauthorized: false }) {
+  if (!ssl) {
+    return value
+  }
+
+  const parsed = new URL(value)
+  const sslMode = parsed.searchParams.get('sslmode')
+  if (!sslMode || sslMode !== 'no-verify') {
+    parsed.searchParams.set('sslmode', 'no-verify')
+  }
+  return parsed.toString()
+}
+
 export function resolveMigrationConnectionConfig() {
   const connectionString = process.env.DATABASE_URL
     ?? process.env.SUPABASE_MIGRATION_URL
@@ -183,7 +196,11 @@ export function resolveMigrationConnectionConfig() {
     : { rejectUnauthorized: false as const }
 
   if (connectionString) {
-    return { connectionString, ssl, family: 4 as const }
+    return {
+      connectionString: normalizeMigrationConnectionString(connectionString, ssl),
+      ssl,
+      family: 4 as const,
+    }
   }
 
   if (!host || !password) {
