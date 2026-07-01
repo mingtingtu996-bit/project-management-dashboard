@@ -1,0 +1,358 @@
+name: Production Livegate Execution
+
+on:
+  workflow_dispatch:
+    inputs:
+      gate_ids:
+        description: Optional comma or space separated gate IDs. Leave blank for C18, C19, and old-object.
+        required: false
+        default: ''
+        type: string
+      include_c15:
+        description: Include C15 live learning closeout. Requires a real production candidate/cohort or it will fail.
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: production-livegate-execution-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  livegate:
+    name: Production Livegate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: Production
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install livegate dependencies
+        run: npm ci
+
+      - name: Configure SSH
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
+          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          if [ -z "$DEPLOY_HOST" ] || [ -z "$DEPLOY_SSH_PRIVATE_KEY" ]; then
+            echo "Missing required deploy SSH secrets." >&2
+            exit 1
+          fi
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_PRIVATE_KEY" > ~/.ssh/workbuddy-production-livegate
+          chmod 600 ~/.ssh/workbuddy-production-livegate
+          if [ -n "$DEPLOY_KNOWN_HOSTS" ]; then
+            printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$DEPLOY_PORT" "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+          fi
+
+      - name: Collect server-side discovery signals
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          OUTPUT_ROOT: project-testing/reports/production-livegate-${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUTPUT_ROOT"
+          local_signals="$OUTPUT_ROOT/server-handoff-signals.json"
+          local_collector="project-testing/tools/collect-release-handoff-signals.mjs"
+          remote_root="$DEPLOY_PATH/.workbuddy-production-livegate/${GITHUB_RUN_ID}"
+          remote_collector_host="$remote_root/collect-release-handoff-signals.mjs"
+          remote_collector_container="/tmp/workbuddy-production-livegate-${GITHUB_RUN_ID}-collect.mjs"
+          remote_signals_host="$remote_root/handoff-signals.json"
+          remote_env="$DEPLOY_PATH/deploy/env/server.production.env"
+
+          write_blocked_signals() {
+            node --input-type=module <<'NODE'
+          import { writeFileSync } from 'node:fs';
+          const reason = String(process.env.BLOCKED_REASON || 'server-side discovery failed')
+            .replace(/[\r\n]/g, ' ')
+            .slice(0, 200);
+          writeFileSync(process.env.BLOCKED_SIGNALS_FILE, `${JSON.stringify({
+            schemaVersion: 'workbuddy-release-handoff-signals/v1',
+            generatedAt: new Date().toISOString(),
+            envPresence: {},
+            connectivity: {
+              db: {
+                ok: false,
+                databaseTargetRef: 'env://app/deploy/env/server.production.env#SUPABASE_MIGRATION_URL',
+                error: reason,
+                discoverySource: 'server-side-ssh-discovery',
+              },
+            },
+            tableCounts: {},
+            columns: {},
+            discoveredTargets: {
+              companyId: '',
+              projectId: '',
+              planId: '',
+              candidateId: '',
+              sampleCohortRef: '',
+            },
+            boundary: {
+              noSecretValuesWritten: true,
+              liveMutation: false,
+              dbMutation: false,
+              note: 'Server-side discovery failed before target IDs could be read. This file is sanitized and contains no env values.',
+            },
+          }, null, 2)}\n`);
+          NODE
+          }
+
+          if ssh -i ~/.ssh/workbuddy-production-livegate -p "$DEPLOY_PORT" -o IdentitiesOnly=yes "$DEPLOY_USER@$DEPLOY_HOST" \
+            "mkdir -p '$remote_root' && test -s '$remote_env' && (docker ps --format '{{.Names}}' 2>/dev/null || sudo -n docker ps --format '{{.Names}}') | grep -qx 'project-management-api'"; then
+            scp -i ~/.ssh/workbuddy-production-livegate -P "$DEPLOY_PORT" -o IdentitiesOnly=yes \
+              "$local_collector" "$DEPLOY_USER@$DEPLOY_HOST:$remote_collector_host"
+
+            if ssh -i ~/.ssh/workbuddy-production-livegate -p "$DEPLOY_PORT" -o IdentitiesOnly=yes "$DEPLOY_USER@$DEPLOY_HOST" \
+              "set -e; if docker info >/dev/null 2>&1; then docker_cmd='docker'; elif sudo -n docker info >/dev/null 2>&1; then docker_cmd='sudo -n docker'; else exit 1; fi; \$docker_cmd cp '$remote_collector_host' project-management-api:'$remote_collector_container'; \$docker_cmd exec project-management-api sh -lc \"mkdir -p /tmp/workbuddy-production-livegate-${GITHUB_RUN_ID} && node -- '$remote_collector_container' --env-source process --env-file deploy/env/server.production.env --discovery-source server-side-ssh-discovery --output-dir /tmp/workbuddy-production-livegate-${GITHUB_RUN_ID} --include-live --confirm-live-handoff --include-db --confirm-db-ready --environment-owner github-actions-production-livegate --write-approval-ref 'github-actions://run/${GITHUB_RUN_ID}' --manual-approval-ref 'github-actions://run/${GITHUB_RUN_ID}' --monitoring-owner github-actions-production-livegate --rollback-owner github-actions-production-livegate --cleanup-owner github-actions-production-livegate --migration-owner github-actions-production-livegate --runtime-publication-owner github-actions-production-livegate --consumer-observation-owner github-actions-production-livegate >/dev/null\"; \$docker_cmd cp project-management-api:/tmp/workbuddy-production-livegate-${GITHUB_RUN_ID}/handoff-signals.json '$remote_signals_host'; \$docker_cmd exec --user 0 project-management-api sh -lc \"rm -rf /tmp/workbuddy-production-livegate-${GITHUB_RUN_ID} '$remote_collector_container'\" >/dev/null 2>&1 || true"; then
+              scp -i ~/.ssh/workbuddy-production-livegate -P "$DEPLOY_PORT" -o IdentitiesOnly=yes \
+                "$DEPLOY_USER@$DEPLOY_HOST:$remote_signals_host" "$local_signals"
+            else
+              BLOCKED_REASON="server-side discovery command failed" BLOCKED_SIGNALS_FILE="$local_signals" write_blocked_signals
+            fi
+
+            ssh -i ~/.ssh/workbuddy-production-livegate -p "$DEPLOY_PORT" -o IdentitiesOnly=yes "$DEPLOY_USER@$DEPLOY_HOST" \
+              "rm -rf '$remote_root'" >/dev/null 2>&1 || true
+          else
+            BLOCKED_REASON="server-side discovery setup failed" BLOCKED_SIGNALS_FILE="$local_signals" write_blocked_signals
+          fi
+
+          test -s "$local_signals"
+
+      - name: Generate production handoff
+        env:
+          OUTPUT_ROOT: project-testing/reports/production-livegate-${{ github.run_id }}
+          GATE_IDS: ${{ inputs.gate_ids }}
+          INCLUDE_C15: ${{ inputs.include_c15 }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const outputRoot = process.env.OUTPUT_ROOT;
+          const signals = JSON.parse(readFileSync(`${outputRoot}/server-handoff-signals.json`, 'utf8'));
+          writeFileSync(`${outputRoot}/handoff-signals.json`, `${JSON.stringify(signals, null, 2)}\n`);
+          const discovered = signals.discoveredTargets ?? {};
+          const requested = String(process.env.GATE_IDS || '')
+            .split(/[\s,]+/u)
+            .map((item) => item.trim())
+            .filter(Boolean);
+          const defaultGateIds = [
+            'c18-l07-l15-live-diagnostics',
+            ...(process.env.INCLUDE_C15 === 'true' ? ['c15-live-learning-closeout'] : []),
+            'c19-runtime-publication-release-rollback',
+            'old-object-physical-drop-closeout',
+          ];
+          const selectedGateIds = requested.length > 0 ? requested : defaultGateIds;
+          const artifactRoot = `${outputRoot}/artifacts`;
+          const approvalRef = `github-actions://run/${process.env.GITHUB_RUN_ID}`;
+          const monitoringWindow = `${new Date().toISOString()}/PT30M`;
+          const handoff = {
+            schemaVersion: 'workbuddy-release-handoff-input/v1',
+            generatedAt: new Date().toISOString(),
+            source: 'github-actions-production-livegate-execution',
+            boundary: {
+              secretsEmbedded: false,
+              envFileUploaded: false,
+              serverSideDiscovery: true,
+              productionLivegate: true,
+            },
+            unlockFlags: {
+              includeLive: true,
+              confirmLiveHandoff: true,
+              includeDb: true,
+              confirmDbReady: true,
+            },
+            gateSelection: { selectedGateIds },
+            gates: {
+              'c18-l07-l15-live-diagnostics': {
+                live: {
+                  baseUrl: String(signals.baseUrl || '').trim(),
+                  authTokenRef: 'env://deploy/env/server.production.env#JWT_SECRET+DEV_USER_ID',
+                  environmentOwner: 'github-actions-production-livegate',
+                  writeApprovalRef: approvalRef,
+                  cleanupOwner: 'github-actions-production-livegate',
+                  artifactRoot,
+                },
+                targets: {
+                  projectId: String(discovered.projectId || ''),
+                  planId: String(discovered.planId || ''),
+                },
+                evidenceOwners: {
+                  backendDiagnosticsOwner: 'github-actions-production-livegate',
+                  databaseEvidenceOwner: 'github-actions-production-livegate',
+                  browserEvidenceOwner: 'github-actions-production-livegate',
+                },
+              },
+              'c15-live-learning-closeout': {
+                live: {
+                  environmentOwner: 'github-actions-production-livegate',
+                  writeApprovalRef: approvalRef,
+                  artifactRoot,
+                },
+                targets: {
+                  companyId: String(discovered.companyId || ''),
+                  projectId: String(discovered.projectId || ''),
+                  candidateId: String(discovered.candidateId || ''),
+                  sampleCohortRef: String(discovered.sampleCohortRef || ''),
+                },
+                approvals: { manualApprovalRef: approvalRef },
+                owners: {
+                  monitoringOwner: 'github-actions-production-livegate',
+                  rollbackOwner: 'github-actions-production-livegate',
+                },
+              },
+              'c19-runtime-publication-release-rollback': {
+                live: {
+                  environmentOwner: 'github-actions-production-livegate',
+                  writeApprovalRef: approvalRef,
+                  artifactRoot,
+                },
+                targets: {
+                  companyId: String(discovered.companyId || ''),
+                  projectId: String(discovered.projectId || ''),
+                },
+                release: {
+                  phase1L5Ref: `${artifactRoot}/phase1-l5-handoff.json`,
+                  releaseClosureArtifactRef: `${artifactRoot}/c19-release-closure-artifact.json`,
+                  rollbackTargetRef: `${artifactRoot}/c19-runtime-rollback-target.json`,
+                  monitoringWindow,
+                },
+                approvals: { manualApprovalRef: approvalRef },
+                owners: {
+                  runtimePublicationOwner: 'github-actions-production-livegate',
+                  consumerObservationOwner: 'github-actions-production-livegate',
+                  monitoringOwner: 'github-actions-production-livegate',
+                  rollbackOwner: 'github-actions-production-livegate',
+                },
+              },
+              'old-object-physical-drop-closeout': {
+                db: {
+                  databaseTargetRef: 'env://deploy/env/server.production.env#SUPABASE_MIGRATION_URL',
+                  databaseReadinessOwner: 'github-actions-production-livegate',
+                  noSafeCandidateCloseoutRef: `${artifactRoot}/old-object-no-safe-candidate-closeout.json`,
+                  backupLocationRef: `${artifactRoot}/db-backup-reference.json`,
+                  catalogReadbackOwner: 'github-actions-production-livegate',
+                  apiBrowserSmokeOwner: 'github-actions-production-livegate',
+                },
+                approvals: { manualApprovalRef: approvalRef },
+                owners: {
+                  migrationOwner: 'github-actions-production-livegate',
+                  rollbackOwner: 'github-actions-production-livegate',
+                  postDropSmokeOwner: 'github-actions-production-livegate',
+                },
+              },
+            },
+          };
+          writeFileSync(`${outputRoot}/production-handoff.generated.json`, `${JSON.stringify(handoff, null, 2)}\n`);
+          writeFileSync(`${outputRoot}/production-livegate-gate-selection.json`, `${JSON.stringify({ selectedGateIds }, null, 2)}\n`);
+          NODE
+
+      - name: Run production livegate inside production container
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          OUTPUT_ROOT: project-testing/reports/production-livegate-${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          local_tool_root="project-testing/tools"
+          local_matrix="project-testing/matrix/release-test-matrix.json"
+          remote_root="$DEPLOY_PATH/.workbuddy-production-livegate/${GITHUB_RUN_ID}"
+          remote_tools="$remote_root/tools"
+          remote_artifacts="$remote_root/artifacts"
+          remote_handoff="$remote_root/production-handoff.generated.json"
+          remote_matrix="$remote_root/release-test-matrix.json"
+          remote_env="$DEPLOY_PATH/deploy/env/server.production.env"
+          mkdir -p "$OUTPUT_ROOT/artifacts"
+
+          ssh -i ~/.ssh/workbuddy-production-livegate -p "$DEPLOY_PORT" -o IdentitiesOnly=yes "$DEPLOY_USER@$DEPLOY_HOST" \
+            "mkdir -p '$remote_tools' '$remote_artifacts' && test -s '$remote_env'"
+          scp -i ~/.ssh/workbuddy-production-livegate -P "$DEPLOY_PORT" -o IdentitiesOnly=yes \
+            "$local_tool_root/collect-release-handoff-signals.mjs" \
+            "$local_tool_root/validate-release-evidence.mjs" \
+            "$local_tool_root/evaluate-release-closeout.mjs" \
+            "$local_tool_root/run-production-livegate-evidence.mjs" \
+            "$DEPLOY_USER@$DEPLOY_HOST:$remote_tools/"
+          scp -i ~/.ssh/workbuddy-production-livegate -P "$DEPLOY_PORT" -o IdentitiesOnly=yes \
+            "$local_matrix" "$DEPLOY_USER@$DEPLOY_HOST:$remote_matrix"
+          scp -i ~/.ssh/workbuddy-production-livegate -P "$DEPLOY_PORT" -o IdentitiesOnly=yes \
+            "$OUTPUT_ROOT/production-handoff.generated.json" "$DEPLOY_USER@$DEPLOY_HOST:$remote_handoff"
+
+          set +e
+          ssh -i ~/.ssh/workbuddy-production-livegate -p "$DEPLOY_PORT" -o IdentitiesOnly=yes "$DEPLOY_USER@$DEPLOY_HOST" \
+            "set -e; if docker info >/dev/null 2>&1; then docker_cmd='docker'; elif sudo -n docker info >/dev/null 2>&1; then docker_cmd='sudo -n docker'; else exit 1; fi; \$docker_cmd exec project-management-api sh -lc \"mkdir -p /tmp/workbuddy-production-livegate-${GITHUB_RUN_ID}/artifacts\"; for f in '$remote_tools'/*.mjs '$remote_matrix' '$remote_handoff'; do \$docker_cmd cp \"\$f\" project-management-api:/tmp/workbuddy-production-livegate-${GITHUB_RUN_ID}/; done; set +e; \$docker_cmd exec project-management-api sh -lc \"node -- /tmp/workbuddy-production-livegate-${GITHUB_RUN_ID}/run-production-livegate-evidence.mjs --env-source process --env-file deploy/env/server.production.env --handoff-file /tmp/workbuddy-production-livegate-${GITHUB_RUN_ID}/production-handoff.generated.json --artifact-root /tmp/workbuddy-production-livegate-${GITHUB_RUN_ID}/artifacts --matrix /tmp/workbuddy-production-livegate-${GITHUB_RUN_ID}/release-test-matrix.json --include-live --confirm-live-handoff --include-db --confirm-db-ready\"; run_status=\$?; set -e; \$docker_cmd cp project-management-api:/tmp/workbuddy-production-livegate-${GITHUB_RUN_ID}/artifacts '$remote_root/artifacts.out'; \$docker_cmd exec --user 0 project-management-api sh -lc \"rm -rf /tmp/workbuddy-production-livegate-${GITHUB_RUN_ID}\" >/dev/null 2>&1 || true; exit \$run_status"
+          livegate_status=$?
+          set -e
+
+          scp -i ~/.ssh/workbuddy-production-livegate -P "$DEPLOY_PORT" -o IdentitiesOnly=yes -r \
+            "$DEPLOY_USER@$DEPLOY_HOST:$remote_root/artifacts.out/." "$OUTPUT_ROOT/artifacts/"
+          ssh -i ~/.ssh/workbuddy-production-livegate -p "$DEPLOY_PORT" -o IdentitiesOnly=yes "$DEPLOY_USER@$DEPLOY_HOST" \
+            "rm -rf '$remote_root'" >/dev/null 2>&1 || true
+
+          # Runner-side evaluation is the final go/no-go check. It re-reads only sanitized artifacts.
+          gate_args=()
+          if [ -f "$OUTPUT_ROOT/production-livegate-gate-selection.json" ]; then
+            while IFS= read -r gate_id; do
+              gate_args+=(--gate "$gate_id")
+            done < <(node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          const selection = JSON.parse(readFileSync(`${process.env.OUTPUT_ROOT}/production-livegate-gate-selection.json`, 'utf8'));
+          for (const gateId of selection.selectedGateIds ?? []) console.log(gateId);
+          NODE
+          )
+          fi
+          node project-testing/tools/evaluate-release-closeout.mjs \
+            --evidence-root "$OUTPUT_ROOT/artifacts" \
+            --output "$OUTPUT_ROOT/artifacts/closeout-decision.json" \
+            "${gate_args[@]}"
+
+          if [ "$livegate_status" -ne 0 ]; then
+            echo "Production livegate command exited nonzero as expected for open gates. See closeout-decision.json." >&2
+          fi
+
+      - name: Publish livegate summary
+        if: always()
+        env:
+          OUTPUT_ROOT: project-testing/reports/production-livegate-${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ -f "$OUTPUT_ROOT/artifacts/closeout-decision.md" ]; then
+            cat "$OUTPUT_ROOT/artifacts/closeout-decision.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Remove SSH key from runner
+        if: always()
+        run: |
+          rm -f ~/.ssh/workbuddy-production-livegate
+
+      - name: Upload sanitized production livegate reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: production-livegate-${{ github.run_id }}
+          path: |
+            project-testing/reports/production-livegate-${{ github.run_id }}/**/*
+            !project-testing/reports/production-livegate-${{ github.run_id }}/**/*.env
+          if-no-files-found: error
+          retention-days: 14
