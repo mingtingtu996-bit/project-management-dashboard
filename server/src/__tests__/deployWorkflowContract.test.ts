@@ -56,6 +56,7 @@ describe('deploy workflow contract', () => {
     expect(workflow).toContain('self-hosted deployment step must run pending migrations from the production server env')
     expect(workflow).toContain('deploy-server:')
     expect(workflow).toContain('Deploy To Self-hosted Server')
+    expect(workflow).toContain('fetch-depth: 0')
     expect(workflow).toContain('Check server deployment credentials')
     expect(workflow).toContain('DEPLOY_HOST')
     expect(workflow).toContain('DEPLOY_USER')
