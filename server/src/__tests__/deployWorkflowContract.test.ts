@@ -121,6 +121,34 @@ describe('deploy workflow contract', () => {
     expect(workflowGuard).toContain('npm test -- src/__tests__/deployWorkflowContract.test.ts')
   })
 
+  it('keeps production server worktree maintenance gated, backed up, and scoped to tracked changes', () => {
+    const workflow = readFileSync(resolve(workspaceRoot, '.github', 'workflows', 'production-server-worktree-maintenance.yml'), 'utf8')
+    const workflowGuard = readFileSync(resolve(workspaceRoot, '.github', 'workflows', 'workflow-guard.yml'), 'utf8')
+
+    expect(workflow).toContain('name: Production Server Worktree Maintenance')
+    expect(workflow).toContain('workflow_dispatch:')
+    expect(workflow).toContain('environment: Production')
+    expect(workflow).toContain('backup-and-clean-tracked')
+    expect(workflow).toContain('BACKUP_AND_CLEAN_TRACKED_CHANGES')
+    expect(workflow).toContain('Refusing clean mode without the required confirmation phrase.')
+    expect(workflow).toContain('git status --porcelain=v1 --untracked-files=no')
+    expect(workflow).toContain('git diff --binary HEAD -- > "$patch_file"')
+    expect(workflow).toContain('git reset --hard HEAD >/dev/null')
+    expect(workflow).toContain('maintenance-meta.env')
+    expect(workflow).toContain('node --input-type=module')
+    expect(workflow).not.toContain('node - "$summary_file"')
+    expect(workflow).toContain('trackedFilesOnly: true')
+    expect(workflow).toContain('untrackedFilesPreserved: true')
+    expect(workflow).toContain('envValuesWritten: false')
+    expect(workflow).toContain('secretValuesWritten: false')
+    expect(workflow).toContain('patchStoredOnProductionServerOnly: true')
+    expect(workflow).toContain('!project-testing/reports/production-server-worktree-maintenance-${{ github.run_id }}/**/*.patch')
+    expect(workflow).toContain('rm -f ~/.ssh/workbuddy-production-maintenance')
+    expect(workflow).toContain('retention-days: 14')
+
+    expect(workflowGuard).toContain('.github/workflows/production-server-worktree-maintenance.yml')
+  })
+
   it('keeps production closeout target discovery on the self-hosted production side', () => {
     const workflow = readFileSync(resolve(workspaceRoot, '.github', 'workflows', 'production-closeout-readiness.yml'), 'utf8')
     const workflowGuard = readFileSync(resolve(workspaceRoot, '.github', 'workflows', 'workflow-guard.yml'), 'utf8')

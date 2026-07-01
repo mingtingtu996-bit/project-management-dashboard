@@ -1,0 +1,258 @@
+name: Production Server Worktree Maintenance
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Inspect only, or back up and clean tracked server worktree changes.
+        required: true
+        default: inspect
+        type: choice
+        options:
+          - inspect
+          - backup-and-clean-tracked
+      confirmation:
+        description: Type BACKUP_AND_CLEAN_TRACKED_CHANGES when mode is backup-and-clean-tracked.
+        required: false
+        default: ""
+        type: string
+
+concurrency:
+  group: production-server-worktree-maintenance
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  worktree-maintenance:
+    name: Worktree Maintenance
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: Production
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Configure SSH
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
+          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          if [ -z "$DEPLOY_HOST" ] || [ -z "$DEPLOY_SSH_PRIVATE_KEY" ]; then
+            echo "Missing required deploy SSH secrets." >&2
+            exit 1
+          fi
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_PRIVATE_KEY" > ~/.ssh/workbuddy-production-maintenance
+          chmod 600 ~/.ssh/workbuddy-production-maintenance
+          if [ -n "$DEPLOY_KNOWN_HOSTS" ]; then
+            printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$DEPLOY_PORT" "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+          fi
+
+      - name: Inspect or clean production worktree
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          MODE: ${{ inputs.mode }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+          OUTPUT_ROOT: project-testing/reports/production-server-worktree-maintenance-${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ -z "$DEPLOY_HOST" ] || [ -z "$DEPLOY_USER" ] || [ -z "$DEPLOY_PATH" ]; then
+            echo "Missing required deploy location secrets." >&2
+            exit 1
+          fi
+          if [ "$MODE" = "backup-and-clean-tracked" ] && [ "$CONFIRMATION" != "BACKUP_AND_CLEAN_TRACKED_CHANGES" ]; then
+            echo "Refusing clean mode without the required confirmation phrase." >&2
+            exit 1
+          fi
+
+          mkdir -p "$OUTPUT_ROOT"
+          remote_root="$DEPLOY_PATH/.workbuddy-server-worktree-maintenance/${GITHUB_RUN_ID}"
+          remote_script="$remote_root/maintenance.sh"
+          remote_meta="$remote_root/maintenance-meta.env"
+          local_script="$OUTPUT_ROOT/maintenance.sh"
+
+          cat > "$local_script" <<'MAINTENANCE_SCRIPT'
+          set -euo pipefail
+          cd "$DEPLOY_PATH"
+          if [ ! -d .git ]; then
+            echo "Deployment directory is not a git repository." >&2
+            exit 1
+          fi
+
+          backup_root=".workbuddy-server-worktree-maintenance/${RUN_ID}"
+          backup_dir="${backup_root}/backup"
+          mkdir -p "$backup_dir"
+
+          status_file="${backup_dir}/tracked-status.before.txt"
+          name_status_file="${backup_dir}/tracked-name-status.before.txt"
+          diff_stat_file="${backup_dir}/tracked-diff-stat.before.txt"
+          patch_file="${backup_dir}/tracked-changes.before.patch"
+          meta_file="${backup_root}/maintenance-meta.env"
+
+          git status --porcelain=v1 --untracked-files=no > "$status_file"
+          git diff --name-status HEAD -- > "$name_status_file"
+          git diff --stat HEAD -- > "$diff_stat_file"
+          git diff --binary HEAD -- > "$patch_file"
+          head_before="$(git rev-parse HEAD)"
+          branch_before="$(git rev-parse --abbrev-ref HEAD)"
+          change_count="$(wc -l < "$status_file" | tr -d ' ')"
+          patch_sha="$(sha256sum "$patch_file" | awk '{print $1}')"
+          dirty_before="false"
+          if [ "$change_count" != "0" ]; then
+            dirty_before="true"
+          fi
+
+          cleaned="false"
+          if [ "$MODE" = "backup-and-clean-tracked" ]; then
+            if [ "$CONFIRMATION" != "BACKUP_AND_CLEAN_TRACKED_CHANGES" ]; then
+              echo "Missing confirmation phrase." >&2
+              exit 1
+            fi
+            git reset --hard HEAD >/dev/null
+            cleaned="true"
+          fi
+
+          git status --porcelain=v1 --untracked-files=no > "${backup_dir}/tracked-status.after.txt"
+          dirty_after="false"
+          if [ -s "${backup_dir}/tracked-status.after.txt" ]; then
+            dirty_after="true"
+          fi
+
+          generated_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          {
+            printf 'schema_version=%s\n' 'workbuddy-production-server-worktree-maintenance/v1'
+            printf 'generated_at=%s\n' "$generated_at"
+            printf 'run_id=%s\n' "$RUN_ID"
+            printf 'mode=%s\n' "$MODE"
+            printf 'backup_root=%s\n' "$backup_root"
+            printf 'backup_dir=%s\n' "$backup_dir"
+            printf 'head_before=%s\n' "$head_before"
+            printf 'branch_before=%s\n' "$branch_before"
+            printf 'change_count=%s\n' "$change_count"
+            printf 'patch_sha=%s\n' "$patch_sha"
+            printf 'dirty_before=%s\n' "$dirty_before"
+            printf 'dirty_after=%s\n' "$dirty_after"
+            printf 'cleaned=%s\n' "$cleaned"
+          } > "$meta_file"
+          MAINTENANCE_SCRIPT
+
+          ssh -i ~/.ssh/workbuddy-production-maintenance -p "$DEPLOY_PORT" -o IdentitiesOnly=yes "$DEPLOY_USER@$DEPLOY_HOST" \
+            "mkdir -p '$remote_root'"
+          scp -i ~/.ssh/workbuddy-production-maintenance -P "$DEPLOY_PORT" -o IdentitiesOnly=yes \
+            "$local_script" "$DEPLOY_USER@$DEPLOY_HOST:$remote_script"
+          ssh -i ~/.ssh/workbuddy-production-maintenance -p "$DEPLOY_PORT" -o IdentitiesOnly=yes "$DEPLOY_USER@$DEPLOY_HOST" \
+            "DEPLOY_PATH='$DEPLOY_PATH' RUN_ID='${GITHUB_RUN_ID}' MODE='$MODE' CONFIRMATION='$CONFIRMATION' bash '$remote_script'"
+
+          scp -i ~/.ssh/workbuddy-production-maintenance -P "$DEPLOY_PORT" -o IdentitiesOnly=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST:$remote_meta" "$OUTPUT_ROOT/maintenance-meta.env"
+          scp -i ~/.ssh/workbuddy-production-maintenance -P "$DEPLOY_PORT" -o IdentitiesOnly=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST:$remote_root/backup/tracked-status.before.txt" "$OUTPUT_ROOT/tracked-status.before.txt"
+          scp -i ~/.ssh/workbuddy-production-maintenance -P "$DEPLOY_PORT" -o IdentitiesOnly=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST:$remote_root/backup/tracked-name-status.before.txt" "$OUTPUT_ROOT/tracked-name-status.before.txt"
+          scp -i ~/.ssh/workbuddy-production-maintenance -P "$DEPLOY_PORT" -o IdentitiesOnly=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST:$remote_root/backup/tracked-status.after.txt" "$OUTPUT_ROOT/tracked-status.after.txt"
+
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs';
+
+          const root = process.env.OUTPUT_ROOT;
+          const parseMeta = (text) => Object.fromEntries(
+            text.split(/\r?\n/u)
+              .filter(Boolean)
+              .map((line) => {
+                const index = line.indexOf('=');
+                return [line.slice(0, index), line.slice(index + 1)];
+              }),
+          );
+          const readLines = (file) => readFileSync(`${root}/${file}`, 'utf8')
+            .split(/\r?\n/u)
+            .filter(Boolean);
+          const meta = parseMeta(readFileSync(`${root}/maintenance-meta.env`, 'utf8'));
+          const backupDir = meta.backup_dir;
+          const summary = {
+            schemaVersion: meta.schema_version,
+            generatedAt: meta.generated_at,
+            runId: meta.run_id,
+            mode: meta.mode,
+            backupRoot: meta.backup_root,
+            backupFiles: [
+              `${backupDir}/tracked-status.before.txt`,
+              `${backupDir}/tracked-name-status.before.txt`,
+              `${backupDir}/tracked-diff-stat.before.txt`,
+              `${backupDir}/tracked-changes.before.patch`,
+              `${backupDir}/tracked-status.after.txt`,
+            ],
+            headBefore: meta.head_before,
+            branchBefore: meta.branch_before,
+            trackedChangeCountBefore: Number(meta.change_count || 0),
+            trackedStatusBefore: readLines('tracked-status.before.txt'),
+            trackedNameStatusBefore: readLines('tracked-name-status.before.txt'),
+            trackedStatusAfter: readLines('tracked-status.after.txt'),
+            dirtyBefore: meta.dirty_before === 'true',
+            dirtyAfter: meta.dirty_after === 'true',
+            cleaned: meta.cleaned === 'true',
+            patchSha256: meta.patch_sha,
+            boundary: {
+              trackedFilesOnly: true,
+              untrackedFilesPreserved: true,
+              envValuesWritten: false,
+              secretValuesWritten: false,
+              patchStoredOnProductionServerOnly: true,
+            },
+          };
+          writeFileSync(`${root}/maintenance-summary.json`, `${JSON.stringify(summary, null, 2)}\n`);
+          NODE
+          test -s "$OUTPUT_ROOT/maintenance-summary.json"
+
+      - name: Publish maintenance summary
+        if: always()
+        env:
+          OUTPUT_ROOT: project-testing/reports/production-server-worktree-maintenance-${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ -f "$OUTPUT_ROOT/maintenance-summary.json" ]; then
+            node --input-type=module <<'NODE' >> "$GITHUB_STEP_SUMMARY"
+          import { readFileSync } from 'node:fs';
+          const summary = JSON.parse(readFileSync(`${process.env.OUTPUT_ROOT}/maintenance-summary.json`, 'utf8'));
+          console.log('# Production Server Worktree Maintenance');
+          console.log('');
+          console.log(`- Mode: ${summary.mode}`);
+          console.log(`- Cleaned: ${summary.cleaned ? 'yes' : 'no'}`);
+          console.log(`- Dirty before: ${summary.dirtyBefore ? 'yes' : 'no'}`);
+          console.log(`- Dirty after: ${summary.dirtyAfter ? 'yes' : 'no'}`);
+          console.log(`- Tracked change count before: ${summary.trackedChangeCountBefore}`);
+          console.log(`- Backup root: ${summary.backupRoot}`);
+          console.log(`- Patch SHA-256: ${summary.patchSha256}`);
+          NODE
+          fi
+
+      - name: Remove SSH key from runner
+        if: always()
+        run: |
+          rm -f ~/.ssh/workbuddy-production-maintenance
+
+      - name: Upload sanitized maintenance report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: production-server-worktree-maintenance-${{ github.run_id }}
+          path: |
+            project-testing/reports/production-server-worktree-maintenance-${{ github.run_id }}/**/*
+            !project-testing/reports/production-server-worktree-maintenance-${{ github.run_id }}/**/*.env
+            !project-testing/reports/production-server-worktree-maintenance-${{ github.run_id }}/**/*.patch
+          if-no-files-found: error
+          retention-days: 14
