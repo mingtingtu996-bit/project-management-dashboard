@@ -298,7 +298,7 @@ async function probeDatabase(env, envFile, pgModule) {
   }
 
   const client = new pgModule.Client({
-    connectionString,
+    connectionString: normalizePgConnectionStringForHandoff(connectionString, { rejectUnauthorized: false }),
     ssl: { rejectUnauthorized: false },
     connectionTimeoutMillis: 12000,
     query_timeout: 12000,
@@ -453,6 +453,19 @@ function sanitizeColumns(columns = {}) {
       .filter((column) => column.column_name);
   }
   return sanitized;
+}
+
+function normalizePgConnectionStringForHandoff(value, ssl) {
+  if (!ssl) return value;
+  try {
+    const parsed = new URL(value);
+    if (parsed.searchParams.get('sslmode') !== 'no-verify') {
+      parsed.searchParams.set('sslmode', 'no-verify');
+    }
+    return parsed.toString();
+  } catch {
+    return value;
+  }
 }
 
 async function readServerSignalsProbe(serverSignalsFile, envFile, env) {
