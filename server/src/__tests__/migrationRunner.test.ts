@@ -130,9 +130,37 @@ describe('migration runner contract', () => {
 
   it('prefers DATABASE_URL when it is provided', () => {
     process.env.DATABASE_URL = 'postgresql://postgres:secret@db.example.supabase.co:5432/postgres'
+    process.env.SUPABASE_MIGRATION_URL = 'postgresql://postgres:other@db.other.supabase.co:5432/postgres'
 
     expect(resolveMigrationConnectionConfig()).toEqual({
       connectionString: 'postgresql://postgres:secret@db.example.supabase.co:5432/postgres',
+      family: 4,
+      ssl: { rejectUnauthorized: false },
+    })
+  })
+
+  it('uses production migration connection fallbacks before host/password config', () => {
+    delete process.env.DATABASE_URL
+    process.env.SUPABASE_MIGRATION_URL = 'postgresql://postgres:migration@db.migration.supabase.co:5432/postgres'
+    process.env.DIRECT_DATABASE_URL = 'postgresql://postgres:direct@db.direct.supabase.co:5432/postgres'
+    process.env.DB_CONNECTION_STRING = 'postgresql://runtime:runtime@db.runtime.supabase.co:6543/postgres'
+
+    expect(resolveMigrationConnectionConfig()).toEqual({
+      connectionString: 'postgresql://postgres:migration@db.migration.supabase.co:5432/postgres',
+      family: 4,
+      ssl: { rejectUnauthorized: false },
+    })
+
+    delete process.env.SUPABASE_MIGRATION_URL
+    expect(resolveMigrationConnectionConfig()).toEqual({
+      connectionString: 'postgresql://postgres:direct@db.direct.supabase.co:5432/postgres',
+      family: 4,
+      ssl: { rejectUnauthorized: false },
+    })
+
+    delete process.env.DIRECT_DATABASE_URL
+    expect(resolveMigrationConnectionConfig()).toEqual({
+      connectionString: 'postgresql://runtime:runtime@db.runtime.supabase.co:6543/postgres',
       family: 4,
       ssl: { rejectUnauthorized: false },
     })

@@ -169,6 +169,9 @@ function deriveSupabaseHostFromUrl(value?: string | null) {
 
 export function resolveMigrationConnectionConfig() {
   const connectionString = process.env.DATABASE_URL
+    ?? process.env.SUPABASE_MIGRATION_URL
+    ?? process.env.DIRECT_DATABASE_URL
+    ?? process.env.DB_CONNECTION_STRING
   const host = process.env.PGHOST ?? process.env.SUPABASE_HOST ?? deriveSupabaseHostFromUrl(process.env.SUPABASE_URL)
   const port = Number.parseInt(process.env.PGPORT ?? process.env.SUPABASE_PORT ?? '5432', 10)
   const database = process.env.PGDATABASE ?? process.env.SUPABASE_DATABASE ?? 'postgres'
@@ -185,7 +188,7 @@ export function resolveMigrationConnectionConfig() {
 
   if (!host || !password) {
     throw new Error(
-      '缺少数据库连接信息，请提供 DATABASE_URL，或提供 PGHOST/PGPASSWORD（也支持 SUPABASE_HOST/SUPABASE_PASSWORD）。',
+      '缺少数据库连接信息，请提供 DATABASE_URL/SUPABASE_MIGRATION_URL/DIRECT_DATABASE_URL/DB_CONNECTION_STRING，或提供 PGHOST/PGPASSWORD（也支持 SUPABASE_HOST/SUPABASE_PASSWORD）。',
     )
   }
 

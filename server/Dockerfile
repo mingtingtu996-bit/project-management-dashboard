@@ -31,6 +31,7 @@ ENV NODE_ENV=production
 
 COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
+COPY migrations ./migrations
 COPY package.json ./
 
 RUN addgroup -S nodejs && adduser -S appuser -G nodejs

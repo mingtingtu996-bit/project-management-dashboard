@@ -7,6 +7,7 @@ set -euo pipefail
 COMPOSE_FILE="${COMPOSE_FILE:-deploy/docker-compose.lighthouse.yml}"
 ENV_FILE="${ENV_FILE:-deploy/env/server.production.env}"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1/api/health}"
+RELEASE_BUNDLE="${RELEASE_BUNDLE:-}"
 
 case "$APP_DIR" in
   "~") APP_DIR="$HOME" ;;
@@ -81,11 +82,21 @@ run_docker_compose() {
   fi
 }
 
-git fetch --depth=1 origin "$RELEASE_SHA"
+if [ -n "$RELEASE_BUNDLE" ]; then
+  if [ ! -f "$RELEASE_BUNDLE" ]; then
+    echo "Missing release bundle: $RELEASE_BUNDLE" >&2
+    exit 1
+  fi
+  git fetch "$RELEASE_BUNDLE" "$RELEASE_SHA"
+else
+  git fetch --depth=1 origin "$RELEASE_SHA"
+fi
 git checkout --force "$RELEASE_SHA"
 
 mkdir -p deploy/data/logs
 
+run_docker_compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" build api
+run_docker_compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" run --rm --no-deps migration
 run_docker_compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --build --remove-orphans
 run_docker_compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" ps
 
