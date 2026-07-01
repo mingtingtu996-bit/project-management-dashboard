@@ -4,12 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Inspect only, or back up and clean tracked server worktree changes.
+        description: Inspect only, collect runtime diagnostics, or back up and clean tracked server worktree changes.
         required: true
         default: inspect
         type: choice
         options:
           - inspect
+          - runtime-diagnostics
           - backup-and-clean-tracked
       confirmation:
         description: Type BACKUP_AND_CLEAN_TRACKED_CHANGES when mode is backup-and-clean-tracked.
@@ -60,6 +61,7 @@ jobs:
           fi
 
       - name: Inspect or clean production worktree
+        if: ${{ inputs.mode != 'runtime-diagnostics' }}
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
@@ -218,6 +220,104 @@ jobs:
           NODE
           test -s "$OUTPUT_ROOT/maintenance-summary.json"
 
+      - name: Collect runtime diagnostics
+        if: ${{ inputs.mode == 'runtime-diagnostics' }}
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          OUTPUT_ROOT: project-testing/reports/production-server-worktree-maintenance-${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ -z "$DEPLOY_HOST" ] || [ -z "$DEPLOY_USER" ] || [ -z "$DEPLOY_PATH" ]; then
+            echo "Missing required deploy location secrets." >&2
+            exit 1
+          fi
+
+          mkdir -p "$OUTPUT_ROOT"
+          remote_root="$DEPLOY_PATH/.workbuddy-server-worktree-maintenance/${GITHUB_RUN_ID}"
+          remote_script="$remote_root/runtime-diagnostics.sh"
+          remote_report="$remote_root/runtime-diagnostics.raw.txt"
+          local_script="$OUTPUT_ROOT/runtime-diagnostics.sh"
+
+          cat > "$local_script" <<'DIAGNOSTICS_SCRIPT'
+          set -euo pipefail
+          cd "$DEPLOY_PATH"
+          report=".workbuddy-server-worktree-maintenance/${RUN_ID}/runtime-diagnostics.raw.txt"
+          mkdir -p "$(dirname "$report")"
+
+          if docker info >/dev/null 2>&1; then
+            docker_cmd="docker"
+          elif sudo -n docker info >/dev/null 2>&1; then
+            docker_cmd="sudo -n docker"
+          else
+            echo "Docker is not available for diagnostics." >&2
+            exit 1
+          fi
+
+          {
+            echo "schemaVersion=workbuddy-production-runtime-diagnostics/v1"
+            echo "generatedAt=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "runId=$RUN_ID"
+            echo "releaseHead=$(git rev-parse HEAD 2>/dev/null || true)"
+            echo
+            echo "## docker ps"
+            $docker_cmd ps -a --filter "name=project-management" --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' || true
+            echo
+            echo "## api health inspect"
+            $docker_cmd inspect project-management-api --format '{{json .State.Health}}' || true
+            echo
+            echo "## api container state"
+            $docker_cmd inspect project-management-api --format 'status={{.State.Status}} running={{.State.Running}} exitCode={{.State.ExitCode}} error={{.State.Error}} startedAt={{.State.StartedAt}} finishedAt={{.State.FinishedAt}}' || true
+            echo
+            echo "## api logs tail"
+            $docker_cmd logs --tail 200 project-management-api 2>&1 || true
+            echo
+            echo "## local health curl"
+            curl --fail --silent --show-error http://127.0.0.1:3001/api/health 2>&1 || true
+          } > "$report"
+          DIAGNOSTICS_SCRIPT
+
+          ssh -i ~/.ssh/workbuddy-production-maintenance -p "$DEPLOY_PORT" -o IdentitiesOnly=yes "$DEPLOY_USER@$DEPLOY_HOST" \
+            "mkdir -p '$remote_root'"
+          scp -i ~/.ssh/workbuddy-production-maintenance -P "$DEPLOY_PORT" -o IdentitiesOnly=yes \
+            "$local_script" "$DEPLOY_USER@$DEPLOY_HOST:$remote_script"
+          ssh -i ~/.ssh/workbuddy-production-maintenance -p "$DEPLOY_PORT" -o IdentitiesOnly=yes "$DEPLOY_USER@$DEPLOY_HOST" \
+            "DEPLOY_PATH='$DEPLOY_PATH' RUN_ID='${GITHUB_RUN_ID}' bash '$remote_script'"
+          scp -i ~/.ssh/workbuddy-production-maintenance -P "$DEPLOY_PORT" -o IdentitiesOnly=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST:$remote_report" "$OUTPUT_ROOT/runtime-diagnostics.raw.txt"
+
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs';
+
+          const root = process.env.OUTPUT_ROOT;
+          const raw = readFileSync(`${root}/runtime-diagnostics.raw.txt`, 'utf8');
+          const redacted = raw
+            .replace(/(postgres(?:ql)?:\/\/)[^\s'"<>]+/giu, '$1[REDACTED]')
+            .replace(/(https?:\/\/[^\/\s'"<>]*supabase\.[^\s'"<>]+)/giu, '[REDACTED_SUPABASE_URL]')
+            .replace(/(service[_-]?role[_-]?key|anon[_-]?key|jwt[_-]?secret|password|secret|token)([=:]\s*)[^\s'"<>]+/giu, '$1$2[REDACTED]')
+            .replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/gu, '[REDACTED_JWT]');
+          writeFileSync(`${root}/runtime-diagnostics.txt`, redacted);
+
+          const lower = redacted.toLowerCase();
+          const summary = {
+            schemaVersion: 'workbuddy-production-runtime-diagnostics/v1',
+            generatedAt: new Date().toISOString(),
+            runId: process.env.GITHUB_RUN_ID,
+            apiUnhealthy: lower.includes('unhealthy'),
+            apiExited: lower.includes('status=exited') || lower.includes('running=false'),
+            healthCurlFailed: lower.includes('curl:') || lower.includes('failed to connect'),
+            secretValuesWritten: false,
+            envValuesWritten: false,
+            diagnosticsOnly: true,
+            rawReportStoredOnProductionServer: true,
+          };
+          writeFileSync(`${root}/runtime-diagnostics-summary.json`, `${JSON.stringify(summary, null, 2)}\n`);
+          NODE
+          rm -f "$OUTPUT_ROOT/runtime-diagnostics.raw.txt"
+          test -s "$OUTPUT_ROOT/runtime-diagnostics.txt"
+
       - name: Publish maintenance summary
         if: always()
         env:
@@ -239,6 +339,18 @@ jobs:
           console.log(`- Patch SHA-256: ${summary.patchSha256}`);
           NODE
           fi
+          if [ -f "$OUTPUT_ROOT/runtime-diagnostics-summary.json" ]; then
+            node --input-type=module <<'NODE' >> "$GITHUB_STEP_SUMMARY"
+          import { readFileSync } from 'node:fs';
+          const summary = JSON.parse(readFileSync(`${process.env.OUTPUT_ROOT}/runtime-diagnostics-summary.json`, 'utf8'));
+          console.log('# Production Runtime Diagnostics');
+          console.log('');
+          console.log(`- API unhealthy signal: ${summary.apiUnhealthy ? 'yes' : 'no'}`);
+          console.log(`- API exited signal: ${summary.apiExited ? 'yes' : 'no'}`);
+          console.log(`- Health curl failed signal: ${summary.healthCurlFailed ? 'yes' : 'no'}`);
+          console.log(`- Diagnostics only: ${summary.diagnosticsOnly ? 'yes' : 'no'}`);
+          NODE
+          fi
 
       - name: Remove SSH key from runner
         if: always()
@@ -254,5 +366,6 @@ jobs:
             project-testing/reports/production-server-worktree-maintenance-${{ github.run_id }}/**/*
             !project-testing/reports/production-server-worktree-maintenance-${{ github.run_id }}/**/*.env
             !project-testing/reports/production-server-worktree-maintenance-${{ github.run_id }}/**/*.patch
+            !project-testing/reports/production-server-worktree-maintenance-${{ github.run_id }}/**/*.raw.txt
           if-no-files-found: error
           retention-days: 14
