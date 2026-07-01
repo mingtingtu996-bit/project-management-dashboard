@@ -82,15 +82,30 @@ run_docker_compose() {
   fi
 }
 
-if [ -n "$RELEASE_BUNDLE" ]; then
-  if [ ! -f "$RELEASE_BUNDLE" ]; then
-    echo "Missing release bundle: $RELEASE_BUNDLE" >&2
-    exit 1
+SOURCE_FETCH_FAILED_EXIT_CODE=86
+
+fetch_release_source() {
+  if [ -n "$RELEASE_BUNDLE" ]; then
+    if [ ! -f "$RELEASE_BUNDLE" ]; then
+      echo "Missing release bundle: $RELEASE_BUNDLE" >&2
+      return 1
+    fi
+    git fetch "$RELEASE_BUNDLE" "$RELEASE_SHA"
+    return $?
   fi
-  git fetch "$RELEASE_BUNDLE" "$RELEASE_SHA"
-else
-  git fetch --depth=1 origin "$RELEASE_SHA"
-fi
+
+  for attempt in 1 2 3; do
+    if git fetch --depth=1 origin "$RELEASE_SHA"; then
+      return 0
+    fi
+    echo "Release fetch attempt $attempt failed for $RELEASE_SHA" >&2
+    sleep $((attempt * 5))
+  done
+
+  return "$SOURCE_FETCH_FAILED_EXIT_CODE"
+}
+
+fetch_release_source
 git checkout --force "$RELEASE_SHA"
 
 mkdir -p deploy/data/logs
