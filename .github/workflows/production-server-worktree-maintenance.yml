@@ -82,7 +82,7 @@ jobs:
           mkdir -p "$OUTPUT_ROOT"
           remote_root="$DEPLOY_PATH/.workbuddy-server-worktree-maintenance/${GITHUB_RUN_ID}"
           remote_script="$remote_root/maintenance.sh"
-          remote_summary="$remote_root/maintenance-summary.json"
+          remote_meta="$remote_root/maintenance-meta.env"
           local_script="$OUTPUT_ROOT/maintenance.sh"
 
           cat > "$local_script" <<'MAINTENANCE_SCRIPT'
@@ -101,7 +101,7 @@ jobs:
           name_status_file="${backup_dir}/tracked-name-status.before.txt"
           diff_stat_file="${backup_dir}/tracked-diff-stat.before.txt"
           patch_file="${backup_dir}/tracked-changes.before.patch"
-          summary_file="${backup_root}/maintenance-summary.json"
+          meta_file="${backup_root}/maintenance-meta.env"
 
           git status --porcelain=v1 --untracked-files=no > "$status_file"
           git diff --name-status HEAD -- > "$name_status_file"
@@ -132,50 +132,22 @@ jobs:
             dirty_after="true"
           fi
 
-          export backup_root backup_dir head_before branch_before change_count patch_sha dirty_before dirty_after cleaned
-          node - "$summary_file" <<'NODE'
-          const fs = require('fs');
-          const out = process.argv[2];
-          const env = process.env;
-          const statusBeforePath = `${env.backup_dir}/tracked-status.before.txt`;
-          const statusAfterPath = `${env.backup_dir}/tracked-status.after.txt`;
-          const nameStatusPath = `${env.backup_dir}/tracked-name-status.before.txt`;
-          const readLines = (file) => fs.existsSync(file)
-            ? fs.readFileSync(file, 'utf8').split(/\r?\n/u).filter(Boolean)
-            : [];
-          const summary = {
-            schemaVersion: 'workbuddy-production-server-worktree-maintenance/v1',
-            generatedAt: new Date().toISOString(),
-            runId: env.RUN_ID,
-            mode: env.MODE,
-            backupRoot: env.backup_root,
-            backupFiles: [
-              `${env.backup_dir}/tracked-status.before.txt`,
-              `${env.backup_dir}/tracked-name-status.before.txt`,
-              `${env.backup_dir}/tracked-diff-stat.before.txt`,
-              `${env.backup_dir}/tracked-changes.before.patch`,
-              `${env.backup_dir}/tracked-status.after.txt`,
-            ],
-            headBefore: env.head_before,
-            branchBefore: env.branch_before,
-            trackedChangeCountBefore: Number(env.change_count || 0),
-            trackedStatusBefore: readLines(statusBeforePath),
-            trackedNameStatusBefore: readLines(nameStatusPath),
-            trackedStatusAfter: readLines(statusAfterPath),
-            dirtyBefore: env.dirty_before === 'true',
-            dirtyAfter: env.dirty_after === 'true',
-            cleaned: env.cleaned === 'true',
-            patchSha256: env.patch_sha,
-            boundary: {
-              trackedFilesOnly: true,
-              untrackedFilesPreserved: true,
-              envValuesWritten: false,
-              secretValuesWritten: false,
-              patchStoredOnProductionServerOnly: true,
-            },
-          };
-          fs.writeFileSync(out, `${JSON.stringify(summary, null, 2)}\n`);
-          NODE
+          generated_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          {
+            printf 'schema_version=%s\n' 'workbuddy-production-server-worktree-maintenance/v1'
+            printf 'generated_at=%s\n' "$generated_at"
+            printf 'run_id=%s\n' "$RUN_ID"
+            printf 'mode=%s\n' "$MODE"
+            printf 'backup_root=%s\n' "$backup_root"
+            printf 'backup_dir=%s\n' "$backup_dir"
+            printf 'head_before=%s\n' "$head_before"
+            printf 'branch_before=%s\n' "$branch_before"
+            printf 'change_count=%s\n' "$change_count"
+            printf 'patch_sha=%s\n' "$patch_sha"
+            printf 'dirty_before=%s\n' "$dirty_before"
+            printf 'dirty_after=%s\n' "$dirty_after"
+            printf 'cleaned=%s\n' "$cleaned"
+          } > "$meta_file"
           MAINTENANCE_SCRIPT
 
           ssh -i ~/.ssh/workbuddy-production-maintenance -p "$DEPLOY_PORT" -o IdentitiesOnly=yes "$DEPLOY_USER@$DEPLOY_HOST" \
@@ -186,7 +158,64 @@ jobs:
             "DEPLOY_PATH='$DEPLOY_PATH' RUN_ID='${GITHUB_RUN_ID}' MODE='$MODE' CONFIRMATION='$CONFIRMATION' bash '$remote_script'"
 
           scp -i ~/.ssh/workbuddy-production-maintenance -P "$DEPLOY_PORT" -o IdentitiesOnly=yes \
-            "$DEPLOY_USER@$DEPLOY_HOST:$remote_summary" "$OUTPUT_ROOT/maintenance-summary.json"
+            "$DEPLOY_USER@$DEPLOY_HOST:$remote_meta" "$OUTPUT_ROOT/maintenance-meta.env"
+          scp -i ~/.ssh/workbuddy-production-maintenance -P "$DEPLOY_PORT" -o IdentitiesOnly=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST:$remote_root/backup/tracked-status.before.txt" "$OUTPUT_ROOT/tracked-status.before.txt"
+          scp -i ~/.ssh/workbuddy-production-maintenance -P "$DEPLOY_PORT" -o IdentitiesOnly=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST:$remote_root/backup/tracked-name-status.before.txt" "$OUTPUT_ROOT/tracked-name-status.before.txt"
+          scp -i ~/.ssh/workbuddy-production-maintenance -P "$DEPLOY_PORT" -o IdentitiesOnly=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST:$remote_root/backup/tracked-status.after.txt" "$OUTPUT_ROOT/tracked-status.after.txt"
+
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs';
+
+          const root = process.env.OUTPUT_ROOT;
+          const parseMeta = (text) => Object.fromEntries(
+            text.split(/\r?\n/u)
+              .filter(Boolean)
+              .map((line) => {
+                const index = line.indexOf('=');
+                return [line.slice(0, index), line.slice(index + 1)];
+              }),
+          );
+          const readLines = (file) => readFileSync(`${root}/${file}`, 'utf8')
+            .split(/\r?\n/u)
+            .filter(Boolean);
+          const meta = parseMeta(readFileSync(`${root}/maintenance-meta.env`, 'utf8'));
+          const backupDir = meta.backup_dir;
+          const summary = {
+            schemaVersion: meta.schema_version,
+            generatedAt: meta.generated_at,
+            runId: meta.run_id,
+            mode: meta.mode,
+            backupRoot: meta.backup_root,
+            backupFiles: [
+              `${backupDir}/tracked-status.before.txt`,
+              `${backupDir}/tracked-name-status.before.txt`,
+              `${backupDir}/tracked-diff-stat.before.txt`,
+              `${backupDir}/tracked-changes.before.patch`,
+              `${backupDir}/tracked-status.after.txt`,
+            ],
+            headBefore: meta.head_before,
+            branchBefore: meta.branch_before,
+            trackedChangeCountBefore: Number(meta.change_count || 0),
+            trackedStatusBefore: readLines('tracked-status.before.txt'),
+            trackedNameStatusBefore: readLines('tracked-name-status.before.txt'),
+            trackedStatusAfter: readLines('tracked-status.after.txt'),
+            dirtyBefore: meta.dirty_before === 'true',
+            dirtyAfter: meta.dirty_after === 'true',
+            cleaned: meta.cleaned === 'true',
+            patchSha256: meta.patch_sha,
+            boundary: {
+              trackedFilesOnly: true,
+              untrackedFilesPreserved: true,
+              envValuesWritten: false,
+              secretValuesWritten: false,
+              patchStoredOnProductionServerOnly: true,
+            },
+          };
+          writeFileSync(`${root}/maintenance-summary.json`, `${JSON.stringify(summary, null, 2)}\n`);
+          NODE
           test -s "$OUTPUT_ROOT/maintenance-summary.json"
 
       - name: Publish maintenance summary
