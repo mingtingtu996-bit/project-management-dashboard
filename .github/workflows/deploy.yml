@@ -115,6 +115,7 @@ jobs:
       - name: Build frontend
         run: pnpm --dir client run build
         env:
+          VITE_STORAGE_MODE: backend
           VITE_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
 
