@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 process.env.NODE_ENV = 'test'
 process.env.SUPABASE_URL = 'http://127.0.0.1:54321'
@@ -65,6 +65,10 @@ vi.mock('../middleware/logger.js', () => ({
 const { scanPreMilestoneWarnings } = await import('../services/preMilestoneWarningService.js')
 
 describe('pre milestone warning service', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   beforeEach(() => {
     mocks.from.mockClear()
     mocks.tables.pre_milestones.splice(0, mocks.tables.pre_milestones.length)
@@ -75,6 +79,9 @@ describe('pre milestone warning service', () => {
 
   it('returns only due permit warnings and adds supplement-chain warnings for certificates', async () => {
     const today = new Date('2026-04-17T00:00:00.000Z')
+    vi.useFakeTimers()
+    vi.setSystemTime(today)
+
     const expiringSoon = new Date(today)
     expiringSoon.setDate(expiringSoon.getDate() + 3)
     const farFuture = new Date(today)

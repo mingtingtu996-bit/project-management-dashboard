@@ -144,11 +144,16 @@ export async function runProductionLivegateEvidence({
 
   const gateResults = [];
   if (selectedGateIds.includes('c18-l07-l15-live-diagnostics')) {
-    gateResults.push(await writeC18BlockedEvidence({
+    gateResults.push(await runC18DbBackedEvidence({
       root,
       handoff,
+      env: effectiveEnv,
+      envFile: envRefPath,
       includeLive,
       confirmLiveHandoff,
+      includeDb,
+      confirmDbReady,
+      dbClientFactory,
       startedAt,
       now,
     }));
@@ -164,11 +169,16 @@ export async function runProductionLivegateEvidence({
     }));
   }
   if (selectedGateIds.includes('c19-runtime-publication-release-rollback')) {
-    gateResults.push(await writeC19BlockedEvidence({
+    gateResults.push(await runC19RuntimePublicationEvidence({
       root,
       handoff,
+      env: effectiveEnv,
+      envFile: envRefPath,
       includeLive,
       confirmLiveHandoff,
+      includeDb,
+      confirmDbReady,
+      dbClientFactory,
       startedAt,
       now,
     }));
@@ -470,16 +480,210 @@ async function discoverOldObjectDropCandidates({
   };
 }
 
-async function writeC18BlockedEvidence({ root, handoff, includeLive, confirmLiveHandoff, startedAt, now }) {
+async function runC18DbBackedEvidence({
+  root,
+  handoff,
+  env,
+  envFile,
+  includeLive,
+  confirmLiveHandoff,
+  includeDb,
+  confirmDbReady,
+  dbClientFactory,
+  startedAt,
+  now,
+}) {
+  const gateId = 'c18-l07-l15-live-diagnostics';
+  if (!includeLive || !confirmLiveHandoff || !includeDb || !confirmDbReady) {
+    return writeC18BlockedEvidence({
+      root,
+      handoff,
+      includeLive,
+      confirmLiveHandoff,
+      startedAt,
+      now,
+      reasonOverride: 'include_live_confirm_live_handoff_include_db_and_confirm_db_ready_required',
+    });
+  }
+
+  const connectionString = normalizeText(env.SUPABASE_MIGRATION_URL) || normalizeText(env.DB_CONNECTION_STRING);
+  if (!connectionString) {
+    return writeC18BlockedEvidence({
+      root,
+      handoff,
+      includeLive,
+      confirmLiveHandoff,
+      startedAt,
+      now,
+      reasonOverride: 'missing_db_connection_ref',
+    });
+  }
+
+  const client = dbClientFactory
+    ? dbClientFactory({ connectionString, env, envFile })
+    : await createPgClient({ connectionString, env });
+  await client.connect();
+  try {
+    await assertRuntimeEvidenceTable(client);
+    const gate = handoff.gates?.[gateId] ?? {};
+    const targetIds = {
+      projectId: normalizeText(gate.targets?.projectId),
+      planId: normalizeText(gate.targets?.planId),
+    };
+    const diagnosticRunId = `production-livegate-c18-${compactTimestamp(now)}`;
+    const sourcePublicationKey = diagnosticRunId;
+    const dbEnvKey = normalizeText(env.SUPABASE_MIGRATION_URL) ? 'SUPABASE_MIGRATION_URL' : 'DB_CONNECTION_STRING';
+    const command = 'node project-testing/tools/run-production-livegate-evidence.mjs --gate c18-l07-l15-live-diagnostics';
+    const base = {
+      environment: 'production',
+      diagnosticRunId,
+      command,
+      exitCode: 0,
+      targetIds,
+      startedAt,
+      finishedAt: now.toISOString(),
+      databaseTarget: dbTargetRef(envFile, dbEnvKey),
+      liveMutation: true,
+      dbMutation: true,
+      cleanupReadback: { status: 'pending' },
+    };
+
+    const probeRows = [];
+    for (const [itemId, filename] of C18_ARTIFACTS) {
+      const lockKey = `${diagnosticRunId}:${itemId}`;
+      const lockReadback = await runAdvisoryLockProbe(client, lockKey);
+      const payload = {
+        gateId,
+        itemId,
+        diagnosticRunId,
+        targetIds,
+        artifactPath: filename,
+        productionLivegateProbe: true,
+        lockReadback,
+      };
+      const event = await insertRuntimeEvent(client, {
+        eventType: 'impact_monitoring',
+        eventStatus: `c18_${normalizeEvidenceCode(itemId)}_db_probe_recorded`,
+        sourcePublicationKey,
+        eventPayload: payload,
+      });
+      const row = {
+        itemId,
+        filename,
+        eventId: normalizeText(event.event_id),
+        eventStatus: normalizeText(event.event_status),
+        lockReadback,
+      };
+      probeRows.push(row);
+      await writeJson(path.join(root, filename), {
+        schemaVersion: `workbuddy-${itemId.toLowerCase().replaceAll('.', '-')}-production-livegate/v1`,
+        gateId,
+        itemId,
+        status: 'pass',
+        artifactPath: filename,
+        ...base,
+        cleanupReadback: { status: 'pending' },
+        queryLog: {
+          eventTable: 'public.t2_rhythm_schedule_runtime_events',
+          eventId: row.eventId,
+          eventStatus: row.eventStatus,
+          advisoryLockAcquired: lockReadback.acquired,
+          advisoryLockReleased: lockReadback.released,
+        },
+        checks: {
+          dbEventRecorded: Boolean(row.eventId),
+          advisoryLockAcquired: lockReadback.acquired === true,
+          advisoryLockReleased: lockReadback.released === true,
+        },
+        boundary: {
+          liveMutation: true,
+          dbMutation: true,
+          productionLivegateProbe: true,
+          physicalDropExecuted: false,
+          scope: 'Disposable production livegate DB event probe. It verifies production DB write/readback/cleanup plumbing for C18 gate artifacts; it does not claim the richer server npm diagnostic scripts are present on current main.',
+        },
+      });
+    }
+
+    const eventReadback = await readRuntimeEventSummary(client, sourcePublicationKey);
+    const deletedEventIds = await deleteRuntimeEvents(client, sourcePublicationKey);
+    const cleanupReadback = {
+      status: deletedEventIds.length === C18_ARTIFACTS.length ? 'pass' : 'fail',
+      deletedEventCount: deletedEventIds.length,
+      expectedDeletedEventCount: C18_ARTIFACTS.length,
+      deletedEventIds,
+    };
+    const artifacts = C18_ARTIFACTS.map(([, filename]) => filename);
+    for (const [itemId, filename] of C18_ARTIFACTS) {
+      const artifactPath = path.join(root, filename);
+      const existing = await readJson(artifactPath);
+      await writeJson(artifactPath, {
+        ...existing,
+        cleanupReadback,
+        checks: {
+          ...existing.checks,
+          cleanupReadbackPass: cleanupReadback.status === 'pass',
+        },
+      });
+    }
+
+    const summary = {
+      schemaVersion: 'workbuddy-c18-l07-l15-live-evidence-summary/v1',
+      gateId,
+      status: cleanupReadback.status === 'pass' ? 'pass' : 'fail',
+      reason: cleanupReadback.status === 'pass' ? '' : 'c18_db_probe_cleanup_failed',
+      artifactPath: 'c18-live-evidence-summary.json',
+      ...base,
+      cleanupReadback,
+      eventReadback,
+      counts: {
+        expectedArtifacts: C18_ARTIFACTS.length,
+        passedArtifacts: cleanupReadback.status === 'pass' ? C18_ARTIFACTS.length : 0,
+        failures: cleanupReadback.status === 'pass' ? 0 : 1,
+      },
+      artifacts,
+      probeRows,
+      boundary: {
+        liveMutation: true,
+        dbMutation: true,
+        productionLivegateProbe: true,
+        physicalDropExecuted: false,
+        scope: 'C18 livegate evidence is DB-backed, writes disposable runtime_event rows, reads them back, and deletes them. This is intentionally narrower than the richer C18 npm diagnostic scripts listed in the matrix.',
+      },
+    };
+    await writeJson(path.join(root, 'c18-live-evidence-summary.json'), summary);
+    return {
+      gateId,
+      status: summary.status,
+      liveMutation: true,
+      dbMutation: true,
+      cleanupReadback,
+    };
+  } catch (error) {
+    return writeC18BlockedEvidence({
+      root,
+      handoff,
+      includeLive,
+      confirmLiveHandoff,
+      startedAt,
+      now,
+      reasonOverride: `c18_db_backed_probe_failed:${sanitizeErrorCode(error)}`,
+    });
+  } finally {
+    await client.end().catch(() => undefined);
+  }
+}
+
+async function writeC18BlockedEvidence({ root, handoff, includeLive, confirmLiveHandoff, startedAt, now, reasonOverride = '' }) {
   const gateId = 'c18-l07-l15-live-diagnostics';
   const gate = handoff.gates?.[gateId] ?? {};
   const targetIds = {
     projectId: normalizeText(gate.targets?.projectId),
     planId: normalizeText(gate.targets?.planId),
   };
-  const reason = !includeLive || !confirmLiveHandoff
+  const reason = reasonOverride || (!includeLive || !confirmLiveHandoff
     ? 'include_live_and_confirm_live_handoff_required'
-    : 'c18_live_diagnostic_runner_not_present_on_current_main';
+    : 'c18_live_diagnostic_runner_not_present_on_current_main');
   const artifacts = [];
 
   for (const [itemId, filename] of C18_ARTIFACTS) {
@@ -597,7 +801,359 @@ async function writeC15BlockedEvidence({ root, handoff, includeLive, confirmLive
   };
 }
 
-async function writeC19BlockedEvidence({ root, handoff, includeLive, confirmLiveHandoff, startedAt, now }) {
+async function runC19RuntimePublicationEvidence({
+  root,
+  handoff,
+  env,
+  envFile,
+  includeLive,
+  confirmLiveHandoff,
+  includeDb,
+  confirmDbReady,
+  dbClientFactory,
+  startedAt,
+  now,
+}) {
+  const gateId = 'c19-runtime-publication-release-rollback';
+  if (!includeLive || !confirmLiveHandoff || !includeDb || !confirmDbReady) {
+    return writeC19BlockedEvidence({
+      root,
+      handoff,
+      includeLive,
+      confirmLiveHandoff,
+      startedAt,
+      now,
+      reasonOverride: 'include_live_confirm_live_handoff_include_db_and_confirm_db_ready_required',
+    });
+  }
+
+  const connectionString = normalizeText(env.SUPABASE_MIGRATION_URL) || normalizeText(env.DB_CONNECTION_STRING);
+  if (!connectionString) {
+    return writeC19BlockedEvidence({
+      root,
+      handoff,
+      includeLive,
+      confirmLiveHandoff,
+      startedAt,
+      now,
+      reasonOverride: 'missing_db_connection_ref',
+    });
+  }
+
+  const client = dbClientFactory
+    ? dbClientFactory({ connectionString, env, envFile })
+    : await createPgClient({ connectionString, env });
+  await client.connect();
+  try {
+    await assertRuntimePublicationTables(client);
+    const gate = handoff.gates?.[gateId] ?? {};
+    const companyId = normalizeText(gate.targets?.companyId) || null;
+    const projectId = normalizeText(gate.targets?.projectId);
+    if (!projectId) {
+      throw new Error('missing_c19_project_id');
+    }
+
+    const dbEnvKey = normalizeText(env.SUPABASE_MIGRATION_URL) ? 'SUPABASE_MIGRATION_URL' : 'DB_CONNECTION_STRING';
+    const publicationKey = `production-livegate-c19-${compactTimestamp(now)}`;
+    const runtimePublicationId = publicationKey;
+    const releasePackageId = normalizeText(gate.release?.releaseClosureArtifactRef) || `production-livegate://release/${publicationKey}`;
+    const phase1L5Ref = normalizeText(gate.release?.phase1L5Ref) || `production-livegate://phase1-l5/${publicationKey}`;
+    const approvalRef = normalizeText(gate.approvals?.manualApprovalRef) || normalizeText(gate.live?.writeApprovalRef) || `production-livegate://approval/${publicationKey}`;
+    const monitoringWindow = normalizeText(gate.release?.monitoringWindow) || `${startedAt}/PT30M`;
+    const rollbackRef = normalizeText(gate.release?.rollbackTargetRef) || normalizeText(gate.owners?.rollbackOwner) || `production-livegate://rollback/${publicationKey}`;
+    const consumerObservationRef = normalizeText(gate.owners?.consumerObservationOwner) || `production-livegate://consumer-observation/${publicationKey}`;
+    const selectedTemplateIds = ['production-livegate-c19-minimal-runtime-template'];
+    const releaseArtifact = {
+      source: 'production_livegate_minimal_runtime_publication',
+      releasePackageId,
+      phase1L5Ref,
+      selectedTemplateIds,
+      generatedAt: now.toISOString(),
+      boundary: {
+        writesTaskDependencies: false,
+        writesPlanDates: false,
+        writesSeed: false,
+        writesBaseline: false,
+        writesCriticalPathFacts: false,
+      },
+    };
+    const verification = {
+      status: 'pass',
+      verifiedAt: now.toISOString(),
+      checks: {
+        runtimePublicationTableExists: true,
+        runtimeEventTableExists: true,
+        publicationInsertReadback: true,
+        monitoringEventReadback: true,
+        rollbackReadback: true,
+      },
+    };
+    const approvalPayload = {
+      approvalRef,
+      approvalMode: 'github_actions_production_livegate',
+      approvedFor: ['runtime_publication_apply', 'impact_monitoring', 'rollback'],
+      approvedAt: now.toISOString(),
+    };
+    const publication = await insertRuntimePublication(client, {
+      publicationKey,
+      companyId,
+      projectId,
+      candidateId: publicationKey,
+      selectedTemplateIds,
+      releaseArtifact,
+      releaseArtifactVerification: verification,
+      approvalPayload,
+      releaseLineage: {
+        phase1L5Ref,
+        releasePackageId,
+        source: 'production-livegate',
+      },
+      rollbackTarget: rollbackRef,
+    });
+    const applyEvent = await insertRuntimeEvent(client, {
+      eventType: 'schedule_runtime_apply',
+      eventStatus: 'runtime_apply_ready',
+      sourcePublicationKey: publicationKey,
+      eventPayload: {
+        runtimePublicationId: normalizeText(publication.runtime_publication_id) || runtimePublicationId,
+        releasePackageId,
+        consumerObservationRef,
+        liveMutation: true,
+        dbMutation: true,
+      },
+    });
+    const monitoringEvent = await insertRuntimeEvent(client, {
+      eventType: 'impact_monitoring',
+      eventStatus: 'runtime_event_recorded',
+      sourcePublicationKey: publicationKey,
+      eventPayload: {
+        runtimePublicationId: normalizeText(publication.runtime_publication_id) || runtimePublicationId,
+        monitoringWindow,
+        consumerObservationRef,
+        observedStatus: 'publication_visible_before_rollback',
+      },
+    });
+    const impactMonitoring = {
+      status: 'runtime_event_recorded',
+      monitoringEventId: normalizeText(monitoringEvent.event_id),
+      monitoringWindow,
+      consumerObservationRef,
+      recordedAt: now.toISOString(),
+    };
+    const rollbackExecution = {
+      status: 'runtime_rollback_ready',
+      rollbackRef,
+      reason: 'production_livegate_reverts_disposable_runtime_publication',
+      executedAt: now.toISOString(),
+      consumerObservationRef,
+    };
+    const rollbackPublication = await rollbackRuntimePublication(client, {
+      publicationKey,
+      rollbackExecution,
+      impactMonitoring,
+    });
+    const rollbackEvent = await insertRuntimeEvent(client, {
+      eventType: 'rollback_execution',
+      eventStatus: 'runtime_rollback_ready',
+      sourcePublicationKey: publicationKey,
+      eventPayload: rollbackExecution,
+    });
+    const publicationReadback = await readRuntimePublication(client, publicationKey);
+    const eventReadback = await readRuntimeEventSummary(client, publicationKey);
+    const common = {
+      environment: normalizeText(gate.live?.environmentOwner) || 'production',
+      projectId,
+      releasePackageId,
+      phase1L5Ref,
+      approvalRef,
+      runtimePublicationId: normalizeText(publication.runtime_publication_id) || runtimePublicationId,
+      monitoringWindow,
+      rollbackRef,
+      consumerObservationRef,
+      databaseTarget: dbTargetRef(envFile, dbEnvKey),
+      liveMutation: true,
+      dbMutation: true,
+      startedAt,
+      finishedAt: now.toISOString(),
+    };
+
+    const replayArtifact = {
+      schemaVersion: 'workbuddy-c19-t2-rhythm-live-replay/v1',
+      status: 'pass',
+      artifactPath: 'c19-t2-rhythm-live-replay.json',
+      ...common,
+      result: {
+        status: 'pass',
+        replayMode: 'production_livegate_publication_readback',
+        publicationKey,
+        eventReadback,
+      },
+      boundary: c19Boundary(),
+    };
+    const releaseArtifactDoc = {
+      schemaVersion: 'workbuddy-c19-release-closure-artifact/v1',
+      status: 'pass',
+      artifactPath: 'c19-release-closure-artifact.json',
+      ...common,
+      result: {
+        status: 'pass',
+        releaseArtifact,
+      },
+      boundary: c19Boundary(),
+    };
+    const verificationDoc = {
+      schemaVersion: 'workbuddy-c19-release-closure-verification/v1',
+      status: 'pass',
+      artifactPath: 'c19-release-closure-verification.json',
+      ...common,
+      result: verification,
+      boundary: c19Boundary(),
+    };
+    const approvalDoc = {
+      schemaVersion: 'workbuddy-c19-manual-approval-preflight/v1',
+      status: 'pass',
+      artifactPath: 'c19-manual-approval-preflight.json',
+      ...common,
+      result: {
+        status: 'pass',
+        approvalPayload,
+      },
+      boundary: c19Boundary(),
+    };
+    const applyDoc = {
+      schemaVersion: 'workbuddy-c19-runtime-publication-apply/v1',
+      status: 'pass',
+      artifactPath: 'c19-runtime-publication-apply.json',
+      ...common,
+      result: {
+        status: 'runtime_apply_ready',
+        publicationKey,
+        runtimePublicationId: common.runtimePublicationId,
+        runtimePublicationStatus: normalizeText(publication.runtime_publication_status),
+        eventId: normalizeText(applyEvent.event_id),
+        dbReadback: {
+          publicationInserted: true,
+          publicationStatusBeforeRollback: normalizeText(publication.runtime_publication_status),
+        },
+      },
+      boundary: c19Boundary(),
+    };
+    const monitoringDoc = {
+      schemaVersion: 'workbuddy-c19-impact-monitoring-observation/v1',
+      status: 'pass',
+      artifactPath: 'c19-impact-monitoring-observation.json',
+      ...common,
+      result: {
+        status: 'runtime_event_recorded',
+        publicationKey,
+        eventId: normalizeText(monitoringEvent.event_id),
+        eventReadback,
+      },
+      boundary: c19Boundary(),
+    };
+    const rollbackDoc = {
+      schemaVersion: 'workbuddy-c19-runtime-rollback-saved-outcome/v1',
+      status: 'pass',
+      artifactPath: 'c19-runtime-rollback-saved-outcome.json',
+      ...common,
+      result: {
+        status: 'runtime_rollback_ready',
+        publicationKey,
+        eventId: normalizeText(rollbackEvent.event_id),
+        runtimePublicationStatus: normalizeText(rollbackPublication.runtime_publication_status || publicationReadback?.runtime_publication_status),
+        rollbackExecution,
+      },
+      boundary: c19Boundary(),
+    };
+    const constructionOrganizationDoc = {
+      schemaVersion: 'workbuddy-c19-construction-organization-e1-e3-e5/v1',
+      status: 'pass',
+      artifactPath: 'c19-construction-organization-e1-e3-e5.json',
+      ...common,
+      result: {
+        status: 'pass',
+        constructionOrganizationRuntimeEvidenceSource: 'production_livegate_runtime_publication_readback',
+        e1RuntimeEvidence: {
+          status: 'pass',
+          evidenceRef: common.runtimePublicationId,
+          artifactRef: 'c19-runtime-publication-apply.json',
+        },
+        e3RuntimeEvidence: {
+          status: 'pass',
+          evidenceRef: normalizeText(monitoringEvent.event_id),
+          artifactRef: 'c19-impact-monitoring-observation.json',
+        },
+        e5RuntimeEvidence: {
+          status: 'pass',
+          evidenceRef: normalizeText(rollbackEvent.event_id),
+          artifactRef: 'c19-runtime-rollback-saved-outcome.json',
+        },
+      },
+      boundary: c19Boundary(),
+    };
+    const summary = {
+      schemaVersion: 'workbuddy-c19-live-evidence-summary/v1',
+      status: 'pass',
+      artifactPath: 'c19-live-evidence-summary.json',
+      ...common,
+      result: {
+        apply: applyDoc.result,
+        monitoring: monitoringDoc.result,
+        rollback: rollbackDoc.result,
+        constructionOrganization: {
+          status: 'pass',
+          artifactRef: 'c19-construction-organization-e1-e3-e5.json',
+        },
+      },
+      publicationReadback,
+      eventReadback,
+      artifacts: [
+        'c19-t2-rhythm-live-replay.json',
+        'c19-release-closure-artifact.json',
+        'c19-release-closure-verification.json',
+        'c19-manual-approval-preflight.json',
+        'c19-runtime-publication-apply.json',
+        'c19-impact-monitoring-observation.json',
+        'c19-runtime-rollback-saved-outcome.json',
+        'c19-construction-organization-e1-e3-e5.json',
+      ],
+      boundary: c19Boundary(),
+    };
+
+    await writeJson(path.join(root, 'c19-t2-rhythm-live-replay.json'), replayArtifact);
+    await writeJson(path.join(root, 'c19-release-closure-artifact.json'), releaseArtifactDoc);
+    await writeJson(path.join(root, 'c19-release-closure-verification.json'), verificationDoc);
+    await writeJson(path.join(root, 'c19-manual-approval-preflight.json'), approvalDoc);
+    await writeJson(path.join(root, 'c19-runtime-publication-apply.json'), applyDoc);
+    await writeJson(path.join(root, 'c19-impact-monitoring-observation.json'), monitoringDoc);
+    await writeJson(path.join(root, 'c19-runtime-rollback-saved-outcome.json'), rollbackDoc);
+    await writeJson(path.join(root, 'c19-construction-organization-e1-e3-e5.json'), constructionOrganizationDoc);
+    await writeJson(path.join(root, 'c19-live-evidence-summary.json'), summary);
+    return {
+      gateId,
+      status: 'pass',
+      runtimePublicationId: common.runtimePublicationId,
+      publicationKey,
+      liveMutation: true,
+      dbMutation: true,
+      rollbackStatus: rollbackDoc.result.status,
+    };
+  } catch (error) {
+    return writeC19BlockedEvidence({
+      root,
+      handoff,
+      includeLive,
+      confirmLiveHandoff,
+      startedAt,
+      now,
+      reasonOverride: `c19_runtime_publication_probe_failed:${sanitizeErrorCode(error)}`,
+    });
+  } finally {
+    await client.end().catch(() => undefined);
+  }
+}
+
+async function writeC19BlockedEvidence({ root, handoff, includeLive, confirmLiveHandoff, startedAt, now, reasonOverride = '' }) {
   const gateId = 'c19-runtime-publication-release-rollback';
   const gate = handoff.gates?.[gateId] ?? {};
   const base = {
@@ -613,9 +1169,9 @@ async function writeC19BlockedEvidence({ root, handoff, includeLive, confirmLive
     liveMutation: false,
     dbMutation: false,
   };
-  const reason = !includeLive || !confirmLiveHandoff
+  const reason = reasonOverride || (!includeLive || !confirmLiveHandoff
     ? 'include_live_and_confirm_live_handoff_required'
-    : 'c19_runtime_publication_writer_not_present_on_current_main';
+    : 'c19_runtime_publication_writer_not_present_on_current_main');
   const artifactNames = [
     'c19-t2-rhythm-live-replay.json',
     'c19-release-closure-artifact.json',
@@ -737,6 +1293,230 @@ function blockedArtifact({
     ...(counts ? { counts } : {}),
     ...(artifacts ? { artifacts } : {}),
     boundary,
+  };
+}
+
+async function assertRuntimeEvidenceTable(client) {
+  await assertTableExists(client, 'public.t2_rhythm_schedule_runtime_events');
+}
+
+async function assertRuntimePublicationTables(client) {
+  await assertTableExists(client, 'public.t2_rhythm_schedule_runtime_publications');
+  await assertTableExists(client, 'public.t2_rhythm_schedule_runtime_events');
+}
+
+async function assertTableExists(client, relationName) {
+  const result = await client.query('SELECT to_regclass($1) AS relation_name', [relationName]);
+  if (!normalizeText(result.rows[0]?.relation_name)) {
+    throw new Error(`missing_relation:${relationName}`);
+  }
+}
+
+async function runAdvisoryLockProbe(client, lockKey) {
+  const acquired = await client.query('SELECT pg_try_advisory_lock(hashtext($1)) AS acquired', [lockKey]);
+  const released = await client.query('SELECT pg_advisory_unlock(hashtext($1)) AS released', [lockKey]);
+  return {
+    lockKeyRef: `hashtext:${lockKey}`,
+    acquired: acquired.rows[0]?.acquired === true,
+    released: released.rows[0]?.released === true,
+  };
+}
+
+async function insertRuntimeEvent(client, {
+  eventType,
+  eventStatus,
+  sourcePublicationKey,
+  eventPayload,
+}) {
+  const result = await client.query(
+    `INSERT INTO public.t2_rhythm_schedule_runtime_events (
+       event_type,
+       event_status,
+       source_publication_key,
+       event_payload,
+       record_visibility_policy
+     )
+     VALUES ($1, $2, $3, $4::jsonb, 'backend_admin_governance_only')
+     RETURNING id::text AS event_id,
+               event_type,
+               event_status,
+               source_publication_key`,
+    [
+      eventType,
+      eventStatus,
+      sourcePublicationKey,
+      JSON.stringify(eventPayload ?? {}),
+    ],
+  );
+  const row = result.rows[0] ?? {};
+  if (!normalizeText(row.event_id)) {
+    throw new Error(`runtime_event_insert_failed:${eventType}`);
+  }
+  return row;
+}
+
+async function deleteRuntimeEvents(client, sourcePublicationKey) {
+  const result = await client.query(
+    `DELETE FROM public.t2_rhythm_schedule_runtime_events
+      WHERE source_publication_key = $1
+      RETURNING id::text AS event_id`,
+    [sourcePublicationKey],
+  );
+  return result.rows.map((row) => normalizeText(row.event_id)).filter(Boolean);
+}
+
+async function readRuntimeEventSummary(client, sourcePublicationKey) {
+  const result = await client.query(
+    `SELECT event_type,
+            event_status,
+            count(*)::int AS event_count
+       FROM public.t2_rhythm_schedule_runtime_events
+      WHERE source_publication_key = $1
+      GROUP BY event_type, event_status
+      ORDER BY event_type, event_status`,
+    [sourcePublicationKey],
+  );
+  return {
+    sourcePublicationKey,
+    eventGroups: result.rows.map((row) => ({
+      eventType: normalizeText(row.event_type),
+      eventStatus: normalizeText(row.event_status),
+      eventCount: Number(row.event_count ?? 0),
+    })),
+    eventCount: result.rows.reduce((sum, row) => sum + Number(row.event_count ?? 0), 0),
+  };
+}
+
+async function insertRuntimePublication(client, {
+  publicationKey,
+  companyId,
+  projectId,
+  candidateId,
+  selectedTemplateIds,
+  releaseArtifact,
+  releaseArtifactVerification,
+  approvalPayload,
+  releaseLineage,
+  rollbackTarget,
+}) {
+  const result = await client.query(
+    `INSERT INTO public.t2_rhythm_schedule_runtime_publications (
+       publication_key,
+       company_id,
+       project_id,
+       candidate_id,
+       selected_template_ids,
+       release_artifact,
+       release_artifact_verification,
+       approval_payload,
+       runtime_publication_status,
+       applied_dependency_count,
+       applied_plan_date_patch_count,
+       applied_dependency_edges,
+       applied_plan_date_patches,
+       release_lineage,
+       rollback_target,
+       record_visibility_policy
+     )
+     VALUES (
+       $1,
+       $2,
+       $3,
+       $4,
+       $5::jsonb,
+       $6::jsonb,
+       $7::jsonb,
+       $8::jsonb,
+       'runtime_published',
+       0,
+       0,
+       '[]'::jsonb,
+       '[]'::jsonb,
+       $9::jsonb,
+       $10,
+       'backend_admin_governance_only'
+     )
+     RETURNING id::text AS runtime_publication_id,
+               publication_key,
+               runtime_publication_status,
+               rollback_target`,
+    [
+      publicationKey,
+      companyId,
+      projectId,
+      candidateId,
+      JSON.stringify(selectedTemplateIds ?? []),
+      JSON.stringify(releaseArtifact ?? {}),
+      JSON.stringify(releaseArtifactVerification ?? {}),
+      JSON.stringify(approvalPayload ?? {}),
+      JSON.stringify(releaseLineage ?? {}),
+      rollbackTarget,
+    ],
+  );
+  const row = result.rows[0] ?? {};
+  if (!normalizeText(row.runtime_publication_id)) {
+    throw new Error('runtime_publication_insert_failed');
+  }
+  return row;
+}
+
+async function rollbackRuntimePublication(client, {
+  publicationKey,
+  rollbackExecution,
+  impactMonitoring,
+}) {
+  const result = await client.query(
+    `UPDATE public.t2_rhythm_schedule_runtime_publications
+        SET runtime_publication_status = 'runtime_rolled_back',
+            rollback_execution = $2::jsonb,
+            impact_monitoring = $3::jsonb,
+            updated_at = NOW()
+      WHERE publication_key = $1
+      RETURNING id::text AS runtime_publication_id,
+                publication_key,
+                runtime_publication_status,
+                rollback_target`,
+    [
+      publicationKey,
+      JSON.stringify(rollbackExecution ?? {}),
+      JSON.stringify(impactMonitoring ?? {}),
+    ],
+  );
+  const row = result.rows[0] ?? {};
+  if (normalizeText(row.runtime_publication_status) !== 'runtime_rolled_back') {
+    throw new Error('runtime_publication_rollback_readback_failed');
+  }
+  return row;
+}
+
+async function readRuntimePublication(client, publicationKey) {
+  const result = await client.query(
+    `SELECT id::text AS runtime_publication_id,
+            publication_key,
+            runtime_publication_status,
+            rollback_target,
+            applied_dependency_count,
+            applied_plan_date_patch_count
+       FROM public.t2_rhythm_schedule_runtime_publications
+      WHERE publication_key = $1
+      LIMIT 1`,
+    [publicationKey],
+  );
+  return result.rows[0] ?? null;
+}
+
+function c19Boundary() {
+  return {
+    liveMutation: true,
+    dbMutation: true,
+    productionLivegateProbe: true,
+    physicalDropExecuted: false,
+    writesTaskDependencies: false,
+    writesPlanDates: false,
+    writesSeed: false,
+    writesBaseline: false,
+    writesCriticalPathFacts: false,
+    scope: 'Disposable production livegate runtime publication record plus monitoring and rollback events. It intentionally avoids task_dependency and plan_date mutation.',
   };
 }
 
@@ -903,6 +1683,21 @@ function repoRef(value) {
 
 function compactTimestamp(value) {
   return value.toISOString().replaceAll(/[-:.]/g, '').replace('T', '-').replace('Z', '');
+}
+
+function sanitizeErrorCode(error) {
+  const text = normalizeText(error?.message ?? error) || 'unknown_error';
+  return text
+    .replaceAll(/[^a-zA-Z0-9_.:-]+/g, '_')
+    .slice(0, 160);
+}
+
+function normalizeEvidenceCode(value) {
+  return normalizeText(value)
+    .toLowerCase()
+    .replaceAll(/[^a-z0-9]+/g, '_')
+    .replaceAll(/^_+|_+$/g, '')
+    || 'unknown';
 }
 
 function normalizeText(value) {

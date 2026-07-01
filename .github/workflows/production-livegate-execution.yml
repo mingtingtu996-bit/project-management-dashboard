@@ -283,6 +283,7 @@ jobs:
           remote_artifacts="$remote_root/artifacts"
           remote_handoff="$remote_root/production-handoff.generated.json"
           remote_matrix="$remote_root/release-test-matrix.json"
+          remote_gate_args="$remote_root/production-livegate-container-gate-args.txt"
           remote_env="$DEPLOY_PATH/deploy/env/server.production.env"
           mkdir -p "$OUTPUT_ROOT/artifacts"
 
@@ -299,9 +300,33 @@ jobs:
           scp -i ~/.ssh/workbuddy-production-livegate -P "$DEPLOY_PORT" -o IdentitiesOnly=yes \
             "$OUTPUT_ROOT/production-handoff.generated.json" "$DEPLOY_USER@$DEPLOY_HOST:$remote_handoff"
 
+          container_gate_args=()
+          container_gate_args_file="$OUTPUT_ROOT/production-livegate-container-gate-args.txt"
+          : > "$container_gate_args_file"
+          while IFS= read -r gate_id; do
+            case "$gate_id" in
+              c18-l07-l15-live-diagnostics|c15-live-learning-closeout|c19-runtime-publication-release-rollback|old-object-physical-drop-closeout)
+                container_gate_args+=(--gate "$gate_id")
+                printf '%s\n%s\n' "--gate" "$gate_id" >> "$container_gate_args_file"
+                ;;
+              *)
+                echo "Unknown production livegate id: $gate_id" >&2
+                exit 1
+                ;;
+            esac
+          done < <(node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          const selection = JSON.parse(readFileSync(`${process.env.OUTPUT_ROOT}/production-livegate-gate-selection.json`, 'utf8'));
+          for (const gateId of selection.selectedGateIds ?? []) console.log(gateId);
+          NODE
+          )
+          container_gate_arg_string="${container_gate_args[*]}"
+          scp -i ~/.ssh/workbuddy-production-livegate -P "$DEPLOY_PORT" -o IdentitiesOnly=yes \
+            "$container_gate_args_file" "$DEPLOY_USER@$DEPLOY_HOST:$remote_gate_args"
+
           set +e
           ssh -i ~/.ssh/workbuddy-production-livegate -p "$DEPLOY_PORT" -o IdentitiesOnly=yes "$DEPLOY_USER@$DEPLOY_HOST" \
-            "set -e; if docker info >/dev/null 2>&1; then docker_cmd='docker'; elif sudo -n docker info >/dev/null 2>&1; then docker_cmd='sudo -n docker'; else exit 1; fi; \$docker_cmd exec project-management-api sh -lc \"mkdir -p /tmp/workbuddy-production-livegate-${GITHUB_RUN_ID}/artifacts\"; for f in '$remote_tools'/*.mjs '$remote_matrix' '$remote_handoff'; do \$docker_cmd cp \"\$f\" project-management-api:/tmp/workbuddy-production-livegate-${GITHUB_RUN_ID}/; done; set +e; \$docker_cmd exec project-management-api sh -lc \"node -- /tmp/workbuddy-production-livegate-${GITHUB_RUN_ID}/run-production-livegate-evidence.mjs --env-source process --env-file deploy/env/server.production.env --handoff-file /tmp/workbuddy-production-livegate-${GITHUB_RUN_ID}/production-handoff.generated.json --artifact-root /tmp/workbuddy-production-livegate-${GITHUB_RUN_ID}/artifacts --matrix /tmp/workbuddy-production-livegate-${GITHUB_RUN_ID}/release-test-matrix.json --include-live --confirm-live-handoff --include-db --confirm-db-ready\"; run_status=\$?; set -e; \$docker_cmd cp project-management-api:/tmp/workbuddy-production-livegate-${GITHUB_RUN_ID}/artifacts '$remote_root/artifacts.out'; \$docker_cmd exec --user 0 project-management-api sh -lc \"rm -rf /tmp/workbuddy-production-livegate-${GITHUB_RUN_ID}\" >/dev/null 2>&1 || true; exit \$run_status"
+            "set -e; gate_args=\"\$(tr '\n' ' ' < '$remote_gate_args')\"; if docker info >/dev/null 2>&1; then docker_cmd='docker'; elif sudo -n docker info >/dev/null 2>&1; then docker_cmd='sudo -n docker'; else exit 1; fi; \$docker_cmd exec project-management-api sh -lc \"mkdir -p /tmp/workbuddy-production-livegate-${GITHUB_RUN_ID}/artifacts\"; for f in '$remote_tools'/*.mjs '$remote_matrix' '$remote_handoff'; do \$docker_cmd cp \"\$f\" project-management-api:/tmp/workbuddy-production-livegate-${GITHUB_RUN_ID}/; done; set +e; \$docker_cmd exec project-management-api sh -lc \"node -- /tmp/workbuddy-production-livegate-${GITHUB_RUN_ID}/run-production-livegate-evidence.mjs --env-source process --env-file deploy/env/server.production.env --handoff-file /tmp/workbuddy-production-livegate-${GITHUB_RUN_ID}/production-handoff.generated.json --artifact-root /tmp/workbuddy-production-livegate-${GITHUB_RUN_ID}/artifacts --matrix /tmp/workbuddy-production-livegate-${GITHUB_RUN_ID}/release-test-matrix.json --include-live --confirm-live-handoff --include-db --confirm-db-ready \$gate_args\"; run_status=\$?; set -e; \$docker_cmd cp project-management-api:/tmp/workbuddy-production-livegate-${GITHUB_RUN_ID}/artifacts '$remote_root/artifacts.out'; \$docker_cmd exec --user 0 project-management-api sh -lc \"rm -rf /tmp/workbuddy-production-livegate-${GITHUB_RUN_ID}\" >/dev/null 2>&1 || true; exit \$run_status"
           livegate_status=$?
           set -e
 
