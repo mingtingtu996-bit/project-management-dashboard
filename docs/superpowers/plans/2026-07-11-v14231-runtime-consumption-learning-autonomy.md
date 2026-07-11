@@ -18,6 +18,7 @@
 - A receipt is `effective_applied` only when task selection, duration, dates, dependency, overlap, buffer, or confidence changes.
 - Confirmed baselines may receive an automatic revision draft but are never auto-confirmed or silently replaced.
 - `project-testing/reports/implementation-integrity-review-v1.4.22-v1.4.23.1-v1.4.23.2-20260711.md` is read-only historical audit input and must not be edited or deleted.
+- `AUDIT_FINDINGS.md` is also read-only historical audit input and must not be edited or deleted.
 - Historical artifacts never satisfy a current staging or production/live gate; environment evidence must record target, execution time, code digest, and outcome.
 - Every production behavior change follows red-green-refactor.
 
@@ -52,7 +53,7 @@ Cover project > company > industry > system stable > bootstrap, candidate non-ov
 
 - [ ] **Step 2: Run the focused test and verify RED**
 
-Run: `npx vitest run --config server/vitest.config.ts server/src/__tests__/durationAssetRuntimeContractService.test.ts`
+Run: `npm exec --workspace=server -- vitest run src/__tests__/durationAssetRuntimeContractService.test.ts`
 
 Expected: FAIL because the new service does not exist.
 
@@ -86,7 +87,7 @@ __effectiveRuntimeSource: mapAlgorithmSeedResolverSource(source),
 
 - [ ] **Step 7: Run resolver tests**
 
-Run: `npx vitest run --config server/vitest.config.ts server/src/__tests__/algorithmSeedGovernanceFlow.test.ts server/src/__tests__/algorithmSeedResolverFastFallback.test.ts server/src/__tests__/durationAssetRuntimeContractService.test.ts`
+Run: `npm exec --workspace=server -- vitest run src/__tests__/algorithmSeedGovernanceFlow.test.ts src/__tests__/algorithmSeedResolverFastFallback.test.ts src/__tests__/durationAssetRuntimeContractService.test.ts`
 
 Expected: all tests pass with no live DB requirement.
 
@@ -119,7 +120,7 @@ Add cases for metadata-only `evidence_only`, confidence-only `advisory_used`, in
 
 - [ ] **Step 2: Run the receipt test and verify RED**
 
-Run: `npx vitest run --config server/vitest.config.ts server/src/__tests__/durationAssetConsumptionReceiptService.test.ts`
+Run: `npm exec --workspace=server -- vitest run src/__tests__/durationAssetConsumptionReceiptService.test.ts`
 
 Expected: FAIL because the receipt service does not exist.
 
@@ -146,7 +147,7 @@ The assembler does not manufacture effective receipts; it only validates and pro
 
 - [ ] **Step 7: Run Task 2 tests**
 
-Run: `npx vitest run --config server/vitest.config.ts server/src/__tests__/durationAssetConsumptionReceiptService.test.ts server/src/__tests__/durationInputAssemblerService.test.ts`
+Run: `npm exec --workspace=server -- vitest run src/__tests__/durationAssetConsumptionReceiptService.test.ts src/__tests__/durationInputAssemblerService.test.ts`
 
 Expected: all tests pass.
 
@@ -159,6 +160,7 @@ Expected: all tests pass.
 - Modify: `server/src/routes/projectWizard.ts`
 - Test: `server/src/__tests__/wbsTemplateManagedFrontierGeneration.test.ts`
 - Test: `server/src/__tests__/defaultMasterPlanExecutableAssemblyService.test.ts`
+- Test: `server/src/__tests__/wbsPlanRollupContract.test.ts`
 - Test: `server/src/__tests__/wizardGenerationSideEffects.test.ts`
 
 **Interfaces:**
@@ -171,7 +173,7 @@ For every formal business type assert 60-300 visible master rows, milestone/phas
 
 - [ ] **Step 2: Verify RED on the managed-frontier test**
 
-Run: `npx vitest run --config server/vitest.config.ts server/src/__tests__/wbsTemplateManagedFrontierGeneration.test.ts -t "consumption receipt"`
+Run: `npm exec --workspace=server -- vitest run src/__tests__/wbsTemplateManagedFrontierGeneration.test.ts -t "consumption receipt"`
 
 Expected: FAIL because current utilization counts do not prove actual output changes.
 
@@ -185,7 +187,9 @@ Return the same receipt summary from preview and from the existing transactional
 
 - [ ] **Step 5: Run Task 3 tests**
 
-Run: `npx vitest run --config server/vitest.config.ts server/src/__tests__/wbsTemplateManagedFrontierGeneration.test.ts server/src/__tests__/defaultMasterPlanExecutableAssemblyService.test.ts server/src/__tests__/wizardGenerationSideEffects.test.ts`
+Keep the centralized rollup contract as the single business rule: only `duration_bearing`, `quality_gate`, `external_wait`, and `handover_marker` extend a parent plan window. Update the legacy WBS generation expectation to reuse the shared contributor predicate and assert excluded children remain dated but do not extend the parent; do not change the production rule or weaken the assertion just to make the suite green.
+
+Run: `npm exec --workspace=server -- vitest run src/__tests__/wbsTemplateManagedFrontierGeneration.test.ts src/__tests__/defaultMasterPlanExecutableAssemblyService.test.ts src/__tests__/wbsPlanRollupContract.test.ts src/__tests__/wizardGenerationSideEffects.test.ts`
 
 Expected: all tests pass.
 
@@ -207,7 +211,7 @@ Assert an active T2 resolver record changes generated cycle duration, direct see
 
 - [ ] **Step 2: Run the drilldown test and verify RED**
 
-Run: `npx vitest run --config server/vitest.config.ts server/src/__tests__/taskPlanDrilldownRhythmService.test.ts`
+Run: `npm exec --workspace=server -- vitest run src/__tests__/taskPlanDrilldownRhythmService.test.ts`
 
 Expected: active version and conflict receipt assertions fail against the direct seed import/equal split implementation.
 
@@ -221,7 +225,7 @@ The rhythm result may provide rows, but those rows must still pass common schedu
 
 - [ ] **Step 5: Run Task 4 tests**
 
-Run: `npx vitest run --config server/vitest.config.ts server/src/__tests__/taskPlanDrilldownRhythmService.test.ts server/src/__tests__/wbsTemplateGenerationCompositeE2E.test.ts`
+Run: `npm exec --workspace=server -- vitest run src/__tests__/taskPlanDrilldownRhythmService.test.ts src/__tests__/wbsTemplateGenerationCompositeE2E.test.ts`
 
 Expected: all tests pass; a single expansion remains capped at 80 rows and project totals may exceed 500.
 
@@ -251,7 +255,7 @@ Write/adjust a failing test that clears the project cache after mocked task/depe
 
 - [ ] **Step 2: Verify the isolated critical-path failures, then make them GREEN**
 
-Run: `npx vitest run --config server/vitest.config.ts server/src/__tests__/projectCriticalPathService.test.ts`
+Run: `npm exec --workspace=server -- vitest run src/__tests__/projectCriticalPathService.test.ts`
 
 Expected after correction: all critical-path tests pass without weakening the five-minute production cache.
 
@@ -279,7 +283,7 @@ Replace violations owned by the duration/default-master-plan chain with `constru
 
 - [ ] **Step 8: Run Task 5 tests**
 
-Run: `npx vitest run --config server/vitest.config.ts server/src/__tests__/projectCriticalPathService.test.ts server/src/__tests__/scheduleAccelerationRuntimeService.test.ts server/src/__tests__/projectRemainingDurationForecastService.test.ts server/src/__tests__/wizardPostCommitDerivationRecoveryService.test.ts server/src/__tests__/wizardGenerationSideEffects.test.ts server/src/__tests__/reportsRoutes.test.ts server/src/__tests__/serverRawDateMathGuard.test.ts`
+Run: `npm exec --workspace=server -- vitest run src/__tests__/projectCriticalPathService.test.ts src/__tests__/scheduleAccelerationRuntimeService.test.ts src/__tests__/projectRemainingDurationForecastService.test.ts src/__tests__/wizardPostCommitDerivationRecoveryService.test.ts src/__tests__/wizardGenerationSideEffects.test.ts src/__tests__/reportsRoutes.test.ts src/__tests__/serverRawDateMathGuard.test.ts`
 
 Expected: all tests pass.
 
@@ -287,10 +291,12 @@ Expected: all tests pass.
 
 **Files:**
 - Create: `server/src/services/durationContextPolicyRuntimePublicationBridgeService.ts`
+- Create: `server/src/services/durationContextPolicyLearningCheckpointService.ts`
 - Modify: `server/src/jobs/durationContextPolicyLearningJob.ts`
 - Modify: `server/src/services/durationContextPolicySelectorService.ts`
 - Modify: `server/src/services/defaultMasterPlanVisibilityLearningService.ts`
 - Test: `server/src/__tests__/durationContextPolicyRuntimePublicationBridgeService.test.ts`
+- Test: `server/src/__tests__/durationContextPolicyLearningCheckpointService.test.ts`
 - Test: `server/src/__tests__/durationContextPolicyLearningJob.test.ts`
 - Test: `server/src/__tests__/durationContextPolicySelectorService.test.ts`
 - Test: `server/src/__tests__/executeSqlGuard.test.ts`
@@ -303,29 +309,35 @@ Expected: all tests pass.
 
 Assert low-risk candidates may auto-publish stable after gates, medium-risk duration/lag/overlap candidates run bounded canary before stable, and high-risk task/dependency/milestone changes remain `manual_professional_approval_required`.
 
+Also write stage-by-stage failure-injection tests for one stable operation ID: after candidate/canary/decision persistence succeeds and a later publication or monitoring stage fails, retry must resume from the last verified checkpoint and must not create a second candidate, decision, event, or publication. Cover process restart and same-operation multi-instance dedupe through injected persistence adapters.
+
 - [ ] **Step 2: Verify RED**
 
-Run: `npx vitest run --config server/vitest.config.ts server/src/__tests__/durationContextPolicyRuntimePublicationBridgeService.test.ts`
+Run: `npm exec --workspace=server -- vitest run src/__tests__/durationContextPolicyRuntimePublicationBridgeService.test.ts`
 
 Expected: FAIL because current job stops at canary registry/trial-plan evidence.
 
-- [ ] **Step 3: Implement the bridge with existing writers**
+- [ ] **Step 3: Implement operation identity and stage checkpoints**
+
+Derive a stable operation ID from scheduled window, project scope, input fact digest, and learner version. Persist/check each stage's terminal status and output hash; a retry skips a completed matching stage, rejects a mismatched hash, and resumes only incomplete stages. Each candidate/decision/publication write uses operation ID plus stage as its idempotency key.
+
+- [ ] **Step 4: Implement the bridge with existing writers**
 
 Delegate numeric publications to `persistAlgorithmAssetLearnableParameterRuntimePublication`, monitoring to `recordAlgorithmAssetLearnableParameterImpactMonitoring`, rollback to `executeAlgorithmAssetLearnableParameterRuntimeRollback`, and reads to `loadAlgorithmAssetLearnableParameterRuntimeValue`. Do not write seed files or task facts.
 
-- [ ] **Step 4: Connect the learning job**
+- [ ] **Step 5: Connect the learning job**
 
 After activation readiness, invoke the bridge and return `runtimeMutationPolicy` that accurately describes canary/stable publication actions. A gate miss retains the previous stable version.
 
-- [ ] **Step 5: Connect selector consumption**
+- [ ] **Step 6: Connect selector consumption**
 
 Use a stable runtime publication when consumable, otherwise keep deterministic current factors; canary use requires the explicit boundary.
 
-- [ ] **Step 6: Run Task 6 tests**
+- [ ] **Step 7: Run Task 6 tests**
 
 Convert the default-master-plan visibility feedback reader to a fixed parameterized query accepted by the SQL guard; do not approve a truly dynamic SQL string merely to turn the test green.
 
-Run: `npx vitest run --config server/vitest.config.ts server/src/__tests__/durationContextPolicyRuntimePublicationBridgeService.test.ts server/src/__tests__/durationContextPolicyLearningJob.test.ts server/src/__tests__/durationContextPolicySelectorService.test.ts server/src/__tests__/executeSqlGuard.test.ts`
+Run: `npm exec --workspace=server -- vitest run src/__tests__/durationContextPolicyLearningCheckpointService.test.ts src/__tests__/durationContextPolicyRuntimePublicationBridgeService.test.ts src/__tests__/durationContextPolicyLearningJob.test.ts src/__tests__/durationContextPolicySelectorService.test.ts src/__tests__/executeSqlGuard.test.ts`
 
 Expected: all tests pass with injected query executors and no real DB.
 
@@ -349,7 +361,7 @@ Assert no material diff creates no draft; duration/date/dependency changes mark 
 
 - [ ] **Step 2: Verify RED**
 
-Run: `npx vitest run --config server/vitest.config.ts server/src/__tests__/durationAssetBaselineRevisionBridgeService.test.ts`
+Run: `npm exec --workspace=server -- vitest run src/__tests__/durationAssetBaselineRevisionBridgeService.test.ts`
 
 Expected: FAIL because publication impact currently only reaches generic baseline validity status.
 
@@ -363,7 +375,7 @@ The scheduler may create drafts only for stable publication events that have pas
 
 - [ ] **Step 5: Run Task 7 tests**
 
-Run: `npx vitest run --config server/vitest.config.ts server/src/__tests__/durationAssetBaselineRevisionBridgeService.test.ts server/src/__tests__/baselineGovernanceService.test.ts server/src/__tests__/schedulerJobContracts.test.ts`
+Run: `npm exec --workspace=server -- vitest run src/__tests__/durationAssetBaselineRevisionBridgeService.test.ts src/__tests__/baselineGovernanceService.test.ts src/__tests__/schedulerJobContracts.test.ts`
 
 Expected: all tests pass.
 
@@ -376,6 +388,8 @@ Expected: all tests pass.
 - Modify: `server/src/registry/system-domain-registry.json`
 - Test: `server/src/__tests__/systemRegistryGuard.test.ts`
 - Test: `server/src/__tests__/v14231NonLiveCloseoutContract.test.ts`
+- Create: `server/src/__tests__/durationSuggestionAssemblyIntegration.test.ts`
+- Create: `server/src/fixtures/duration-accuracy/frozen-accepted-samples.json`
 - Create: `project-testing/reports/duration-runtime-consumption-closure-20260711/readiness.md`
 
 **Interfaces:**
@@ -398,7 +412,7 @@ Read generated artifacts only, calculate gates from receipt status and test resu
 
 - [ ] **Step 4: Run focused server verification**
 
-Run all test files listed in Tasks 1-7 with `npx vitest run --config server/vitest.config.ts ...`.
+Run all test files listed in Tasks 1-7 with `npm exec --workspace=server -- vitest run ...`.
 
 Expected: all focused tests pass.
 
@@ -411,8 +425,8 @@ Add only the default-master-plan, drilldown, runtime-publication, monitoring, ro
 Run:
 
 ```powershell
-npx tsc -p server/tsconfig.json --noEmit
-npx vitest run --config server/vitest.config.ts
+npm run typecheck --workspace=server
+npm run test:run --workspace=server
 ```
 
 Expected: TypeScript passes and server tests have no new failures; any unrelated pre-existing failure is listed with exact evidence.
@@ -421,19 +435,23 @@ Expected: TypeScript passes and server tests have no new failures; any unrelated
 
 Re-run the already-passing 224-04 through 224-07 context calibration, residual overlay, cold-start baseline, and factor-synthesis tests. They remain regression gates and are not removed or reclassified because this专项 touches adjacent code.
 
-- [ ] **Step 8: Generate a simulated residential plan and audit**
+- [ ] **Step 8: Add a non-fully-mocked duration assembly accuracy chain**
+
+Use versioned, provenance-bearing frozen accepted samples and the real input assembler, seed resolver fallback/active-version logic, duration suggestion calculation, output governance, and accuracy service. Mock only the external persistence boundary. Assert sample lineage, minimum coverage, MAE/MAPE thresholds, and over-compensation rate; printed engineering references without assertions do not satisfy this gate. Keep the old mocked test as a simulation/contract test, not production accuracy evidence.
+
+- [ ] **Step 9: Generate a simulated residential plan and audit**
 
 Run the existing simulation tool, then the new audit tool. Verify the master plan is simple and control-focused, drilldown uses governed T2 assets, and receipt counts are based on changed outputs. This closes candidate/read-only behavior only.
 
-- [ ] **Step 9: Run staging smoke when a real staging DB and credentials are available**
+- [ ] **Step 10: Run staging smoke when a real staging DB and credentials are available**
 
 Record current schema/migration state, authenticated wizard preview/commit, concurrent retry/idempotency behavior, post-commit derivation recovery, runtime consumer observation, canary publication, monitoring, rollback, tenant/company/project boundary, target, timestamp, and code digest. Missing access leaves staging rows `unable_to_verify`.
 
-- [ ] **Step 10: Run production/live smoke only with explicit production access**
+- [ ] **Step 11: Run production/live smoke only with explicit production access**
 
 Run read-only/current evidence checks first, then only the already-guarded publication/rollback procedures authorized for that environment. Browser/API wizard smoke, accepted real samples, four-layer consumer observation, publication, monitoring, rollback, accuracy outcome, and final claim must all be fresh. Missing credentials or any missing layer leaves production/live `not_closed`.
 
-- [ ] **Step 11: Write the readiness report**
+- [ ] **Step 12: Write the readiness report**
 
 Record code implementation and actual local behavior first, tests second, and evidence artifacts last. Explicitly list staging requirements (schema/migrations, scheduler, tenant isolation, monitoring, rollback) and production/live requirements (real credentials, real publication, real consumption and outcome); do not mark them complete from local evidence.
 
@@ -464,5 +482,9 @@ The historical audit remains unchanged. Final reporting must include, for every 
 | `232-01`, `232A-01`, `232A-04` duration slice | P8 | Every new/modified in-scope service/job registered and no in-scope unknown scan result. |
 | `232-03` duration slice | P6-P8 | New/modified learning/monitor/rollback/recovery jobs prove idempotency, single-flight, terminal state and recovery. |
 | `224-04` through `224-07` | P8 regression | Existing passing calibration, residual-overlay, cold-start and factor gates remain green and are not deleted. |
+| `BACKEND-046` | P6, `232-03` duration slice | Stable operation ID, stage checkpoint/output hash, committed-stage retry, process restart and same-operation dedupe tests prove exactly-once effects. |
+| `BACKEND-051` | P3-P4, P8 | Centralized duration-contribution rollup is the sole contract; legacy WBS generation and shared contract tests both pass without weakening behavior. |
+| `BACKEND-052` | P8, `224-03`, `224-08` | Real assembler/non-fully-mocked chain over provenance-bearing frozen samples asserts coverage, MAE/MAPE and over-compensation; staging/live claims still require real readback. |
+| `BACKEND-055` | P3-P8 regression risk | No line-count rewrite is required; extracted new services stay focused, characterization and long WBS tests remain regression gates, and no new rule is embedded in the large route/service. |
 
 Out of scope remains exactly as delegated: external knowledge connectors/writers, root governance command dependency, governance-workbench lint, generic readiness hardcoding, global registry redesign, commercialization, release workflow, tenant-wide isolation redesign, and global Git cleanup.
