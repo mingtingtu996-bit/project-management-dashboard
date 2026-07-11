@@ -16,7 +16,7 @@ The product must treat planning levels as separate operational surfaces rather t
 | Weekly plan | 30-100 active rows | Crew-level execution |
 | Governed process library | 1,000-3,000 possible rows across the whole project | On-demand source material, never one initial schedule |
 
-The existing project-facts recommendation range of 60-300 rows remains the authority for wizard master plans. The existing 500-row server fuse remains a final general-generation safety boundary, not a target size.
+The existing project-facts recommendation range of 60-300 rows remains the authority for wizard master plans. The existing 500-row server fuse remains only a single-operation or single-batch general-generation safety boundary, not a project-total limit or a target size. A project execution plan may accumulate more than 500 rows through governed expansions; crossing 500 persisted project rows must never block a later row-specific expansion.
 
 ## Inclusion Policy
 
@@ -78,6 +78,7 @@ The operation inherits these parent fields when present:
 
 - Target per expansion: 5-40 selected child rows.
 - Hard server limit per selected-row preview or commit: 80 generated schedule rows.
+- Project-total task count is not subject to the 500-row generation fuse; 500 remains a single-operation or single-batch technical boundary for non-drilldown generation.
 - The client displays generated and selected counts and blocks apply above 80.
 - Activity-step generation is never enabled on the first expansion of a master-plan row.
 - When a request exceeds 80 rows, no preview rows are committed. The response instructs the user to select a narrower node, building, section, floor range, or work package.
