@@ -655,12 +655,16 @@ function parseManualReorderPayload(value: unknown): ManualReorderSessionPayload 
 }
 
 async function collectManualReorderStartSnapshot(projectId: string): Promise<ManualReorderStartSnapshot> {
-  const [tasks, baselines, monthlyPlans, criticalTaskIds] = await Promise.all([
-    executeSQL<Task>('SELECT * FROM tasks WHERE project_id = ?', [projectId]),
-    executeSQL<{ id: string; status?: string | null }>('SELECT id, status FROM task_baselines WHERE project_id = ?', [projectId]),
-    executeSQL<{ id: string; status?: string | null }>('SELECT id, status FROM monthly_plans WHERE project_id = ?', [projectId]),
-    getCriticalPathTaskIds(projectId),
-  ])
+  const tasks = await executeSQL<Task>('SELECT id, is_milestone FROM tasks WHERE project_id = ?', [projectId])
+  const baselines = await executeSQL<{ id: string; status?: string | null }>(
+    'SELECT id, status FROM task_baselines WHERE project_id = ?',
+    [projectId],
+  )
+  const monthlyPlans = await executeSQL<{ id: string; status?: string | null }>(
+    'SELECT id, status FROM monthly_plans WHERE project_id = ?',
+    [projectId],
+  )
+  const criticalTaskIds = await getCriticalPathTaskIds(projectId)
 
   return {
     total_tasks: tasks.length,
@@ -917,10 +921,14 @@ export function buildAlerts(snapshot: PlanningGovernanceSnapshot): PlanningGover
 }
 
 async function getProjectRecipients(projectId: string, scope: 'owner' | 'owner_admin' = 'owner_admin'): Promise<string[]> {
-  const [project, members] = await Promise.all([
-    executeSQLOne<ProjectOwnerRow>('SELECT id, owner_id FROM projects WHERE id = ? LIMIT 1', [projectId]),
-    executeSQL<ProjectMemberRow>('SELECT project_id, user_id, permission_level FROM project_members WHERE project_id = ?', [projectId]),
-  ])
+  const project = await executeSQLOne<ProjectOwnerRow>(
+    'SELECT id, owner_id FROM projects WHERE id = ? LIMIT 1',
+    [projectId],
+  )
+  const members = await executeSQL<ProjectMemberRow>(
+    'SELECT project_id, user_id, permission_level FROM project_members WHERE project_id = ?',
+    [projectId],
+  )
 
   const ownerRecipients = uniqueStrings([project?.owner_id ?? null])
   if (scope === 'owner') {
@@ -1101,14 +1109,23 @@ export class PlanningGovernanceService {
   }
 
   async scanProjectGovernance(projectId: string): Promise<PlanningGovernanceSnapshot> {
-    const [health, integrity, anomaly, monthlyPlans, tasks, manualReorderStates] = await Promise.all([
-      this.healthService.evaluateProjectHealth(projectId),
-      this.integrityService.scanProjectIntegrity(projectId),
-      this.anomalyService.scanProjectPassiveReorder(projectId),
-      executeSQL<MonthlyPlan>('SELECT * FROM monthly_plans WHERE project_id = ?', [projectId]),
-      executeSQL<Task>('SELECT * FROM tasks WHERE project_id = ?', [projectId]),
-      listActiveManualReorderStates(projectId),
-    ])
+    const health = await this.healthService.evaluateProjectHealth(projectId)
+    const integrity = await this.integrityService.scanProjectIntegrity(projectId)
+    const anomaly = await this.anomalyService.scanProjectPassiveReorder(projectId)
+    const monthlyPlans = await executeSQL<MonthlyPlan>('SELECT * FROM monthly_plans WHERE project_id = ?', [projectId])
+    const taskRows = await executeSQL<Task>(
+      'SELECT id, title, monthly_plan_item_id, baseline_item_id FROM tasks WHERE project_id = ?',
+      [projectId],
+    )
+    const tasks = taskRows.map((task) => ({
+      ...task,
+      task_source: task.monthly_plan_item_id
+        ? 'monthly_plan'
+        : task.baseline_item_id
+          ? 'baseline'
+          : 'ad_hoc',
+    }))
+    const manualReorderStates = await listActiveManualReorderStates(projectId)
 
     const taskIds = tasks.map((task) => task.id)
     const snapshots = await listTaskProgressSnapshotsByTaskIds(taskIds)

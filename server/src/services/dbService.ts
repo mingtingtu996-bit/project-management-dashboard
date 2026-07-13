@@ -468,6 +468,24 @@ async function deleteProjectScopedRows(projectId: string, step: ProjectCleanupSt
 //   高风险路由（含动态 SET 模板字符串）：SupabaseService.query / create / update / delete（本文件底部）
 //   历史 JOIN/OR/表达式 UPDATE 调用已逐步迁出；新代码应继续避免向 executeSQL 回灌复杂 SQL
 // ─────────────────────────────────────────────────────────────────────────────
+function resolveSimpleSelectProjection(sql: string, isCount: boolean): string {
+  if (isCount) return '*'
+
+  const projectionMatch = sql.match(/^SELECT\s+([\s\S]+?)\s+FROM\s+\w+/i)
+  if (!projectionMatch) return '*'
+
+  const columns = projectionMatch[1]
+    .split(',')
+    .map((column) => column.trim())
+    .filter(Boolean)
+
+  if (columns.length === 0 || !columns.every((column) => column === '*' || /^[A-Za-z_][A-Za-z0-9_]*$/.test(column))) {
+    return '*'
+  }
+
+  return columns.join(',')
+}
+
 async function executeSQL<T = any>(sql: string, params: any[] = []): Promise<T[]> {
   const s = sql.trim()
   const upper = s.toUpperCase()
@@ -485,8 +503,9 @@ async function executeSQL<T = any>(sql: string, params: any[] = []): Promise<T[]
 
     // 判断是 COUNT(*) 查询
     const isCount = /SELECT\s+COUNT\s*\(\s*\*\s*\)\s+AS\s+(\w+)/i.test(s)
+    const projection = resolveSimpleSelectProjection(s, isCount)
 
-    let query = supabase.from(table).select('*') as unknown as SqlSelectQuery
+    let query = supabase.from(table).select(projection) as unknown as SqlSelectQuery
 
     // 解析 WHERE 子句
     const whereMatch = s.match(/WHERE\s+(.+?)(?:\s+ORDER\s+|\s+LIMIT\s+|\s+GROUP\s+|$)/i)

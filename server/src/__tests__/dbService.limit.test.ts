@@ -75,6 +75,19 @@ describe('executeSQL LIMIT parsing', () => {
     expect(mocks.builders[0]?.range).not.toHaveBeenCalled()
   })
 
+  it('pushes simple SELECT projections down to Supabase', async () => {
+    await executeSQL(
+      `SELECT id, title, status, progress, planned_start_date, planned_end_date,
+              end_date, start_date, actual_start_date, actual_end_date
+       FROM tasks WHERE project_id = ?`,
+      ['project-1'],
+    )
+
+    expect(mocks.builders[0]?.select).toHaveBeenCalledWith(
+      'id,title,status,progress,planned_start_date,planned_end_date,end_date,start_date,actual_start_date,actual_end_date',
+    )
+  })
+
   it('supports literal LIMIT with OFFSET values', async () => {
     await executeSQL('SELECT * FROM tasks LIMIT 10 OFFSET 20')
 

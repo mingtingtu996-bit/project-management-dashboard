@@ -88,13 +88,22 @@ function nowAgeDays(timestamp: number): number {
 
 export class PlanningIntegrityService {
   async scanProjectIntegrity(projectId: string): Promise<PlanningIntegrityReport> {
-  const [tasks, milestones, baselineItems, monthlyPlanItems, changeLogs] = await Promise.all([
-      executeSQL<Task>('SELECT * FROM tasks WHERE project_id = ?', [projectId]),
-      executeSQL<Milestone>('SELECT * FROM milestones WHERE project_id = ?', [projectId]),
-      executeSQL<TaskBaselineItem>('SELECT * FROM task_baseline_items WHERE project_id = ?', [projectId]),
-      executeSQL<MonthlyPlanItem>('SELECT * FROM monthly_plan_items WHERE project_id = ?', [projectId]),
-      loadChangeLogs(projectId),
-    ])
+    const tasks = await executeSQL<Task>(
+      `SELECT id, responsible_unit, assignee_unit, participant_unit_id,
+              specialty_type, phase_id, status
+       FROM tasks WHERE project_id = ?`,
+      [projectId],
+    )
+    const milestones = await executeSQL<Milestone>('SELECT * FROM milestones WHERE project_id = ?', [projectId])
+    const baselineItems = await executeSQL<TaskBaselineItem>(
+      'SELECT * FROM task_baseline_items WHERE project_id = ?',
+      [projectId],
+    )
+    const monthlyPlanItems = await executeSQL<MonthlyPlanItem>(
+      'SELECT * FROM monthly_plan_items WHERE project_id = ?',
+      [projectId],
+    )
+    const changeLogs = await loadChangeLogs(projectId)
 
     const taskIds = tasks.map((task) => task.id)
     const criticalTaskIds = await getCriticalPathTaskIds(projectId)

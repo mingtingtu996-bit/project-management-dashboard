@@ -4,16 +4,17 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Inspect only, collect runtime diagnostics, or back up and clean tracked server worktree changes.
+        description: Inspect, diagnose, restart the existing runtime, or back up and clean tracked server worktree changes.
         required: true
         default: inspect
         type: choice
         options:
           - inspect
           - runtime-diagnostics
+          - runtime-restart
           - backup-and-clean-tracked
       confirmation:
-        description: Type BACKUP_AND_CLEAN_TRACKED_CHANGES when mode is backup-and-clean-tracked.
+        description: Type BACKUP_AND_CLEAN_TRACKED_CHANGES for clean mode or RESTART_PRODUCTION_RUNTIME for restart mode.
         required: false
         default: ""
         type: string
@@ -61,7 +62,7 @@ jobs:
           fi
 
       - name: Inspect or clean production worktree
-        if: ${{ inputs.mode != 'runtime-diagnostics' }}
+        if: ${{ inputs.mode != 'runtime-diagnostics' && inputs.mode != 'runtime-restart' }}
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
@@ -318,6 +319,208 @@ jobs:
           rm -f "$OUTPUT_ROOT/runtime-diagnostics.raw.txt"
           test -s "$OUTPUT_ROOT/runtime-diagnostics.txt"
 
+      - name: Restart production runtime
+        if: ${{ inputs.mode == 'runtime-restart' }}
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          DEPLOY_HEALTH_URL: ${{ secrets.DEPLOY_HEALTH_URL }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+          OUTPUT_ROOT: project-testing/reports/production-server-worktree-maintenance-${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ -z "$DEPLOY_HOST" ] || [ -z "$DEPLOY_USER" ] || [ -z "$DEPLOY_PATH" ] || [ -z "$DEPLOY_HEALTH_URL" ]; then
+            echo "Missing required deploy location or health URL secrets." >&2
+            exit 1
+          fi
+          if [ "$CONFIRMATION" != "RESTART_PRODUCTION_RUNTIME" ]; then
+            echo "Refusing runtime restart without the required confirmation phrase." >&2
+            exit 1
+          fi
+
+          mkdir -p "$OUTPUT_ROOT"
+          remote_root="/tmp/workbuddy-production-runtime-restart/${GITHUB_RUN_ID}"
+          remote_script="$remote_root/runtime-restart.sh"
+          remote_meta="$remote_root/runtime-restart-meta.env"
+          local_script="$OUTPUT_ROOT/runtime-restart.sh"
+
+          cleanup_restart_remote() {
+            ssh -i ~/.ssh/workbuddy-production-maintenance -p "$DEPLOY_PORT" -o IdentitiesOnly=yes "$DEPLOY_USER@$DEPLOY_HOST" \
+              "rm -rf '$remote_root'" >/dev/null 2>&1 || true
+          }
+          trap cleanup_restart_remote EXIT
+
+          cat > "$local_script" <<'RESTART_SCRIPT'
+          set -euo pipefail
+          cd "$DEPLOY_PATH"
+          report="$REMOTE_ROOT/runtime-restart-meta.env"
+          mkdir -p "$(dirname "$report")"
+
+          generated_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          release_head="$(git rev-parse HEAD 2>/dev/null || true)"
+          if docker info >/dev/null 2>&1; then
+            docker_cmd=(docker)
+            docker_available="true"
+          elif sudo -n docker info >/dev/null 2>&1; then
+            docker_cmd=(sudo -n docker)
+            docker_available="true"
+          else
+            docker_available="false"
+            {
+              printf 'schema_version=%s\n' 'workbuddy-production-runtime-restart/v1'
+              printf 'generated_at=%s\n' "$generated_at"
+              printf 'run_id=%s\n' "$RUN_ID"
+              printf 'release_head=%s\n' "$release_head"
+              printf 'docker_available=%s\n' "$docker_available"
+              printf 'api_before_status=%s\n' 'unknown'
+              printf 'api_after_status=%s\n' 'unknown'
+              printf 'web_before_status=%s\n' 'unknown'
+              printf 'web_after_status=%s\n' 'unknown'
+              printf 'local_health_passed=%s\n' 'false'
+              printf 'recovery_succeeded=%s\n' 'false'
+            } > "$report"
+            exit 1
+          fi
+
+          container_status() {
+            "${docker_cmd[@]}" container inspect "$1" --format '{{.State.Status}}' 2>/dev/null || printf 'missing'
+          }
+
+          api_before_status="$(container_status project-management-api)"
+          web_before_status="$(container_status project-management-web)"
+          api_started="false"
+          web_started="false"
+          local_health_passed="false"
+
+          if "${docker_cmd[@]}" container inspect project-management-api >/dev/null 2>&1; then
+            if "${docker_cmd[@]}" start project-management-api >/dev/null; then
+              api_started="true"
+            fi
+          elif "${docker_cmd[@]}" compose -f deploy/docker-compose.lighthouse.yml up -d --no-build --no-deps api >/dev/null; then
+            api_started="true"
+          fi
+
+          if [ "$api_started" = "true" ]; then
+            for _attempt in $(seq 1 30); do
+              if curl --fail --silent --show-error --max-time 15 http://127.0.0.1:3001/api/health >/dev/null 2>&1; then
+                local_health_passed="true"
+                break
+              fi
+              sleep 4
+            done
+          fi
+
+          if [ "$local_health_passed" = "true" ]; then
+            if "${docker_cmd[@]}" container inspect project-management-web >/dev/null 2>&1; then
+              if "${docker_cmd[@]}" start project-management-web >/dev/null; then
+                web_started="true"
+              fi
+            elif "${docker_cmd[@]}" compose -f deploy/docker-compose.lighthouse.yml up -d --no-build --no-deps web >/dev/null; then
+              web_started="true"
+            fi
+          fi
+
+          api_after_status="$(container_status project-management-api)"
+          web_after_status="$(container_status project-management-web)"
+          recovery_succeeded="false"
+          if [ "$local_health_passed" = "true" ] && [ "$api_after_status" = "running" ] && [ "$web_after_status" = "running" ]; then
+            recovery_succeeded="true"
+          fi
+
+          {
+            printf 'schema_version=%s\n' 'workbuddy-production-runtime-restart/v1'
+            printf 'generated_at=%s\n' "$generated_at"
+            printf 'run_id=%s\n' "$RUN_ID"
+            printf 'release_head=%s\n' "$release_head"
+            printf 'docker_available=%s\n' "$docker_available"
+            printf 'api_before_status=%s\n' "$api_before_status"
+            printf 'api_after_status=%s\n' "$api_after_status"
+            printf 'web_before_status=%s\n' "$web_before_status"
+            printf 'web_after_status=%s\n' "$web_after_status"
+            printf 'api_started=%s\n' "$api_started"
+            printf 'web_started=%s\n' "$web_started"
+            printf 'local_health_passed=%s\n' "$local_health_passed"
+            printf 'recovery_succeeded=%s\n' "$recovery_succeeded"
+          } > "$report"
+
+          if [ "$recovery_succeeded" != "true" ]; then
+            exit 1
+          fi
+          RESTART_SCRIPT
+
+          ssh -i ~/.ssh/workbuddy-production-maintenance -p "$DEPLOY_PORT" -o IdentitiesOnly=yes "$DEPLOY_USER@$DEPLOY_HOST" \
+            "mkdir -p '$remote_root'"
+          scp -i ~/.ssh/workbuddy-production-maintenance -P "$DEPLOY_PORT" -o IdentitiesOnly=yes \
+            "$local_script" "$DEPLOY_USER@$DEPLOY_HOST:$remote_script"
+          set +e
+          ssh -i ~/.ssh/workbuddy-production-maintenance -p "$DEPLOY_PORT" -o IdentitiesOnly=yes "$DEPLOY_USER@$DEPLOY_HOST" \
+            "DEPLOY_PATH='$DEPLOY_PATH' REMOTE_ROOT='$remote_root' RUN_ID='${GITHUB_RUN_ID}' bash '$remote_script'"
+          restart_status=$?
+          set -e
+          scp -i ~/.ssh/workbuddy-production-maintenance -P "$DEPLOY_PORT" -o IdentitiesOnly=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST:$remote_meta" "$OUTPUT_ROOT/runtime-restart-meta.env"
+
+          public_health_passed="false"
+          if [ "$restart_status" -eq 0 ]; then
+            for _attempt in $(seq 1 12); do
+              if curl --fail --silent --show-error --max-time 15 "$DEPLOY_HEALTH_URL" >/dev/null 2>&1; then
+                public_health_passed="true"
+                break
+              fi
+              sleep 5
+            done
+          fi
+          if [ "$public_health_passed" != "true" ]; then
+            restart_status=1
+          fi
+          export PUBLIC_HEALTH_PASSED="$public_health_passed"
+
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs';
+
+          const root = process.env.OUTPUT_ROOT;
+          const meta = Object.fromEntries(
+            readFileSync(`${root}/runtime-restart-meta.env`, 'utf8')
+              .split(/\r?\n/u)
+              .filter(Boolean)
+              .map((line) => {
+                const index = line.indexOf('=');
+                return [line.slice(0, index), line.slice(index + 1)];
+              }),
+          );
+          const publicHealthPassed = process.env.PUBLIC_HEALTH_PASSED === 'true';
+          const summary = {
+            schemaVersion: meta.schema_version,
+            generatedAt: meta.generated_at,
+            runId: meta.run_id,
+            releaseHead: meta.release_head,
+            dockerAvailable: meta.docker_available === 'true',
+            apiBeforeStatus: meta.api_before_status,
+            apiAfterStatus: meta.api_after_status,
+            webBeforeStatus: meta.web_before_status,
+            webAfterStatus: meta.web_after_status,
+            apiStarted: meta.api_started === 'true',
+            webStarted: meta.web_started === 'true',
+            localHealthPassed: meta.local_health_passed === 'true',
+            publicHealthPassed,
+            recoverySucceeded: meta.recovery_succeeded === 'true' && publicHealthPassed,
+            boundary: {
+              existingContainersPreferred: true,
+              imageBuildAllowed: false,
+              databaseMigrationAllowed: false,
+              sourceMutationAllowed: false,
+              secretValuesWritten: false,
+              envValuesWritten: false,
+            },
+          };
+          writeFileSync(`${root}/runtime-restart-summary.json`, `${JSON.stringify(summary, null, 2)}\n`);
+          NODE
+          rm -f "$OUTPUT_ROOT/runtime-restart-meta.env"
+          test -s "$OUTPUT_ROOT/runtime-restart-summary.json"
+          exit "$restart_status"
+
       - name: Publish maintenance summary
         if: always()
         env:
@@ -349,6 +552,20 @@ jobs:
           console.log(`- API exited signal: ${summary.apiExited ? 'yes' : 'no'}`);
           console.log(`- Health curl failed signal: ${summary.healthCurlFailed ? 'yes' : 'no'}`);
           console.log(`- Diagnostics only: ${summary.diagnosticsOnly ? 'yes' : 'no'}`);
+          NODE
+          fi
+          if [ -f "$OUTPUT_ROOT/runtime-restart-summary.json" ]; then
+            node --input-type=module <<'NODE' >> "$GITHUB_STEP_SUMMARY"
+          import { readFileSync } from 'node:fs';
+          const summary = JSON.parse(readFileSync(`${process.env.OUTPUT_ROOT}/runtime-restart-summary.json`, 'utf8'));
+          console.log('# Production Runtime Restart');
+          console.log('');
+          console.log(`- Release head: ${summary.releaseHead || 'unknown'}`);
+          console.log(`- API status: ${summary.apiBeforeStatus} -> ${summary.apiAfterStatus}`);
+          console.log(`- Web status: ${summary.webBeforeStatus} -> ${summary.webAfterStatus}`);
+          console.log(`- Local health passed: ${summary.localHealthPassed ? 'yes' : 'no'}`);
+          console.log(`- Public health passed: ${summary.publicHealthPassed ? 'yes' : 'no'}`);
+          console.log(`- Recovery succeeded: ${summary.recoverySucceeded ? 'yes' : 'no'}`);
           NODE
           fi
 

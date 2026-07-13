@@ -1,0 +1,301 @@
+name: Production Runtime Monitor
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: production-runtime-monitor
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  OUTPUT_ROOT: project-testing/reports/production-runtime-monitor-${{ github.run_id }}
+
+jobs:
+  monitor:
+    name: Probe And Recover Runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    environment: Production
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Probe public production health
+        id: public_probe
+        env:
+          DEPLOY_HEALTH_URL: ${{ secrets.DEPLOY_HEALTH_URL }}
+        run: |
+          set -euo pipefail
+          healthy="false"
+          if [ -n "$DEPLOY_HEALTH_URL" ]; then
+            for _attempt in 1 2 3; do
+              if curl --fail --silent --show-error --max-time 15 "$DEPLOY_HEALTH_URL" >/dev/null 2>&1; then
+                healthy="true"
+                break
+              fi
+              sleep 5
+            done
+          fi
+          echo "healthy=$healthy" >> "$GITHUB_OUTPUT"
+
+      - name: Initialize monitor summary
+        env:
+          PUBLIC_PROBE_HEALTHY: ${{ steps.public_probe.outputs.healthy }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUTPUT_ROOT"
+          node --input-type=module <<'NODE'
+          import { writeFileSync } from 'node:fs';
+
+          const publicProbeHealthy = process.env.PUBLIC_PROBE_HEALTHY === 'true';
+          const summary = {
+            schemaVersion: 'workbuddy-production-runtime-monitor/v1',
+            generatedAt: new Date().toISOString(),
+            runId: process.env.GITHUB_RUN_ID,
+            publicProbeHealthy,
+            recoveryAttempted: false,
+            recoverySucceeded: false,
+            runtimeHealthy: publicProbeHealthy,
+            apiBeforeStatus: 'not-inspected',
+            apiAfterStatus: 'not-inspected',
+            webBeforeStatus: 'not-inspected',
+            webAfterStatus: 'not-inspected',
+            localHealthPassed: false,
+            publicProbeAfterRecoveryPassed: false,
+            secretValuesWritten: false,
+            envValuesWritten: false,
+          };
+          writeFileSync(`${process.env.OUTPUT_ROOT}/runtime-monitor-summary.json`, `${JSON.stringify(summary, null, 2)}\n`);
+          NODE
+
+      - name: Configure recovery SSH
+        if: steps.public_probe.outputs.healthy != 'true'
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
+          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          if [ -z "$DEPLOY_HOST" ] || [ -z "$DEPLOY_SSH_PRIVATE_KEY" ]; then
+            echo "Missing required recovery SSH secrets." >&2
+            exit 1
+          fi
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_PRIVATE_KEY" > ~/.ssh/workbuddy-production-monitor
+          chmod 600 ~/.ssh/workbuddy-production-monitor
+          if [ -n "$DEPLOY_KNOWN_HOSTS" ]; then
+            printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$DEPLOY_PORT" "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+          fi
+
+      - name: Recover existing production containers
+        if: steps.public_probe.outputs.healthy != 'true'
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          DEPLOY_HEALTH_URL: ${{ secrets.DEPLOY_HEALTH_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "$DEPLOY_HOST" ] || [ -z "$DEPLOY_USER" ] || [ -z "$DEPLOY_PATH" ] || [ -z "$DEPLOY_HEALTH_URL" ]; then
+            echo "Missing required deploy location or health URL secrets." >&2
+            exit 1
+          fi
+
+          remote_root="/tmp/workbuddy-production-runtime-monitor/${GITHUB_RUN_ID}"
+          remote_script="$remote_root/recover-existing-runtime.sh"
+          remote_report="$remote_root/runtime-monitor-meta.env"
+          local_script="$OUTPUT_ROOT/recover-existing-runtime.sh"
+
+          cleanup_remote() {
+            ssh -i ~/.ssh/workbuddy-production-monitor -p "$DEPLOY_PORT" -o IdentitiesOnly=yes "$DEPLOY_USER@$DEPLOY_HOST" \
+              "rm -rf '$remote_root'" >/dev/null 2>&1 || true
+          }
+          trap cleanup_remote EXIT
+
+          cat > "$local_script" <<'RECOVERY_SCRIPT'
+          set -euo pipefail
+          cd "$DEPLOY_PATH"
+          report="$REMOTE_ROOT/runtime-monitor-meta.env"
+          mkdir -p "$(dirname "$report")"
+
+          generated_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          if docker info >/dev/null 2>&1; then
+            docker_cmd=(docker)
+            docker_available="true"
+          elif sudo -n docker info >/dev/null 2>&1; then
+            docker_cmd=(sudo -n docker)
+            docker_available="true"
+          else
+            docker_available="false"
+            {
+              printf 'generated_at=%s\n' "$generated_at"
+              printf 'docker_available=%s\n' "$docker_available"
+              printf 'api_before_status=%s\n' 'unknown'
+              printf 'api_after_status=%s\n' 'unknown'
+              printf 'web_before_status=%s\n' 'unknown'
+              printf 'web_after_status=%s\n' 'unknown'
+              printf 'local_health_passed=%s\n' 'false'
+              printf 'recovery_succeeded=%s\n' 'false'
+            } > "$report"
+            exit 1
+          fi
+
+          container_status() {
+            "${docker_cmd[@]}" container inspect "$1" --format '{{.State.Status}}' 2>/dev/null || printf 'missing'
+          }
+
+          api_before_status="$(container_status project-management-api)"
+          web_before_status="$(container_status project-management-web)"
+          local_health_passed="false"
+
+          if "${docker_cmd[@]}" container inspect project-management-api >/dev/null 2>&1; then
+            "${docker_cmd[@]}" start project-management-api >/dev/null || true
+            for _attempt in $(seq 1 30); do
+              if curl --fail --silent --show-error --max-time 15 http://127.0.0.1:3001/api/health >/dev/null 2>&1; then
+                local_health_passed="true"
+                break
+              fi
+              sleep 4
+            done
+          fi
+
+          if [ "$local_health_passed" = "true" ] && "${docker_cmd[@]}" container inspect project-management-web >/dev/null 2>&1; then
+            "${docker_cmd[@]}" start project-management-web >/dev/null || true
+          fi
+
+          api_after_status="$(container_status project-management-api)"
+          web_after_status="$(container_status project-management-web)"
+          recovery_succeeded="false"
+          if [ "$local_health_passed" = "true" ] && [ "$api_after_status" = "running" ] && [ "$web_after_status" = "running" ]; then
+            recovery_succeeded="true"
+          fi
+
+          {
+            printf 'generated_at=%s\n' "$generated_at"
+            printf 'docker_available=%s\n' "$docker_available"
+            printf 'api_before_status=%s\n' "$api_before_status"
+            printf 'api_after_status=%s\n' "$api_after_status"
+            printf 'web_before_status=%s\n' "$web_before_status"
+            printf 'web_after_status=%s\n' "$web_after_status"
+            printf 'local_health_passed=%s\n' "$local_health_passed"
+            printf 'recovery_succeeded=%s\n' "$recovery_succeeded"
+          } > "$report"
+
+          if [ "$recovery_succeeded" != "true" ]; then
+            exit 1
+          fi
+          RECOVERY_SCRIPT
+
+          ssh -i ~/.ssh/workbuddy-production-monitor -p "$DEPLOY_PORT" -o IdentitiesOnly=yes "$DEPLOY_USER@$DEPLOY_HOST" \
+            "mkdir -p '$remote_root'"
+          scp -i ~/.ssh/workbuddy-production-monitor -P "$DEPLOY_PORT" -o IdentitiesOnly=yes \
+            "$local_script" "$DEPLOY_USER@$DEPLOY_HOST:$remote_script"
+          set +e
+          ssh -i ~/.ssh/workbuddy-production-monitor -p "$DEPLOY_PORT" -o IdentitiesOnly=yes "$DEPLOY_USER@$DEPLOY_HOST" \
+            "DEPLOY_PATH='$DEPLOY_PATH' REMOTE_ROOT='$remote_root' bash '$remote_script'"
+          recovery_status=$?
+          set -e
+          scp -i ~/.ssh/workbuddy-production-monitor -P "$DEPLOY_PORT" -o IdentitiesOnly=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST:$remote_report" "$OUTPUT_ROOT/runtime-monitor-meta.env"
+
+          public_probe_after_recovery_passed="false"
+          if [ "$recovery_status" -eq 0 ]; then
+            for _attempt in $(seq 1 12); do
+              if curl --fail --silent --show-error --max-time 15 "$DEPLOY_HEALTH_URL" >/dev/null 2>&1; then
+                public_probe_after_recovery_passed="true"
+                break
+              fi
+              sleep 5
+            done
+          fi
+          if [ "$public_probe_after_recovery_passed" != "true" ]; then
+            recovery_status=1
+          fi
+          export PUBLIC_PROBE_AFTER_RECOVERY_PASSED="$public_probe_after_recovery_passed"
+
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs';
+
+          const meta = Object.fromEntries(
+            readFileSync(`${process.env.OUTPUT_ROOT}/runtime-monitor-meta.env`, 'utf8')
+              .split(/\r?\n/u)
+              .filter(Boolean)
+              .map((line) => {
+                const index = line.indexOf('=');
+                return [line.slice(0, index), line.slice(index + 1)];
+              }),
+          );
+          const publicProbeAfterRecoveryPassed = process.env.PUBLIC_PROBE_AFTER_RECOVERY_PASSED === 'true';
+          const recoverySucceeded = meta.recovery_succeeded === 'true' && publicProbeAfterRecoveryPassed;
+          const summary = {
+            schemaVersion: 'workbuddy-production-runtime-monitor/v1',
+            generatedAt: meta.generated_at || new Date().toISOString(),
+            runId: process.env.GITHUB_RUN_ID,
+            publicProbeHealthy: false,
+            recoveryAttempted: true,
+            recoverySucceeded,
+            runtimeHealthy: recoverySucceeded,
+            dockerAvailable: meta.docker_available === 'true',
+            apiBeforeStatus: meta.api_before_status,
+            apiAfterStatus: meta.api_after_status,
+            webBeforeStatus: meta.web_before_status,
+            webAfterStatus: meta.web_after_status,
+            localHealthPassed: meta.local_health_passed === 'true',
+            publicProbeAfterRecoveryPassed,
+            secretValuesWritten: false,
+            envValuesWritten: false,
+            boundary: {
+              existingContainersOnly: true,
+              imageBuildAllowed: false,
+              databaseMigrationAllowed: false,
+              sourceMutationAllowed: false,
+            },
+          };
+          writeFileSync(`${process.env.OUTPUT_ROOT}/runtime-monitor-summary.json`, `${JSON.stringify(summary, null, 2)}\n`);
+          NODE
+          rm -f "$OUTPUT_ROOT/runtime-monitor-meta.env"
+          exit "$recovery_status"
+
+      - name: Publish monitor summary
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ ! -f "$OUTPUT_ROOT/runtime-monitor-summary.json" ]; then
+            exit 0
+          fi
+          node --input-type=module <<'NODE' >> "$GITHUB_STEP_SUMMARY"
+          import { readFileSync } from 'node:fs';
+          const summary = JSON.parse(readFileSync(`${process.env.OUTPUT_ROOT}/runtime-monitor-summary.json`, 'utf8'));
+          console.log('# Production Runtime Monitor');
+          console.log('');
+          console.log(`- Public probe healthy: ${summary.publicProbeHealthy ? 'yes' : 'no'}`);
+          console.log(`- Recovery attempted: ${summary.recoveryAttempted ? 'yes' : 'no'}`);
+          console.log(`- Recovery succeeded: ${summary.recoverySucceeded ? 'yes' : 'no'}`);
+          console.log(`- Public probe after recovery: ${summary.publicProbeAfterRecoveryPassed ? 'passed' : 'not passed'}`);
+          console.log(`- Runtime healthy: ${summary.runtimeHealthy ? 'yes' : 'no'}`);
+          NODE
+
+      - name: Remove recovery SSH key
+        if: always()
+        run: rm -f ~/.ssh/workbuddy-production-monitor
+
+      - name: Upload sanitized monitor report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: production-runtime-monitor-${{ github.run_id }}
+          path: |
+            project-testing/reports/production-runtime-monitor-${{ github.run_id }}/runtime-monitor-summary.json
+          if-no-files-found: error
+          retention-days: 14

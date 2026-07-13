@@ -258,6 +258,27 @@ describe('§4.10.7 dataQualityJob', () => {
   })
 })
 
+describe('planning governance runtime pressure', () => {
+  it('runs full-database governance stages sequentially', () => {
+    const schedulerSource = readServerFile('src', 'scheduler.ts')
+    const section = schedulerSource.slice(
+      schedulerSource.indexOf('class PlanningGovernanceJob'),
+      schedulerSource.indexOf('class OperationalNotificationJob'),
+    )
+
+    expect(section).not.toContain('Promise.all([')
+    const stagePositions = [
+      "'healthScan'",
+      "'integrityScan'",
+      "'anomalyScan'",
+      "'governanceNotifications'",
+      "'baselineValidity'",
+    ].map((stage) => section.indexOf(stage))
+    expect(stagePositions.every((position) => position >= 0)).toBe(true)
+    expect(stagePositions).toEqual([...stagePositions].sort((left, right) => left - right))
+  })
+})
+
 // ─────────────────────────────────────────────────────────────────────────────
 // §4.10.12 healthHistorySnapshotJob
 // ─────────────────────────────────────────────────────────────────────────────

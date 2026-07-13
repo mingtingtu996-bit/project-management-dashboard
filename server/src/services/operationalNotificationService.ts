@@ -210,10 +210,14 @@ function detectStatusProgressMismatchSignals(tasks: Task[]): OperationalSignalDe
 }
 
 async function loadProjectRecipients(projectId: string): Promise<string[]> {
-  const [project, members] = await Promise.all([
-    executeSQLOne<ProjectOwnerRow>('SELECT id, owner_id FROM projects WHERE id = ? LIMIT 1', [projectId]),
-    executeSQL<ProjectMemberRow>('SELECT project_id, user_id, role, permission_level FROM project_members WHERE project_id = ?', [projectId]),
-  ])
+  const project = await executeSQLOne<ProjectOwnerRow>(
+    'SELECT id, owner_id FROM projects WHERE id = ? LIMIT 1',
+    [projectId],
+  )
+  const members = await executeSQL<ProjectMemberRow>(
+    'SELECT project_id, user_id, role, permission_level FROM project_members WHERE project_id = ?',
+    [projectId],
+  )
 
   return uniqueStrings([
     project?.owner_id ?? null,
@@ -372,7 +376,12 @@ export class OperationalNotificationService {
   }
 
   async collectProjectSignals(projectId: string): Promise<OperationalSignalDefinition[]> {
-    const tasks = await executeSQL<Task>('SELECT * FROM tasks WHERE project_id = ?', [projectId])
+    const tasks = await executeSQL<Task>(
+      `SELECT id, title, status, progress, planned_start_date, planned_end_date,
+              end_date, start_date, actual_start_date, actual_end_date
+       FROM tasks WHERE project_id = ?`,
+      [projectId],
+    )
 
     return [
       ...detectDateInversionSignals(tasks),
@@ -467,35 +476,39 @@ export class OperationalNotificationService {
 
   async syncAllProjectNotifications(): Promise<Notification[]> {
     const projectIds = await listActiveProjectIds()
-    const CONCURRENCY = 4
     const results: Notification[] = []
     const recipientsCache: ProjectRecipientsCache = new Map()
 
-    for (let i = 0; i < projectIds.length; i += CONCURRENCY) {
-      const batch = projectIds.slice(i, i + CONCURRENCY)
-      const batchResults = await Promise.all(
-        batch.map(async (projectId) => {
-          try {
-            const integrityReport = await this.planningIntegrityService.scanProjectIntegrity(projectId)
-            const notifications = await Promise.all([
-              this.syncProjectNotifications(projectId, recipientsCache),
-              this.syncMappingOrphanPointerNotifications(projectId, integrityReport, recipientsCache),
-              this.milestoneIntegrityService.syncProjectMilestoneNotifications(
-                projectId,
-                integrityReport.milestone_integrity,
-              ),
-            ])
-            return notifications.flat()
-          } catch (error) {
-            logger.warn('[operationalNotificationService] sync failed', {
-              projectId,
-              error: error instanceof Error ? error.message : String(error),
-            })
-            return []
-          }
-        }),
-      )
-      results.push(...batchResults.flat())
+    for (const projectId of projectIds) {
+      let integrityReport: Awaited<ReturnType<PlanningIntegrityService['scanProjectIntegrity']>>
+      try {
+        integrityReport = await this.planningIntegrityService.scanProjectIntegrity(projectId)
+      } catch (error) {
+        logger.warn('[operationalNotificationService] sync failed', {
+          projectId,
+          error: error instanceof Error ? error.message : String(error),
+        })
+        continue
+      }
+
+      const runStage = async (stage: string, operation: () => Promise<Notification[]>) => {
+        try {
+          results.push(...await operation())
+        } catch (error) {
+          logger.warn('[operationalNotificationService] notification stage failed', {
+            projectId,
+            stage,
+            error: error instanceof Error ? error.message : String(error),
+          })
+        }
+      }
+
+      await runStage('operational', () => this.syncProjectNotifications(projectId, recipientsCache))
+      await runStage('mapping_orphan', () => this.syncMappingOrphanPointerNotifications(projectId, integrityReport, recipientsCache))
+      await runStage('milestone', () => this.milestoneIntegrityService.syncProjectMilestoneNotifications(
+        projectId,
+        integrityReport.milestone_integrity,
+      ))
     }
 
     return results

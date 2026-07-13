@@ -6,6 +6,7 @@ const state = vi.hoisted(() => ({
   listNotifications: vi.fn(),
   insertNotification: vi.fn(async (notification: Record<string, unknown>) => notification),
   updateNotificationById: vi.fn(async () => undefined),
+  listActiveProjectIds: vi.fn(),
   scanProjectIntegrity: vi.fn(),
   syncProjectMilestoneNotifications: vi.fn(async () => []),
   logger: {
@@ -28,7 +29,7 @@ vi.mock('../services/notificationStore.js', () => ({
 }))
 
 vi.mock('../services/activeProjectService.js', () => ({
-  listActiveProjectIds: vi.fn(async () => ['project-1']),
+  listActiveProjectIds: state.listActiveProjectIds,
 }))
 
 vi.mock('../services/planningIntegrityService.js', () => ({
@@ -53,6 +54,7 @@ const { OperationalNotificationService } = await import('../services/operational
 describe('operational notification service', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    state.listActiveProjectIds.mockResolvedValue(['project-1'])
     state.scanProjectIntegrity.mockResolvedValue({
       project_id: 'project-1',
       milestone_integrity: {
@@ -125,6 +127,70 @@ describe('operational notification service', () => {
       status: 'resolved',
       is_read: true,
     }))
+    const taskQuery = String(
+      state.executeSQL.mock.calls.find(([query]) => String(query).includes('FROM tasks WHERE project_id = ?'))?.[0],
+    )
+    expect(taskQuery).not.toContain('SELECT *')
+    expect(taskQuery).toContain('planned_start_date')
+    expect(taskQuery).toContain('actual_end_date')
+  })
+
+  it('serializes project and notification stages to cap database pressure', async () => {
+    let active = 0
+    let maxActive = 0
+    const tracked = async <T>(value: T): Promise<T> => {
+      active += 1
+      maxActive = Math.max(maxActive, active)
+      await new Promise((resolve) => setTimeout(resolve, 5))
+      active -= 1
+      return value
+    }
+
+    state.listActiveProjectIds.mockResolvedValue(['project-1', 'project-2'])
+    state.scanProjectIntegrity.mockImplementation(async (projectId: string) => tracked({
+      project_id: projectId,
+      milestone_integrity: {
+        project_id: projectId,
+        summary: { total: 0, aligned: 0, needs_attention: 0, missing_data: 0, blocked: 0 },
+        items: [],
+      },
+    }))
+    state.syncProjectMilestoneNotifications.mockImplementation(async () => tracked([]))
+
+    const service = new OperationalNotificationService()
+    vi.spyOn(service, 'syncProjectNotifications').mockImplementation(async () => tracked([]))
+    vi.spyOn(service, 'syncMappingOrphanPointerNotifications').mockImplementation(async () => tracked([]))
+
+    await service.syncAllProjectNotifications()
+
+    expect(maxActive).toBe(1)
+  })
+
+  it('continues later notification stages when an earlier stage fails', async () => {
+    const service = new OperationalNotificationService()
+    vi.spyOn(service, 'syncProjectNotifications').mockRejectedValue(new Error('operational stage failed'))
+    const mappingStage = vi.spyOn(service, 'syncMappingOrphanPointerNotifications').mockResolvedValue([])
+    state.syncProjectMilestoneNotifications.mockResolvedValue([])
+
+    await service.syncAllProjectNotifications()
+
+    expect(mappingStage).toHaveBeenCalledWith(
+      'project-1',
+      expect.objectContaining({ project_id: 'project-1' }),
+      expect.any(Map),
+    )
+    expect(state.syncProjectMilestoneNotifications).toHaveBeenCalledWith(
+      'project-1',
+      expect.objectContaining({ project_id: 'project-1' }),
+    )
+    expect(state.logger.warn).toHaveBeenCalledWith(
+      '[operationalNotificationService] notification stage failed',
+      expect.objectContaining({
+        projectId: 'project-1',
+        stage: 'operational',
+        error: 'operational stage failed',
+      }),
+    )
   })
 
   it('syncs mapping-orphan and milestone integrity notifications through the all-project entrypoint', async () => {

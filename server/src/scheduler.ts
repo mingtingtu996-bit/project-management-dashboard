@@ -467,13 +467,14 @@ class PlanningGovernanceJob {
             }
           }
 
-          const [healthReports, integrityReports, anomalyReports, notifications, baselineValidityReports] = await Promise.all([
-            safeRun('healthScan', () => new PlanningHealthService().scanAllProjectHealth()),
-            safeRun('integrityScan', () => new PlanningIntegrityService().scanAllProjectIntegrity()),
-            safeRun('anomalyScan', () => new SystemAnomalyService().scanAllProjectPassiveReorder()),
-            safeRun('governanceNotifications', () => planningGovernanceService.persistProjectGovernanceNotifications()),
-            safeRun('baselineValidity', () => scanAllProjectBaselineValidity()),
-          ])
+          const healthReports = await safeRun('healthScan', () => new PlanningHealthService().scanAllProjectHealth())
+          const integrityReports = await safeRun('integrityScan', () => new PlanningIntegrityService().scanAllProjectIntegrity())
+          const anomalyReports = await safeRun('anomalyScan', () => new SystemAnomalyService().scanAllProjectPassiveReorder())
+          const notifications = await safeRun(
+            'governanceNotifications',
+            () => planningGovernanceService.persistProjectGovernanceNotifications(),
+          )
+          const baselineValidityReports = await safeRun('baselineValidity', () => scanAllProjectBaselineValidity())
 
           return {
             healthReports: healthReports.length,

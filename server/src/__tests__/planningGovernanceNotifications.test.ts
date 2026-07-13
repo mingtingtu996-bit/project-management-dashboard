@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   evaluateProjectHealth: vi.fn(),
   scanProjectIntegrity: vi.fn(),
   scanProjectPassiveReorder: vi.fn(),
+  writeLog: vi.fn(async () => undefined),
 }))
 
 vi.mock('../services/dbService.js', () => ({
@@ -30,6 +31,10 @@ vi.mock('../services/notificationStore.js', () => ({
 
 vi.mock('../services/projectHealthService.js', () => ({
   enqueueProjectHealthUpdate: mocks.enqueueProjectHealthUpdate,
+}))
+
+vi.mock('../services/changeLogs.js', () => ({
+  writeLog: mocks.writeLog,
 }))
 
 vi.mock('../services/planningHealthService.js', () => ({
@@ -73,7 +78,7 @@ describe('planning governance notification persistence', () => {
       if (normalized.startsWith('select * from monthly_plans where project_id = ?')) {
         return []
       }
-      if (normalized.startsWith('select * from tasks where project_id = ?')) {
+      if (normalized.includes('from tasks where project_id = ?')) {
         return []
       }
       return []
@@ -213,7 +218,7 @@ describe('planning governance notification persistence', () => {
           closeout_at: null,
         }]
       }
-      if (normalized.startsWith('select * from tasks where project_id = ?')) {
+      if (normalized.includes('from tasks where project_id = ?')) {
         return [{
           id: 'task-1',
           project_id: 'project-1',
@@ -285,5 +290,73 @@ describe('planning governance notification persistence', () => {
       notification_type: 'planning-governance-ad-hoc',
       task_id: 'task-1',
     }))
+  })
+
+  it('reads only task fields used by governance evaluation', async () => {
+    const { planningGovernanceService } = await import('../services/planningGovernanceService.js')
+
+    await planningGovernanceService.scanProjectGovernance('project-1')
+
+    const taskQuery = String(
+      mocks.executeSQL.mock.calls.find(([query]) => String(query).toLowerCase().includes('from tasks where project_id = ?'))?.[0],
+    )
+    expect(taskQuery).not.toContain('SELECT *')
+    expect(taskQuery).toContain('monthly_plan_item_id')
+    expect(taskQuery).toContain('baseline_item_id')
+    expect(taskQuery).not.toContain('CASE')
+    expect(taskQuery).not.toContain('task_source')
+  })
+
+  it('serializes database-heavy stages across the governance persistence entrypoint', async () => {
+    const health = await mocks.evaluateProjectHealth('project-1')
+    const integrity = await mocks.scanProjectIntegrity('project-1')
+    const anomaly = await mocks.scanProjectPassiveReorder('project-1')
+    vi.clearAllMocks()
+
+    let active = 0
+    let maxActive = 0
+    const tracked = async <T>(value: T): Promise<T> => {
+      active += 1
+      maxActive = Math.max(maxActive, active)
+      await new Promise((resolve) => setTimeout(resolve, 5))
+      active -= 1
+      return value
+    }
+
+    mocks.executeSQL.mockImplementation(async () => tracked([]))
+    mocks.executeSQLOne.mockImplementation(async () => tracked({ id: 'project-1', owner_id: 'owner-1' }))
+    mocks.listTaskProgressSnapshotsByTaskIds.mockImplementation(async () => tracked([]))
+    mocks.evaluateProjectHealth.mockImplementation(async () => tracked(health))
+    mocks.scanProjectIntegrity.mockImplementation(async () => tracked(integrity))
+    mocks.scanProjectPassiveReorder.mockImplementation(async () => tracked(anomaly))
+
+    const { planningGovernanceService } = await import('../services/planningGovernanceService.js')
+    await planningGovernanceService.persistProjectGovernanceNotifications('project-1')
+
+    expect(maxActive).toBe(1)
+  })
+
+  it('keeps manual reorder startup reads narrow and serialized', async () => {
+    let active = 0
+    let maxActive = 0
+    const tracked = async <T>(value: T): Promise<T> => {
+      active += 1
+      maxActive = Math.max(maxActive, active)
+      await new Promise((resolve) => setTimeout(resolve, 5))
+      active -= 1
+      return value
+    }
+
+    mocks.executeSQL.mockImplementation(async () => tracked([]))
+
+    const { planningGovernanceService } = await import('../services/planningGovernanceService.js')
+    await planningGovernanceService.startProjectReorderSession({ projectId: 'project-1' })
+
+    const taskQuery = String(
+      mocks.executeSQL.mock.calls.find(([query]) => String(query).toLowerCase().includes('from tasks where project_id = ?'))?.[0],
+    )
+    expect(taskQuery).not.toContain('SELECT *')
+    expect(taskQuery).toContain('is_milestone')
+    expect(maxActive).toBe(1)
   })
 })
