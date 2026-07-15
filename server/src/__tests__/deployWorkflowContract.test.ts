@@ -1114,6 +1114,23 @@ describe('deploy workflow contract', () => {
     expect(workflow).toContain('Server delete mutation classification audit')
     expect(workflow).toContain('npm run audit:delete-mutation-classification')
     expect(workflow).toContain('npm run guard:legacy-object-drop -- --ci-no-drop-candidates-ok --from-retired-object-audit --scan-migration-drops')
+    expect(workflow).toContain('--migration-drop-baseline-version 310')
+  })
+
+  it('invokes only client package scripts shipped in the release tree', () => {
+    const workflow = readFileSync(resolve(workspaceRoot, '.github', 'workflows', 'deploy.yml'), 'utf8')
+    const clientPackage = JSON.parse(readFileSync(resolve(workspaceRoot, 'client', 'package.json'), 'utf8')) as {
+      scripts?: Record<string, string>
+    }
+    const referencedScripts = Array.from(
+      workflow.matchAll(/pnpm --dir client run ([a-zA-Z0-9:_-]+)/g),
+      (match) => match[1],
+    )
+
+    expect(referencedScripts.length).toBeGreaterThan(0)
+    for (const script of referencedScripts) {
+      expect(clientPackage.scripts?.[script], `missing client script: ${script}`).toBeTypeOf('string')
+    }
   })
 })
 

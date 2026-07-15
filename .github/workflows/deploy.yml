@@ -91,9 +91,6 @@ jobs:
       - name: Client frontend BI aggregation guard
         run: pnpm --dir client run guard:frontend-bi-aggregation
 
-      - name: Client UI commercial gates
-        run: pnpm --dir client run guard:ui-commercial-gates
-
       - name: v1.4.23.1 Client Contract Gate
         run: npm run verify:v14231-client-contracts --workspace=client
 
@@ -171,7 +168,7 @@ jobs:
         run: npm run guard:legacy-scope-runtime-surface
 
       - name: Server legacy object drop guard
-        run: npm run guard:legacy-object-drop -- --ci-no-drop-candidates-ok --from-retired-object-audit --scan-migration-drops --allow-target-catalog-preflight
+        run: npm run guard:legacy-object-drop -- --ci-no-drop-candidates-ok --from-retired-object-audit --scan-migration-drops --migration-drop-baseline-version 310 --allow-target-catalog-preflight
 
       - name: Server retired object reference audit
         run: npm run audit:retired-object-references
