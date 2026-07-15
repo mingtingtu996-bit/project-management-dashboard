@@ -250,8 +250,28 @@ function assertMigrationTargetMatchesSupabaseProject(connectionString?: string |
   }
 }
 
+function normalizeMigrationConnectionString(
+  value: string,
+  ssl: false | { rejectUnauthorized: false },
+) {
+  if (!ssl) {
+    return value
+  }
+
+  const parsed = new URL(value)
+  if (parsed.searchParams.get('sslmode') !== 'no-verify') {
+    parsed.searchParams.set('sslmode', 'no-verify')
+  }
+  return parsed.toString()
+}
+
 export function resolveMigrationConnectionConfig() {
-  const connectionString = [process.env.SUPABASE_MIGRATION_URL, process.env.DATABASE_URL]
+  const connectionString = [
+    process.env.SUPABASE_MIGRATION_URL,
+    process.env.DIRECT_DATABASE_URL,
+    process.env.DATABASE_URL,
+    process.env.DB_CONNECTION_STRING,
+  ]
     .map((value) => String(value ?? '').trim())
     .find(Boolean)
   const host = process.env.PGHOST ?? process.env.SUPABASE_HOST ?? deriveSupabaseHostFromUrl(process.env.SUPABASE_URL)
@@ -266,12 +286,16 @@ export function resolveMigrationConnectionConfig() {
 
   if (connectionString) {
     assertMigrationTargetMatchesSupabaseProject(connectionString)
-    return { connectionString, ssl, family: 4 as const }
+    return {
+      connectionString: normalizeMigrationConnectionString(connectionString, ssl),
+      ssl,
+      family: 4 as const,
+    }
   }
 
   if (!host || !password) {
     throw new Error(
-      '缺少数据库连接信息，请提供 DATABASE_URL，或提供 PGHOST/PGPASSWORD（也支持 SUPABASE_HOST/SUPABASE_PASSWORD）。',
+      '缺少迁移数据库连接信息，请提供 SUPABASE_MIGRATION_URL、DIRECT_DATABASE_URL、DATABASE_URL、DB_CONNECTION_STRING，或 PGHOST/PGPASSWORD。',
     )
   }
 

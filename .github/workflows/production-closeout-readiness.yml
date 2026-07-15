@@ -4,28 +4,34 @@ on:
   workflow_dispatch:
     inputs:
       base_url:
-        description: Production public base URL, for example https://example.com
-        required: true
+        description: Production public base URL. Leave blank to use WORKBUDDY_LIVE_BASE_URL/API_BASE_URL from server env, then GitHub deployment URL.
+        required: false
+        default: ''
         type: string
       company_id:
-        description: Production company id for controlled closeout readiness
-        required: true
+        description: Production company id for controlled closeout readiness. Leave blank for read-only DB discovery.
+        required: false
+        default: ''
         type: string
       project_id:
-        description: Production project id for controlled closeout readiness
-        required: true
+        description: Production project id for controlled closeout readiness. Leave blank for read-only DB discovery.
+        required: false
+        default: ''
         type: string
       plan_id:
-        description: Production plan id for C18 diagnostics readiness
-        required: true
+        description: Production plan id for C18 diagnostics readiness. Leave blank for read-only DB discovery.
+        required: false
+        default: ''
         type: string
       candidate_id:
-        description: Production C15 candidate id for readiness; use a governed candidate only
-        required: true
+        description: Production C15 candidate id for readiness; use a governed candidate only. Leave blank for read-only DB discovery.
+        required: false
+        default: ''
         type: string
       approval_ref:
         description: Approval or change-ticket reference authorizing readiness evaluation
-        required: true
+        required: false
+        default: ''
         type: string
       sample_cohort_ref:
         description: Optional C15 sample cohort evidence reference
@@ -52,6 +58,11 @@ on:
         required: false
         default: ''
         type: string
+      gate_ids:
+        description: Optional comma or space separated gate IDs. Leave blank for auto; C15 is selected only when a candidate id exists.
+        required: false
+        default: ''
+        type: string
 
 concurrency:
   group: production-closeout-readiness-${{ github.ref }}
@@ -66,7 +77,7 @@ jobs:
     name: Readiness Only
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    environment: Production
+    environment: production
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -75,13 +86,17 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: '20'
+          cache: npm
+
+      - name: Install readiness dependencies
+        run: npm ci
 
       - name: Configure SSH
         env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
-          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
-          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_HOST: ${{ secrets.PRODUCTION_DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.PRODUCTION_DEPLOY_PORT || '22' }}
+          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.PRODUCTION_DEPLOY_SSH_PRIVATE_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.PRODUCTION_DEPLOY_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
           if [ -z "$DEPLOY_HOST" ] || [ -z "$DEPLOY_SSH_PRIVATE_KEY" ]; then
@@ -98,30 +113,88 @@ jobs:
             ssh-keyscan -p "$DEPLOY_PORT" "$DEPLOY_HOST" >> ~/.ssh/known_hosts
           fi
 
-      - name: Fetch production env from self-hosted server
+      - name: Collect server-side discovery signals
         env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
-          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          DEPLOY_HOST: ${{ secrets.PRODUCTION_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.PRODUCTION_DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.PRODUCTION_DEPLOY_PORT || '22' }}
+          DEPLOY_PATH: ${{ secrets.PRODUCTION_DEPLOY_PATH }}
+          OUTPUT_ROOT: project-testing/reports/production-closeout-readiness-${{ github.run_id }}
         run: |
           set -euo pipefail
-          if [ -z "$DEPLOY_HOST" ] || [ -z "$DEPLOY_USER" ] || [ -z "$DEPLOY_PATH" ]; then
-            echo "Missing required deploy location secrets." >&2
-            exit 1
-          fi
-          mkdir -p deploy/env
+          mkdir -p "$OUTPUT_ROOT"
+          local_blocked_signals="$OUTPUT_ROOT/server-handoff-signals.json"
+          local_collector="project-testing/tools/collect-release-handoff-signals.mjs"
+          remote_root="$DEPLOY_PATH/.workbuddy-production-closeout-readiness/${GITHUB_RUN_ID}"
+          remote_collector_host="$remote_root/collect-release-handoff-signals.mjs"
+          remote_collector_container="/tmp/workbuddy-production-closeout-readiness-${GITHUB_RUN_ID}.mjs"
+          remote_signals_host="$remote_root/handoff-signals.json"
           remote_env="$DEPLOY_PATH/deploy/env/server.production.env"
-          ssh -i ~/.ssh/workbuddy-production-closeout -p "$DEPLOY_PORT" -o IdentitiesOnly=yes "$DEPLOY_USER@$DEPLOY_HOST" \
-            "test -s '$remote_env'"
-          scp -i ~/.ssh/workbuddy-production-closeout -P "$DEPLOY_PORT" -o IdentitiesOnly=yes \
-            "$DEPLOY_USER@$DEPLOY_HOST:$remote_env" deploy/env/server.production.env
-          test -s deploy/env/server.production.env
+
+          write_blocked_signals() {
+            node --input-type=module <<'NODE'
+          import { writeFileSync } from 'node:fs';
+          const reason = String(process.env.BLOCKED_REASON || 'server-side discovery failed')
+            .replace(/[\r\n]/g, ' ')
+            .slice(0, 200);
+          const output = process.env.BLOCKED_SIGNALS_FILE;
+          writeFileSync(output, `${JSON.stringify({
+            schemaVersion: 'workbuddy-release-handoff-signals/v1',
+            generatedAt: new Date().toISOString(),
+            envPresence: {},
+            connectivity: {
+              db: {
+                ok: false,
+                databaseTargetRef: 'env://deploy/env/server.production.env#SUPABASE_MIGRATION_URL',
+                error: reason,
+                discoverySource: 'server-side-ssh-discovery',
+              },
+            },
+            tableCounts: {},
+            columns: {},
+            discoveredTargets: {
+              companyId: '',
+              projectId: '',
+              planId: '',
+              candidateId: '',
+              sampleCohortRef: '',
+            },
+            boundary: {
+              noSecretValuesWritten: true,
+              liveMutation: false,
+              dbMutation: false,
+              note: 'Server-side discovery failed before target IDs could be read. This file is sanitized and contains no env values.',
+            },
+          }, null, 2)}\n`);
+          NODE
+          }
+
+          if ssh -i ~/.ssh/workbuddy-production-closeout -p "$DEPLOY_PORT" -o IdentitiesOnly=yes "$DEPLOY_USER@$DEPLOY_HOST" \
+            "mkdir -p '$remote_root' && test -s '$remote_env' && (docker ps --format '{{.Names}}' 2>/dev/null || sudo -n docker ps --format '{{.Names}}') | grep -qx 'project-management-api'"; then
+            scp -i ~/.ssh/workbuddy-production-closeout -P "$DEPLOY_PORT" -o IdentitiesOnly=yes \
+              "$local_collector" "$DEPLOY_USER@$DEPLOY_HOST:$remote_collector_host"
+
+            if ssh -i ~/.ssh/workbuddy-production-closeout -p "$DEPLOY_PORT" -o IdentitiesOnly=yes "$DEPLOY_USER@$DEPLOY_HOST" \
+              "set -e; if docker info >/dev/null 2>&1; then docker_cmd='docker'; elif sudo -n docker info >/dev/null 2>&1; then docker_cmd='sudo -n docker'; else exit 1; fi; \$docker_cmd cp '$remote_collector_host' project-management-api:'$remote_collector_container'; \$docker_cmd exec project-management-api sh -lc \"mkdir -p /tmp/workbuddy-production-closeout-readiness-${GITHUB_RUN_ID} && node -- '$remote_collector_container' --env-source process --env-file deploy/env/server.production.env --discovery-source server-side-ssh-discovery --output-dir /tmp/workbuddy-production-closeout-readiness-${GITHUB_RUN_ID} --include-live --confirm-live-handoff --include-db --confirm-db-ready --environment-owner github-actions-production-closeout --write-approval-ref 'github-actions://run/${GITHUB_RUN_ID}' --manual-approval-ref 'github-actions://run/${GITHUB_RUN_ID}' --monitoring-owner github-actions-production-closeout --rollback-owner github-actions-production-closeout --cleanup-owner github-actions-production-closeout --migration-owner github-actions-production-closeout --runtime-publication-owner github-actions-production-closeout --consumer-observation-owner github-actions-production-closeout >/dev/null\"; \$docker_cmd cp project-management-api:/tmp/workbuddy-production-closeout-readiness-${GITHUB_RUN_ID}/handoff-signals.json '$remote_signals_host'; \$docker_cmd exec --user 0 project-management-api sh -lc \"rm -rf /tmp/workbuddy-production-closeout-readiness-${GITHUB_RUN_ID} '$remote_collector_container'\" >/dev/null 2>&1 || true"; then
+              scp -i ~/.ssh/workbuddy-production-closeout -P "$DEPLOY_PORT" -o IdentitiesOnly=yes \
+                "$DEPLOY_USER@$DEPLOY_HOST:$remote_signals_host" "$local_blocked_signals"
+            else
+              BLOCKED_REASON="server-side discovery command failed" BLOCKED_SIGNALS_FILE="$local_blocked_signals" write_blocked_signals
+            fi
+
+            ssh -i ~/.ssh/workbuddy-production-closeout -p "$DEPLOY_PORT" -o IdentitiesOnly=yes "$DEPLOY_USER@$DEPLOY_HOST" \
+              "rm -rf '$remote_root'" >/dev/null 2>&1 || true
+          else
+            BLOCKED_REASON="server-side discovery setup failed" BLOCKED_SIGNALS_FILE="$local_blocked_signals" write_blocked_signals
+          fi
+
+          test -s "$local_blocked_signals"
 
       - name: Generate production readiness report
         env:
           OUTPUT_ROOT: project-testing/reports/production-closeout-readiness-${{ github.run_id }}
           BASE_URL: ${{ inputs.base_url }}
+          DEPLOYMENT_URL: ${{ github.event.repository.homepage }}
           COMPANY_ID: ${{ inputs.company_id }}
           PROJECT_ID: ${{ inputs.project_id }}
           PLAN_ID: ${{ inputs.plan_id }}
@@ -132,19 +205,116 @@ jobs:
           RELEASE_CLOSURE_ARTIFACT_REF: ${{ inputs.release_closure_artifact_ref }}
           ROLLBACK_TARGET_REF: ${{ inputs.rollback_target_ref }}
           MONITORING_WINDOW: ${{ inputs.monitoring_window }}
+          GATE_IDS: ${{ inputs.gate_ids }}
         run: |
           set -euo pipefail
           mkdir -p "$OUTPUT_ROOT"
+
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const outputRoot = process.env.OUTPUT_ROOT;
+          const signals = JSON.parse(readFileSync(`${outputRoot}/server-handoff-signals.json`, 'utf8'));
+          writeFileSync(`${outputRoot}/handoff-signals.json`, `${JSON.stringify(signals, null, 2)}\n`);
+          const discovered = signals.discoveredTargets ?? {};
+          const discoveredTargets = {
+            COMPANY_ID: discovered.companyId,
+            PROJECT_ID: discovered.projectId,
+            PLAN_ID: discovered.planId,
+            CANDIDATE_ID: discovered.candidateId,
+            SAMPLE_COHORT_REF: discovered.sampleCohortRef,
+          };
+          const env = process.env;
+          const fill = (key, fallback = '') => String(env[key] || discoveredTargets[key] || fallback || '').trim();
+          const allGateIds = [
+            'c18-l07-l15-live-diagnostics',
+            'c15-live-learning-closeout',
+            'c19-runtime-publication-release-rollback',
+            'old-object-physical-drop-closeout',
+          ];
+          const requestedGateIds = String(env.GATE_IDS || '')
+            .split(/[\s,]+/u)
+            .map((gateId) => gateId.trim())
+            .filter(Boolean);
+          const baseUrl = String(env.BASE_URL || '').trim()
+            || String(signals.baseUrl || '').trim()
+            || String(env.DEPLOYMENT_URL || '').trim();
+          const monitoringWindow = String(env.MONITORING_WINDOW || '').trim()
+            || `${new Date().toISOString()}/PT30M`;
+          const candidateId = fill('CANDIDATE_ID');
+          const selectedGateIds = requestedGateIds.length > 0
+            ? requestedGateIds
+            : [
+                'c18-l07-l15-live-diagnostics',
+                ...(candidateId ? ['c15-live-learning-closeout'] : []),
+                'c19-runtime-publication-release-rollback',
+                'old-object-physical-drop-closeout',
+              ];
+          const notSelectedGateIds = allGateIds.filter((gateId) => !selectedGateIds.includes(gateId));
+          const gateSelection = {
+            schemaVersion: 'workbuddy-production-gate-selection/v1',
+            generatedAt: new Date().toISOString(),
+            mode: requestedGateIds.length > 0 ? 'manual-input' : 'auto-from-server-side-discovery',
+            selectedGateIds,
+            notSelectedGateIds,
+            reasons: Object.fromEntries(notSelectedGateIds.map((gateId) => [
+              gateId,
+              gateId === 'c15-live-learning-closeout' && !candidateId
+                ? 'no duration_context_policy_canary_candidates row was discovered; C15 is not ready and requires a separate candidate-backed handoff'
+                : 'not selected for this readiness run',
+            ])),
+            boundary: {
+              readinessOnly: true,
+              liveOrDbCommandsExecuted: 0,
+            },
+          };
+          const values = {
+            BASE_URL: baseUrl,
+            COMPANY_ID: fill('COMPANY_ID'),
+            PROJECT_ID: fill('PROJECT_ID'),
+            PLAN_ID: fill('PLAN_ID'),
+            CANDIDATE_ID: candidateId,
+            APPROVAL_REF: String(env.APPROVAL_REF || `github-actions://run/${env.GITHUB_RUN_ID}`).trim(),
+            SAMPLE_COHORT_REF: fill('SAMPLE_COHORT_REF'),
+            MONITORING_WINDOW: monitoringWindow,
+            GATE_IDS: selectedGateIds.join(' '),
+          };
+          const shellQuote = (value) => `'${String(value).replace(/'/g, `'\\''`).replace(/\n/g, '')}'`;
+          writeFileSync(
+            `${outputRoot}/production-gate-selection.input.json`,
+            `${JSON.stringify(gateSelection, null, 2)}\n`,
+          );
+          writeFileSync(
+            `${outputRoot}/production-readiness-inputs.env`,
+            Object.entries(values).map(([key, value]) => `${key}=${shellQuote(value)}`).join('\n') + '\n',
+          );
+          NODE
+
+          # shellcheck disable=SC1090
+          source "$OUTPUT_ROOT/production-readiness-inputs.env"
+
           args=(
-            --env-file deploy/env/server.production.env
+            --production-env-ref deploy/env/server.production.env
+            --server-signals-file "$OUTPUT_ROOT/server-handoff-signals.json"
             --output-root "$OUTPUT_ROOT"
-            --base-url "$BASE_URL"
-            --company-id "$COMPANY_ID"
-            --project-id "$PROJECT_ID"
-            --plan-id "$PLAN_ID"
-            --candidate-id "$CANDIDATE_ID"
-            --approval-ref "$APPROVAL_REF"
           )
+          if [ -n "$BASE_URL" ]; then
+            args+=(--base-url "$BASE_URL")
+          fi
+          if [ -n "$COMPANY_ID" ]; then
+            args+=(--company-id "$COMPANY_ID")
+          fi
+          if [ -n "$PROJECT_ID" ]; then
+            args+=(--project-id "$PROJECT_ID")
+          fi
+          if [ -n "$PLAN_ID" ]; then
+            args+=(--plan-id "$PLAN_ID")
+          fi
+          if [ -n "$CANDIDATE_ID" ]; then
+            args+=(--candidate-id "$CANDIDATE_ID")
+          fi
+          if [ -n "$APPROVAL_REF" ]; then
+            args+=(--approval-ref "$APPROVAL_REF")
+          fi
           if [ -n "$SAMPLE_COHORT_REF" ]; then
             args+=(--sample-cohort-ref "$SAMPLE_COHORT_REF")
           fi
@@ -159,6 +329,11 @@ jobs:
           fi
           if [ -n "$MONITORING_WINDOW" ]; then
             args+=(--monitoring-window "$MONITORING_WINDOW")
+          fi
+          if [ -n "$GATE_IDS" ]; then
+            for gate_id in $GATE_IDS; do
+              args+=(--gate "$gate_id")
+            done
           fi
           node project-testing/tools/prepare-production-closeout-readiness.mjs "${args[@]}"
 
@@ -180,10 +355,9 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: Remove production env from runner
+      - name: Remove SSH key from runner
         if: always()
         run: |
-          rm -f deploy/env/server.production.env
           rm -f ~/.ssh/workbuddy-production-closeout
 
       - name: Upload sanitized readiness reports

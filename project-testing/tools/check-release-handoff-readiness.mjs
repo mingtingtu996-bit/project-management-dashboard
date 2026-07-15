@@ -157,7 +157,7 @@ export async function checkReleaseHandoffReadiness({
   const handoff = JSON.parse(raw);
   const selectedGateIds = gateIds.length > 0 ? gateIds : DEFAULT_GATE_IDS;
   const secretLeaks = findSecretLeaks(handoff);
-  const refIssues = findReferenceIssues(handoff);
+  const refIssues = findReferenceIssues(handoff, [], buildServerSideEnvRefContext(handoff));
   const gates = selectedGateIds.map((gateId) => evaluateGateReadiness({
     gateId,
     matrix,
@@ -357,9 +357,9 @@ function findSecretLeaks(value, pathParts = []) {
   });
 }
 
-function findReferenceIssues(value, pathParts = []) {
+function findReferenceIssues(value, pathParts = [], envRefContext = null) {
   if (Array.isArray(value)) {
-    return value.flatMap((item, index) => findReferenceIssues(item, [...pathParts, String(index)]));
+    return value.flatMap((item, index) => findReferenceIssues(item, [...pathParts, String(index)], envRefContext));
   }
 
   if (!value || typeof value !== 'object') {
@@ -370,14 +370,14 @@ function findReferenceIssues(value, pathParts = []) {
     const currentPath = [...pathParts, key];
     const issues = [];
     if (typeof item === 'string' && /ref$/iu.test(key) && item.trim().startsWith('env://')) {
-      const issue = validateEnvRef(item.trim(), currentPath.join('.'));
+      const issue = validateEnvRef(item.trim(), currentPath.join('.'), envRefContext);
       if (issue) issues.push(issue);
     }
-    return [...issues, ...findReferenceIssues(item, currentPath)];
+    return [...issues, ...findReferenceIssues(item, currentPath, envRefContext)];
   });
 }
 
-function validateEnvRef(ref, refPath) {
+function validateEnvRef(ref, refPath, envRefContext = null) {
   const match = /^env:\/\/([^#]+)#([A-Z0-9_]+)$/u.exec(ref);
   if (!match) {
     return {
@@ -398,6 +398,17 @@ function validateEnvRef(ref, refPath) {
       path: refPath,
       ref,
       reason: 'env ref must stay inside repository-controlled handoff paths',
+    };
+  }
+
+  const serverSideStatus = getServerSideEnvStatus(envRefContext, relativeFile, key);
+  if (serverSideStatus) {
+    if (serverSideStatus.nonEmpty) return null;
+    return {
+      code: 'env-ref-missing',
+      path: refPath,
+      ref,
+      reason: `server-side env presence does not confirm a non-empty key: ${key}`,
     };
   }
 
@@ -449,6 +460,37 @@ function validateEnvRef(ref, refPath) {
   }
 
   return null;
+}
+
+function buildServerSideEnvRefContext(handoff) {
+  if (!handoff?.boundary?.serverSideDiscovery || handoff?.boundary?.envFileUploaded !== false) {
+    return null;
+  }
+  const envPresence = handoff.envPresence;
+  if (envPresence?.source !== 'server-side-sanitized-signals') {
+    return null;
+  }
+  return {
+    envFile: String(envPresence.envFile || 'deploy/env/server.production.env').replaceAll('\\', '/'),
+    keyStatus: envPresence.keyStatus ?? {},
+  };
+}
+
+function getServerSideEnvStatus(envRefContext, relativeFile, key) {
+  if (!envRefContext || envRefContext.envFile !== relativeFile) {
+    return null;
+  }
+  const status = envRefContext.keyStatus?.[key];
+  if (typeof status === 'boolean') {
+    return { present: status, nonEmpty: status };
+  }
+  if (!status || typeof status !== 'object') {
+    return { present: false, nonEmpty: false };
+  }
+  return {
+    present: status.present === true || status.nonEmpty === true,
+    nonEmpty: status.nonEmpty === true,
+  };
 }
 
 function parseEnvFile(source) {

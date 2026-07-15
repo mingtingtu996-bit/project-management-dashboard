@@ -1,17 +1,29 @@
 #!/usr/bin/env node
 
 import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-
-import dotenv from 'dotenv';
-import pg from 'pg';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, '../..');
 const DEFAULT_ENV_FILE = path.join(REPO_ROOT, 'server/.env');
 const DEFAULT_REPORT_ROOT = path.join(REPO_ROOT, 'project-testing/reports');
+const localRequire = createRequire(import.meta.url);
+const containerRequire = createRequire('/app/package.json');
+
+async function importDependency(packageName) {
+  try {
+    return await import(pathToFileURL(localRequire.resolve(packageName)).href);
+  } catch (localError) {
+    try {
+      return await import(pathToFileURL(containerRequire.resolve(packageName)).href);
+    } catch {
+      throw localError;
+    }
+  }
+}
 
 const TABLES_TO_PROBE = [
   'companies',
@@ -38,6 +50,8 @@ const ENV_KEYS = [
   'DB_CONNECTION_STRING',
   'DB_PASSWORD',
   'JWT_SECRET',
+  'WORKBUDDY_LIVE_BASE_URL',
+  'API_BASE_URL',
   'DEV_USER_ID',
   'PORT',
   'CORS_ORIGIN',
@@ -61,6 +75,9 @@ function parseArgs(argv = process.argv.slice(2)) {
     migrationOwner: '',
     runtimePublicationOwner: '',
     consumerObservationOwner: '',
+    serverSignalsFile: '',
+    envSource: 'file',
+    discoverySource: '',
     help: false,
   };
 
@@ -118,6 +135,18 @@ function parseArgs(argv = process.argv.slice(2)) {
     } else if (arg === '--consumer-observation-owner') {
       options.consumerObservationOwner = readValue(argv, index, arg);
       index += 1;
+    } else if (arg === '--server-signals-file') {
+      options.serverSignalsFile = path.resolve(readValue(argv, index, arg));
+      index += 1;
+    } else if (arg === '--env-source') {
+      options.envSource = readValue(argv, index, arg);
+      if (!['file', 'process'].includes(options.envSource)) {
+        throw new Error('--env-source must be file or process');
+      }
+      index += 1;
+    } else if (arg === '--discovery-source') {
+      options.discoverySource = readValue(argv, index, arg);
+      index += 1;
     } else if (arg === '--help' || arg === '-h') {
       options.help = true;
     } else {
@@ -149,6 +178,9 @@ Options:
   --migration-owner <ref>           Fill old-object migration owner.
   --runtime-publication-owner <ref> Fill C-19 runtime publication owner.
   --consumer-observation-owner <ref> Fill C-19 consumer observation owner.
+  --server-signals-file <path>      Use sanitized server-side discovery signals instead of probing DB locally.
+  --env-source <file|process>       Read env keys from a dotenv file or process.env. Defaults to file.
+  --discovery-source <label>        Override DB discovery source label for sanitized reports.
 `);
 }
 
@@ -571,7 +603,20 @@ function applyProjectTarget(output, project, selectionReason) {
   };
 }
 
-async function probeDatabase(env, envFile) {
+export function normalizePgConnectionStringForHandoff(value, ssl) {
+  if (!ssl) return value;
+  try {
+    const parsed = new URL(value);
+    if (parsed.searchParams.get('sslmode') !== 'no-verify') {
+      parsed.searchParams.set('sslmode', 'no-verify');
+    }
+    return parsed.toString();
+  } catch {
+    return value;
+  }
+}
+
+async function probeDatabase(env, envFile, pgModule) {
   const connectionString = env.SUPABASE_MIGRATION_URL || env.DB_CONNECTION_STRING;
   if (!connectionString) {
     return {
@@ -581,9 +626,10 @@ async function probeDatabase(env, envFile) {
     };
   }
 
-  const client = new pg.Client({
-    connectionString,
-    ssl: { rejectUnauthorized: false },
+  const ssl = { rejectUnauthorized: false };
+  const client = new pgModule.Client({
+    connectionString: normalizePgConnectionStringForHandoff(connectionString, ssl),
+    ssl,
     connectionTimeoutMillis: 12000,
     query_timeout: 12000,
     statement_timeout: 12000,
@@ -684,6 +730,88 @@ async function probeDatabase(env, envFile) {
   } finally {
     await client.end().catch(() => undefined);
   }
+}
+
+async function loadEnv(options) {
+  if (options.envSource === 'process') {
+    return Object.fromEntries(ENV_KEYS
+      .filter((key) => Object.prototype.hasOwnProperty.call(process.env, key))
+      .map((key) => [key, process.env[key] ?? '']));
+  }
+
+  const envRaw = await readFile(options.envFile, 'utf8');
+  const dotenvModule = await importDependency('dotenv');
+  return dotenvModule.default.parse(envRaw);
+}
+
+function sanitizeTargetValue(value) {
+  return String(value ?? '').trim().replace(/[\r\n]/g, '').slice(0, 240);
+}
+
+function sanitizeDiscoveredTargets(targets = {}) {
+  return {
+    companyId: sanitizeTargetValue(targets.companyId),
+    projectId: sanitizeTargetValue(targets.projectId),
+    planId: sanitizeTargetValue(targets.planId),
+    candidateId: sanitizeTargetValue(targets.candidateId),
+    sampleCohortRef: sanitizeTargetValue(targets.sampleCohortRef),
+  };
+}
+
+function sanitizeTableCounts(tableCounts = {}) {
+  const sanitized = {};
+  if (!tableCounts || typeof tableCounts !== 'object') return sanitized;
+  for (const [tableName, value] of Object.entries(tableCounts)) {
+    if (!/^[a-z_][a-z0-9_]*$/i.test(tableName)) continue;
+    const count = Number(value?.count);
+    sanitized[tableName] = {
+      exists: Boolean(value?.exists),
+      count: Number.isFinite(count) ? count : null,
+      ...(value?.error ? { error: String(value.error).slice(0, 160) } : {}),
+    };
+  }
+  return sanitized;
+}
+
+function sanitizeColumns(columns = {}) {
+  const sanitized = {};
+  if (!columns || typeof columns !== 'object') return sanitized;
+  for (const [tableName, tableColumns] of Object.entries(columns)) {
+    if (!/^[a-z_][a-z0-9_]*$/i.test(tableName) || !Array.isArray(tableColumns)) continue;
+    sanitized[tableName] = tableColumns
+      .map((column) => ({
+        column_name: sanitizeTargetValue(column?.column_name),
+        data_type: sanitizeTargetValue(column?.data_type),
+      }))
+      .filter((column) => column.column_name);
+  }
+  return sanitized;
+}
+
+async function readServerSignalsProbe(serverSignalsFile, envFile, env) {
+  const raw = await readFile(serverSignalsFile, 'utf8');
+  const signals = JSON.parse(raw.replace(/^\uFEFF/u, ''));
+  const db = signals.connectivity?.db ?? {};
+  const error = db.error
+    ? String(db.error).replace(/[\r\n]/g, ' ').slice(0, 200)
+    : undefined;
+  const databaseTargetRef = hasEnv(env, 'SUPABASE_MIGRATION_URL')
+    ? envRef(envFile, 'SUPABASE_MIGRATION_URL')
+    : hasEnv(env, 'DB_CONNECTION_STRING')
+      ? envRef(envFile, 'DB_CONNECTION_STRING')
+      : sanitizeTargetValue(db.databaseTargetRef);
+
+  return {
+    ok: db.ok === true,
+    databaseTargetRef,
+    error,
+    tableCounts: sanitizeTableCounts(signals.tableCounts),
+    columns: sanitizeColumns(signals.columns),
+    targets: sanitizeDiscoveredTargets(signals.discoveredTargets),
+    targetSelection: null,
+    candidateDiscovery: null,
+    discoverySource: 'server-side-sanitized-signals',
+  };
 }
 
 function deriveBaseUrl(env) {
@@ -828,9 +956,10 @@ async function main() {
   const outputDir = options.outputDir ?? await findLatestHandoffDir(options.reportRoot);
   await mkdir(outputDir, { recursive: true });
 
-  const envRaw = await readFile(options.envFile, 'utf8');
-  const env = dotenv.parse(envRaw);
-  const dbProbe = await probeDatabase(env, options.envFile);
+  const env = await loadEnv(options);
+  const dbProbe = options.serverSignalsFile
+    ? await readServerSignalsProbe(options.serverSignalsFile, options.envFile, env)
+    : await probeDatabase(env, options.envFile, (await importDependency('pg')).default);
   const signals = {
     schemaVersion: 'workbuddy-release-handoff-signals/v1',
     generatedAt: new Date().toISOString(),
@@ -841,6 +970,7 @@ async function main() {
         ok: dbProbe.ok,
         databaseTargetRef: dbProbe.databaseTargetRef,
         error: dbProbe.error ?? null,
+        discoverySource: options.discoverySource || dbProbe.discoverySource || 'runner-local-db-probe',
       },
     },
     tableCounts: dbProbe.tableCounts ?? {},

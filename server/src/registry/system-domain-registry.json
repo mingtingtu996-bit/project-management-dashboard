@@ -3065,6 +3065,20 @@
     },
     {
       "kind": "migration",
+      "id": "312_runtime_login_rls_helper_acl",
+      "architectureUnit": "底座：平台运行观测",
+      "runtimeScope": "platform_foundation",
+      "assignmentReason": "grant the concrete non-bypass runtime login access to the active-company RLS helper"
+    },
+    {
+      "kind": "migration",
+      "id": "313_grant_rls_helper_execute_to_runtime_roles",
+      "architectureUnit": "底座：平台运行观测",
+      "runtimeScope": "platform_foundation",
+      "assignmentReason": "grant every supported Supabase and backend runtime role access to the active-company RLS helper"
+    },
+    {
+      "kind": "migration",
       "id": "CLEAN_MIGRATION",
       "architectureUnit": "底座：平台运行观测",
       "runtimeScope": "platform_foundation",

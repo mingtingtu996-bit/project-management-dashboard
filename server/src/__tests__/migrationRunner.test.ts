@@ -83,6 +83,22 @@ describe('migration runner contract', () => {
     expect(calculateMigrationChecksum(sql)).toBe(calculateMigrationChecksum(sql))
   })
 
+  it('keeps the production RLS helper ACL migration broad enough for Supabase anon startup reads', () => {
+    const sql = readFileSync(
+      resolve(serverRoot, 'migrations', '313_grant_rls_helper_execute_to_runtime_roles.sql'),
+      'utf8',
+    )
+
+    expect(sql).toContain("p.proname = 'is_active_company_member'")
+    expect(sql).toContain("'anon'")
+    expect(sql).toContain("'authenticated'")
+    expect(sql).toContain("'service_role'")
+    expect(sql).toContain("'workbuddy_runtime'")
+    expect(sql).toContain("'workbuddy_runtime_login'")
+    expect(sql).toContain("format('GRANT EXECUTE ON FUNCTION %s TO %I'")
+    expect(sql).toContain('ALTER ROLE workbuddy_runtime_login WITH INHERIT NOBYPASSRLS')
+  })
+
   it('supports baseline selection and version ordering with numeric and suffixed versions', () => {
     expect(compareMigrationVersions('009', '009b')).toBeLessThan(0)
     expect(compareMigrationVersions('083a', '084')).toBeLessThan(0)
@@ -142,11 +158,49 @@ describe('migration runner contract', () => {
     })
   })
 
-  it('prefers DATABASE_URL when it is provided', () => {
+  it('prefers the dedicated migration URL over the runtime DATABASE_URL', () => {
     process.env.DATABASE_URL = 'postgresql://postgres:secret@db.example.supabase.co:5432/postgres'
+    process.env.SUPABASE_MIGRATION_URL = 'postgresql://postgres:other@db.other.supabase.co:5432/postgres'
 
     expect(resolveMigrationConnectionConfig()).toEqual({
-      connectionString: 'postgresql://postgres:secret@db.example.supabase.co:5432/postgres',
+      connectionString: 'postgresql://postgres:other@db.other.supabase.co:5432/postgres?sslmode=no-verify',
+      family: 4,
+      ssl: { rejectUnauthorized: false },
+    })
+  })
+
+  it('normalizes migration connection-string sslmode so pg keeps non-verifying TLS for Supabase pooler certificates', () => {
+    process.env.DATABASE_URL = 'postgresql://postgres:secret@db.example.supabase.co:5432/postgres?sslmode=require'
+
+    expect(resolveMigrationConnectionConfig()).toEqual({
+      connectionString: 'postgresql://postgres:secret@db.example.supabase.co:5432/postgres?sslmode=no-verify',
+      family: 4,
+      ssl: { rejectUnauthorized: false },
+    })
+  })
+
+  it('uses production migration connection fallbacks before host/password config', () => {
+    delete process.env.DATABASE_URL
+    process.env.SUPABASE_MIGRATION_URL = 'postgresql://postgres:migration@db.migration.supabase.co:5432/postgres'
+    process.env.DIRECT_DATABASE_URL = 'postgresql://postgres:direct@db.direct.supabase.co:5432/postgres'
+    process.env.DB_CONNECTION_STRING = 'postgresql://runtime:runtime@db.runtime.supabase.co:6543/postgres'
+
+    expect(resolveMigrationConnectionConfig()).toEqual({
+      connectionString: 'postgresql://postgres:migration@db.migration.supabase.co:5432/postgres?sslmode=no-verify',
+      family: 4,
+      ssl: { rejectUnauthorized: false },
+    })
+
+    delete process.env.SUPABASE_MIGRATION_URL
+    expect(resolveMigrationConnectionConfig()).toEqual({
+      connectionString: 'postgresql://postgres:direct@db.direct.supabase.co:5432/postgres?sslmode=no-verify',
+      family: 4,
+      ssl: { rejectUnauthorized: false },
+    })
+
+    delete process.env.DIRECT_DATABASE_URL
+    expect(resolveMigrationConnectionConfig()).toEqual({
+      connectionString: 'postgresql://runtime:runtime@db.runtime.supabase.co:6543/postgres?sslmode=no-verify',
       family: 4,
       ssl: { rejectUnauthorized: false },
     })
@@ -157,7 +211,7 @@ describe('migration runner contract', () => {
     process.env.DATABASE_URL = 'postgresql://postgres:secret@db.example.supabase.co:5432/postgres'
 
     expect(resolveMigrationConnectionConfig()).toEqual({
-      connectionString: 'postgresql://postgres:secret@db.example.supabase.co:5432/postgres',
+      connectionString: 'postgresql://postgres:secret@db.example.supabase.co:5432/postgres?sslmode=no-verify',
       family: 4,
       ssl: { rejectUnauthorized: false },
     })
@@ -170,7 +224,7 @@ describe('migration runner contract', () => {
     process.env.DB_PASSWORD = 'runtime-secret'
 
     expect(resolveMigrationConnectionConfig()).toEqual({
-      connectionString: 'postgresql://postgres:migration-secret@db.example.supabase.co:5432/postgres',
+      connectionString: 'postgresql://postgres:migration-secret@db.example.supabase.co:5432/postgres?sslmode=no-verify',
       family: 4,
       ssl: { rejectUnauthorized: false },
     })

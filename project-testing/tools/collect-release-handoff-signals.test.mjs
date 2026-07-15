@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -7,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import {
   buildCandidateDiscovery,
   buildCandidateDiscoveryBlockers,
+  normalizePgConnectionStringForHandoff,
 } from './collect-release-handoff-signals.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -173,4 +176,104 @@ test('candidate discovery blockers reject missing table and missing status colum
     }),
     ['canary_candidate_status_column_missing', 'canary_candidate_selected_id_missing'],
   );
+});
+
+test('handoff signal collector normalizes Supabase sslmode for non-verifying TLS', () => {
+  assert.equal(
+    normalizePgConnectionStringForHandoff(
+      'postgresql://postgres:secret@db.example.supabase.co:5432/postgres?sslmode=require',
+      { rejectUnauthorized: false },
+    ),
+    'postgresql://postgres:secret@db.example.supabase.co:5432/postgres?sslmode=no-verify',
+  );
+});
+
+test('handoff signal collector hydrates targets from sanitized server-side process discovery', async () => {
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'workbuddy-handoff-server-signals-'));
+  try {
+    const serverSignalsFile = path.join(tempDir, 'server-signals.json');
+    const outputDir = path.join(tempDir, 'reports');
+    await writeFile(serverSignalsFile, JSON.stringify({
+      schemaVersion: 'workbuddy-release-handoff-signals/v1',
+      connectivity: {
+        db: {
+          ok: true,
+          databaseTargetRef: 'env://deploy/env/server.production.env#SUPABASE_MIGRATION_URL',
+          error: null,
+        },
+      },
+      discoveredTargets: {
+        companyId: 'company-prod-1',
+        projectId: 'project-prod-1',
+        planId: 'plan-prod-1',
+        candidateId: 'candidate-prod-1',
+        sampleCohortRef: 'db-sample://project/project-prod-1/duration-context-policy-canary-candidates',
+      },
+    }, null, 2), 'utf8');
+
+    const result = spawnSync(process.execPath, [
+      '--', collectorPath,
+      '--env-source', 'process',
+      '--env-file', 'deploy/env/server.production.env',
+      '--output-dir', outputDir,
+      '--server-signals-file', serverSignalsFile,
+      '--include-live', '--confirm-live-handoff', '--include-db', '--confirm-db-ready',
+      '--environment-owner', 'github-actions-production-closeout',
+      '--write-approval-ref', 'github-actions://run/test',
+      '--manual-approval-ref', 'github-actions://run/test',
+      '--monitoring-owner', 'github-actions-production-closeout',
+      '--rollback-owner', 'github-actions-production-closeout',
+      '--cleanup-owner', 'github-actions-production-closeout',
+      '--migration-owner', 'github-actions-production-closeout',
+      '--runtime-publication-owner', 'github-actions-production-closeout',
+      '--consumer-observation-owner', 'github-actions-production-closeout',
+    ], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        SUPABASE_MIGRATION_URL: 'postgresql://example.invalid/unreachable',
+        WORKBUDDY_LIVE_BASE_URL: 'https://workbuddy.example.test',
+      },
+    });
+
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const signals = JSON.parse(await readFile(path.join(outputDir, 'handoff-signals.json'), 'utf8'));
+    assert.equal(signals.connectivity.db.discoverySource, 'server-side-sanitized-signals');
+    assert.equal(signals.discoveredTargets.candidateId, 'candidate-prod-1');
+    const candidate = JSON.parse(await readFile(path.join(outputDir, 'handoff-candidate.generated.json'), 'utf8'));
+    assert.equal(candidate.gates['c18-l07-l15-live-diagnostics'].live.baseUrl, 'https://workbuddy.example.test');
+    assert.equal(candidate.gates['c15-live-learning-closeout'].targets.candidateId, 'candidate-prod-1');
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('handoff signal collector labels requested server-side discovery when DB input is absent', async () => {
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'workbuddy-handoff-discovery-source-'));
+  try {
+    const outputDir = path.join(tempDir, 'reports');
+    const result = spawnSync(process.execPath, [
+      '--', collectorPath,
+      '--env-source', 'process',
+      '--env-file', 'deploy/env/server.production.env',
+      '--output-dir', outputDir,
+      '--discovery-source', 'server-side-ssh-discovery',
+    ], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        SUPABASE_MIGRATION_URL: '',
+        DB_CONNECTION_STRING: '',
+      },
+    });
+
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const signals = JSON.parse(await readFile(path.join(outputDir, 'handoff-signals.json'), 'utf8'));
+    assert.equal(signals.connectivity.db.ok, false);
+    assert.equal(signals.connectivity.db.discoverySource, 'server-side-ssh-discovery');
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
 });

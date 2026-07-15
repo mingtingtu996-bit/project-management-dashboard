@@ -1059,3 +1059,74 @@ describe('deploy workflow contract', () => {
     expect(workflow).toContain('npm run guard:legacy-object-drop -- --ci-no-drop-candidates-ok --from-retired-object-audit --scan-migration-drops')
   })
 })
+
+describe('mainline production workflow integration', () => {
+  it('keeps production server maintenance gated and preserves untracked files', () => {
+    const workflow = readFileSync(
+      resolve(workspaceRoot, '.github', 'workflows', 'production-server-worktree-maintenance.yml'),
+      'utf8',
+    )
+    const guard = readFileSync(resolve(workspaceRoot, '.github', 'workflows', 'workflow-guard.yml'), 'utf8')
+
+    expect(workflow).toContain('name: Production Server Worktree Maintenance')
+    expect(workflow).toContain('BACKUP_AND_CLEAN_TRACKED_CHANGES')
+    expect(workflow).toContain('git status --porcelain=v1 --untracked-files=no')
+    expect(workflow).toContain('untrackedFilesPreserved: true')
+    expect(workflow).toContain('diagnosticsOnly: true')
+    expect(workflow).toContain('rawReportStoredOnProductionServer: true')
+    expect(workflow).toContain('secrets.PRODUCTION_DEPLOY_HOST')
+    expect(workflow).not.toContain('secrets.DEPLOY_HOST')
+    expect(guard).toContain('.github/workflows/production-server-worktree-maintenance.yml')
+  })
+
+  it('keeps production closeout discovery server-side without copying production env files', () => {
+    const workflow = readFileSync(
+      resolve(workspaceRoot, '.github', 'workflows', 'production-closeout-readiness.yml'),
+      'utf8',
+    )
+    const guard = readFileSync(resolve(workspaceRoot, '.github', 'workflows', 'workflow-guard.yml'), 'utf8')
+
+    expect(workflow).toContain('Collect server-side discovery signals')
+    expect(workflow).not.toContain('Fetch production env from self-hosted server')
+    expect(workflow).toContain('--env-source process')
+    expect(workflow).toContain('--discovery-source server-side-ssh-discovery')
+    expect(workflow).toContain('--production-env-ref deploy/env/server.production.env')
+    expect(workflow).toContain('--server-signals-file "$OUTPUT_ROOT/server-handoff-signals.json"')
+    expect(workflow).toContain('production-gate-selection.input.json')
+    expect(workflow).toContain('args+=(--gate "$gate_id")')
+    expect(workflow).toContain('secrets.PRODUCTION_DEPLOY_HOST')
+    expect(workflow).not.toContain('secrets.DEPLOY_HOST')
+    expect(guard).toContain('project-testing/tools/collect-release-handoff-signals.test.mjs')
+    expect(guard).toContain('project-testing/tools/prepare-production-closeout-readiness.test.mjs')
+  })
+
+  it('keeps production livegate execution server-side and evidence-gated', () => {
+    const workflow = readFileSync(
+      resolve(workspaceRoot, '.github', 'workflows', 'production-livegate-execution.yml'),
+      'utf8',
+    )
+    const guard = readFileSync(resolve(workspaceRoot, '.github', 'workflows', 'workflow-guard.yml'), 'utf8')
+
+    expect(workflow).toContain('name: Production Livegate Execution')
+    expect(workflow).toContain('Run production livegate inside production container')
+    expect(workflow).toContain('--env-source process')
+    expect(workflow).toContain('production-livegate-gate-selection.json')
+    expect(workflow).toContain('run-production-livegate-evidence.mjs')
+    expect(workflow).toContain('node project-testing/tools/evaluate-release-closeout.mjs')
+    expect(workflow).not.toContain('Fetch production env from self-hosted server')
+    expect(workflow).not.toContain('SUPABASE_MIGRATION_URL=')
+    expect(workflow).toContain('secrets.PRODUCTION_DEPLOY_HOST')
+    expect(workflow).not.toContain('secrets.DEPLOY_HOST')
+    expect(guard).toContain('.github/workflows/production-livegate-execution.yml')
+    expect(guard).toContain('project-testing/tools/run-production-livegate-evidence.test.mjs')
+  })
+
+  it('repairs only recognized Docker builder cache corruption before deploy', () => {
+    const script = readFileSync(resolve(workspaceRoot, 'scripts', 'deploy-lighthouse-server.sh'), 'utf8')
+
+    expect(script).toContain('run_api_build_with_cache_repair()')
+    expect(script).toContain('failed to prepare extraction snapshot|parent snapshot .* does not exist')
+    expect(script).toContain('docker builder prune -af')
+    expect(script).toContain('run_api_build_with_cache_repair')
+  })
+})
