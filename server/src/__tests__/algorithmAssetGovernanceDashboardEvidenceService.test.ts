@@ -6,7 +6,7 @@ import {
   collectAlgorithmAssetGovernanceDashboardEvidence,
 } from '../services/algorithmAssetGovernanceDashboardEvidenceService.js'
 
-const serverRoot = process.cwd().endsWith('\\server') ? process.cwd() : resolve(process.cwd(), 'server')
+const serverRoot = process.cwd().replace(/\\/g, '/').endsWith('/server') ? process.cwd() : resolve(process.cwd(), 'server')
 
 function readServerFile(...segments: string[]) {
   return readFileSync(resolve(serverRoot, ...segments), 'utf8')

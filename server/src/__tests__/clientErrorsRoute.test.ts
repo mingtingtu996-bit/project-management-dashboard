@@ -67,7 +67,7 @@ describe('client errors route', () => {
   })
 
   it('keeps public client error telemetry mounted before broad api auth routers', () => {
-    const serverRoot = process.cwd().endsWith('\\server')
+    const serverRoot = process.cwd().replace(/\\/g, '/').endsWith('/server')
       ? process.cwd()
       : resolve(process.cwd(), 'server')
     const indexSource = readFileSync(resolve(serverRoot, 'src', 'index.ts'), 'utf8')

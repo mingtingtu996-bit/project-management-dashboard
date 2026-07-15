@@ -10,7 +10,7 @@ const guardPath = resolve(serverRoot, 'scripts', 'guard-construction-organizatio
 const tempRoots: string[] = []
 
 function createFixture(files: Record<string, string>) {
-  const root = join(tmpdir(), `construction-org-hydration-guard-${Date.now()}-${Math.random().toString(16).slice(2)}`)
+  const root = join(tmpdir(), 'tmp', `construction-org-hydration-guard-${Date.now()}-${Math.random().toString(16).slice(2)}`)
   for (const [relativePath, source] of Object.entries(files)) {
     const filePath = join(root, relativePath)
     mkdirSync(dirname(filePath), { recursive: true })

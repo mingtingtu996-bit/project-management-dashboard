@@ -18,7 +18,7 @@ import {
 } from '../services/projectExecutionSummaryService.js'
 import type { ConstructionCalendarContext } from '../services/constructionCalendar.js'
 
-const serverRoot = process.cwd().endsWith('\\server') ? process.cwd() : resolve(process.cwd(), 'server')
+const serverRoot = process.cwd().replace(/\\/g, '/').endsWith('/server') ? process.cwd() : resolve(process.cwd(), 'server')
 
 const SHUTDOWN_CALENDAR: ConstructionCalendarContext = {
   basis: 'official_construction_calendar_seed',

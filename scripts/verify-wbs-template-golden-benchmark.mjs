@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 const repoRoot = resolve(fileURLToPath(new URL('..', import.meta.url)))
-const tsxCliPath = resolve(repoRoot, 'node_modules/tsx/dist/cli.mjs')
+const tsxCliPath = resolve(repoRoot, 'server/node_modules/tsx/dist/cli.mjs')
 const outputPath = resolve(repoRoot, 'artifacts/reports/wbs-template-golden-benchmark-verification.json')
 const runtimeOutputPath = resolve(repoRoot, 'artifacts/reports/wbs-template-golden-benchmark-runtime-results.json')
 const userArgs = process.argv.slice(2)

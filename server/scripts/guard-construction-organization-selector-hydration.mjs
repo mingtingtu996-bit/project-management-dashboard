@@ -21,7 +21,6 @@ function shouldSkip(filePath) {
     || normalized.endsWith('/constructionOrganizationScenarioSelector.ts')
     || normalized.includes('/node_modules/')
     || normalized.includes('/dist/')
-    || normalized.includes('/tmp/')
   )
 }
 

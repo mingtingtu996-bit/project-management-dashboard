@@ -3,7 +3,7 @@ import { resolve } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
-const serverRoot = process.cwd().endsWith('\\server') || process.cwd().endsWith('/server')
+const serverRoot = process.cwd().replace(/\\/g, '/').endsWith('/server')
   ? process.cwd()
   : resolve(process.cwd(), 'server')
 const migrationsRoot = resolve(serverRoot, 'migrations')

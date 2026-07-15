@@ -11,7 +11,8 @@ describe('default master-plan visibility learning job contract', () => {
     const jobSource = readServerFile('src', 'jobs', 'defaultMasterPlanVisibilityLearningJob.ts')
     const schedulerSource = readServerFile('src', 'scheduler.ts')
 
-    expect(jobSource).toContain('nextDailyRunAt(6, 35)')
+    expect(jobSource).toContain("schedule: { kind: 'daily', hour: 6, minute: 35 }")
+    expect(jobSource).toContain('PersistentWallClockJobTimer')
     expect(jobSource).toContain("trigger: 'daily_06_35'")
     expect(jobSource).toContain('runDefaultMasterPlanVisibilityLearningSweep({})')
     expect(schedulerSource).toContain("import { defaultMasterPlanVisibilityLearningJob } from './jobs/defaultMasterPlanVisibilityLearningJob.js'")

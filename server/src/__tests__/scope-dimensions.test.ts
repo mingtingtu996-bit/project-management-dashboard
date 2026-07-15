@@ -3,7 +3,7 @@ import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { ENGINEERING_OBJECT_TYPES } from '../types/db.js'
 
-const serverRoot = process.cwd().endsWith('\\server') ? process.cwd() : resolve(process.cwd(), 'server')
+const serverRoot = process.cwd().replace(/\\/g, '/').endsWith('/server') ? process.cwd() : resolve(process.cwd(), 'server')
 const repoRoot = resolve(serverRoot, '..')
 
 function readServerFile(...segments: string[]) {

@@ -3,7 +3,7 @@ import { resolve } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
-const workspaceRoot = process.cwd().endsWith('\\server')
+const workspaceRoot = process.cwd().replace(/\\/g, '/').endsWith('/server')
   ? resolve(process.cwd(), '..')
   : process.cwd()
 

@@ -495,6 +495,8 @@ describe('acceptance flow service', () => {
   })
 
   it('uses the local business calendar day for acceptance due buckets', async () => {
+    const previousTimeZone = process.env.TZ
+    process.env.TZ = 'Asia/Shanghai'
     vi.useFakeTimers()
     try {
       vi.setSystemTime(new Date('2026-06-18T23:30:00.000Z'))
@@ -508,6 +510,11 @@ describe('acceptance flow service', () => {
       })
     } finally {
       vi.useRealTimers()
+      if (previousTimeZone === undefined) {
+        delete process.env.TZ
+      } else {
+        process.env.TZ = previousTimeZone
+      }
     }
   })
 

@@ -54,7 +54,7 @@ describe('verify WBS template golden benchmark CLI', () => {
       { cwd: join(__dirname, '../../..'), encoding: 'utf8' },
     )
 
-    expect(result.status).toBe(0)
+    expect(result.status, result.stderr).toBe(0)
     expect(result.stdout).toContain('"status": "pass"')
     expect(result.stdout).toContain('"runtimeGate"')
     expect(result.stdout).toContain('"resultCount": 13')
@@ -85,7 +85,7 @@ describe('verify WBS template golden benchmark CLI', () => {
       { cwd: join(__dirname, '../../..'), encoding: 'utf8' },
     )
 
-    expect(result.status).toBe(0)
+    expect(result.status, result.stderr).toBe(0)
     expect(result.stdout).toContain('"status": "pass"')
   }, 60_000)
 

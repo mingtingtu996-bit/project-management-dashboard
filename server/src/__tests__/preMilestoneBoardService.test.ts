@@ -393,27 +393,38 @@ describe('pre milestone board service', () => {
   })
 
   it('uses local calendar dates instead of UTC dates for certificate overdue buckets', () => {
-    const localEarlyMorning = new Date(2026, 5, 19, 1, 30, 0)
-    const board = buildLicenseBoardReadModel({
-      certificates: [
-        {
-          id: 'cert-planning',
-          milestone_type: 'land_use_planning_permit',
-          milestone_name: 'land_use_planning_permit',
-          status: 'internal_review',
-          planned_end_date: '2026-06-19',
-        },
-      ],
-      workItems: [],
-      dependencies: [],
-      now: localEarlyMorning,
-    })
+    const previousTimeZone = process.env.TZ
+    process.env.TZ = 'Asia/Shanghai'
+    try {
+      const localEarlyMorning = new Date('2026-06-18T17:30:00.000Z')
+      const board = buildLicenseBoardReadModel({
+        certificates: [
+          {
+            id: 'cert-planning',
+            milestone_type: 'land_use_planning_permit',
+            milestone_name: 'land_use_planning_permit',
+            status: 'internal_review',
+            planned_end_date: '2026-06-19',
+          },
+        ],
+        workItems: [],
+        dependencies: [],
+        now: localEarlyMorning,
+      })
 
-    expect(localEarlyMorning.toISOString().slice(0, 10)).not.toBe('2026-06-19')
-    expect(board.summary.overdueCount).toBe(0)
-    expect(board.summary.criticalItems[0]).toEqual(expect.objectContaining({
-      dueDate: '2026-06-19',
-      isOverdue: false,
-    }))
+      expect(localEarlyMorning.toISOString().slice(0, 10)).toBe('2026-06-18')
+      expect(localEarlyMorning.getDate()).toBe(19)
+      expect(board.summary.overdueCount).toBe(0)
+      expect(board.summary.criticalItems[0]).toEqual(expect.objectContaining({
+        dueDate: '2026-06-19',
+        isOverdue: false,
+      }))
+    } finally {
+      if (previousTimeZone === undefined) {
+        delete process.env.TZ
+      } else {
+        process.env.TZ = previousTimeZone
+      }
+    }
   })
 })
