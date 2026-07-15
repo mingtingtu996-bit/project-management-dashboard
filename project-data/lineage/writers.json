@@ -3,32 +3,6 @@
   "mutationBoundary": "writer_registry_only_no_db_mutation_no_runtime_write",
   "writers": [
     {
-      "id": "progress_knowledge_candidate_sql_apply",
-      "path": "project-search/tools/apply-progress-knowledge-sql-to-db.mjs",
-      "ownerCenter": "project-search",
-      "environmentBoundary": "governed DB apply for progress knowledge candidate tables only",
-      "allowedTables": [
-        "progress_knowledge_sources",
-        "progress_knowledge_documents",
-        "progress_asset_candidates",
-        "progress_asset_calibration_runs",
-        "progress_asset_calibration_results",
-        "progress_asset_publication_readiness"
-      ],
-      "forbiddenTables": [
-        "tasks",
-        "task_baselines",
-        "monthly_plans",
-        "monthly_plan_items",
-        "task_dependencies",
-        "duration_experience_samples",
-        "actual_duration_outcomes",
-        "critical_path"
-      ],
-      "requiresUnlock": true,
-      "defaultMode": "candidate_only"
-    },
-    {
       "id": "progress_knowledge_source_verification_sql_generator",
       "path": "project-search/tools/build-progress-knowledge-source-verification.mjs",
       "ownerCenter": "project-search",
@@ -247,6 +221,75 @@
       "forbiddenTables": [],
       "requiresUnlock": true,
       "defaultMode": "staging_controlled_replay"
+    },
+    {
+      "id": "default_master_plan_independent_task_network_materialization",
+      "path": "server/src/services/defaultMasterPlanIndependentTaskNetworkMaterializationService.ts",
+      "ownerCenter": "server",
+      "environmentBoundary": "authenticated project-scoped materialization of an approved independent default master-plan candidate inside one transaction",
+      "allowedTables": [
+        "tasks",
+        "task_baselines",
+        "task_baseline_items",
+        "task_dependencies"
+      ],
+      "forbiddenTables": [
+        "monthly_plans",
+        "monthly_plan_items",
+        "duration_experience_samples",
+        "actual_duration_outcomes",
+        "critical_path",
+        "runtime_publication_tables",
+        "production_seed_rows"
+      ],
+      "requiresUnlock": false,
+      "defaultMode": "approved_candidate_transactional_materialization"
+    },
+    {
+      "id": "v14241_uat05_api_task_update_diagnostic",
+      "path": "project-testing/tools/diagnose-v14241-uat05-api-task-update.mjs",
+      "ownerCenter": "project-testing",
+      "environmentBoundary": "controlled staging UAT-05 diagnostic against one fixture task with immediate title restoration",
+      "allowedTables": [
+        "tasks"
+      ],
+      "forbiddenTables": [
+        "task_baselines",
+        "task_baseline_items",
+        "task_dependencies",
+        "monthly_plans",
+        "monthly_plan_items",
+        "duration_experience_samples",
+        "actual_duration_outcomes",
+        "critical_path",
+        "runtime_publication_tables",
+        "production_seed_rows"
+      ],
+      "requiresUnlock": false,
+      "defaultMode": "controlled_staging_fixture_diagnostic_and_restore"
+    },
+    {
+      "id": "v14241_uat05_inprocess_task_route_diagnostic",
+      "path": "project-testing/tools/diagnose-v14241-uat05-inprocess-task-route.mjs",
+      "ownerCenter": "project-testing",
+      "environmentBoundary": "controlled staging UAT-05 in-process route diagnostic against one fixture task with immediate title restoration",
+      "allowedTables": [
+        "tasks"
+      ],
+      "forbiddenTables": [
+        "task_baselines",
+        "task_baseline_items",
+        "task_dependencies",
+        "monthly_plans",
+        "monthly_plan_items",
+        "duration_experience_samples",
+        "actual_duration_outcomes",
+        "critical_path",
+        "runtime_publication_tables",
+        "production_seed_rows"
+      ],
+      "requiresUnlock": false,
+      "defaultMode": "controlled_staging_inprocess_fixture_diagnostic_and_restore"
     },
     {
       "id": "controlled_live_closeout_writers",
@@ -702,10 +745,10 @@
       "environmentBoundary": "application route writer for wizard rollback/recovery and generated task/dependency cleanup",
       "allowedTables": [
         "tasks",
+        "task_baselines",
         "task_dependencies"
       ],
       "forbiddenTables": [
-        "task_baselines",
         "monthly_plans",
         "monthly_plan_items",
         "duration_experience_samples",
@@ -906,10 +949,10 @@
       "environmentBoundary": "application service writer for wizard generation rollback cleanup",
       "allowedTables": [
         "tasks",
+        "task_baselines",
         "task_dependencies"
       ],
       "forbiddenTables": [
-        "task_baselines",
         "monthly_plans",
         "monthly_plan_items",
         "duration_experience_samples",

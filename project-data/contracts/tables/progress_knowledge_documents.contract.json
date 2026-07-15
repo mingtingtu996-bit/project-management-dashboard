@@ -17,9 +17,9 @@
     "extraction_status",
     "extraction_quality"
   ],
-  "allowedWriterRegistryIds": [
-    "progress_knowledge_candidate_sql_apply"
-  ],
+  "physicalPresenceRequired": false,
+  "retiredByMigration": "311_retire_product_runtime_progress_knowledge_governance.sql",
+  "allowedWriterRegistryIds": [],
   "qualityRules": [
     "document_key_required",
     "document_type_required",

@@ -35,6 +35,12 @@ async function main() {
     'critical_path',
     'published_runtime_overlay',
     'production_seed_rows',
+    'progress_knowledge_sources',
+    'progress_knowledge_documents',
+    'progress_asset_candidates',
+    'progress_asset_calibration_runs',
+    'progress_asset_calibration_results',
+    'progress_asset_publication_readiness',
   ]
 
   for (const table of requiredForbidden) {
@@ -51,8 +57,19 @@ async function main() {
     }
   }
 
-  for (const gate of ['source_verification', 'candidate_review', 'data_contract_check', 'controlled_writer_authorization', 'rollback_plan', 'readback_evidence']) {
+  for (const gate of [
+    'source_verification',
+    'candidate_review',
+    'code_owner_review',
+    'data_contract_check',
+    'official_seed_rule_or_template_change',
+    'automated_code_tests',
+    'normal_code_release',
+  ]) {
     if (!gates.gates.includes(gate)) fail(`Candidate-to-runtime gate is missing: ${gate}`)
+  }
+  if ((searchBoundary.allowedTables || []).length !== 0) {
+    fail('Project-search may not write product database tables')
   }
 
   console.log(JSON.stringify({

@@ -13,7 +13,7 @@ Use this skill before changing `project-data/`, data contracts, writer registrie
 2. Classify the task:
    - Table/source-of-truth inventory: update `catalog/`.
    - Writer or staging/live write path: update `lineage/writers.json` and `boundaries/`.
-   - External knowledge or search candidate promotion: update `boundaries/candidate-to-runtime-gates.json`.
+   - External knowledge calibration: keep it repository-local and update `boundaries/candidate-to-runtime-gates.json` only as a no-runtime compatibility boundary.
    - Table/schema/data quality rule: update `contracts/` and `quality/`.
    - MCP or CLI tooling: update `plugins/` and run `tools/ensure-data-governance-plugins.mjs`.
 3. Treat all MCP/database access as read-only unless a separate testing handoff explicitly authorizes a write path.
@@ -42,7 +42,7 @@ External search, public project data, and knowledge-base material may not direct
 - published runtime overlays
 - production seed rows
 
-Candidate material must pass source verification, review, replay/shadow evidence, contract checks, publication readiness, controlled writer, rollback, and readback before any runtime or business fact use.
+External candidate material never enters product tables. Accepted findings become official seed/rule/template source changes through code-owner review, automated tests, and normal release. Runtime learning is separate and uses real product facts and outcomes.
 
 ## MCP Rules
 

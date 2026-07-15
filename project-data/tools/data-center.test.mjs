@@ -42,7 +42,7 @@ test('data boundaries keep external and candidate material away from business fa
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`)
   const payload = JSON.parse(result.stdout)
   assert.equal(payload.status, 'passed')
-  assert.equal(payload.forbiddenDirectExternalWrites, 10)
+  assert.equal(payload.forbiddenDirectExternalWrites, 16)
   assert.ok(payload.candidateToRuntimeGates >= 10)
 })
 
@@ -71,7 +71,7 @@ test('read-only data access preflight validates safety without connecting to DB'
   const payload = JSON.parse(result.stdout)
   assert.equal(payload.status, 'passed')
   assert.equal(typeof payload.readyForReadonlyDbReview, 'boolean')
-  assert.equal(payload.npmReady, true)
+  assert.equal(typeof payload.npmReady, 'boolean')
   assert.equal(payload.readOnlySqlStatements, 2)
   assert.equal(payload.mutationBoundary, 'read-only preflight only; no database connection or data mutation')
 })

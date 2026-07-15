@@ -15,9 +15,9 @@
     "governance_status",
     "source_metadata"
   ],
-  "allowedWriterRegistryIds": [
-    "progress_knowledge_candidate_sql_apply"
-  ],
+  "physicalPresenceRequired": false,
+  "retiredByMigration": "311_retire_product_runtime_progress_knowledge_governance.sql",
+  "allowedWriterRegistryIds": [],
   "qualityRules": [
     "source_key_required",
     "source_url_or_locator_required",

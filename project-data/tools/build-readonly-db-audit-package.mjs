@@ -54,7 +54,7 @@ async function listContractFiles(relativeDir) {
 async function readTableContracts(tableCatalog) {
   const contracts = []
   for (const table of tableCatalog.tables) {
-    if (!table.contractPath) continue
+    if (!table.contractPath || table.physicalPresenceRequired === false) continue
     contracts.push(await readJson(table.contractPath))
   }
   return contracts

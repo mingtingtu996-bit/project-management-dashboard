@@ -12,9 +12,9 @@ All tools in this center are read-only by default. Real staging/live/prod data w
 
 - `skills/workbuddy-data-governance/`: project-local data governance skill. Read it before changing data contracts, writer registry, data boundaries, or data quality rules.
 - `catalog/`: table, column, service, and metric catalog entries.
-- `contracts/`: table, runtime-writer, and candidate-asset contracts.
-- `boundaries/`: environment and mutation boundaries, forbidden writes, and candidate-to-runtime gates.
-- `lineage/`: writer registry, migration ledger, runtime publication lineage, and external knowledge flow.
+- `contracts/`: product table, writer, and local candidate-asset contracts.
+- `boundaries/`: environment and mutation boundaries, forbidden writes, and the external-knowledge no-runtime boundary.
+- `lineage/`: writer registry, migration ledger, runtime publication lineage, and repository-local external knowledge flow.
 - `quality/`: data quality rule inventory plus Soda and Data Contract CLI templates.
 - `plugins/mcp-config/`: MCP configuration templates. Do not write tokens or database URLs into committed files.
 - `plugins/mcp-servers/`: locally installed npm MCP packages for Supabase MCP and MCP Toolbox.
@@ -70,7 +70,7 @@ The first version focuses on:
 - core table catalog
 - forbidden write boundaries
 - writer registry
-- candidate-to-runtime gates
+- external-knowledge-to-code boundary
 - BI metric source-of-truth boundaries
 - plugin/tool inventory
 

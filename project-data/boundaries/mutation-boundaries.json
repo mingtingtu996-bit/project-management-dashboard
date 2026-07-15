@@ -5,7 +5,8 @@
     {
       "id": "search_candidate_only",
       "center": "project-search",
-      "allowedTables": [
+      "allowedTables": [],
+      "forbiddenProductDatabaseTables": [
         "progress_knowledge_sources",
         "progress_knowledge_documents",
         "progress_asset_candidates",
@@ -14,7 +15,7 @@
         "progress_asset_publication_readiness"
       ],
       "forbiddenTablesRef": "project-data/boundaries/forbidden-writes.json",
-      "defaultMode": "candidate_review_only"
+      "defaultMode": "repository_local_research_to_reviewed_code_change_only"
     },
     {
       "id": "testing_staging_controlled_writer",

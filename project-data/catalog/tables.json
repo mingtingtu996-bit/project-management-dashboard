@@ -136,6 +136,9 @@
       "owner": "project-search governance scripts",
       "sourceOfTruth": "project-search source verification pipeline",
       "directExternalWriteAllowed": false,
+      "physicalPresenceRequired": false,
+      "retiredByMigration": "311_retire_product_runtime_progress_knowledge_governance.sql",
+      "notes": "Historical catalog entry only; repository research no longer writes product database tables.",
       "contractPath": "project-data/contracts/tables/progress_knowledge_sources.contract.json"
     },
     {
@@ -148,6 +151,9 @@
       "owner": "project-search governance scripts",
       "sourceOfTruth": "project-search document verification pipeline",
       "directExternalWriteAllowed": false,
+      "physicalPresenceRequired": false,
+      "retiredByMigration": "311_retire_product_runtime_progress_knowledge_governance.sql",
+      "notes": "Historical catalog entry only; repository research no longer writes product database tables.",
       "contractPath": "project-data/contracts/tables/progress_knowledge_documents.contract.json"
     },
     {
@@ -159,7 +165,10 @@
       "grain": "one candidate knowledge asset",
       "owner": "project-search governance scripts",
       "sourceOfTruth": "project-search candidate review pipeline",
-      "directExternalWriteAllowed": false
+      "directExternalWriteAllowed": false,
+      "physicalPresenceRequired": false,
+      "retiredByMigration": "311_retire_product_runtime_progress_knowledge_governance.sql",
+      "notes": "Historical catalog entry only; local candidate files replace this retired product table."
     },
     {
       "id": "progress_asset_calibration_runs",
@@ -170,7 +179,10 @@
       "grain": "one candidate calibration run",
       "owner": "project-search governance scripts",
       "sourceOfTruth": "project-search calibration pipeline",
-      "directExternalWriteAllowed": false
+      "directExternalWriteAllowed": false,
+      "physicalPresenceRequired": false,
+      "retiredByMigration": "311_retire_product_runtime_progress_knowledge_governance.sql",
+      "notes": "Historical catalog entry only; local calibration files replace this retired product table."
     },
     {
       "id": "progress_asset_calibration_results",
@@ -181,7 +193,10 @@
       "grain": "one candidate calibration result",
       "owner": "project-search governance scripts",
       "sourceOfTruth": "project-search calibration pipeline",
-      "directExternalWriteAllowed": false
+      "directExternalWriteAllowed": false,
+      "physicalPresenceRequired": false,
+      "retiredByMigration": "311_retire_product_runtime_progress_knowledge_governance.sql",
+      "notes": "Historical catalog entry only; local calibration files replace this retired product table."
     },
     {
       "id": "progress_asset_publication_readiness",
@@ -192,7 +207,10 @@
       "grain": "one candidate publication readiness result",
       "owner": "project-search governance scripts",
       "sourceOfTruth": "project-search readiness pipeline",
-      "directExternalWriteAllowed": false
+      "directExternalWriteAllowed": false,
+      "physicalPresenceRequired": false,
+      "retiredByMigration": "311_retire_product_runtime_progress_knowledge_governance.sql",
+      "notes": "Historical catalog entry only; external research has no product runtime publication path."
     }
   ]
 }

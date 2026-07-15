@@ -12,7 +12,15 @@
       "id": "progress_knowledge_assets",
       "path": "server/migrations/226_v14225_progress_knowledge_assets.sql",
       "domain": "external_knowledge_governance",
-      "requiresContract": true
+      "requiresContract": true,
+      "status": "retired_by_311"
+    },
+    {
+      "id": "retire_product_runtime_progress_knowledge_governance",
+      "path": "server/migrations/311_retire_product_runtime_progress_knowledge_governance.sql",
+      "domain": "platform_foundation",
+      "requiresContract": true,
+      "status": "managed_pending"
     }
   ]
 }

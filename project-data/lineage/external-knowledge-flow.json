@@ -4,11 +4,10 @@
   "flow": [
     "project-search source/document/candidate evidence",
     "project-search knowledge-base candidate cards",
-    "human review and mapping owner decision",
-    "shadow or replay evidence",
-    "project-data contract and boundary check",
-    "testing-center controlled writer gate",
-    "readback and rollback evidence",
-    "runtime or business fact only after release gate"
+    "code-owner review and conflict decision",
+    "official seed rule or template source change",
+    "automated code and generation-quality tests",
+    "normal application release",
+    "runtime learning remains separate and consumes only real product facts and outcomes"
   ]
 }

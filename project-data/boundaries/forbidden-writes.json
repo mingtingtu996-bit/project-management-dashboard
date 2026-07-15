@@ -11,7 +11,13 @@
     "actual_duration_outcomes",
     "critical_path",
     "published_runtime_overlay",
-    "production_seed_rows"
+    "production_seed_rows",
+    "progress_knowledge_sources",
+    "progress_knowledge_documents",
+    "progress_asset_candidates",
+    "progress_asset_calibration_runs",
+    "progress_asset_calibration_results",
+    "progress_asset_publication_readiness"
   ],
   "appliesTo": [
     "project-search",
