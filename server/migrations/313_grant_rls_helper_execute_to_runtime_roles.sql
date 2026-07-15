@@ -1,35 +1,54 @@
--- Ensure every production runtime role that can trigger project RLS can execute
--- the active-company membership helper. Migration 312 granted the concrete
--- runtime login role, but production startup still failed through the Supabase
--- anon read path with permission denied on this function.
+-- Ensure every role that can evaluate project RLS can execute the non-exposed
+-- active-company helper. Keep the legacy public helper backend-only so PostgREST
+-- cannot expose its SECURITY DEFINER surface to anon/authenticated callers.
 
 BEGIN;
 
 DO $$
 DECLARE
-  target_function regprocedure;
   target_role text;
 BEGIN
-  FOR target_function IN
-    SELECT p.oid::regprocedure
-    FROM pg_proc p
-    JOIN pg_namespace n ON n.oid = p.pronamespace
-    WHERE n.nspname = 'public'
-      AND p.proname = 'is_active_company_member'
-  LOOP
-    FOREACH target_role IN ARRAY ARRAY[
-      'anon',
-      'authenticated',
-      'service_role',
-      'workbuddy_runtime',
-      'workbuddy_runtime_login'
-    ]
-    LOOP
+  IF to_regprocedure('workbuddy_private.is_active_company_member(uuid,text[])') IS NULL THEN
+    RAISE EXCEPTION 'workbuddy_private.is_active_company_member(uuid,text[]) is required before migration 313';
+  END IF;
+
+  FOREACH target_role IN ARRAY ARRAY[
+    'anon',
+    'authenticated',
+    'service_role',
+    'workbuddy_runtime',
+    'workbuddy_runtime_login'
+  ] LOOP
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = target_role) THEN
+      EXECUTE format('GRANT USAGE ON SCHEMA workbuddy_private TO %I', target_role);
+      EXECUTE format(
+        'GRANT EXECUTE ON FUNCTION workbuddy_private.is_active_company_member(UUID, TEXT[]) TO %I',
+        target_role
+      );
+    END IF;
+  END LOOP;
+
+  IF to_regprocedure('public.is_active_company_member(uuid,text[])') IS NOT NULL THEN
+    EXECUTE 'REVOKE ALL ON FUNCTION public.is_active_company_member(UUID, TEXT[]) FROM PUBLIC';
+
+    FOREACH target_role IN ARRAY ARRAY['anon', 'authenticated'] LOOP
       IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = target_role) THEN
-        EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO %I', target_function, target_role);
+        EXECUTE format(
+          'REVOKE ALL ON FUNCTION public.is_active_company_member(UUID, TEXT[]) FROM %I',
+          target_role
+        );
       END IF;
     END LOOP;
-  END LOOP;
+
+    FOREACH target_role IN ARRAY ARRAY['service_role', 'workbuddy_runtime', 'workbuddy_runtime_login'] LOOP
+      IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = target_role) THEN
+        EXECUTE format(
+          'GRANT EXECUTE ON FUNCTION public.is_active_company_member(UUID, TEXT[]) TO %I',
+          target_role
+        );
+      END IF;
+    END LOOP;
+  END IF;
 
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'workbuddy_runtime_login') THEN
     EXECUTE 'ALTER ROLE workbuddy_runtime_login WITH INHERIT NOBYPASSRLS';

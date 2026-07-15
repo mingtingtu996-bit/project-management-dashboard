@@ -885,7 +885,7 @@ describe('Reports story coverage', () => {
   })
 
   it('downloads owner monthly reports from the backend export endpoint', async () => {
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(new Blob(['%PDF-test']), {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response('%PDF-test', {
       status: 200,
       headers: {
         'content-disposition': "attachment; filename*=UTF-8''owner-monthly.pdf",
@@ -927,9 +927,11 @@ describe('Reports story coverage', () => {
     const requestedUrl = String(fetchMock.mock.calls[0]?.[0] ?? '')
     expect(requestedUrl).toContain('format=pdf')
     expect(requestedUrl).toContain('period=')
-    expect(createObjectUrl).toHaveBeenCalled()
-    expect(clickSpy).toHaveBeenCalled()
-    expect(revokeObjectUrl).toHaveBeenCalledWith('blob:report-export')
+    await waitFor(() => {
+      expect(createObjectUrl).toHaveBeenCalled()
+      expect(clickSpy).toHaveBeenCalled()
+      expect(revokeObjectUrl).toHaveBeenCalledWith('blob:report-export')
+    })
     clickSpy.mockRestore()
     vi.unstubAllGlobals()
   })

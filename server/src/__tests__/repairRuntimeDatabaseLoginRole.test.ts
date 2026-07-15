@@ -51,8 +51,11 @@ describe('repair runtime database login role', () => {
     expect(sql).toContain("format('CREATE ROLE %I LOGIN INHERIT NOBYPASSRLS PASSWORD %L'")
     expect(sql).toContain("format('ALTER ROLE %I WITH LOGIN INHERIT NOBYPASSRLS PASSWORD %L'")
     expect(sql).toContain('GRANT workbuddy_runtime TO workbuddy_runtime_login')
-    expect(sql).toContain('GRANT EXECUTE ON FUNCTION public.is_active_company_member(UUID, TEXT[]) TO workbuddy_runtime_login')
-    expect(sql).toContain('GRANT EXECUTE ON FUNCTION public.is_active_project_member(UUID, TEXT[]) TO workbuddy_runtime_login')
+    expect(sql).toContain('GRANT USAGE ON SCHEMA workbuddy_private TO workbuddy_runtime_login')
+    expect(sql).toContain('GRANT EXECUTE ON FUNCTION workbuddy_private.is_active_company_member(UUID, TEXT[]) TO workbuddy_runtime_login')
+    expect(sql).toContain('GRANT EXECUTE ON FUNCTION workbuddy_private.is_active_project_member(UUID, TEXT[]) TO workbuddy_runtime_login')
+    expect(sql).not.toContain('GRANT EXECUTE ON FUNCTION public.is_active_company_member')
+    expect(sql).not.toContain('GRANT EXECUTE ON FUNCTION public.is_active_project_member')
     expect(sql).toContain("'runtime''secret'")
   })
 

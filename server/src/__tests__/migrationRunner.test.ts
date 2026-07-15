@@ -83,20 +83,32 @@ describe('migration runner contract', () => {
     expect(calculateMigrationChecksum(sql)).toBe(calculateMigrationChecksum(sql))
   })
 
-  it('keeps the production RLS helper ACL migration broad enough for Supabase anon startup reads', () => {
-    const sql = readFileSync(
+  it('keeps production RLS helper grants on the private schema without reopening public RPC access', () => {
+    const runtimeSql = readFileSync(
+      resolve(serverRoot, 'migrations', '312_runtime_login_rls_helper_acl.sql'),
+      'utf8',
+    )
+    const roleSql = readFileSync(
       resolve(serverRoot, 'migrations', '313_grant_rls_helper_execute_to_runtime_roles.sql'),
       'utf8',
     )
 
-    expect(sql).toContain("p.proname = 'is_active_company_member'")
-    expect(sql).toContain("'anon'")
-    expect(sql).toContain("'authenticated'")
-    expect(sql).toContain("'service_role'")
-    expect(sql).toContain("'workbuddy_runtime'")
-    expect(sql).toContain("'workbuddy_runtime_login'")
-    expect(sql).toContain("format('GRANT EXECUTE ON FUNCTION %s TO %I'")
-    expect(sql).toContain('ALTER ROLE workbuddy_runtime_login WITH INHERIT NOBYPASSRLS')
+    expect(runtimeSql).toContain('GRANT USAGE ON SCHEMA workbuddy_private TO workbuddy_runtime')
+    expect(runtimeSql).toContain('GRANT EXECUTE ON FUNCTION workbuddy_private.is_active_company_member(UUID, TEXT[]) TO workbuddy_runtime')
+    expect(runtimeSql).not.toContain('GRANT EXECUTE ON FUNCTION public.is_active_company_member')
+
+    expect(roleSql).toContain("to_regprocedure('workbuddy_private.is_active_company_member(uuid,text[])')")
+    expect(roleSql).toContain("'anon'")
+    expect(roleSql).toContain("'authenticated'")
+    expect(roleSql).toContain("'service_role'")
+    expect(roleSql).toContain("'workbuddy_runtime'")
+    expect(roleSql).toContain("'workbuddy_runtime_login'")
+    expect(roleSql).toContain("format('GRANT USAGE ON SCHEMA workbuddy_private TO %I'")
+    expect(roleSql).toContain('GRANT EXECUTE ON FUNCTION workbuddy_private.is_active_company_member(UUID, TEXT[]) TO %I')
+    expect(roleSql).toContain('REVOKE ALL ON FUNCTION public.is_active_company_member(UUID, TEXT[]) FROM PUBLIC')
+    expect(roleSql).toContain('REVOKE ALL ON FUNCTION public.is_active_company_member(UUID, TEXT[]) FROM %I')
+    expect(roleSql).not.toContain("format('GRANT EXECUTE ON FUNCTION %s TO %I'")
+    expect(roleSql).toContain('ALTER ROLE workbuddy_runtime_login WITH INHERIT NOBYPASSRLS')
   })
 
   it('supports baseline selection and version ordering with numeric and suffixed versions', () => {

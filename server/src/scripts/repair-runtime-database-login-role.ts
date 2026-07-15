@@ -233,8 +233,9 @@ BEGIN
 END $$;
 
 GRANT workbuddy_runtime TO ${config.roleName};
-GRANT EXECUTE ON FUNCTION public.is_active_company_member(UUID, TEXT[]) TO ${config.roleName};
-GRANT EXECUTE ON FUNCTION public.is_active_project_member(UUID, TEXT[]) TO ${config.roleName};
+GRANT USAGE ON SCHEMA workbuddy_private TO ${config.roleName};
+GRANT EXECUTE ON FUNCTION workbuddy_private.is_active_company_member(UUID, TEXT[]) TO ${config.roleName};
+GRANT EXECUTE ON FUNCTION workbuddy_private.is_active_project_member(UUID, TEXT[]) TO ${config.roleName};
 `.trim()
 }
 
