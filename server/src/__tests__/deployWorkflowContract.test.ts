@@ -200,6 +200,33 @@ describe('deploy workflow contract', () => {
     expect(applyIndex).toBeGreaterThan(confirmationIndex)
   })
 
+  it('blocks target database mutation until deployment and runtime secrets pass preflight', () => {
+    const workflow = readFileSync(resolve(workspaceRoot, '.github', 'workflows', 'deploy.yml'), 'utf8')
+    const preflightStart = workflow.indexOf('  deployment-target-preflight:')
+    const migrationStart = workflow.indexOf('  database-migration:')
+
+    expect(preflightStart).toBeGreaterThan(-1)
+    expect(migrationStart).toBeGreaterThan(preflightStart)
+
+    const preflightJob = workflow.slice(preflightStart, migrationStart)
+    expect(preflightJob).toContain("github.event_name == 'workflow_dispatch'")
+    expect(preflightJob).toContain("github.event.inputs.environment != 'preview'")
+    expect(preflightJob).toContain("secrets[format('{0}_DEPLOY_HOST'")
+    expect(preflightJob).toContain("secrets[format('{0}_DEPLOY_USER'")
+    expect(preflightJob).toContain("secrets[format('{0}_DEPLOY_PATH'")
+    expect(preflightJob).toContain("secrets[format('{0}_DEPLOY_SSH_PRIVATE_KEY'")
+    expect(preflightJob).toContain("secrets[format('{0}_DEPLOY_HEALTH_URL'")
+    expect(preflightJob).toContain("secrets[format('{0}_SUPABASE_URL'")
+    expect(preflightJob).toContain("secrets[format('{0}_SUPABASE_ANON_KEY'")
+    expect(preflightJob).toContain("secrets[format('{0}_SUPABASE_MIGRATION_URL'")
+    expect(preflightJob).toContain("secrets[format('{0}_SUPABASE_ADVISOR_EXPORT_JSON'")
+    expect(preflightJob).toContain('Target deployment preflight blocked')
+    expect(preflightJob).toContain('exit 1')
+
+    const migrationJob = workflow.slice(migrationStart, workflow.indexOf('  workspace-isolation-live:'))
+    expect(migrationJob).toContain('needs: [server-quality, deployment-target-preflight]')
+  })
+
   it('fails before applying migrations when current governance inputs are missing', () => {
     const workflow = readFileSync(resolve(workspaceRoot, '.github', 'workflows', 'deploy.yml'), 'utf8')
     const preflightIndex = workflow.indexOf('Preflight current migration governance inputs')

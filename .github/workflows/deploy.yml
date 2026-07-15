@@ -388,11 +388,71 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  deployment-target-preflight:
+    name: Deployment Target Preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: ${{ github.event.inputs.environment }}
+    if: >
+      github.event_name == 'workflow_dispatch' && github.event.inputs.environment != 'preview'
+    env:
+      DEPLOY_HOST: ${{ secrets[format('{0}_DEPLOY_HOST', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+      DEPLOY_USER: ${{ secrets[format('{0}_DEPLOY_USER', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+      DEPLOY_PATH: ${{ secrets[format('{0}_DEPLOY_PATH', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+      DEPLOY_SSH_PRIVATE_KEY: ${{ secrets[format('{0}_DEPLOY_SSH_PRIVATE_KEY', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+      DEPLOY_HEALTH_URL: ${{ secrets[format('{0}_DEPLOY_HEALTH_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+      SUPABASE_URL: ${{ secrets[format('{0}_SUPABASE_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+      SUPABASE_ANON_KEY: ${{ secrets[format('{0}_SUPABASE_ANON_KEY', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+      SUPABASE_MIGRATION_URL: ${{ secrets[format('{0}_SUPABASE_MIGRATION_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+      SUPABASE_ADVISOR_EXPORT_JSON: ${{ secrets[format('{0}_SUPABASE_ADVISOR_EXPORT_JSON', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+    steps:
+      - name: Check target deployment and runtime secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in \
+            DEPLOY_HOST \
+            DEPLOY_USER \
+            DEPLOY_PATH \
+            DEPLOY_SSH_PRIVATE_KEY \
+            DEPLOY_HEALTH_URL \
+            SUPABASE_URL \
+            SUPABASE_ANON_KEY \
+            SUPABASE_MIGRATION_URL \
+            SUPABASE_ADVISOR_EXPORT_JSON; do
+            if [ -z "${!name:-}" ]; then
+              missing+=("$name")
+            fi
+          done
+
+          if [ "${#missing[@]}" -gt 0 ] || [[ "$DEPLOY_HEALTH_URL" != https://* ]]; then
+            {
+              echo "### Target deployment preflight blocked"
+              echo ""
+              if [ "${#missing[@]}" -gt 0 ]; then
+                printf '%s\n' "- Missing target-specific secrets: ${missing[*]}"
+              fi
+              if [ -n "$DEPLOY_HEALTH_URL" ] && [[ "$DEPLOY_HEALTH_URL" != https://* ]]; then
+                echo "- DEPLOY_HEALTH_URL must begin with https://."
+              fi
+              echo "- Database migrations were not started."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          {
+            echo "### Target deployment preflight passed"
+            echo ""
+            echo "- Target: ${{ github.event.inputs.environment }}"
+            echo "- Deployment, runtime, migration, and governance inputs are present."
+          } >> "$GITHUB_STEP_SUMMARY"
+
   database-migration:
     name: Apply Pending Database Migrations
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: [server-quality]
+    needs: [server-quality, deployment-target-preflight]
     environment: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || 'production' }}
     env:
       # Required: STAGING_SUPABASE_MIGRATION_URL and PRODUCTION_SUPABASE_MIGRATION_URL.
