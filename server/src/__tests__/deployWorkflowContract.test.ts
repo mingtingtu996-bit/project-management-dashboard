@@ -113,6 +113,34 @@ describe('deploy workflow contract', () => {
     expect(deployScript).toContain('DEPLOY_TARGET="$DEPLOY_TARGET"')
   })
 
+  it('keeps the retired Vercel integration from creating a parallel deployment', () => {
+    for (const configPath of [
+      resolve(workspaceRoot, 'vercel.json'),
+      resolve(workspaceRoot, 'client', 'vercel.json'),
+    ]) {
+      const config = JSON.parse(readFileSync(configPath, 'utf8')) as Record<string, unknown>
+
+      expect(config.$schema).toBe('https://openapi.vercel.sh/vercel.json')
+      expect(config.ignoreCommand).toContain('process.exit(0)')
+      expect(config).not.toHaveProperty('builds')
+      expect(config).not.toHaveProperty('routes')
+    }
+
+    const workflowGuard = readFileSync(resolve(workspaceRoot, '.github', 'workflows', 'workflow-guard.yml'), 'utf8')
+    expect(workflowGuard.match(/- 'vercel\.json'/g)).toHaveLength(2)
+    expect(workflowGuard.match(/- 'client\/vercel\.json'/g)).toHaveLength(2)
+  })
+
+  it('gives the cold-runner workflow contract enough time to finish', () => {
+    const workflowGuard = readFileSync(resolve(workspaceRoot, '.github', 'workflows', 'workflow-guard.yml'), 'utf8')
+    const deployJobStart = workflowGuard.indexOf('  deploy-workflow-contract:')
+    const deployJob = workflowGuard.slice(deployJobStart)
+
+    expect(deployJobStart).toBeGreaterThanOrEqual(0)
+    expect(deployJob).toContain('timeout-minutes: 30')
+    expect(deployJob).toContain('run: npm run verify:workflow-contract')
+  })
+
   it('keeps migration governance evidence in deployment preflight and attests runtime from the release migration ledger', () => {
     const workflow = readFileSync(resolve(workspaceRoot, '.github', 'workflows', 'deploy.yml'), 'utf8')
     const compose = readFileSync(resolve(workspaceRoot, 'deploy', 'docker-compose.lighthouse.yml'), 'utf8')

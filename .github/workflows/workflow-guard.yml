@@ -10,6 +10,8 @@ on:
       - '.github/workflows/production-runtime-recovery.yml'
       - '.github/workflows/production-server-worktree-maintenance.yml'
       - '.github/workflows/workflow-guard.yml'
+      - 'vercel.json'
+      - 'client/vercel.json'
       - 'scripts/recover-production-runtime.sh'
       - 'scripts/production-runtime-recovery.contract.test.mjs'
       - 'deploy/README.md'
@@ -279,6 +281,8 @@ on:
       - '.github/workflows/production-runtime-recovery.yml'
       - '.github/workflows/production-server-worktree-maintenance.yml'
       - '.github/workflows/workflow-guard.yml'
+      - 'vercel.json'
+      - 'client/vercel.json'
       - 'scripts/recover-production-runtime.sh'
       - 'scripts/production-runtime-recovery.contract.test.mjs'
       - 'deploy/README.md'
@@ -552,7 +556,7 @@ jobs:
   deploy-workflow-contract:
     name: Deploy Workflow Contract
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: server
