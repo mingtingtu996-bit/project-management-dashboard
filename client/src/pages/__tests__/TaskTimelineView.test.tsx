@@ -38,4 +38,15 @@ describe('TaskTimelineView source contracts', () => {
     expect(source.includes('scrollToToday')).toBe(true)
     expect(source.includes('TaskTimelineViewHandle')).toBe(true)
   })
+
+  it('renders target acceleration reschedule previews as a third timeline comparison layer', () => {
+    const source = readTaskTimelineViewSource()
+
+    expect(source.includes('TaskTimelineReschedulePreview')).toBe(true)
+    expect(source.includes('reschedulePreviewByTaskId')).toBe(true)
+    expect(source.includes('rescheduleStartX')).toBe(true)
+    expect(source.includes('rescheduleEndX')).toBe(true)
+    expect(source.includes('重排建议')).toBe(true)
+    expect(source.includes('蓝色建议条：采纳重排后的计划')).toBe(true)
+  })
 })

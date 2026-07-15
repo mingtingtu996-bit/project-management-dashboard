@@ -223,7 +223,9 @@ export function evaluateDurationRuntimeConsumerObservationRuntimeCallCoverage(
   )
 
   return {
-    status: missingRuntimeCalls.length === 0 && unlinkedConsumerObservations.length === 0
+    status: missingRuntimeCalls.length === 0
+      && rejectedRuntimeCalls.length === 0
+      && unlinkedConsumerObservations.length === 0
       ? 'runtime_consumer_observation_runtime_calls_ready'
       : 'runtime_consumer_observation_runtime_calls_not_ready',
     requiredRuntimeCalls,

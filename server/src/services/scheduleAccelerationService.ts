@@ -1,16 +1,8 @@
-import { normalizeDurationContributionMode } from '../seeds/durationContributionMode.js'
 import { logger } from '../middleware/logger.js'
 import {
-  SCHEDULE_ACCELERATION_DEFAULT_PROFILE_CODE,
-  SCHEDULE_ACCELERATION_DEFAULT_RESOURCE_CRASH_CAP,
-  SCHEDULE_ACCELERATION_HARD_CONSTRAINT_TYPES,
-  SCHEDULE_ACCELERATION_MIN_RESOURCE_CRASH_CAP,
-  SCHEDULE_ACCELERATION_PROFILE_SEED,
-  SCHEDULE_ACCELERATION_PROFILE_SOURCE,
-  SCHEDULE_ACCELERATION_RESOURCE_CRASH_CAP_SEED,
-  SCHEDULE_ACCELERATION_SEASONAL_FACTOR_SEED,
-} from '../seeds/scheduleAccelerationProfileSeed.js'
-import { readProjectGenerationFactsSnapshot } from './projectGenerationFactsSnapshotService.js'
+  buildProjectGenerationFactsSnapshot,
+  readProjectGenerationFactsSnapshot,
+} from './projectGenerationFactsSnapshotService.js'
 import {
   getProjectCriticalPathSnapshot,
   type CriticalPathSnapshot,
@@ -39,8 +31,31 @@ import {
   productionDaysBetweenInclusive,
   type ConstructionCalendarContext,
 } from './constructionCalendar.js'
+import type {
+  ConstructionOrganizationScenarioSelection,
+  ConstructionOrganizationScenarioSelectorInput,
+} from './constructionOrganizationScenarioSelector.js'
+import {
+  buildConstructionOrganizationSelectorInputFromProjectFacts,
+  ensureConstructionOrganizationDecisionReportProductCloseoutReadiness,
+  selectConstructionOrganizationScenario,
+} from './constructionOrganizationScenarioSelector.js'
+import {
+  buildT2RhythmProductionCapacityCoverage,
+} from './t2RhythmProductionCapacityEvidenceService.js'
+import {
+  SCHEDULE_ACCELERATION_DEFAULT_PROFILE_CODE_FROM_RESOLVER as SCHEDULE_ACCELERATION_DEFAULT_PROFILE_CODE,
+  SCHEDULE_ACCELERATION_DEFAULT_RESOURCE_CRASH_CAP_FROM_RESOLVER as SCHEDULE_ACCELERATION_DEFAULT_RESOURCE_CRASH_CAP,
+  SCHEDULE_ACCELERATION_MIN_RESOURCE_CRASH_CAP_FROM_RESOLVER as SCHEDULE_ACCELERATION_MIN_RESOURCE_CRASH_CAP,
+  SCHEDULE_ACCELERATION_PROFILE_SOURCE_FROM_RESOLVER as SCHEDULE_ACCELERATION_PROFILE_SOURCE,
+  getScheduleAccelerationHardConstraintTypesFromResolver,
+  getScheduleAccelerationProfileSeedFromResolver,
+  getScheduleAccelerationResourceCrashCapSeedFromResolver,
+  getScheduleAccelerationSeasonalFactorSeedFromResolver,
+  resolveDurationContributionModeFromResolver as normalizeDurationContributionMode,
+} from './algorithmSeedResolver.js'
 
-export { SCHEDULE_ACCELERATION_PROFILE_SOURCE } from '../seeds/scheduleAccelerationProfileSeed.js'
+export { SCHEDULE_ACCELERATION_PROFILE_SOURCE_FROM_RESOLVER as SCHEDULE_ACCELERATION_PROFILE_SOURCE } from './algorithmSeedResolver.js'
 export {
   buildAlgorithmFactContext,
   summarizeAlgorithmFactContext,
@@ -81,10 +96,12 @@ export type ScheduleAccelerationRow = {
 
 export type ScheduleAccelerationContext = {
   scenario?: ScheduleAccelerationScenario
+  projectGenerationFacts?: Record<string, unknown> | null
   projectTypeCodes?: string[]
   methodVariantCodes?: string[]
   climateSignals?: string[]
   weatherImpactBands?: string[]
+  constructionOrganizationScenario?: ConstructionOrganizationScenarioSelection | null
   constructionCalendar?: ConstructionCalendarContext | null
   workCalendar?: ConstructionCalendarContext | null
   runtime?: ScheduleRuntimeRecoveryContext
@@ -108,6 +125,7 @@ export type ScheduleRuntimeRecoveryContext = {
   floatingTaskCount?: number | null
   scheduleState?: string | null
   localAccelerationFactor?: number | null
+  t2RhythmScheduleEvidence?: Record<string, unknown> | null
   evidenceCodes?: string[]
   evidenceObjects?: import('./algorithmFactContextService.js').RuntimeExecutionEvidenceObject[]
   runtimeInferenceSummary?: import('./algorithmFactContextService.js').RuntimeExecutionInferenceSummary
@@ -131,6 +149,9 @@ export interface RecordScheduleAccelerationRuntimeConsumptionInput {
 const SCHEDULE_ACCELERATION_CONSUMER_ASSET_KEYS = new Set([
   'dependency_rule_candidate',
 ])
+const SCHEDULE_ACCELERATION_PROFILE_SEED = getScheduleAccelerationProfileSeedFromResolver()
+const SCHEDULE_ACCELERATION_SEASONAL_FACTOR_SEED = getScheduleAccelerationSeasonalFactorSeedFromResolver()
+const SCHEDULE_ACCELERATION_RESOURCE_CRASH_CAP_SEED = getScheduleAccelerationResourceCrashCapSeedFromResolver()
 
 export type ScheduleTargetFeasibility = {
   mode: ScheduleAccelerationMode
@@ -203,6 +224,20 @@ export type ScheduleAccelerationProposal = {
     criticalCandidateDays: number
     resourceGroupedCandidateDays: number
     hardConstraintDays: number
+    constructionOrganizationScenario?: {
+      source: ConstructionOrganizationScenarioSelection['source']
+      sourceVersion?: string
+      recommendedScenarioIds: string[]
+      confidence?: string
+      resourcePolicy?: string
+      boundaryPolicy?: ConstructionOrganizationScenarioSelection['boundaryPolicy']
+      recommendedPlanOption?: Record<string, unknown> | null
+      planOptions?: Array<Record<string, unknown>>
+      planOptionComparisonPackage?: Record<string, unknown> | null
+      scenarioRecommendations?: Record<string, unknown> | null
+      planNetworkDraftRecommendations?: Record<string, unknown> | null
+    } | null
+    constructionOrganizationRecoveryFactor?: number
     fastTrackBudgetDays?: number
     fastTrackBudgetRatio?: number
     policySource?: typeof SCHEDULE_ACCELERATION_PROFILE_SOURCE
@@ -224,8 +259,40 @@ export type ScheduleAccelerationProposal = {
       evidenceCodes?: string[]
       evidenceObjects?: import('./algorithmFactContextService.js').RuntimeExecutionEvidenceObject[]
       runtimeInferenceSummary?: import('./algorithmFactContextService.js').RuntimeExecutionInferenceSummary
+      t2RhythmScheduleEvidence?: Record<string, unknown> | null
       networkSlackRecoveryFactor?: number
       recoveryBudgetFactor?: number
+    }
+    t2RhythmScheduleEvidence?: {
+      source: 'schedule_acceleration_e5_readonly_context'
+      evidenceRowCount: number
+      selectedTemplateIds: string[]
+      canEnterC1913Phase1Selection: boolean
+      requiresManualReview: boolean
+      writesTaskDependencies: false
+      writesPlanDates: false
+      writesCriticalPathFacts: false
+      runtimeProjectRemainingEvidence?: Record<string, unknown>
+      rowEvidence: Array<Record<string, unknown>>
+      conflictCodes?: string[]
+      productionCapacityCoverage?: Record<string, unknown>
+      phase1Selection?: Record<string, unknown>
+      readinessSummary?: {
+        source: 'schedule_acceleration_t2_readiness_summary'
+        phase1SelectionStatus: string | null
+        productionCapacityCoverageStatus: string | null
+        assemblyGateStatus: string | null
+        standardLibraryTrustGateStatus: string | null
+        standardLibraryTrustBoundary: string | null
+        standardLibraryTrustBlockingReasons: string[]
+        selectionReceiptCount: number | null
+        selectorReceiptAuditStatus: string | null
+        selectedCandidateId: string | null
+        canEnterC1913Phase1Selection: boolean
+        requiresManualReview: boolean
+        conflictCodes: string[]
+        blockingReasons: string[]
+      }
     }
     networkFallbackPolicy?: ScheduleAccelerationNetworkFallbackPolicy
   }
@@ -351,9 +418,12 @@ type TargetAccelerationBudget = {
   resourceGroupedCandidateDays: number
   hardConstraintDays: number
   runtimeAdjustment?: RuntimeRecoveryAdjustment
+  constructionOrganizationScenario?: ConstructionOrganizationScenarioSelection | null
+  constructionOrganizationRecoveryFactor: number
+  t2RhythmScheduleEvidence?: NonNullable<ScheduleAccelerationProposal['calculationBasis']>['t2RhythmScheduleEvidence']
 }
 
-const HARD_CONSTRAINT_TYPES = new Set<string>(SCHEDULE_ACCELERATION_HARD_CONSTRAINT_TYPES)
+const HARD_CONSTRAINT_TYPES = new Set<string>(getScheduleAccelerationHardConstraintTypesFromResolver())
 
 function normalizeText(value: unknown) {
   return String(value ?? '').trim()
@@ -444,6 +514,10 @@ function readRecord(value: unknown): Record<string, unknown> {
   return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {}
 }
 
+function isNonEmptyRecord(value: Record<string, unknown>) {
+  return Object.keys(value).length > 0
+}
+
 function readGovernedDurationSuggestionDays(suggestion: Record<string, unknown>) {
   const outputCode = normalizeText(suggestion.durationOutputCode)
   const value = outputCode === 'contextual_reference'
@@ -484,6 +558,449 @@ function readCodeArray(value: unknown): string[] {
     .flatMap((item) => typeof item === 'string' ? item.split(/[,\s]+/) : [item])
     .map((item) => normalizeText(item).toLowerCase())
     .filter(Boolean))
+}
+
+function uniqueUnknownStrings(values: unknown[]) {
+  return uniqueStringArray(values
+    .flatMap((value) => Array.isArray(value) ? value : [value])
+    .map((value) => normalizeText(value))
+    .filter(Boolean))
+}
+
+function firstNonEmptyRecord(records: Array<Record<string, unknown>>) {
+  return records.find(isNonEmptyRecord) ?? {}
+}
+
+function readProductionCapacityCoverage(value: Record<string, unknown>) {
+  const direct = readRecord(value.productionCapacityCoverage ?? value.production_capacity_coverage)
+  if (isNonEmptyRecord(direct)) return direct
+  const scheduleTrustEvidence = readRecord(value.scheduleTrustEvidence ?? value.schedule_trust_evidence)
+  return readRecord(scheduleTrustEvidence.productionCapacityCoverage ?? scheduleTrustEvidence.production_capacity_coverage)
+}
+
+function readProductionCapacityEvidence(value: Record<string, unknown>) {
+  return readRecord(
+    value.t2RhythmProductionCapacityEvidence
+      ?? value.t2_rhythm_production_capacity_evidence
+      ?? value.productionCapacityEvidence
+      ?? value.production_capacity_evidence,
+  )
+}
+
+function deriveProductionCapacityCoverageFromEvidence(
+  candidatePackage: Record<string, unknown>,
+  productionCapacityEvidence: Record<string, unknown>,
+) {
+  if (!isNonEmptyRecord(candidatePackage) || !isNonEmptyRecord(productionCapacityEvidence)) return {}
+  if (normalizeId(candidatePackage.source) !== 't2_division_rhythm_schedule_candidate_package') return {}
+  if (normalizeId(productionCapacityEvidence.source) !== 't2_rhythm_production_capacity_evidence') return {}
+
+  return buildT2RhythmProductionCapacityCoverage({
+    candidatePackage: candidatePackage as Parameters<typeof buildT2RhythmProductionCapacityCoverage>[0]['candidatePackage'],
+    productionCapacityEvidence: productionCapacityEvidence as Parameters<typeof buildT2RhythmProductionCapacityCoverage>[0]['productionCapacityEvidence'],
+  }) as unknown as Record<string, unknown>
+}
+
+function readPhase1Selection(value: Record<string, unknown>) {
+  return readRecord(
+    value.phase1Selection
+      ?? value.phase1_selection
+      ?? value.t2RhythmSchedulePhase1Selection
+      ?? value.t2_rhythm_schedule_phase1_selection,
+  )
+}
+
+function collectPhase1SelectionConflictCodes(selection: Record<string, unknown>) {
+  return readArray(selection.rejectedCandidates ?? selection.rejected_candidates)
+    .flatMap((candidate) => readRecord(candidate).conflictCodes ?? readRecord(candidate).conflict_codes)
+}
+
+function collectPhase1SelectionReasonCodes(selection: Record<string, unknown>) {
+  return readArray(selection.rejectedCandidates ?? selection.rejected_candidates)
+    .flatMap((candidate) => readRecord(candidate).reasonCodes ?? readRecord(candidate).reason_codes)
+}
+
+function collectProductionCapacityCoverageConflictCodes(coverage: Record<string, unknown>) {
+  const status = normalizeId(coverage.status)
+  if (status === 'evidence_incomplete') return ['production_capacity_evidence_missing']
+  if (status === 'capacity_gap') return ['production_capacity_gap']
+  return []
+}
+
+function readSelectionReceiptCount(value: Record<string, unknown>): number | null {
+  const direct = Number(value.selectionReceiptCount ?? value.selection_receipt_count)
+  if (Number.isFinite(direct) && direct >= 0) return direct
+  const scheduleTrustEvidence = readRecord(value.scheduleTrustEvidence ?? value.schedule_trust_evidence)
+  const fromTrustEvidence = Number(scheduleTrustEvidence.selectionReceiptCount ?? scheduleTrustEvidence.selection_receipt_count)
+  if (Number.isFinite(fromTrustEvidence) && fromTrustEvidence >= 0) return fromTrustEvidence
+  return null
+}
+
+function readSelectorReceiptAuditStatus(value: Record<string, unknown>): string | null {
+  const direct = normalizeId(value.selectorReceiptAuditStatus ?? value.selector_receipt_audit_status)
+  if (direct) return direct
+  const scheduleTrustEvidence = readRecord(value.scheduleTrustEvidence ?? value.schedule_trust_evidence)
+  return normalizeId(scheduleTrustEvidence.selectorReceiptAuditStatus ?? scheduleTrustEvidence.selector_receipt_audit_status)
+}
+
+function collectSelectorReceiptEvidence(value: Record<string, unknown>) {
+  const candidates: Record<string, unknown>[] = [
+    value,
+    readRecord(value.t2RhythmScheduleEvidence ?? value.t2_rhythm_schedule_evidence),
+    readRecord(value.t2RhythmScheduleCandidatePackage ?? value.t2_rhythm_schedule_candidate_package),
+    readRecord(value.t2RhythmScheduleCandidateNetwork ?? value.t2_rhythm_schedule_candidate_network),
+    readRecord(value.t2RhythmScheduleCandidateNetworkEvaluation ?? value.t2_rhythm_schedule_candidate_network_evaluation),
+  ]
+  const assemblyInputChannels = readRecord(readRecord(value.durationInputAssembly ?? value.duration_input_assembly).inputChannels)
+  candidates.push(
+    readRecord(assemblyInputChannels.t2RhythmScheduleCandidatePackage),
+    readRecord(assemblyInputChannels.t2RhythmScheduleCandidateNetwork),
+    readRecord(assemblyInputChannels.t2RhythmScheduleCandidateNetworkEvaluation),
+  )
+
+  const statuses = candidates
+    .map(readSelectorReceiptAuditStatus)
+    .filter((status): status is string => Boolean(status))
+  const counts = candidates
+    .map(readSelectionReceiptCount)
+    .filter((count): count is number => count != null)
+  return {
+    selectionReceiptCount: counts.length > 0 ? Math.max(...counts) : null,
+    selectorReceiptAuditStatus: statuses.includes('missing')
+      ? 'missing'
+      : statuses.includes('ready') ? 'ready' : null,
+  }
+}
+
+function readStandardLibraryTrustGateStatus(value: Record<string, unknown>): string | null {
+  const direct = normalizeId(value.standardLibraryTrustGateStatus ?? value.standard_library_trust_gate_status)
+  if (direct) return direct
+  const trustGate = readRecord(
+    value.t2RhythmStandardLibraryTrustGate
+      ?? value.t2_rhythm_standard_library_trust_gate
+      ?? value.t2_rhythm_standard_library_live_replay_trust_gate,
+  )
+  const trustGateStatus = normalizeId(trustGate.status)
+  if (trustGateStatus) return trustGateStatus
+  const channelStatus = normalizeId(value.status)
+  const canTrust = value.canTrustForRealScheduleCalibration ?? value.can_trust_for_real_schedule_calibration
+  if (channelStatus === 'candidate_conflict' && canTrust === false) return 'not_trustworthy_for_real_schedule'
+  if (channelStatus === 'ready' && canTrust === true) return 'shadow_replay_ready_not_publishable'
+  return null
+}
+
+function readStandardLibraryTrustBoundary(value: Record<string, unknown>): string | null {
+  const direct = normalizeId(value.standardLibraryTrustBoundary ?? value.standard_library_trust_boundary)
+  if (direct) return direct
+  const trustGate = readRecord(
+    value.t2RhythmStandardLibraryTrustGate
+      ?? value.t2_rhythm_standard_library_trust_gate
+      ?? value.t2_rhythm_standard_library_live_replay_trust_gate,
+  )
+  const trustGateBoundary = normalizeId(trustGate.trustBoundary ?? trustGate.trust_boundary)
+  if (trustGateBoundary) return trustGateBoundary
+  return normalizeId(value.trustBoundary ?? value.trust_boundary) || null
+}
+
+function readStandardLibraryTrustBlockingReasons(value: Record<string, unknown>) {
+  const trustGate = readRecord(
+    value.t2RhythmStandardLibraryTrustGate
+      ?? value.t2_rhythm_standard_library_trust_gate
+      ?? value.t2_rhythm_standard_library_live_replay_trust_gate,
+  )
+  return uniqueUnknownStrings([
+    readArray(value.standardLibraryTrustBlockingReasons ?? value.standard_library_trust_blocking_reasons),
+    readArray(trustGate.blockingReasons ?? trustGate.blocking_reasons),
+  ])
+}
+
+function collectStandardLibraryTrustGateEvidence(value: Record<string, unknown>) {
+  const durationInputAssembly = readRecord(value.durationInputAssembly ?? value.duration_input_assembly)
+  const assemblyGate = readRecord(value.assemblyGate ?? value.assembly_gate)
+  const durationAssemblyGate = readRecord(durationInputAssembly.assemblyGate ?? durationInputAssembly.assembly_gate)
+  const inputChannels = readRecord(durationInputAssembly.inputChannels ?? durationInputAssembly.input_channels)
+  const trustGateChannel = readRecord(
+    inputChannels.t2RhythmStandardLibraryTrustGate
+      ?? inputChannels.t2_rhythm_standard_library_trust_gate,
+  )
+  const candidates = [
+    value,
+    assemblyGate,
+    durationAssemblyGate,
+    trustGateChannel,
+  ].filter(isNonEmptyRecord)
+  const statuses = candidates
+    .map(readStandardLibraryTrustGateStatus)
+    .filter((status): status is string => Boolean(status))
+  const boundaries = candidates
+    .map(readStandardLibraryTrustBoundary)
+    .filter((boundary): boundary is string => Boolean(boundary))
+  return {
+    standardLibraryTrustGateStatus: statuses.includes('not_trustworthy_for_real_schedule')
+      ? 'not_trustworthy_for_real_schedule'
+      : statuses.includes('missing')
+        ? 'missing'
+        : statuses.includes('shadow_replay_ready_not_publishable') ? 'shadow_replay_ready_not_publishable' : null,
+    standardLibraryTrustBoundary: boundaries.includes('blocked_live_replay_evidence')
+      ? 'blocked_live_replay_evidence'
+      : boundaries.includes('archived_live_shadow_replay_only') ? 'archived_live_shadow_replay_only' : null,
+    standardLibraryTrustBlockingReasons: uniqueUnknownStrings(
+      candidates.flatMap(readStandardLibraryTrustBlockingReasons),
+    ),
+  }
+}
+
+function readSelectedPhase1CandidateId(selection: Record<string, unknown>) {
+  const selectedEvaluation = readRecord(selection.selectedEvaluation ?? selection.selected_evaluation)
+  return normalizeId(selection.selectedCandidateId ?? selection.selected_candidate_id ?? selectedEvaluation.candidateId)
+}
+
+function readEvaluationCandidateId(evaluation: Record<string, unknown>) {
+  return normalizeId(
+    evaluation.candidateId
+      ?? evaluation.candidate_id
+      ?? evaluation.networkCandidateId
+      ?? evaluation.network_candidate_id,
+  )
+}
+
+function collectPhase1SelectionCandidateMismatchCodes(
+  selection: Record<string, unknown>,
+  evaluation: Record<string, unknown>,
+) {
+  const selectedCandidateId = readSelectedPhase1CandidateId(selection)
+  const evaluationCandidateId = readEvaluationCandidateId(evaluation)
+  return selectedCandidateId && evaluationCandidateId && selectedCandidateId !== evaluationCandidateId
+    ? ['phase1_selection_candidate_mismatch']
+    : []
+}
+
+function readRowForecastSources(row: ScheduleAccelerationRow) {
+  const durationForecast = readRecord(row.values.durationForecast)
+  const snakeDurationForecast = readRecord(row.values.duration_forecast)
+  return readRecord(
+    durationForecast.forecastSources
+      ?? durationForecast.forecast_sources
+      ?? snakeDurationForecast.forecastSources
+      ?? snakeDurationForecast.forecast_sources
+      ?? row.values.forecastSources
+      ?? row.values.forecast_sources,
+  )
+}
+
+function buildScheduleAccelerationT2RhythmEvidence(
+  rows: ScheduleAccelerationRow[],
+  context?: ScheduleAccelerationContext,
+): NonNullable<ScheduleAccelerationProposal['calculationBasis']>['t2RhythmScheduleEvidence'] | undefined {
+  const runtimeProjectRemainingEvidence = readRecord(readRecord(context?.runtime).t2RhythmScheduleEvidence)
+  const rowEvidence: Array<Record<string, unknown>> = []
+  const selectedTemplateIds: unknown[] = []
+  const conflictCodes: unknown[] = [runtimeProjectRemainingEvidence.conflictCodes]
+  const capacityCoverages: Record<string, unknown>[] = [
+    readProductionCapacityCoverage(runtimeProjectRemainingEvidence),
+    readProductionCapacityCoverage(readRecord(runtimeProjectRemainingEvidence.t2RhythmScheduleCandidateNetworkEvaluation)),
+    deriveProductionCapacityCoverageFromEvidence(
+      readRecord(runtimeProjectRemainingEvidence.t2RhythmScheduleCandidatePackage ?? runtimeProjectRemainingEvidence.t2_rhythm_schedule_candidate_package),
+      readProductionCapacityEvidence(runtimeProjectRemainingEvidence),
+    ),
+  ]
+  const phase1Selections: Record<string, unknown>[] = [readPhase1Selection(runtimeProjectRemainingEvidence)]
+  const assemblyGates: Record<string, unknown>[] = [
+    readRecord(readRecord(runtimeProjectRemainingEvidence.durationInputAssembly).assemblyGate),
+  ]
+  const selectorReceiptEvidences: ReturnType<typeof collectSelectorReceiptEvidence>[] = [
+    collectSelectorReceiptEvidence(runtimeProjectRemainingEvidence),
+  ]
+  const standardLibraryTrustGateEvidences: ReturnType<typeof collectStandardLibraryTrustGateEvidence>[] = [
+    collectStandardLibraryTrustGateEvidence(runtimeProjectRemainingEvidence),
+  ]
+  const blockingReasons: unknown[] = []
+
+  for (const row of rows) {
+    const sources = readRowForecastSources(row)
+    const rowT2Evidence = readRecord(sources.t2RhythmScheduleEvidence ?? sources.t2_rhythm_schedule_evidence)
+    const rowPackage = readRecord(sources.t2RhythmScheduleCandidatePackage ?? sources.t2_rhythm_schedule_candidate_package)
+    const rowEvaluation = readRecord(sources.t2RhythmScheduleCandidateNetworkEvaluation ?? sources.t2_rhythm_schedule_candidate_network_evaluation)
+    const rowNetwork = readRecord(sources.t2RhythmScheduleCandidateNetwork ?? sources.t2_rhythm_schedule_candidate_network)
+    const rowPhase1Selection = readRecord(sources.t2RhythmSchedulePhase1Selection ?? sources.t2_rhythm_schedule_phase1_selection)
+    const rowProductionCapacityEvidence = readProductionCapacityEvidence(sources)
+    const rowAssembly = readRecord(sources.durationInputAssembly ?? sources.duration_input_assembly)
+    if (!Object.keys(rowT2Evidence).length
+      && !Object.keys(rowPackage).length
+      && !Object.keys(rowEvaluation).length
+      && !Object.keys(rowNetwork).length
+      && !Object.keys(rowPhase1Selection).length
+      && !Object.keys(rowProductionCapacityEvidence).length
+      && !Object.keys(rowAssembly).length) {
+      continue
+    }
+
+    const evidence = {
+      clientRowId: row.clientRowId,
+      ...(Object.keys(rowT2Evidence).length ? { t2RhythmScheduleEvidence: rowT2Evidence } : {}),
+      ...(Object.keys(rowPackage).length ? { t2RhythmScheduleCandidatePackage: rowPackage } : {}),
+      ...(Object.keys(rowNetwork).length ? { t2RhythmScheduleCandidateNetwork: rowNetwork } : {}),
+      ...(Object.keys(rowEvaluation).length ? { t2RhythmScheduleCandidateNetworkEvaluation: rowEvaluation } : {}),
+      ...(Object.keys(rowPhase1Selection).length ? { t2RhythmSchedulePhase1Selection: rowPhase1Selection } : {}),
+      ...(Object.keys(rowProductionCapacityEvidence).length ? { t2RhythmProductionCapacityEvidence: rowProductionCapacityEvidence } : {}),
+      ...(Object.keys(rowAssembly).length ? { durationInputAssembly: rowAssembly } : {}),
+    }
+    rowEvidence.push(evidence)
+    selectedTemplateIds.push(rowT2Evidence.selectedTemplateIds)
+    selectedTemplateIds.push(rowPackage.selectedTemplateIds)
+    selectedTemplateIds.push(rowNetwork.selectedTemplateIds)
+    selectedTemplateIds.push(readRecord(rowEvaluation.scheduleTrustEvidence).selectedTemplateIds)
+    selectedTemplateIds.push(readRecord(readRecord(rowAssembly.inputChannels).t2RhythmScheduleCandidatePackage).selectedTemplateIds)
+    conflictCodes.push(rowT2Evidence.conflictCodes)
+    conflictCodes.push(readRecord(rowNetwork.conflictSummary).conflictCodes)
+    conflictCodes.push(readRecord(rowEvaluation.conflictSummary).conflictCodes)
+    conflictCodes.push(collectPhase1SelectionConflictCodes(rowPhase1Selection))
+    conflictCodes.push(collectPhase1SelectionCandidateMismatchCodes(rowPhase1Selection, rowEvaluation))
+    conflictCodes.push(readRecord(rowAssembly.assemblyGate).conflictCodes)
+    capacityCoverages.push(readProductionCapacityCoverage(rowT2Evidence))
+    capacityCoverages.push(readProductionCapacityCoverage(rowNetwork))
+    capacityCoverages.push(readProductionCapacityCoverage(rowEvaluation))
+    capacityCoverages.push(deriveProductionCapacityCoverageFromEvidence(rowPackage, rowProductionCapacityEvidence))
+    phase1Selections.push(readPhase1Selection(rowT2Evidence))
+    phase1Selections.push(rowPhase1Selection)
+    assemblyGates.push(readRecord(rowAssembly.assemblyGate))
+    selectorReceiptEvidences.push(collectSelectorReceiptEvidence(evidence))
+    standardLibraryTrustGateEvidences.push(collectStandardLibraryTrustGateEvidence(evidence))
+    blockingReasons.push(readProductionCapacityCoverage(rowT2Evidence).blockingReasons)
+    blockingReasons.push(readProductionCapacityCoverage(rowNetwork).blockingReasons)
+    blockingReasons.push(readProductionCapacityCoverage(rowEvaluation).blockingReasons)
+    blockingReasons.push(deriveProductionCapacityCoverageFromEvidence(rowPackage, rowProductionCapacityEvidence).blockingReasons)
+    blockingReasons.push(collectPhase1SelectionReasonCodes(rowPhase1Selection))
+    blockingReasons.push(collectPhase1SelectionCandidateMismatchCodes(rowPhase1Selection, rowEvaluation))
+  }
+
+  const hasRuntimeEvidence = Object.keys(runtimeProjectRemainingEvidence).length > 0
+  if (!hasRuntimeEvidence && rowEvidence.length === 0) return undefined
+
+  selectedTemplateIds.push(runtimeProjectRemainingEvidence.selectedTemplateIds)
+  conflictCodes.push(collectPhase1SelectionCandidateMismatchCodes(
+    readPhase1Selection(runtimeProjectRemainingEvidence),
+    readRecord(
+      runtimeProjectRemainingEvidence.t2RhythmScheduleCandidateNetworkEvaluation
+        ?? runtimeProjectRemainingEvidence.t2_rhythm_schedule_candidate_network_evaluation,
+    ),
+  ))
+  blockingReasons.push(readProductionCapacityCoverage(runtimeProjectRemainingEvidence).blockingReasons)
+  blockingReasons.push(deriveProductionCapacityCoverageFromEvidence(
+    readRecord(runtimeProjectRemainingEvidence.t2RhythmScheduleCandidatePackage ?? runtimeProjectRemainingEvidence.t2_rhythm_schedule_candidate_package),
+    readProductionCapacityEvidence(runtimeProjectRemainingEvidence),
+  ).blockingReasons)
+  blockingReasons.push(collectPhase1SelectionReasonCodes(readPhase1Selection(runtimeProjectRemainingEvidence)))
+  blockingReasons.push(collectPhase1SelectionCandidateMismatchCodes(
+    readPhase1Selection(runtimeProjectRemainingEvidence),
+    readRecord(
+      runtimeProjectRemainingEvidence.t2RhythmScheduleCandidateNetworkEvaluation
+        ?? runtimeProjectRemainingEvidence.t2_rhythm_schedule_candidate_network_evaluation,
+    ),
+  ))
+  const productionCapacityCoverage = firstNonEmptyRecord(capacityCoverages)
+  const normalizedConflictCodes = uniqueUnknownStrings([
+    ...conflictCodes,
+    collectProductionCapacityCoverageConflictCodes(productionCapacityCoverage),
+  ])
+  const phase1Selection = firstNonEmptyRecord(phase1Selections)
+  const assemblyGate = firstNonEmptyRecord(assemblyGates)
+  const selectorReceiptAuditStatuses = selectorReceiptEvidences
+    .map((evidence) => evidence.selectorReceiptAuditStatus)
+    .filter((status): status is string => Boolean(status))
+  const selectorReceiptCounts = selectorReceiptEvidences
+    .map((evidence) => evidence.selectionReceiptCount)
+    .filter((count): count is number => count != null)
+  const selectorReceiptAuditStatus = selectorReceiptAuditStatuses.includes('missing')
+    ? 'missing'
+    : selectorReceiptAuditStatuses.includes('ready') ? 'ready' : null
+  const selectionReceiptCount = selectorReceiptCounts.length > 0 ? Math.max(...selectorReceiptCounts) : null
+  const selectorReceiptMissing = selectorReceiptAuditStatus === 'missing'
+    || (selectorReceiptAuditStatus === null && normalizeId(readRecord(phase1Selection.selectionBasis ?? phase1Selection.selection_basis).selectorReceiptRequired ?? readRecord(phase1Selection.combinationConsistencyGate ?? phase1Selection.combination_consistency_gate).selectorReceiptRequired) === 'true')
+  const standardLibraryTrustGateStatuses = standardLibraryTrustGateEvidences
+    .map((evidence) => evidence.standardLibraryTrustGateStatus)
+    .filter((status): status is string => Boolean(status))
+  const standardLibraryTrustBoundaries = standardLibraryTrustGateEvidences
+    .map((evidence) => evidence.standardLibraryTrustBoundary)
+    .filter((boundary): boundary is string => Boolean(boundary))
+  const standardLibraryTrustGateStatus = standardLibraryTrustGateStatuses.includes('not_trustworthy_for_real_schedule')
+    ? 'not_trustworthy_for_real_schedule'
+    : standardLibraryTrustGateStatuses.includes('missing')
+      ? 'missing'
+      : standardLibraryTrustGateStatuses.includes('shadow_replay_ready_not_publishable') ? 'shadow_replay_ready_not_publishable' : null
+  const standardLibraryTrustBoundary = standardLibraryTrustBoundaries.includes('blocked_live_replay_evidence')
+    ? 'blocked_live_replay_evidence'
+    : standardLibraryTrustBoundaries.includes('archived_live_shadow_replay_only') ? 'archived_live_shadow_replay_only' : null
+  const standardLibraryTrustBlockingReasons = uniqueUnknownStrings(
+    standardLibraryTrustGateEvidences.flatMap((evidence) => evidence.standardLibraryTrustBlockingReasons),
+  )
+  const standardLibraryTrustGateMissing = standardLibraryTrustGateStatus === 'missing'
+  const standardLibraryTrustGateBlocked = standardLibraryTrustGateStatus === 'not_trustworthy_for_real_schedule'
+    || standardLibraryTrustGateMissing
+  const normalizedBlockingReasons = uniqueUnknownStrings(blockingReasons)
+  const normalizedBlockingReasonsWithSelector = uniqueUnknownStrings([
+    normalizedBlockingReasons,
+    selectorReceiptMissing ? 'selector_receipt_missing' : null,
+    standardLibraryTrustBlockingReasons,
+    standardLibraryTrustGateMissing ? 't2_standard_library_live_replay_trust_gate_missing' : null,
+    standardLibraryTrustGateMissing ? 'archived_live_replay_required' : null,
+  ])
+  const normalizedConflictCodesWithSelector = uniqueUnknownStrings([
+    normalizedConflictCodes,
+    selectorReceiptMissing ? 'selector_receipt_missing' : null,
+    standardLibraryTrustGateMissing
+      ? 't2_standard_library_live_replay_trust_gate_missing'
+      : standardLibraryTrustGateBlocked ? 't2_standard_library_live_replay_not_trustworthy' : null,
+  ])
+  const runtimeCanEnter = runtimeProjectRemainingEvidence.canEnterC1913Phase1Selection === true
+  const rowCanEnter = rowEvidence.some((evidence) => (
+    readRecord(evidence.t2RhythmScheduleEvidence).canEnterC1913Phase1Selection === true
+    || readRecord(evidence.t2RhythmScheduleCandidateNetworkEvaluation).canEnterC1913Phase1Selection === true
+    || readRecord(evidence.t2RhythmSchedulePhase1Selection).status === 'phase1_selection_ready'
+    || readRecord(readRecord(evidence.durationInputAssembly).assemblyGate).canEnterC1913Phase1Selection === true
+  ))
+  const requiresManualReview = runtimeProjectRemainingEvidence.requiresManualReview === true
+    || rowEvidence.some((evidence) => (
+      readRecord(evidence.t2RhythmScheduleEvidence).requiresManualReview === true
+      || readRecord(evidence.t2RhythmSchedulePhase1Selection).status === 'manual_review_required'
+      || readRecord(readRecord(evidence.durationInputAssembly).assemblyGate).requiresManualReview === true
+    ))
+    || normalizedConflictCodesWithSelector.length > 0
+    || normalizedBlockingReasonsWithSelector.length > 0
+  const canEnterC1913Phase1Selection = (runtimeCanEnter || rowCanEnter) && !requiresManualReview
+  const readinessSummary = {
+    source: 'schedule_acceleration_t2_readiness_summary' as const,
+    phase1SelectionStatus: normalizeId(phase1Selection.status),
+    productionCapacityCoverageStatus: normalizeId(productionCapacityCoverage.status),
+    assemblyGateStatus: normalizeId(assemblyGate.status),
+    standardLibraryTrustGateStatus,
+    standardLibraryTrustBoundary,
+    standardLibraryTrustBlockingReasons,
+    selectionReceiptCount,
+    selectorReceiptAuditStatus,
+    selectedCandidateId: readSelectedPhase1CandidateId(phase1Selection),
+    canEnterC1913Phase1Selection,
+    requiresManualReview,
+    conflictCodes: normalizedConflictCodesWithSelector,
+    blockingReasons: normalizedBlockingReasonsWithSelector,
+  }
+
+  return {
+    source: 'schedule_acceleration_e5_readonly_context',
+    evidenceRowCount: Number(runtimeProjectRemainingEvidence.evidenceRowCount ?? rowEvidence.length) || rowEvidence.length,
+    selectedTemplateIds: uniqueUnknownStrings(selectedTemplateIds),
+    canEnterC1913Phase1Selection,
+    requiresManualReview,
+    writesTaskDependencies: false,
+    writesPlanDates: false,
+    writesCriticalPathFacts: false,
+    ...(hasRuntimeEvidence ? { runtimeProjectRemainingEvidence } : {}),
+    rowEvidence,
+    ...(normalizedConflictCodesWithSelector.length > 0 ? { conflictCodes: normalizedConflictCodesWithSelector } : {}),
+    ...(isNonEmptyRecord(productionCapacityCoverage) ? { productionCapacityCoverage } : {}),
+    ...(isNonEmptyRecord(phase1Selection) ? { phase1Selection } : {}),
+    readinessSummary,
+  }
 }
 
 function normalizeRowProjectionMode(value: unknown): ScheduleAccelerationRowProjectionMode | '' {
@@ -616,12 +1133,322 @@ function readRowsProjectGenerationFacts(rows: ScheduleAccelerationRow[]) {
   return {}
 }
 
+function readConstructionOrganizationScenarioFromRows(rows: ScheduleAccelerationRow[]): ConstructionOrganizationScenarioSelection | null {
+  for (const row of rows) {
+    const metadata = readRowMetadata(row)
+    const projectOrganization = readRecord(metadata.projectOrganization)
+    const scenarioSelection = readRecord(projectOrganization.scenarioSelection)
+    if (scenarioSelection.source === 'construction_organization_scenario_selector') {
+      return scenarioSelection as unknown as ConstructionOrganizationScenarioSelection
+    }
+  }
+  return null
+}
+
+function deriveConstructionOrganizationScenarioFromContext(
+  context?: ScheduleAccelerationContext,
+): ConstructionOrganizationScenarioSelection | null {
+  const projectGenerationFacts = buildProjectGenerationFactsSnapshot(context?.projectGenerationFacts)
+  const selectorInput: ConstructionOrganizationScenarioSelectorInput = buildConstructionOrganizationSelectorInputFromProjectFacts(projectGenerationFacts, {
+    methodVariantCodes: projectGenerationFacts.methodVariantCodes ?? context?.methodVariantCodes,
+    climateSignals: projectGenerationFacts.climateSignals ?? context?.climateSignals,
+    weatherImpactBands: projectGenerationFacts.weatherImpactBands ?? context?.weatherImpactBands,
+  })
+
+  const hasSelectorFacts = Object.values(selectorInput).some((value) => {
+    if (Array.isArray(value)) return value.length > 0
+    if (value && typeof value === 'object') return Object.keys(value as Record<string, unknown>).length > 0
+    return value !== undefined && value !== null && value !== ''
+  })
+  if (!hasSelectorFacts) return null
+
+  return selectConstructionOrganizationScenario(selectorInput)
+}
+
+function resolveConstructionOrganizationScenario(
+  rows: ScheduleAccelerationRow[],
+  context?: ScheduleAccelerationContext,
+) {
+  return context?.constructionOrganizationScenario
+    ?? readConstructionOrganizationScenarioFromRows(rows)
+    ?? deriveConstructionOrganizationScenarioFromContext(context)
+}
+
+function summarizeConstructionOrganizationScenario(selection?: ConstructionOrganizationScenarioSelection | null) {
+  if (!selection) return null
+  const projectOrganizationPolicy = selection.factBasis?.projectOrganizationPolicy
+    && typeof selection.factBasis.projectOrganizationPolicy === 'object'
+    ? selection.factBasis.projectOrganizationPolicy as Record<string, unknown>
+    : null
+  const projectOrganizationPolicySummary = projectOrganizationPolicy
+    ? {
+        source: projectOrganizationPolicy.source,
+        policyId: projectOrganizationPolicy.policyId,
+        sourceVersion: projectOrganizationPolicy.sourceVersion,
+        strategy: projectOrganizationPolicy.strategy,
+        schemeFamily: projectOrganizationPolicy.schemeFamily,
+        primaryInterfaceSequence: Array.isArray(projectOrganizationPolicy.primaryInterfaceSequence)
+          ? projectOrganizationPolicy.primaryInterfaceSequence
+          : [],
+        interfaceGateTags: Array.isArray(projectOrganizationPolicy.interfaceGateTags)
+          ? projectOrganizationPolicy.interfaceGateTags
+          : [],
+        laneRole: projectOrganizationPolicy.laneRole,
+        lanePrefix: projectOrganizationPolicy.lanePrefix,
+        networkPolicy: projectOrganizationPolicy.networkPolicy,
+        confidence: projectOrganizationPolicy.confidence,
+        rationale: projectOrganizationPolicy.rationale,
+        resourcePolicy: projectOrganizationPolicy.resourcePolicy,
+      }
+    : null
+  const summarizeUseCaseEvaluations = (option: NonNullable<ConstructionOrganizationScenarioSelection['recommendedPlanOption']>) => option.evaluation?.useCaseEvaluations
+    ? {
+        newProjectPlanning: option.evaluation.useCaseEvaluations.newProjectPlanning,
+        startingLineOnboarding: option.evaluation.useCaseEvaluations.startingLineOnboarding,
+        accelerationRecovery: option.evaluation.useCaseEvaluations.accelerationRecovery,
+      }
+    : null
+  const summarizePlanOption = (option: NonNullable<ConstructionOrganizationScenarioSelection['recommendedPlanOption']>) => ({
+    optionId: option.optionId,
+    source: option.source,
+    selectedScenarioIds: option.selectedScenarioIds,
+    projectOrganizationScheme: option.projectOrganizationScheme,
+    combinedScore: option.combinedScore,
+    confidence: option.confidence,
+    recoveryFactorHint: option.evaluation?.recoveryFactorHint,
+    networkEvaluation: option.evaluation?.networkEvaluation
+      ? {
+          evaluationRole: option.evaluation.networkEvaluation.evaluationRole,
+          e3NetworkBasis: option.evaluation.networkEvaluation.e3NetworkBasis,
+          projectDurationDays: option.evaluation.networkEvaluation.projectDurationDays,
+          criticalNodeIds: option.evaluation.networkEvaluation.criticalNodeIds,
+          edgeCount: option.evaluation.networkEvaluation.edgeCount,
+          e5RecoverableSpanDays: option.evaluation.networkEvaluation.e5RecoverableSpanDays,
+          writesTaskDependencies: option.evaluation.networkEvaluation.writesTaskDependencies,
+          writesPlanDates: option.evaluation.networkEvaluation.writesPlanDates,
+          writesCriticalPathFacts: option.evaluation.networkEvaluation.writesCriticalPathFacts,
+        }
+      : null,
+    engineEvaluationSummary: option.evaluation?.engineEvaluationSummary
+      ? {
+          source: option.evaluation.engineEvaluationSummary.source,
+          evaluationRole: option.evaluation.engineEvaluationSummary.evaluationRole,
+          e1: option.evaluation.engineEvaluationSummary.e1,
+          e3: option.evaluation.engineEvaluationSummary.e3,
+          e5: option.evaluation.engineEvaluationSummary.e5,
+          projectOrganization: option.evaluation.engineEvaluationSummary.projectOrganization,
+          boundary: option.evaluation.engineEvaluationSummary.boundary,
+        }
+      : null,
+    generatedRowProjection: option.evaluation?.generatedRowProjection
+      ? {
+          source: option.evaluation.generatedRowProjection.source,
+          projectionBasis: option.evaluation.generatedRowProjection.projectionBasis,
+          generatedScheduleSpanDays: option.evaluation.generatedRowProjection.generatedScheduleSpanDays,
+          virtualProjectDurationDays: option.evaluation.generatedRowProjection.virtualProjectDurationDays,
+          spanDeltaDays: option.evaluation.generatedRowProjection.spanDeltaDays,
+          dependencyAlignmentScore: option.evaluation.generatedRowProjection.dependencyAlignmentScore,
+          projectionConfidence: option.evaluation.generatedRowProjection.projectionConfidence,
+          mappedNodeCount: option.evaluation.generatedRowProjection.mappedNodeCount,
+          generatedRowMatchCount: option.evaluation.generatedRowProjection.generatedRowMatchCount,
+          unmappedNodeIds: option.evaluation.generatedRowProjection.unmappedNodeIds,
+          candidateDependencyPreview: option.evaluation.generatedRowProjection.candidateDependencyPreview
+            ? {
+                source: option.evaluation.generatedRowProjection.candidateDependencyPreview.source,
+                previewBasis: option.evaluation.generatedRowProjection.candidateDependencyPreview.previewBasis,
+                materializationReadiness: option.evaluation.generatedRowProjection.candidateDependencyPreview.materializationReadiness,
+                previewEdgeCount: option.evaluation.generatedRowProjection.candidateDependencyPreview.previewEdges.length,
+                unresolvedEdgeCount: option.evaluation.generatedRowProjection.candidateDependencyPreview.unresolvedEdges.length,
+                previewEdges: option.evaluation.generatedRowProjection.candidateDependencyPreview.previewEdges,
+                unresolvedEdges: option.evaluation.generatedRowProjection.candidateDependencyPreview.unresolvedEdges,
+                writesTaskDependencies: option.evaluation.generatedRowProjection.candidateDependencyPreview.writesTaskDependencies,
+                writesPlanDates: option.evaluation.generatedRowProjection.candidateDependencyPreview.writesPlanDates,
+                writesCriticalPathFacts: option.evaluation.generatedRowProjection.candidateDependencyPreview.writesCriticalPathFacts,
+              }
+            : null,
+          candidateMaterializationEvaluation: option.evaluation.generatedRowProjection.candidateMaterializationEvaluation
+            ? {
+                source: option.evaluation.generatedRowProjection.candidateMaterializationEvaluation.source,
+                materializationBasis: option.evaluation.generatedRowProjection.candidateMaterializationEvaluation.materializationBasis,
+                previewEdgeCount: option.evaluation.generatedRowProjection.candidateMaterializationEvaluation.previewEdgeCount,
+                satisfiedEdgeCount: option.evaluation.generatedRowProjection.candidateMaterializationEvaluation.satisfiedEdgeCount,
+                violatedEdgeCount: option.evaluation.generatedRowProjection.candidateMaterializationEvaluation.violatedEdgeCount,
+                unresolvedEdgeCount: option.evaluation.generatedRowProjection.candidateMaterializationEvaluation.unresolvedEdgeCount,
+                materializedNetworkSpanDays: option.evaluation.generatedRowProjection.candidateMaterializationEvaluation.materializedNetworkSpanDays,
+                materializationScore: option.evaluation.generatedRowProjection.candidateMaterializationEvaluation.materializationScore,
+                violationDetails: option.evaluation.generatedRowProjection.candidateMaterializationEvaluation.violationDetails,
+                writesTaskDependencies: option.evaluation.generatedRowProjection.candidateMaterializationEvaluation.writesTaskDependencies,
+                writesPlanDates: option.evaluation.generatedRowProjection.candidateMaterializationEvaluation.writesPlanDates,
+                writesCriticalPathFacts: option.evaluation.generatedRowProjection.candidateMaterializationEvaluation.writesCriticalPathFacts,
+              }
+            : null,
+          materializationDecision: option.evaluation.generatedRowProjection.materializationDecision
+            ? {
+                source: option.evaluation.generatedRowProjection.materializationDecision.source,
+                decision: option.evaluation.generatedRowProjection.materializationDecision.decision,
+                allowManualMaterialization: option.evaluation.generatedRowProjection.materializationDecision.allowManualMaterialization,
+                reasons: option.evaluation.generatedRowProjection.materializationDecision.reasons,
+                writesTaskDependencies: option.evaluation.generatedRowProjection.materializationDecision.writesTaskDependencies,
+                writesPlanDates: option.evaluation.generatedRowProjection.materializationDecision.writesPlanDates,
+                writesCriticalPathFacts: option.evaluation.generatedRowProjection.materializationDecision.writesCriticalPathFacts,
+              }
+            : null,
+          materializationReviewPackage: option.evaluation.generatedRowProjection.materializationReviewPackage
+            ? {
+                source: option.evaluation.generatedRowProjection.materializationReviewPackage.source,
+                packageBasis: option.evaluation.generatedRowProjection.materializationReviewPackage.packageBasis,
+                optionId: option.evaluation.generatedRowProjection.materializationReviewPackage.optionId,
+                status: option.evaluation.generatedRowProjection.materializationReviewPackage.status,
+                allowManualReview: option.evaluation.generatedRowProjection.materializationReviewPackage.allowManualReview,
+                proposedDependencyEdgeCount: option.evaluation.generatedRowProjection.materializationReviewPackage.proposedDependencyEdgeCount,
+                blockedReasons: option.evaluation.generatedRowProjection.materializationReviewPackage.blockedReasons,
+                proposedDependencyEdges: option.evaluation.generatedRowProjection.materializationReviewPackage.proposedDependencyEdges,
+                conflictEvidence: option.evaluation.generatedRowProjection.materializationReviewPackage.conflictEvidence,
+                reviewRequired: option.evaluation.generatedRowProjection.materializationReviewPackage.reviewRequired,
+                writesTaskDependencies: option.evaluation.generatedRowProjection.materializationReviewPackage.writesTaskDependencies,
+                writesPlanDates: option.evaluation.generatedRowProjection.materializationReviewPackage.writesPlanDates,
+                writesCriticalPathFacts: option.evaluation.generatedRowProjection.materializationReviewPackage.writesCriticalPathFacts,
+              }
+            : null,
+          generatedRowReferenceDurationEvidence: option.evaluation.generatedRowProjection.generatedRowReferenceDurationEvidence
+            ? {
+                source: option.evaluation.generatedRowProjection.generatedRowReferenceDurationEvidence.source,
+                durationBasis: option.evaluation.generatedRowProjection.generatedRowReferenceDurationEvidence.durationBasis,
+                matchedReferenceRowCount: option.evaluation.generatedRowProjection.generatedRowReferenceDurationEvidence.matchedReferenceRowCount,
+                totalPlanReferenceDays: option.evaluation.generatedRowProjection.generatedRowReferenceDurationEvidence.totalPlanReferenceDays,
+                totalContextualReferenceDays: option.evaluation.generatedRowProjection.generatedRowReferenceDurationEvidence.totalContextualReferenceDays,
+                totalRecommendedDurationDays: option.evaluation.generatedRowProjection.generatedRowReferenceDurationEvidence.totalRecommendedDurationDays,
+                phaseDurations: option.evaluation.generatedRowProjection.generatedRowReferenceDurationEvidence.phaseDurations,
+                writesReferenceDuration: option.evaluation.generatedRowProjection.generatedRowReferenceDurationEvidence.writesReferenceDuration,
+                writesPlanDates: option.evaluation.generatedRowProjection.generatedRowReferenceDurationEvidence.writesPlanDates,
+                writesSeed: option.evaluation.generatedRowProjection.generatedRowReferenceDurationEvidence.writesSeed,
+              }
+            : null,
+          generatedRowNetworkEvaluation: option.evaluation.generatedRowProjection.generatedRowNetworkEvaluation
+            ? {
+                source: option.evaluation.generatedRowProjection.generatedRowNetworkEvaluation.source,
+                networkBasis: option.evaluation.generatedRowProjection.generatedRowNetworkEvaluation.networkBasis,
+                projectedNetworkSpanDays: option.evaluation.generatedRowProjection.generatedRowNetworkEvaluation.projectedNetworkSpanDays,
+                previewEdgeCount: option.evaluation.generatedRowProjection.generatedRowNetworkEvaluation.previewEdgeCount,
+                unresolvedEdgeCount: option.evaluation.generatedRowProjection.generatedRowNetworkEvaluation.unresolvedEdgeCount,
+                criticalGeneratedRowIds: option.evaluation.generatedRowProjection.generatedRowNetworkEvaluation.criticalGeneratedRowIds,
+                materializationStatus: option.evaluation.generatedRowProjection.generatedRowNetworkEvaluation.materializationStatus,
+                rowSchedule: option.evaluation.generatedRowProjection.generatedRowNetworkEvaluation.rowSchedule,
+                writesTaskDependencies: option.evaluation.generatedRowProjection.generatedRowNetworkEvaluation.writesTaskDependencies,
+                writesPlanDates: option.evaluation.generatedRowProjection.generatedRowNetworkEvaluation.writesPlanDates,
+                writesCriticalPathFacts: option.evaluation.generatedRowProjection.generatedRowNetworkEvaluation.writesCriticalPathFacts,
+              }
+            : null,
+          writesTaskDependencies: option.evaluation.generatedRowProjection.writesTaskDependencies,
+          writesPlanDates: option.evaluation.generatedRowProjection.writesPlanDates,
+          writesCriticalPathFacts: option.evaluation.generatedRowProjection.writesCriticalPathFacts,
+        }
+      : null,
+    useCaseEvaluations: summarizeUseCaseEvaluations(option),
+    virtualNetworkTotalSpanDays: option.combinedVirtualNetwork?.totalSpanDays,
+    virtualNetworkCriticalNodeIds: option.combinedVirtualNetwork?.criticalNodeIds,
+    excludedScenarioIds: option.excludedScenarioIds,
+    boundaryPolicy: {
+      writesTaskDependencies: option.evaluation?.writesTaskDependencies,
+      writesPlanDates: option.evaluation?.writesPlanDates,
+      writesSeed: option.evaluation?.writesSeed,
+    },
+  })
+  const summarizeUseCaseRecommendation = (
+    recommendation: ConstructionOrganizationScenarioSelection['scenarioRecommendations'][keyof ConstructionOrganizationScenarioSelection['scenarioRecommendations']] | undefined,
+  ) => recommendation
+    ? {
+        useCase: recommendation.useCase,
+        optionId: recommendation.optionId,
+        selectedScenarioIds: recommendation.selectedScenarioIds,
+        recommendationBasis: recommendation.recommendationBasis,
+        confidence: recommendation.confidence,
+        actionability: recommendation.actionability,
+        currentSubstage: recommendation.currentSubstage ?? null,
+        recoveryFactorHint: recommendation.recoveryFactorHint,
+        writesTaskDependencies: recommendation.writesTaskDependencies,
+        writesPlanDates: recommendation.writesPlanDates,
+        writesSeed: recommendation.writesSeed,
+      }
+    : null
+  return {
+    source: selection.source,
+    sourceVersion: selection.sourceVersion,
+    recommendedScenarioIds: selection.recommendedScenarioIds,
+    projectOrganizationPolicy: projectOrganizationPolicySummary,
+    factBasis: projectOrganizationPolicySummary
+      ? { projectOrganizationPolicy: projectOrganizationPolicySummary }
+      : null,
+    recommendedPlanOption: selection.recommendedPlanOption ? summarizePlanOption(selection.recommendedPlanOption) : null,
+    planOptions: (selection.planOptions ?? []).map((option) => summarizePlanOption(option)),
+    planOptionComparisonPackage: selection.planOptionComparisonPackage ?? null,
+    organizationDecisionReport: ensureConstructionOrganizationDecisionReportProductCloseoutReadiness(
+      selection.organizationDecisionReport as unknown as Record<string, unknown> | null | undefined,
+    ),
+    scenarioRecommendations: selection.scenarioRecommendations
+      ? {
+          newProjectPlanning: summarizeUseCaseRecommendation(selection.scenarioRecommendations.newProjectPlanning),
+          startingLineOnboarding: summarizeUseCaseRecommendation(selection.scenarioRecommendations.startingLineOnboarding),
+          accelerationRecovery: summarizeUseCaseRecommendation(selection.scenarioRecommendations.accelerationRecovery),
+        }
+      : null,
+    planNetworkDraftRecommendations: selection.planNetworkDraftRecommendations ?? null,
+    confidence: selection.confidence,
+    resourcePolicy: selection.boundaryPolicy.resourcePolicy,
+    boundaryPolicy: selection.boundaryPolicy,
+    candidateEvaluations: selection.candidates
+      .filter((candidate) => selection.recommendedScenarioIds.includes(candidate.scenarioId))
+      .map((candidate) => ({
+        scenarioId: candidate.scenarioId,
+        compositeScore: candidate.evaluation?.compositeScore,
+        recoveryFactorHint: candidate.evaluation?.recoveryFactorHint,
+        scheduleRiskLevel: candidate.evaluation?.scheduleRiskLevel,
+        e1DurationBasis: candidate.evaluation?.e1DurationBasis,
+        e3NetworkBasis: candidate.evaluation?.e3NetworkBasis,
+        e5AccelerationBasis: candidate.evaluation?.e5AccelerationBasis,
+        virtualNetworkTotalSpanDays: candidate.virtualNetwork?.totalSpanDays,
+        virtualNetworkCriticalNodeIds: candidate.virtualNetwork?.criticalNodeIds,
+      })),
+  }
+}
+
+function resolveConstructionOrganizationRecoveryFactor(selection?: ConstructionOrganizationScenarioSelection | null) {
+  if (!selection) return 1
+  const accelerationRecommendationFactor = Number(selection.scenarioRecommendations?.accelerationRecovery?.recoveryFactorHint)
+  if (Number.isFinite(accelerationRecommendationFactor) && accelerationRecommendationFactor > 0) {
+    return Math.max(1, Math.min(1.1, accelerationRecommendationFactor))
+  }
+  const planOptionFactor = Number(selection.recommendedPlanOption?.evaluation?.recoveryFactorHint)
+  if (Number.isFinite(planOptionFactor) && planOptionFactor > 0) {
+    return Math.max(1, Math.min(1.1, planOptionFactor))
+  }
+  const recommendedCandidateFactors = selection.candidates
+    .filter((candidate) => selection.recommendedScenarioIds.includes(candidate.scenarioId))
+    .map((candidate) => Number(candidate.evaluation?.recoveryFactorHint))
+    .filter((factor) => Number.isFinite(factor) && factor > 0)
+  if (recommendedCandidateFactors.length > 0) {
+    return Math.max(1, Math.min(1.1, Math.max(...recommendedCandidateFactors)))
+  }
+  const recommended = new Set(selection.recommendedScenarioIds)
+  if (recommended.has('tower_lane_early_release_after_core_basement')) return 1.08
+  if (recommended.has('shared_basement_first_then_tower')) return 1
+  return 1
+}
+
 function readContextProjectGenerationFacts(context?: ScheduleAccelerationContext): Record<string, unknown> {
+  const snapshot = buildProjectGenerationFactsSnapshot(context?.projectGenerationFacts)
   const projectTypeCodes = readFeatureCodeValues(context?.projectTypeCodes)
   const methodVariantCodes = readFeatureCodeValues(context?.methodVariantCodes)
   return {
+    ...snapshot,
     ...(projectTypeCodes.length > 0 ? { businessType: projectTypeCodes[0], projectTypeCodes } : {}),
     ...(methodVariantCodes.length > 0 ? { methodVariantCodes } : {}),
+    ...(context?.constructionOrganizationScenario
+      ? {
+          constructionOrganizationScenarioIds: context.constructionOrganizationScenario.recommendedScenarioIds,
+          constructionOrganizationScenarioSource: context.constructionOrganizationScenario.source,
+        }
+      : {}),
   }
 }
 
@@ -839,6 +1666,7 @@ function resolveRuntimeRecoveryAdjustment(context?: ScheduleAccelerationContext)
       evidenceCodes: uniqueStringArray(runtime.evidenceCodes ?? []),
       evidenceObjects: runtime.evidenceObjects ?? [],
       runtimeInferenceSummary: runtime.runtimeInferenceSummary,
+      t2RhythmScheduleEvidence: runtime.t2RhythmScheduleEvidence ?? null,
       networkSlackRecoveryFactor,
       recoveryBudgetFactor,
     },
@@ -1189,13 +2017,24 @@ function estimateRecoverableTargetBudget(params: {
   const hardConstraintDays = params.rows.reduce((sum, row) => (
     getHardConstraintReason(row) ? sum + readGeneratedRowPlanDurationDays(row, constructionCalendar) : sum
   ), 0)
-  const fastTrackBudget = Math.round(naturalDurationDays * profile.fastTrackBudgetRatio * profile.seasonalFactor)
+  const naturalFastTrackBudget = Math.round(naturalDurationDays * profile.fastTrackBudgetRatio * profile.seasonalFactor)
+  const criticalFastTrackBudgetCap = criticalCandidateDays > 0
+    ? Math.max(1, Math.round(criticalCandidateDays * profile.fastTrackBudgetRatio * profile.seasonalFactor))
+    : naturalFastTrackBudget
+  const fastTrackBudget = Math.min(naturalFastTrackBudget, criticalFastTrackBudgetCap)
   const crashBudget = Math.round(resourceGroupedCandidateDays * profile.crashRatio * profile.seasonalFactor)
   const totalCap = Math.round(naturalDurationDays * profile.totalRecoverCapRatio * profile.seasonalFactor)
   const runtimeAdjustment = scenario === 'runtime_delay_recovery'
     ? resolveRuntimeRecoveryAdjustment(params.context)
     : undefined
-  const conservativeBudget = Math.round(Math.max(0, Math.min(totalCap, fastTrackBudget + crashBudget)) * (runtimeAdjustment?.factor ?? 1))
+  const constructionOrganizationScenario = resolveConstructionOrganizationScenario(params.rows, params.context)
+  const constructionOrganizationRecoveryFactor = resolveConstructionOrganizationRecoveryFactor(constructionOrganizationScenario)
+  const t2RhythmScheduleEvidence = buildScheduleAccelerationT2RhythmEvidence(params.rows, params.context)
+  const conservativeBudget = Math.round(
+    Math.max(0, Math.min(totalCap, fastTrackBudget + crashBudget))
+      * (runtimeAdjustment?.factor ?? 1)
+      * constructionOrganizationRecoveryFactor,
+  )
   return {
     recoverableDays: Math.min(params.overshootDays, conservativeBudget),
     naturalDurationDays,
@@ -1213,6 +2052,9 @@ function estimateRecoverableTargetBudget(params: {
     resourceGroupedCandidateDays,
     hardConstraintDays,
     runtimeAdjustment,
+    constructionOrganizationScenario,
+    constructionOrganizationRecoveryFactor,
+    t2RhythmScheduleEvidence,
   }
 }
 
@@ -1908,7 +2750,13 @@ function buildTargetAccelerationProposal(params: {
   budget: TargetAccelerationBudget
 }): ScheduleAccelerationProposal | undefined {
   if (params.overshootDays <= 0) return undefined
-  const fastTrackBudget = Math.max(0, Math.round(params.recoverableDays * 0.5))
+  const seededFastTrackBudget = Math.max(0, Math.min(
+    params.recoverableDays,
+    Math.round(params.budget.fastTrackBudgetDays),
+  ))
+  const fastTrackBudget = seededFastTrackBudget > 0
+    ? seededFastTrackBudget
+    : Math.max(0, Math.round(params.recoverableDays * params.budget.fastTrackBudgetRatio))
   const fastTrack = buildFastTrackProposalAction({
     rows: params.rows,
     recoverBudgetDays: fastTrackBudget,
@@ -1941,6 +2789,7 @@ function buildTargetAccelerationProposal(params: {
   })
   const totalRecoverDays = terminalRecovery.recoverDays
   const remainingGapDays = Math.max(0, params.overshootDays - totalRecoverDays)
+  const effectiveRescheduleDraft = totalRecoverDays > 0 ? rescheduleDraft : undefined
   const durationOutputContract = buildDurationOutputContractSummary('acceleration_target')
   const accelerationTargetDays = Math.max(1, params.budget.naturalDurationDays - totalRecoverDays)
   const recoverableDaysConfidenceBand = buildRecoverableDaysConfidenceBand(
@@ -2016,7 +2865,7 @@ function buildTargetAccelerationProposal(params: {
         : 'needs_scope_decision',
     commitmentDisclaimer: '预案默认来源于模板和算法估算，实际可追回时间需结合现场资源到位、协同施工约束和项目事实复核。',
     actions,
-    rescheduleDraft,
+    rescheduleDraft: effectiveRescheduleDraft,
     protectedConstraints: buildTargetProtectedConstraints(params.rows, params.budget.constructionCalendar),
     calculationBasis: {
       scenario: params.scenario,
@@ -2028,10 +2877,13 @@ function buildTargetAccelerationProposal(params: {
       criticalCandidateDays: params.budget.criticalCandidateDays,
       resourceGroupedCandidateDays: params.budget.resourceGroupedCandidateDays,
       hardConstraintDays: params.budget.hardConstraintDays,
+      constructionOrganizationScenario: summarizeConstructionOrganizationScenario(params.budget.constructionOrganizationScenario),
+      constructionOrganizationRecoveryFactor: params.budget.constructionOrganizationRecoveryFactor,
       fastTrackBudgetDays: params.budget.fastTrackBudgetDays,
       fastTrackBudgetRatio: params.budget.fastTrackBudgetRatio,
       policySource: SCHEDULE_ACCELERATION_PROFILE_SOURCE,
       runtimeContext: params.budget.runtimeAdjustment?.summary,
+      t2RhythmScheduleEvidence: params.budget.t2RhythmScheduleEvidence,
       networkFallbackPolicy: terminalRecovery.networkFallbackPolicy,
     },
   }
@@ -2205,7 +3057,7 @@ export async function evaluateRuntimeDelayRecoveryWithCriticalPath(params: {
   })
 
   const runtimeArtifactPublications = params.runtimeArtifactPublications ?? []
-  if (params.runtimeConsumerObservationQueryExec && runtimeArtifactPublications.length > 0) {
+  if (params.runtimeConsumerObservationQueryExec) {
     try {
       await recordScheduleAccelerationConsumedArtifacts({
         queryExec: params.runtimeConsumerObservationQueryExec,

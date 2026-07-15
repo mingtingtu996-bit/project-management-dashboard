@@ -4,13 +4,13 @@
 import { Router } from 'express'
 import { executeSQL, executeSQLOne, getMembers } from '../services/dbService.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
-import { authenticate, requireProjectEditor } from '../middleware/auth.js'
+import { authenticate, requireProjectEditor, requireProjectMember } from '../middleware/auth.js'
 import { logger } from '../middleware/logger.js'
 import { constructionDrawingSchema, constructionDrawingUpdateSchema } from '../middleware/validation.js'
 import type { ApiResponse } from '../types/index.js'
 import type { ConstructionDrawing } from '../types/db.js'
 import { v4 as uuidv4 } from 'uuid'
-import { registerDrawingPackageRoutes } from './drawing-packages.js'
+import { clearDrawingBoardCache, registerDrawingPackageRoutes } from './drawing-packages.js'
 import { registerDrawingReviewRuleRoutes } from './drawing-review-rules.js'
 import {
   deriveDrawingScheduleImpactFlag,
@@ -23,6 +23,7 @@ import {
   syncPackageCurrentDrawingCertificateLink,
 } from '../services/drawingCertificateLinkService.js'
 import { autoSatisfyDrawingPackageConditions } from '../services/taskConditionLinkageService.js'
+import { listActiveEntityLinksForEntity } from '../services/projectLinkingService.js'
 import { persistNotification } from '../services/warningChainService.js'
 import {
   CONSTRUCTION_DRAWING_COLUMNS,
@@ -78,6 +79,90 @@ function isApprovedReviewStatus(value: unknown) {
   return normalized === '已通过' || normalized === '已出图'
 }
 
+function normalizeStatsBucket(value: unknown, fallback = '未分类') {
+  const normalized = normalizeNullableText(value)
+  return normalized || fallback
+}
+
+function countByValue<T extends Record<string, unknown>>(
+  rows: T[],
+  key: string,
+  pickValue: (row: T) => unknown,
+) {
+  const bucket = new Map<string, number>()
+  for (const row of rows) {
+    const value = normalizeStatsBucket(pickValue(row))
+    bucket.set(value, (bucket.get(value) ?? 0) + 1)
+  }
+  return Array.from(bucket.entries()).map(([value, count]) => ({ [key]: value, count }))
+}
+
+async function resolveConstructionDrawingProjectId(drawingId: string) {
+  const drawing = await executeSQLOne<{ project_id?: string | null }>(
+    'SELECT project_id FROM construction_drawings WHERE id = ? LIMIT 1',
+    [drawingId],
+  )
+  return drawing?.project_id ?? undefined
+}
+
+async function validateDrawingProjectReferences(projectId: string, payload: Record<string, unknown>) {
+  const packageId = normalizeNullableText(payload.package_id)
+  if (packageId) {
+    const drawingPackage = await executeSQLOne<{ project_id?: string | null }>(
+      'SELECT project_id FROM drawing_packages WHERE id = ? LIMIT 1',
+      [packageId],
+    )
+    if (!drawingPackage || normalizeNullableText(drawingPackage.project_id) !== projectId) {
+      return {
+        status: 400,
+        response: {
+          success: false,
+          error: { code: 'DRAWING_PACKAGE_PROJECT_MISMATCH', message: '图纸包不属于当前项目' },
+          timestamp: new Date().toISOString(),
+        } satisfies ApiResponse,
+      }
+    }
+  }
+
+  const parentDrawingId = normalizeNullableText(payload.parent_drawing_id)
+  if (parentDrawingId) {
+    const parentDrawing = await executeSQLOne<{ project_id?: string | null }>(
+      'SELECT project_id FROM construction_drawings WHERE id = ? LIMIT 1',
+      [parentDrawingId],
+    )
+    if (!parentDrawing || normalizeNullableText(parentDrawing.project_id) !== projectId) {
+      return {
+        status: 400,
+        response: {
+          success: false,
+          error: { code: 'PARENT_DRAWING_PROJECT_MISMATCH', message: '父级图纸不属于当前项目' },
+          timestamp: new Date().toISOString(),
+        } satisfies ApiResponse,
+      }
+    }
+  }
+
+  const relatedLicenseId = normalizeNullableText(payload.related_license_id)
+  if (relatedLicenseId) {
+    const relatedLicense = await executeSQLOne<{ project_id?: string | null }>(
+      'SELECT project_id FROM pre_milestones WHERE id = ? LIMIT 1',
+      [relatedLicenseId],
+    )
+    if (!relatedLicense || normalizeNullableText(relatedLicense.project_id) !== projectId) {
+      return {
+        status: 400,
+        response: {
+          success: false,
+          error: { code: 'RELATED_LICENSE_PROJECT_MISMATCH', message: '关联证照不属于当前项目' },
+          timestamp: new Date().toISOString(),
+        } satisfies ApiResponse,
+      }
+    }
+  }
+
+  return null
+}
+
 function normalizeLockVersion(value: unknown): number | null {
   if (value == null || value === '') return null
   const parsed = Number(value)
@@ -107,6 +192,70 @@ function readOptionalNormalizedValue<T>(
   return normalize(payload[key])
 }
 
+function readMergedUpdateValue(
+  fieldMap: Record<string, unknown>,
+  current: Record<string, unknown>,
+  key: string,
+) {
+  if (fieldMap[key] !== undefined) return fieldMap[key]
+  return current[key] ?? null
+}
+
+async function listConstructionDrawingsByFilters(input: {
+  projectId: string
+  drawingType?: string | null
+  status?: string | null
+  reviewStatus?: string | null
+}) {
+  const { projectId, drawingType, status, reviewStatus } = input
+  if (drawingType && status && reviewStatus) {
+    return executeSQL<ConstructionDrawing>(
+      `${CONSTRUCTION_DRAWING_SELECT} WHERE project_id = ? AND drawing_type = ? AND status = ? AND review_status = ? ORDER BY sort_order ASC, created_at ASC`,
+      [projectId, drawingType, status, reviewStatus],
+    )
+  }
+  if (drawingType && status) {
+    return executeSQL<ConstructionDrawing>(
+      `${CONSTRUCTION_DRAWING_SELECT} WHERE project_id = ? AND drawing_type = ? AND status = ? ORDER BY sort_order ASC, created_at ASC`,
+      [projectId, drawingType, status],
+    )
+  }
+  if (drawingType && reviewStatus) {
+    return executeSQL<ConstructionDrawing>(
+      `${CONSTRUCTION_DRAWING_SELECT} WHERE project_id = ? AND drawing_type = ? AND review_status = ? ORDER BY sort_order ASC, created_at ASC`,
+      [projectId, drawingType, reviewStatus],
+    )
+  }
+  if (status && reviewStatus) {
+    return executeSQL<ConstructionDrawing>(
+      `${CONSTRUCTION_DRAWING_SELECT} WHERE project_id = ? AND status = ? AND review_status = ? ORDER BY sort_order ASC, created_at ASC`,
+      [projectId, status, reviewStatus],
+    )
+  }
+  if (drawingType) {
+    return executeSQL<ConstructionDrawing>(
+      `${CONSTRUCTION_DRAWING_SELECT} WHERE project_id = ? AND drawing_type = ? ORDER BY sort_order ASC, created_at ASC`,
+      [projectId, drawingType],
+    )
+  }
+  if (status) {
+    return executeSQL<ConstructionDrawing>(
+      `${CONSTRUCTION_DRAWING_SELECT} WHERE project_id = ? AND status = ? ORDER BY sort_order ASC, created_at ASC`,
+      [projectId, status],
+    )
+  }
+  if (reviewStatus) {
+    return executeSQL<ConstructionDrawing>(
+      `${CONSTRUCTION_DRAWING_SELECT} WHERE project_id = ? AND review_status = ? ORDER BY sort_order ASC, created_at ASC`,
+      [projectId, reviewStatus],
+    )
+  }
+  return executeSQL<ConstructionDrawing>(
+    `${CONSTRUCTION_DRAWING_SELECT} WHERE project_id = ? ORDER BY sort_order ASC, created_at ASC`,
+    [projectId],
+  )
+}
+
 function uniqueRecipients(values: Array<string | null | undefined>) {
   return [...new Set(values.filter((value): value is string => Boolean(value && value.trim())))]
 }
@@ -134,7 +283,7 @@ async function notifyDrawingVersionUpdate(input: {
   const recipients = uniqueRecipients([
     input.responsibleUserId ?? null,
     ...members
-      .filter((member) => member.role === 'owner')
+      .filter((member) => member.permission_level === 'owner')
       .map((member) => member.user_id),
   ])
 
@@ -254,18 +403,20 @@ async function ensureDrawingVersionSnapshot(input: {
   )
 }
 
-async function refreshPackageCurrentPointer(packageId: string | null | undefined) {
+async function refreshPackageCurrentPointer(packageId: string | null | undefined, projectId?: string | null) {
   const normalizedPackageId = normalizeNullableText(packageId)
   if (!normalizedPackageId) return
+  const normalizedProjectId = normalizeNullableText(projectId)
+  if (!normalizedProjectId) return
 
   const currentDrawing = await executeSQLOne<{ id: string }>(
-    'SELECT id FROM construction_drawings WHERE package_id = ? AND is_current_version = ? ORDER BY created_at DESC, sort_order DESC LIMIT 1',
-    [normalizedPackageId, 1],
+    'SELECT id FROM construction_drawings WHERE package_id = ? AND project_id = ? AND is_current_version = ? ORDER BY created_at DESC, sort_order DESC LIMIT 1',
+    [normalizedPackageId, normalizedProjectId, 1],
   )
 
   await executeSQL(
-    'UPDATE drawing_packages SET current_version_drawing_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-    [currentDrawing?.id ?? null, normalizedPackageId],
+    'UPDATE drawing_packages SET current_version_drawing_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND project_id = ?',
+    [currentDrawing?.id ?? null, normalizedPackageId, normalizedProjectId],
   )
 }
 
@@ -304,51 +455,55 @@ async function syncPackageItemCurrentDrawing(input: {
 async function applyPackageCurrentVersionSelection(input: {
   packageId: string
   drawingId: string
+  projectId?: string | null
   versionId?: string | null
   isCurrentVersion?: boolean | null
 }) {
   const normalizedPackageId = normalizeNullableText(input.packageId)
   const normalizedDrawingId = normalizeNullableText(input.drawingId)
+  const normalizedProjectId = normalizeNullableText(input.projectId)
   const normalizedVersionId = normalizeNullableText(input.versionId)
-  if (!normalizedPackageId || !normalizedDrawingId) return
+  if (!normalizedPackageId || !normalizedDrawingId || !normalizedProjectId) return
 
   if (input.isCurrentVersion === true) {
     await executeSQL(
-      'UPDATE construction_drawings SET is_current_version = ? WHERE package_id = ? AND id <> ?',
-      [0, normalizedPackageId, normalizedDrawingId],
+      'UPDATE construction_drawings SET is_current_version = ? WHERE package_id = ? AND project_id = ? AND id <> ?',
+      [0, normalizedPackageId, normalizedProjectId, normalizedDrawingId],
     )
     await executeSQL(
-      'UPDATE construction_drawings SET is_current_version = ? WHERE id = ?',
-      [1, normalizedDrawingId],
+      'UPDATE construction_drawings SET is_current_version = ? WHERE id = ? AND project_id = ?',
+      [1, normalizedDrawingId, normalizedProjectId],
     )
     if (normalizedVersionId) {
-    await executeSQL(
-      'UPDATE drawing_versions SET is_current_version = ?, superseded_at = CURRENT_TIMESTAMP WHERE package_id = ? AND id <> ?',
-      [0, normalizedPackageId, normalizedVersionId],
+      await executeSQL(
+        'UPDATE drawing_versions SET is_current_version = ?, superseded_at = CURRENT_TIMESTAMP WHERE package_id = ? AND project_id = ? AND id <> ?',
+        [0, normalizedPackageId, normalizedProjectId, normalizedVersionId],
       )
       await executeSQL(
-        'UPDATE drawing_versions SET is_current_version = ?, superseded_at = ? WHERE id = ?',
-        [1, null, normalizedVersionId],
+        'UPDATE drawing_versions SET is_current_version = ?, superseded_at = ? WHERE id = ? AND project_id = ?',
+        [1, null, normalizedVersionId, normalizedProjectId],
       )
     }
   } else if (input.isCurrentVersion === false) {
     await executeSQL(
-      'UPDATE construction_drawings SET is_current_version = ? WHERE id = ?',
-      [0, normalizedDrawingId],
+      'UPDATE construction_drawings SET is_current_version = ? WHERE id = ? AND project_id = ?',
+      [0, normalizedDrawingId, normalizedProjectId],
     )
     if (normalizedVersionId) {
       await executeSQL(
-        'UPDATE drawing_versions SET is_current_version = ?, superseded_at = CURRENT_TIMESTAMP WHERE id = ?',
-        [0, normalizedVersionId],
+        'UPDATE drawing_versions SET is_current_version = ?, superseded_at = CURRENT_TIMESTAMP WHERE id = ? AND project_id = ?',
+        [0, normalizedVersionId, normalizedProjectId],
       )
     }
   }
 
-  await refreshPackageCurrentPointer(normalizedPackageId)
+  await refreshPackageCurrentPointer(normalizedPackageId, normalizedProjectId)
 }
 
 // ─── 获取项目的所有施工图纸 ─────────────────────────────────────
-router.get('/', asyncHandler(async (req, res) => {
+router.get('/',
+  requireProjectMember((req) => String(req.query.projectId ?? req.query.project_id ?? '').trim() || undefined),
+  asyncHandler(async (req, res) => {
   const projectId = req.query.projectId as string
 
   if (!projectId) {
@@ -362,26 +517,17 @@ router.get('/', asyncHandler(async (req, res) => {
 
   // 支持按类型和状态筛选
   const { drawing_type, status, review_status } = req.query
-  let sql = `${CONSTRUCTION_DRAWING_SELECT} WHERE project_id = ?`
-  const params: any[] = [projectId]
+  const drawingTypeFilter = normalizeNullableText(drawing_type)
+  const statusFilter = normalizeNullableText(status)
+  const reviewStatusFilter = normalizeNullableText(review_status)
 
-  if (drawing_type) {
-    sql += ' AND drawing_type = ?'
-    params.push(drawing_type)
-  }
-  if (status) {
-    sql += ' AND status = ?'
-    params.push(status)
-  }
-  if (review_status) {
-    sql += ' AND review_status = ?'
-    params.push(review_status)
-  }
-
-  sql += ' ORDER BY sort_order ASC, created_at ASC'
-
-  logger.info('Fetching construction drawings', { projectId, drawing_type, status })
-  const data = await executeSQL(sql, params)
+  logger.info('Fetching construction drawings', { projectId, drawing_type: drawingTypeFilter, status: statusFilter })
+  const data = await listConstructionDrawingsByFilters({
+    projectId,
+    drawingType: drawingTypeFilter,
+    status: statusFilter,
+    reviewStatus: reviewStatusFilter,
+  })
 
   const response: ApiResponse<ConstructionDrawing[]> = {
     success: true,
@@ -394,45 +540,22 @@ router.get('/', asyncHandler(async (req, res) => {
 // ─── 获取图纸统计数据（放在 /:id 之前，避免路由冲突）───────────
 // 注意：此路由挂载到 /api/construction-drawings 后，
 // 访问路径为 GET /api/construction-drawings/project/:projectId/stats
-router.get('/project/:projectId/stats', asyncHandler(async (req, res) => {
+router.get('/project/:projectId/stats',
+  requireProjectMember((req) => req.params.projectId),
+  asyncHandler(async (req, res) => {
   const { projectId } = req.params
   logger.info('Fetching drawing stats', { projectId })
   const monthBounds = getCurrentMonthBounds()
 
-  const [total, byType, byStatus, byReviewStatus, byDisciplineType, byDocumentPurpose, plannedSubmitThisMonth] = await Promise.all([
+  const [total, statsRows, plannedSubmitThisMonth] = await Promise.all([
     executeSQLOne(
       'SELECT COUNT(*) as count FROM construction_drawings WHERE project_id = ?',
       [projectId]
     ),
     executeSQL(
-      `SELECT drawing_type, COUNT(*) as count FROM construction_drawings
-       WHERE project_id = ? GROUP BY drawing_type`,
-      [projectId]
-    ),
-    executeSQL(
-      `SELECT status, COUNT(*) as count FROM construction_drawings
-       WHERE project_id = ? GROUP BY status`,
-      [projectId]
-    ),
-    executeSQL(
-      `SELECT review_status, COUNT(*) as count FROM construction_drawings
-       WHERE project_id = ? GROUP BY review_status`,
-      [projectId]
-    ),
-    executeSQL(
-      `SELECT COALESCE(NULLIF(discipline_type, ''), drawing_type, '未分类') as discipline_type,
-              COUNT(*) as count
+      `SELECT drawing_type, status, review_status, discipline_type, document_purpose
        FROM construction_drawings
-       WHERE project_id = ?
-       GROUP BY COALESCE(NULLIF(discipline_type, ''), drawing_type, '未分类')`,
-      [projectId]
-    ),
-    executeSQL(
-      `SELECT COALESCE(NULLIF(document_purpose, ''), '未分类') as document_purpose,
-              COUNT(*) as count
-       FROM construction_drawings
-       WHERE project_id = ?
-       GROUP BY COALESCE(NULLIF(document_purpose, ''), '未分类')`,
+       WHERE project_id = ?`,
       [projectId]
     ),
     executeSQLOne(
@@ -447,11 +570,11 @@ router.get('/project/:projectId/stats', asyncHandler(async (req, res) => {
     success: true,
     data: {
       total: total?.count || 0,
-      by_type: byType || [],
-      by_status: byStatus || [],
-      by_review_status: byReviewStatus || [],
-      by_discipline_type: byDisciplineType || [],
-      by_document_purpose: byDocumentPurpose || [],
+      by_type: countByValue(statsRows || [], 'drawing_type', (row) => row.drawing_type),
+      by_status: countByValue(statsRows || [], 'status', (row) => row.status),
+      by_review_status: countByValue(statsRows || [], 'review_status', (row) => row.review_status),
+      by_discipline_type: countByValue(statsRows || [], 'discipline_type', (row) => normalizeNullableText(row.discipline_type) ?? row.drawing_type),
+      by_document_purpose: countByValue(statsRows || [], 'document_purpose', (row) => row.document_purpose),
       planned_submit_this_month_count: Number(plannedSubmitThisMonth?.count ?? 0) || 0,
     },
     timestamp: new Date().toISOString(),
@@ -460,7 +583,9 @@ router.get('/project/:projectId/stats', asyncHandler(async (req, res) => {
 }))
 
 // ─── 获取单张施工图纸 ───────────────────────────────────────────
-router.get('/:id', asyncHandler(async (req, res) => {
+router.get('/:id',
+  requireProjectMember((req) => resolveConstructionDrawingProjectId(req.params.id)),
+  asyncHandler(async (req, res) => {
   const { id } = req.params
   logger.info('Fetching construction drawing', { id })
 
@@ -499,6 +624,10 @@ router.post('/', requireProjectEditor(req => req.body.project_id), asyncHandler(
     return res.status(400).json(response)
   }
   const payload = parsed.data
+  const referenceError = await validateDrawingProjectReferences(payload.project_id, payload as Record<string, unknown>)
+  if (referenceError) {
+    return res.status(referenceError.status).json(referenceError.response)
+  }
 
   const id = uuidv4()
   const ts = new Date().toISOString().slice(0, 19).replace('T', ' ')
@@ -622,6 +751,7 @@ router.post('/', requireProjectEditor(req => req.body.project_id), asyncHandler(
     await applyPackageCurrentVersionSelection({
       packageId,
       drawingId: id,
+      projectId: payload.project_id,
       versionId: snapshot?.id ?? null,
       isCurrentVersion: currentVersionPolicy.resolvedCurrentVersion,
     })
@@ -656,6 +786,7 @@ router.post('/', requireProjectEditor(req => req.body.project_id), asyncHandler(
   } else {
     await syncDrawingCertificateLink(data as Record<string, unknown>)
   }
+  clearDrawingBoardCache(payload.project_id)
 
   const response: ApiResponse<ConstructionDrawing> = {
     success: true,
@@ -709,6 +840,28 @@ router.put('/:id', requireProjectEditor(async (req) => {
   }
 
   const currentRecord = current as Record<string, unknown>
+  const currentProjectId = normalizeNullableText(currentRecord.project_id)
+  const requestedProjectId = normalizeNullableText(payload.project_id)
+  if (requestedProjectId && currentProjectId && requestedProjectId !== currentProjectId) {
+    const response: ApiResponse = {
+      success: false,
+      error: { code: 'PROJECT_ID_IMMUTABLE', message: '施工图纸所属项目不能修改' },
+      timestamp: new Date().toISOString(),
+    }
+    return res.status(400).json(response)
+  }
+
+  if (currentProjectId) {
+    const referenceError = await validateDrawingProjectReferences(currentProjectId, {
+      package_id: readMergedValue(payloadRecord, currentRecord, 'package_id'),
+      parent_drawing_id: readMergedValue(payloadRecord, currentRecord, 'parent_drawing_id'),
+      related_license_id: readMergedValue(payloadRecord, currentRecord, 'related_license_id'),
+    })
+    if (referenceError) {
+      return res.status(referenceError.status).json(referenceError.response)
+    }
+  }
+
   const currentLockVersion = normalizeLockVersion(currentRecord.lock_version) ?? 1
   if (expectedLockVersion === null) {
     const response: ApiResponse = {
@@ -729,8 +882,6 @@ router.put('/:id', requireProjectEditor(async (req) => {
   }
 
   const ts = new Date().toISOString().slice(0, 19).replace('T', ' ')
-  const setClauses: string[] = ['updated_at = ?', 'lock_version = ?']
-  const params: any[] = [ts, currentLockVersion + 1]
   const explicitCurrentVersion = Object.prototype.hasOwnProperty.call(payload, 'is_current_version')
     ? normalizeNullableBoolean(payload.is_current_version)
     : null
@@ -849,22 +1000,109 @@ router.put('/:id', requireProjectEditor(async (req) => {
     return res.status(currentVersionPolicy.error.status).json(response)
   }
 
-  for (const [col, val] of Object.entries(fieldMap)) {
-    if (val !== undefined) {
-      setClauses.push(`${col} = ?`)
-      params.push(val)
-    }
-  }
-
-  params.push(id, currentLockVersion)
+  const writeProjectId = currentProjectId || payload.project_id || ''
+  const updateParams = [
+    ts,
+    currentLockVersion + 1,
+    readMergedUpdateValue(fieldMap, currentRecord, 'drawing_type'),
+    readMergedUpdateValue(fieldMap, currentRecord, 'drawing_name'),
+    readMergedUpdateValue(fieldMap, currentRecord, 'version'),
+    readMergedUpdateValue(fieldMap, currentRecord, 'description'),
+    readMergedUpdateValue(fieldMap, currentRecord, 'status'),
+    readMergedUpdateValue(fieldMap, currentRecord, 'design_unit'),
+    readMergedUpdateValue(fieldMap, currentRecord, 'design_person'),
+    readMergedUpdateValue(fieldMap, currentRecord, 'drawing_date'),
+    readMergedUpdateValue(fieldMap, currentRecord, 'review_unit'),
+    readMergedUpdateValue(fieldMap, currentRecord, 'review_status'),
+    readMergedUpdateValue(fieldMap, currentRecord, 'review_date'),
+    readMergedUpdateValue(fieldMap, currentRecord, 'review_opinion'),
+    readMergedUpdateValue(fieldMap, currentRecord, 'review_report_no'),
+    readMergedUpdateValue(fieldMap, currentRecord, 'related_license_id'),
+    readMergedUpdateValue(fieldMap, currentRecord, 'planned_submit_date'),
+    readMergedUpdateValue(fieldMap, currentRecord, 'planned_pass_date'),
+    readMergedUpdateValue(fieldMap, currentRecord, 'actual_submit_date'),
+    readMergedUpdateValue(fieldMap, currentRecord, 'actual_pass_date'),
+    readMergedUpdateValue(fieldMap, currentRecord, 'lead_unit'),
+    readMergedUpdateValue(fieldMap, currentRecord, 'responsible_user_id'),
+    readMergedUpdateValue(fieldMap, currentRecord, 'sort_order'),
+    readMergedUpdateValue(fieldMap, currentRecord, 'notes'),
+    readMergedUpdateValue(fieldMap, currentRecord, 'package_id'),
+    readMergedUpdateValue(fieldMap, currentRecord, 'package_code'),
+    readMergedUpdateValue(fieldMap, currentRecord, 'package_name'),
+    readMergedUpdateValue(fieldMap, currentRecord, 'discipline_type'),
+    readMergedUpdateValue(fieldMap, currentRecord, 'document_purpose'),
+    readMergedUpdateValue(fieldMap, currentRecord, 'drawing_code'),
+    readMergedUpdateValue(fieldMap, currentRecord, 'parent_drawing_id'),
+    readMergedUpdateValue(fieldMap, currentRecord, 'version_no'),
+    readMergedUpdateValue(fieldMap, currentRecord, 'revision_no'),
+    readMergedUpdateValue(fieldMap, currentRecord, 'issued_for'),
+    readMergedUpdateValue(fieldMap, currentRecord, 'effective_date'),
+    readMergedUpdateValue(fieldMap, currentRecord, 'is_current_version'),
+    readMergedUpdateValue(fieldMap, currentRecord, 'requires_review'),
+    readMergedUpdateValue(fieldMap, currentRecord, 'review_mode'),
+    readMergedUpdateValue(fieldMap, currentRecord, 'review_basis'),
+    readMergedUpdateValue(fieldMap, currentRecord, 'has_change'),
+    readMergedUpdateValue(fieldMap, currentRecord, 'change_reason'),
+    readMergedUpdateValue(fieldMap, currentRecord, 'schedule_impact_flag'),
+    readMergedUpdateValue(fieldMap, currentRecord, 'is_ready_for_construction'),
+    readMergedUpdateValue(fieldMap, currentRecord, 'is_ready_for_acceptance'),
+    id,
+    writeProjectId,
+    currentLockVersion,
+  ]
   await executeSQL(
-    `UPDATE construction_drawings SET ${setClauses.join(', ')} WHERE id = ? AND lock_version = ?`,
-    params
+    `UPDATE construction_drawings
+     SET updated_at = ?,
+         lock_version = ?,
+         drawing_type = ?,
+         drawing_name = ?,
+         version = ?,
+         description = ?,
+         status = ?,
+         design_unit = ?,
+         design_person = ?,
+         drawing_date = ?,
+         review_unit = ?,
+         review_status = ?,
+         review_date = ?,
+         review_opinion = ?,
+         review_report_no = ?,
+         related_license_id = ?,
+         planned_submit_date = ?,
+         planned_pass_date = ?,
+         actual_submit_date = ?,
+         actual_pass_date = ?,
+         lead_unit = ?,
+         responsible_user_id = ?,
+         sort_order = ?,
+         notes = ?,
+         package_id = ?,
+         package_code = ?,
+         package_name = ?,
+         discipline_type = ?,
+         document_purpose = ?,
+         drawing_code = ?,
+         parent_drawing_id = ?,
+         version_no = ?,
+         revision_no = ?,
+         issued_for = ?,
+         effective_date = ?,
+         is_current_version = ?,
+         requires_review = ?,
+         review_mode = ?,
+         review_basis = ?,
+         has_change = ?,
+         change_reason = ?,
+         schedule_impact_flag = ?,
+         is_ready_for_construction = ?,
+         is_ready_for_acceptance = ?
+     WHERE id = ? AND project_id = ? AND lock_version = ?`,
+    updateParams
   )
 
   const updated = await executeSQLOne(
-    `${CONSTRUCTION_DRAWING_SELECT} WHERE id = ? LIMIT 1`,
-    [id]
+    `${CONSTRUCTION_DRAWING_SELECT} WHERE id = ? AND project_id = ? LIMIT 1`,
+    [id, writeProjectId]
   )
   if (!updated || (normalizeLockVersion((updated as Record<string, unknown>).lock_version) ?? currentLockVersion) === currentLockVersion) {
     const response: ApiResponse = {
@@ -883,8 +1121,8 @@ router.put('/:id', requireProjectEditor(async (req) => {
 
   if (packageChanged && packageId) {
     await executeSQL(
-      'UPDATE drawing_versions SET package_id = ?, updated_at = CURRENT_TIMESTAMP WHERE drawing_id = ?',
-      [packageId, id],
+      'UPDATE drawing_versions SET package_id = ?, updated_at = CURRENT_TIMESTAMP WHERE drawing_id = ? AND project_id = ?',
+      [packageId, id, writeProjectId],
     )
   }
 
@@ -906,6 +1144,7 @@ router.put('/:id', requireProjectEditor(async (req) => {
     await applyPackageCurrentVersionSelection({
       packageId,
       drawingId: id,
+      projectId: writeProjectId,
       versionId: snapshot?.id ?? null,
       isCurrentVersion: currentVersionPolicy.resolvedCurrentVersion,
     })
@@ -919,7 +1158,7 @@ router.put('/:id', requireProjectEditor(async (req) => {
   }
 
   if (packageChanged) {
-    await refreshPackageCurrentPointer(currentPackageId)
+    await refreshPackageCurrentPointer(currentPackageId, writeProjectId)
   }
 
   if (versionChanged) {
@@ -953,6 +1192,7 @@ router.put('/:id', requireProjectEditor(async (req) => {
   } else {
     await syncDrawingCertificateLink(updatedRecord)
   }
+  clearDrawingBoardCache(writeProjectId)
 
   const becameApproved = !isApprovedReviewStatus(currentRecord.review_status) && isApprovedReviewStatus(updatedRecord.review_status)
   if (packageId && becameApproved) {
@@ -990,14 +1230,55 @@ router.delete('/:id', requireProjectEditor(async (req) => {
     `${CONSTRUCTION_DRAWING_SELECT} WHERE id = ? LIMIT 1`,
     [id],
   )
+  if (!current) {
+    return res.status(404).json({
+      success: false,
+      error: { code: 'DRAWING_NOT_FOUND', message: '施工图纸不存在' },
+      timestamp: new Date().toISOString(),
+    } satisfies ApiResponse)
+  }
 
-  await executeSQL('DELETE FROM construction_drawings WHERE id = ?', [id])
+  if (current?.project_id) {
+    const activeLinks = await listActiveEntityLinksForEntity({
+      projectId: current.project_id,
+      entityType: 'construction_drawing',
+      entityId: id,
+    })
+    if (activeLinks.length > 0) {
+      const response: ApiResponse = {
+        success: false,
+        error: {
+          code: 'CONSTRUCTION_DRAWING_LINKED',
+          message: 'This construction drawing still has active task/certificate links. Deactivate or archive the linkage before deleting.',
+          details: { activeLinkCount: activeLinks.length },
+        },
+        timestamp: new Date().toISOString(),
+      }
+      return res.status(422).json(response)
+    }
+  }
+
+  // v1.4.15: retention decision must block unsafe physical deletes.
+  const { enforceRetentionOrBlock, buildRetentionBlockedApiError, buildRetentionBlockedHttpStatus } = await import('../services/deletionRetentionGovernanceService.js')
+  const retention = await enforceRetentionOrBlock({
+    entityType: 'construction_drawing',
+    entityId: id,
+    projectId: current?.project_id ?? null,
+    userId: req.user?.id ?? null,
+    userAction: 'delete',
+  })
+  if (retention.blocked) {
+    return res.status(buildRetentionBlockedHttpStatus(retention.result)).json({ success: false, error: buildRetentionBlockedApiError(retention.reason, retention.result), timestamp: new Date().toISOString() })
+  }
+
+  await executeSQL('DELETE FROM construction_drawings WHERE id = ? AND project_id = ?', [id, current.project_id])
 
   if (current?.package_id) {
     await syncPackageCurrentDrawingCertificateLink(current.project_id, current.package_id)
   } else {
     await cleanupDrawingCertificateLink(current as unknown as Record<string, unknown> | null)
   }
+  clearDrawingBoardCache(current.project_id)
 
   const response: ApiResponse = {
     success: true,
@@ -1007,4 +1288,3 @@ router.delete('/:id', requireProjectEditor(async (req) => {
 }))
 
 export default router
-

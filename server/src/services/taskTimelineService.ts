@@ -1,4 +1,4 @@
-import { executeSQL } from './dbService.js'
+import { query as rawQuery } from '../database.js'
 import { logger } from '../middleware/logger.js'
 
 export type TaskTimelineEventKind = 'task' | 'milestone' | 'condition' | 'obstacle'
@@ -52,15 +52,15 @@ export async function getProjectTimelineEvents(projectId: string): Promise<TaskT
   if (!normalizedProjectId) return []
 
   try {
-    const rows = await executeSQL<PersistedTaskTimelineEventRow>(
+    const result = await rawQuery(
       `SELECT id, task_id, event_type, title, description, status_label, occurred_at, created_at
        FROM task_timeline_events
-       WHERE project_id = ?
+       WHERE project_id = $1
        ORDER BY occurred_at DESC, created_at DESC`,
       [normalizedProjectId],
     )
 
-    return (rows || []).map(mapPersistedTaskTimelineEvent)
+    return ((result.rows || []) as PersistedTaskTimelineEventRow[]).map(mapPersistedTaskTimelineEvent)
   } catch (error) {
     logger.warn('Failed to load persisted task timeline events', {
       projectId: normalizedProjectId,
@@ -75,10 +75,10 @@ export async function isTaskTimelineEventStoreReady(projectId: string): Promise<
   if (!normalizedProjectId) return false
 
   try {
-    await executeSQL(
+    await rawQuery(
       `SELECT id
        FROM task_timeline_events
-       WHERE project_id = ?
+       WHERE project_id = $1
        LIMIT 1`,
       [normalizedProjectId],
     )

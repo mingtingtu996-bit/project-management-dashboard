@@ -1,8 +1,8 @@
-/**
+﻿/**
  * 10.10b contract test
  *
  * Locks the following rules for shared truth objects
- * (notifications / warnings / issueRows / problemRows / delayRequests / changeLogs / taskProgressSnapshots):
+ * (notifications / warnings / issueRows / problemRows / changeLogs / taskProgressSnapshots):
  *
  * 1. Single-read: pages consume shared store slices, not page-private shadow state
  * 2. Three-state: store exposes loading / error per shared slice so UI can distinguish
@@ -44,13 +44,6 @@ describe('shared truth contract (10.10b)', () => {
       expect(Array.isArray(state.problemRows)).toBe(true)
     })
 
-    it('exposes delayRequests slice with setter', () => {
-      const state = useStore.getState()
-      expect(state).toHaveProperty('delayRequests')
-      expect(state).toHaveProperty('setDelayRequests')
-      expect(Array.isArray(state.delayRequests)).toBe(true)
-    })
-
     it('exposes changeLogs slice with setter', () => {
       const state = useStore.getState()
       expect(state).toHaveProperty('changeLogs')
@@ -74,7 +67,7 @@ describe('shared truth contract (10.10b)', () => {
       const status = state.sharedSliceStatus
 
       // Each shared slice must have loading + error fields
-      for (const key of ['notifications', 'warnings', 'issueRows', 'problemRows', 'delayRequests', 'changeLogs', 'taskProgressSnapshots'] as const) {
+      for (const key of ['notifications', 'warnings', 'issueRows', 'problemRows', 'changeLogs', 'taskProgressSnapshots'] as const) {
         expect(status).toHaveProperty(key)
         expect(status[key]).toHaveProperty('loading')
         expect(status[key]).toHaveProperty('error')
@@ -97,19 +90,14 @@ describe('shared truth contract (10.10b)', () => {
       state.setSharedSliceStatus('warnings', { loading: false, error: '加载失败' })
       expect(useStore.getState().sharedSliceStatus.warnings.error).toBe('加载失败')
 
-      // Set loading for delay requests
-      state.setSharedSliceStatus('delayRequests', { loading: true, error: null })
-      expect(useStore.getState().sharedSliceStatus.delayRequests.loading).toBe(true)
-
       // Reset
       state.setSharedSliceStatus('notifications', { loading: false, error: null })
       state.setSharedSliceStatus('warnings', { loading: false, error: null })
-      state.setSharedSliceStatus('delayRequests', { loading: false, error: null })
     })
 
     it('defaults all slices to not-loading and no-error', () => {
       const status = useStore.getState().sharedSliceStatus
-      for (const key of ['notifications', 'warnings', 'issueRows', 'problemRows', 'delayRequests', 'changeLogs', 'taskProgressSnapshots'] as const) {
+      for (const key of ['notifications', 'warnings', 'issueRows', 'problemRows', 'changeLogs', 'taskProgressSnapshots'] as const) {
         expect(status[key].loading).toBe(false)
         expect(status[key].error).toBeNull()
       }
@@ -124,7 +112,6 @@ describe('shared truth contract (10.10b)', () => {
       // Populate some data
       state.setNotifications([{ id: 'n1', type: 'test', title: 'T', content: 'C', isRead: false, isMuted: false, createdAt: '' }])
       state.setWarnings([{ id: 'w1', warning_type: 'test', warning_level: 'info', title: 'T', description: 'D' }])
-      state.setDelayRequests([{ id: 'delay-1', task_id: 'task-1', status: 'pending' }])
       state.setChangeLogs([{ id: 'log-1', entity_type: 'task', entity_id: 'task-1', field_name: 'status' }])
       state.setTaskProgressSnapshots([{ id: 'snapshot-1', task_id: 'task-1', project_id: 'project-1' }])
       state.setSharedSliceStatus('notifications', { loading: false, error: '旧错误' })
@@ -137,7 +124,6 @@ describe('shared truth contract (10.10b)', () => {
       expect(after.warnings).toHaveLength(0)
       expect(after.issueRows).toHaveLength(0)
       expect(after.problemRows).toHaveLength(0)
-      expect(after.delayRequests).toHaveLength(0)
       expect(after.changeLogs).toHaveLength(0)
       expect(after.taskProgressSnapshots).toHaveLength(0)
       // Status must also reset
@@ -169,11 +155,6 @@ describe('shared truth contract (10.10b)', () => {
     it('exports useProblemRows selector', async () => {
       const mod = await import('@/hooks/useStore')
       expect(typeof mod.useProblemRows).toBe('function')
-    })
-
-    it('exports useDelayRequests selector', async () => {
-      const mod = await import('@/hooks/useStore')
-      expect(typeof mod.useDelayRequests).toBe('function')
     })
 
     it('exports useChangeLogs selector', async () => {

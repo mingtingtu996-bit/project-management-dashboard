@@ -15,17 +15,40 @@ export type WbsTemplateRuntimePublicationQueryExec = <T = Record<string, unknown
 export type WbsTemplateRuntimePublicationReadiness =
   | SpecialWorkDurationSeedPublicationReadiness
   | WbsReferenceDaysPublicationReadiness
+  | DefaultMasterPlanRuntimePublicationReadiness
 
 export type WbsTemplateRuntimeAssetKind =
   | 'special_work_duration_seed'
   | 'wbs_reference_days'
+  | 'default_master_plan'
+
+export type DefaultMasterPlanRuntimeLineage = {
+  assetType: 'default_master_plan'
+  defaultMasterPlanVersionId?: string | null
+  acceptedBaselineId: string
+  projectId: string
+  generationMode: 'residential_master_plan_v2' | 'managed_frontier_default_master_plan'
+  runtimeAssetKey: string
+  dependencyWriterReleaseRecordTarget: string
+  runtimePublicationKey: string
+  rollbackTarget: string
+  durationCalibrationEvidenceRef: string
+  dependencyWriterEvidenceRef: string
+  sourceEvidenceRefs?: string[]
+}
+
+export type DefaultMasterPlanRuntimePublicationReadiness = {
+  status: 'default_master_plan_publication_ready' | 'default_master_plan_publication_not_ready'
+  defaultMasterPlanLineage: DefaultMasterPlanRuntimeLineage
+  missingReasons: string[]
+}
 
 export type WbsTemplateRuntimePublication = {
   publicationKey: string
   assetKind: WbsTemplateRuntimeAssetKind
   assetVersionId: string
   runtimePublicationStatus: 'runtime_published'
-  runtimeLineage: SpecialWorkDurationSeedVersionLineage | WbsReferenceDaysLineage
+  runtimeLineage: SpecialWorkDurationSeedVersionLineage | WbsReferenceDaysLineage | DefaultMasterPlanRuntimeLineage
   rollbackTarget: string
   companyId: string
   projectId: string | null
@@ -130,7 +153,7 @@ type ExtractedReadiness = {
   assetVersionId: string | null
   publicationKey: string | null
   rollbackTarget: string | null
-  runtimeLineage: SpecialWorkDurationSeedVersionLineage | WbsReferenceDaysLineage
+  runtimeLineage: SpecialWorkDurationSeedVersionLineage | WbsReferenceDaysLineage | DefaultMasterPlanRuntimeLineage
   missingReasons: string[]
 }
 
@@ -153,7 +176,26 @@ function isReferenceDaysReadiness(
   return 'referenceDaysLineage' in readiness
 }
 
+function isDefaultMasterPlanReadiness(
+  readiness: WbsTemplateRuntimePublicationReadiness,
+): readiness is DefaultMasterPlanRuntimePublicationReadiness {
+  return 'defaultMasterPlanLineage' in readiness
+}
+
 function extractReadiness(readiness: WbsTemplateRuntimePublicationReadiness): ExtractedReadiness {
+  if (isDefaultMasterPlanReadiness(readiness)) {
+    return {
+      ready: readiness.status === 'default_master_plan_publication_ready',
+      assetKind: 'default_master_plan',
+      assetVersionId: nullableText(readiness.defaultMasterPlanLineage.defaultMasterPlanVersionId)
+        ?? nullableText(readiness.defaultMasterPlanLineage.acceptedBaselineId),
+      publicationKey: nullableText(readiness.defaultMasterPlanLineage.runtimePublicationKey),
+      rollbackTarget: nullableText(readiness.defaultMasterPlanLineage.rollbackTarget),
+      runtimeLineage: readiness.defaultMasterPlanLineage,
+      missingReasons: readiness.missingReasons,
+    }
+  }
+
   if (isReferenceDaysReadiness(readiness)) {
     return {
       ready: readiness.status === 'wbs_reference_days_publication_ready',
@@ -194,6 +236,35 @@ function blockedPublication(
     reasons: uniqueReasons(reasons.length > 0 ? reasons : extracted.missingReasons),
     runtimePublication: null,
   }
+}
+
+function defaultMasterPlanPublicationControlReasons(extracted: ExtractedReadiness) {
+  if (extracted.assetKind !== 'default_master_plan') return []
+  const lineage = extracted.runtimeLineage as DefaultMasterPlanRuntimeLineage
+  return [
+    nullableText(lineage.durationCalibrationEvidenceRef)
+      ? null
+      : 'duration_calibration_evidence_ref_required',
+    nullableText(lineage.dependencyWriterEvidenceRef)
+      ? null
+      : 'dependency_writer_evidence_ref_required',
+    nullableText(lineage.dependencyWriterReleaseRecordTarget)
+      ? null
+    : 'dependency_writer_release_record_target_required',
+  ].filter((reason): reason is string => Boolean(reason))
+}
+
+function defaultMasterPlanProjectScopeReasons(
+  extracted: ExtractedReadiness,
+  inputProjectId: unknown,
+) {
+  if (extracted.assetKind !== 'default_master_plan') return []
+  const projectId = nullableText(inputProjectId)
+  if (!projectId) return ['project_scope_required_for_default_master_plan']
+  const lineage = extracted.runtimeLineage as DefaultMasterPlanRuntimeLineage
+  const lineageProjectId = nullableText(lineage.projectId)
+  if (!lineageProjectId) return ['default_master_plan_lineage_project_id_required']
+  return lineageProjectId === projectId ? [] : ['default_master_plan_project_id_mismatch']
 }
 
 function buildRuntimePublication(
@@ -255,6 +326,8 @@ export async function persistWbsTemplateRuntimePublication(
   const reasons = [
     ...(extracted.ready ? [] : extracted.missingReasons.length > 0 ? extracted.missingReasons : ['wbs_template_publication_ready_required']),
     ...(companyId ? [] : ['company_scope_required']),
+    ...defaultMasterPlanProjectScopeReasons(extracted, input.projectId),
+    ...defaultMasterPlanPublicationControlReasons(extracted),
     ...(extracted.assetVersionId ? [] : ['asset_version_required']),
     ...(extracted.publicationKey ? [] : ['runtime_publication_key_required']),
     ...(extracted.rollbackTarget ? [] : ['rollback_target_required']),
@@ -388,17 +461,29 @@ export async function resolveWbsTemplateRuntimePublication(
     }
   }
 
+  const resolvedAssetKind = normalizeText(rowField(row, 'asset_kind', 'assetKind'))
+  const resolvedProjectId = nullableText(rowField(row, 'project_id', 'projectId'))
+  const defaultMasterPlanConsumerReasons = resolvedAssetKind === 'default_master_plan'
+    ? [
+        ...(projectId ? [] : ['project_scope_required_for_default_master_plan_runtime_consumer']),
+        ...(projectId && !resolvedProjectId ? ['default_master_plan_runtime_project_id_required'] : []),
+        ...(projectId && resolvedProjectId && resolvedProjectId !== projectId
+          ? ['default_master_plan_project_id_mismatch']
+          : []),
+      ]
+    : []
+
   return {
-    runtimeConsumable: true,
+    runtimeConsumable: defaultMasterPlanConsumerReasons.length === 0,
     publicationKey: normalizeText(rowField(row, 'publication_key', 'publicationKey')),
-    assetKind: normalizeText(rowField(row, 'asset_kind', 'assetKind')),
+    assetKind: resolvedAssetKind,
     assetVersionId: normalizeText(rowField(row, 'asset_version_id', 'assetVersionId')),
     runtimePublicationStatus: normalizeText(rowField(row, 'runtime_publication_status', 'runtimePublicationStatus')),
     runtimeLineage: rowField(row, 'runtime_lineage', 'runtimeLineage') ?? null,
     rollbackTarget: nullableText(rowField(row, 'rollback_target', 'rollbackTarget')),
     companyId: nullableText(rowField(row, 'company_id', 'companyId')),
-    projectId: nullableText(rowField(row, 'project_id', 'projectId')),
-    reasons: [],
+    projectId: resolvedProjectId,
+    reasons: defaultMasterPlanConsumerReasons,
   }
 }
 

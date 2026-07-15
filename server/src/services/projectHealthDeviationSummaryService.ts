@@ -1,0 +1,146 @@
+// v1.4.19: Unified project health + deviation summary DTO
+// Single source for Dashboard, Reports, CompanyCockpit
+
+import { supabase } from './dbService.js'
+import { logger } from '../middleware/logger.js'
+
+export interface HealthDeviationSummary {
+  projectId: string
+  healthScore: number | null
+  healthStatus: string | null
+  businessHealthScore: number | null
+  healthConfidenceScore: number | null
+  healthConfidenceFlag: string | null
+  healthBasis: Record<string, unknown>
+  deviationSummary: Record<string, unknown>
+  caliberVersion: string
+  generatedAt: string
+}
+
+function normalizeText(value: unknown) {
+  return String(value ?? '').trim()
+}
+
+function readObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
+
+function readArray(value: unknown) {
+  return Array.isArray(value) ? value : []
+}
+
+function readForecastFactorSummary(value: unknown) {
+  const summary = readObject(value)
+  return {
+    factors: readArray(summary.factors).filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item)),
+    businessReasons: readArray(summary.businessReasons ?? summary.business_reasons).map(normalizeText).filter(Boolean),
+  }
+}
+
+async function buildRecentDurationDeviationCauses(projectId: string) {
+  const { data, error } = await (supabase as any)
+    .from('task_duration_forecasts')
+    .select('task_id, forecast_delay_days, factor_summary, generated_at, created_at, is_current')
+    .eq('project_id', projectId)
+    .eq('is_current', true)
+    .order('generated_at', { ascending: false })
+    .limit(50)
+
+  if (error || !Array.isArray(data)) return []
+
+  const causes = new Map<string, {
+    code: string
+    label: string
+    count: number
+    maxDelayDays: number
+    reasons: string[]
+  }>()
+
+  for (const row of data as Array<Record<string, unknown>>) {
+    const summary = readForecastFactorSummary(row.factor_summary)
+    const delayDays = Math.max(0, Number(row.forecast_delay_days ?? 0) || 0)
+    for (const factor of summary.factors) {
+      const key = normalizeText(factor.key)
+      if (key !== 'resource_conflict') continue
+      const metadata = readObject(factor.metadata)
+      const reason = normalizeText(factor.reason) || summary.businessReasons[0] || '现场承载压力影响当前工期预测。'
+      const existing = causes.get(key) ?? {
+        code: key,
+        label: '现场承载压力',
+        count: 0,
+        maxDelayDays: 0,
+        reasons: [],
+      }
+      existing.count += 1
+      existing.maxDelayDays = Math.max(existing.maxDelayDays, delayDays)
+      existing.reasons = Array.from(new Set([
+        ...existing.reasons,
+        reason,
+        Number(metadata.resourceObstacleCount ?? 0) > 0 ? '资源类阻碍未解除' : '',
+        Number(metadata.overdueMaterialCount ?? 0) > 0 ? '关联材料到货逾期' : '',
+        Number(metadata.sameResponsibleUnitCount ?? 0) > 0 ? '同责任单位任务集中' : '',
+      ].filter(Boolean))).slice(0, 5)
+      causes.set(key, existing)
+    }
+  }
+
+  return Array.from(causes.values())
+}
+
+export async function buildProjectHealthDeviationSummary(projectId: string): Promise<HealthDeviationSummary> {
+  const now = new Date().toISOString()
+
+  // Get latest daily snapshot for this project
+  const { data: snapshot } = await (supabase as any)
+    .from('project_daily_snapshot')
+    .select('*')
+    .eq('project_id', projectId)
+    .order('snapshot_date', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  const latest = snapshot ?? {}
+
+  // Get current execution summary for real-time context
+  const { data: project } = await (supabase as any)
+    .from('projects')
+    .select('health_score, health_status, overall_progress')
+    .eq('id', projectId)
+    .maybeSingle()
+
+  const durationDeviationCauses = await buildRecentDurationDeviationCauses(projectId)
+  const baseDeviationSummary = readObject(latest.deviation_summary)
+  const latestHealthScore = latest.health_score ?? null
+  const persistedHealthScore = project?.health_score ?? null
+  const healthScore = latestHealthScore ?? persistedHealthScore
+  const businessHealthScore = latest.business_health_score ?? latestHealthScore ?? persistedHealthScore
+  const healthStatus = latest.health_status ?? project?.health_status ?? null
+
+  return {
+    projectId,
+    healthScore,
+    healthStatus,
+    businessHealthScore,
+    healthConfidenceScore: latest.health_confidence_score ?? null,
+    healthConfidenceFlag: latest.health_confidence_flag ?? (project?.health_score != null ? 'medium' : 'unavailable'),
+    healthBasis: latest.health_basis ?? {},
+    deviationSummary: {
+      ...baseDeviationSummary,
+      durationDeviationCauses,
+    },
+    caliberVersion: latest.health_caliber_version ?? 'legacy',
+    generatedAt: now,
+  }
+}
+
+export async function buildMultiProjectHealthSummaries(projectIds: string[]): Promise<HealthDeviationSummary[]> {
+  const summaries: HealthDeviationSummary[] = []
+  for (const id of projectIds) {
+    try {
+      summaries.push(await buildProjectHealthDeviationSummary(id))
+    } catch (err) {
+      logger.error('Failed to build health summary for project', { projectId: id, error: err })
+    }
+  }
+  return summaries
+}

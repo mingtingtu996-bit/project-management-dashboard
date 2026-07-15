@@ -5,7 +5,7 @@ function makePlan(overrides: Partial<AcceptancePlan>): AcceptancePlan {
   return {
     id: 'plan-1',
     project_id: 'project-1',
-    milestone_id: 'milestone-1',
+    covered_task_ids: ['task-1'],
     type_id: 'pre_acceptance',
     type_name: '预验收',
     type_color: 'bg-sky-500',

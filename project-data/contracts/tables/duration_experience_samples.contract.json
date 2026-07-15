@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "workbuddy-table-contract/v1",
+  "tableId": "duration_experience_samples",
+  "authorityLevel": "learning_fact",
+  "grain": "one governed duration experience sample",
+  "owner": "duration learning governance",
+  "mutationBoundary": "contract_only_no_db_mutation_no_runtime_write",
+  "requiredConcepts": [
+    "id",
+    "project_id",
+    "source_type",
+    "planned_duration",
+    "actual_duration",
+    "sample_status",
+    "created_at"
+  ],
+  "forbiddenDirectWriters": [
+    "project-search",
+    "external public data",
+    "candidate knowledge assets"
+  ],
+  "allowedWriterRegistryIds": [
+    "default_master_plan_staging_runtime_evidence",
+    "controlled_live_closeout_writers",
+    "duration_experience_service",
+    "duration_learning_scope_evidence_writer",
+    "template_duration_governance_service"
+  ],
+  "qualityRules": [
+    "project_id_required",
+    "duration_sample_source_required",
+    "duration_days_non_negative",
+    "duration_sample_status_required"
+  ]
+}

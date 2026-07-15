@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "workbuddy-data-external-knowledge-flow/v1",
+  "mutationBoundary": "lineage_only_no_db_mutation_no_runtime_write",
+  "flow": [
+    "project-search source/document/candidate evidence",
+    "project-search knowledge-base candidate cards",
+    "human review and mapping owner decision",
+    "shadow or replay evidence",
+    "project-data contract and boundary check",
+    "testing-center controlled writer gate",
+    "readback and rollback evidence",
+    "runtime or business fact only after release gate"
+  ]
+}

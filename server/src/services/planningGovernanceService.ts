@@ -3,20 +3,27 @@ import { v4 as uuidv4 } from 'uuid'
 import { normalizeProjectPermissionLevel } from '../auth/access.js'
 import { executeSQL, executeSQLOne, listTaskProgressSnapshotsByTaskIds } from './dbService.js'
 import { listActiveProjectIds } from './activeProjectService.js'
-import { findNotification, insertNotification } from './notificationStore.js'
+import { findNotification } from './notificationStore.js'
+import { notificationTouchpointService } from './notificationTouchpointService.js'
 import { writeLog } from './changeLogs.js'
 import { PlanningHealthService } from './planningHealthService.js'
 import { PlanningIntegrityService } from './planningIntegrityService.js'
 import { enqueueProjectHealthUpdate } from './projectHealthService.js'
 import { getCriticalPathTaskIds } from './criticalPathHelpers.js'
 import { SystemAnomalyService } from './systemAnomalyService.js'
+import { detectProgressQualitySignals } from './progressAnomalyService.js'
+import { signedDurationDayDelta } from '../utils/durationDays.js'
 import type { Notification } from '../types/db.js'
 import type { MonthlyPlan, Task, TaskProgressSnapshot } from '../types/db.js'
 import type {
   PassiveReorderDetectionReport,
   PlanningGovernanceAlert,
+  PlanningGovernanceGateLevel,
+  PlanningGovernanceSignal,
   PlanningGovernanceState,
   PlanningGovernanceSnapshot,
+  PlanningGovernanceSourceAlgorithm,
+  PlanningGovernanceTargetSurface,
   PlanningHealthReport,
   PlanningIntegrityReport,
 } from '../types/planning.js'
@@ -24,7 +31,6 @@ import type {
 interface ProjectMemberRow {
   project_id: string
   user_id: string
-  role?: string | null
   permission_level?: string | null
 }
 
@@ -65,11 +71,156 @@ interface ManualReorderSessionPayload extends Record<string, unknown> {
   completion_note?: string | null
 }
 
+type GovernanceSeverity = 'info' | 'warning' | 'critical'
+
+type GovernanceLinkageSourceAlgorithm =
+  | 'task_condition_linkage'
+  | 'drawing_package'
+  | 'pre_milestone'
+  | 'acceptance_flow'
+
+type GovernanceExplanationSourceAlgorithm =
+  | 'progress_deviation'
+  | 'project_schedule_state'
+  | 'duration_context'
+  | 'task_duration_forecast'
+  | 'construction_rhythm'
+
+export interface PlanningGovernanceWbsRollupIssueInput {
+  code: string
+  level: 'error' | 'warning' | 'info'
+  message: string
+  rowId?: string | null
+  parentId?: string | null
+  field?: string | null
+  details?: Record<string, unknown> | null
+}
+
+export interface PlanningGovernanceBaselineValidityInput {
+  baselineId?: string | null
+  baselineStatus?: string | null
+  state: 'valid' | 'needs_realign' | 'insufficient_data' | string
+  triggeredRules?: string[]
+  comparedTaskCount?: number
+  deviatedTaskCount?: number
+  deviatedTaskRatio?: number
+  shiftedMilestoneCount?: number
+  averageMilestoneShiftDays?: number
+  totalDurationDeviationRatio?: number
+  isValid?: boolean
+}
+
+export interface PlanningGovernanceProgressAnomalyInput {
+  taskId?: string | null
+  code: string
+  severity: GovernanceSeverity | string
+  summary: string
+  acknowledged?: boolean
+  excludedFromVelocityLearning?: boolean
+  confidenceAction?: string
+  metadata?: Record<string, unknown> | null
+}
+
+export interface PlanningGovernanceTaskConstraintInput {
+  taskId?: string | null
+  readyForStart?: boolean | null
+  dependencyStatus?: string | null
+  conditionStatus?: string | null
+  obstacleStatus?: string | null
+  progressImpactLevel?: string | null
+  blockedForProgress?: boolean | null
+  dependencyCount?: number
+  advisoryDependencyCount?: number
+  totalDependencyCount?: number
+  unmetDependencyCount?: number
+  hardConditionCount?: number
+  unmetHardConditionCount?: number
+  openObstacleCount?: number
+  sourceEventType?: string | null
+  sourceEventKey?: string | null
+  snapshotId?: string | null
+  createdAt?: string | null
+  evidence?: Record<string, unknown> | null
+}
+
+export interface PlanningGovernanceLinkageSignalInput {
+  sourceAlgorithm: GovernanceLinkageSourceAlgorithm
+  taskId?: string | null
+  sourceId?: string | null
+  boundToTask?: boolean | null
+  severity?: GovernanceSeverity | string | null
+  title?: string | null
+  detail?: string | null
+  evidence?: Record<string, unknown> | null
+  targetSurface?: PlanningGovernanceTargetSurface
+}
+
+export interface PlanningGovernanceExplanationSignalInput {
+  sourceAlgorithm: GovernanceExplanationSourceAlgorithm
+  taskId?: string | null
+  sourceId?: string | null
+  severity?: GovernanceSeverity | string | null
+  title?: string | null
+  detail?: string | null
+  evidence?: Record<string, unknown> | null
+  targetSurface?: PlanningGovernanceTargetSurface
+  gateLevel?: PlanningGovernanceGateLevel
+}
+
+export interface PlanningGovernanceSignalContext {
+  wbsRollupIssues?: PlanningGovernanceWbsRollupIssueInput[]
+  baselineValidity?: PlanningGovernanceBaselineValidityInput | PlanningGovernanceBaselineValidityInput[] | null
+  progressAnomalySignals?: PlanningGovernanceProgressAnomalyInput[]
+  taskConstraintSummaries?: PlanningGovernanceTaskConstraintInput[]
+  linkageSignals?: PlanningGovernanceLinkageSignalInput[]
+  explanationSignals?: PlanningGovernanceExplanationSignalInput[]
+}
+
+interface TaskConstraintSnapshotRow {
+  id?: string | null
+  task_id?: string | null
+  ready_for_start?: boolean | number | string | null
+  dependency_status?: string | null
+  condition_status?: string | null
+  obstacle_status?: string | null
+  progress_impact_level?: string | null
+  blocked_for_progress?: boolean | number | string | null
+  readiness_summary?: unknown
+  source_event_type?: string | null
+  source_event_key?: string | null
+  created_at?: string | null
+}
+
+interface ProjectScheduleStateRow {
+  id?: string | null
+  scope_type?: string | null
+  scope_id?: string | null
+  state?: string | null
+  confidence_score?: number | string | null
+  window_days?: number | string | null
+  window_end_date?: string | null
+  downstream_policy?: Record<string, unknown> | null
+  metrics?: Record<string, unknown> | null
+  evidence?: unknown
+}
+
+interface TaskDurationForecastSignalRow {
+  id?: string | null
+  task_id?: string | null
+  forecast_delay_days?: number | string | null
+  confidence_level?: string | null
+  confidence_score?: number | string | null
+  delay_risk_index?: number | string | null
+  business_reason?: string | null
+  factor_summary?: Record<string, unknown> | null
+  calculation_context?: Record<string, unknown> | null
+  generated_at?: string | null
+}
+
 function uniqueStrings(values: Array<string | null | undefined>): string[] {
   return [...new Set(values.filter((value): value is string => Boolean(value && value.trim())))]
 }
 
-const DAY_MS = 24 * 60 * 60 * 1000
 const GOVERNANCE_CLOSEOUT_THRESHOLDS = [3, 5, 7] as const
 const GOVERNANCE_REORDER_THRESHOLDS = [3, 5, 7] as const
 
@@ -160,30 +311,30 @@ function monthBoundaryTimestamp(month: string): number | null {
   return Date.UTC(year, monthPart, 1, 0, 0, 0, 0)
 }
 
-function daysBetween(start: number, end: number): number {
-  return Math.floor((end - start) / DAY_MS)
+function closeoutOverdueDays(dueTimestamp: number, now: Date): number {
+  return Math.max(0, signedDurationDayDelta(new Date(dueTimestamp), now) ?? 0)
 }
 
 function buildCloseoutAlertDetail(plan: MonthlyPlan, overdueDays: number, threshold: number): string {
   const planLabel = `${plan.month}${plan.title ? ` / ${plan.title}` : ''}`
   if (threshold === 3) {
-    return `月度计划 ${planLabel} 已超期 ${overdueDays} 天，请 PM 尽快完成关账。`
+    return `Monthly plan ${planLabel} is ${overdueDays} days overdue. PM should complete closeout soon.`
   }
   if (threshold === 5) {
-    return `月度计划 ${planLabel} 已超期 ${overdueDays} 天，请升级到项目负责人处理，并同步 Dashboard 关账超期信号。`
+    return `Monthly plan ${planLabel} is ${overdueDays} days overdue. Escalate to the project owner and surface an overdue signal.`
   }
-  return `月度计划 ${planLabel} 已超期 ${overdueDays} 天，系统已解锁强制发起关账权限。`
+  return `Monthly plan ${planLabel} is ${overdueDays} days overdue. Project owner attention is required to finish normal closeout.`
 }
 
 function buildReorderAlertDetail(window: NonNullable<PassiveReorderDetectionReport['windows']>[number], threshold: number): string {
   const prefix =
     threshold === 3
-      ? '被动重排已触发，请 PM 关注并确认是否继续变更。'
+      ? 'Passive reorder was detected. PM should review whether the change should continue.'
       : threshold === 5
-        ? '被动重排已持续，建议升级项目负责人介入。'
-        : '被动重排已进入收口阶段，系统将自动结束并生成变更摘要。'
+        ? 'Passive reorder is continuing. Project owner attention is recommended.'
+        : 'Passive reorder has reached the closeout stage. The system will end it and generate a change summary.'
 
-  return `${prefix} ${window.window_days} 日窗口命中：${window.event_count} 条变更、${window.key_task_count ?? 0} 个关键任务、平均偏移 ${window.average_offset_days ?? 0} 天。`
+  return `${prefix} Window ${window.window_days}d: ${window.event_count} changes, ${window.key_task_count ?? 0} key tasks, average offset ${window.average_offset_days ?? 0} days.`
 }
 
 function getProjectNotificationScope(kind: PlanningGovernanceAlert['kind']): 'owner' | 'owner_admin' {
@@ -214,7 +365,7 @@ function getPlanningGovernanceNotificationType(kind: PlanningGovernanceAlert['ki
       return 'planning-governance-milestone'
     case 'closeout_reminder':
     case 'closeout_escalation':
-    case 'closeout_unlock':
+    case 'closeout_owner_attention':
       return 'planning-governance-closeout'
     case 'reorder_reminder':
     case 'reorder_escalation':
@@ -238,8 +389,8 @@ function getPlanningGovernanceNotificationCategory(kind: PlanningGovernanceAlert
 function buildMappingOrphanPointerAlert(snapshot: PlanningGovernanceSnapshot): PlanningGovernanceAlert | null {
   const pendingCount = snapshot.integrity.mapping_integrity.baseline_pending_count
   const mergedCount = snapshot.integrity.mapping_integrity.baseline_merged_count
-  const carryoverCount = snapshot.integrity.mapping_integrity.monthly_carryover_count
-  const total = pendingCount + mergedCount + carryoverCount
+  const carryoverOrphanCount = snapshot.integrity.mapping_integrity.monthly_carryover_count
+  const total = pendingCount + mergedCount + carryoverOrphanCount
 
   if (total === 0) return null
 
@@ -250,7 +401,7 @@ function buildMappingOrphanPointerAlert(snapshot: PlanningGovernanceSnapshot): P
     kind: 'mapping_orphan_pointer',
     severity,
     title: '规划映射存在孤立指针',
-    detail: `映射孤立指针 ${total} 条，其中 baseline pending/missing ${pendingCount} 条、baseline merged ${mergedCount} 条、monthly carryover ${carryoverCount} 条。`,
+    detail: `Mapping orphan pointers ${total}: baseline pending/missing ${pendingCount}, baseline merged ${mergedCount}, monthly carryover orphan ${carryoverOrphanCount}.`,
     source_id: `${snapshot.project_id}:mapping_orphan_pointer`,
   }
 }
@@ -271,19 +422,715 @@ function buildMilestoneScenarioAlerts(snapshot: PlanningGovernanceSnapshot): Pla
 
       const title =
         item.state === 'blocked'
-          ? `${item.milestone_key} 里程碑受阻`
+          ? `${item.milestone_key} milestone blocked`
           : item.state === 'missing_data'
-            ? `${item.milestone_key} 里程碑缺少关键数据`
-            : `${item.milestone_key} 里程碑需人工关注`
+            ? `${item.milestone_key} milestone missing data`
+            : `${item.milestone_key} milestone needs attention`
 
       return {
         kind,
         severity,
         title,
-        detail: `里程碑 ${item.milestone_key}「${item.title}」存在 ${item.issues.join('；') || '异常场景'}。`,
+        detail: `Milestone ${item.milestone_key} ${item.title} has issues: ${item.issues.join('; ') || 'unknown scenario'}.`,
         source_id: `${snapshot.project_id}:milestone:${item.milestone_id}:${kind}`,
       } satisfies PlanningGovernanceAlert
     })
+}
+
+function buildGovernanceSignal(params: {
+  projectId: string
+  sourceAlgorithm: PlanningGovernanceSourceAlgorithm
+  gateLevel: PlanningGovernanceGateLevel
+  targetSurface: PlanningGovernanceTargetSurface
+  title: string
+  detail: string
+  evidence: Record<string, unknown>
+  recommendation: string
+  sourceId?: string | null
+  taskId?: string | null
+}): PlanningGovernanceSignal {
+  return {
+    id: buildGovernanceStateKey([
+      params.projectId,
+      params.sourceAlgorithm,
+      params.gateLevel,
+      params.targetSurface,
+      params.sourceId ?? params.title,
+    ]),
+    sourceAlgorithm: params.sourceAlgorithm,
+    gateLevel: params.gateLevel,
+    targetSurface: params.targetSurface,
+    title: params.title,
+    detail: params.detail,
+    evidence: params.evidence,
+    recommendation: params.recommendation,
+    sourceId: params.sourceId ?? null,
+    taskId: params.taskId ?? null,
+  }
+}
+
+export interface PreConfirmGovernanceGateResult {
+  projectId: string
+  targetSurface: PlanningGovernanceTargetSurface
+  allowed: boolean
+  blocked: boolean
+  blockingSignals: PlanningGovernanceSignal[]
+  confirmationSignals: PlanningGovernanceSignal[]
+  hintSignals: PlanningGovernanceSignal[]
+}
+
+function signalAppliesToTarget(signal: PlanningGovernanceSignal, targetSurface: PlanningGovernanceTargetSurface): boolean {
+  if (signal.targetSurface === targetSurface) return true
+  if (signal.targetSurface === 'planning_governance') return true
+  if (targetSurface === 'baseline' && signal.targetSurface === 'task_list') return true
+  if (targetSurface === 'monthly_plan' && signal.targetSurface === 'task_list') return true
+  return false
+}
+
+export function evaluatePreConfirmGovernanceGate(params: {
+  projectId: string
+  targetSurface: PlanningGovernanceTargetSurface
+  signals: PlanningGovernanceSignal[]
+}): PreConfirmGovernanceGateResult {
+  const scopedSignals = params.signals.filter((signal) => signalAppliesToTarget(signal, params.targetSurface))
+  const blockingSignals = scopedSignals.filter((signal) => signal.gateLevel === 'block_save')
+  const confirmationSignals = scopedSignals.filter((signal) => signal.gateLevel === 'confirm')
+  const hintSignals = scopedSignals.filter((signal) => signal.gateLevel === 'hint' || signal.gateLevel === 'explain')
+
+  return {
+    projectId: params.projectId,
+    targetSurface: params.targetSurface,
+    allowed: blockingSignals.length === 0,
+    blocked: blockingSignals.length > 0,
+    blockingSignals,
+    confirmationSignals,
+    hintSignals,
+  }
+}
+
+function toRecord(value: unknown): Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+    ? value as Record<string, unknown>
+    : {}
+}
+
+function toNumberOrNull(value: unknown): number | null {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+  return null
+}
+
+function toBoolean(value: unknown): boolean {
+  if (value === true || value === 1) return true
+  const normalized = String(value ?? '').trim().toLowerCase()
+  return normalized === 'true' || normalized === '1' || normalized === 'yes'
+}
+
+function normalizeGovernanceSeverity(value: unknown): GovernanceSeverity {
+  const normalized = String(value ?? '').trim().toLowerCase()
+  if (normalized === 'critical') return 'critical'
+  if (normalized === 'warning') return 'warning'
+  return 'info'
+}
+
+function normalizeOptionalText(value: unknown): string | null {
+  const normalized = String(value ?? '').trim()
+  return normalized || null
+}
+
+function pushWbsRollupSignals(
+  signals: PlanningGovernanceSignal[],
+  projectId: string,
+  issues: PlanningGovernanceWbsRollupIssueInput[] = [],
+) {
+  issues.forEach((issue, index) => {
+    const gateLevel: PlanningGovernanceGateLevel =
+      issue.level === 'error'
+        ? 'block_save'
+        : issue.level === 'warning'
+          ? 'confirm'
+          : 'hint'
+
+    signals.push(buildGovernanceSignal({
+      projectId,
+      sourceAlgorithm: 'wbs_plan_rollup',
+      gateLevel,
+      targetSurface: 'task_list',
+      title: `WBS rollup ${issue.code}`,
+      detail: issue.message,
+      evidence: {
+        code: issue.code,
+        level: issue.level,
+        rowId: issue.rowId ?? null,
+        parentId: issue.parentId ?? null,
+        field: issue.field ?? null,
+        ...(issue.details ?? {}),
+      },
+      recommendation:
+        gateLevel === 'block_save'
+          ? 'Repair WBS parent-child structure, date windows or duration contribution mode before saving the plan rows.'
+          : 'Confirm WBS rollup diagnostics before publishing or confirming the plan.',
+      sourceId: `${projectId}:wbs_plan_rollup:${issue.rowId ?? issue.parentId ?? issue.code}:${index}`,
+      taskId: issue.rowId ?? null,
+    }))
+  })
+}
+
+function pushBaselineValiditySignals(
+  signals: PlanningGovernanceSignal[],
+  projectId: string,
+  baselineValidity: PlanningGovernanceSignalContext['baselineValidity'],
+) {
+  const items = Array.isArray(baselineValidity)
+    ? baselineValidity
+    : baselineValidity
+      ? [baselineValidity]
+      : []
+
+  for (const item of items) {
+    const state = String(item.state ?? '').trim()
+    const baselineStatus = String(item.baselineStatus ?? '').trim()
+    if (state === 'valid' && baselineStatus !== 'pending_realign') continue
+
+    const gateLevel: PlanningGovernanceGateLevel =
+      state === 'needs_realign' || baselineStatus === 'pending_realign'
+        ? 'confirm'
+        : 'hint'
+
+    signals.push(buildGovernanceSignal({
+      projectId,
+      sourceAlgorithm: 'planning_revision_pool',
+      gateLevel,
+      targetSurface: 'baseline',
+      title: 'Baseline validity needs realignment review',
+      detail:
+        state === 'needs_realign' || baselineStatus === 'pending_realign'
+          ? 'Baseline validity rules indicate the current baseline may need realignment before it remains a commitment anchor.'
+          : 'Baseline validity has insufficient data and should be reviewed before confirmation.',
+      evidence: {
+        baseline_id: item.baselineId ?? null,
+        baseline_status: item.baselineStatus ?? null,
+        state: item.state,
+        triggered_rules: item.triggeredRules ?? [],
+        compared_task_count: item.comparedTaskCount ?? null,
+        deviated_task_count: item.deviatedTaskCount ?? null,
+        deviated_task_ratio: item.deviatedTaskRatio ?? null,
+        shifted_milestone_count: item.shiftedMilestoneCount ?? null,
+        average_milestone_shift_days: item.averageMilestoneShiftDays ?? null,
+        total_duration_deviation_ratio: item.totalDurationDeviationRatio ?? null,
+      },
+      recommendation: 'Confirm whether to realign the baseline or rebuild the revision pool before publishing.',
+      sourceId: `${projectId}:planning_revision_pool:${item.baselineId ?? 'project'}`,
+    }))
+  }
+}
+
+function pushProgressAnomalySignals(
+  signals: PlanningGovernanceSignal[],
+  projectId: string,
+  anomalySignals: PlanningGovernanceProgressAnomalyInput[] = [],
+) {
+  for (const signal of anomalySignals) {
+    const severity = normalizeGovernanceSeverity(signal.severity)
+    signals.push(buildGovernanceSignal({
+      projectId,
+      sourceAlgorithm: 'progress_anomaly',
+      gateLevel: severity === 'critical' ? 'confirm' : 'hint',
+      targetSurface: 'planning_governance',
+      title: `Progress anomaly ${signal.code}`,
+      detail: signal.summary,
+      evidence: {
+        code: signal.code,
+        severity,
+        acknowledged: signal.acknowledged ?? false,
+        excluded_from_velocity_learning: signal.excludedFromVelocityLearning ?? false,
+        confidence_action: signal.confidenceAction ?? 'confidence_only',
+        ...(signal.metadata ?? {}),
+      },
+      recommendation:
+        severity === 'critical'
+          ? 'Confirm the progress anomaly before using it as governance context; it should not directly block publication.'
+          : 'Keep the progress anomaly as a data quality and confidence hint.',
+      sourceId: `${projectId}:progress_anomaly:${signal.taskId ?? 'project'}:${signal.code}`,
+      taskId: signal.taskId ?? null,
+    }))
+  }
+}
+
+function pushTaskConstraintSignals(
+  signals: PlanningGovernanceSignal[],
+  projectId: string,
+  summaries: PlanningGovernanceTaskConstraintInput[] = [],
+) {
+  for (const summary of summaries) {
+    const dependencyStatus = String(summary.dependencyStatus ?? '').trim()
+    const conditionStatus = String(summary.conditionStatus ?? '').trim()
+    const progressImpactLevel = String(summary.progressImpactLevel ?? '').trim()
+    const blocked =
+      summary.readyForStart === false
+      || dependencyStatus === 'blocking'
+      || conditionStatus === 'blocking'
+      || summary.blockedForProgress === true
+      || progressImpactLevel === 'blocked'
+    const warning =
+      progressImpactLevel === 'warning'
+      || progressImpactLevel === 'partial'
+      || String(summary.obstacleStatus ?? '').trim() === 'warning'
+      || String(summary.obstacleStatus ?? '').trim() === 'partial_impact'
+
+    if (!blocked && !warning) continue
+
+    signals.push(buildGovernanceSignal({
+      projectId,
+      sourceAlgorithm: 'task_constraint',
+      gateLevel: blocked ? 'confirm' : 'hint',
+      targetSurface: 'monthly_plan',
+      title: blocked ? 'Task start constraints need confirmation' : 'Task constraint warning',
+      detail: blocked
+        ? 'Bound task dependencies, start conditions or progress blockers are not ready.'
+        : 'Task constraint context indicates a warning that should be reviewed.',
+      evidence: {
+        ready_for_start: summary.readyForStart ?? null,
+        dependency_status: summary.dependencyStatus ?? null,
+        condition_status: summary.conditionStatus ?? null,
+        obstacle_status: summary.obstacleStatus ?? null,
+        progress_impact_level: summary.progressImpactLevel ?? null,
+        blocked_for_progress: summary.blockedForProgress ?? null,
+        dependency_count: summary.dependencyCount ?? null,
+        advisory_dependency_count: summary.advisoryDependencyCount ?? null,
+        total_dependency_count: summary.totalDependencyCount ?? null,
+        unmet_dependency_count: summary.unmetDependencyCount ?? null,
+        hard_condition_count: summary.hardConditionCount ?? null,
+        unmet_hard_condition_count: summary.unmetHardConditionCount ?? null,
+        open_obstacle_count: summary.openObstacleCount ?? null,
+        source_event_type: summary.sourceEventType ?? null,
+        source_event_key: summary.sourceEventKey ?? null,
+        created_at: summary.createdAt ?? null,
+        ...(summary.evidence ?? {}),
+      },
+      recommendation: blocked
+        ? 'Confirm or resolve bound start conditions before monthly plan confirmation.'
+        : 'Review task constraint diagnostics as a soft governance hint.',
+      sourceId: summary.sourceEventKey
+        ? `${projectId}:task_constraint:${summary.sourceEventKey}`
+        : `${projectId}:task_constraint:${summary.taskId ?? summary.snapshotId ?? 'project'}`,
+      taskId: summary.taskId ?? null,
+    }))
+  }
+}
+
+function pushLinkageSignals(
+  signals: PlanningGovernanceSignal[],
+  projectId: string,
+  linkageSignals: PlanningGovernanceLinkageSignalInput[] = [],
+) {
+  for (const signal of linkageSignals) {
+    if (signal.boundToTask !== true) continue
+
+    const severity = normalizeGovernanceSeverity(signal.severity)
+    signals.push(buildGovernanceSignal({
+      projectId,
+      sourceAlgorithm: signal.sourceAlgorithm,
+      gateLevel: severity === 'info' ? 'hint' : 'confirm',
+      targetSurface: signal.targetSurface ?? 'monthly_plan',
+      title: signal.title ?? `${signal.sourceAlgorithm} linked plan prerequisite`,
+      detail: signal.detail ?? `${signal.sourceAlgorithm} has a bound plan prerequisite that needs confirmation.`,
+      evidence: {
+        bound_to_task: true,
+        severity,
+        ...(signal.evidence ?? {}),
+      },
+      recommendation: 'Because this business-domain signal is explicitly bound to a plan task, confirm it before plan confirmation.',
+      sourceId: signal.sourceId ?? `${projectId}:${signal.sourceAlgorithm}:${signal.taskId ?? 'project'}`,
+      taskId: signal.taskId ?? null,
+    }))
+  }
+}
+
+function pushExplanationSignals(
+  signals: PlanningGovernanceSignal[],
+  projectId: string,
+  explanationSignals: PlanningGovernanceExplanationSignalInput[] = [],
+) {
+  for (const signal of explanationSignals) {
+    const sourceAlgorithm = signal.sourceAlgorithm
+    const gateLevel: PlanningGovernanceGateLevel =
+      signal.gateLevel === 'confirm' || signal.gateLevel === 'block_save'
+        ? 'hint'
+        : signal.gateLevel ?? (sourceAlgorithm === 'progress_deviation' ? 'explain' : 'hint')
+
+    signals.push(buildGovernanceSignal({
+      projectId,
+      sourceAlgorithm,
+      gateLevel,
+      targetSurface: signal.targetSurface ?? (sourceAlgorithm === 'progress_deviation' ? 'reports' : 'planning_governance'),
+      title: signal.title ?? `${sourceAlgorithm} governance context`,
+      detail: signal.detail ?? `${sourceAlgorithm} provides explanation or candidate context for planning governance.`,
+      evidence: {
+        severity: normalizeGovernanceSeverity(signal.severity),
+        ...(signal.evidence ?? {}),
+      },
+      recommendation:
+        sourceAlgorithm === 'progress_deviation'
+          ? 'Use this as attribution for why health or delivery changed; do not use it as a hard publication gate.'
+          : 'Use this candidate or confidence context as a planning governance hint unless a curated rule promotes it.',
+      sourceId: signal.sourceId ?? `${projectId}:${sourceAlgorithm}:${signal.taskId ?? 'project'}`,
+      taskId: signal.taskId ?? null,
+    }))
+  }
+}
+
+export function buildGovernanceSignals(
+  snapshot: PlanningGovernanceSnapshot,
+  context: PlanningGovernanceSignalContext = {},
+): PlanningGovernanceSignal[] {
+  const signals: PlanningGovernanceSignal[] = []
+  const mapping = snapshot.integrity.mapping_integrity
+  const data = snapshot.integrity.data_integrity
+  const system = snapshot.integrity.system_consistency
+
+  const baselineAnchorBreaks = mapping.baseline_pending_count + mapping.baseline_merged_count
+  if (baselineAnchorBreaks > 0) {
+    signals.push(buildGovernanceSignal({
+      projectId: snapshot.project_id,
+      sourceAlgorithm: 'data_lineage',
+      gateLevel: 'block_save',
+      targetSurface: 'baseline',
+      title: 'Baseline commitment anchors need repair',
+      detail: `Baseline source mapping has ${mapping.baseline_pending_count} pending and ${mapping.baseline_merged_count} merged anchors.`,
+      evidence: {
+        baseline_pending_count: mapping.baseline_pending_count,
+        baseline_merged_count: mapping.baseline_merged_count,
+      },
+      recommendation: 'Repair baseline source mapping before publishing or confirming the commitment baseline.',
+      sourceId: `${snapshot.project_id}:data_lineage:baseline_anchor`,
+    }))
+  }
+
+  if (mapping.monthly_carryover_count > 0) {
+    signals.push(buildGovernanceSignal({
+      projectId: snapshot.project_id,
+      sourceAlgorithm: 'data_lineage',
+      gateLevel: 'confirm',
+      targetSurface: 'monthly_plan',
+      title: 'Monthly carryover lineage needs confirmation',
+      detail: `Monthly carryover contains ${mapping.monthly_carryover_count} items without a stable source anchor.`,
+      evidence: {
+        monthly_carryover_count: mapping.monthly_carryover_count,
+      },
+      recommendation: 'Confirm or repair carryover lineage before monthly plan confirmation.',
+      sourceId: `${snapshot.project_id}:data_lineage:monthly_carryover`,
+    }))
+  }
+
+  const dataIssueCount =
+    data.missing_participant_unit_count +
+    data.missing_scope_dimension_count +
+    data.missing_progress_snapshot_count
+  if (dataIssueCount > 0) {
+    signals.push(buildGovernanceSignal({
+      projectId: snapshot.project_id,
+      sourceAlgorithm: 'data_quality',
+      gateLevel: 'confirm',
+      targetSurface: 'planning_governance',
+      title: 'Planning data quality needs confirmation',
+      detail: `Planning data has ${dataIssueCount} quality issues across participants, scope and progress snapshots.`,
+      evidence: {
+        total_tasks: data.total_tasks,
+        missing_participant_unit_count: data.missing_participant_unit_count,
+        missing_scope_dimension_count: data.missing_scope_dimension_count,
+        missing_progress_snapshot_count: data.missing_progress_snapshot_count,
+      },
+      recommendation: 'Keep row-level validation in the editing surface and confirm remaining data gaps before publication.',
+      sourceId: `${snapshot.project_id}:data_quality:planning_integrity`,
+    }))
+  }
+
+  for (const item of snapshot.integrity.milestone_integrity.items) {
+    if (item.state === 'aligned') continue
+
+    const gateLevel: PlanningGovernanceGateLevel =
+      item.gate_level ?? (item.state === 'needs_attention' ? 'confirm' : 'block_save')
+    const targetSurface: PlanningGovernanceTargetSurface =
+      item.target_surface ?? (gateLevel === 'block_save' ? 'baseline' : 'planning_governance')
+
+    signals.push(buildGovernanceSignal({
+      projectId: snapshot.project_id,
+      sourceAlgorithm: 'milestone_integrity',
+      gateLevel,
+      targetSurface,
+      title: `${item.milestone_key} milestone ${item.state.replace('_', ' ')}`,
+      detail: `Milestone ${item.milestone_key} ${item.title} has issues: ${item.issues.join('; ') || 'unknown scenario'}.`,
+      evidence: {
+        milestone_id: item.milestone_id,
+        milestone_key: item.milestone_key,
+        state: item.state,
+        planned_date: item.planned_date,
+        current_planned_date: item.current_planned_date,
+        actual_date: item.actual_date,
+        issues: item.issues,
+        scenario_type: item.scenario_type ?? null,
+        scenario_label: item.scenario_label ?? null,
+        suggested_action: item.suggested_action ?? null,
+        commitment_anchor: item.commitment_anchor ?? null,
+        critical_context: item.critical_context ?? false,
+      },
+      recommendation:
+        gateLevel === 'block_save'
+          ? 'Repair M1-M9 milestone dates or commitment anchors before publishing the plan.'
+          : item.suggested_action ?? 'Review M1-M9 milestone drift during plan governance confirmation.',
+      sourceId: `${snapshot.project_id}:milestone_integrity:${item.milestone_id}`,
+    }))
+  }
+
+  const systemIssueCount = system.inconsistent_milestones + system.stale_snapshot_count
+  if (systemIssueCount > 0) {
+    signals.push(buildGovernanceSignal({
+      projectId: snapshot.project_id,
+      sourceAlgorithm: 'planning_integrity',
+      gateLevel: 'confirm',
+      targetSurface: 'planning_governance',
+      title: 'Planning integrity needs review',
+      detail: `Planning integrity has ${system.inconsistent_milestones} inconsistent milestones and ${system.stale_snapshot_count} stale snapshots.`,
+      evidence: {
+        inconsistent_milestones: system.inconsistent_milestones,
+        stale_snapshot_count: system.stale_snapshot_count,
+      },
+      recommendation: 'Review integrity diagnostics before confirmation; only explicit blocking findings should stop save.',
+      sourceId: `${snapshot.project_id}:planning_integrity:system_consistency`,
+    }))
+  }
+
+  for (const window of snapshot.anomaly.windows.filter((item) => item.triggered)) {
+    signals.push(buildGovernanceSignal({
+      projectId: snapshot.project_id,
+      sourceAlgorithm: 'system_anomaly',
+      gateLevel: window.window_days >= 5 ? 'confirm' : 'hint',
+      targetSurface: 'planning_governance',
+      title: `Passive reorder ${window.window_days}d window triggered`,
+      detail: `Passive reorder window ${window.window_days}d has ${window.event_count} events affecting ${window.affected_task_count} tasks.`,
+      evidence: {
+        window_days: window.window_days,
+        event_count: window.event_count,
+        affected_task_count: window.affected_task_count,
+        cumulative_event_count: window.cumulative_event_count,
+        average_offset_days: window.average_offset_days ?? null,
+        key_task_count: window.key_task_count ?? null,
+      },
+      recommendation:
+        window.window_days >= 5
+          ? 'Confirm whether passive reorder should become an explicit revision or be closed with a change summary.'
+          : 'Review execution changes and continue monitoring passive reorder state.',
+      sourceId: `${snapshot.project_id}:system_anomaly:passive_reorder:${window.window_days}`,
+    }))
+  }
+
+  if (snapshot.health.score < 80) {
+    signals.push(buildGovernanceSignal({
+      projectId: snapshot.project_id,
+      sourceAlgorithm: 'planning_health',
+      gateLevel: snapshot.health.score < 60 ? 'explain' : 'hint',
+      targetSurface: 'planning_governance',
+      title: 'Planning health score needs attention',
+      detail: `Planning health score is ${snapshot.health.score}/100; health score explains governance pressure but does not block save by itself.`,
+      evidence: {
+        score: snapshot.health.score,
+        status: snapshot.health.status,
+        breakdown: snapshot.health.breakdown,
+      },
+      recommendation: 'Use underlying block_save or confirm signals as the actual gate; keep the health score as summary context.',
+      sourceId: `${snapshot.project_id}:planning_health`,
+    }))
+  }
+
+  pushWbsRollupSignals(signals, snapshot.project_id, context.wbsRollupIssues)
+  pushBaselineValiditySignals(signals, snapshot.project_id, context.baselineValidity)
+  pushProgressAnomalySignals(signals, snapshot.project_id, context.progressAnomalySignals)
+  pushTaskConstraintSignals(signals, snapshot.project_id, context.taskConstraintSummaries)
+  pushLinkageSignals(signals, snapshot.project_id, context.linkageSignals)
+  pushExplanationSignals(signals, snapshot.project_id, context.explanationSignals)
+
+  return signals
+}
+
+function groupSnapshotsByTaskId(snapshots: TaskProgressSnapshot[]): Map<string, TaskProgressSnapshot[]> {
+  const grouped = new Map<string, TaskProgressSnapshot[]>()
+  for (const snapshot of snapshots) {
+    const taskId = normalizeOptionalText(snapshot.task_id)
+    if (!taskId) continue
+    grouped.set(taskId, [...(grouped.get(taskId) ?? []), snapshot])
+  }
+  return grouped
+}
+
+function buildProgressAnomalyContextFromSnapshots(snapshots: TaskProgressSnapshot[]): PlanningGovernanceProgressAnomalyInput[] {
+  const signals: PlanningGovernanceProgressAnomalyInput[] = []
+  for (const [taskId, taskSnapshots] of groupSnapshotsByTaskId(snapshots).entries()) {
+    for (const signal of detectProgressQualitySignals(taskSnapshots)) {
+      signals.push({
+        taskId,
+        code: signal.code,
+        severity: signal.severity,
+        summary: signal.summary,
+        acknowledged: signal.acknowledged,
+        excludedFromVelocityLearning: signal.excludedFromVelocityLearning,
+        confidenceAction: signal.confidenceAction,
+        metadata: signal.metadata,
+      })
+    }
+  }
+  return signals
+}
+
+function mapConstraintSnapshotRow(row: TaskConstraintSnapshotRow): PlanningGovernanceTaskConstraintInput {
+  const summary = toRecord(row.readiness_summary)
+  return {
+    taskId: normalizeOptionalText(row.task_id),
+    readyForStart: row.ready_for_start == null ? null : toBoolean(row.ready_for_start),
+    dependencyStatus: normalizeOptionalText(row.dependency_status),
+    conditionStatus: normalizeOptionalText(row.condition_status),
+    obstacleStatus: normalizeOptionalText(row.obstacle_status),
+    progressImpactLevel: normalizeOptionalText(row.progress_impact_level),
+    blockedForProgress: row.blocked_for_progress == null ? null : toBoolean(row.blocked_for_progress),
+    dependencyCount: toNumberOrNull(summary.dependencyCount ?? summary.dependency_count) ?? undefined,
+    advisoryDependencyCount: toNumberOrNull(summary.advisoryDependencyCount ?? summary.advisory_dependency_count) ?? undefined,
+    totalDependencyCount: toNumberOrNull(summary.totalDependencyCount ?? summary.total_dependency_count) ?? undefined,
+    unmetDependencyCount: toNumberOrNull(summary.unmetDependencyCount ?? summary.unmet_dependency_count) ?? undefined,
+    hardConditionCount: toNumberOrNull(summary.hardConditionCount ?? summary.hard_condition_count) ?? undefined,
+    unmetHardConditionCount: toNumberOrNull(summary.unmetHardConditionCount ?? summary.unmet_hard_condition_count) ?? undefined,
+    openObstacleCount: toNumberOrNull(summary.openObstacleCount ?? summary.open_obstacle_count) ?? undefined,
+    sourceEventType: row.source_event_type ?? null,
+    sourceEventKey: row.source_event_key ?? null,
+    snapshotId: row.id ?? null,
+    createdAt: row.created_at ?? null,
+  }
+}
+
+function mapProjectScheduleStateRow(row: ProjectScheduleStateRow): PlanningGovernanceExplanationSignalInput | null {
+  const state = normalizeOptionalText(row.state)
+  if (!state || state === 'normal') return null
+
+  return {
+    sourceAlgorithm: 'project_schedule_state',
+    sourceId: row.id ? `project_schedule_state:${row.id}` : null,
+    severity: state === 'blocked' || state === 'overcompressed' ? 'warning' : 'info',
+    title: `Project schedule state ${state}`,
+    detail: `Project schedule state is ${state} for ${row.scope_type ?? 'project'} scope.`,
+    evidence: {
+      scope_type: row.scope_type ?? null,
+      scope_id: row.scope_id ?? null,
+      state,
+      confidence_score: toNumberOrNull(row.confidence_score),
+      window_days: toNumberOrNull(row.window_days),
+      window_end_date: row.window_end_date ?? null,
+      downstream_policy: row.downstream_policy ?? {},
+      metrics: row.metrics ?? {},
+      evidence: row.evidence ?? null,
+    },
+  }
+}
+
+function mapDurationForecastRow(row: TaskDurationForecastSignalRow): PlanningGovernanceExplanationSignalInput[] {
+  const forecastDelayDays = toNumberOrNull(row.forecast_delay_days) ?? 0
+  const confidenceScore = toNumberOrNull(row.confidence_score)
+  const delayRiskIndex = toNumberOrNull(row.delay_risk_index)
+  const shouldEmitForecast =
+    forecastDelayDays > 0
+    || (delayRiskIndex !== null && delayRiskIndex >= 0.6)
+    || String(row.confidence_level ?? '').trim().toLowerCase() === 'low'
+  const signals: PlanningGovernanceExplanationSignalInput[] = []
+
+  if (shouldEmitForecast) {
+    signals.push({
+      sourceAlgorithm: 'task_duration_forecast',
+      sourceId: row.id ? `task_duration_forecast:${row.id}` : null,
+      taskId: row.task_id ?? null,
+      severity: forecastDelayDays >= 7 || (delayRiskIndex !== null && delayRiskIndex >= 0.8) ? 'warning' : 'info',
+      title: 'Task duration forecast needs review',
+      detail: `Current duration forecast indicates ${forecastDelayDays} delay days.`,
+      evidence: {
+        forecast_delay_days: forecastDelayDays,
+        confidence_level: row.confidence_level ?? null,
+        confidence_score: confidenceScore,
+        delay_risk_index: delayRiskIndex,
+        business_reason: row.business_reason ?? null,
+        generated_at: row.generated_at ?? null,
+      },
+    })
+  }
+
+  if (row.factor_summary || row.calculation_context) {
+    signals.push({
+      sourceAlgorithm: 'duration_context',
+      sourceId: row.id ? `duration_context:${row.id}` : null,
+      taskId: row.task_id ?? null,
+      severity: 'info',
+      title: 'Duration context explanation available',
+      detail: 'Duration context explains why the forecast changed and remains candidate or confidence context.',
+      evidence: {
+        factor_summary: row.factor_summary ?? {},
+        calculation_context: row.calculation_context ?? {},
+        forecast_delay_days: forecastDelayDays,
+      },
+    })
+  }
+
+  return signals
+}
+
+async function collectPlanningGovernanceSignalContext(params: {
+  projectId: string
+  monthlyPlans: MonthlyPlan[]
+  snapshots: TaskProgressSnapshot[]
+}): Promise<PlanningGovernanceSignalContext> {
+  const baselineRows = await executeSQL<{ id: string; status?: string | null }>(
+    'SELECT id, status FROM task_baselines WHERE project_id = ?',
+    [params.projectId],
+  )
+  const taskConstraintRows = await executeSQL<TaskConstraintSnapshotRow>(
+    'SELECT * FROM task_constraint_snapshots WHERE project_id = ? ORDER BY created_at DESC LIMIT 100',
+    [params.projectId],
+  )
+  const scheduleStateRows = await executeSQL<ProjectScheduleStateRow>(
+    'SELECT * FROM project_schedule_states WHERE project_id = ? ORDER BY window_end_date DESC, created_at DESC LIMIT 20',
+    [params.projectId],
+  )
+  const durationForecastRows = await executeSQL<TaskDurationForecastSignalRow>(
+    'SELECT * FROM task_duration_forecasts WHERE project_id = ? AND is_current = true ORDER BY forecast_delay_days DESC, generated_at DESC LIMIT 50',
+    [params.projectId],
+  )
+
+  return {
+    baselineValidity: [
+      ...baselineRows
+        .filter((row) => String(row.status ?? '').trim() === 'pending_realign')
+        .map((row) => ({
+          baselineId: row.id,
+          baselineStatus: row.status ?? null,
+          state: 'needs_realign' as const,
+          triggeredRules: ['task_deviation_ratio'],
+          isValid: false,
+        })),
+      ...params.monthlyPlans
+        .filter((row) => String(row.status ?? '').trim() === 'pending_realign')
+        .map((row) => ({
+          baselineId: `monthly_plan:${row.id}`,
+          baselineStatus: row.status ?? null,
+          state: 'needs_realign' as const,
+          triggeredRules: ['task_deviation_ratio'],
+          isValid: false,
+        })),
+    ],
+    progressAnomalySignals: buildProgressAnomalyContextFromSnapshots(params.snapshots),
+    taskConstraintSummaries: taskConstraintRows.map(mapConstraintSnapshotRow),
+    explanationSignals: [
+      ...scheduleStateRows.map(mapProjectScheduleStateRow).filter((signal): signal is PlanningGovernanceExplanationSignalInput => Boolean(signal)),
+      ...durationForecastRows.flatMap(mapDurationForecastRow),
+    ],
+  }
 }
 
 export function buildCloseoutGovernanceAlerts(params: {
@@ -301,7 +1148,7 @@ export function buildCloseoutGovernanceAlerts(params: {
     const dueTimestamp = monthBoundaryTimestamp(plan.month)
     if (dueTimestamp === null) continue
 
-    const overdueDays = Math.max(0, daysBetween(dueTimestamp, now.getTime()))
+    const overdueDays = closeoutOverdueDays(dueTimestamp, now)
     if (overdueDays < GOVERNANCE_CLOSEOUT_THRESHOLDS[0]) continue
 
     for (const threshold of GOVERNANCE_CLOSEOUT_THRESHOLDS) {
@@ -312,7 +1159,7 @@ export function buildCloseoutGovernanceAlerts(params: {
           ? 'closeout_reminder'
           : threshold === 5
             ? 'closeout_escalation'
-            : 'closeout_unlock'
+            : 'closeout_owner_attention'
 
       alerts.push({
         kind,
@@ -322,7 +1169,7 @@ export function buildCloseoutGovernanceAlerts(params: {
             ? '月度计划关账超期提醒'
             : threshold === 5
               ? '月度计划关账超期升级'
-              : '月度计划可强制发起关账',
+              : 'Monthly plan closeout owner attention',
         detail: buildCloseoutAlertDetail(plan, overdueDays, threshold),
         source_id: `${params.projectId}:monthly_plan:${plan.id}:closeout:${threshold}`,
       })
@@ -356,10 +1203,10 @@ export function buildExecutionReorderGovernanceAlerts(params: {
       severity: threshold === 3 ? 'warning' : 'critical',
       title:
         threshold === 3
-          ? '被动重排第3日提醒'
+          ? 'Passive reorder day 3 reminder'
           : threshold === 5
-            ? '被动重排第5日升级'
-            : '被动重排结束并生成变更摘要',
+            ? 'Passive reorder day 5 escalation'
+            : 'Passive reorder ended and generated a change summary',
       detail: buildReorderAlertDetail(window, threshold),
       source_id: `${params.projectId}:passive_reorder:${threshold}`,
     })
@@ -409,8 +1256,8 @@ export function buildAdHocCarryoverGovernanceAlerts(params: {
     alerts.push({
       kind: 'ad_hoc_cross_month_reminder',
       severity: 'warning',
-      title: '临时任务连续跨月未纳入月度计划',
-      detail: `任务 "${task.title}" 已连续 ${monthCount} 个月以 ad_hoc 方式执行，且未挂接月度计划，请尽快纳入月度计划。`,
+      title: 'Ad hoc task missing monthly plan mapping',
+      detail: `Task "${task.title}" has been executed as ad_hoc for ${monthCount} months and is not linked to a monthly plan. Please include it in monthly planning.`,
       source_id: `${params.projectId}:task:${task.id}:ad_hoc:month3`,
       task_id: task.id,
     })
@@ -441,7 +1288,7 @@ export function buildCloseoutGovernanceStates(params: {
     const dueTimestamp = monthBoundaryTimestamp(plan.month)
     if (dueTimestamp === null) continue
 
-    const overdueDays = Math.max(0, daysBetween(dueTimestamp, now.getTime()))
+    const overdueDays = closeoutOverdueDays(dueTimestamp, now)
     if (overdueDays < GOVERNANCE_CLOSEOUT_THRESHOLDS[0]) continue
 
     for (const threshold of GOVERNANCE_CLOSEOUT_THRESHOLDS) {
@@ -452,7 +1299,7 @@ export function buildCloseoutGovernanceStates(params: {
           ? 'closeout_reminder'
           : threshold === 5
             ? 'closeout_overdue_signal'
-            : 'closeout_force_unlock'
+            : 'closeout_owner_attention'
 
       states.push({
         id: uuidv4(),
@@ -467,7 +1314,7 @@ export function buildCloseoutGovernanceStates(params: {
             ? '月度计划关账提醒'
             : threshold === 5
               ? '月度计划关账超期信号'
-              : '月度计划强制关账权限已解锁',
+              : 'Monthly plan closeout owner attention',
         detail: buildCloseoutAlertDetail(plan, overdueDays, threshold),
         threshold_day: threshold,
         dashboard_signal: threshold === 5,
@@ -476,7 +1323,7 @@ export function buildCloseoutGovernanceStates(params: {
           month: plan.month,
           overdue_days: overdueDays,
           threshold_day: threshold,
-          force_unlock_enabled: threshold === 7,
+          owner_attention_required: threshold === 7,
           dashboard_signal: threshold === 5,
         },
         source_entity_type: 'monthly_plan',
@@ -597,8 +1444,8 @@ export function buildAdHocCarryoverGovernanceStates(params: {
       kind: 'ad_hoc_cross_month_reminder',
       status: 'active',
       severity: 'warning',
-      title: '临时任务连续跨月未纳入月度计划',
-      detail: `任务 "${task.title}" 已连续 ${monthCount} 个月以 ad_hoc 方式执行，且未挂接月度计划，请尽快纳入月度计划。`,
+      title: 'Ad hoc task missing monthly plan mapping',
+      detail: `Task "${task.title}" has been executed as ad_hoc for ${monthCount} months and is not linked to a monthly plan. Please include it in monthly planning.`,
       threshold_day: monthCount,
       dashboard_signal: false,
       payload: {
@@ -655,12 +1502,16 @@ function parseManualReorderPayload(value: unknown): ManualReorderSessionPayload 
 }
 
 async function collectManualReorderStartSnapshot(projectId: string): Promise<ManualReorderStartSnapshot> {
-  const [tasks, baselines, monthlyPlans, criticalTaskIds] = await Promise.all([
-    executeSQL<Task>('SELECT * FROM tasks WHERE project_id = ?', [projectId]),
-    executeSQL<{ id: string; status?: string | null }>('SELECT id, status FROM task_baselines WHERE project_id = ?', [projectId]),
-    executeSQL<{ id: string; status?: string | null }>('SELECT id, status FROM monthly_plans WHERE project_id = ?', [projectId]),
-    getCriticalPathTaskIds(projectId),
-  ])
+  const tasks = await executeSQL<Task>('SELECT id, is_milestone FROM tasks WHERE project_id = ?', [projectId])
+  const baselines = await executeSQL<{ id: string; status?: string | null }>(
+    'SELECT id, status FROM task_baselines WHERE project_id = ?',
+    [projectId],
+  )
+  const monthlyPlans = await executeSQL<{ id: string; status?: string | null }>(
+    'SELECT id, status FROM monthly_plans WHERE project_id = ?',
+    [projectId],
+  )
+  const criticalTaskIds = await getCriticalPathTaskIds(projectId)
 
   return {
     total_tasks: tasks.length,
@@ -917,10 +1768,14 @@ export function buildAlerts(snapshot: PlanningGovernanceSnapshot): PlanningGover
 }
 
 async function getProjectRecipients(projectId: string, scope: 'owner' | 'owner_admin' = 'owner_admin'): Promise<string[]> {
-  const [project, members] = await Promise.all([
-    executeSQLOne<ProjectOwnerRow>('SELECT id, owner_id FROM projects WHERE id = ? LIMIT 1', [projectId]),
-    executeSQL<ProjectMemberRow>('SELECT project_id, user_id, permission_level FROM project_members WHERE project_id = ?', [projectId]),
-  ])
+  const project = await executeSQLOne<ProjectOwnerRow>(
+    'SELECT id, owner_id FROM projects WHERE id = ? LIMIT 1',
+    [projectId],
+  )
+  const members = await executeSQL<ProjectMemberRow>(
+    'SELECT project_id, user_id, permission_level FROM project_members WHERE project_id = ?',
+    [projectId],
+  )
 
   const ownerRecipients = uniqueStrings([project?.owner_id ?? null])
   if (scope === 'owner') {
@@ -932,7 +1787,7 @@ async function getProjectRecipients(projectId: string, scope: 'owner' | 'owner_a
   return uniqueStrings([
     ...ownerRecipients,
     ...((members ?? [])
-      .filter((member) => normalizeProjectPermissionLevel(member.permission_level ?? member.role) === 'owner')
+      .filter((member) => normalizeProjectPermissionLevel(member.permission_level) === 'owner')
       .map((member) => member.user_id)),
   ])
 }
@@ -952,7 +1807,7 @@ async function persistAlertNotification(projectId: string, alert: PlanningGovern
   if (existing) return existing
 
   const now = new Date().toISOString()
-  return await insertNotification({
+  return await notificationTouchpointService.emit({
     id: uuidv4(),
     project_id: projectId,
     type: `planning_gov_${alert.kind}`,
@@ -966,9 +1821,13 @@ async function persistAlertNotification(projectId: string, alert: PlanningGovern
     source_entity_id: alert.source_id,
     category: notificationCategory,
     task_id: alert.task_id ?? null,
-    delay_request_id: alert.delay_request_id ?? null,
     recipients,
     status: 'unread',
+    touchpoint_type: 'dashboard_todo',
+    scope_type: 'project',
+    dedupe_key: `planning_governance:${projectId}:${alert.kind}:${alert.source_id}`,
+    target_route: `/projects/${projectId}/planning`,
+    target_label: 'View planning governance',
     metadata: {
       category: notificationCategory,
       alert_kind: alert.kind,
@@ -1017,8 +1876,8 @@ export class PlanningGovernanceService {
       kind: 'manual_reorder_session' as PlanningGovernanceState['kind'],
       status: 'active',
       severity: 'info',
-      title: '主动重排进行中',
-      detail: `已启动 ${payload.reorder_mode} 模式的主动重排。`,
+      title: 'Manual reorder in progress',
+      detail: `Manual reorder has started in ${payload.reorder_mode} mode.`,
       threshold_day: null,
       dashboard_signal: false,
       payload,
@@ -1079,7 +1938,7 @@ export class PlanningGovernanceService {
       kind: 'manual_reorder_session' as PlanningGovernanceState['kind'],
       status: 'resolved',
       severity: 'info',
-      detail: `主动重排已结束，涉及 ${nextPayload.end_summary?.changed_task_count ?? 0} 个任务变更。`,
+      detail: `Manual reorder has ended and affected ${nextPayload.end_summary?.changed_task_count ?? 0} tasks.`,
       payload: nextPayload,
       resolved_at: now,
       updated_at: now,
@@ -1101,17 +1960,36 @@ export class PlanningGovernanceService {
   }
 
   async scanProjectGovernance(projectId: string): Promise<PlanningGovernanceSnapshot> {
-    const [health, integrity, anomaly, monthlyPlans, tasks, manualReorderStates] = await Promise.all([
-      this.healthService.evaluateProjectHealth(projectId),
-      this.integrityService.scanProjectIntegrity(projectId),
-      this.anomalyService.scanProjectPassiveReorder(projectId),
-      executeSQL<MonthlyPlan>('SELECT * FROM monthly_plans WHERE project_id = ?', [projectId]),
-      executeSQL<Task>('SELECT * FROM tasks WHERE project_id = ?', [projectId]),
-      listActiveManualReorderStates(projectId),
-    ])
+    const health = await this.healthService.evaluateProjectHealth(projectId)
+    const integrity = await this.integrityService.scanProjectIntegrity(projectId)
+    const anomaly = await this.anomalyService.scanProjectPassiveReorder(projectId)
+    const monthlyPlans = await executeSQL<MonthlyPlan>('SELECT * FROM monthly_plans WHERE project_id = ?', [projectId])
+    const taskRows = await executeSQL<Task>(
+      `SELECT id,
+              title,
+              monthly_plan_item_id,
+              baseline_item_id
+         FROM tasks
+        WHERE project_id = ?`,
+      [projectId],
+    )
+    const tasks = taskRows.map((task) => ({
+      ...task,
+      task_source: task.monthly_plan_item_id
+        ? 'monthly_plan'
+        : task.baseline_item_id
+          ? 'baseline'
+          : 'ad_hoc',
+    }))
+    const manualReorderStates = await listActiveManualReorderStates(projectId)
 
     const taskIds = tasks.map((task) => task.id)
     const snapshots = await listTaskProgressSnapshotsByTaskIds(taskIds)
+    const signalContext = await collectPlanningGovernanceSignalContext({
+      projectId,
+      monthlyPlans,
+      snapshots,
+    })
 
     const snapshot: PlanningGovernanceSnapshot = {
       project_id: projectId,
@@ -1120,6 +1998,7 @@ export class PlanningGovernanceService {
       anomaly,
       alerts: [],
       states: [],
+      governanceSignals: [],
     }
 
     const states = [
@@ -1135,24 +2014,25 @@ export class PlanningGovernanceService {
       ...buildAdHocCarryoverGovernanceAlerts({ projectId, tasks, snapshots }),
     ]
     snapshot.states = await syncPlanningGovernanceStates(projectId, states)
+    snapshot.governanceSignals = buildGovernanceSignals(snapshot, signalContext)
     return snapshot
   }
 
-  async scanAllProjectGovernance(): Promise<PlanningGovernanceSnapshot[]> {
-    const projectIds = await listActiveProjectIds()
+  async scanAllProjectGovernance(projectIds?: string[] | null): Promise<PlanningGovernanceSnapshot[]> {
+    const activeProjectIds = await listActiveProjectIds(projectIds)
     const reports: PlanningGovernanceSnapshot[] = []
 
-    for (const projectId of projectIds) {
+    for (const projectId of activeProjectIds) {
       reports.push(await this.scanProjectGovernance(projectId))
     }
 
     return reports
   }
 
-  async persistProjectGovernanceNotifications(projectId?: string): Promise<Notification[]> {
+  async persistProjectGovernanceNotifications(projectId?: string, projectIds?: string[] | null): Promise<Notification[]> {
     const reports = projectId
       ? [await this.scanProjectGovernance(projectId)]
-      : await this.scanAllProjectGovernance()
+      : await this.scanAllProjectGovernance(projectIds)
 
     const persisted: Notification[] = []
     for (const report of reports) {

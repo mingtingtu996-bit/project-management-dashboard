@@ -52,7 +52,7 @@ export function ExecutionScatterChart({
       <CardContent className="space-y-4">
         {points.length > 0 ? (
           <ChartAccessibleWrapper
-            columns={['序号', '任务', '偏差天数', '偏差率(%)', '计划进度', '实际进度', '实际日期']}
+            columns={['序号', '任务', '偏差生产日', '偏差率(%)', '计划进度', '实际进度', '实际日期']}
             rows={chartRows.map((row) => [
               row.index,
               row.title,
@@ -71,7 +71,7 @@ export function ExecutionScatterChart({
                   <XAxis
                     type="number"
                     dataKey="deviation_days"
-                    name="偏差天数"
+                    name="偏差生产日"
                     domain={[-maxDeviationDays, maxDeviationDays]}
                     tickLine={false}
                     axisLine={false}

@@ -23,7 +23,7 @@ interface CriticalPathInsertDialogProps {
 
 function getTaskLabel(task: Task | null | undefined) {
   if (!task) return '未知任务'
-  return task.title || task.name || task.id
+  return task.title || task.id
 }
 
 export function CriticalPathInsertDialog({
@@ -50,7 +50,7 @@ export function CriticalPathInsertDialog({
     if (!query) return eligibleTasks
 
     return eligibleTasks.filter((task) => {
-      const haystack = [task.title, task.name, task.id]
+      const haystack = [task.title, task.id]
         .filter((value): value is string => Boolean(value))
         .join(' ')
         .toLowerCase()
@@ -88,7 +88,7 @@ export function CriticalPathInsertDialog({
       anchorType: isBefore ? 'before' : 'after',
       leftTaskId: isBefore ? null : anchorTask.id,
       rightTaskId: isBefore ? anchorTask.id : null,
-      reason: `来自任务右键菜单：${anchorLabel}`,
+      reason: `来自关键路径操作：${anchorLabel}`,
     })
     onOpenChange(false)
   }

@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { z } from 'zod'
 import { asyncHandler } from '../middleware/errorHandler.js'
-import { authenticate, requireProjectEditor } from '../middleware/auth.js'
+import { authenticate, requireProjectEditor, requireProjectMember } from '../middleware/auth.js'
 import { validate } from '../middleware/validation.js'
 import { logger } from '../middleware/logger.js'
 import type { ApiResponse } from '../types/index.js'
@@ -81,7 +81,7 @@ const overrideUpdateBodySchema = z.object({
   },
 )
 
-router.get('/:id/critical-path', validate(projectIdParamSchema, 'params'), asyncHandler(async (req, res) => {
+router.get('/:id/critical-path', validate(projectIdParamSchema, 'params'), requireProjectMember((req) => req.params.id), asyncHandler(async (req, res) => {
   const projectId = req.params.id
   logger.info('Fetching critical path snapshot', { projectId })
 
@@ -94,7 +94,7 @@ router.get('/:id/critical-path', validate(projectIdParamSchema, 'params'), async
   res.json(response)
 }))
 
-router.post('/:id/critical-path/refresh', validate(projectIdParamSchema, 'params'), asyncHandler(async (req, res) => {
+router.post('/:id/critical-path/refresh', validate(projectIdParamSchema, 'params'), requireProjectEditor((req) => req.params.id), asyncHandler(async (req, res) => {
   const projectId = req.params.id
   logger.info('Refreshing critical path snapshot', { projectId })
 
@@ -107,7 +107,7 @@ router.post('/:id/critical-path/refresh', validate(projectIdParamSchema, 'params
   res.json(response)
 }))
 
-router.get('/:id/critical-path/overrides', validate(projectIdParamSchema, 'params'), asyncHandler(async (req, res) => {
+router.get('/:id/critical-path/overrides', validate(projectIdParamSchema, 'params'), requireProjectMember((req) => req.params.id), asyncHandler(async (req, res) => {
   const projectId = req.params.id
   logger.info('Listing critical path overrides', { projectId })
 
@@ -186,6 +186,13 @@ router.delete(
   const projectId = req.params.id
   const { overrideId } = req.params
   logger.info('Deleting critical path override', { projectId, overrideId })
+
+  // v1.4.15: retention decision must block unsafe physical deletes.
+  const { enforceRetentionOrBlock, buildRetentionBlockedApiError, buildRetentionBlockedHttpStatus } = await import('../services/deletionRetentionGovernanceService.js')
+  const retention = await enforceRetentionOrBlock({ entityType: 'critical_path_override', entityId: overrideId, projectId, userId: req.user?.id ?? null, userAction: 'delete' })
+  if (retention.blocked) {
+    return res.status(buildRetentionBlockedHttpStatus(retention.result)).json({ success: false, error: buildRetentionBlockedApiError(retention.reason, retention.result), timestamp: new Date().toISOString() })
+  }
 
   await deleteCriticalPathOverride(projectId, overrideId)
   await recalculateProjectCriticalPath(projectId)

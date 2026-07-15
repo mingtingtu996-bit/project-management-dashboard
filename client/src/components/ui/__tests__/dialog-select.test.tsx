@@ -21,6 +21,21 @@ describe('Dialog and Select UI contract', () => {
     expect(closeButton.className).toContain('focus-visible:ring-2')
   })
 
+  it('allows full-screen workbench dialogs to opt out of expensive overlay blur', () => {
+    render(
+      <Dialog open>
+        <DialogContent overlayClassName="bg-black/45 backdrop-blur-none">
+          <DialogTitle>娴嬭瘯寮圭獥</DialogTitle>
+          <DialogDescription>娴嬭瘯寮圭獥璇存槑</DialogDescription>
+        </DialogContent>
+      </Dialog>,
+    )
+
+    const overlay = document.querySelector('.backdrop-blur-none')
+    expect(overlay).toBeTruthy()
+    expect(overlay?.className).toContain('bg-black/45')
+  })
+
   it('uses focus-visible on select trigger', () => {
     render(
       <Select>

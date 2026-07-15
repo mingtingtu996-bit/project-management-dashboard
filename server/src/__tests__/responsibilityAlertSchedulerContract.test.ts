@@ -25,6 +25,6 @@ describe('responsibility alert scheduler contract', () => {
     expect(schedulerSource).toContain('responsibilityAlertJob.stop()')
 
     expect(jobsRouteSource).toContain("name: 'responsibilityAlertJob'")
-    expect(jobsRouteSource).toContain('result: await responsibilityAlertJob.executeNow()')
+    expect(jobsRouteSource).toContain('result: await responsibilityAlertJob.executeNow(projectScope)')
   })
 })

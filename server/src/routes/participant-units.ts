@@ -6,19 +6,28 @@ import { authenticate, requireProjectEditor, requireProjectMember } from '../mid
 import { asyncHandler } from '../middleware/errorHandler.js'
 import { logger } from '../middleware/logger.js'
 import { validate, validateIdParam } from '../middleware/validation.js'
+import { query as rawQuery } from '../database.js'
 import { SupabaseService } from '../services/dbService.js'
+import { executeRetention } from '../services/deletionRetentionGovernanceService.js'
 import type { ParticipantUnit } from '../types/db.js'
 import type { ApiResponse } from '../types/index.js'
 
 const router = Router()
 const supabase = new SupabaseService()
 const TABLE_NAME = 'participant_units'
+const PARTICIPANT_UNIT_CACHE_TTL_MS = 30_000
+const participantUnitReadCache = new Map<string, {
+  expiresAt: number
+  promise: Promise<ParticipantUnit[]>
+}>()
 
 router.use(authenticate)
 
 const participantUnitsQuerySchema = z.object({
   projectId: z.string().trim().min(1).optional(),
   project_id: z.string().trim().min(1).optional(),
+  status: z.enum(['active', 'disabled', 'archived', 'all']).optional(),
+  unit_status: z.enum(['active', 'disabled', 'archived', 'all']).optional(),
 }).passthrough().refine(
   (value) => Boolean(String(value.projectId ?? value.project_id ?? '').trim()),
   'projectId is required',
@@ -32,6 +41,8 @@ const participantUnitCreateBodySchema = z.object({
   contact_role: z.string().optional().nullable(),
   contact_phone: z.string().optional().nullable(),
   contact_email: z.string().optional().nullable(),
+  status: z.enum(['active', 'disabled', 'archived']).optional(),
+  unit_status: z.enum(['active', 'disabled', 'archived']).optional(),
 }).passthrough()
 
 const participantUnitUpdateBodySchema = participantUnitCreateBodySchema.extend({
@@ -69,9 +80,31 @@ function mapParticipantUnit(row: Record<string, any>): ParticipantUnit {
     contact_role: normalizeNullableText(row.contact_role),
     contact_phone: normalizeNullableText(row.contact_phone),
     contact_email: normalizeNullableText(row.contact_email),
+    unit_status: normalizeText(row.unit_status) || 'active',
     version: Number(row.version ?? 1),
     created_at: String(row.created_at ?? now()),
     updated_at: String(row.updated_at ?? now()),
+  }
+}
+
+function normalizeDirectRow(row: Record<string, any>) {
+  const normalized: Record<string, any> = {}
+  for (const [key, value] of Object.entries(row)) {
+    normalized[key] = value instanceof Date ? value.toISOString() : value
+  }
+  return normalized
+}
+
+function clearParticipantUnitReadCache(projectId?: string | null) {
+  const normalizedProjectId = normalizeText(projectId)
+  if (!normalizedProjectId) {
+    participantUnitReadCache.clear()
+    return
+  }
+  for (const key of [...participantUnitReadCache.keys()]) {
+    if (key.startsWith(`${normalizedProjectId}:`)) {
+      participantUnitReadCache.delete(key)
+    }
   }
 }
 
@@ -93,6 +126,7 @@ function normalizeCreateBody(body: Record<string, unknown>) {
     contact_role: normalizeNullableText(body.contact_role),
     contact_phone: normalizeNullableText(body.contact_phone),
     contact_email: normalizeNullableText(body.contact_email),
+    unit_status: normalizeText(body.unit_status ?? body.status) || 'active',
     version: 1,
     created_at: now(),
     updated_at: now(),
@@ -108,6 +142,7 @@ function normalizeUpdateBody(body: Record<string, unknown>, current: Record<stri
     contact_role: resolveNullableText(body.contact_role, current.contact_role),
     contact_phone: resolveNullableText(body.contact_phone, current.contact_phone),
     contact_email: resolveNullableText(body.contact_email, current.contact_email),
+    unit_status: resolveRequiredText(body.unit_status ?? body.status, current.unit_status || 'active'),
     version: nextVersion,
     updated_at: now(),
   }
@@ -118,20 +153,115 @@ async function resolveParticipantUnitProjectId(id: string) {
   return normalizeText(rows[0]?.project_id)
 }
 
+async function safeCountReferences(table: string, unitId: string) {
+  try {
+    const rows = await supabase.query<Record<string, any>>(table, { participant_unit_id: unitId })
+    return rows.length
+  } catch (error) {
+    logger.warn('Skipping participant unit reference check', {
+      table,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return 0
+  }
+}
+
+type ParticipantUnitSnapshotReferenceTable =
+  | 'task_baseline_items'
+  | 'monthly_plan_items'
+  | 'task_progress_snapshots'
+
+async function queryParticipantUnitSnapshotReferences(table: ParticipantUnitSnapshotReferenceTable, unitId: string) {
+  const params = [JSON.stringify({ participant_unit_id: unitId })]
+  switch (table) {
+    case 'task_baseline_items':
+      return rawQuery('SELECT id FROM task_baseline_items WHERE task_fact_snapshot @> $1::jsonb LIMIT 1', params)
+    case 'monthly_plan_items':
+      return rawQuery('SELECT id FROM monthly_plan_items WHERE task_fact_snapshot @> $1::jsonb LIMIT 1', params)
+    case 'task_progress_snapshots':
+      return rawQuery('SELECT id FROM task_progress_snapshots WHERE snapshot_data @> $1::jsonb LIMIT 1', params)
+  }
+}
+
+async function safeCountSnapshotReferences(table: ParticipantUnitSnapshotReferenceTable, unitId: string) {
+  try {
+    const result = await queryParticipantUnitSnapshotReferences(table, unitId)
+    return result.rowCount ?? result.rows.length
+  } catch (error) {
+    logger.warn('Skipping participant unit snapshot reference check', {
+      table,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return 0
+  }
+}
+
+async function listParticipantUnits(projectId: string, status: string): Promise<ParticipantUnit[]> {
+  const cacheKey = `${projectId}:${status}`
+  const cached = participantUnitReadCache.get(cacheKey)
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.promise
+  }
+
+  const promise = (async () => {
+    try {
+      const params: unknown[] = [projectId]
+      const statusClause = status === 'all'
+        ? ''
+        : 'AND COALESCE(unit_status, $2) = $2'
+      if (status !== 'all') {
+        params.push(status)
+      }
+
+      const { rows } = await rawQuery(
+        `SELECT *
+         FROM participant_units
+         WHERE project_id::text = $1
+           ${statusClause}
+         ORDER BY created_at DESC`,
+        params,
+      )
+      return rows.map((row) => mapParticipantUnit(normalizeDirectRow(row)))
+    } catch (error) {
+      logger.warn('Falling back to Supabase REST for participant units list', {
+        projectId,
+        status,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+
+    const rows = await supabase.query<Record<string, any>>(TABLE_NAME, { project_id: projectId })
+    return rows
+      .filter((row) => status === 'all' || (normalizeText(row.unit_status) || 'active') === status)
+      .map(mapParticipantUnit)
+      .sort((left, right) => right.created_at.localeCompare(left.created_at))
+  })()
+
+  participantUnitReadCache.set(cacheKey, {
+    expiresAt: Date.now() + PARTICIPANT_UNIT_CACHE_TTL_MS,
+    promise,
+  })
+  try {
+    return await promise
+  } catch (error) {
+    const current = participantUnitReadCache.get(cacheKey)
+    if (current?.promise === promise) {
+      participantUnitReadCache.delete(cacheKey)
+    }
+    throw error
+  }
+}
+
 router.get(
   '/',
   requireProjectMember((req) => normalizeText(req.query.projectId ?? req.query.project_id)),
   validate(participantUnitsQuerySchema, 'query'),
   asyncHandler(async (req, res) => {
     const projectId = normalizeText(req.query.projectId ?? req.query.project_id)
-    const conditions = { project_id: projectId }
+    const status = normalizeText(req.query.status ?? req.query.unit_status) || 'active'
+    logger.info('Fetching participant units', { projectId: projectId || null, status })
 
-    logger.info('Fetching participant units', { projectId: projectId || null })
-
-    const rows = await supabase.query<Record<string, any>>(TABLE_NAME, conditions)
-    const data = rows
-      .map(mapParticipantUnit)
-      .sort((left, right) => right.created_at.localeCompare(left.created_at))
+    const data = await listParticipantUnits(projectId, status)
 
     const response: ApiResponse<ParticipantUnit[]> = {
       success: true,
@@ -167,6 +297,7 @@ router.post(
     })
 
     const created = await supabase.create<Record<string, any>>(TABLE_NAME, record as Record<string, unknown>)
+    clearParticipantUnitReadCache(record.project_id)
 
     const response: ApiResponse<ParticipantUnit> = {
       success: true,
@@ -212,6 +343,11 @@ router.put(
       return res.status(409).json(response)
     }
 
+    const submittedProjectId = normalizeText(req.body?.project_id)
+    if (submittedProjectId && submittedProjectId !== normalizeText(current.project_id)) {
+      return res.status(400).json(validationError('project_id cannot be changed for participant units'))
+    }
+
     const updates = normalizeUpdateBody((req.body ?? {}) as Record<string, unknown>, current, expectedVersion + 1)
 
     if (!updates.project_id) {
@@ -225,6 +361,7 @@ router.put(
     }
 
     const updated = await supabase.update<Record<string, any>>(TABLE_NAME, id, updates)
+    clearParticipantUnitReadCache(current.project_id)
 
     const response: ApiResponse<ParticipantUnit> = {
       success: true,
@@ -242,9 +379,59 @@ router.delete(
   requireProjectEditor(async (req) => resolveParticipantUnitProjectId(req.params.id)),
   asyncHandler(async (req, res) => {
     const { id } = req.params
+    const projectId = await resolveParticipantUnitProjectId(id)
 
-    logger.info('Deleting participant unit', { id })
-    await supabase.delete(TABLE_NAME, id)
+    // v1.4.10: check references before deciding physical delete vs archive
+    const referenceCounts = await Promise.all([
+      safeCountReferences('tasks', id),
+      safeCountReferences('task_conditions', id),
+      safeCountReferences('acceptance_plans', id),
+      safeCountReferences('project_materials', id),
+      safeCountReferences('responsibility_watchlist', id),
+      safeCountReferences('responsibility_alert_states', id),
+      safeCountReferences('project_daily_snapshot', id),
+      safeCountSnapshotReferences('task_baseline_items', id),
+      safeCountSnapshotReferences('monthly_plan_items', id),
+      safeCountSnapshotReferences('task_progress_snapshots', id),
+    ])
+
+    const hasReferences = referenceCounts.some((count) => count > 0)
+    const retention = await executeRetention({
+      entityType: 'participant_unit',
+      entityId: id,
+      projectId,
+      userId: req.user?.id ?? null,
+      userAction: 'delete',
+      suggestedAction: {
+        classification: 'participant_unit_reference_aware_delete_or_archive',
+        referenceCounts,
+        hasReferences,
+      },
+    })
+
+    if (retention.resolvedAction === 'archive') {
+      logger.info('Archiving participant unit (has references)', { id })
+      await supabase.update(TABLE_NAME, id, { unit_status: 'archived', updated_at: new Date().toISOString() } as any)
+    } else if (retention.resolvedAction === 'physical_delete' && retention.executionMode === 'auto_execute') {
+      logger.info('Physically deleting participant unit (no references)', { id })
+      await supabase.delete(TABLE_NAME, id)
+    } else {
+      logger.warn('Participant unit deletion blocked by retention governance', {
+        id,
+        resolvedAction: retention.resolvedAction,
+        reasonCode: retention.reasonCode,
+      })
+      return res.status(422).json({
+        success: false,
+        error: {
+          code: 'PARTICIPANT_UNIT_RETENTION_BLOCKED',
+          message: retention.reason,
+          details: retention,
+        },
+        timestamp: now(),
+      } as ApiResponse)
+    }
+    clearParticipantUnitReadCache(projectId)
 
     const response: ApiResponse = {
       success: true,

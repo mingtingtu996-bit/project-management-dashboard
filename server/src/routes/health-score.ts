@@ -2,23 +2,43 @@
  * 健康度 API 路由
  * 提供项目健康度的计算和更新接口
  *
- * 路由顺序说明：固定路径（batch/avg-history/record-snapshot）必须在参数路径（/:projectId）之前
+ * 路由顺序说明：固定路径（batch/record-snapshot）必须在参数路径（/:projectId）之前
  */
 
 import express from 'express'
 import { z } from 'zod'
 
-import { authenticate } from '../middleware/auth.js'
+import { getVisibleProjectIds } from '../auth/access.js'
+import { getRequestCompanyId } from '../auth/companyContext.js'
+import { authenticate, requireProjectEditor, requireProjectMember } from '../middleware/auth.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import { logger } from '../middleware/logger.js'
 import { validate } from '../middleware/validation.js'
-import { recordProjectDailySnapshots } from '../services/projectDailySnapshotService.js'
+import {
+  loadProjectMonthlyHealthHistory,
+  recordProjectDailySnapshot,
+  recordProjectDailySnapshots,
+} from '../services/projectDailySnapshotService.js'
 import { REQUEST_TIMEOUT_BUDGETS, runWithRequestBudget } from '../services/requestBudgetService.js'
 import { calculateProjectHealth, updateProjectHealth, updateAllProjectsHealth } from '../services/projectHealthService.js'
 import type { ApiResponse } from '../types/index.js'
 
 const router = express.Router()
 router.use(authenticate)
+
+type ProjectHealthResult = Awaited<ReturnType<typeof calculateProjectHealth>>
+type ProjectHealthDegradedResult = {
+  degraded: true
+  degradationReason: 'request_budget_exceeded'
+  score: null
+  details: null
+  status: 'degraded'
+  message: string
+}
+type ProjectHealthReadResult = ProjectHealthResult | ProjectHealthDegradedResult
+
+const HEALTH_SCORE_READ_CACHE_TTL_MS = Number(process.env.HEALTH_SCORE_READ_CACHE_TTL_MS ?? 60_000)
+const projectHealthScoreReadCache = new Map<string, { expiresAt: number; result: ProjectHealthResult }>()
 
 const projectIdParamSchema = z.object({
   projectId: z.string().trim().min(1, 'projectId 不能为空'),
@@ -44,74 +64,76 @@ function errorResponse(message: string, code: string, details?: unknown): ApiRes
   }
 }
 
-function formatMonthKey(date = new Date()) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+export function clearHealthScoreReadCacheForTest() {
+  if (process.env.NODE_ENV !== 'test') return
+  projectHealthScoreReadCache.clear()
 }
 
-function getPreviousMonthKey(date = new Date()) {
-  const previous = new Date(date.getFullYear(), date.getMonth() - 1, 1)
-  return formatMonthKey(previous)
+function buildDegradedProjectHealthScore(projectId: string, error: unknown): ProjectHealthDegradedResult {
+  logger.warn('[health-score] project health score degraded after budgeted read failed without cache', {
+    projectId,
+    error: error instanceof Error ? error.message : String(error),
+  })
+
+  return {
+    degraded: true,
+    degradationReason: 'request_budget_exceeded',
+    score: null,
+    details: null,
+    status: 'degraded',
+    message: '健康分解暂不可用，请稍后重试。',
+  }
 }
 
-function monthStart(monthKey: string) {
-  return `${monthKey}-01`
-}
-
-function nextMonthStart(monthKey: string) {
-  const [year, month] = monthKey.split('-').map(Number)
-  return monthStart(formatMonthKey(new Date(year, month, 1)))
-}
-
-function snapshotDateToMonthKey(value: unknown) {
-  const text = String(value ?? '').slice(0, 10)
-  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text.slice(0, 7) : null
-}
-
-function toFiniteNumber(value: unknown) {
-  const next = Number(value)
-  return Number.isFinite(next) ? next : null
-}
-
-function average(values: number[]) {
-  if (values.length === 0) return null
-  // eslint-disable-next-line -- route-level-aggregation-approved
-  return Math.round(values.reduce((sum, value) => sum + value, 0) / values.length)
-}
-
-function latestMonthlySnapshotRows<T extends {
-  project_id: string | null
-  snapshot_date: string | null
-  health_score?: number | null
-}>(rows: T[]) {
-  const latestRows = new Map<string, T>()
-
-  for (const row of rows) {
-    const period = snapshotDateToMonthKey(row.snapshot_date)
-    const projectId = String(row.project_id ?? '').trim()
-    if (!period || !projectId) continue
-
-    const key = `${period}::${projectId}`
-    const current = latestRows.get(key)
-    if (!current || String(row.snapshot_date) > String(current.snapshot_date)) {
-      latestRows.set(key, row)
-    }
+async function loadProjectHealthScoreWithBudget(projectId: string): Promise<ProjectHealthReadResult> {
+  const cached = projectHealthScoreReadCache.get(projectId)
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.result
   }
 
-  return [...latestRows.values()]
+  try {
+    const result = await runWithRequestBudget(
+      {
+        operation: 'health-score.project-read',
+        timeoutMs: REQUEST_TIMEOUT_BUDGETS.analysisReadMs,
+      },
+      () => calculateProjectHealth(projectId),
+    )
+    projectHealthScoreReadCache.set(projectId, {
+      expiresAt: Date.now() + HEALTH_SCORE_READ_CACHE_TTL_MS,
+      result,
+    })
+    return result
+  } catch (error) {
+    if (cached) {
+      logger.warn('[health-score] reused stale project health score after budgeted read failed', {
+        projectId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+      return cached.result
+    }
+    return buildDegradedProjectHealthScore(projectId, error)
+  }
+}
+
+async function getVisibleProjectIdsForRequest(req: express.Request): Promise<string[] | null> {
+  if (!req.user?.id) return []
+  return getVisibleProjectIds(req.user.id, req.user.globalRole, getRequestCompanyId(req))
 }
 
 /**
  * POST /api/health-score/batch
  * 批量更新所有项目的健康度
  */
-router.post('/batch', asyncHandler(async (_req, res) => {
+router.post('/batch', asyncHandler(async (req, res) => {
   try {
+    const visibleProjectIds = await getVisibleProjectIdsForRequest(req)
     const updatedCount = await runWithRequestBudget(
       {
         operation: 'health_score.batch',
         timeoutMs: REQUEST_TIMEOUT_BUDGETS.batchWriteMs,
       },
-      async () => updateAllProjectsHealth(),
+      async () => updateAllProjectsHealth(visibleProjectIds),
     )
 
     res.json({
@@ -132,83 +154,26 @@ router.post('/batch', asyncHandler(async (_req, res) => {
 }))
 
 /**
- * GET /api/health-score/avg-history
- * 获取所有项目本月和上月的平均健康度
- */
-router.get('/avg-history', asyncHandler(async (_req, res) => {
-  try {
-    const data = await runWithRequestBudget(
-      {
-        operation: 'health_score.avg_history',
-        timeoutMs: REQUEST_TIMEOUT_BUDGETS.fastReadMs,
-      },
-      async () => {
-        const { createClient } = await import('@supabase/supabase-js')
-        const supabaseUrl = process.env.SUPABASE_URL || ''
-        const supabaseKey = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY || ''
-        const supabase = createClient(supabaseUrl, supabaseKey)
-
-        const thisMonth = formatMonthKey()
-        const lastMonth = getPreviousMonthKey()
-
-        const { data, error } = await supabase
-          .from('project_daily_snapshot')
-          .select('project_id, snapshot_date, health_score')
-          .gte('snapshot_date', monthStart(lastMonth))
-          .lt('snapshot_date', nextMonthStart(thisMonth))
-          .order('snapshot_date', { ascending: true })
-          .order('project_id', { ascending: true })
-
-        if (error) {
-          logger.warn('查询日快照历史均值失败（可能表未创建）', { message: error.message })
-          return { thisMonth: null, lastMonth: null, change: null }
-        }
-
-        const rows = latestMonthlySnapshotRows(data || [])
-        const thisMonthScores = rows
-          .filter((row) => snapshotDateToMonthKey(row.snapshot_date) === thisMonth)
-          .map((row) => toFiniteNumber(row.health_score))
-          .filter((value): value is number => value !== null)
-        const lastMonthScores = rows
-          .filter((row) => snapshotDateToMonthKey(row.snapshot_date) === lastMonth)
-          .map((row) => toFiniteNumber(row.health_score))
-          .filter((value): value is number => value !== null)
-
-        const thisAvg = average(thisMonthScores)
-        const lastAvg = average(lastMonthScores)
-        const change = thisAvg !== null && lastAvg !== null ? thisAvg - lastAvg : null
-
-        return {
-          thisMonth: thisAvg,
-          lastMonth: lastAvg,
-          change,
-          thisMonthPeriod: thisMonth,
-          lastMonthPeriod: lastMonth,
-        }
-      },
-    )
-
-    res.json({
-      success: true,
-      data,
-    })
-  } catch (error) {
-    logger.error('获取健康度历史均值失败', { error })
-    res.json({ success: true, data: { thisMonth: null, lastMonth: null, change: null } })
-  }
-}))
-
-/**
  * POST /api/health-score/record-snapshot
  */
-router.post('/record-snapshot', asyncHandler(async (_req, res) => {
+router.post('/record-snapshot', asyncHandler(async (req, res) => {
   try {
+    const visibleProjectIds = await getVisibleProjectIdsForRequest(req)
     const result = await runWithRequestBudget(
       {
         operation: 'health_score.record_snapshot',
         timeoutMs: REQUEST_TIMEOUT_BUDGETS.batchWriteMs,
       },
-      async () => recordProjectDailySnapshots(),
+      async () => {
+        if (visibleProjectIds === null) return recordProjectDailySnapshots()
+        const results = await Promise.all(visibleProjectIds.map((projectId) => recordProjectDailySnapshot(projectId)))
+        // eslint-disable-next-line -- route-level-aggregation-approved
+        return results.reduce((acc, item) => ({
+          recorded: acc.recorded + item.recorded,
+          failed: acc.failed + item.failed,
+          snapshotDate: item.snapshotDate || acc.snapshotDate,
+        }), { recorded: 0, failed: 0, snapshotDate: new Date().toISOString().split('T')[0] })
+      },
     )
 
     res.json({
@@ -231,9 +196,9 @@ router.post('/record-snapshot', asyncHandler(async (_req, res) => {
 /**
  * GET /api/health-score/:projectId
  */
-router.get('/:projectId', validate(projectIdParamSchema, 'params'), asyncHandler(async (req, res) => {
+router.get('/:projectId', validate(projectIdParamSchema, 'params'), requireProjectMember((req) => req.params.projectId), asyncHandler(async (req, res) => {
   const { projectId } = req.params
-  const healthResult = await calculateProjectHealth(projectId)
+  const healthResult = await loadProjectHealthScoreWithBudget(projectId)
 
   res.json({
     success: true,
@@ -248,38 +213,14 @@ router.get(
   '/:projectId/history',
   validate(projectIdParamSchema, 'params'),
   validate(projectHistoryQuerySchema, 'query'),
+  requireProjectMember((req) => req.params.projectId),
   asyncHandler(async (req, res) => {
     try {
       const { projectId } = req.params
       const months = Number(req.query.months ?? 3)
 
-      const { createClient } = await import('@supabase/supabase-js')
-      const supabaseUrl = process.env.SUPABASE_URL || ''
-      const supabaseKey = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY || ''
-      const supabase = createClient(supabaseUrl, supabaseKey)
-
-      const { data, error } = await supabase
-        .from('project_daily_snapshot')
-        .select('project_id, snapshot_date, health_score, health_status, updated_at')
-        .eq('project_id', projectId)
-        .order('snapshot_date', { ascending: false })
-
-      if (error) {
-        logger.warn('查询日快照健康度历史失败（可能表未创建）', { message: error.message, projectId })
-        return res.json({ success: true, data: [] })
-      }
-
-      const monthlyRows = latestMonthlySnapshotRows(data || [])
-        .sort((left, right) => String(right.snapshot_date).localeCompare(String(left.snapshot_date)))
-        .slice(0, months)
-        .map((row) => ({
-          period: snapshotDateToMonthKey(row.snapshot_date),
-          health_score: row.health_score,
-          health_status: row.health_status,
-          recorded_at: row.updated_at ?? row.snapshot_date,
-        }))
-
-      res.json({ success: true, data: monthlyRows })
+      const history = await loadProjectMonthlyHealthHistory(projectId, months)
+      res.json({ success: true, data: history })
     } catch (error) {
       logger.error('获取健康度历史失败', { error, projectId: req.params.projectId })
       res.json({ success: true, data: [] })
@@ -290,7 +231,7 @@ router.get(
 /**
  * PUT /api/health-score/:projectId
  */
-router.put('/:projectId', validate(projectIdParamSchema, 'params'), asyncHandler(async (req, res) => {
+router.put('/:projectId', validate(projectIdParamSchema, 'params'), requireProjectEditor((req) => req.params.projectId), asyncHandler(async (req, res) => {
   const { projectId } = req.params
   const healthResult = await updateProjectHealth(projectId)
 

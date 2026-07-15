@@ -161,6 +161,25 @@ const state = vi.hoisted(() => {
 
 vi.mock('../middleware/auth.js', () => ({
   authenticate: (_req: any, _res: any, next: () => void) => next(),
+  requireProjectMember: (getProjectId: (req: any) => string | undefined | Promise<string | undefined>) => {
+    return async (req: any, res: any, next: () => void) => {
+      const projectId = await getProjectId(req)
+      if (!projectId) {
+        res.status(400).json({
+          success: false,
+          error: { code: 'BAD_REQUEST', message: '缺少项目ID' },
+          timestamp: new Date().toISOString(),
+        })
+        return
+      }
+
+      req.user = {
+        id: 'user-1',
+        globalRole: 'regular',
+      }
+      next()
+    }
+  },
   requireProjectEditor: (getProjectId: (req: any) => string | undefined | Promise<string | undefined>) => {
     return async (req: any, res: any, next: () => void) => {
       const projectId = await getProjectId(req)
@@ -185,6 +204,18 @@ vi.mock('../middleware/auth.js', () => ({
 vi.mock('../services/dbService.js', () => ({
   executeSQL: state.executeSQL,
   executeSQLOne: state.executeSQLOne,
+}))
+
+vi.mock('../services/deletionRetentionGovernanceService.js', () => ({
+  enforceRetentionOrBlock: vi.fn(async () => ({ blocked: false, reason: null, result: null })),
+  buildRetentionBlockedApiError: vi.fn((reason: string, result: Record<string, unknown>) => ({
+    code: 'RETENTION_REJECTED',
+    message: reason,
+    details: result,
+  })),
+  buildRetentionBlockedHttpStatus: vi.fn((result: Record<string, unknown>) => (
+    result.requiresUserConfirmation ? 409 : 422
+  )),
 }))
 
 const { registerDrawingReviewRuleRoutes } = await import('../routes/drawing-review-rules.js')
@@ -367,7 +398,7 @@ describe('drawing review rules routes', () => {
     expect(blockedRes.body.error?.code).toBe('MISSING_REVIEWER_FOR_MANDATORY')
   })
 
-  it('returns all review rules when projectId is omitted', async () => {
+  it('returns only global review rules when projectId is omitted', async () => {
     seedRule({
       id: 'global-rule',
       project_id: null,
@@ -410,10 +441,44 @@ describe('drawing review rules routes', () => {
 
     expect(res.status).toBe(200)
     expect(res.body.success).toBe(true)
-    expect(res.body.data.rules).toHaveLength(3)
-    expect(res.body.data.rules[0]).toMatchObject({ id: 'project-rule-a' })
-    expect(res.body.data.rules[1]).toMatchObject({ id: 'project-rule-b' })
-    expect(res.body.data.rules[2]).toMatchObject({ id: 'global-rule' })
+    expect(res.body.data.rules).toHaveLength(1)
+    expect(res.body.data.rules[0]).toMatchObject({ id: 'global-rule', project_id: null })
+  })
+
+  it('keeps global review rules read-only even when a projectId is supplied', async () => {
+    seedRule({
+      id: 'global-rule',
+      project_id: null,
+      package_code: null,
+      discipline_type: '消防',
+      document_purpose: '送审报批',
+      default_review_mode: 'mandatory',
+      review_basis: '全局消防规则',
+      is_active: 1,
+      created_at: '2026-04-24 08:00:00',
+      updated_at: '2026-04-24 08:00:00',
+    })
+
+    const request = supertest(buildApp())
+    const updateRes = await request
+      .put('/api/construction-drawings/review-rules/global-rule?projectId=project-1')
+      .send({
+        review_basis: '项目尝试改全局规则',
+        default_review_mode: 'manual_confirm',
+      })
+
+    expect(updateRes.status).toBe(403)
+    expect(updateRes.body.error?.code).toBe('SYSTEM_RULE_READ_ONLY')
+    expect(state.rules[0]).toMatchObject({
+      id: 'global-rule',
+      review_basis: '全局消防规则',
+      default_review_mode: 'mandatory',
+    })
+
+    const deleteRes = await request.delete('/api/construction-drawings/review-rules/global-rule?projectId=project-1')
+    expect(deleteRes.status).toBe(403)
+    expect(deleteRes.body.error?.code).toBe('SYSTEM_RULE_READ_ONLY')
+    expect(state.rules).toHaveLength(1)
   })
 
   it('rejects invalid review mode values during evaluation', async () => {

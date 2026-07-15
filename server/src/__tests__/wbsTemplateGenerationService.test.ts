@@ -85,6 +85,7 @@ vi.mock('../middleware/logger.js', () => ({
 
 import {
   applyProcessConstraintEffects,
+  buildCandidateNetworkEvaluationForGeneratedRows,
   buildTemplateGenerateCreateOperations,
   CHINA_GB55032_TEMPLATE_ID,
   generateWbsTemplatePhaseChainRows as generateWbsTemplatePhaseChainRowsRaw,
@@ -109,6 +110,7 @@ import { inferExecutionNature } from '../seeds/executionNature.js'
 import { getScopeAssignmentRules } from '../services/scopeAssignmentRulesService.js'
 import {
   calculateWbsParentPlanRollup,
+  contributesToWbsPlannedWindow,
   distributePlanDurationAcrossActivitySteps,
 } from '../services/wbsPlanRollupService.js'
 
@@ -303,6 +305,193 @@ function assertGeneratedDependencyNetworkIsClosed(
 }
 
 describe('v1.4.7.2 WBS template generation service', () => {
+  it('materializes only the selected task next-level process frontier for drilldown', async () => {
+    const parentTaskId = '00000000-0000-4000-8000-000000000101'
+    const generated = await generateWbsTemplateRows({
+      projectId: '00000000-0000-4000-8000-000000000001',
+      surface: 'task_list',
+      diagnosticDurationSuggestionMode: 'fast_template',
+      operation: {
+        type: 'template_generate',
+        generationBatchId: 'batch-task-process-drilldown',
+        templateId: CHINA_GB55032_TEMPLATE_ID,
+        selectedNodeIds: ['02-01-01'],
+        plannedStartDate: '2026-06-01',
+        scope: { building_object_id: 'building-1' },
+        attachUnderRowId: parentTaskId,
+        generationDepth: 'process',
+        includeActivitySteps: false,
+        drilldownMode: 'selected_children',
+        drilldownGenerationLevel: 'process_detail',
+        sourceParentTaskId: parentTaskId,
+      },
+    })
+
+    expect(generated.rows).toHaveLength(3)
+    expect(generated.rows.some((row) => stableCodeOf(row) === '02-01-01')).toBe(false)
+    expect(generated.rows.every((row) => row.values.wbs_node_type === 'process')).toBe(true)
+    expect(generated.rows.every((row) => row.values.row_projection_mode === 'schedule_row')).toBe(true)
+    expect(generated.rows.map((row) => row.values.title)).not.toEqual(expect.arrayContaining([
+      expect.stringMatching(/深化配模|承载复核|成型验收/),
+    ]))
+    expect(generated.rows.filter((row) => !row.parentClientRowId).every((row) => row.parentRowId === parentTaskId)).toBe(true)
+    expect(generated.rows.every((row) => (
+      (row.values.standard_task_metadata as any)?.drilldownGenerationLineage?.level === 'process_detail'
+    ))).toBe(true)
+    expect(generated.rowLimit).toBe(80)
+  }, 30_000)
+
+  it('uses the parent T2 rhythm asset to materialize ordered standard-floor cycle rows', async () => {
+    const parentTaskId = '00000000-0000-4000-8000-000000000101'
+    const generated = await generateWbsTemplateRows({
+      projectId: '00000000-0000-4000-8000-000000000001',
+      surface: 'task_list',
+      diagnosticDurationSuggestionMode: 'fast_template',
+      operation: {
+        type: 'template_generate',
+        generationBatchId: 'batch-t2-floor-cycle-drilldown',
+        templateId: 't2-residential-standard-floor-structure-rhythm-v1',
+        selectedNodeIds: ['t2-residential-standard-floor-structure-rhythm-v1:floor-cycles'],
+        plannedStartDate: '2027-08-19',
+        projectPlannedEndDate: '2028-03-17',
+        scope: { building_object_id: 'building-1' },
+        attachUnderRowId: parentTaskId,
+        generationDepth: 'process',
+        includeActivitySteps: false,
+        drilldownMode: 'selected_children',
+        drilldownGenerationLevel: 'process_detail',
+        sourceParentTaskId: parentTaskId,
+        drilldownParentContext: {
+          parentTaskId,
+          parentTitle: '1#楼主体结构标准层循环',
+          plannedStartDate: '2027-08-19',
+          plannedEndDate: '2028-03-17',
+          currentLevel: 'master_control',
+          standardFloorCount: 24,
+          t2RhythmTemplateId: 't2-residential-standard-floor-structure-rhythm-v1',
+          cycleIndex: null,
+          cycleCount: null,
+          buildingLabel: '1#楼',
+          executionPhase: 'superstructure_rhythm',
+          executionLane: 'tower_1',
+          sourceStandardWorkCode: 'RMP-04-01-02',
+          sortOrder: 20,
+        },
+      },
+    })
+
+    expect(generated.rows).toHaveLength(24)
+    expect(generated.rows.every((row) => row.values.wbs_node_type === 'process')).toBe(true)
+    expect(generated.rows.every((row) => row.values.row_projection_mode === 'schedule_row')).toBe(true)
+    expect(generated.rows.map((row) => row.values.title)).not.toEqual(expect.arrayContaining([
+      expect.stringMatching(/进场检验|大体积测温|后浇带|抗渗试压/),
+    ]))
+    expect(generated.rows[0]?.values).toEqual(expect.objectContaining({
+      title: '1#楼标准层第01施工循环',
+      planned_start_date: '2027-08-19',
+    }))
+    expect(generated.rows.at(-1)?.values).toEqual(expect.objectContaining({
+      title: '1#楼标准层第24施工循环',
+      planned_end_date: '2028-03-17',
+    }))
+    expect((generated as any).taskPlanRhythmAssetSummary).toEqual(expect.objectContaining({
+      role: 'system_bootstrap',
+      effectiveSource: 'system_bootstrap',
+    }))
+    expect((generated as any).taskPlanRhythmParentWindowFit).toEqual(expect.objectContaining({
+      decision: 'controlled_compression_to_parent_boundary',
+      cycleCount: 24,
+    }))
+    expect((generated as any).durationAssetConsumptionReceipts).toEqual([
+      expect.objectContaining({
+        consumer: 'task_plan_drilldown_rhythm',
+        status: 'effective_applied',
+        changedFields: expect.arrayContaining(['task_selection', 'duration', 'dates', 'dependency']),
+      }),
+    ])
+    expect((generated as any).durationAssetConsumptionSummary).toEqual(expect.objectContaining({
+      effectiveAppliedCount: 1,
+      blockedByConflictCount: 0,
+    }))
+    expect(generated.rows.every((row) => (
+      (row.values.standard_task_metadata as any)?.taskStructureGovernance?.pipeline
+        === 'wbs_task_structure_governance_pipeline'
+    ))).toBe(true)
+    expect(generated.rows.slice(1).every((row) => row.predecessorDependencies.every((dependency) => (
+      (dependency as any).dependencyRuleEvidence?.relationLayerKey === 'same_parent_internal_flow'
+    )))).toBe(true)
+    expect(generated.rowLimit).toBe(80)
+  }, 30_000)
+
+  it('blocks a T2 drilldown when the parent window is shorter than the governed P20 minimum', async () => {
+    const parentTaskId = '00000000-0000-4000-8000-000000000101'
+    await expect(generateWbsTemplateRows({
+      projectId: '00000000-0000-4000-8000-000000000001',
+      surface: 'task_list',
+      operation: {
+        type: 'template_generate',
+        generationBatchId: 'batch-t2-short-parent-conflict',
+        templateId: 't2-residential-standard-floor-structure-rhythm-v1',
+        selectedNodeIds: ['t2-residential-standard-floor-structure-rhythm-v1:floor-cycles'],
+        scope: { building_object_id: 'building-1' },
+        attachUnderRowId: parentTaskId,
+        drilldownMode: 'selected_children',
+        drilldownGenerationLevel: 'process_detail',
+        drilldownParentContext: {
+          parentTaskId,
+          parentTitle: '1#楼主体结构标准层循环',
+          plannedStartDate: '2027-08-19',
+          plannedEndDate: '2027-10-31',
+          currentLevel: 'master_control',
+          standardFloorCount: 24,
+          t2RhythmTemplateId: 't2-residential-standard-floor-structure-rhythm-v1',
+          cycleIndex: null,
+          cycleCount: null,
+          buildingLabel: '1#楼',
+          executionPhase: 'superstructure_rhythm',
+          executionLane: 'tower_1',
+          sourceStandardWorkCode: 'RMP-04-01-02',
+          sortOrder: 20,
+        },
+      },
+    })).rejects.toMatchObject({
+      code: 'TASK_PLAN_DRILLDOWN_PARENT_WINDOW_CONFLICT',
+      statusCode: 422,
+      details: expect.objectContaining({
+        decision: 'blocked_by_minimum_rhythm_conflict',
+        minimumRequiredProductionDays: 120,
+        mutationBoundary: 'rejected_before_task_or_dependency_write',
+        assetConsumptionReceipts: [expect.objectContaining({ status: 'blocked_by_conflict' })],
+      }),
+    })
+  }, 30_000)
+
+  it('rejects an attached drilldown that would materialize more than 80 schedule rows', async () => {
+    await expect(generateWbsTemplateRows({
+      projectId: '00000000-0000-4000-8000-000000000001',
+      surface: 'task_list',
+      diagnosticDurationSuggestionMode: 'fast_template',
+      operation: {
+        type: 'template_generate',
+        generationBatchId: 'batch-task-drilldown-row-limit',
+        templateId: CHINA_GB55032_TEMPLATE_ID,
+        selectedNodeIds: ['02-01-01'],
+        plannedStartDate: '2026-06-01',
+        scope: {
+          buildings: Array.from({ length: 41 }, (_value, index) => `building-${index + 1}`),
+        },
+        attachUnderRowId: '00000000-0000-4000-8000-000000000101',
+        generationDepth: 'process',
+        drilldownMode: 'selected_children',
+        drilldownGenerationLevel: 'process_detail',
+      },
+    })).rejects.toMatchObject({
+      code: 'TASK_PLAN_DRILLDOWN_ROW_LIMIT_EXCEEDED',
+      statusCode: 413,
+      details: expect.objectContaining({ rowLimit: 80 }),
+    })
+  }, 30_000)
+
   it('records v1.4.22.5 runtime consumer evidence for WBS template generation artifacts', async () => {
     const { calls, queryExec } = createRecordingQueryExec()
 
@@ -451,6 +640,9 @@ describe('v1.4.7.2 WBS template generation service', () => {
     expect(inferDurationContributionMode({ name: 'wall installation', planItemKind: 'work_task' })).toBe('duration_bearing')
     expect(inferDurationContributionMode({ name: 'document record closeout' })).toBe('record_only')
     expect(inferDurationContributionMode({ name: 'acceptance handover record' })).toBe('handover_marker')
+    expect(inferDurationContributionMode({ name: '管道试压和渗漏整改复验' })).toBe('duration_bearing')
+    expect(inferDurationContributionMode({ name: '系统联动调试' })).toBe('duration_bearing')
+    expect(inferDurationContributionMode({ name: '试运行记录归档' })).toBe('record_only')
   })
 
   it('separates physical execution nature from duration contribution mode', () => {
@@ -653,6 +845,81 @@ describe('v1.4.7.2 WBS template generation service', () => {
     expect(createOperations.every((operation) => operation.type === 'create_row')).toBe(true)
   }, 30000)
 
+  it('classifies starting-line generated rows into history, in-progress and future stages', async () => {
+    const generated = await generateWbsTemplateRows({
+      projectId: '00000000-0000-4000-8000-000000000001',
+      surface: 'task_list',
+      detailLevel: 'standard',
+      operation: {
+        type: 'template_generate',
+        generationBatchId: 'batch-starting-line-main-structure',
+        primaryCatalogId: CHINA_GB55032_TEMPLATE_ID,
+        templateIds: [CHINA_GB55032_TEMPLATE_ID, 'china-gb55032-2022-outdoor'],
+        selectedNodesByTemplate: {
+          [CHINA_GB55032_TEMPLATE_ID]: ['01-02-01', '01-03-01', '02-01-01', '02-01-03', '02-02-01', '03-02-01', '07-05'],
+          'china-gb55032-2022-outdoor': ['OUT-02-01-01'],
+        },
+        plannedStartDate: '2026-03-01',
+        scope: {
+          phase_object_id: 'phase-starting-line',
+          section_object_id: 'section-starting-line',
+          building_object_id: 'building-starting-line',
+          basement_object_id: 'basement-starting-line',
+          physical_zone_object_id: 'outdoor-starting-line',
+          project_type_code: 'civil_residential',
+          totalAreaM2: 165000,
+          buildingCount: 4,
+          highestBuildingFloorCount: 32,
+          standardFloorCount: 29,
+          basementLevelCount: 2,
+          siteAreaM2: 26000,
+          towerCraneCount: 4,
+        },
+        projectFacts: {
+          mode: 'starting_line',
+          businessType: 'general_civil',
+          businessSubtype: 'civil_residential',
+          projectTypeCode: 'civil_residential',
+          methodVariantCodes: ['cast_in_situ'],
+          actualStartDate: '2026-03-01',
+          onboardingSubstage: 'main_structure',
+          onboardingPhaseProgress: {
+            'building-starting-line': { buildingName: '1#楼', floor: 'L12' },
+          },
+          onboardingPassedMilestones: ['pile_foundation_acceptance', 'foundation_acceptance', 'basement_structure_acceptance'],
+          totalAreaM2: 165000,
+          aboveGroundAreaM2: 124000,
+          basementAreaM2: 41000,
+          siteAreaM2: 26000,
+          buildingCount: 4,
+          highestBuildingFloorCount: 32,
+          standardFloorCount: 29,
+          basementLevelCount: 2,
+          towerCraneCount: 4,
+          hasCivilDefense: true,
+        },
+      },
+      onboardingSubstage: 'main_structure',
+      duplicatePolicy: 'preserve_historical_skip_future',
+    })
+
+    expect(generated.onboardingSummary).toEqual(expect.objectContaining({
+      history: expect.any(Number),
+      in_progress: expect.any(Number),
+      future: expect.any(Number),
+    }))
+    expect(generated.onboardingSummary?.history).toBeGreaterThan(0)
+    expect(generated.onboardingSummary?.in_progress).toBeGreaterThan(0)
+    expect(generated.onboardingSummary?.future).toBeGreaterThan(0)
+
+    const historyRows = generated.rows.filter((row) => row.values.onboarding_stage_classification === 'history')
+    const inProgressRows = generated.rows.filter((row) => row.values.onboarding_stage_classification === 'in_progress')
+    const futureRows = generated.rows.filter((row) => row.values.onboarding_stage_classification === 'future')
+    expect(historyRows.every((row) => row.values.is_historical === true)).toBe(true)
+    expect(inProgressRows.some((row) => row.values.execution_phase === 'superstructure_rhythm')).toBe(true)
+    expect(futureRows.some((row) => !['foundation_pit_pile', 'basement_structure', 'basement_waterproof_handover', 'superstructure_rhythm'].includes(String(row.values.execution_phase ?? '')))).toBe(true)
+  }, 30000)
+
   it('reports target end feasibility without compressing generated schedule dates', async () => {
     const natural = await generateWbsTemplateRowsRaw({
       projectId: '00000000-0000-4000-8000-000000000001',
@@ -722,6 +989,111 @@ describe('v1.4.7.2 WBS template generation service', () => {
         }),
       }),
     ]))
+  }, 30000)
+
+  it('records the real WBS generation runtime call without fabricating observations when no published artifact was consumed', async () => {
+    const { calls, queryExec } = createRecordingQueryExec()
+
+    const generated = await generateWbsTemplateRowsRaw({
+      projectId: '00000000-0000-4000-8000-000000000001',
+      surface: 'task_list',
+      detailLevel: 'standard',
+      diagnosticDurationSuggestionMode: 'fast_template',
+      operation: {
+        type: 'template_generate',
+        generationBatchId: 'batch-runtime-call-only',
+        templateId: CHINA_GB55032_TEMPLATE_ID,
+        selectedNodeIds: ['01-01-01'],
+        plannedStartDate: '2026-06-01',
+        scope: {
+          building_object_id: 'building-1',
+        },
+      },
+      runtimeConsumerObservationQueryExec: queryExec,
+      runtimeConsumerObservedAt: '2026-06-15T12:00:00.000Z',
+      runtimeArtifactPublications: [],
+    })
+
+    expect(generated.generationBatchId).toBe('batch-runtime-call-only')
+    expect(callsForTable(calls, 'runtime_consumer_runtime_calls')).toHaveLength(1)
+    expect(callsForTable(calls, 'runtime_consumer_runtime_calls')[0].params).toEqual([
+      'wbsTemplateGenerationService',
+      'wbsTemplateGenerationService:generateWbsTemplateRows',
+      'called',
+      expect.objectContaining({
+        projectId: '00000000-0000-4000-8000-000000000001',
+        generationBatchId: 'batch-runtime-call-only',
+        runtimeAssetMode: 'no_published_artifact',
+        runtimeArtifactCount: 0,
+      }),
+      [expect.stringContaining('wbs_template_generation:00000000-0000-4000-8000-000000000001:batch-runtime-call-only:')],
+      false,
+      false,
+      '2026-06-15T12:00:00.000Z',
+    ])
+    expect(callsForTable(calls, 'runtime_consumer_observations')).toHaveLength(0)
+  }, 30000)
+
+  it('evaluates target feasibility after final rollups so natural end matches generated rows', async () => {
+    const generated = await generateWbsTemplateRows({
+      projectId: '00000000-0000-4000-8000-000000000001',
+      surface: 'task_list',
+      detailLevel: 'standard',
+      operation: {
+        type: 'template_generate',
+        generationBatchId: 'batch-target-final-rollup-natural-end',
+        primaryCatalogId: CHINA_GB55032_TEMPLATE_ID,
+        templateIds: [CHINA_GB55032_TEMPLATE_ID, 'china-industrial-cleanroom-specialty'],
+        selectedNodesByTemplate: {
+          [CHINA_GB55032_TEMPLATE_ID]: ['01-02-01', '02-01-01', '02-01-03'],
+          'china-industrial-cleanroom-specialty': ['ICR-01-01-01', 'ICR-02-01-01', 'ICR-03-01-01', 'ICR-04-01-01', 'ICR-05-01-05'],
+        },
+        plannedStartDate: '2026-09-01',
+        clientContext: {
+          projectPlannedEndDate: '2026-12-16',
+          targetConstraintMode: 'compression_preview',
+        },
+        scope: {
+          phase_object_id: 'phase-industrial-cleanroom',
+          section_object_id: 'section-industrial-cleanroom',
+          building_object_id: 'building-industrial-cleanroom',
+          physical_zone_object_id: 'zone-industrial-cleanroom',
+          project_type_code: 'industrial_cleanroom',
+          totalAreaM2: 120000,
+          buildingCount: 4,
+          highestBuildingFloorCount: 6,
+          siteAreaM2: 60000,
+          maxSpanM: 36,
+          supportHeightM: 10,
+        },
+        projectFacts: {
+          businessType: 'industrial',
+          businessSubtype: 'industrial_cleanroom',
+          projectTypeCode: 'industrial_cleanroom',
+          methodVariantCodes: ['steel_frame'],
+          totalAreaM2: 120000,
+          aboveGroundAreaM2: 105000,
+          basementAreaM2: 15000,
+          siteAreaM2: 60000,
+          buildingCount: 4,
+          highestBuildingFloorCount: 6,
+          cleanroom_grade: 1000,
+          process_pure_water: 20,
+          voc_treatment: true,
+          chemical_waste: 1,
+          maxSpanM: 36,
+          supportHeightM: 10,
+        },
+      },
+    })
+
+    const latestGeneratedEnd = generated.rows
+      .map((row) => String(row.values.planned_end_date ?? '').slice(0, 10))
+      .filter(Boolean)
+      .sort()
+      .at(-1)
+
+    expect(generated.targetFeasibility?.naturalEndDate).toBe(latestGeneratedEnd)
   }, 30000)
 
   it('builds a preview-only acceleration proposal without mutating the natural schedule', async () => {
@@ -1153,6 +1525,48 @@ describe('v1.4.7.2 WBS template generation service', () => {
     expect(durationBearingProcessRows.every((row) => (row.values.duration_suggestion as any)?.durationOutputCode === 'plan_reference')).toBe(true)
   }, 30000)
 
+  it('schedules WBS template rows by construction production days instead of raw calendar days', async () => {
+    const generated = await generateWbsTemplateRows({
+      projectId: '00000000-0000-4000-8000-000000000001',
+      surface: 'task_list',
+      detailLevel: 'standard',
+      diagnosticDurationSuggestionMode: 'fast_template',
+      operation: {
+        type: 'template_generate',
+        generationBatchId: 'batch-template-construction-calendar',
+        templateId: 'china-building-site-management',
+        selectedNodeIds: ['SITE-01-01-02'],
+        plannedStartDate: '2026-06-01',
+        constructionCalendar: {
+          basis: 'official_construction_calendar_seed',
+          windows: [{
+            holidayCode: 'local_shutdown',
+            holidayName: 'Local shutdown',
+            startDate: '2026-06-02',
+            endDate: '2026-06-03',
+            countsAsConstructionShutdown: true,
+          }],
+        },
+        scope: {
+          building_object_id: 'building-1',
+        },
+      },
+    })
+
+    const rowsByStableCode = new Map(
+      generated.rows.map((row) => [
+        String((row.values.standard_task_metadata as Record<string, unknown> | undefined)?.stableCode ?? ''),
+        row,
+      ]),
+    )
+    const roadBase = rowsByStableCode.get('SITE-01-01-02-P02')
+    expect(roadBase, 'fixture should include a multi-day duration-bearing generated process row').toBeTruthy()
+    expect(roadBase!.values.planned_start_date).toBe('2026-06-01')
+    expect(roadBase!.values.planned_end_date).toBe('2026-06-06')
+    expect(durationDaysOf(roadBase!)).toBe(6)
+    expect((roadBase!.values.standard_task_metadata as Record<string, unknown>).calendarBasis).toBe('official_construction_calendar_seed')
+  }, 30000)
+
   it('keeps dependency schedule inside the guardrail after pruning generated hierarchy self-dependencies', async () => {
     const generated = await generateWbsTemplateRows({
       projectId: '00000000-0000-4000-8000-000000000001',
@@ -1335,6 +1749,43 @@ describe('v1.4.7.2 WBS template generation service', () => {
       toOutputCode: 'plan_reference',
     }))
   })
+
+  it('threads the injected runtime evidence writer through full duration suggestion assembly', async () => {
+    const calls: Array<{ sql: string; params: unknown[] }> = []
+    const queryExec = async <T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<T[]> => {
+      calls.push({ sql, params })
+      return [] as T[]
+    }
+
+    await generateWbsTemplateRowsRaw({
+      projectId: '00000000-0000-4000-8000-000000000001',
+      surface: 'task_list',
+      detailLevel: 'overview',
+      diagnosticDurationSuggestionMode: 'full',
+      runtimeConsumerObservationQueryExec: queryExec,
+      runtimeArtifactPublications: [],
+      operation: {
+        type: 'template_generate',
+        generationBatchId: 'batch-full-duration-runtime-writer',
+        templateId: CHINA_GB55032_TEMPLATE_ID,
+        selectedNodeIds: ['03-02-01'],
+        plannedStartDate: '2026-06-01',
+        detailLevel: 'overview',
+        scope: {
+          project_type_code: 'residential',
+          structure_type_code: 'shear_wall',
+        },
+        projectFacts: {
+          totalAreaM2: 140000,
+          buildingCount: 5,
+          standardFloorCount: 22,
+        },
+      } as any,
+    })
+
+    expect(calls.some((call) => call.params[0] === 'durationSuggestionService')).toBe(true)
+    expect(calls.some((call) => call.params[0] === 'wbsTemplateGenerationService')).toBe(true)
+  }, 15000)
 
   it('does not write plan reference days without a governed duration suggestion contract', async () => {
     const row = {
@@ -1711,6 +2162,58 @@ describe('v1.4.7.2 WBS template generation service', () => {
     }))
   }, 30000)
 
+  it('applies construction production calendar when dependency scheduling shifts generated rows', async () => {
+    const generated = await generateWbsTemplateRows({
+      projectId: '00000000-0000-4000-8000-000000000001',
+      surface: 'task_list',
+      detailLevel: 'overview',
+      operation: {
+        type: 'template_generate',
+        generationBatchId: 'batch-dependency-calendar-shift',
+        templateIds: [CHINA_GB55032_TEMPLATE_ID],
+        selectedNodesByTemplate: {
+          [CHINA_GB55032_TEMPLATE_ID]: ['01-03-01', '01-02-01', '02-01-03', '02-02-01'],
+        },
+        plannedStartDate: '2026-06-01',
+        constructionCalendar: {
+          basis: 'official_construction_calendar_seed',
+          windows: [{
+            holidayCode: 'mid_phase_shutdown',
+            holidayName: 'Mid phase shutdown',
+            startDate: '2026-06-23',
+            endDate: '2026-06-26',
+            countsAsConstructionShutdown: true,
+          }],
+        },
+        scope: {
+          physical_zone_object_id: 'zone-1',
+          project_type_code: 'residential',
+        },
+      },
+    })
+
+    const rowsByStableCode = new Map(generated.rows.map((row) => [stableCodeOf(row), row]))
+    const concrete = rowsByStableCode.get('02-01-03')
+    const foundation = rowsByStableCode.get('01-02-01')
+
+    expect(concrete).toBeTruthy()
+    expect(foundation).toBeTruthy()
+    expect(concrete?.values.planned_start_date).toBe('2026-06-27')
+    expect(foundation?.values.planned_start_date).toBe('2026-06-28')
+    expect((concrete?.values.standard_task_metadata as any)?.dependencySchedule).toEqual(expect.objectContaining({
+      source: 'generated_dependency_network',
+      adjusted: true,
+      calendarBasis: 'official_construction_calendar_seed',
+      constructionCalendarWindowCount: 1,
+    }))
+    expect((foundation?.values.standard_task_metadata as any)?.dependencySchedule).toEqual(expect.objectContaining({
+      source: 'generated_dependency_network',
+      adjusted: true,
+      calendarBasis: 'official_construction_calendar_seed',
+      constructionCalendarWindowCount: 1,
+    }))
+  }, 30000)
+
   it('does not project overview non-duration control item packs as ordinary schedule rows', async () => {
     const generated = await generateWbsTemplateRows({
       projectId: '00000000-0000-4000-8000-000000000001',
@@ -1795,9 +2298,9 @@ describe('v1.4.7.2 WBS template generation service', () => {
     expect(rowByStableCode.get('07-04-02')?.values.row_projection_mode).toBe('schedule_row')
   }, 30000)
 
-  it('uses 500 rows as a render budget instead of a hard generation limit', async () => {
+  it('rejects oversized single-batch WBS generation before materializing rows', async () => {
     const buildings = Array.from({ length: 501 }, (_, index) => `building-${index + 1}`)
-    const generated = await generateWbsTemplateRowsRaw({
+    await expect(generateWbsTemplateRowsRaw({
       projectId: '00000000-0000-4000-8000-000000000001',
       surface: 'task_list',
       operation: {
@@ -1810,17 +2313,57 @@ describe('v1.4.7.2 WBS template generation service', () => {
           buildings,
         },
       },
+    })).rejects.toMatchObject({
+      statusCode: 413,
+      code: 'WBS_TEMPLATE_GENERATION_ROW_LIMIT_EXCEEDED',
+      details: expect.objectContaining({
+        generatedMainPlanRowCount: 501,
+        rowLimit: 500,
+        generationBatches: [
+          expect.objectContaining({
+            rowCount: 501,
+            rowLimit: 500,
+            rowLimitExceeded: true,
+          }),
+        ],
+      }),
     })
+  }, 30000)
 
-    expect(generated.rows).toHaveLength(501)
-    expect(generated.rowLimit).toBe(500)
-    expect(generated.rowLimitPolicy).toBe('single_batch')
-    expect(generated.generationBatches).toHaveLength(1)
-    expect(generated.generationBatches[0]).toEqual(expect.objectContaining({
-      rowCount: 501,
-      rowLimit: 500,
-      rowLimitExceeded: true,
-    }))
+  it('preflights a 200 by 200 scope expansion before duration suggestions or row materialization', async () => {
+    const buildings = Array.from({ length: 200 }, (_, index) => `building-${index + 1}`)
+    const floors = Array.from({ length: 200 }, (_, index) => `floor-${index + 1}`)
+
+    await expect(generateWbsTemplateRowsRaw({
+      projectId: '00000000-0000-4000-8000-000000000001',
+      surface: 'task_list',
+      operation: {
+        type: 'template_generate',
+        generationBatchId: 'batch-200-by-200-preflight',
+        templateId: 'china-building-site-management',
+        selectedNodeIds: ['SITE-01-01-01'],
+        plannedStartDate: '2026-06-01',
+        scope: {
+          buildings,
+          floors,
+        },
+      },
+    })).rejects.toMatchObject({
+      statusCode: 413,
+      code: 'WBS_TEMPLATE_GENERATION_ROW_LIMIT_EXCEEDED',
+      details: expect.objectContaining({
+        generatedMainPlanRowCount: 40000,
+        rowLimit: 500,
+        preflightStage: 'scope_cardinality',
+        generationBatches: [
+          expect.objectContaining({
+            rowCount: 40000,
+            rowLimit: 500,
+            rowLimitExceeded: true,
+          }),
+        ],
+      }),
+    })
   }, 30000)
 
   it('auto-expands schedule-critical item packs to process rows under overview detail', async () => {
@@ -1985,11 +2528,26 @@ describe('v1.4.7.2 WBS template generation service', () => {
 
     const summaryRows = generated.rows.filter((row) => !['process', 'activity_step'].includes(String(row.values.wbs_node_type)))
     expect(summaryRows.length).toBeGreaterThan(0)
-    const summaryWithChildren = summaryRows.find((row) => generated.rows.some((child) => child.parentClientRowId === row.clientRowId))
+    const summaryWithChildren = summaryRows.find((row) => {
+      const planRollup = (row.values.standard_task_metadata as any)?.planRollup
+      return planRollup?.appliedToPlanWindow === true
+        && generated.rows.some((child) => child.parentClientRowId === row.clientRowId)
+    })
     expect(summaryWithChildren).toBeTruthy()
     const summaryChildren = generated.rows.filter((row) => row.parentClientRowId === summaryWithChildren!.clientRowId)
-    const childStarts = summaryChildren.map((row) => String(row.values.planned_start_date)).sort()
-    const childEnds = summaryChildren.map((row) => String(row.values.planned_end_date)).sort()
+    const windowContributingChildren = summaryChildren.filter((row) => (
+      contributesToWbsPlannedWindow(row.values.duration_contribution_mode)
+    ))
+    const excludedWindowChildren = summaryChildren.filter((row) => (
+      !contributesToWbsPlannedWindow(row.values.duration_contribution_mode)
+    ))
+    expect(windowContributingChildren.length).toBeGreaterThan(0)
+    expect(excludedWindowChildren.length).toBeGreaterThan(0)
+    expect(excludedWindowChildren.every((row) => (
+      String(row.values.planned_end_date) >= String(row.values.planned_start_date)
+    ))).toBe(true)
+    const childStarts = windowContributingChildren.map((row) => String(row.values.planned_start_date)).sort()
+    const childEnds = windowContributingChildren.map((row) => String(row.values.planned_end_date)).sort()
     const childStart = childStarts[0]
     const childEnd = childEnds[childEnds.length - 1]
     expect(summaryWithChildren!.values.planned_start_date).toBe(childStart)
@@ -1999,6 +2557,10 @@ describe('v1.4.7.2 WBS template generation service', () => {
       planRollup: expect.objectContaining({
         source: 'child_plan_window',
         referenceDurationPolicy: 'date_window',
+        diagnostics: expect.objectContaining({
+          excludedWindowChildCount: excludedWindowChildren.length,
+          windowContributorCount: windowContributingChildren.length,
+        }),
       }),
       taskStructureGovernance: expect.objectContaining({
         pipeline: 'wbs_task_structure_governance_pipeline',
@@ -3258,6 +3820,110 @@ describe('v1.4.7.2 WBS template generation service', () => {
         }),
       ]),
     }))
+  }, 30000)
+
+  it('applies L3 conditional lag profiles to emitted cross-item workflow dependencies', async () => {
+    const makeGenerated = (variant: string, projectFacts: Record<string, unknown>) => generateWbsTemplateRows({
+      projectId: '00000000-0000-4000-8000-000000000001',
+      surface: 'task_list',
+      operation: {
+        type: 'template_generate',
+        generationBatchId: `batch-cleanroom-conditional-lag-${variant}`,
+        templateId: 'china-cleanroom-medical-specialty',
+        selectedNodeIds: ['CLN-02-01-01', 'CLN-02-01-02'],
+        plannedStartDate: '2026-06-01',
+        scope: {
+          building_object_id: 'building-1',
+          physical_zone_object_id: 'clean-zone-1',
+          project_type_code: 'hospital',
+        },
+        projectFacts: {
+          projectTypeCode: 'hospital',
+          ...projectFacts,
+        },
+      },
+    })
+
+    const findWorkflowEdge = (
+      generated: Awaited<ReturnType<typeof generateWbsTemplateRows>>,
+      expectedLagDays: number,
+      expectedProfileCode: string | null,
+    ) => {
+      const rowByStableCode = new Map(generated.rows.map((row) => [stableCodeOf(row), row]))
+      const cleanHvacAcceptance = rowByStableCode.get('CLN-02-01-01-P11')
+      const thirdPartyValidation = rowByStableCode.get('CLN-02-01-02-P04')
+      const dependency = thirdPartyValidation?.predecessorDependencies.find((candidate) => (
+        candidate.source === 'cross_item_workflow'
+        && candidate.intentCode === 'cross-item:cleanroom_air_acceptance_to_third_party_validation_process'
+      ))
+      const metadata = thirdPartyValidation?.values.standard_task_metadata as Record<string, any> | undefined
+      const workflowEntry = (metadata?.crossItemWorkflow ?? []).find((entry: Record<string, unknown>) => (
+        entry.ruleCode === 'cleanroom_air_acceptance_to_third_party_validation_process'
+      ))
+
+      expect(cleanHvacAcceptance).toBeTruthy()
+      expect(thirdPartyValidation).toBeTruthy()
+      expect(dependency).toEqual(expect.objectContaining({
+        clientRowId: cleanHvacAcceptance?.clientRowId,
+        dependencyType: 'FS',
+        lagDays: expectedLagDays,
+        baseLagDays: 1,
+        effectiveLagDays: expectedLagDays,
+        source: 'cross_item_workflow',
+        intentCode: 'cross-item:cleanroom_air_acceptance_to_third_party_validation_process',
+        relationRole: 'workflow',
+        strength: 'hard',
+      }))
+      if (expectedProfileCode) {
+        expect(dependency).toEqual(expect.objectContaining({
+          conditionalLagProfileCode: expectedProfileCode,
+          appliedConditionalLagProfileCode: expectedProfileCode,
+          conditionalLagTriggerSignals: expect.arrayContaining(['third_party_validation_required']),
+        }))
+      } else {
+        expect((dependency as Record<string, unknown> | undefined)?.conditionalLagProfileCode ?? null).toBeNull()
+      }
+      expect(workflowEntry).toEqual(expect.objectContaining({
+        ruleCode: 'cleanroom_air_acceptance_to_third_party_validation_process',
+        predecessorStableCode: 'CLN-02-01-01-P11',
+        successorStableCode: 'CLN-02-01-02-P04',
+        baseLagDays: 1,
+        effectiveLagDays: expectedLagDays,
+        lagDays: expectedLagDays,
+        scopeRule: 'same_zone',
+      }))
+      return workflowEntry as Record<string, any>
+    }
+
+    const baseWorkflow = findWorkflowEdge(await makeGenerated('base', { hardConstraintCodes: [] }), 1, null)
+    const triggeredWorkflow = findWorkflowEdge(
+      await makeGenerated('hard-constraint', { hardConstraintCodes: ['third_party_validation_required'] }),
+      5,
+      'strict_cleanliness_or_data_center_integrated_validation',
+    )
+    const projectFeatureTriggeredWorkflow = findWorkflowEdge(
+      await makeGenerated('project-feature', {
+        projectFeatures: {
+          third_party_validation_required: true,
+        },
+      }),
+      5,
+      'strict_cleanliness_or_data_center_integrated_validation',
+    )
+    const exposedProfileValues = [
+      triggeredWorkflow.appliedConditionalLagProfileCode,
+      triggeredWorkflow.appliedConditionalLagProfileConditionCode,
+      triggeredWorkflow.conditionalLagProfileCode,
+      triggeredWorkflow.appliedConditionalLagProfile?.conditionCode,
+    ].filter(Boolean)
+
+    expect(baseWorkflow.appliedConditionalLagProfileCode ?? baseWorkflow.conditionalLagProfileCode ?? null).toBeNull()
+    if (exposedProfileValues.length > 0) {
+      expect(exposedProfileValues).toContain('strict_cleanliness_or_data_center_integrated_validation')
+    }
+    expect(projectFeatureTriggeredWorkflow.conditionalLagTriggerSignals).toEqual(expect.arrayContaining([
+      'third_party_validation_required',
+    ]))
   }, 30000)
 
   it('materializes hospital medical-gas acceptance release to special-room functional commissioning at process level', async () => {
@@ -5618,7 +6284,7 @@ describe('v1.4.7.2 WBS template generation service', () => {
         source: 'cross_item_workflow',
         intentCode: 'cross-item:hotel_guestroom_terminal_install_to_room_mep_terminal_review_process',
         relationRole: 'workflow',
-        strength: 'recommended',
+        strength: 'hard',
       }),
     ]))
     expect(roomMepTerminalReview?.values.standard_task_metadata).toEqual(expect.objectContaining({
@@ -5676,7 +6342,7 @@ describe('v1.4.7.2 WBS template generation service', () => {
         source: 'cross_item_workflow',
         intentCode: 'cross-item:hotel_pms_door_lock_room_binding_to_room_pms_network_retest_process',
         relationRole: 'workflow',
-        strength: 'recommended',
+        strength: 'hard',
       }),
     ]))
     expect(roomPmsNetworkRetest?.predecessorDependencies).not.toEqual(expect.arrayContaining([
@@ -5740,7 +6406,7 @@ describe('v1.4.7.2 WBS template generation service', () => {
         source: 'cross_item_workflow',
         intentCode: 'cross-item:hotel_kitchen_exhaust_interface_review_to_grease_exhaust_duct_install_process',
         relationRole: 'workflow',
-        strength: 'recommended',
+        strength: 'hard',
       }),
     ]))
     expect(greaseExhaustDuctInstall?.values.standard_task_metadata).toEqual(expect.objectContaining({
@@ -6973,7 +7639,7 @@ describe('v1.4.7.2 WBS template generation service', () => {
         source: 'cross_item_workflow',
         intentCode: 'cross-item:fire_alarm_point_table_review_to_ibms_alarm_graphics_configuration_process',
         relationRole: 'workflow',
-        strength: 'recommended',
+        strength: 'hard',
       }),
     ]))
     expect(successor?.values.standard_task_metadata).toEqual(expect.objectContaining({
@@ -7757,9 +8423,13 @@ describe('v1.4.7.2 WBS template generation service', () => {
     })
 
     const rowByStableCode = new Map(generated.rows.map((row) => [stableCodeOf(row), row]))
+    const embeddedStructure = rowByStableCode.get('CDF-01-01-01')
+    const protectiveEquipment = rowByStableCode.get('CDF-01-01-02')
     const predecessor = rowByStableCode.get('CDF-01-01-01-P10')
     const successor = rowByStableCode.get('CDF-01-01-02-P08')
 
+    expect(embeddedStructure?.values.execution_phase).toBe('basement_structure')
+    expect(protectiveEquipment?.values.execution_phase).toBe('secondary_structure_fitout_roughin')
     expect(predecessor, 'CDF-01-01-01-P10 should be generated').toBeTruthy()
     expect(successor, 'CDF-01-01-02-P08 should be generated').toBeTruthy()
     expect(successor?.predecessorDependencies).toEqual(expect.arrayContaining([
@@ -9064,7 +9734,7 @@ describe('v1.4.7.2 WBS template generation service', () => {
         source: 'cross_item_workflow',
       }),
     ]))
-  }, 15000)
+  }, 30000)
 
   it('summarizes standard internal-flow manual governance without exposing it to ordinary generation pages', () => {
     const report = collectStandardInternalFlowGovernanceReport(12)
@@ -9126,6 +9796,8 @@ describe('v1.4.7.2 WBS template generation service', () => {
     expect(report.executionBaselineGate.status).toBe('runtime_execution_baseline_ready_with_p2_governance_tail')
     expect(report.executionBaselineGate.runtimeImpactStatus).toBe('runtime_impact_ready')
     expect(report.executionBaselineGate.coverageSprintStatus).toBe('coverage_sprint_pending')
+    expect(report.executionBaselineGate.scheduleTrustCoverageStatus)
+      .toBe('schedule_trust_closed_with_classified_non_l2_tail')
     expect(report.executionBaselineGate.runtimeBlockingReviewRequiredRuleCount).toBe(0)
     expect(report.executionBaselineGate.operatingMode).toBe('freeze_runtime_impact_tail_and_continue_backend_back_validation')
     expect(report.topReviewRequiredPairs[0]).toEqual(expect.objectContaining({
@@ -9148,7 +9820,7 @@ describe('v1.4.7.2 WBS template generation service', () => {
       expect.objectContaining({ standardCode: 'GB50300-2013' }),
       expect.objectContaining({ standardCode: 'GB50204-2015' }),
     ]))
-  })
+  }, 25000)
 
   it('resolves manually curated same-parent internal-flow rules from the dedicated rule seed', () => {
     flattenChinaTemplateCatalog()
@@ -9971,6 +10643,222 @@ describe('v1.4.7.2 WBS template generation service', () => {
     expect(constrainedRow?.values).not.toHaveProperty('duration_context')
   }, 15000)
 
+  it('routes v1.4.7.4 process constraints onto existing dependency candidates without creating edges', () => {
+    const rows = [
+      {
+        clientRowId: 'row-waterproof',
+        parentClientRowId: null,
+        parentRowId: null,
+        sortOrder: 1,
+        predecessorClientRowIds: [],
+        predecessorDependencies: [],
+        values: {
+          wbs_node_type: 'process',
+          category_type: 'process',
+          title: '卫生间防水及闭水试验',
+          planned_start_date: '2026-06-01',
+          planned_end_date: '2026-06-10',
+          start_date: '2026-06-01',
+          end_date: '2026-06-10',
+          standard_task_metadata: { stableCode: 'WTR-01' },
+        },
+        durationSuggestion: null,
+      },
+      {
+        clientRowId: 'row-tile',
+        parentClientRowId: null,
+        parentRowId: null,
+        sortOrder: 2,
+        predecessorClientRowIds: ['row-waterproof'],
+        predecessorDependencies: [{
+          clientRowId: 'row-waterproof',
+          dependencyType: 'FS',
+          lagDays: 0,
+          source: 'sibling_sequence',
+          relationRole: 'workflow',
+          strength: 'recommended',
+        }],
+        values: {
+          wbs_node_type: 'process',
+          category_type: 'process',
+          title: '卫生间墙地砖铺贴',
+          planned_start_date: '2026-06-11',
+          planned_end_date: '2026-06-15',
+          start_date: '2026-06-11',
+          end_date: '2026-06-15',
+          standard_task_metadata: {
+            stableCode: 'TIL-01',
+            processConstraintRules: [{
+              stableCode: 'bathroom_waterproof_to_tile_room_overlap',
+              constraintType: 'overlap_allowed',
+              applicationMode: 'edge_overlap',
+              impactMode: 'overlap_ratio',
+              runtimeActionPolicy: 'candidate_only',
+              timeSourcePolicy: 'explicit_carrier_or_standard_work_duration',
+              durationLookupPolicy: 'route_to_standard_work_duration_seed',
+              durationLookupKeys: ['waterproof_water_test', 'tile_laying'],
+              carrierProcessHints: ['防水施工', '闭水试验', '墙地砖铺贴'],
+              durationAuthorityPolicy: 'no_duration_values_in_process_constraint',
+              durationDoubleCountPolicy: 'standard_work_duration_owns_all_day_values_process_constraint_owns_edge_routing',
+              partialOverlapRatio: 0.3,
+              startAfterPercent: 70,
+              scopeGranularity: 'room',
+              releaseQuantityPolicy: 'real_task_quantity_then_standard_duration_quantity_proxy_then_scope_proxy',
+              minReleaseQuantityPercent: 90,
+              quantityEvidenceRequirement: 'real_quantity_required_for_auto_release',
+              quantityProxyRiskLevel: 'high',
+              quantitySourcePriority: ['task_planned_completed_quantity'],
+              insufficientQuantityPolicy: 'candidate_only_until_real_quantity_or_scope_release',
+              quantityDoubleCountPolicy: 'standard_work_duration_owns_default_quantity_process_constraint_owns_release_threshold',
+              sourceStandard: 'national_standard',
+              sourceVersion: 'GB50207-2012 + GB50210-2018',
+              sourceClauseRef: 'Bathroom tile work can be released room by room after waterproof test and base acceptance.',
+              confidence: 'medium',
+            }],
+          },
+        },
+        durationSuggestion: null,
+      },
+    ]
+
+    applyProcessConstraintEffects(rows as any)
+
+    expect(rows[1].predecessorDependencies).toHaveLength(1)
+    expect(rows[1].predecessorDependencies[0]).toEqual(expect.objectContaining({
+      clientRowId: 'row-waterproof',
+      dependencyType: 'FS',
+      lagDays: 0,
+      processConstraintRoutingCandidates: [
+        expect.objectContaining({
+          source: 'v1.4.7.4_process_constraint',
+          ruleCode: 'bathroom_waterproof_to_tile_room_overlap',
+          applicationMode: 'edge_overlap',
+          runtimeActionPolicy: 'candidate_only',
+          mutationBoundary: 'candidate_only_existing_dependency_no_auto_mutation',
+          dependencyCreationPolicy: 'never_create_dependency',
+          proposedDependencyType: 'SS',
+          proposedLagDays: 7,
+          proposedStartAfterPercent: 70,
+          proposedPartialOverlapRatio: 0.3,
+          releaseQuantityPolicy: 'real_task_quantity_then_standard_duration_quantity_proxy_then_scope_proxy',
+          minReleaseQuantityPercent: 90,
+        }),
+      ],
+    }))
+    expect((rows[1].values.standard_task_metadata as any).durationContext.processConstraintPolicy).toEqual(expect.objectContaining({
+      createsDependency: false,
+      routesExistingDependencies: true,
+      autoMutatesDependencies: false,
+      edgeRoutingCandidateCount: 1,
+    }))
+  })
+
+  it('uses process-constraint routing candidates in read-only candidate CPM without mutating dependencies', () => {
+    const rows = [
+      {
+        clientRowId: 'row-waterproof',
+        parentClientRowId: null,
+        parentRowId: null,
+        sortOrder: 1,
+        predecessorClientRowIds: [],
+        predecessorDependencies: [],
+        rowProjectionMode: 'schedule_row',
+        values: {
+          wbs_node_type: 'process',
+          category_type: 'process',
+          title: '卫生间防水及闭水试验',
+          planned_start_date: '2026-06-01',
+          planned_end_date: '2026-06-10',
+          start_date: '2026-06-01',
+          end_date: '2026-06-10',
+          standard_task_metadata: { stableCode: 'WTR-01' },
+        },
+        durationSuggestion: null,
+      },
+      {
+        clientRowId: 'row-tile',
+        parentClientRowId: null,
+        parentRowId: null,
+        sortOrder: 2,
+        predecessorClientRowIds: ['row-waterproof'],
+        predecessorDependencies: [{
+          clientRowId: 'row-waterproof',
+          dependencyType: 'FS',
+          lagDays: 0,
+          source: 'sibling_sequence',
+          relationRole: 'workflow',
+          strength: 'recommended',
+        }],
+        rowProjectionMode: 'schedule_row',
+        values: {
+          wbs_node_type: 'process',
+          category_type: 'process',
+          title: '卫生间墙地砖铺贴',
+          planned_start_date: '2026-06-01',
+          planned_end_date: '2026-06-05',
+          start_date: '2026-06-01',
+          end_date: '2026-06-05',
+          standard_task_metadata: {
+            stableCode: 'TIL-01',
+            processConstraintRules: [{
+              stableCode: 'bathroom_waterproof_to_tile_room_overlap',
+              constraintType: 'overlap_allowed',
+              applicationMode: 'edge_overlap',
+              impactMode: 'overlap_ratio',
+              runtimeActionPolicy: 'candidate_only',
+              timeSourcePolicy: 'explicit_carrier_or_standard_work_duration',
+              durationLookupPolicy: 'route_to_standard_work_duration_seed',
+              durationLookupKeys: ['waterproof_water_test', 'tile_laying'],
+              carrierProcessHints: ['防水施工', '闭水试验', '墙地砖铺贴'],
+              durationAuthorityPolicy: 'no_duration_values_in_process_constraint',
+              durationDoubleCountPolicy: 'standard_work_duration_owns_all_day_values_process_constraint_owns_edge_routing',
+              partialOverlapRatio: 0.3,
+              startAfterPercent: 70,
+              scopeGranularity: 'room',
+              releaseQuantityPolicy: 'real_task_quantity_then_standard_duration_quantity_proxy_then_scope_proxy',
+              minReleaseQuantityPercent: 90,
+              quantityEvidenceRequirement: 'real_quantity_required_for_auto_release',
+              quantityProxyRiskLevel: 'high',
+              quantitySourcePriority: ['task_planned_completed_quantity'],
+              insufficientQuantityPolicy: 'candidate_only_until_real_quantity_or_scope_release',
+              quantityDoubleCountPolicy: 'standard_work_duration_owns_default_quantity_process_constraint_owns_release_threshold',
+              sourceStandard: 'national_standard',
+              sourceVersion: 'GB50207-2012 + GB50210-2018',
+              sourceClauseRef: 'Bathroom tile work can be released room by room after waterproof test and base acceptance.',
+              confidence: 'medium',
+            }],
+          },
+        },
+        durationSuggestion: null,
+      },
+    ]
+
+    applyProcessConstraintEffects(rows as any)
+    const evaluation = buildCandidateNetworkEvaluationForGeneratedRows(rows as any)
+    const tileSchedule = evaluation?.rowSchedule.find((item) => item.generatedRowId === 'row-tile')
+
+    expect(rows[1].predecessorDependencies).toHaveLength(1)
+    expect(rows[1].predecessorDependencies[0]).toEqual(expect.objectContaining({
+      clientRowId: 'row-waterproof',
+      dependencyType: 'FS',
+      lagDays: 0,
+    }))
+    expect(evaluation).toEqual(expect.objectContaining({
+      source: 'generated_wbs_row_candidate_network_cpm',
+      projectedNetworkSpanDays: 12,
+      previewEdgeCount: 1,
+      processConstraintRoutingCandidateEdgeCount: 1,
+      writesTaskDependencies: false,
+      writesPlanDates: false,
+      writesCriticalPathFacts: false,
+    }))
+    expect(tileSchedule).toEqual(expect.objectContaining({
+      startDay: 7,
+      finishDay: 12,
+      durationDays: 5,
+    }))
+  })
+
   it('projects descendant process constraints onto collapsed overview itemPack rows', async () => {
     const generated = await generateWbsTemplateRows({
       projectId: '00000000-0000-4000-8000-000000000001',
@@ -10391,6 +11279,13 @@ describe('v1.4.7.2 WBS template generation service', () => {
         packageChildRhythmWindowRole: expected.role,
       }))
       expect(item?.metadata.scheduleAuthorityPolicy).toBe('package_child_rhythm_window')
+      expect(item?.row.predecessorDependencies.filter((dependency) => dependency.source === 'sibling_sequence')).toHaveLength(0)
+      if (item?.metadata.internalFlow) {
+        expect(item.metadata.internalFlow).toEqual(expect.objectContaining({
+          createsDependency: false,
+          dependencyMaterializationPolicy: 'metadata_only_parent_package_window_authority',
+        }))
+      }
     }
 
     const longestChildDuration = Math.max(...processRows.map((item) => item.duration))
@@ -10746,10 +11641,13 @@ describe('v1.4.7.2 WBS template generation service', () => {
   }, 15000)
 
   it('uses project facts to scale area-based durations and PC rate without changing row count', async () => {
+    const runtimeConsumerObservationQueryExec = async <T = Record<string, unknown>>(): Promise<T[]> => [] as T[]
     const makeGenerated = (facts: Record<string, unknown>) => generateWbsTemplateRows({
       projectId: '00000000-0000-4000-8000-000000000001',
       surface: 'task_list',
       diagnosticDurationSuggestionMode: 'full',
+      runtimeConsumerObservationQueryExec,
+      runtimeArtifactPublications: [],
       operation: {
         type: 'template_generate',
         templateId: CHINA_GB55032_TEMPLATE_ID,
@@ -10810,7 +11708,7 @@ describe('v1.4.7.2 WBS template generation service', () => {
     expect(high.rows).toHaveLength(low.rows.length)
     expect(durationDaysOf(highByCode.get('PFB-00-01-02')!)).toBeGreaterThan(durationDaysOf(lowByCode.get('PFB-00-01-02')!))
     expect(durationDaysOf(highByCode.get('PFB-02-01-01')!)).toBeGreaterThan(durationDaysOf(lowByCode.get('PFB-02-01-01')!))
-  }, 15000)
+  }, 30000)
 
   it('anchors standard-floor rhythm cross-item dependencies at building level without floor cartesian edges', async () => {
     const generated = await generateWbsTemplateRows({
@@ -11476,6 +12374,60 @@ describe('v1.4.7.2 WBS template generation service', () => {
         }),
       }),
     ]))
+  }, 30_000)
+
+  it('honors explicit start-finish dependency type in phase release policies', async () => {
+    const generated = await generateWbsTemplatePhaseChainRows({
+      projectId: '00000000-0000-4000-8000-000000000001',
+      surface: 'task_list',
+      detailLevel: 'overview',
+      operations: [
+        {
+          type: 'template_generate',
+          generationBatchId: 'batch-phase-release-sf-p1',
+          templateIds: [CHINA_GB55032_TEMPLATE_ID],
+          selectedNodesByTemplate: {
+            [CHINA_GB55032_TEMPLATE_ID]: ['01-03-01'],
+          },
+          plannedStartDate: '2026-06-01',
+          scope: {
+            phase_object_id: 'phase-pit-sf',
+            physical_zone_object_id: 'zone-sf',
+            project_type_code: 'residential',
+          },
+        },
+        {
+          type: 'template_generate',
+          generationBatchId: 'batch-phase-release-sf-p2',
+          templateIds: [CHINA_GB55032_TEMPLATE_ID],
+          selectedNodesByTemplate: {
+            [CHINA_GB55032_TEMPLATE_ID]: ['01-03-01'],
+          },
+          plannedStartDate: '2026-06-01',
+          phaseReleasePolicy: {
+            mode: 'overlap_after_days',
+            afterDays: 7,
+            dependencyType: 'SF',
+            lagDays: -2,
+          },
+          scope: {
+            phase_object_id: 'phase-finish-sf',
+            physical_zone_object_id: 'zone-sf',
+            project_type_code: 'residential',
+          },
+        },
+      ],
+    })
+
+    const secondPhaseRows = generated.rows.filter((row) => row.values.phase_object_id === 'phase-finish-sf')
+    const phaseChain = secondPhaseRows
+      .flatMap((row) => row.predecessorDependencies)
+      .find((dependency) => dependency.source === 'phase_chain')
+    expect(phaseChain).toEqual(expect.objectContaining({
+      dependencyType: 'SF',
+      lagDays: -2,
+      intentCode: 'phase-chain:phase-pit-sf->phase-finish-sf',
+    }))
   }, 30_000)
 
   it('anchors start-start phase release to the predecessor phase start instead of its latest tail row', async () => {
@@ -12659,6 +13611,7 @@ describe('v1.4.7.2 WBS template generation service', () => {
     const childRows = generated.rows.filter((row) => (
       String((row.values.standard_task_metadata as Record<string, unknown> | undefined)?.stableCode ?? '').startsWith('HVA-02-01-02-P')
     ))
+    expect(childRows.every((row) => row.predecessorDependencies.every((dependency) => dependency.source !== 'sibling_sequence'))).toBe(true)
     const childStartDates = childRows.map((row) => String(row.values.planned_start_date).slice(0, 10)).sort()
     const childEndDates = childRows.map((row) => String(row.values.planned_end_date).slice(0, 10)).sort()
     expect(durationDaysBetween(childStartDates[0], childEndDates.at(-1)!)).toBe(8)
@@ -12800,6 +13753,134 @@ describe('v1.4.7.2 WBS template generation service', () => {
     expect(generated.rows.every((row) => row.values.phase_object_id === 'phase-1')).toBe(true)
     expect(generated.rows.every((row) => row.values.building_object_id !== 'building-ward')).toBe(true)
   }, 15000)
+
+  it('expands matching-building assignments across every matching building instead of collapsing to the first one', async () => {
+    const generated = await generateWbsTemplateRows({
+      projectId: '00000000-0000-4000-8000-000000000001',
+      surface: 'task_list',
+      operation: {
+        type: 'template_generate',
+        generationBatchId: 'batch-scope-assignment-multi-medical-tech',
+        primaryCatalogId: CHINA_GB55032_TEMPLATE_ID,
+        selectedNodesByTemplate: {
+          [CHINA_GB55032_TEMPLATE_ID]: ['02-01-01'],
+        },
+        plannedStartDate: '2026-06-01',
+        detailLevel: 'overview',
+        scope: {
+          scopeExpansionMode: 'project',
+          scope_objects: [
+            { id: 'phase-1', type: 'phase', name: '一期', parentId: null, metadata: {} },
+            { id: 'section-1', type: 'section', name: '一标段', parentId: 'phase-1', metadata: {} },
+            { id: 'building-medical-tech-1', type: 'building', name: '1#医技楼', parentId: 'section-1', metadata: { functionalUsage: 'medical_technology' } },
+            { id: 'building-medical-tech-2', type: 'building', name: '2#医技楼', parentId: 'section-1', metadata: { functionalUsage: 'medical_technology' } },
+            { id: 'building-ward', type: 'building', name: '住院楼', parentId: 'section-1', metadata: { functionalUsage: 'ward' } },
+          ],
+        },
+      },
+      scopeAssignmentRules: [
+        {
+          itemPackPattern: '02-01-01',
+          effect: 'assign_to_matching_buildings',
+          matchFunctionalUsage: 'medical_technology',
+          priority: 1,
+        },
+      ],
+    })
+
+    const buildingIds = new Set(generated.rows.map((row) => row.values.building_object_id))
+    expect(buildingIds).toEqual(new Set(['building-medical-tech-1', 'building-medical-tech-2']))
+    expect(generated.rows.some((row) => row.values.building_object_id === 'building-ward')).toBe(false)
+  }, 15000)
+
+  it('expands assign-to-all-building rules across every materialized building', async () => {
+    const generated = await generateWbsTemplateRows({
+      projectId: '00000000-0000-4000-8000-000000000001',
+      surface: 'task_list',
+      operation: {
+        type: 'template_generate',
+        generationBatchId: 'batch-scope-assignment-all-buildings',
+        primaryCatalogId: CHINA_GB55032_TEMPLATE_ID,
+        selectedNodesByTemplate: {
+          [CHINA_GB55032_TEMPLATE_ID]: ['02-01-01'],
+        },
+        plannedStartDate: '2026-06-01',
+        detailLevel: 'overview',
+        scope: {
+          scopeExpansionMode: 'project',
+          scope_objects: [
+            { id: 'phase-1', type: 'phase', name: '一期', parentId: null, metadata: {} },
+            { id: 'section-1', type: 'section', name: '一标段', parentId: 'phase-1', metadata: {} },
+            { id: 'building-1', type: 'building', name: '1#楼', parentId: 'section-1', metadata: { functionalUsage: 'ward' } },
+            { id: 'building-2', type: 'building', name: '2#楼', parentId: 'section-1', metadata: { functionalUsage: 'medical_technology' } },
+            { id: 'building-3', type: 'building', name: '3#楼', parentId: 'section-1', metadata: { functionalUsage: 'office' } },
+          ],
+        },
+      },
+      scopeAssignmentRules: [
+        {
+          itemPackPattern: '02-01-01',
+          effect: 'assign_to_all_buildings',
+          priority: 1,
+        },
+      ],
+    })
+
+    expect(new Set(generated.rows.map((row) => row.values.building_object_id)))
+      .toEqual(new Set(['building-1', 'building-2', 'building-3']))
+    expect(generated.rows.every((row) => row.values.section_object_id === 'section-1')).toBe(true)
+    expect(generated.rows.every((row) => row.values.phase_object_id === 'phase-1')).toBe(true)
+  }, 15000)
+
+  it('does not hard-block optional matching-building rules when the project has no matching usage fact', async () => {
+    const generated = await generateWbsTemplateRows({
+      projectId: '00000000-0000-4000-8000-000000000001',
+      surface: 'task_list',
+      operation: {
+        type: 'template_generate',
+        generationBatchId: 'batch-scope-assignment-optional-building-usage',
+        templateIds: ['china-jgj-tianjin-decoration'],
+        selectedNodesByTemplate: {
+          'china-jgj-tianjin-decoration': ['DEC-05-01-01'],
+        },
+        plannedStartDate: '2026-06-01',
+        detailLevel: 'overview',
+        scope: {
+          scopeExpansionMode: 'project',
+          project_type_code: 'general_civil',
+          functional_usage_codes: ['住宅楼'],
+          scope_objects: [
+            { id: 'phase-1', type: 'phase', name: '一期', parentId: null, metadata: {} },
+            { id: 'section-1', type: 'section', name: '一标段', parentId: 'phase-1', metadata: {} },
+            { id: 'building-1', type: 'building', name: '1#楼', parentId: 'section-1', metadata: { functionalUsage: '住宅楼' } },
+          ],
+        },
+      },
+      scopeAssignmentRules: [
+        {
+          itemPackPattern: 'DEC-05',
+          effect: 'assign_to_matching_buildings',
+          matchFunctionalUsage: '商业',
+          priority: 1,
+        },
+      ],
+      diagnosticDurationSuggestionMode: 'fast_template',
+    })
+
+    expect(generated.rows.some((row) => {
+      const metadata = row.values.standard_task_metadata as Record<string, unknown> | undefined
+      return String(metadata?.stableCode ?? row.values.standard_work_code ?? '').startsWith('DEC-05')
+    })).toBe(false)
+    expect(generated.governanceWarnings).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'SCOPE_ASSIGNMENT_TARGET_NOT_FOUND',
+        details: expect.objectContaining({
+          itemPackPattern: 'DEC-05',
+          missingObjectLabel: '楼栋',
+        }),
+      }),
+    ]))
+  }, 30000)
 
   it('expands standard template rows across materialized building scope objects', async () => {
     const generated = await generateWbsTemplateRows({
@@ -13231,6 +14312,56 @@ describe('v1.4.7.2 WBS template generation service', () => {
     expect([...rowsByZone.keys()].filter(Boolean).sort()).toEqual(['substation-1', 'switching-station-1'])
   }, 30000)
 
+  it('does not block optional independent engineering zones once the triggered pack has a declared target', async () => {
+    const generated = await generateWbsTemplateRows({
+      projectId: '00000000-0000-4000-8000-000000000001',
+      surface: 'task_list',
+      operation: {
+        type: 'template_generate',
+        generationBatchId: 'batch-scope-assignment-optional-independent-zones',
+        templateIds: ['china-electrical-system'],
+        selectedNodesByTemplate: {
+          'china-electrical-system': ['ELE-05-01-01'],
+        },
+        plannedStartDate: '2026-06-01',
+        detailLevel: 'overview',
+        scope: {
+          scopeExpansionMode: 'project',
+          scope_objects: [
+            { id: 'phase-1', type: 'phase', name: '一期', parentId: null, metadata: {} },
+            { id: 'section-1', type: 'section', name: '一标段', parentId: 'phase-1', metadata: {} },
+            {
+              id: 'switching-station-1',
+              type: 'physical_zone',
+              name: '开闭所',
+              parentId: 'section-1',
+              metadata: { physicalSpaceKind: 'independent_engineering_zone', physicalCategory: 'switching_station' },
+            },
+          ],
+        },
+      },
+      scopeAssignmentRules: getScopeAssignmentRules('general_civil'),
+      diagnosticDurationSuggestionMode: 'fast_template',
+    })
+
+    const electricalRows = generated.rows.filter((row) => {
+      const metadata = row.values.standard_task_metadata as Record<string, unknown> | undefined
+      return String(metadata?.stableCode ?? '').startsWith('ELE-05-01-01')
+    })
+
+    expect(electricalRows.length).toBeGreaterThan(0)
+    expect(electricalRows.every((row) => row.values.physical_zone_object_id === 'switching-station-1')).toBe(true)
+    expect(generated.governanceWarnings).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'SCOPE_ASSIGNMENT_TARGET_NOT_FOUND',
+        details: expect.objectContaining({
+          itemPackPattern: 'ELE-05-01-01',
+          missingObjectLabel: '变配电所',
+        }),
+      }),
+    ]))
+  }, 30000)
+
   it('assigns materialized basement and outdoor specialty rows without leaking building-floor anchors', async () => {
     const generated = await generateWbsTemplateRows({
       projectId: '00000000-0000-4000-8000-000000000001',
@@ -13304,6 +14435,136 @@ describe('v1.4.7.2 WBS template generation service', () => {
     expect(outdoorRows.every((row) => row.values.section_object_id === 'section-1' && row.values.phase_object_id === 'phase-1')).toBe(true)
   }, 30000)
 
+  it('keeps shared-basement scope facts on the shared-basement tower-lane strategy instead of low-rise heuristics', async () => {
+    const generated = await generateWbsTemplateRows({
+      projectId: '00000000-0000-4000-8000-000000000001',
+      surface: 'task_list',
+      operation: {
+        type: 'template_generate',
+        generationBatchId: 'batch-shared-basement-fact-strategy',
+        templateIds: [CHINA_GB55032_TEMPLATE_ID],
+        selectedNodesByTemplate: {
+          [CHINA_GB55032_TEMPLATE_ID]: ['01-03-01', '02-01-01'],
+        },
+        plannedStartDate: '2026-06-01',
+        detailLevel: 'overview',
+        scope: {
+          scopeExpansionMode: 'project',
+          business_type: 'general_civil',
+          project_type_code: 'residential',
+          buildingCount: 6,
+          standardFloorCount: 8,
+          highestBuildingFloorCount: 8,
+          basementLevelCount: 1,
+          scope_objects: [
+            { id: 'phase-1', type: 'phase', name: 'Phase 1', parentId: null, metadata: {} },
+            { id: 'section-1', type: 'section', name: 'Section 1', parentId: 'phase-1', metadata: {} },
+            { id: 'building-1', type: 'building', name: '1#', parentId: 'section-1', metadata: {} },
+            { id: 'building-2', type: 'building', name: '2#', parentId: 'section-1', metadata: {} },
+            { id: 'building-3', type: 'building', name: '3#', parentId: 'section-1', metadata: {} },
+            { id: 'building-4', type: 'building', name: '4#', parentId: 'section-1', metadata: {} },
+            { id: 'building-5', type: 'building', name: '5#', parentId: 'section-1', metadata: {} },
+            { id: 'building-6', type: 'building', name: '6#', parentId: 'section-1', metadata: {} },
+            {
+              id: 'basement-common',
+              type: 'basement',
+              name: 'Shared basement',
+              parentId: 'section-1',
+              metadata: {
+                basementKind: 'common_basement',
+                serviceTargetObjectIds: ['building-1', 'building-2', 'building-3', 'building-4', 'building-5', 'building-6'],
+              },
+            },
+          ],
+        },
+      },
+      diagnosticDurationSuggestionMode: 'fast_template',
+    })
+
+    const organizedRows = generated.rows.filter((row) => row.values.project_organization_policy_id)
+    expect(organizedRows.length).toBeGreaterThan(0)
+    expect(new Set(organizedRows.map((row) => row.values.project_organization_strategy))).toEqual(new Set([
+      'shared_basement_podium_then_multi_tower_lane_network',
+    ]))
+    expect(new Set(organizedRows.map((row) => row.values.organization_lane).filter(Boolean))).toEqual(new Set([
+      'shared_works',
+      'tower_lane_1',
+      'tower_lane_2',
+      'tower_lane_3',
+      'tower_lane_4',
+      'tower_lane_5',
+      'tower_lane_6',
+    ]))
+    expect(new Set(organizedRows.map((row) => row.values.organization_lane).filter(Boolean))).not.toContain('lowrise_lane_1')
+
+    const organization = (organizedRows[0].values.standard_task_metadata as Record<string, any>).projectOrganization
+    expect(organization.inputBasis.scopeOrganizationFacts).toEqual(expect.objectContaining({
+      organizationSignals: expect.arrayContaining([
+        'shared_basement_service_range',
+        'shared_basement_serves_multiple_buildings',
+      ]),
+      sharedBasementServiceTargetCount: 6,
+      sharedBasementServiceTargetKindCounts: expect.objectContaining({ building: 6 }),
+    }))
+  }, 30000)
+
+  it('does not backfill direct scope anchors into explicit scope combos from legacy wizard payloads', async () => {
+    const generated = await generateWbsTemplateRows({
+      projectId: '00000000-0000-4000-8000-000000000001',
+      surface: 'task_list',
+      operation: {
+        type: 'template_generate',
+        generationBatchId: 'batch-legacy-direct-scope-anchor-isolation',
+        templateIds: ['china-electrical-system'],
+        selectedNodesByTemplate: {
+          'china-electrical-system': ['ELE-05-01-01'],
+        },
+        plannedStartDate: '2026-06-01',
+        detailLevel: 'overview',
+        scope: {
+          scopeExpansionMode: 'project',
+          building_object_id: 'building-1',
+          floor_object_id: 'building-1-l1',
+          physical_zone_object_id: 'outdoor-site',
+          scope_combos: [
+            {
+              phase_object_id: 'phase-1',
+              section_object_id: 'section-1',
+              building_object_id: 'building-1',
+              floor_object_id: 'building-1-l1',
+            },
+          ],
+          scope_objects: [
+            { id: 'phase-1', type: 'phase', name: '一期', parentId: null, metadata: {} },
+            { id: 'section-1', type: 'section', name: '一标段', parentId: 'phase-1', metadata: {} },
+            { id: 'building-1', type: 'building', name: '1#楼', parentId: 'section-1', metadata: { functionalUsage: 'residential_tower' } },
+            { id: 'building-1-l1', type: 'floor', name: 'L1', parentId: 'building-1', metadata: { floorOrder: 1 } },
+            { id: 'outdoor-site', type: 'physical_zone', name: '室外总平', parentId: 'section-1', metadata: { physicalSpaceKind: 'outdoor_site' } },
+          ],
+        },
+      },
+    })
+
+    expect(generated.scopeCombos).toEqual([
+      expect.objectContaining({
+        phase_object_id: 'phase-1',
+        section_object_id: 'section-1',
+        building_object_id: 'building-1',
+        floor_object_id: 'building-1-l1',
+        physical_zone_object_id: null,
+      }),
+    ])
+
+    const electricalRows = generated.rows.filter((row) => {
+      const metadata = row.values.standard_task_metadata as Record<string, unknown> | undefined
+      return String(metadata?.stableCode ?? '').startsWith('ELE-05-01-01')
+    })
+    expect(electricalRows.length).toBeGreaterThan(0)
+    expect(electricalRows.every((row) => row.values.building_object_id === 'building-1')).toBe(true)
+    expect(electricalRows.every((row) => row.values.floor_object_id === 'building-1-l1')).toBe(true)
+    expect(electricalRows.every((row) => !row.values.physical_zone_object_id)).toBe(true)
+  }, 30000)
+
   it('expands matching specialty rows across multiple materialized basement scope objects', async () => {
     const generated = await generateWbsTemplateRows({
       projectId: '00000000-0000-4000-8000-000000000001',
@@ -13349,7 +14610,7 @@ describe('v1.4.7.2 WBS template generation service', () => {
     expect(basementRows.every((row) => row.values.phase_object_id === 'phase-1')).toBe(true)
   }, 30000)
 
-  it('warns when a selected template cannot find the required physical scope object', async () => {
+  it('emits a blocking error when a selected template cannot find the required physical scope object', async () => {
     const generated = await generateWbsTemplateRows({
       projectId: '00000000-0000-4000-8000-000000000001',
       surface: 'task_list',
@@ -13384,7 +14645,7 @@ describe('v1.4.7.2 WBS template generation service', () => {
     expect(generated.governanceWarnings).toEqual(expect.arrayContaining([
       expect.objectContaining({
         code: 'SCOPE_ASSIGNMENT_TARGET_NOT_FOUND',
-        severity: 'warning',
+        severity: 'error',
         nodeCode: 'OUT-02-01-01',
         details: expect.objectContaining({
           targetObjectType: 'physical_zone',
@@ -13394,7 +14655,7 @@ describe('v1.4.7.2 WBS template generation service', () => {
     ]))
   }, 30000)
 
-  it('warns when a selected basement specialty template cannot find a basement scope object', async () => {
+  it('emits a blocking error when a selected basement specialty template cannot find a basement scope object', async () => {
     const generated = await generateWbsTemplateRows({
       projectId: '00000000-0000-4000-8000-000000000001',
       surface: 'task_list',
@@ -13428,7 +14689,7 @@ describe('v1.4.7.2 WBS template generation service', () => {
     expect(generated.governanceWarnings).toEqual(expect.arrayContaining([
       expect.objectContaining({
         code: 'SCOPE_ASSIGNMENT_TARGET_NOT_FOUND',
-        severity: 'warning',
+        severity: 'error',
         nodeCode: 'WPI-01-01-01',
         details: expect.objectContaining({
           targetObjectType: 'basement',

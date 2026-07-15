@@ -22,9 +22,9 @@ describe('auth session schema usage', () => {
           username: 'admin',
           display_name: '系统管理员',
           email: 'admin@example.com',
-          role: 'owner',
           global_role: 'company_admin',
           password_hash: 'hash',
+          auth_token_version: 3,
           joined_at: '2026-04-01T00:00:00.000Z',
           last_active: '2026-04-24T00:00:00.000Z',
         },
@@ -36,8 +36,29 @@ describe('auth session schema usage', () => {
 
     expect(user?.global_role).toBe('company_admin')
     expect(toAuthUserView(user as NonNullable<typeof user>).globalRole).toBe('company_admin')
+    expect(toAuthUserView(user as NonNullable<typeof user>).tokenVersion).toBe(3)
     expect(mocks.query).toHaveBeenCalledOnce()
     expect(String(mocks.query.mock.calls[0]?.[0])).toContain('global_role')
+    expect(String(mocks.query.mock.calls[0]?.[0])).toContain('auth_token_version')
+    expect(String(mocks.query.mock.calls[0]?.[0])).toContain("COALESCE(status, 'active') = 'active'")
+    expect(String(mocks.query.mock.calls[0]?.[0])).toContain('deleted_at IS NULL')
     expect(String(mocks.query.mock.calls[0]?.[0])).not.toContain('information_schema.columns')
+  })
+
+  it('fails closed when active-session guard columns are missing', async () => {
+    mocks.query
+      .mockRejectedValueOnce({
+        code: '42703',
+        message: 'column "deleted_at" does not exist',
+      })
+
+    const { getAuthUserByUsername } = await import('../auth/session.js')
+
+    await expect(getAuthUserByUsername('admin')).rejects.toMatchObject({
+      code: 'AUTH_ACTIVE_USER_GUARD_UNAVAILABLE',
+      statusCode: 500,
+    })
+    expect(mocks.query).toHaveBeenCalledTimes(1)
+    expect(String(mocks.query.mock.calls[0]?.[0])).toContain('deleted_at IS NULL')
   })
 })

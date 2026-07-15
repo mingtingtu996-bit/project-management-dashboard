@@ -3,10 +3,11 @@ set -euo pipefail
 
 : "${APP_DIR:?APP_DIR is required}"
 : "${RELEASE_SHA:?RELEASE_SHA is required}"
+: "${DEPLOY_TARGET:?DEPLOY_TARGET is required}"
 
 COMPOSE_FILE="${COMPOSE_FILE:-deploy/docker-compose.lighthouse.yml}"
 ENV_FILE="${ENV_FILE:-deploy/env/server.production.env}"
-HEALTH_URL="${HEALTH_URL:-http://127.0.0.1/api/health}"
+HEALTH_URL="${HEALTH_URL:-}"
 PERFORMANCE_SUMMARY_URL="${PERFORMANCE_SUMMARY_URL:-}"
 
 case "$APP_DIR" in
@@ -75,6 +76,20 @@ read_env_value() {
   ' "$ENV_FILE"
 }
 
+if [ -n "$(read_env_value SUPABASE_SERVICE_KEY)" ]; then
+  echo "SUPABASE_SERVICE_KEY is forbidden in the API runtime env file; use an isolated migration/admin worker." >&2
+  exit 1
+fi
+if [ -z "$(read_env_value SUPABASE_RUNTIME_KEY)" ]; then
+  echo "SUPABASE_RUNTIME_KEY is required and must represent a non-BYPASSRLS application role." >&2
+  exit 1
+fi
+
+WEB_PORT_VALUE="$(read_env_value WEB_PORT)"
+WEB_PORT_VALUE="${WEB_PORT_VALUE:-8080}"
+INTERNAL_HEALTH_URL="http://127.0.0.1:${WEB_PORT_VALUE}/api/readyz"
+HEALTH_URL="${HEALTH_URL:-$INTERNAL_HEALTH_URL}"
+
 if [ -z "${VITE_SUPABASE_URL:-}" ]; then
   VITE_SUPABASE_URL="$(read_env_value VITE_SUPABASE_URL)"
 fi
@@ -104,6 +119,10 @@ fi
 run_docker_compose() {
   if [ "$USE_SUDO_DOCKER" = "1" ]; then
     sudo -n env \
+      RELEASE_SHA="$RELEASE_SHA" \
+      DEPLOY_TARGET="$DEPLOY_TARGET" \
+      EXPECTED_SCHEMA_MIGRATION_FILENAME="$EXPECTED_SCHEMA_MIGRATION_FILENAME" \
+      EXPECTED_SCHEMA_MIGRATION_CHECKSUM="$EXPECTED_SCHEMA_MIGRATION_CHECKSUM" \
       VITE_SUPABASE_URL="$VITE_SUPABASE_URL" \
       VITE_SUPABASE_ANON_KEY="$VITE_SUPABASE_ANON_KEY" \
       docker compose "$@"
@@ -131,11 +150,11 @@ retry() {
 
 derive_performance_summary_url() {
   local health_url="$1"
-  if [[ "$health_url" == */api/health ]]; then
-    echo "${health_url%/api/health}/api/performance-reports/summary"
-  else
-    echo "${health_url%/}/api/performance-reports/summary"
-  fi
+  case "$health_url" in
+    */api/readyz) echo "${health_url%/api/readyz}/api/performance-reports/summary" ;;
+    */api/readyz) echo "${health_url%/api/readyz}/api/performance-reports/summary" ;;
+    *) echo "${health_url%/}/api/performance-reports/summary" ;;
+  esac
 }
 
 if [ -n "${RELEASE_ARCHIVE:-}" ]; then
@@ -148,6 +167,7 @@ if [ -n "${RELEASE_ARCHIVE:-}" ]; then
   if [ -d .git ]; then
     git ls-files -z | xargs -0 -r rm -f --
   fi
+  rm -rf client/dist
   tar -xzf "$RELEASE_ARCHIVE" -C "$APP_DIR"
   rm -f "$RELEASE_ARCHIVE"
 elif [ -d .git ]; then
@@ -158,13 +178,74 @@ else
   exit 1
 fi
 
+FRONTEND_BUILD_MANIFEST="client/dist/workbuddy-build.json"
+if [ ! -f "$FRONTEND_BUILD_MANIFEST" ]; then
+  echo "Missing tested frontend build provenance: $APP_DIR/$FRONTEND_BUILD_MANIFEST" >&2
+  exit 1
+fi
+if ! grep -Fq "\"releaseSha\": \"$RELEASE_SHA\"" "$FRONTEND_BUILD_MANIFEST"; then
+  echo "Frontend build provenance does not match release SHA $RELEASE_SHA" >&2
+  exit 1
+fi
+
+LATEST_SCHEMA_MIGRATION_PATH="$(find server/migrations -maxdepth 1 -type f -name '[0-9]*_*.sql' -print | sort -V | tail -n 1)"
+if [ -z "$LATEST_SCHEMA_MIGRATION_PATH" ] || [ ! -f "$LATEST_SCHEMA_MIGRATION_PATH" ]; then
+  echo "No managed schema migration found in the release tree." >&2
+  exit 1
+fi
+EXPECTED_SCHEMA_MIGRATION_FILENAME="$(basename "$LATEST_SCHEMA_MIGRATION_PATH")"
+EXPECTED_SCHEMA_MIGRATION_CHECKSUM="$(sha256sum "$LATEST_SCHEMA_MIGRATION_PATH" | awk '{print $1}')"
+if [ -z "$EXPECTED_SCHEMA_MIGRATION_CHECKSUM" ]; then
+  echo "Unable to calculate release migration checksum: $LATEST_SCHEMA_MIGRATION_PATH" >&2
+  exit 1
+fi
+export EXPECTED_SCHEMA_MIGRATION_FILENAME EXPECTED_SCHEMA_MIGRATION_CHECKSUM
+
 mkdir -p deploy/data/logs
 
 run_docker_compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --build --remove-orphans
 run_docker_compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" ps
 
-curl --fail --silent --show-error "$HEALTH_URL" >/tmp/project-management-health.json
+curl --fail --silent --show-error "$INTERNAL_HEALTH_URL" >/tmp/project-management-health.json
 cat /tmp/project-management-health.json
+
+if [ "$HEALTH_URL" != "$INTERNAL_HEALTH_URL" ]; then
+  case "$HEALTH_URL" in
+    https://*) ;;
+    *)
+      echo "External deployment health URL must use https://: $HEALTH_URL" >&2
+      exit 1
+      ;;
+  esac
+
+  curl --fail --silent --show-error "$HEALTH_URL" >/tmp/project-management-public-health.json
+  cat /tmp/project-management-public-health.json
+  if ! curl --fail --silent --show-error --head "$HEALTH_URL" \
+    | tr -d '\r' \
+    | grep -qi '^strict-transport-security:'; then
+    echo "Public HTTPS response is missing Strict-Transport-Security: $HEALTH_URL" >&2
+    exit 1
+  fi
+
+  HTTP_HEALTH_URL="http://${HEALTH_URL#https://}"
+  redirect_result="$(curl --silent --show-error --max-redirs 0 --output /dev/null --write-out '%{http_code} %{redirect_url}' "$HTTP_HEALTH_URL")"
+  redirect_status="${redirect_result%% *}"
+  redirect_url="${redirect_result#* }"
+  case "$redirect_status" in
+    301|302|307|308) ;;
+    *)
+      echo "Public HTTP endpoint did not redirect to HTTPS: $HTTP_HEALTH_URL ($redirect_status)" >&2
+      exit 1
+      ;;
+  esac
+  case "$redirect_url" in
+    https://*) ;;
+    *)
+      echo "Public HTTP redirect target is not HTTPS: $redirect_url" >&2
+      exit 1
+      ;;
+  esac
+fi
 
 if [ -z "$PERFORMANCE_SUMMARY_URL" ]; then
   PERFORMANCE_SUMMARY_URL="$(derive_performance_summary_url "$HEALTH_URL")"

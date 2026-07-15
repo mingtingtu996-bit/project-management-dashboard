@@ -13,6 +13,7 @@ ALTER TABLE projects ENABLE ROW LEVEL SECURITY;
 
 -- 1. SELECT策略 - 只能查看自己的项目
 -- 允许查看自己的项目或公开模板
+DROP POLICY IF EXISTS "projects_select_own" ON projects;
 CREATE POLICY "projects_select_own" ON projects
   FOR SELECT
   USING (
@@ -22,6 +23,7 @@ CREATE POLICY "projects_select_own" ON projects
 
 -- 2. INSERT策略 - 只能插入自己的项目
 -- 确保创建的项目owner_id为当前用户
+DROP POLICY IF EXISTS "projects_insert_own" ON projects;
 CREATE POLICY "projects_insert_own" ON projects
   FOR INSERT
   WITH CHECK (
@@ -30,6 +32,7 @@ CREATE POLICY "projects_insert_own" ON projects
 
 -- 3. UPDATE策略 - 只能更新自己的项目
 -- 防止修改其他用户的项目
+DROP POLICY IF EXISTS "projects_update_own" ON projects;
 CREATE POLICY "projects_update_own" ON projects
   FOR UPDATE
   USING (
@@ -38,6 +41,7 @@ CREATE POLICY "projects_update_own" ON projects
 
 -- 4. DELETE策略 - 只能删除自己的项目
 -- 防止删除其他用户的项目
+DROP POLICY IF EXISTS "projects_delete_own" ON projects;
 CREATE POLICY "projects_delete_own" ON projects
   FOR DELETE
   USING (
@@ -78,12 +82,14 @@ ORDER BY policyname;
 -- ================================================
 
 SELECT
-  schemaname,
-  tablename,
-  rowsecurity AS rls_enabled,
-  forcerowsecurity AS rls_forced
-FROM pg_tables
-WHERE tablename = 'projects';
+  n.nspname AS schemaname,
+  c.relname AS tablename,
+  c.relrowsecurity AS rls_enabled,
+  c.relforcerowsecurity AS rls_forced
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = 'public'
+  AND c.relname = 'projects';
 
 -- ================================================
 -- 注意事项

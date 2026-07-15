@@ -11,6 +11,11 @@ import {
   recordProjectRemainingDurationForecastConsumedArtifacts,
   type DurationRuntimeConsumerFacadeArtifactsResult,
 } from './durationRuntimeConsumerObservationAdapterService.js'
+import {
+  evaluateDurationPlausibility,
+  orderDurationBand,
+  type DurationPlausibilityWarning,
+} from './durationEngineeringPlausibilityGuardrailService.js'
 import type {
   DurationRuntimeConsumerObservationQueryExec,
   DurationRuntimeConsumerObservedArtifact,
@@ -22,12 +27,19 @@ import {
   productionDaysBetweenInclusive,
   type ConstructionCalendarContext,
 } from './constructionCalendar.js'
+import { buildDownstreamDurationAssetConsumption } from './durationAssetDownstreamConsumptionService.js'
+import type {
+  DurationAssetConsumptionReceipt,
+  DurationAssetConsumptionSummary,
+} from './durationAssetConsumptionReceiptService.js'
 
 export type ProjectMonthlyCommitmentSummary = {
   activeCommitmentCount?: number | null
   carryoverCommitmentCount?: number | null
   latestCommitmentFinishDate?: string | null
 }
+
+export type ProjectMonthlyCommitmentSoftSignalPolicy = 'status_only_not_finish_boundary'
 
 export type ProjectRemainingDurationForecast = {
   durationOutputCode: 'project_remaining_forecast'
@@ -74,16 +86,49 @@ export type ProjectRemainingDurationForecast = {
       activeCommitmentCount: number
       carryoverCommitmentCount: number
       latestCommitmentFinishDate: string | null
+      commitmentFinishSoftSignalDate: string | null
+      commitmentFinishBeyondForecastDays: number
+      softSignalPolicy: ProjectMonthlyCommitmentSoftSignalPolicy
     }
     externalInterfaces: {
       hardGateCount: number
       latestGateFinishDate: string | null
+      gateRelationSummary?: {
+        parallelWaitCount: number
+        startGateCount?: number
+        finishGateCount: number
+        handoverGateCount?: number
+        mixedGateCount?: number
+        totalCount: number
+        relationKinds?: string[]
+      }
       serialRemainingDays?: number
       overlappedRemainingDays?: number
+      startGateFinishDate?: string | null
       overlappedGateFinishDate?: string | null
+      finishGateFinishDate?: string | null
+      handoverGateFinishDate?: string | null
       gateTailDaysAfterInternal?: number
       serializedGateFinishDate?: string | null
     }
+    t2RhythmScheduleEvidence?: {
+      source: 'project_remaining_duration_forecast_e4_row_evidence'
+      evidenceRowCount: number
+      selectedTemplateIds: string[]
+      canEnterC1913Phase1Selection: boolean
+      requiresManualReview: boolean
+      writesTaskDependencies: false
+      writesPlanDates: false
+      writesCriticalPathFacts: false
+      t2RhythmScheduleCandidatePackage?: Record<string, unknown>
+      t2RhythmScheduleCandidateNetworkEvaluation?: Record<string, unknown>
+      durationInputAssembly?: Record<string, unknown>
+      conflictCodes?: string[]
+    }
+    durationInputAssembly?: Record<string, unknown>
+    upstreamAssetConsumptionReceipts?: DurationAssetConsumptionReceipt[]
+    assetConsumptionReceipts?: DurationAssetConsumptionReceipt[]
+    assetConsumptionSummary?: DurationAssetConsumptionSummary
     boundaryPolicy: string[]
   }
 }
@@ -216,6 +261,17 @@ function readNumber(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null
 }
 
+function isNonEmptyRecord(value: Record<string, unknown>) {
+  return Object.keys(value).length > 0
+}
+
+function uniqueStrings(values: unknown[]) {
+  return [...new Set(values
+    .flatMap((value) => Array.isArray(value) ? value : [value])
+    .map((value) => normalizeText(value))
+    .filter(Boolean))]
+}
+
 function firstProjectId(rows: ScheduleAccelerationRow[]) {
   for (const row of rows) {
     const projectId = normalizeText(row.values.project_id ?? row.values.projectId)
@@ -252,6 +308,54 @@ function readRowOptimisticBandFinish(row: ScheduleAccelerationRow) {
       ?? readRecord(row.values.durationForecast).forecastP20FinishDate
       ?? readRecord(row.values.duration_forecast).forecast_p20_finish_date,
   )
+}
+
+function addProductionDaysOrNull(
+  date: string | null | undefined,
+  days: number | null | undefined,
+  calendar?: ConstructionCalendarContext | null,
+) {
+  if (!date || days == null || days <= 0) return null
+  return addProductionDays(date, days, calendar)
+}
+
+function orderCriticalBandFinishDates(
+  row: ScheduleAccelerationRow,
+  asOfDate: string,
+  calendar?: ConstructionCalendarContext | null,
+): {
+  optimisticBandFinishDate: string | null
+  medianFinishDate: string | null
+  confidenceBandFinishDate: string | null
+  warnings: DurationPlausibilityWarning[]
+} {
+  const medianFinish = readRowGoverningFinish(row, asOfDate, calendar)
+  const optimisticFinish = readRowOptimisticBandFinish(row)
+  const confidenceFinish = readRowConfidenceBandFinish(row)
+  if (!medianFinish && !optimisticFinish && !confidenceFinish) {
+    return {
+      optimisticBandFinishDate: null,
+      medianFinishDate: null,
+      confidenceBandFinishDate: null,
+      warnings: [],
+    }
+  }
+  const optimisticDays = optimisticFinish ? projectRemainingDurationDays(asOfDate, optimisticFinish, calendar) : null
+  const medianDays = medianFinish ? projectRemainingDurationDays(asOfDate, medianFinish, calendar) : null
+  const confidenceDays = confidenceFinish ? projectRemainingDurationDays(asOfDate, confidenceFinish, calendar) : null
+  const ordered = orderDurationBand({
+    engineCode: 'project_remaining_forecast',
+    p20Days: optimisticDays,
+    p50Days: medianDays,
+    p80Days: confidenceDays,
+    taskId: row.clientRowId,
+  })
+  return {
+    optimisticBandFinishDate: addProductionDaysOrNull(asOfDate, ordered.band.p20Days, calendar),
+    medianFinishDate: addProductionDaysOrNull(asOfDate, ordered.band.p50Days, calendar) ?? medianFinish,
+    confidenceBandFinishDate: addProductionDaysOrNull(asOfDate, ordered.band.p80Days, calendar),
+    warnings: ordered.warnings,
+  }
 }
 
 function readRowRemainingDurationDays(row: ScheduleAccelerationRow) {
@@ -294,6 +398,108 @@ function readRowGoverningFinish(
   )
 }
 
+function readRowForecastSources(row: ScheduleAccelerationRow) {
+  const durationForecast = readRecord(row.values.durationForecast)
+  const snakeDurationForecast = readRecord(row.values.duration_forecast)
+  return readRecord(
+    durationForecast.forecastSources
+      ?? durationForecast.forecast_sources
+      ?? snakeDurationForecast.forecastSources
+      ?? snakeDurationForecast.forecast_sources
+      ?? row.values.forecastSources
+      ?? row.values.forecast_sources,
+  )
+}
+
+function buildT2RhythmScheduleEvidence(rows: ScheduleAccelerationRow[]) {
+  let evidenceRowCount = 0
+  let t2RhythmScheduleCandidatePackage: Record<string, unknown> | null = null
+  let t2RhythmScheduleCandidateNetworkEvaluation: Record<string, unknown> | null = null
+  let durationInputAssembly: Record<string, unknown> | null = null
+  const selectedTemplateIds: unknown[] = []
+  const conflictCodes: unknown[] = []
+
+  for (const row of rows) {
+    const sources = readRowForecastSources(row)
+    const rowPackage = readRecord(
+      sources.t2RhythmScheduleCandidatePackage
+        ?? sources.t2_rhythm_schedule_candidate_package,
+    )
+    const rowEvaluation = readRecord(
+      sources.t2RhythmScheduleCandidateNetworkEvaluation
+        ?? sources.t2_rhythm_schedule_candidate_network_evaluation,
+    )
+    const rowAssembly = readRecord(
+      sources.durationInputAssembly
+        ?? sources.duration_input_assembly,
+    )
+    const hasT2Evidence = isNonEmptyRecord(rowPackage)
+      || isNonEmptyRecord(rowEvaluation)
+      || isNonEmptyRecord(rowAssembly)
+    if (!hasT2Evidence) continue
+
+    evidenceRowCount += 1
+    if (!t2RhythmScheduleCandidatePackage && isNonEmptyRecord(rowPackage)) {
+      t2RhythmScheduleCandidatePackage = rowPackage
+    }
+    if (!t2RhythmScheduleCandidateNetworkEvaluation && isNonEmptyRecord(rowEvaluation)) {
+      t2RhythmScheduleCandidateNetworkEvaluation = rowEvaluation
+    }
+    if (!durationInputAssembly && isNonEmptyRecord(rowAssembly)) {
+      durationInputAssembly = rowAssembly
+    }
+
+    selectedTemplateIds.push(rowPackage.selectedTemplateIds)
+    selectedTemplateIds.push(readRecord(rowEvaluation.scheduleTrustEvidence).selectedTemplateIds)
+    selectedTemplateIds.push(readRecord(readRecord(rowAssembly.inputChannels).t2RhythmScheduleCandidatePackage).selectedTemplateIds)
+    conflictCodes.push(readRecord(rowAssembly.assemblyGate).conflictCodes)
+  }
+
+  if (evidenceRowCount <= 0) return null
+
+  const assemblyGate = readRecord(durationInputAssembly?.assemblyGate)
+  const evaluationCanEnter = t2RhythmScheduleCandidateNetworkEvaluation?.canEnterC1913Phase1Selection === true
+  const assemblyCanEnter = assemblyGate.canEnterC1913Phase1Selection === true
+  const normalizedConflictCodes = uniqueStrings(conflictCodes)
+  const requiresManualReview = assemblyGate.requiresManualReview === true
+    || normalizeText(t2RhythmScheduleCandidatePackage?.status) === 'candidate_conflict'
+    || normalizeText(t2RhythmScheduleCandidateNetworkEvaluation?.status) === 'candidate_conflict'
+    || normalizedConflictCodes.length > 0
+
+  return {
+    source: 'project_remaining_duration_forecast_e4_row_evidence' as const,
+    evidenceMode: 'row_projection_only' as const,
+    evidenceRowCount,
+    selectedTemplateIds: uniqueStrings(selectedTemplateIds),
+    canEnterC1913Phase1Selection: (assemblyCanEnter || evaluationCanEnter) && !requiresManualReview,
+    releaseEvidenceReady: false,
+    missingReleaseEvidenceReasons: [
+      'archived_phase1_selector_replay_required',
+      'runtime_publication_evidence_required',
+    ],
+    requiresManualReview,
+    writesTaskDependencies: false as const,
+    writesPlanDates: false as const,
+    writesCriticalPathFacts: false as const,
+    ...(t2RhythmScheduleCandidatePackage ? { t2RhythmScheduleCandidatePackage } : {}),
+    ...(t2RhythmScheduleCandidateNetworkEvaluation ? { t2RhythmScheduleCandidateNetworkEvaluation } : {}),
+    ...(durationInputAssembly ? { durationInputAssembly } : {}),
+    ...(normalizedConflictCodes.length > 0 ? { conflictCodes: normalizedConflictCodes } : {}),
+  }
+}
+
+function readRuntimeDurationInputAssembly(runtimeExecutionFacts?: RuntimeExecutionFacts | null) {
+  const runtime = readRecord(runtimeExecutionFacts)
+  const t2Evidence = readRecord(
+    runtime.t2RhythmScheduleEvidence
+      ?? runtime.t2_rhythm_schedule_evidence,
+  )
+  return readRecord(
+    t2Evidence.durationInputAssembly
+      ?? t2Evidence.duration_input_assembly,
+  )
+}
+
 function readExternalGateFinishDate(
   row: ScheduleAccelerationRow,
   asOfDate: string,
@@ -331,6 +537,19 @@ function readExternalGateRemainingDays(
     ? plannedStartDate
     : asOfDate
   return projectRemainingDurationDays(startDate, finishDate, calendar)
+}
+
+function readExplicitExternalGateFinishDate(row: ScheduleAccelerationRow) {
+  return normalizeDate(
+    row.values.forecast_finish_date
+      ?? row.values.forecastFinishDate
+      ?? row.values.duration_forecast_finish_date
+      ?? readRecord(row.values.durationForecast).forecastFinishDate
+      ?? readRecord(row.values.duration_forecast).forecast_finish_date
+      ?? row.values.planned_finish_date
+      ?? row.values.planned_end_date
+      ?? row.values.end_date,
+  )
 }
 
 function computeCriticalMergeBiasDays(
@@ -415,19 +634,27 @@ function isCompletedRow(row: ScheduleAccelerationRow) {
 
 function isScheduleRow(row: ScheduleAccelerationRow) {
   const metadata = readRecord(row.values.standard_task_metadata ?? row.values.metadata)
+  const summaryValue = row.values.is_wbs_summary ?? metadata.isWbsSummary ?? metadata.is_wbs_summary
+  const isSummary = summaryValue === true
+    || summaryValue === 1
+    || normalizeText(summaryValue).toLowerCase() === 'true'
+  const durationContributionMode = normalizeText(
+    row.values.duration_contribution_mode ?? metadata.durationContributionMode ?? metadata.duration_contribution_mode,
+  )
   const mode = normalizeText(row.rowProjectionMode ?? row.values.row_projection_mode ?? metadata.rowProjectionMode ?? metadata.row_projection_mode)
-  return !mode || mode === 'schedule_row'
+  return !(isSummary && durationContributionMode === 'record_only') && (!mode || mode === 'schedule_row')
 }
 
 function isCriticalOrNearCriticalRow(row: ScheduleAccelerationRow) {
   const totalFloat = readNumber(row.values.total_float_days)
   const freeFloat = readNumber(row.values.free_float_days)
-  return row.values.is_critical === true
-    || (totalFloat !== null && totalFloat <= 3)
+  return (totalFloat !== null && totalFloat <= 3)
     || (freeFloat !== null && freeFloat <= 1)
 }
 
-function isExternalHardGateRow(row: ScheduleAccelerationRow) {
+type GateRelationKind = 'parallel_wait' | 'start_gate' | 'finish_gate' | 'handover_gate' | 'mixed_gate'
+
+function deriveExternalGateRelation(row: ScheduleAccelerationRow): GateRelationKind | null {
   const metadata = readRecord(row.values.standard_task_metadata ?? row.values.metadata)
   const contributionMode = normalizeText(row.values.duration_contribution_mode ?? metadata.durationContributionMode ?? metadata.duration_contribution_mode).toLowerCase()
   const constraintType = normalizeText(metadata.constraintType ?? metadata.constraint_type).toLowerCase()
@@ -449,20 +676,134 @@ function isExternalHardGateRow(row: ScheduleAccelerationRow) {
     ...readArray(metadata.hardConstraintCodes),
     ...readArray(metadata.hard_constraint_codes),
   ].map(normalizeText).filter(Boolean)
-  return contributionMode.includes('external')
-    || gateRelation.includes('acceptance')
-    || gateRelation.includes('certificate')
-    || gateRelation.includes('permit')
-    || gateRelation.includes('handover')
-    || constraintType.includes('external')
-    || constraintType.includes('acceptance')
-    || constraintType.includes('certificate')
-    || constraintType.includes('permit')
-    || constraintType.includes('handover')
-    || externalInterfaces.length > 0
-    || hardConstraints.length > 0
+  const documentEvidenceRole = normalizeText(
+    row.values.documentEvidenceRole
+      ?? row.values.document_evidence_role
+      ?? metadata.documentEvidenceRole
+      ?? metadata.document_evidence_role,
+  ).toLowerCase()
+  const blockingLevel = normalizeText(
+    row.values.blockingLevel
+      ?? row.values.blocking_level
+      ?? metadata.blockingLevel
+      ?? metadata.blocking_level,
+  ).toLowerCase()
+  const certificateType = normalizeText(
+    row.values.certificateType
+      ?? row.values.certificate_type
+      ?? metadata.certificateType
+      ?? metadata.certificate_type,
+  ).toLowerCase()
+
+  const relationText = [
+    contributionMode,
+    gateRelation,
+    constraintType,
+    documentEvidenceRole,
+    blockingLevel,
+    certificateType,
+    normalizeText(row.values.title),
+    ...externalInterfaces,
+    ...hardConstraints,
+  ].join(' ').toLowerCase()
+  const finishSignalText = [
+    contributionMode,
+    gateRelation,
+    constraintType,
+    documentEvidenceRole,
+    blockingLevel,
+    certificateType,
+    ...externalInterfaces,
+    ...hardConstraints,
+  ].join(' ').toLowerCase()
+
+  const hasExplicitStartGateSignals = [
+    'start_gate',
+    'startup_gate',
+    'commencement',
+    'precondition',
+    'pre_start',
+  ].some((term) => gateRelation.includes(term) || blockingLevel.includes(term))
+    || (certificateType.includes('construction_permit') && blockingLevel.includes('startup'))
+    || (certificateType.includes('construction_permit') && gateRelation.includes('startup'))
+
+  const hasExplicitHandoverGateSignals = [
+    'handover_gate',
+    'handover_marker',
+    'handover_document',
+    'document_transfer',
+    'archive_transfer',
+  ].some((term) => gateRelation.includes(term)
+      || contributionMode.includes(term)
+      || documentEvidenceRole.includes(term)
+      || constraintType.includes(term))
+    || row.values.handover_required === true
+    || metadata.handoverRequired === true
+    || metadata.handover_required === true
+
+  const hasFinishGateSignals = [
+    'acceptance',
+    'delivery_acceptance',
+    'final_acceptance',
+    'closeout',
+    'completion',
+    'certificate_issue',
+    'certificate_acceptance',
+  ].some((term) => finishSignalText.includes(term))
     || row.values.acceptance_required === true
+    || metadata.acceptanceRequired === true
+    || metadata.acceptance_required === true
+
+  const hasParallelWaitSignals = [
+    'approval_wait',
+    'external_wait',
+    'material_wait',
+    'certificate_wait',
+    'interface_wait',
+    'outbound_wait',
+    'utility_wait',
+  ].some((term) => relationText.includes(term))
     || row.values.material_required === true
+    || metadata.materialRequired === true
+    || metadata.material_required === true
+    || (!hasFinishGateSignals && relationText.includes('external'))
+
+  if (hasExplicitStartGateSignals && !hasFinishGateSignals && !hasExplicitHandoverGateSignals) return 'start_gate'
+  if (hasExplicitHandoverGateSignals && !hasFinishGateSignals && !hasParallelWaitSignals) return 'handover_gate'
+  if (!hasFinishGateSignals && !hasParallelWaitSignals && !hasExplicitHandoverGateSignals) return null
+  if (hasExplicitHandoverGateSignals && hasParallelWaitSignals) return 'mixed_gate'
+  if (hasFinishGateSignals && hasParallelWaitSignals && (
+    row.values.acceptance_required === true
+    || metadata.acceptanceRequired === true
+    || metadata.acceptance_required === true
+  )) return 'mixed_gate'
+  if (hasExplicitHandoverGateSignals) return 'handover_gate'
+  if (hasFinishGateSignals) return 'finish_gate'
+  return 'parallel_wait'
+}
+
+function isExternalHardGateRow(row: ScheduleAccelerationRow) {
+  return deriveExternalGateRelation(row) !== null
+}
+
+function isFinishGateRow(row: ScheduleAccelerationRow) {
+  return deriveExternalGateRelation(row) === 'finish_gate'
+}
+
+function isParallelWaitGateRow(row: ScheduleAccelerationRow) {
+  return deriveExternalGateRelation(row) === 'parallel_wait'
+}
+
+function isStartGateRow(row: ScheduleAccelerationRow) {
+  return deriveExternalGateRelation(row) === 'start_gate'
+}
+
+function isHandoverGateRow(row: ScheduleAccelerationRow) {
+  return deriveExternalGateRelation(row) === 'handover_gate'
+}
+
+function isMixedGateRow(row: ScheduleAccelerationRow) {
+  return deriveExternalGateRelation(row) === 'mixed_gate'
 }
 
 function applyFreshCriticalPathSnapshotToRows(
@@ -567,6 +908,7 @@ export function buildProjectRemainingForecastPredictionEvent(input: {
   rows: ScheduleAccelerationRow[]
   asOfDate: string
   projectId?: string | null
+  constructionCalendar?: ConstructionCalendarContext | null
 }): DurationAccuracyPredictionInput {
   const rowIds = input.rows.map((row) => normalizeText(row.clientRowId)).filter(Boolean)
   const projectId = normalizeText(input.projectId) || firstProjectId(input.rows)
@@ -611,6 +953,8 @@ export function buildProjectRemainingForecastPredictionEvent(input: {
     predictionContext: {
       sourceService: 'projectRemainingDurationForecastService',
       durationOutputCode: input.forecast.durationOutputCode,
+      durationDayUnit: 'construction_production_day',
+      constructionCalendar: input.constructionCalendar ?? null,
       projectRemainingForecastDays: input.forecast.projectRemainingForecastDays,
       targetGapDays: input.forecast.targetGapDays,
       calculationContext: input.forecast.calculationContext,
@@ -656,11 +1000,23 @@ export function buildProjectRemainingDurationForecast(params: {
   const externalGateRows = remainingRows.filter(isExternalHardGateRow)
   const internalRemainingRows = remainingRows.filter((row) => !isExternalHardGateRow(row))
   const internalCriticalRows = criticalRows.filter((row) => !isExternalHardGateRow(row))
+  const criticalBandOrders = internalCriticalRows.map((row) => orderCriticalBandFinishDates(row, asOfDate, constructionCalendar))
+  const durationPlausibilityWarnings: DurationPlausibilityWarning[] = criticalBandOrders.flatMap((item) => item.warnings)
   const monthlyCommitments = params.monthlyCommitments ?? {}
+  const gateRelationByRow = new Map<ScheduleAccelerationRow, GateRelationKind>()
+  for (const row of externalGateRows) {
+    const relation = deriveExternalGateRelation(row)
+    if (relation) gateRelationByRow.set(row, relation)
+  }
+  const relationKinds = Array.from(new Set(Array.from(gateRelationByRow.values())))
+  const parallelGateRows = externalGateRows.filter((row) => isParallelWaitGateRow(row) || isMixedGateRow(row))
+  const startGateRows = externalGateRows.filter(isStartGateRow)
+  const finishGateRows = externalGateRows.filter((row) => isFinishGateRow(row) || isMixedGateRow(row))
+  const handoverGateRows = externalGateRows.filter(isHandoverGateRow)
   const latestRemainingFinishDate = latestDate(internalRemainingRows.map((row) => readRowGoverningFinish(row, asOfDate, constructionCalendar)))
   const latestCriticalFinishDate = latestDate(internalCriticalRows.map((row) => readRowGoverningFinish(row, asOfDate, constructionCalendar)))
-  const optimisticBandFinishDate = latestDate(internalCriticalRows.map(readRowOptimisticBandFinish))
-  const confidenceBandFinishDate = latestDate(internalCriticalRows.map(readRowConfidenceBandFinish))
+  const optimisticBandFinishDate = latestDate(criticalBandOrders.map((item) => item.optimisticBandFinishDate))
+  const confidenceBandFinishDate = latestDate(criticalBandOrders.map((item) => item.confidenceBandFinishDate))
   const criticalPathSpanDays = internalCriticalRows
     .map(readRowCriticalPathSpanDays)
     .filter((days): days is number => days !== null && days > 0)
@@ -668,6 +1024,9 @@ export function buildProjectRemainingDurationForecast(params: {
     ? addProductionDays(asOfDate, Math.max(...criticalPathSpanDays), constructionCalendar)
     : null
   const latestGateFinishDate = latestDate(externalGateRows.map((row) => readExternalGateFinishDate(row, asOfDate, constructionCalendar)))
+  const latestParallelGateFinishDate = latestDate(parallelGateRows.map((row) => readExternalGateFinishDate(row, asOfDate, constructionCalendar)))
+  const latestStartGateFinishDate = latestDate(startGateRows.map((row) => readExternalGateFinishDate(row, asOfDate, constructionCalendar)))
+  const latestFinishGateFinishDate = latestDate(finishGateRows.map((row) => readExplicitExternalGateFinishDate(row)))
   const latestCommitmentFinishDate = normalizeDate(monthlyCommitments.latestCommitmentFinishDate)
   const mergeBias = computeCriticalMergeBiasDays(internalCriticalRows, asOfDate, constructionCalendar)
   const deterministicInternalFinishDate = latestDate([
@@ -691,27 +1050,72 @@ export function buildProjectRemainingDurationForecast(params: {
     ? addExtraProductionDays(rawInternalWorkFinishDate, pressureProgressExtraDays, constructionCalendar)
     : rawInternalWorkFinishDate
   const internalWorkFinishDate = adjustedInternalFinishDate
-  const externalGateRemainingDays = externalGateRows
-    .map((row) => readExternalGateRemainingDays(row, asOfDate))
+  const parallelGateRemainingDays = parallelGateRows
+    .map((row) => readExternalGateRemainingDays(row, asOfDate, constructionCalendar))
     .filter((days) => days > 0)
-  const overlappedRemainingDays = externalGateRemainingDays.length > 0
-    ? Math.max(...externalGateRemainingDays)
+  const startGateRemainingDays = startGateRows
+    .map((row) => readExternalGateRemainingDays(row, asOfDate, constructionCalendar))
+    .filter((days) => days > 0)
+  const finishGateRemainingDays = finishGateRows
+    .filter((row) => !readExplicitExternalGateFinishDate(row))
+    .map((row) => readExternalGateRemainingDays(row, asOfDate, constructionCalendar))
+    .filter((days) => days > 0)
+  const handoverGateRemainingDays = handoverGateRows
+    .filter((row) => !readExplicitExternalGateFinishDate(row))
+    .map((row) => readExternalGateRemainingDays(row, asOfDate, constructionCalendar))
+    .filter((days) => days > 0)
+  const overlappedRemainingDays = parallelGateRemainingDays.length > 0
+    ? Math.max(...parallelGateRemainingDays)
     : 0
   const gateRemainingFinishDate = overlappedRemainingDays > 0
     ? addProductionDays(asOfDate, overlappedRemainingDays, constructionCalendar)
     : null
-  const overlappedGateFinishDate = latestDate([latestGateFinishDate, gateRemainingFinishDate])
-  const gateTailDaysAfterInternal = internalWorkFinishDate && overlappedGateFinishDate
-    ? Math.max(0, signedDurationDayDelta(internalWorkFinishDate, overlappedGateFinishDate) ?? 0)
+  const startGateRemainingFinishDate = startGateRemainingDays.length > 0
+    ? addProductionDays(asOfDate, Math.max(...startGateRemainingDays), constructionCalendar)
+    : null
+  const startGateFinishDate = latestDate([latestStartGateFinishDate, startGateRemainingFinishDate])
+  const parallelGateFinishDate = latestDate([latestParallelGateFinishDate, gateRemainingFinishDate])
+  const finishGateFinishDate = latestDate([
+    latestFinishGateFinishDate,
+    internalWorkFinishDate && finishGateRemainingDays.length > 0
+      ? addProductionDays(internalWorkFinishDate, Math.max(...finishGateRemainingDays), constructionCalendar)
+      : null,
+  ])
+  const latestHandoverGateFinishDate = latestDate(handoverGateRows.map((row) => readExplicitExternalGateFinishDate(row)))
+  const handoverBaseFinishDate = latestDate([finishGateFinishDate, internalWorkFinishDate])
+  const handoverGateFinishDate = latestDate([
+    latestHandoverGateFinishDate,
+    handoverBaseFinishDate && handoverGateRemainingDays.length > 0
+      ? addProductionDays(handoverBaseFinishDate, Math.max(...handoverGateRemainingDays), constructionCalendar)
+      : null,
+  ])
+  const serializedGateFinishCandidate = latestDate([finishGateFinishDate, handoverGateFinishDate])
+  const gateTailDaysAfterInternal = internalWorkFinishDate && serializedGateFinishCandidate
+    ? Math.max(0, signedDurationDayDelta(internalWorkFinishDate, serializedGateFinishCandidate) ?? 0)
     : 0
   const serialRemainingDays = gateTailDaysAfterInternal
-  const serializedGateFinishDate = gateTailDaysAfterInternal > 0 ? overlappedGateFinishDate : null
-  const forecastFinishDate = latestDate([
+  const serializedGateFinishDate = gateTailDaysAfterInternal > 0 ? serializedGateFinishCandidate : null
+  const rawForecastFinishDate = latestDate([
     internalWorkFinishDate,
-    overlappedGateFinishDate,
-    latestCommitmentFinishDate,
+    startGateFinishDate,
+    parallelGateFinishDate,
+    serializedGateFinishCandidate,
     asOfDate,
   ])
+  const forecastDurationGuard = evaluateDurationPlausibility({
+    engineCode: 'project_remaining_forecast',
+    durationDays: rawForecastFinishDate ? projectRemainingDurationDays(asOfDate, rawForecastFinishDate, constructionCalendar) : null,
+    title: 'project remaining forecast',
+    clamp: true,
+  })
+  durationPlausibilityWarnings.push(...forecastDurationGuard.warnings)
+  const forecastFinishDate = forecastDurationGuard.durationDays
+    ? addProductionDays(asOfDate, forecastDurationGuard.durationDays, constructionCalendar)
+    : rawForecastFinishDate
+  const commitmentFinishBeyondForecastDays = Math.max(
+    0,
+    signedDurationDayDelta(forecastFinishDate, latestCommitmentFinishDate) ?? 0,
+  )
   const targetEndDate = normalizeDate(params.targetEndDate)
   const factContext = buildAlgorithmFactContext({
     phase: 'runtime_forecast',
@@ -720,12 +1124,44 @@ export function buildProjectRemainingDurationForecast(params: {
   })
   const factSummary = summarizeAlgorithmFactContext(factContext)
   const durationOutputContract = buildDurationOutputContractSummary()
+  const t2RhythmScheduleEvidence = buildT2RhythmScheduleEvidence(scheduleRows)
+  const rowDurationInputAssembly = readRecord(t2RhythmScheduleEvidence?.durationInputAssembly)
+  const runtimeDurationInputAssembly = readRuntimeDurationInputAssembly(params.runtimeExecutionFacts)
+  const durationInputAssembly = isNonEmptyRecord(rowDurationInputAssembly)
+    ? rowDurationInputAssembly
+    : runtimeDurationInputAssembly
+  const upstreamAssetConsumptionReceipts = Array.isArray(durationInputAssembly.assetConsumptionReceipts)
+    ? durationInputAssembly.assetConsumptionReceipts as DurationAssetConsumptionReceipt[]
+    : []
+  const finalProjectRemainingForecastDays = projectRemainingDurationDays(
+    asOfDate,
+    forecastFinishDate,
+    constructionCalendar,
+  )
+  const downstreamAssetConsumption = buildDownstreamDurationAssetConsumption({
+    consumer: 'project_remaining_duration_forecast',
+    upstreamReceipts: upstreamAssetConsumptionReceipts,
+    before: {
+      durationDays: null,
+      dates: null,
+      confidence: null,
+    },
+    after: {
+      durationDays: finalProjectRemainingForecastDays,
+      dates: {
+        forecastFinishDate,
+        targetEndDate,
+      },
+      confidence: confidenceBandDecision,
+    },
+    targetRowIds: scheduleRows.map((row) => row.clientRowId),
+  })
 
   const forecast: ProjectRemainingDurationForecast = {
     durationOutputCode: 'project_remaining_forecast',
     durationOutputSemanticFieldName: 'projectRemainingForecastDays',
     durationOutputContract,
-    projectRemainingForecastDays: projectRemainingDurationDays(asOfDate, forecastFinishDate, constructionCalendar),
+    projectRemainingForecastDays: finalProjectRemainingForecastDays,
     forecastFinishDate,
     targetEndDate,
     targetGapDays: projectRemainingGapDays(targetEndDate, forecastFinishDate, constructionCalendar),
@@ -756,21 +1192,49 @@ export function buildProjectRemainingDurationForecast(params: {
         activeCommitmentCount: Number(monthlyCommitments.activeCommitmentCount ?? 0) || 0,
         carryoverCommitmentCount: Number(monthlyCommitments.carryoverCommitmentCount ?? 0) || 0,
         latestCommitmentFinishDate,
+        commitmentFinishSoftSignalDate: latestCommitmentFinishDate,
+        commitmentFinishBeyondForecastDays,
+        softSignalPolicy: 'status_only_not_finish_boundary',
       },
       externalInterfaces: {
         hardGateCount: externalGateRows.length,
         latestGateFinishDate,
+        gateRelationSummary: {
+          parallelWaitCount: parallelGateRows.length,
+          startGateCount: startGateRows.length,
+          finishGateCount: finishGateRows.length,
+          handoverGateCount: handoverGateRows.length,
+          mixedGateCount: externalGateRows.filter(isMixedGateRow).length,
+          totalCount: externalGateRows.length,
+          relationKinds,
+        },
         serialRemainingDays,
         overlappedRemainingDays,
-        overlappedGateFinishDate,
+        startGateFinishDate,
+        overlappedGateFinishDate: parallelGateFinishDate,
+        finishGateFinishDate,
+        handoverGateFinishDate,
         gateTailDaysAfterInternal,
         serializedGateFinishDate,
       },
+      ...(t2RhythmScheduleEvidence ? { t2RhythmScheduleEvidence } : {}),
+      ...(isNonEmptyRecord(durationInputAssembly) ? { durationInputAssembly } : {}),
+      ...(upstreamAssetConsumptionReceipts.length > 0
+        ? { upstreamAssetConsumptionReceipts }
+        : {}),
+      ...(downstreamAssetConsumption.receipts.length > 0
+        ? {
+            assetConsumptionReceipts: downstreamAssetConsumption.receipts,
+            assetConsumptionSummary: downstreamAssetConsumption.summary,
+          }
+        : {}),
       boundaryPolicy: [
         ...(durationOutputContract?.boundaryPolicy ?? []),
         'project_remaining_window_arbitrates_deterministic_merge_bias_and_confidence_band_finish',
-        'external_hard_gates_overlap_with_internal_work_and_only_tail_after_internal_finish_extends_project',
+        'external_hard_gates_are_relation_aware_parallel_wait_or_finish_gates',
+        'monthly_commitments_are_status_pressure_soft_signals_not_finish_boundaries',
       ],
+      ...(durationPlausibilityWarnings.length > 0 ? { durationPlausibilityWarnings } : {}),
     },
   }
 
@@ -781,7 +1245,7 @@ export function buildProjectRemainingDurationForecast(params: {
   }))
 
   const runtimeArtifactPublications = params.runtimeArtifactPublications ?? []
-  if (params.runtimeConsumerObservationQueryExec && runtimeArtifactPublications.length > 0) {
+  if (params.runtimeConsumerObservationQueryExec) {
     const projectId = normalizeText(params.projectId) || firstProjectId(scheduleRows)
     void recordProjectRemainingDurationForecastConsumedArtifacts({
       queryExec: params.runtimeConsumerObservationQueryExec,

@@ -1,0 +1,957 @@
+{
+  "schemaVersion": "workbuddy-data-writer-registry/v1",
+  "mutationBoundary": "writer_registry_only_no_db_mutation_no_runtime_write",
+  "writers": [
+    {
+      "id": "progress_knowledge_candidate_sql_apply",
+      "path": "project-search/tools/apply-progress-knowledge-sql-to-db.mjs",
+      "ownerCenter": "project-search",
+      "environmentBoundary": "governed DB apply for progress knowledge candidate tables only",
+      "allowedTables": [
+        "progress_knowledge_sources",
+        "progress_knowledge_documents",
+        "progress_asset_candidates",
+        "progress_asset_calibration_runs",
+        "progress_asset_calibration_results",
+        "progress_asset_publication_readiness"
+      ],
+      "forbiddenTables": [
+        "tasks",
+        "task_baselines",
+        "monthly_plans",
+        "monthly_plan_items",
+        "task_dependencies",
+        "duration_experience_samples",
+        "actual_duration_outcomes",
+        "critical_path"
+      ],
+      "requiresUnlock": true,
+      "defaultMode": "candidate_only"
+    },
+    {
+      "id": "progress_knowledge_source_verification_sql_generator",
+      "path": "project-search/tools/build-progress-knowledge-source-verification.mjs",
+      "ownerCenter": "project-search",
+      "environmentBoundary": "candidate SQL generation only; no database connection or apply",
+      "allowedTables": [
+        "progress_knowledge_sources",
+        "progress_knowledge_documents"
+      ],
+      "forbiddenTables": [
+        "tasks",
+        "task_baselines",
+        "monthly_plans",
+        "monthly_plan_items",
+        "task_dependencies",
+        "duration_experience_samples",
+        "actual_duration_outcomes",
+        "critical_path"
+      ],
+      "requiresUnlock": false,
+      "defaultMode": "candidate_sql_generation_only_no_db_connection"
+    },
+    {
+      "id": "progress_knowledge_source_expansion_sql_generator",
+      "path": "project-search/tools/build-progress-knowledge-source-expansion.mjs",
+      "ownerCenter": "project-search",
+      "environmentBoundary": "candidate SQL generation only; no database connection or apply",
+      "allowedTables": [
+        "progress_knowledge_sources",
+        "progress_knowledge_documents"
+      ],
+      "forbiddenTables": [
+        "tasks",
+        "task_baselines",
+        "monthly_plans",
+        "monthly_plan_items",
+        "task_dependencies",
+        "duration_experience_samples",
+        "actual_duration_outcomes",
+        "critical_path"
+      ],
+      "requiresUnlock": false,
+      "defaultMode": "candidate_sql_generation_only_no_db_connection"
+    },
+    {
+      "id": "progress_knowledge_document_hash_repair_sql_generator",
+      "path": "project-search/tools/build-progress-knowledge-document-hash-repair.mjs",
+      "ownerCenter": "project-search",
+      "environmentBoundary": "candidate document hash repair SQL generation only; no database connection or apply",
+      "allowedTables": [
+        "progress_knowledge_documents"
+      ],
+      "forbiddenTables": [
+        "tasks",
+        "task_baselines",
+        "monthly_plans",
+        "monthly_plan_items",
+        "task_dependencies",
+        "duration_experience_samples",
+        "actual_duration_outcomes",
+        "critical_path"
+      ],
+      "requiresUnlock": false,
+      "defaultMode": "candidate_sql_generation_only_no_db_connection"
+    },
+    {
+      "id": "progress_knowledge_candidate_review_sql_generator",
+      "path": "project-search/tools/build-progress-knowledge-candidate-review.mjs",
+      "ownerCenter": "project-search",
+      "environmentBoundary": "candidate SQL generation only; no database connection or apply",
+      "allowedTables": [
+        "progress_asset_candidates"
+      ],
+      "forbiddenTables": [
+        "tasks",
+        "task_baselines",
+        "monthly_plans",
+        "monthly_plan_items",
+        "task_dependencies",
+        "duration_experience_samples",
+        "actual_duration_outcomes",
+        "critical_path"
+      ],
+      "requiresUnlock": false,
+      "defaultMode": "candidate_sql_generation_only_no_db_connection"
+    },
+    {
+      "id": "progress_knowledge_clause_sequence_candidate_review_sql_generator",
+      "path": "project-search/tools/build-progress-knowledge-clause-sequence-candidate-review.mjs",
+      "ownerCenter": "project-search",
+      "environmentBoundary": "candidate SQL generation only; no database connection or apply",
+      "allowedTables": [
+        "progress_asset_candidates"
+      ],
+      "forbiddenTables": [
+        "tasks",
+        "task_baselines",
+        "monthly_plans",
+        "monthly_plan_items",
+        "task_dependencies",
+        "duration_experience_samples",
+        "actual_duration_outcomes",
+        "critical_path"
+      ],
+      "requiresUnlock": false,
+      "defaultMode": "candidate_sql_generation_only_no_db_connection"
+    },
+    {
+      "id": "progress_knowledge_candidate_calibration_sql_generator",
+      "path": "project-search/tools/build-progress-knowledge-candidate-calibration.mjs",
+      "ownerCenter": "project-search",
+      "environmentBoundary": "candidate SQL generation only; no database connection or apply",
+      "allowedTables": [
+        "progress_asset_calibration_runs",
+        "progress_asset_calibration_results"
+      ],
+      "forbiddenTables": [
+        "tasks",
+        "task_baselines",
+        "monthly_plans",
+        "monthly_plan_items",
+        "task_dependencies",
+        "duration_experience_samples",
+        "actual_duration_outcomes",
+        "critical_path"
+      ],
+      "requiresUnlock": false,
+      "defaultMode": "candidate_sql_generation_only_no_db_connection"
+    },
+    {
+      "id": "progress_knowledge_clause_sequence_readiness_sql_generator",
+      "path": "project-search/tools/build-progress-knowledge-clause-sequence-readiness.mjs",
+      "ownerCenter": "project-search",
+      "environmentBoundary": "candidate SQL generation only; no database connection or apply",
+      "allowedTables": [
+        "progress_asset_calibration_runs",
+        "progress_asset_calibration_results",
+        "progress_asset_publication_readiness"
+      ],
+      "forbiddenTables": [
+        "tasks",
+        "task_baselines",
+        "monthly_plans",
+        "monthly_plan_items",
+        "task_dependencies",
+        "duration_experience_samples",
+        "actual_duration_outcomes",
+        "critical_path"
+      ],
+      "requiresUnlock": false,
+      "defaultMode": "candidate_sql_generation_only_no_db_connection"
+    },
+    {
+      "id": "progress_knowledge_completed_project_triad_sql_generator",
+      "path": "project-search/tools/build-progress-knowledge-completed-project-triad-candidates.mjs",
+      "ownerCenter": "project-search",
+      "environmentBoundary": "candidate SQL generation only; no database connection or apply",
+      "allowedTables": [
+        "progress_knowledge_sources",
+        "progress_knowledge_documents",
+        "progress_asset_candidates",
+        "progress_asset_calibration_runs",
+        "progress_asset_calibration_results",
+        "progress_asset_publication_readiness"
+      ],
+      "forbiddenTables": [
+        "tasks",
+        "task_baselines",
+        "monthly_plans",
+        "monthly_plan_items",
+        "task_dependencies",
+        "duration_experience_samples",
+        "actual_duration_outcomes",
+        "critical_path"
+      ],
+      "requiresUnlock": false,
+      "defaultMode": "candidate_sql_generation_only_no_db_connection"
+    },
+    {
+      "id": "progress_knowledge_validation_sql_generator",
+      "path": "project-search/tools/build-progress-knowledge-validation.mjs",
+      "ownerCenter": "project-search",
+      "environmentBoundary": "candidate SQL generation only; no database connection or apply",
+      "allowedTables": [
+        "progress_knowledge_sources",
+        "progress_knowledge_documents",
+        "progress_asset_candidates",
+        "progress_asset_calibration_runs",
+        "progress_asset_calibration_results",
+        "progress_asset_publication_readiness"
+      ],
+      "forbiddenTables": [
+        "tasks",
+        "task_baselines",
+        "monthly_plans",
+        "monthly_plan_items",
+        "task_dependencies",
+        "duration_experience_samples",
+        "actual_duration_outcomes",
+        "critical_path"
+      ],
+      "requiresUnlock": false,
+      "defaultMode": "candidate_sql_generation_only_no_db_connection"
+    },
+    {
+      "id": "default_master_plan_staging_runtime_evidence",
+      "path": "project-testing/tools/run-default-master-plan-staging-runtime-evidence.mjs",
+      "ownerCenter": "project-testing",
+      "environmentBoundary": "staging only unless a separate production handoff exists",
+      "allowedTables": [
+        "tasks",
+        "task_baseline_items",
+        "task_dependencies",
+        "duration_experience_samples",
+        "runtime_publication_tables"
+      ],
+      "forbiddenTables": [],
+      "requiresUnlock": true,
+      "defaultMode": "staging_controlled_replay"
+    },
+    {
+      "id": "controlled_live_closeout_writers",
+      "path": "project-testing/tools/run-controlled-live-closeout-writers.mjs",
+      "ownerCenter": "project-testing",
+      "environmentBoundary": "controlled live closeout handoff only; requires explicit live flags, closed migration governance, rollback evidence, and readback artifacts",
+      "allowedTables": [
+        "tasks",
+        "task_dependencies",
+        "duration_experience_samples",
+        "runtime_publication_tables"
+      ],
+      "forbiddenTables": [
+        "task_baselines",
+        "monthly_plans",
+        "monthly_plan_items",
+        "actual_duration_outcomes",
+        "critical_path",
+        "production_seed_rows"
+      ],
+      "requiresUnlock": true,
+      "defaultMode": "controlled_live_handoff"
+    },
+    {
+      "id": "v14241_real_uat05_residue_cleanup",
+      "path": "project-testing/tools/cleanup-v14241-real-uat05-residue.mjs",
+      "ownerCenter": "project-testing",
+      "environmentBoundary": "staging UAT-05 residue cleanup only; DB cleanup requires explicit --allow-db-cleanup flag and staging refs",
+      "allowedTables": [
+        "task_dependencies"
+      ],
+      "forbiddenTables": [
+        "tasks",
+        "task_baselines",
+        "task_baseline_items",
+        "monthly_plans",
+        "monthly_plan_items",
+        "duration_experience_samples",
+        "actual_duration_outcomes",
+        "critical_path",
+        "runtime_publication_tables",
+        "production_seed_rows"
+      ],
+      "requiresUnlock": true,
+      "defaultMode": "staging_cleanup_readback"
+    },
+    {
+      "id": "default_master_plan_candidate_baseline_materialization",
+      "path": "project-testing/tools/run-default-master-plan-candidate-baseline-materialization.mjs",
+      "ownerCenter": "project-testing",
+      "environmentBoundary": "local or staging candidate baseline materialization only; requires unlock flag, execute mode, allow flag, operator approval, and human actor",
+      "allowedTables": [
+        "task_baselines",
+        "task_baseline_items"
+      ],
+      "forbiddenTables": [
+        "tasks",
+        "task_dependencies",
+        "monthly_plans",
+        "monthly_plan_items",
+        "duration_experience_samples",
+        "actual_duration_outcomes",
+        "critical_path",
+        "runtime_publication_tables",
+        "production_seed_rows"
+      ],
+      "requiresUnlock": true,
+      "defaultMode": "candidate_baseline_materialization"
+    },
+    {
+      "id": "default_master_plan_candidate_refresh_execution",
+      "path": "project-testing/tools/run-default-master-plan-candidate-refresh-execution.mjs",
+      "ownerCenter": "project-testing",
+      "environmentBoundary": "local or staging candidate baseline item refresh only; requires preflight, unlock flag, execute mode, allow flag, operator approval, and human actor",
+      "allowedTables": [
+        "task_baseline_items"
+      ],
+      "forbiddenTables": [
+        "tasks",
+        "task_baselines",
+        "task_dependencies",
+        "monthly_plans",
+        "monthly_plan_items",
+        "duration_experience_samples",
+        "actual_duration_outcomes",
+        "critical_path",
+        "runtime_publication_tables",
+        "production_seed_rows"
+      ],
+      "requiresUnlock": true,
+      "defaultMode": "candidate_baseline_item_refresh"
+    },
+    {
+      "id": "monthly_planning_route_writer",
+      "path": "server/src/routes/monthly-plans.ts",
+      "ownerCenter": "server",
+      "environmentBoundary": "application route writer for authenticated monthly planning workflows",
+      "allowedTables": [
+        "monthly_plans",
+        "monthly_plan_items"
+      ],
+      "forbiddenTables": [
+        "tasks",
+        "task_baselines",
+        "task_dependencies",
+        "duration_experience_samples",
+        "actual_duration_outcomes",
+        "critical_path"
+      ],
+      "requiresUnlock": false,
+      "defaultMode": "application_route_monthly_planning"
+    },
+    {
+      "id": "task_baseline_route_writer",
+      "path": "server/src/routes/task-baselines.ts",
+      "ownerCenter": "server",
+      "environmentBoundary": "application route writer for governed baseline workflow actions",
+      "allowedTables": [
+        "task_baselines",
+        "task_baseline_items"
+      ],
+      "forbiddenTables": [
+        "tasks",
+        "monthly_plans",
+        "monthly_plan_items",
+        "task_dependencies",
+        "duration_experience_samples",
+        "actual_duration_outcomes",
+        "critical_path"
+      ],
+      "requiresUnlock": false,
+      "defaultMode": "application_route_baseline_workflow"
+    },
+    {
+      "id": "task_dependencies_route_writer",
+      "path": "server/src/routes/task-dependencies.ts",
+      "ownerCenter": "server",
+      "environmentBoundary": "application route writer for task dependency and related task metadata updates",
+      "allowedTables": [
+        "tasks",
+        "task_dependencies"
+      ],
+      "forbiddenTables": [
+        "task_baselines",
+        "monthly_plans",
+        "monthly_plan_items",
+        "duration_experience_samples",
+        "actual_duration_outcomes",
+        "critical_path"
+      ],
+      "requiresUnlock": false,
+      "defaultMode": "application_route_dependency_workflow"
+    },
+    {
+      "id": "task_code_transaction_service",
+      "path": "server/src/services/taskCodeTransactionService.ts",
+      "ownerCenter": "server",
+      "environmentBoundary": "application service transaction writer for task code and task rows",
+      "allowedTables": [
+        "tasks"
+      ],
+      "forbiddenTables": [
+        "task_baselines",
+        "monthly_plans",
+        "monthly_plan_items",
+        "task_dependencies",
+        "duration_experience_samples",
+        "actual_duration_outcomes",
+        "critical_path"
+      ],
+      "requiresUnlock": false,
+      "defaultMode": "service_owned_task_transaction"
+    },
+    {
+      "id": "task_write_chain_service",
+      "path": "server/src/services/taskWriteChainService.ts",
+      "ownerCenter": "server",
+      "environmentBoundary": "application service writer for governed task metadata updates",
+      "allowedTables": [
+        "tasks"
+      ],
+      "forbiddenTables": [
+        "task_baselines",
+        "monthly_plans",
+        "monthly_plan_items",
+        "task_dependencies",
+        "duration_experience_samples",
+        "actual_duration_outcomes",
+        "critical_path"
+      ],
+      "requiresUnlock": false,
+      "defaultMode": "service_owned_task_write_chain"
+    },
+    {
+      "id": "task_standard_model_service",
+      "path": "server/src/services/taskStandardModelService.ts",
+      "ownerCenter": "server",
+      "environmentBoundary": "application service writer for standard task dependency materialization",
+      "allowedTables": [
+        "task_dependencies"
+      ],
+      "forbiddenTables": [
+        "tasks",
+        "task_baselines",
+        "monthly_plans",
+        "monthly_plan_items",
+        "duration_experience_samples",
+        "actual_duration_outcomes",
+        "critical_path"
+      ],
+      "requiresUnlock": false,
+      "defaultMode": "service_owned_standard_dependency_writer"
+    },
+    {
+      "id": "duration_experience_service",
+      "path": "server/src/services/durationExperienceService.ts",
+      "ownerCenter": "server",
+      "environmentBoundary": "application service writer for governed duration experience samples",
+      "allowedTables": [
+        "duration_experience_samples"
+      ],
+      "forbiddenTables": [
+        "tasks",
+        "task_baselines",
+        "monthly_plans",
+        "monthly_plan_items",
+        "task_dependencies",
+        "actual_duration_outcomes",
+        "critical_path"
+      ],
+      "requiresUnlock": false,
+      "defaultMode": "service_owned_duration_experience"
+    },
+    {
+      "id": "duration_learning_scope_evidence_writer",
+      "path": "server/src/services/durationLearningScopeEvidenceWriterService.ts",
+      "ownerCenter": "server",
+      "environmentBoundary": "application service writer for duration learning scope evidence rows",
+      "allowedTables": [
+        "duration_experience_samples"
+      ],
+      "forbiddenTables": [
+        "tasks",
+        "task_baselines",
+        "monthly_plans",
+        "monthly_plan_items",
+        "task_dependencies",
+        "actual_duration_outcomes",
+        "critical_path"
+      ],
+      "requiresUnlock": false,
+      "defaultMode": "service_owned_duration_learning_scope_evidence"
+    },
+    {
+      "id": "t2_rhythm_schedule_runtime_publication_service",
+      "path": "server/src/services/t2RhythmScheduleRuntimePublicationService.ts",
+      "ownerCenter": "server",
+      "environmentBoundary": "runtime publication service; requires approval, dependency write approval, plan date write approval, and rollback target",
+      "allowedTables": [
+        "tasks",
+        "task_dependencies",
+        "runtime_publication_tables"
+      ],
+      "forbiddenTables": [
+        "task_baselines",
+        "monthly_plans",
+        "monthly_plan_items",
+        "duration_experience_samples",
+        "actual_duration_outcomes",
+        "critical_path",
+        "production_seed_rows"
+      ],
+      "requiresUnlock": true,
+      "defaultMode": "runtime_publication_approval_required"
+    },
+    {
+      "id": "construction_organization_plan_network_domain_writer",
+      "path": "server/src/services/constructionOrganizationPlanNetworkDomainWriter.ts",
+      "ownerCenter": "server",
+      "environmentBoundary": "domain writer for construction organization plan network release handoff",
+      "allowedTables": [
+        "task_dependencies",
+        "runtime_publication_tables"
+      ],
+      "forbiddenTables": [
+        "tasks",
+        "task_baselines",
+        "monthly_plans",
+        "monthly_plan_items",
+        "duration_experience_samples",
+        "actual_duration_outcomes",
+        "critical_path",
+        "production_seed_rows"
+      ],
+      "requiresUnlock": true,
+      "defaultMode": "manual_review_release_handoff_required"
+    },
+    {
+      "id": "official_holiday_calendar_service",
+      "path": "server/src/services/officialHolidayCalendarService.ts",
+      "ownerCenter": "server",
+      "environmentBoundary": "application service writer for calendar-driven baseline and monthly plan date adjustments",
+      "allowedTables": [
+        "task_baselines",
+        "monthly_plans"
+      ],
+      "forbiddenTables": [
+        "tasks",
+        "monthly_plan_items",
+        "task_dependencies",
+        "duration_experience_samples",
+        "actual_duration_outcomes",
+        "critical_path"
+      ],
+      "requiresUnlock": false,
+      "defaultMode": "service_owned_calendar_adjustment"
+    },
+    {
+      "id": "full_app_test_env_fixture_writer",
+      "path": "scripts/prepare-full-app-test-env.mjs",
+      "ownerCenter": "scripts",
+      "environmentBoundary": "local or staging fixture setup only; must not be treated as production historical data",
+      "allowedTables": [
+        "tasks",
+        "task_baselines",
+        "monthly_plans"
+      ],
+      "forbiddenTables": [
+        "task_dependencies",
+        "duration_experience_samples",
+        "actual_duration_outcomes",
+        "critical_path",
+        "production_seed_rows"
+      ],
+      "requiresUnlock": true,
+      "defaultMode": "fixture_writer_local_or_staging_only",
+      "governanceStatus": "registered_policy_requires_fixture_boundary_review"
+    },
+    {
+      "id": "uiux_performance_fixture_writer",
+      "path": "scripts/verify-uiux-performance.mjs",
+      "ownerCenter": "scripts",
+      "environmentBoundary": "local or staging UI performance fixture setup only",
+      "allowedTables": [
+        "tasks"
+      ],
+      "forbiddenTables": [
+        "task_baselines",
+        "monthly_plans",
+        "monthly_plan_items",
+        "task_dependencies",
+        "duration_experience_samples",
+        "actual_duration_outcomes",
+        "critical_path",
+        "production_seed_rows"
+      ],
+      "requiresUnlock": true,
+      "defaultMode": "fixture_writer_local_or_staging_only",
+      "governanceStatus": "registered_policy_requires_fixture_boundary_review"
+    },
+    {
+      "id": "wave8_browser_fixture_writer",
+      "path": "scripts/verify-wave8-browser.mjs",
+      "ownerCenter": "scripts",
+      "environmentBoundary": "local or staging browser verification fixture setup only",
+      "allowedTables": [
+        "tasks"
+      ],
+      "forbiddenTables": [
+        "task_baselines",
+        "monthly_plans",
+        "monthly_plan_items",
+        "task_dependencies",
+        "duration_experience_samples",
+        "actual_duration_outcomes",
+        "critical_path",
+        "production_seed_rows"
+      ],
+      "requiresUnlock": true,
+      "defaultMode": "fixture_writer_local_or_staging_only",
+      "governanceStatus": "registered_policy_requires_fixture_boundary_review"
+    },
+    {
+      "id": "v11_chapter6_7_fixture_writer",
+      "path": "scripts/verify-v11-chapter6-7.mjs",
+      "ownerCenter": "scripts",
+      "environmentBoundary": "local or staging v1.1 verification fixture setup only",
+      "allowedTables": [
+        "tasks",
+        "monthly_plans",
+        "monthly_plan_items"
+      ],
+      "forbiddenTables": [
+        "task_baselines",
+        "task_dependencies",
+        "duration_experience_samples",
+        "actual_duration_outcomes",
+        "critical_path",
+        "production_seed_rows"
+      ],
+      "requiresUnlock": true,
+      "defaultMode": "fixture_writer_local_or_staging_only",
+      "governanceStatus": "registered_policy_requires_fixture_boundary_review"
+    },
+    {
+      "id": "task_summary_demo_fixture_writer",
+      "path": "scripts/seed-task-summary-demo.mjs",
+      "ownerCenter": "scripts",
+      "environmentBoundary": "local or staging demo fixture setup only",
+      "allowedTables": [
+        "tasks"
+      ],
+      "forbiddenTables": [
+        "task_baselines",
+        "monthly_plans",
+        "monthly_plan_items",
+        "task_dependencies",
+        "duration_experience_samples",
+        "actual_duration_outcomes",
+        "critical_path",
+        "production_seed_rows"
+      ],
+      "requiresUnlock": true,
+      "defaultMode": "fixture_writer_local_or_staging_only",
+      "governanceStatus": "registered_policy_requires_fixture_boundary_review"
+    },
+    {
+      "id": "db_seed_data_fixture_writer",
+      "path": "scripts/db/seed-data.ts",
+      "ownerCenter": "scripts",
+      "environmentBoundary": "local seed data fixture setup only",
+      "allowedTables": [
+        "tasks"
+      ],
+      "forbiddenTables": [
+        "task_baselines",
+        "monthly_plans",
+        "monthly_plan_items",
+        "task_dependencies",
+        "duration_experience_samples",
+        "actual_duration_outcomes",
+        "critical_path",
+        "production_seed_rows"
+      ],
+      "requiresUnlock": true,
+      "defaultMode": "fixture_writer_local_only",
+      "governanceStatus": "registered_policy_requires_fixture_boundary_review"
+    },
+    {
+      "id": "project_wizard_route_writer",
+      "path": "server/src/routes/projectWizard.ts",
+      "ownerCenter": "server",
+      "environmentBoundary": "application route writer for wizard rollback/recovery and generated task/dependency cleanup",
+      "allowedTables": [
+        "tasks",
+        "task_dependencies"
+      ],
+      "forbiddenTables": [
+        "task_baselines",
+        "monthly_plans",
+        "monthly_plan_items",
+        "duration_experience_samples",
+        "actual_duration_outcomes",
+        "critical_path"
+      ],
+      "requiresUnlock": false,
+      "defaultMode": "application_route_project_wizard_recovery"
+    },
+    {
+      "id": "task_conditions_route_writer",
+      "path": "server/src/routes/task-conditions.ts",
+      "ownerCenter": "server",
+      "environmentBoundary": "application route writer for task condition derived task updates",
+      "allowedTables": [
+        "tasks"
+      ],
+      "forbiddenTables": [
+        "task_baselines",
+        "monthly_plans",
+        "monthly_plan_items",
+        "task_dependencies",
+        "duration_experience_samples",
+        "actual_duration_outcomes",
+        "critical_path"
+      ],
+      "requiresUnlock": false,
+      "defaultMode": "application_route_task_condition_update"
+    },
+    {
+      "id": "task_reconcile_route_writer",
+      "path": "server/src/routes/taskReconcile.ts",
+      "ownerCenter": "server",
+      "environmentBoundary": "application route writer for task reconciliation updates",
+      "allowedTables": [
+        "tasks"
+      ],
+      "forbiddenTables": [
+        "task_baselines",
+        "monthly_plans",
+        "monthly_plan_items",
+        "task_dependencies",
+        "duration_experience_samples",
+        "actual_duration_outcomes",
+        "critical_path"
+      ],
+      "requiresUnlock": false,
+      "defaultMode": "application_route_task_reconcile"
+    },
+    {
+      "id": "baseline_governance_service",
+      "path": "server/src/services/baselineGovernanceService.ts",
+      "ownerCenter": "server",
+      "environmentBoundary": "application service writer for baseline governance state",
+      "allowedTables": [
+        "task_baselines",
+        "task_baseline_items"
+      ],
+      "forbiddenTables": [
+        "tasks",
+        "monthly_plans",
+        "monthly_plan_items",
+        "task_dependencies",
+        "duration_experience_samples",
+        "actual_duration_outcomes",
+        "critical_path"
+      ],
+      "requiresUnlock": false,
+      "defaultMode": "service_owned_baseline_governance"
+    },
+    {
+      "id": "planning_revision_pool_service",
+      "path": "server/src/services/planningRevisionPoolService.ts",
+      "ownerCenter": "server",
+      "environmentBoundary": "application service writer for planning revision pool baseline drafts",
+      "allowedTables": [
+        "task_baselines",
+        "task_baseline_items"
+      ],
+      "forbiddenTables": [
+        "tasks",
+        "monthly_plans",
+        "monthly_plan_items",
+        "task_dependencies",
+        "duration_experience_samples",
+        "actual_duration_outcomes",
+        "critical_path"
+      ],
+      "requiresUnlock": false,
+      "defaultMode": "service_owned_planning_revision_pool"
+    },
+    {
+      "id": "db_service_task_writer",
+      "path": "server/src/services/dbService.ts",
+      "ownerCenter": "server",
+      "environmentBoundary": "application service writer for legacy/shared task CRUD paths",
+      "allowedTables": [
+        "tasks"
+      ],
+      "forbiddenTables": [
+        "task_baselines",
+        "monthly_plans",
+        "monthly_plan_items",
+        "task_dependencies",
+        "duration_experience_samples",
+        "actual_duration_outcomes",
+        "critical_path"
+      ],
+      "requiresUnlock": false,
+      "defaultMode": "service_owned_task_crud"
+    },
+    {
+      "id": "project_critical_path_service",
+      "path": "server/src/services/projectCriticalPathService.ts",
+      "ownerCenter": "server",
+      "environmentBoundary": "application service writer for task critical-path projection fields",
+      "allowedTables": [
+        "tasks"
+      ],
+      "forbiddenTables": [
+        "task_baselines",
+        "monthly_plans",
+        "monthly_plan_items",
+        "task_dependencies",
+        "duration_experience_samples",
+        "actual_duration_outcomes",
+        "critical_path"
+      ],
+      "requiresUnlock": true,
+      "defaultMode": "service_owned_critical_path_projection"
+    },
+    {
+      "id": "t2_rhythm_task_window_annotation_domain_writer",
+      "path": "server/src/services/t2RhythmTaskWindowAnnotationDomainWriter.ts",
+      "ownerCenter": "server",
+      "environmentBoundary": "domain writer for approved T2 task window annotations",
+      "allowedTables": [
+        "tasks",
+        "runtime_publication_tables"
+      ],
+      "forbiddenTables": [
+        "task_baselines",
+        "monthly_plans",
+        "monthly_plan_items",
+        "task_dependencies",
+        "duration_experience_samples",
+        "actual_duration_outcomes",
+        "critical_path",
+        "production_seed_rows"
+      ],
+      "requiresUnlock": true,
+      "defaultMode": "manual_review_release_handoff_required"
+    },
+    {
+      "id": "task_constraint_governance_service",
+      "path": "server/src/services/taskConstraintGovernanceService.ts",
+      "ownerCenter": "server",
+      "environmentBoundary": "application service writer for governed task constraint state",
+      "allowedTables": [
+        "tasks"
+      ],
+      "forbiddenTables": [
+        "task_baselines",
+        "monthly_plans",
+        "monthly_plan_items",
+        "task_dependencies",
+        "duration_experience_samples",
+        "actual_duration_outcomes",
+        "critical_path"
+      ],
+      "requiresUnlock": false,
+      "defaultMode": "service_owned_task_constraint_governance"
+    },
+    {
+      "id": "template_duration_governance_service",
+      "path": "server/src/services/templateDurationGovernanceService.ts",
+      "ownerCenter": "server",
+      "environmentBoundary": "application service writer for governed duration experience sample adoption",
+      "allowedTables": [
+        "duration_experience_samples"
+      ],
+      "forbiddenTables": [
+        "tasks",
+        "task_baselines",
+        "monthly_plans",
+        "monthly_plan_items",
+        "task_dependencies",
+        "actual_duration_outcomes",
+        "critical_path"
+      ],
+      "requiresUnlock": false,
+      "defaultMode": "service_owned_template_duration_governance"
+    },
+    {
+      "id": "wizard_generation_recovery_service",
+      "path": "server/src/services/wizardGenerationRecoveryService.ts",
+      "ownerCenter": "server",
+      "environmentBoundary": "application service writer for wizard generation rollback cleanup",
+      "allowedTables": [
+        "tasks",
+        "task_dependencies"
+      ],
+      "forbiddenTables": [
+        "task_baselines",
+        "monthly_plans",
+        "monthly_plan_items",
+        "duration_experience_samples",
+        "actual_duration_outcomes",
+        "critical_path"
+      ],
+      "requiresUnlock": false,
+      "defaultMode": "service_owned_wizard_generation_recovery"
+    },
+    {
+      "id": "company_health_trend_live_diagnostic_writer",
+      "path": "server/src/scripts/diagnose-company-health-trend-live.ts",
+      "ownerCenter": "server",
+      "environmentBoundary": "diagnostic live script writer for project_daily_snapshot; requires explicit diagnostic execution context",
+      "allowedTables": [
+        "project_daily_snapshot"
+      ],
+      "forbiddenTables": [
+        "tasks",
+        "task_baselines",
+        "monthly_plans",
+        "monthly_plan_items",
+        "task_dependencies",
+        "duration_experience_samples",
+        "actual_duration_outcomes",
+        "critical_path",
+        "production_seed_rows"
+      ],
+      "requiresUnlock": true,
+      "defaultMode": "diagnostic_live_writer_requires_explicit_context"
+    },
+    {
+      "id": "project_daily_snapshot_service",
+      "path": "server/src/services/projectDailySnapshotService.ts",
+      "ownerCenter": "server",
+      "environmentBoundary": "application service governance",
+      "allowedTables": [
+        "project_daily_snapshot"
+      ],
+      "forbiddenTables": [],
+      "requiresUnlock": false,
+      "defaultMode": "service_owned_snapshot"
+    }
+  ]
+}

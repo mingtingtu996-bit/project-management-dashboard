@@ -25,6 +25,7 @@ interface AssigneeComboboxProps {
   valueUserId: string | null
   placeholder?: string
   testId?: string
+  className?: string
   onChange: (value: AssigneeComboboxValue) => void
 }
 
@@ -34,6 +35,7 @@ export function AssigneeCombobox({
   valueUserId,
   placeholder = '输入责任人或搜索项目成员',
   testId = 'gantt-assignee-combobox',
+  className,
   onChange,
 }: AssigneeComboboxProps) {
   const [open, setOpen] = useState(false)
@@ -97,6 +99,7 @@ export function AssigneeCombobox({
           placeholder={placeholder}
           aria-autocomplete="list"
           aria-expanded={open}
+          className={className}
         />
       </PopoverAnchor>
       <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start" side="bottom">

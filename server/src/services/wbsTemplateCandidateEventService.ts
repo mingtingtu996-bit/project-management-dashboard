@@ -31,7 +31,31 @@ export interface RecordWbsTemplateCandidateEventInput {
   generatedEntityIds?: string[]
   actorId?: string | null
   metadata?: Record<string, unknown>
+  scheduleTrustGate?: GenerationDepthPolicyScheduleTrustGate | null
   governanceQueryExec?: AlgorithmAssetGovernanceQueryExec
+}
+
+export type GenerationDepthPolicyScheduleTrustGate = {
+  source: 'generation_depth_policy'
+  generationDepth: string
+  status: 'trusted' | 'review_required' | 'blocked'
+  trustedForScheduling: boolean
+  totalScheduleRows: number
+  durationBearingScheduleRows: number
+  fallbackPolicyRowCount: number
+  descendantRollupRequiredRowCount: number
+  descendantRollupAppliedRowCount: number
+  missingDescendantRollupRowCount: number
+  rowsMissingReferenceDuration: number
+  policyConfidenceCounts?: Record<string, number>
+  reviewReasons?: string[]
+  reviewRows?: Array<{
+    stableCode?: string | null
+    title?: string | null
+    reasons?: string[]
+    policyId?: string | null
+    confidence?: string | null
+  }>
 }
 
 export type SpecialWorkDurationSeedLearningScopeEvidence =
@@ -325,6 +349,138 @@ function readRuntimePublicationKeyFromMetadata(metadata: Record<string, unknown>
     ?? normalizeString(metadata.publication_key)
 }
 
+function readMetadataText(metadata: Record<string, unknown>, ...keys: string[]) {
+  for (const key of keys) {
+    const value = normalizeString(metadata[key])
+    if (value) return value
+  }
+  return null
+}
+
+function stableCodePrefix(stableCode: string | null) {
+  if (!stableCode) return null
+  const segments = stableCode.split('-').map((segment) => segment.trim()).filter(Boolean)
+  if (segments.length <= 1) return stableCode
+  return segments.slice(0, Math.max(1, segments.length - 1)).join('-')
+}
+
+function buildGenerationDepthPolicyReplayRequirements(gate: GenerationDepthPolicyScheduleTrustGate) {
+  return uniqueValues([
+    'row_count_within_generation_budget',
+    'schedule_trust_gate_improves_or_stays_trusted',
+    'dependency_anchors_stable',
+    'no_parent_child_duration_conflict',
+    gate.rowsMissingReferenceDuration > 0 ? 'duration_reference_days_complete' : '',
+    gate.missingDescendantRollupRowCount > 0 ? 'descendant_rollup_evidence_complete' : '',
+    gate.fallbackPolicyRowCount > 0 ? 'explicit_policy_match_replaces_fallback' : '',
+  ])
+}
+
+function buildGenerationDepthReviewRows(gate: GenerationDepthPolicyScheduleTrustGate) {
+  return (gate.reviewRows ?? []).slice(0, 20).map((row) => {
+    const stableCode = normalizeString(row.stableCode)
+    return {
+      stableCode,
+      stableCodePrefix: stableCodePrefix(stableCode),
+      title: normalizeString(row.title),
+      reasons: normalizeStringList(row.reasons),
+      policyId: normalizeString(row.policyId),
+      confidence: normalizeString(row.confidence),
+    }
+  })
+}
+
+async function persistGenerationDepthPolicyCandidateEvent(
+  input: RecordWbsTemplateCandidateEventInput,
+  gate: GenerationDepthPolicyScheduleTrustGate | null | undefined,
+) {
+  if (!gate || gate.source !== 'generation_depth_policy' || gate.status === 'trusted') return
+  const companyId = normalizeString(input.companyId)
+  if (!companyId) return
+
+  const templateId = normalizeString(input.templateId) ?? 'unknown'
+  const metadata = normalizeObject(input.metadata)
+  const reviewRows = buildGenerationDepthReviewRows(gate)
+  const templateGroup = readMetadataText(metadata, 'templateGroup', 'template_group')
+  const packType = readMetadataText(metadata, 'packType', 'pack_type')
+  const domainScope = readMetadataText(metadata, 'domainScope', 'domain_scope')
+
+  try {
+    await createAndPersistAlgorithmAssetCandidateEvent({
+      assetKey: `generation_depth_policy.${templateId}.${input.surface}`,
+      sourceSystem: 'wbsTemplateCandidateEventService',
+      assetType: 'rule',
+      companyId,
+      projectId: input.projectId,
+      candidatePayload: {
+        assetType: 'generation_depth_policy',
+        source: 'schedule_trust_gate',
+        templateId,
+        templateGroup,
+        packType,
+        domainScope,
+        surface: input.surface,
+        generationBatchId: normalizeString(input.generationBatchId),
+        generationDepth: gate.generationDepth,
+        status: gate.status,
+        trustedForScheduling: gate.trustedForScheduling,
+        reviewReasons: normalizeStringList(gate.reviewReasons),
+        reviewRows,
+        selectedNodeIds: Array.isArray(input.selectedNodeIds)
+          ? input.selectedNodeIds.map((item) => normalizeString(item)).filter((item): item is string => Boolean(item))
+          : [],
+        suggestedMatchFields: reviewRows.map((row) => ({
+          templateId,
+          templateGroup,
+          packType,
+          domainScope,
+          stableCode: row.stableCode,
+          stableCodePrefix: row.stableCodePrefix,
+        })),
+        scheduleTrustGate: {
+          totalScheduleRows: gate.totalScheduleRows,
+          durationBearingScheduleRows: gate.durationBearingScheduleRows,
+          fallbackPolicyRowCount: gate.fallbackPolicyRowCount,
+          descendantRollupRequiredRowCount: gate.descendantRollupRequiredRowCount,
+          descendantRollupAppliedRowCount: gate.descendantRollupAppliedRowCount,
+          missingDescendantRollupRowCount: gate.missingDescendantRollupRowCount,
+          rowsMissingReferenceDuration: gate.rowsMissingReferenceDuration,
+          policyConfidenceCounts: normalizeObject(gate.policyConfidenceCounts),
+        },
+        candidatePolicy: 'candidate_only_no_runtime_mutation',
+        releasePolicy: 'high_impact_structural_rule_manual_or_batch_review_required',
+        replayRequirements: buildGenerationDepthPolicyReplayRequirements(gate),
+        runtimeMutationBoundary: {
+          writesTasks: false,
+          writesTaskDependencies: false,
+          writesBaselines: false,
+          writesMonthlyPlans: false,
+          writesDurationSeeds: false,
+          writesCriticalPathFacts: false,
+        },
+        metadata,
+      },
+      learningTarget: 'template_structure',
+      learningMaturity: 'governed_candidate',
+      publishAnchor: 'manual_governance_required',
+      automationMaturity: 'manual_required',
+      requestedRuntimeEffect: 'candidate_only',
+      generatedBy: 'service',
+      queryExec: input.governanceQueryExec,
+    })
+  } catch (error) {
+    logger.warn('[wbs-template-candidate] failed to persist generation depth policy candidate event', {
+      projectId: input.projectId,
+      companyId,
+      templateId,
+      surface: input.surface,
+      generationBatchId: input.generationBatchId,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
+// workspace-isolation-capability-write-approved: the exported boundary validates projectId and every outcome row stores that exact project scope.
 async function recordSpecialWorkDurationPlanNetworkOutcome(
   input: RecordWbsTemplateCandidateEventInput,
   counts: WbsTemplateCandidateCounts,
@@ -402,6 +558,7 @@ async function insertCandidateEventWithSchemaFallback(row: Record<string, unknow
   return null
 }
 
+// workspace-isolation-capability-write-approved: the exported boundary validates projectId; both aggregation lookup and upsert bind that project id.
 async function updateWbsTemplateCandidateAggregation(
   input: RecordWbsTemplateCandidateEventInput,
   counts: WbsTemplateCandidateCounts,
@@ -529,44 +686,51 @@ async function persistUnifiedAlgorithmAssetCandidateEvent(
   }
 }
 
+// workspace-isolation-capability-write-approved: authenticated task/baseline commits provide projectId and every candidate write below persists that exact scope.
 export async function recordWbsTemplateCandidateEvent(input: RecordWbsTemplateCandidateEventInput): Promise<void> {
   try {
+    const projectId = normalizeString(input.projectId)
+    if (!projectId) {
+      logger.warn('[wbs-template-candidate] skipped candidate event without project scope')
+      return
+    }
+    const scopedInput = { ...input, projectId }
     const insert = supabase.from('wbs_template_candidate_events')?.insert
     if (typeof insert !== 'function') return
 
-    const selectedNodeIds = Array.isArray(input.selectedNodeIds)
-      ? input.selectedNodeIds.map((item) => String(item ?? '').trim()).filter(Boolean)
+    const selectedNodeIds = Array.isArray(scopedInput.selectedNodeIds)
+      ? scopedInput.selectedNodeIds.map((item) => String(item ?? '').trim()).filter(Boolean)
       : []
-    const generatedEntityIds = (input.generatedEntityIds ?? [])
+    const generatedEntityIds = (scopedInput.generatedEntityIds ?? [])
       .map((item) => String(item ?? '').trim())
       .filter(Boolean)
-    const generatedRowCount = Number.isFinite(Number(input.generatedRowCount))
-      ? Math.max(0, Math.round(Number(input.generatedRowCount)))
+    const generatedRowCount = Number.isFinite(Number(scopedInput.generatedRowCount))
+      ? Math.max(0, Math.round(Number(scopedInput.generatedRowCount)))
       : generatedEntityIds.length
-    const retainedRowCount = readBoundedInteger(input.retainedRowCount, generatedEntityIds.length || generatedRowCount, generatedRowCount)
-    const explicitRejected = input.rejectedRowCount !== undefined
-      ? readBoundedInteger(input.rejectedRowCount, 0, generatedRowCount)
+    const retainedRowCount = readBoundedInteger(scopedInput.retainedRowCount, generatedEntityIds.length || generatedRowCount, generatedRowCount)
+    const explicitRejected = scopedInput.rejectedRowCount !== undefined
+      ? readBoundedInteger(scopedInput.rejectedRowCount, 0, generatedRowCount)
       : Math.max(0, generatedRowCount - retainedRowCount)
-    const pendingRowCount = readBoundedInteger(input.pendingRowCount, 0, Math.max(0, generatedRowCount - retainedRowCount - explicitRejected))
+    const pendingRowCount = readBoundedInteger(scopedInput.pendingRowCount, 0, Math.max(0, generatedRowCount - retainedRowCount - explicitRejected))
     const rejectedRowCount = Math.min(explicitRejected, Math.max(0, generatedRowCount - retainedRowCount - pendingRowCount))
 
     const error = await insertCandidateEventWithSchemaFallback({
-      project_id: input.projectId,
-      surface: input.surface,
+      project_id: scopedInput.projectId,
+      surface: scopedInput.surface,
       event_type: 'template_generate_commit',
-      generation_batch_id: normalizeString(input.generationBatchId),
-      template_id: normalizeString(input.templateId),
+      generation_batch_id: normalizeString(scopedInput.generationBatchId),
+      template_id: normalizeString(scopedInput.templateId),
       selected_node_ids: selectedNodeIds,
-      scope: normalizeObject(input.scope),
-      attach_under_row_id: normalizeString(input.attachUnderRowId),
+      scope: normalizeObject(scopedInput.scope),
+      attach_under_row_id: normalizeString(scopedInput.attachUnderRowId),
       generated_row_count: generatedRowCount,
       retained_row_count: retainedRowCount,
       rejected_row_count: rejectedRowCount,
       pending_row_count: pendingRowCount,
       generated_entity_ids: generatedEntityIds,
-      created_by: normalizeString(input.actorId),
+      created_by: normalizeString(scopedInput.actorId),
       metadata: {
-        ...normalizeObject(input.metadata),
+        ...normalizeObject(scopedInput.metadata),
         retained_row_count: retainedRowCount,
         rejected_row_count: rejectedRowCount,
         pending_row_count: pendingRowCount,
@@ -584,24 +748,25 @@ export async function recordWbsTemplateCandidateEvent(input: RecordWbsTemplateCa
       return
     }
 
-    await updateWbsTemplateCandidateAggregation(input, {
+    await updateWbsTemplateCandidateAggregation(scopedInput, {
       generatedRowCount,
       retainedRowCount,
       rejectedRowCount,
       pendingRowCount,
     })
-    await recordSpecialWorkDurationPlanNetworkOutcome(input, {
+    await recordSpecialWorkDurationPlanNetworkOutcome(scopedInput, {
       generatedRowCount,
       retainedRowCount,
       rejectedRowCount,
       pendingRowCount,
     }, selectedNodeIds, generatedEntityIds)
-    await persistUnifiedAlgorithmAssetCandidateEvent(input, {
+    await persistUnifiedAlgorithmAssetCandidateEvent(scopedInput, {
       generatedRowCount,
       retainedRowCount,
       rejectedRowCount,
       pendingRowCount,
     }, selectedNodeIds, generatedEntityIds)
+    await persistGenerationDepthPolicyCandidateEvent(scopedInput, scopedInput.scheduleTrustGate)
   } catch (error) {
     logger.warn('[wbs-template-candidate] skipped template candidate event', {
       projectId: input.projectId,

@@ -3,7 +3,8 @@
  */
 
 import { useState, useEffect } from 'react';
-import { useAuth } from '@/hooks/useAuth';
+import { useAuth } from '@/context/AuthContext';
+import { toast } from '@/hooks/use-toast'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -13,6 +14,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { resetPlanningGuidanceForUser } from '@/lib/planningGuidance'
 
 interface EditProfileDialogProps {
   isOpen: boolean;
@@ -72,6 +74,14 @@ export const EditProfileDialog: React.FC<EditProfileDialogProps> = ({ isOpen, on
 
   const handleClose = () => {
     if (!loading) onClose();
+  };
+
+  const handleResetPlanningGuidance = () => {
+    const removedCount = resetPlanningGuidanceForUser(user?.id)
+    toast({
+      title: '已重置共享计划树引导',
+      description: removedCount > 0 ? `已清理 ${removedCount} 条提示记录。` : '当前没有需要清理的提示记录。',
+    })
   };
 
   return (
@@ -144,6 +154,26 @@ export const EditProfileDialog: React.FC<EditProfileDialogProps> = ({ isOpen, on
               placeholder="请输入邮箱（可选）"
               disabled={loading}
             />
+          </div>
+
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <div className="text-sm font-medium text-slate-900">共享计划树引导</div>
+                <p className="mt-1 text-xs text-slate-500">重置后，轻提示会在任务列表、项目基线和月度计划中重新出现。</p>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handleResetPlanningGuidance}
+                disabled={loading}
+                data-testid="reset-planning-guidance"
+                className="shrink-0"
+              >
+                重置引导
+              </Button>
+            </div>
           </div>
 
           <DialogFooter className="gap-3 pt-2">

@@ -2,16 +2,16 @@ import { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, CheckCircle2, LogIn, Users, XCircle } from 'lucide-react'
 
-import { useAuth } from '@/hooks/useAuth'
+import { useAuth } from '@/context/AuthContext'
 import { useAuthDialog } from '@/hooks/useAuthDialog'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { CardHead } from '@/components/ui/card-head'
 import { LoadingState } from '@/components/ui/loading-state'
 import { getApiErrorMessage, getAuthHeaders } from '@/lib/apiClient'
-import { syncProjectCacheFromApi } from '@/lib/projectPersistence'
+import { fetchProjectsFromApi } from '@/lib/projectApi'
 import { toast } from '@/hooks/use-toast'
-import { getProjectRoleLabel, normalizeProjectPermissionLevel } from '@/lib/roleLabels'
+import { getProjectRoleLabel, normalizeProjectPermissionLevel, type ProjectPermissionLevel } from '@/lib/roleLabels'
 import { useSetProjects } from '@/hooks/useStore'
 
 type JoinStatus = 'loading' | 'valid' | 'invalid' | 'joined' | 'error'
@@ -20,7 +20,7 @@ interface InvitationInfo {
   id: string
   projectId: string
   projectName?: string | null
-  permissionLevel: string
+  permissionLevel: ProjectPermissionLevel
   alreadyJoined?: boolean
 }
 
@@ -63,7 +63,7 @@ export default function JoinProject() {
       const response = await requestJson<{ success: boolean; data: InvitationInfo }>(`/api/invitations/validate/${inviteCode}`)
       const normalizedInvitation = {
         ...response.data,
-        permissionLevel: normalizeProjectPermissionLevel(response.data.permissionLevel),
+        permissionLevel: normalizeProjectPermissionLevel(response.data.permissionLevel) ?? 'editor',
         alreadyJoined: Boolean(response.data.alreadyJoined),
       }
       setInvitation(normalizedInvitation)
@@ -88,7 +88,7 @@ export default function JoinProject() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
       })
-      const projects = await syncProjectCacheFromApi({ allowEmptyReplace: true })
+      const projects = await fetchProjectsFromApi()
       setProjects(projects)
       setStatus('joined')
       toast({ title: '加入成功', description: `已加入项目「${invitation.projectName || '当前项目'}」` })

@@ -77,12 +77,22 @@ const mocks = vi.hoisted(() => {
       if (index >= 0) notificationsStore.splice(index, 1)
     }),
   }
+  const notificationTouchpointService = {
+    emit: vi.fn(async (notification: Record<string, any>) => {
+      return notificationStore.insertNotification({
+        ...notification,
+        touchpoint_type: notification.touchpoint_type ?? 'dashboard_todo',
+        scope_type: notification.scope_type ?? (notification.project_id ? 'project' : 'system'),
+      })
+    }),
+  }
 
   return {
     issuesStore,
     risksStore,
     notificationsStore,
     notificationStore,
+    notificationTouchpointService,
     executeSQL: vi.fn(async () => []),
     executeSQLOne: vi.fn(async () => ({ cnt: 0 })),
     supabase: {
@@ -144,6 +154,8 @@ vi.mock('../services/dbService.js', async () => {
   }
 
   return {
+    registerDbServiceBusinessSideEffectAdapters: vi.fn(),
+    assertDbServiceBusinessSideEffectAdaptersRegistered: vi.fn(),
     supabase: mocks.supabase,
     SupabaseService: vi.fn(() => mockSupabaseInstance),
     executeSQL: mocks.executeSQL,
@@ -255,13 +267,49 @@ vi.mock('../services/notificationStore.js', () => ({
   deleteNotificationById: mocks.notificationStore.deleteNotificationById,
 }))
 
+vi.mock('../services/notificationTouchpointService.js', () => ({
+  notificationTouchpointService: mocks.notificationTouchpointService,
+}))
+
 // ── 启动 app ─────────────────────────────────────────────────────────────────
+
+vi.mock('../auth/access.js', () => ({
+  getVisibleProjectIds: vi.fn(async () => null),
+  getProjectCompanyId: vi.fn(async (projectId: string) => (projectId ? 'company-1' : null)),
+}))
+
+vi.mock('../services/deletionRetentionGovernanceService.js', () => ({
+  enforceRetentionOrBlock: vi.fn(async () => ({
+    blocked: false,
+    reason: null,
+    result: {
+      resolvedAction: 'physical_delete',
+      requiresUserConfirmation: false,
+    },
+  })),
+  buildRetentionBlockedApiError: vi.fn((reason: string, result: Record<string, unknown>) => ({
+    code: result?.requiresUserConfirmation ? 'RETENTION_CONFIRMATION_REQUIRED' : 'RETENTION_REJECTED',
+    message: reason,
+    details: result,
+  })),
+  buildRetentionBlockedHttpStatus: vi.fn((result: Record<string, unknown>) => (
+    result?.requiresUserConfirmation ? 409 : 422
+  )),
+}))
 
 const { default: app } = await import('../index.js')
 import supertest from 'supertest'
 const request = supertest(app)
 
 const testProjectId = '00000000-0000-0000-0000-000000000001'
+
+function joinedSql(calls: ReadonlyArray<ReadonlyArray<unknown>>) {
+  return calls.map((call) => String(call[0]).toLowerCase()).join('\n')
+}
+
+function executeSqlCalls(): Array<[unknown, unknown[] | undefined]> {
+  return mocks.executeSQL.mock.calls as unknown as Array<[unknown, unknown[] | undefined]>
+}
 
 // ── 每次测试前清空 store ────────────────────────────────────────────────────
 beforeEach(() => {
@@ -274,6 +322,9 @@ beforeEach(() => {
   mocks.notificationStore.updateNotificationById.mockClear()
   mocks.notificationStore.updateNotificationsByIds.mockClear()
   mocks.notificationStore.deleteNotificationById.mockClear()
+  mocks.notificationTouchpointService.emit.mockClear()
+  mocks.executeSQL.mockClear()
+  mocks.executeSQLOne.mockClear()
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -327,7 +378,7 @@ describe('10.1 Issues 域模型', () => {
       })
 
       expect(res.status).toBe(201)
-      expect(mocks.notificationStore.insertNotification).toHaveBeenCalledWith(expect.objectContaining({
+      expect(mocks.notificationTouchpointService.emit).toHaveBeenCalledWith(expect.objectContaining({
         project_id: testProjectId,
         type: 'issue_created',
         notification_type: 'business-warning',
@@ -339,6 +390,7 @@ describe('10.1 Issues 域模型', () => {
         status: 'unread',
         is_read: false,
       }))
+      expect(mocks.notificationStore.insertNotification).toHaveBeenCalledTimes(1)
       expect(mocks.notificationsStore).toHaveLength(1)
     })
 
@@ -418,6 +470,20 @@ describe('10.1 Issues 域模型', () => {
       expect(mocks.issuesStore).toHaveLength(2)
     })
 
+    it('POST /api/issues rejects task references outside the submitted project', async () => {
+      mocks.executeSQLOne.mockResolvedValueOnce({ project_id: '00000000-0000-0000-0000-000000000002' } as any)
+
+      const res = await request.post('/api/issues').send({
+        project_id: testProjectId,
+        task_id: '00000000-0000-0000-0000-000000000011',
+        title: 'cross project task issue',
+        source_type: 'manual',
+      })
+
+      expect(res.status).toBe(400)
+      expect(res.body.error?.code).toBe('TASK_PROJECT_MISMATCH')
+    })
+
     it('GET /api/issues?projectId=... 返回列表', async () => {
       // 先创建一条
       await request.post('/api/issues').send({
@@ -438,6 +504,34 @@ describe('10.1 Issues 域模型', () => {
       const notFoundRes = await request.get('/api/issues/00000000-0000-0000-0000-000000000099')
       expect(notFoundRes.status).toBe(404)
       expect(notFoundRes.body.success).toBe(false)
+    })
+
+    it('GET /api/issues/:id does not record issue closeout sample health evidence', async () => {
+      const issueId = '00000000-0000-0000-0000-0000000005a1'
+      mocks.issuesStore.push({
+        id: issueId,
+        project_id: testProjectId,
+        task_id: null,
+        title: 'read only issue detail',
+        description: null,
+        source_type: 'obstacle_escalated',
+        source_id: '00000000-0000-0000-0000-0000000005b1',
+        severity: 'high',
+        priority: 9,
+        pending_manual_close: false,
+        status: 'closed',
+        created_at: '2026-04-20T00:00:00.000Z',
+        updated_at: '2026-04-21T00:00:00.000Z',
+        closed_at: '2026-04-22T00:00:00.000Z',
+        version: 2,
+      })
+
+      const res = await request.get(`/api/issues/${issueId}`)
+
+      expect(res.status).toBe(200)
+      expect(res.body.data.id).toBe(issueId)
+      const sqlText = joinedSql(executeSqlCalls())
+      expect(sqlText).not.toContain('algorithm_sample_health_events')
     })
 
     it('PUT /api/issues/:id 更新状态', async () => {
@@ -728,6 +822,65 @@ describe('10.1 Issues 域模型', () => {
       expect(res.status).toBe(200)
       expect(res.body.data.status).toBe('investigating')
       expect(res.body.data.pending_manual_close).toBe(false)
+    })
+
+    it('records issue closeout as sample health evidence without publishing runtime assets', async () => {
+      const issueId = '00000000-0000-0000-0000-0000000003c1'
+      mocks.issuesStore.push({
+        id: issueId,
+        project_id: testProjectId,
+        task_id: null,
+        title: 'risk closeout verification issue',
+        description: null,
+        source_type: 'obstacle_escalated',
+        source_id: '00000000-0000-0000-0000-0000000003d1',
+        source_entity_type: 'task_obstacle',
+        source_entity_id: '00000000-0000-0000-0000-0000000003e1',
+        severity: 'high',
+        priority: 9,
+        pending_manual_close: true,
+        status: 'resolved',
+        created_at: '2026-04-20T00:00:00.000Z',
+        updated_at: '2026-04-21T00:00:00.000Z',
+        version: 1,
+      })
+
+      const res = await request.post(`/api/issues/${issueId}/confirm-close`).send({ version: 1 })
+
+      expect(res.status).toBe(200)
+      expect(res.body.data.status).toBe('closed')
+
+      const sampleHealthInserts = executeSqlCalls().filter(([sql]) => (
+        String(sql).toLowerCase().includes('insert into public.algorithm_sample_health_events')
+      ))
+      expect(sampleHealthInserts).toHaveLength(1)
+      expect(sampleHealthInserts[0]?.[1]).toEqual(expect.arrayContaining([
+        `risk_issue_closeout:${issueId}`,
+        'business_completion.sample_health',
+        'businessCompletionSampleHealthAdapterService',
+        'company-1',
+        testProjectId,
+        'governance_report',
+        expect.objectContaining({
+          workCode: 'risk_issue_closeout:risk closeout verification issue',
+          benchmarkEligible: false,
+          candidateEvidenceEligible: true,
+          domain: 'risk_issue_closeout',
+          businessCode: 'risk closeout verification issue',
+          nonDurationBusinessCompletionSample: true,
+          issueId,
+          riskIssueId: issueId,
+          issueCode: 'risk closeout verification issue',
+          sourceRoute: 'issues.confirm-close',
+        }),
+      ]))
+
+      const sqlText = joinedSql(executeSqlCalls())
+      expect(sqlText).not.toContain('standard_work_duration')
+      expect(sqlText).not.toContain('algorithm_seed_records')
+      expect(sqlText).not.toContain('algorithm_seed_overrides')
+      expect(sqlText).not.toContain('algorithm_learnable_parameter_runtime_publications')
+      expect(sqlText).not.toContain('policy_template_entity_runtime_publications')
     })
   })
 })

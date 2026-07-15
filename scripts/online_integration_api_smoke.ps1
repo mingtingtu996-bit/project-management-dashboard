@@ -1,7 +1,7 @@
 $ProgressPreference = 'SilentlyContinue'
 
 $urls = @(
-  'http://127.0.0.1:3001/api/health',
+  'http://127.0.0.1:3001/api/readyz',
   'http://127.0.0.1:3001/api/jobs',
   'http://127.0.0.1:3001/api/projects',
   'http://127.0.0.1:3001/api/dashboard/projects-summary',

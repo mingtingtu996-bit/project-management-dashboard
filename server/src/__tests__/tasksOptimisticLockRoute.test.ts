@@ -7,6 +7,9 @@ const mocks = vi.hoisted(() => ({
     getTask: vi.fn(),
   },
   updateTaskInMainChain: vi.fn(),
+  createTaskBatchUpdateJob: vi.fn(),
+  scheduleTaskBatchUpdateJob: vi.fn(),
+  getTaskBatchUpdateJob: vi.fn(),
   executeSQL: vi.fn(),
   logger: {
     info: vi.fn(),
@@ -58,6 +61,12 @@ vi.mock('../services/taskWriteChainService.js', () => ({
   reopenTaskInMainChain: vi.fn(),
 }))
 
+vi.mock('../services/taskBatchUpdateService.js', () => ({
+  createTaskBatchUpdateJob: mocks.createTaskBatchUpdateJob,
+  scheduleTaskBatchUpdateJob: mocks.scheduleTaskBatchUpdateJob,
+  getTaskBatchUpdateJob: mocks.getTaskBatchUpdateJob,
+}))
+
 vi.mock('../services/requestBudgetService.js', () => ({
   REQUEST_TIMEOUT_BUDGETS: {},
   runWithRequestBudget: vi.fn(async (_budget: unknown, fn: () => Promise<unknown>) => fn()),
@@ -97,6 +106,14 @@ describe('tasks optimistic lock route', () => {
     vi.clearAllMocks()
     mocks.executeSQL.mockResolvedValue([])
     mocks.supabaseService.getTask.mockResolvedValue(buildTask())
+    mocks.createTaskBatchUpdateJob.mockResolvedValue({
+      id: 'job-1',
+      projectId: 'project-1',
+      status: 'pending',
+      acceptedCount: 101,
+      succeededCount: 0,
+      failedCount: 0,
+    })
   })
 
   it('forwards the provided version into the main write chain', async () => {
@@ -166,6 +183,7 @@ describe('tasks optimistic lock route', () => {
 
     const response = await supertest(buildApp())
       .post('/api/tasks/batch-update')
+      .set('Idempotency-Key', 'batch-request-1')
       .send({
         project_id: 'project-1',
         task_ids: taskIds,
@@ -183,6 +201,49 @@ describe('tasks optimistic lock route', () => {
         processing: true,
       },
     })
-    expect(response.body.data.job_id).toEqual(expect.any(String))
+    expect(response.body.data.job_id).toBe('job-1')
+    expect(mocks.createTaskBatchUpdateJob).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: 'project-1',
+      taskIds,
+      requestedBy: 'user-1',
+      idempotencyKey: 'batch-request-1',
+      status: 'in_progress',
+    }))
+    expect(mocks.scheduleTaskBatchUpdateJob).toHaveBeenCalledWith('job-1')
+  })
+
+  it('returns durable per-task outcomes for a batch update job', async () => {
+    mocks.getTaskBatchUpdateJob.mockResolvedValue({
+      id: 'job-1',
+      projectId: 'project-1',
+      status: 'partial_failed',
+      acceptedCount: 2,
+      succeededCount: 1,
+      failedCount: 1,
+      items: [
+        { taskId: 'task-1', status: 'succeeded', errorCode: null, errorMessage: null },
+        { taskId: 'task-2', status: 'conflict', errorCode: 'VERSION_MISMATCH', errorMessage: 'stale write' },
+      ],
+    })
+
+    const response = await supertest(buildApp())
+      .get('/api/tasks/batch-update/jobs/job-1')
+
+    expect(response.status).toBe(200)
+    expect(response.body).toMatchObject({
+      success: true,
+      data: {
+        job_id: 'job-1',
+        project_id: 'project-1',
+        status: 'partial_failed',
+        accepted_count: 2,
+        succeeded_count: 1,
+        failed_count: 1,
+        items: [
+          { task_id: 'task-1', status: 'succeeded' },
+          { task_id: 'task-2', status: 'conflict', error_code: 'VERSION_MISMATCH' },
+        ],
+      },
+    })
   })
 })

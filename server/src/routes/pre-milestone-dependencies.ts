@@ -2,7 +2,8 @@
 
 import { type Request, type Response, Router } from 'express'
 import { asyncHandler } from '../middleware/errorHandler.js'
-import { authenticate } from '../middleware/auth.js'
+import { getRequestCompanyId } from '../auth/companyContext.js'
+import { authenticate, requireProjectMember } from '../middleware/auth.js'
 import { logger } from '../middleware/logger.js'
 import { validate } from '../middleware/validation.js'
 import { executeSQL, executeSQLOne } from '../services/dbService.js'
@@ -10,6 +11,7 @@ import { getProjectPermissionLevel } from '../auth/access.js'
 import { v4 as uuidv4 } from 'uuid'
 import { z } from 'zod'
 import type { ApiResponse } from '../types/index.js'
+import { markPreMilestoneProjectChanged } from '../services/preMilestoneReadCache.js'
 
 const router = Router()
 router.use(authenticate)
@@ -28,7 +30,7 @@ const preMilestoneDependencyCreateBodySchema = z.object({
   target_milestone_id: z.string().trim().optional(),
   dependency_kind: z.string().trim().optional(),
   notes: z.string().optional().nullable(),
-}).passthrough()
+})
 
 async function resolveMilestoneProjectId(milestoneId?: string | null) {
   if (!milestoneId) return null
@@ -60,7 +62,7 @@ async function requireProjectEditorAccess(req: Request, res: Response, projectId
     return false
   }
 
-  const permissionLevel = await getProjectPermissionLevel(req.user.id, projectId)
+  const permissionLevel = await getProjectPermissionLevel(req.user.id, projectId, getRequestCompanyId(req))
   if (permissionLevel !== 'owner' && permissionLevel !== 'editor') {
     const response: ApiResponse = {
       success: false,
@@ -75,7 +77,7 @@ async function requireProjectEditorAccess(req: Request, res: Response, projectId
 }
 
 // 获取项目的所有证照依赖关系
-router.get('/project/:projectId', validate(projectIdParamSchema, 'params'), asyncHandler(async (req, res) => {
+router.get('/project/:projectId', validate(projectIdParamSchema, 'params'), requireProjectMember((req) => req.params.projectId), asyncHandler(async (req, res) => {
   const { projectId } = req.params
   logger.info('Fetching pre-milestone dependencies', { projectId })
 
@@ -171,30 +173,27 @@ router.post('/', validate(preMilestoneDependencyCreateBodySchema), asyncHandler(
 
   const id = uuidv4()
   const now = new Date().toISOString()
-  const payload = {
-    ...req.body,
-    project_id: projectId,
-  }
-
-  const fields: string[] = ['id', 'created_at']
-  const values: any[] = [id, now]
-  const placeholders: string[] = ['?', '?']
-
-  for (const [key, val] of Object.entries(payload)) {
-    fields.push(key)
-    values.push(val)
-    placeholders.push('?')
-  }
 
   await executeSQL(
-    `INSERT INTO pre_milestone_dependencies (${fields.join(', ')}) VALUES (${placeholders.join(', ')})`,
-    values
+    `INSERT INTO pre_milestone_dependencies
+       (id, project_id, source_milestone_id, target_milestone_id, dependency_kind, notes, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [
+      id,
+      projectId,
+      req.body.source_milestone_id,
+      req.body.target_milestone_id,
+      req.body.dependency_kind ?? null,
+      req.body.notes ?? null,
+      now,
+    ]
   )
 
   const data = await executeSQLOne(
     'SELECT * FROM pre_milestone_dependencies WHERE id = ? LIMIT 1',
     [id]
   )
+  markPreMilestoneProjectChanged(projectId)
 
   const response: ApiResponse<typeof data> = {
     success: true,
@@ -228,7 +227,15 @@ router.delete('/:id', validate(preMilestoneDependencyIdParamSchema, 'params'), a
     return
   }
 
-  await executeSQL('DELETE FROM pre_milestone_dependencies WHERE id = ?', [id])
+  // v1.4.15: retention decision must block unsafe physical deletes.
+  const { enforceRetentionOrBlock, buildRetentionBlockedApiError, buildRetentionBlockedHttpStatus } = await import('../services/deletionRetentionGovernanceService.js')
+  const retention = await enforceRetentionOrBlock({ entityType: 'pre_milestone_dependency', entityId: id, projectId, userId: req.user?.id ?? null, userAction: 'delete' })
+  if (retention.blocked) {
+    return res.status(buildRetentionBlockedHttpStatus(retention.result)).json({ success: false, error: buildRetentionBlockedApiError(retention.reason, retention.result), timestamp: new Date().toISOString() })
+  }
+
+  await executeSQL('DELETE FROM pre_milestone_dependencies WHERE id = ? AND project_id = ?', [id, projectId])
+  markPreMilestoneProjectChanged(projectId)
 
   const response: ApiResponse = {
     success: true,

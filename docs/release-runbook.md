@@ -121,6 +121,15 @@ npm run migrate:pending
 
 如果未配置 `SUPABASE_MIGRATION_URL`，当前工作流会明确记录“migration skipped”并继续部署；此时请确保发布前已经在可连通环境中执行过 `npm run migrate:plan` / `npm run migrate:pending`。
 
+官方年度工作日历导入也依赖可写库连接。生产环境应配置 `DB_CONNECTION_STRING` 或复用 `SUPABASE_MIGRATION_URL`，并执行：
+
+```bash
+cd server
+npm run calendar:refresh-official -- --year=2026
+```
+
+该命令会抓取 gov.cn 官方节假日通知、解析年度日历，并用 PostgreSQL 事务发布新的 `work_calendar` seed 版本。
+
 ### 自有服务器部署
 
 - `DEPLOY_HOST`

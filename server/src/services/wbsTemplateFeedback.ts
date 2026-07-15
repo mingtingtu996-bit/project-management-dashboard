@@ -85,6 +85,9 @@ const COMPLETED_PROJECT_STATUSES = new Set([
 
 const WBS_REFERENCE_DAYS_ASSET_KEY = 'wbs_reference_days'
 const WBS_REFERENCE_DAYS_ACCEPTED_SAMPLE_THRESHOLD = 5
+const WBS_REFERENCE_DAYS_DAY_COUNT_BASIS = 'legacy_inclusive_calendar_day'
+const WBS_REFERENCE_DAYS_REFERENCE_DAY_BASIS = 'wbs_template_reference_days'
+const WBS_REFERENCE_DAYS_CONSTRUCTION_CALENDAR_BASIS = 'not_applied'
 
 function isCompletedProjectStatus(status?: string | null): boolean {
   return COMPLETED_PROJECT_STATUSES.has(normalizeText(status))
@@ -335,13 +338,6 @@ function normalizeId(value?: string | null) {
   return normalized || null
 }
 
-function buildDefaultGovernanceQueryExec(): AlgorithmAssetGovernanceQueryExec {
-  return async <T = Record<string, unknown>>(sql: string, params: unknown[] = []) => {
-    const result = await rawQuery(sql, params as any[])
-    return result.rows as T[]
-  }
-}
-
 function buildProjectScopeClause(projectIds: string[] | null, columnName = 'id') {
   if (!projectIds) return { clause: '', params: [] as string[] }
   if (projectIds.length === 0) return { clause: ' WHERE 1 = 0', params: [] as string[] }
@@ -369,6 +365,19 @@ function buildBaselineItemScopeClause(ids: string[], projectIds: string[] | null
   }
 }
 
+async function readOptionalFeedbackRows<T>(label: string, sql: string, params: string[]): Promise<T[]> {
+  try {
+    // execute-sql-dynamic-approved: optional WBS feedback readers use local fixed SELECT builders; scope values stay parameter-bound.
+    return await executeSQL<T>(sql, params)
+  } catch (error) {
+    logger.warn('[wbs-template-feedback] optional feedback sample read failed; continuing with template-only inference', {
+      label,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return []
+  }
+}
+
 function mapFeedbackNodeForCandidate(node: WbsTemplateReferenceDayFeedbackNode) {
   return {
     path: node.path,
@@ -380,7 +389,52 @@ function mapFeedbackNodeForCandidate(node: WbsTemplateReferenceDayFeedbackNode) 
     currentReferenceDays: node.current_reference_days,
     suggestedReferenceDays: node.suggested_reference_days,
     sampleValues: node.sample_values,
+    dayCountBasis: WBS_REFERENCE_DAYS_DAY_COUNT_BASIS,
+    referenceDayBasis: WBS_REFERENCE_DAYS_REFERENCE_DAY_BASIS,
+    constructionCalendarBasis: WBS_REFERENCE_DAYS_CONSTRUCTION_CALENDAR_BASIS,
+    productionDayConversionApplied: false,
   }
+}
+
+// workspace-isolation-capability-read-approved: the global branch only accepts templates with both tenant scopes null; company and project branches bind the caller's authorized ids.
+async function readVisibleWbsTemplate(
+  templateId: string,
+  companyId: string | null,
+  projectIds: string[],
+) {
+  const globalTemplate = await executeSQLOne<any>(
+    `SELECT *
+       FROM wbs_templates
+      WHERE id = ?
+        AND project_id IS NULL
+        AND company_id IS NULL
+      LIMIT 1`,
+    [templateId],
+  )
+  if (globalTemplate) return globalTemplate
+
+  if (companyId) {
+    const companyTemplate = await executeSQLOne<any>(
+      `SELECT *
+         FROM wbs_templates
+        WHERE id = ?
+          AND project_id IS NULL
+          AND company_id = ?
+        LIMIT 1`,
+      [templateId, companyId],
+    )
+    if (companyTemplate) return companyTemplate
+  }
+
+  if (projectIds.length === 0) return null
+  return await executeSQLOne<any>(
+    `SELECT *
+       FROM wbs_templates
+      WHERE id = ?
+        AND project_id = ANY(?::uuid[])
+      LIMIT 1`,
+    [templateId, projectIds],
+  )
 }
 
 function getScopedProjectId(projectIds?: string[] | null) {
@@ -416,8 +470,8 @@ async function recordWbsReferenceDaysPlanNetworkOutcome(
   if (!outcomeStatus) return
 
   const projectId = getScopedProjectId(options.projectIds)
+  if (!projectId) return
   const actionableNodes = getActionableReferenceDayFeedbackNodes(report)
-  const queryExec = options.governanceQueryExec ?? buildDefaultGovernanceQueryExec()
   const outcomeId = `wbs-reference-days:${report.template_id}:${projectId ?? 'multi-project'}`
   const metadata = {
     source: 'wbs_template_feedback',
@@ -431,12 +485,64 @@ async function recordWbsReferenceDaysPlanNetworkOutcome(
     accepted_sample_threshold: WBS_REFERENCE_DAYS_ACCEPTED_SAMPLE_THRESHOLD,
     project_scope: normalizeProjectScope(options.projectIds),
     nodes: actionableNodes.map(mapFeedbackNodeForCandidate),
+    day_count_basis: WBS_REFERENCE_DAYS_DAY_COUNT_BASIS,
+    reference_day_basis: WBS_REFERENCE_DAYS_REFERENCE_DAY_BASIS,
+    construction_calendar_basis: WBS_REFERENCE_DAYS_CONSTRUCTION_CALENDAR_BASIS,
+    production_day_conversion_applied: false,
+    provenance_gap_code: 'C-19.11',
     writes_runtime_directly: false,
     writes_fact_directly: false,
   }
+  const params = [
+    outcomeId,
+    WBS_REFERENCE_DAYS_ASSET_KEY,
+    outcomeStatus,
+    `wbs_template_feedback:${report.template_id}`,
+    'project',
+    'project_business_outcome_writer',
+    normalizeId(options.companyId),
+    projectId,
+    null,
+    metadata,
+    false,
+    false,
+  ]
 
   try {
-    await queryExec(
+    if (options.governanceQueryExec) {
+      await options.governanceQueryExec(
+        `INSERT INTO public.duration_plan_network_outcomes (
+        id,
+        asset_key,
+        outcome_status,
+        outcome_ref,
+        learning_scope,
+        learning_scope_source,
+        company_id,
+        project_id,
+        publication_key,
+        metadata,
+        writes_runtime_directly,
+        writes_fact_directly
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      ON CONFLICT (id) DO UPDATE SET
+        outcome_status = EXCLUDED.outcome_status,
+        outcome_ref = EXCLUDED.outcome_ref,
+        learning_scope = EXCLUDED.learning_scope,
+        learning_scope_source = EXCLUDED.learning_scope_source,
+        company_id = EXCLUDED.company_id,
+        project_id = EXCLUDED.project_id,
+        publication_key = EXCLUDED.publication_key,
+        observed_at = now(),
+        metadata = EXCLUDED.metadata,
+        writes_runtime_directly = false,
+        writes_fact_directly = false`,
+        params,
+      )
+      return
+    }
+
+    await rawQuery(
       `INSERT INTO public.duration_plan_network_outcomes (
         id,
         asset_key,
@@ -463,20 +569,7 @@ async function recordWbsReferenceDaysPlanNetworkOutcome(
         metadata = EXCLUDED.metadata,
         writes_runtime_directly = false,
         writes_fact_directly = false`,
-      [
-        outcomeId,
-        WBS_REFERENCE_DAYS_ASSET_KEY,
-        outcomeStatus,
-        `wbs_template_feedback:${report.template_id}`,
-        'project',
-        'project_business_outcome_writer',
-        normalizeId(options.companyId),
-        projectId,
-        null,
-        metadata,
-        false,
-        false,
-      ],
+      params as any[],
     )
   } catch (error) {
     logger.warn('[wbs-template-feedback] failed to record WBS reference-days network outcome', {
@@ -529,20 +622,24 @@ export async function collectWbsTemplateFeedback(
   templateId: string,
   options: CollectWbsTemplateFeedbackOptions = {},
 ): Promise<WbsTemplateFeedbackReport> {
-  const template = await executeSQLOne<any>('SELECT * FROM wbs_templates WHERE id = ? LIMIT 1', [templateId])
+  const normalizedProjectScope = normalizeProjectScope(options.projectIds) ?? []
+  const companyId = normalizeId(options.companyId)
+  const template = await readVisibleWbsTemplate(templateId, companyId, normalizedProjectScope)
   if (!template) {
     throw new Error('WBS 模板不存在')
   }
 
-  const projectScope = buildProjectScopeClause(normalizeProjectScope(options.projectIds), 'id')
-  const taskProjectScope = buildProjectScopeClause(normalizeProjectScope(options.projectIds), 'project_id')
+  const projectScope = buildProjectScopeClause(normalizedProjectScope, 'id')
+  const taskProjectScope = buildProjectScopeClause(normalizedProjectScope, 'project_id')
 
   const [projects, tasks] = await Promise.all([
-    executeSQL<CompletedProjectRow>(
+    readOptionalFeedbackRows<CompletedProjectRow>(
+      'projects',
       `SELECT id, name, status FROM projects${projectScope.clause} ORDER BY created_at ASC`,
       projectScope.params,
     ),
-    executeSQL<TaskRow>(
+    readOptionalFeedbackRows<TaskRow>(
+      'tasks',
       `SELECT * FROM tasks${taskProjectScope.clause} ORDER BY created_at ASC`,
       taskProjectScope.params,
     ),
@@ -564,9 +661,9 @@ export async function collectWbsTemplateFeedback(
   )
   const completedTasks = tasks.filter((task) => completedProjectIds.has(task.project_id) && getDurationDays(task) !== null)
   const baselineItemIds = Array.from(new Set(completedTasks.map((task) => normalizeText(task.baseline_item_id)).filter(Boolean)))
-  const normalizedProjectScope = normalizeProjectScope(options.projectIds)
   const baselineItemScope = buildBaselineItemScopeClause(baselineItemIds, normalizedProjectScope)
-  const baselineItems = await executeSQL<BaselineItemRow>(
+  const baselineItems = await readOptionalFeedbackRows<BaselineItemRow>(
+    'task_baseline_items',
     `SELECT id, project_id, source_task_id FROM task_baseline_items${baselineItemScope.clause} ORDER BY created_at ASC`,
     baselineItemScope.params,
   )

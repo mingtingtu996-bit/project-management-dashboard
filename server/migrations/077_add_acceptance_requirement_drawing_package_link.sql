@@ -7,11 +7,11 @@ FROM drawing_packages dp
 WHERE ar.drawing_package_id IS NULL
   AND ar.project_id = dp.project_id
   AND (
-    (ar.source_entity_type = 'drawing_package' AND ar.source_entity_id = dp.id)
+    (ar.source_entity_type = 'drawing_package' AND ar.source_entity_id = dp.id::text)
     OR EXISTS (
       SELECT 1
       FROM construction_drawings cd
-      WHERE cd.id = ar.source_entity_id
+      WHERE cd.id::text = ar.source_entity_id
         AND ar.source_entity_type = 'drawing'
         AND cd.package_id = dp.id
     )

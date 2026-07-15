@@ -16,7 +16,7 @@ const pillClass: Record<CardHeadPillVariant, { dot: string; text: string }> = {
   success: { dot: 'bg-emerald-500', text: 'text-emerald-700' },
   warning: { dot: 'bg-amber-500', text: 'text-amber-700' },
   danger: { dot: 'bg-rose-500', text: 'text-rose-700' },
-  info: { dot: 'bg-blue-500', text: 'text-blue-700' },
+  info: { dot: 'bg-blue-600', text: 'text-blue-700' },
   neutral: { dot: 'bg-slate-400', text: 'text-slate-600' },
 }
 

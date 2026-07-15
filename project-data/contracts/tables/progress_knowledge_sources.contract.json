@@ -1,0 +1,27 @@
+{
+  "schemaVersion": "workbuddy-table-contract/v1",
+  "tableId": "progress_knowledge_sources",
+  "authorityLevel": "candidate_source",
+  "grain": "one governed external source",
+  "owner": "project-search governance scripts",
+  "mutationBoundary": "contract_only_no_db_mutation_no_runtime_write",
+  "requiredConcepts": [
+    "source_key",
+    "source_name",
+    "source_url",
+    "connector_type",
+    "access_level",
+    "source_trust_level",
+    "governance_status",
+    "source_metadata"
+  ],
+  "allowedWriterRegistryIds": [
+    "progress_knowledge_candidate_sql_apply"
+  ],
+  "qualityRules": [
+    "source_key_required",
+    "source_url_or_locator_required",
+    "trust_level_required",
+    "source_governance_status_required"
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "schemaVersion": "workbuddy-table-contract/v1",
+  "tableId": "monthly_plan_items",
+  "authorityLevel": "business_fact",
+  "grain": "one row per monthly plan work item",
+  "owner": "monthly planning services",
+  "mutationBoundary": "contract_only_no_db_mutation_no_runtime_write",
+  "requiredConcepts": [
+    "id",
+    "project_id",
+    "monthly_plan_version_id",
+    "source_task_id",
+    "title",
+    "planned_start_date",
+    "planned_end_date"
+  ],
+  "forbiddenDirectWriters": [
+    "project-search",
+    "external public data",
+    "candidate knowledge assets"
+  ],
+  "allowedWriterRegistryIds": [
+    "monthly_planning_route_writer",
+    "v11_chapter6_7_fixture_writer"
+  ],
+  "qualityRules": [
+    "project_id_required",
+    "monthly_plan_item_plan_ref_required",
+    "monthly_plan_item_task_or_title_required"
+  ]
+}

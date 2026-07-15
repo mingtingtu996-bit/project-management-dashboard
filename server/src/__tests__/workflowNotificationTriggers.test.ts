@@ -32,7 +32,6 @@ const state = vi.hoisted(() => {
 
   const acceptancePlan = {
     id: planId,
-    task_id: taskId,
     project_id: projectId,
     plan_name: 'main-structure-acceptance',
     acceptance_type: 'main-structure',
@@ -53,9 +52,12 @@ const state = vi.hoisted(() => {
     assignee_user_id: '11111111-1111-4111-8111-111111111111',
     planned_start_date: '2026-04-15',
     planned_end_date: '2026-04-20',
+    building_object_id: '99999999-9999-4999-8999-999999999999',
     responsible_unit: null,
     assignee_unit: null,
     participant_unit_id: null,
+    completion_rule: 'acceptance_passed',
+    acceptance_required: true,
     version: 1,
     created_at: '2026-04-15T00:00:00.000Z',
     updated_at: '2026-04-15T00:00:00.000Z',
@@ -83,19 +85,19 @@ const state = vi.hoisted(() => {
     estimated_resolve_date: '2026-04-20',
   }
   let relationTableMissing = false
-  let directRelationQueryAvailable = false
-  let legacyPrecedingTaskFieldMissing = false
 
   const persistNotification = vi.fn(async (payload: any) => payload)
   const closeDelaySourceRisksForCompletedTask = vi.fn(async () => [])
   const databaseQuery = vi.fn(async (sql: string, params: unknown[] = []) => {
     const normalized = sql.replace(/\s+/g, ' ').trim().toLowerCase()
 
-    if (normalized === 'select condition_id from public.task_preceding_relations where task_id = $1') {
-      if (!directRelationQueryAvailable) {
+    if (normalized.includes('from public.task_preceding_relations relation')
+      && normalized.includes('condition_row.project_id = $2')) {
+      if (relationTableMissing) {
         throw new Error("relation 'public.task_preceding_relations' does not exist")
       }
-      return { rows: [{ condition_id: params[0] === taskId ? conditionId : null }].filter((row) => row.condition_id), rowCount: 1 }
+      const inScope = params[0] === taskId && params[1] === projectId
+      return { rows: [{ condition_id: inScope ? conditionId : null }].filter((row) => row.condition_id), rowCount: inScope ? 1 : 0 }
     }
 
     return { rows: [], rowCount: 0 }
@@ -104,16 +106,18 @@ const state = vi.hoisted(() => {
   const executeSQLOne = vi.fn(async (sql: string, params: unknown[] = []) => {
     const normalized = sql.replace(/\s+/g, ' ').trim().toLowerCase()
 
-    if (normalized.includes('from construction_drawings where id = ? limit 1')) {
+    if (normalized.includes('from construction_drawings where id = ? limit 1') || normalized.includes('from construction_drawings where id = ? and project_id = ? limit 1')) {
       return { ...drawing }
     }
 
-    if (normalized.includes('from acceptance_plans where id = ? limit 1')) {
+    if (normalized.includes('from acceptance_plans where id = ? limit 1') || normalized.includes('from acceptance_plans where id = ? and project_id = ? limit 1')) {
       return { ...acceptancePlan }
     }
 
-    if (normalized === 'select * from task_obstacles where id = ? limit 1') {
-      return params[0] === obstacleId ? { ...obstacle } : null
+    if (normalized.includes('from task_obstacles where id = ? limit 1')
+      || normalized.includes('from task_obstacles where id = ? and project_id = ? limit 1')) {
+      const matchesProject = normalized.includes('and project_id = ?') ? params[1] === projectId : true
+      return params[0] === obstacleId && matchesProject ? { ...obstacle } : null
     }
 
     return null
@@ -122,9 +126,16 @@ const state = vi.hoisted(() => {
   const executeSQL = vi.fn(async (sql: string, params: unknown[] = []) => {
     const normalized = sql.replace(/\s+/g, ' ').trim().toLowerCase()
 
-    if (normalized.startsWith('update construction_drawings set ') && normalized.endsWith(' where id = ? and lock_version = ?')) {
+    if (normalized.includes('from project_entity_links')
+      && normalized.includes("source_entity_type = 'acceptance_plan'")
+      && normalized.includes("target_entity_type = 'task'")) {
+      return [{ source_entity_id: planId, target_entity_id: taskId }]
+    }
+
+    if (normalized.startsWith('update construction_drawings set ') && (normalized.endsWith(' where id = ? and lock_version = ?') || normalized.endsWith(' where id = ? and project_id = ? and lock_version = ?'))) {
+      const withProject = normalized.endsWith(' where id = ? and project_id = ? and lock_version = ?')
       const clauseList = normalized
-        .slice('update construction_drawings set '.length, -' where id = ? and lock_version = ?'.length)
+        .slice('update construction_drawings set '.length, -(withProject ? ' where id = ? and project_id = ? and lock_version = ?'.length : ' where id = ? and lock_version = ?'.length))
         .split(', ')
         .map((item) => item.replace(' = ?', ''))
       if (Number(params[params.length - 1] ?? 1) !== Number(drawing.lock_version ?? 1)) {
@@ -136,61 +147,62 @@ const state = vi.hoisted(() => {
       return []
     }
 
-    if (normalized.startsWith('update acceptance_plans set ') && normalized.endsWith(' where id = ?')) {
-      if (normalized.startsWith("update acceptance_plans set status = 'passed'")) {
+    const acceptanceUpdateSql = normalized.endsWith(' returning id')
+      ? normalized.slice(0, -' returning id'.length)
+      : normalized
+    if (acceptanceUpdateSql.startsWith('update acceptance_plans set ') && (
+      acceptanceUpdateSql.endsWith(' where id = ?')
+      || acceptanceUpdateSql.endsWith(' where id = ? and project_id = ?')
+      || acceptanceUpdateSql.endsWith(' where id = ? and project_id = ? and status = ?')
+    )) {
+      const suffix = acceptanceUpdateSql.endsWith(' where id = ? and project_id = ? and status = ?')
+        ? ' where id = ? and project_id = ? and status = ?'
+        : acceptanceUpdateSql.endsWith(' where id = ? and project_id = ?')
+          ? ' where id = ? and project_id = ?'
+          : ' where id = ?'
+      const expectedStatus = acceptanceUpdateSql.endsWith(' where id = ? and project_id = ? and status = ?')
+        ? String(params[params.length - 1] ?? '')
+        : null
+      if (expectedStatus !== null && expectedStatus !== acceptancePlan.status) {
+        return []
+      }
+      if (acceptanceUpdateSql.startsWith("update acceptance_plans set status = 'passed'")) {
         acceptancePlan.status = 'passed'
         acceptancePlan.actual_date = params[0] as string
         acceptancePlan.updated_at = params[1] as string
-        return []
+        return [{ ...acceptancePlan }]
       }
 
-      if (normalized.startsWith("update acceptance_plans set status = 'rectification'")) {
+      if (acceptanceUpdateSql.startsWith("update acceptance_plans set status = 'rectification'")) {
         acceptancePlan.status = 'rectification'
         acceptancePlan.updated_at = params[0] as string
-        return []
+        return [{ ...acceptancePlan }]
       }
 
-      const clauseList = normalized
-        .slice('update acceptance_plans set '.length, -' where id = ?'.length)
+      const clauseList = acceptanceUpdateSql
+        .slice('update acceptance_plans set '.length, -suffix.length)
         .split(', ')
         .map((item) => item.replace(' = ?', ''))
       clauseList.forEach((field, index) => {
         ;(acceptancePlan as Record<string, unknown>)[field] = params[index] as never
       })
-      return []
-    }
-
-    if (normalized === 'select id from tasks where preceding_task_id = ?') {
-      if (legacyPrecedingTaskFieldMissing) {
-        throw new Error('column tasks.preceding_task_id does not exist')
-      }
-      return relationTableMissing ? [{ id: dependentTaskId }] : []
-    }
-
-    if (normalized === 'select condition_id from task_preceding_relations where task_id = ?') {
-      if (relationTableMissing) {
-        throw new Error("relation 'public.task_preceding_relations' does not exist")
-      }
-      return [{ condition_id: conditionId }]
+      return [{ ...acceptancePlan }]
     }
 
     if (normalized.startsWith('select id, task_id from task_conditions where id in')) {
       return [{ id: conditionId, task_id: dependentTaskId }]
     }
 
-    if (normalized.startsWith('select id, task_id from task_conditions where task_id in')) {
-      return relationTableMissing ? [{ id: conditionId, task_id: dependentTaskId }] : []
-    }
-
     if (normalized.startsWith('update task_conditions set is_satisfied = true')) {
       return []
     }
 
-    if (normalized.startsWith('select id, task_id, project_id, title, description, severity, status, expected_resolution_date, estimated_resolve_date from task_obstacles where task_id in')) {
+    if (normalized.startsWith('select id, task_id, project_id, title, description, severity, status, estimated_resolve_date from task_obstacles where task_id in')) {
       return [{ ...obstacle }]
     }
 
-    if (normalized === 'update task_obstacles set status = ?, resolution = ?, resolved_by = ?, resolved_at = ? where id = ?') {
+    if (normalized === 'update task_obstacles set status = ?, resolution = ?, resolved_by = ?, resolved_at = ? where id = ?'
+      || normalized === 'update task_obstacles set status = ?, resolution = ?, resolved_by = ?, resolved_at = ? where id = ? and project_id = ?') {
       obstacle.status = String(params[0] ?? obstacle.status)
       obstacle.resolution = String(params[1] ?? '')
       obstacle.resolved_by = String(params[2] ?? '')
@@ -213,8 +225,8 @@ const state = vi.hoisted(() => {
   })
 
   const getMembers = vi.fn(async () => ([
-    { id: 'm-1', project_id: projectId, user_id: 'owner-1', role: 'owner', joined_at: '2026-04-01T00:00:00.000Z' },
-    { id: 'm-2', project_id: projectId, user_id: 'admin-1', role: 'admin', joined_at: '2026-04-01T00:00:00.000Z' },
+    { id: 'm-1', project_id: projectId, user_id: 'owner-1', permission_level: 'owner', joined_at: '2026-04-01T00:00:00.000Z' },
+    { id: 'm-2', project_id: projectId, user_id: 'editor-1', permission_level: 'editor', joined_at: '2026-04-01T00:00:00.000Z' },
   ]))
   const getTask = vi.fn(async () => ({ ...oldTask }))
   const updateTask = vi.fn(async (_id: string, updates: Record<string, unknown>) => ({
@@ -248,6 +260,19 @@ const state = vi.hoisted(() => {
         }
       }
 
+      if (table === 'engineering_objects') {
+        return {
+          select: vi.fn(() => ({
+            in: vi.fn(async () => ({ data: [], error: null })),
+            eq: vi.fn(() => ({
+              eq: vi.fn(() => ({
+                maybeSingle: vi.fn(async () => ({ data: null, error: null })),
+              })),
+            })),
+          })),
+        }
+      }
+
       return {
         select: vi.fn(() => ({
           eq: vi.fn(() => ({
@@ -276,8 +301,6 @@ const state = vi.hoisted(() => {
     executeSQLOne.mockClear()
     executeSQL.mockClear()
     relationTableMissing = false
-    directRelationQueryAvailable = false
-    legacyPrecedingTaskFieldMissing = false
     getMembers.mockClear()
     getTask.mockClear()
     updateTask.mockClear()
@@ -303,12 +326,6 @@ const state = vi.hoisted(() => {
     databaseQuery,
     setRelationTableMissing(value: boolean) {
       relationTableMissing = value
-    },
-    setDirectRelationQueryAvailable(value: boolean) {
-      directRelationQueryAvailable = value
-    },
-    setLegacyPrecedingTaskFieldMissing(value: boolean) {
-      legacyPrecedingTaskFieldMissing = value
     },
     reset,
   }
@@ -337,6 +354,9 @@ vi.mock('../middleware/logger.js', () => ({
 
 vi.mock('../database.js', () => ({
   query: state.databaseQuery,
+  isDatabaseTransactionActive: vi.fn(() => false),
+  withDatabaseTransaction: vi.fn(async (work: () => Promise<unknown>) => await work()),
+  registerDatabasePostCommitEffect: vi.fn(async (_label: string, effect: () => Promise<void>) => await effect()),
 }))
 
 vi.mock('../services/dbService.js', () => ({
@@ -348,6 +368,30 @@ vi.mock('../services/dbService.js', () => ({
     updateTask: state.updateTask,
     supabase: state.supabaseDb,
   }))
+
+vi.mock('../services/engineeringObjectService.js', () => ({
+  hasAnyScopeObjectId: vi.fn((task: Record<string, unknown>) => Boolean(
+    task.engineering_object_id
+    || task.phase_object_id
+    || task.section_object_id
+    || task.building_object_id
+    || task.basement_object_id
+    || task.floor_object_id
+    || task.physical_zone_object_id
+    || task.functional_area_object_id,
+  )),
+  validateScopeObjectTypes: vi.fn(async () => null),
+  validateTaskScopeConsistency: vi.fn(async () => null),
+}))
+
+vi.mock('../services/taskCodeTransactionService.js', () => ({
+  rejectTaskCodeFields: vi.fn(() => null),
+  createTaskWithCodeInTransaction: vi.fn(),
+  updateTaskWithCodeInTransaction: vi.fn(async (taskId: string, updates: Record<string, unknown>) => ({
+    task: await state.updateTask(taskId, updates),
+    taskCode: 'TASK-001',
+  })),
+}))
 
 vi.mock('../services/warningChainService.js', () => ({
   persistNotification: state.persistNotification,
@@ -392,6 +436,7 @@ vi.mock('../services/drawingPackageService.js', () => ({
 
 vi.mock('../routes/drawing-packages.js', () => ({
   registerDrawingPackageRoutes: vi.fn(() => undefined),
+  clearDrawingBoardCache: vi.fn(() => undefined),
 }))
 
 vi.mock('../routes/drawing-review-rules.js', () => ({
@@ -427,7 +472,7 @@ describe('workflow notification triggers', () => {
       .put(`/api/projects/${state.ids.projectId}/construction-drawings/${state.ids.drawingId}`)
       .send({ version: 'V2', lock_version: 1, drawing_name: '总平面图' })
 
-    expect(response.status).toBe(200)
+    expect(response.status, JSON.stringify(response.body)).toBe(200)
     expect(state.persistNotification).toHaveBeenCalledWith(
       expect.objectContaining({
         type: 'drawing_version_updated',
@@ -459,6 +504,12 @@ describe('workflow notification triggers', () => {
       expect.objectContaining({
         status: 'completed',
         progress: 100,
+        updated_by: 'user-1',
+      }),
+      undefined,
+      expect.objectContaining({
+        executionFactIntent: 'acceptance_pass',
+        executionFactEventDate: '2026-04-16',
       }),
     )
   })
@@ -482,7 +533,12 @@ describe('workflow notification triggers', () => {
       expect.objectContaining({
         status: 'completed',
         progress: 100,
-        actual_end_date: '2026-04-16',
+        updated_by: 'user-1',
+      }),
+      undefined,
+      expect.objectContaining({
+        executionFactIntent: 'acceptance_pass',
+        executionFactEventDate: '2026-04-16',
       }),
     )
   })
@@ -494,7 +550,7 @@ describe('workflow notification triggers', () => {
       .put(`/api/tasks/${state.ids.taskId}`)
       .send({ version: 1, progress: 100 })
 
-    expect(response.status).toBe(200)
+    expect(response.status, JSON.stringify(response.body)).toBe(200)
     expect(state.persistNotification).toHaveBeenCalledWith(
       expect.objectContaining({
         type: 'condition_auto_satisfied',
@@ -504,8 +560,8 @@ describe('workflow notification triggers', () => {
         task_id: state.ids.dependentTaskId,
       }),
     )
-    expect(state.closeDelaySourceRisksForCompletedTask).toHaveBeenCalledWith(state.ids.taskId)
-  })
+    expect(state.closeDelaySourceRisksForCompletedTask).toHaveBeenCalledWith(state.ids.taskId, state.ids.projectId)
+  }, 30_000)
 
   it('notifies the new assignee when task responsibility changes', async () => {
     const request = supertest(buildApp())
@@ -530,7 +586,7 @@ describe('workflow notification triggers', () => {
     )
   })
 
-  it('still auto-satisfies preceding conditions through legacy task field when relation table is missing', async () => {
+  it('does not reconstruct condition relations when the canonical table is missing', async () => {
     state.reset()
     vi.clearAllMocks()
     state.setRelationTableMissing(true)
@@ -541,72 +597,14 @@ describe('workflow notification triggers', () => {
       .send({ version: 1, progress: 100 })
 
     expect(response.status).toBe(200)
-    expect(state.persistNotification).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: 'condition_auto_satisfied',
-        source_entity_id: state.ids.conditionId,
-        task_id: state.ids.dependentTaskId,
-      }),
-    )
-  })
-
-  it('auto-satisfies preceding conditions through direct pg fallback when schema cache misses the relation table', async () => {
-    state.reset()
-    vi.clearAllMocks()
-    state.setRelationTableMissing(true)
-    state.setDirectRelationQueryAvailable(true)
-    const request = supertest(buildApp())
-
-    const response = await request
-      .put(`/api/tasks/${state.ids.taskId}`)
-      .send({ version: 1, progress: 100 })
-
-    expect(response.status).toBe(200)
-    expect(state.databaseQuery).toHaveBeenCalledWith(
-      'SELECT condition_id FROM public.task_preceding_relations WHERE task_id = $1',
-      [state.ids.taskId],
-    )
-    expect(state.persistNotification).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: 'condition_auto_satisfied',
-        source_entity_id: state.ids.conditionId,
-        task_id: state.ids.dependentTaskId,
-      }),
-    )
-  })
-
-  it('still auto-satisfies through direct pg fallback when both relation table cache and legacy task field are missing', async () => {
-    state.reset()
-    vi.clearAllMocks()
-    state.setRelationTableMissing(true)
-    state.setDirectRelationQueryAvailable(true)
-    state.setLegacyPrecedingTaskFieldMissing(true)
-    const request = supertest(buildApp())
-
-    const response = await request
-      .put(`/api/tasks/${state.ids.taskId}`)
-      .send({ version: 1, progress: 100 })
-
-    expect(response.status).toBe(200)
-    expect(state.databaseQuery).toHaveBeenCalledWith(
-      'SELECT condition_id FROM public.task_preceding_relations WHERE task_id = $1',
-      [state.ids.taskId],
-    )
-    expect(state.persistNotification).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: 'condition_auto_satisfied',
-        source_entity_id: state.ids.conditionId,
-        task_id: state.ids.dependentTaskId,
-      }),
+    expect(state.persistNotification).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'condition_auto_satisfied' }),
     )
   })
 
   it('auto-resolves dependent task obstacles when preceding conditions are auto-satisfied', async () => {
     state.reset()
     vi.clearAllMocks()
-    state.setRelationTableMissing(true)
-    state.setDirectRelationQueryAvailable(true)
-    state.setLegacyPrecedingTaskFieldMissing(true)
     const request = supertest(buildApp())
 
     const response = await request
@@ -617,7 +615,12 @@ describe('workflow notification triggers', () => {
     expect(state.obstacle.status).toBe('已解决')
     expect(state.obstacle.resolution).toBe('关联前置任务已完成，系统自动解除依赖型阻碍')
     expect(state.obstacle.resolved_by).toBe('user-1')
+    const obstacleLookup = state.executeSQL.mock.calls.find(([sql]) => (
+      String(sql).replace(/\s+/g, ' ').trim().toLowerCase()
+        .startsWith('select id, task_id, project_id, title, description, severity, status')
+        && String(sql).toLowerCase().includes('from task_obstacles')
+    ))
+    expect(String(obstacleLookup?.[0])).toContain('estimated_resolve_date')
+    expect(String(obstacleLookup?.[0])).not.toContain('expected_resolution_date')
   })
 })
-
-

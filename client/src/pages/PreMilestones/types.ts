@@ -373,3 +373,237 @@ export interface CertificateWorkItemFormData {
   notes: string
   certificate_ids: string[]
 }
+
+export type CertificateTemplatePreviewAction = 'will_create' | 'will_skip_existing' | 'needs_confirmation'
+
+export interface CertificateTemplatePreviewCertificate {
+  key: KnownCertificateType
+  certificateType: KnownCertificateType
+  certificateName: string
+  defaultStage: CertificateStage | string
+  defaultStatus: CertificateStatus | string
+  approvingAuthority: string
+  requiredPolicy: string
+  reason: string
+  sortOrder: number
+  action: CertificateTemplatePreviewAction
+  selected: boolean
+  existingId?: string | null
+  skipReason?: string | null
+}
+
+export interface CertificateTemplatePreviewWorkItem {
+  workItemCode: string
+  itemName: string
+  itemStage: CertificateStage | string
+  defaultStatus: CertificateStatus | string
+  approvingAuthority?: string | null
+  isShared: boolean
+  certificateTypes: KnownCertificateType[]
+  requiredPolicy: string
+  planRole: string
+  criticality: 'blocking' | 'important' | 'normal' | string
+  defaultNextAction: string
+  sortOrder: number
+  action: CertificateTemplatePreviewAction
+  selected: boolean
+  existingId?: string | null
+  skipReason?: string | null
+  sourceEvidence?: string[]
+  landAcquisitionMethodCodes?: LandAcquisitionMethodCode[]
+  provinceProfileCodes?: string[]
+}
+
+export type CertificateTemplateDependencyEndpoint =
+  | { type: 'certificate'; certificateType: KnownCertificateType }
+  | { type: 'work_item'; workItemCode: string }
+
+export interface CertificateTemplatePreviewDependency {
+  dependencyCode: string
+  predecessor: CertificateTemplateDependencyEndpoint
+  successor: CertificateTemplateDependencyEndpoint
+  dependencyKind: CertificateDependencyKind
+  relationRole: string
+  reason: string
+  action: CertificateTemplatePreviewAction
+  selected: boolean
+  skipReason?: string | null
+  provinceProfileCodes?: string[]
+}
+
+export interface CertificateTemplatePreviewWarning {
+  code: string
+  message: string
+  severity: 'info' | 'warning'
+}
+
+export type LandAcquisitionMethodCode = 'transfer' | 'allocation' | 'existing_land' | 'redevelopment'
+
+export interface CertificateTemplateLandAcquisitionMethod {
+  methodCode: LandAcquisitionMethodCode
+  methodName: string
+  description: string
+  defaultSelected?: boolean
+  workItemCodes: string[]
+  materialNames: string[]
+  policyBasis: string[]
+  recommendedFor: string[]
+}
+
+export interface CertificateTemplateMaterialPackage {
+  packageCode: string
+  packageName: string
+  packageScope: 'certificate_common' | 'land_acquisition_method' | 'province_overlay' | 'city_overlay'
+  certificateTypes: KnownCertificateType[]
+  workItemCodes: string[]
+  materialNames: string[]
+  policyBasis: string[]
+  requiredPolicy: string
+  sortOrder: number
+  source: 'seed' | 'land_acquisition_method' | 'province_profile' | 'city_override'
+  selected: boolean
+  methodCode?: LandAcquisitionMethodCode
+  provinceCode?: string
+  cityCode?: string
+}
+
+export interface CertificateTemplateMaterialEvidenceChain {
+  materialCode: string
+  materialName: string
+  certificateType: KnownCertificateType
+  handlingStepCode: string
+  handlingStepName: string
+  sourceParties: string[]
+  handlingAuthority: string
+  requiredSubmitMaterials: string[]
+  outputDocument: string
+  linkedWorkItemCodes: string[]
+  linkedWorkItemNames: string[]
+  materialPackageCodes: string[]
+  materialPackageNames: string[]
+  reusableForCertificateTypes: KnownCertificateType[]
+  blockingLevel: 'certificate_gate' | 'startup_gate' | 'supporting'
+}
+
+export interface CertificateTemplateHandlingStep {
+  stepCode: string
+  certificateType: KnownCertificateType
+  stepName: string
+  sourceParties: string[]
+  handlingAuthority: string
+  submitMaterials: string[]
+  outputDocument: string
+  satisfiesMaterialCodes: string[]
+  satisfiesMaterials: string[]
+  reusableForCertificateTypes: KnownCertificateType[]
+  blockingLevel: 'certificate_gate' | 'startup_gate' | 'supporting'
+  sortOrder: number
+}
+
+export interface CertificateTemplateProvinceProfile {
+  provinceCode: string
+  provinceName: string
+  profileVersion: string
+  source?: 'project_static_profile' | 'project_metadata' | 'project_location' | 'default'
+  applied?: boolean
+  authorityAliases: Record<string, string>
+  additionalWorkItemCodes: string[]
+  optionalWorkItemCodes: string[]
+  softDependencyCodes: string[]
+  appliedWorkItemCodes?: string[]
+  appliedSoftDependencyCodes?: string[]
+  policySources: Array<{
+    sourceName: string
+    sourceUrl?: string
+    checkedAt: string
+    updateMode: 'governed_seed_update'
+  }>
+  notes: string[]
+}
+
+export interface CertificateTemplateProvinceRuleSource {
+  recognizedProvinceCode: string
+  recognizedProvinceName: string
+  appliedProfileCode: string
+  appliedProfileName: string
+  source: 'project_static_profile' | 'project_metadata' | 'project_location' | 'default'
+  recognitionAccuracy: 'profile_code' | 'province_alias' | 'default'
+  updateMode: 'governed_seed_update'
+  policyUpdatePolicy: 'trusted_source_auto_publish'
+  sourceCheckedAt: string | null
+  nextReviewDueAt: string | null
+}
+
+export interface CertificateTemplateCityOverride {
+  overrideCode: string
+  cityCode: string
+  cityName: string
+  provinceCode: string
+  overrideScope?: 'city'
+  profileVersion: string
+  aliases: string[]
+  source: 'project_static_profile' | 'project_metadata' | 'project_location'
+  applied: boolean
+  handlingAuthorityOverrides?: Record<string, string>
+  reusableOutputOverrides?: Record<string, string[]>
+  policySources: Array<{
+    sourceName: string
+    sourceUrl?: string
+    checkedAt: string
+    updateMode: 'governed_seed_update'
+  }>
+  notes: string[]
+}
+
+export interface CertificateTemplatePreview {
+  templateCode: string
+  templateName: string
+  seedVersion: string
+  projectId: string
+  summary: {
+    certificateCreateCount: number
+    workItemCreateCount: number
+    dependencyCreateCount: number
+    skippedExistingCount: number
+    needsConfirmationCount: number
+  }
+  certificates: CertificateTemplatePreviewCertificate[]
+  workItems: CertificateTemplatePreviewWorkItem[]
+  dependencies: CertificateTemplatePreviewDependency[]
+  materialPackages?: CertificateTemplateMaterialPackage[]
+  materialEvidenceChains?: CertificateTemplateMaterialEvidenceChain[]
+  handlingSteps?: CertificateTemplateHandlingStep[]
+  landAcquisition: {
+    selectedMethodCode: LandAcquisitionMethodCode
+    source: 'preview_option' | 'project_metadata' | 'default'
+    methods: CertificateTemplateLandAcquisitionMethod[]
+  }
+  provinceProfile: CertificateTemplateProvinceProfile | null
+  provinceRuleSource?: CertificateTemplateProvinceRuleSource
+  cityOverride?: CertificateTemplateCityOverride | null
+  warnings: CertificateTemplatePreviewWarning[]
+}
+
+export interface ApplyCertificateTemplateRequest {
+  templateCode: string
+  seedVersion: string
+  selectedCertificateKeys: string[]
+  selectedWorkItemCodes: string[]
+  selectedDependencyCodes: string[]
+  duplicatePolicy: 'skip_existing'
+  landAcquisitionMethodCode?: LandAcquisitionMethodCode
+}
+
+export interface ApplyCertificateTemplateResult {
+  templateCode: string
+  seedVersion: string
+  projectId: string
+  createdCertificateIds: string[]
+  createdWorkItemIds: string[]
+  createdDependencyIds: string[]
+  skippedExisting: Array<{
+    entityType: 'certificate' | 'work_item' | 'dependency'
+    key: string
+    reason: string
+  }>
+}

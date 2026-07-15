@@ -123,6 +123,41 @@ describe('durationRuntimeConsumerObservationService', () => {
     expect(calls).toEqual([])
   })
 
+  it('allows schedule acceleration adoption as a runtime consumer entry without adding it to the global required path list', async () => {
+    const {
+      recordDurationRuntimeConsumerRuntimeCall,
+    } = await import('../services/durationRuntimeConsumerObservationService.js')
+    const {
+      listDurationRuntimeConsumerBusinessPathRequiredIntegrations,
+    } = await import('../services/durationRuntimeConsumerBusinessPathIntegrationAuditService.js')
+    const { calls, queryExec } = createRecordingQueryExec()
+
+    const result = await recordDurationRuntimeConsumerRuntimeCall({
+      queryExec,
+      consumerKey: 'scheduleAccelerationRuntimeService',
+      runtimeEntryRef: 'scheduleAccelerationRuntimeService:recordScheduleAccelerationRecommendationAdoption',
+      callContext: {
+        projectId: 'project-1',
+        consumerTrigger: 'schedule_acceleration_recommendation_adoption',
+      },
+      sourceEvidenceRefs: ['schedule_acceleration_adoption:project-1'],
+      calledAt: '2027-02-15T00:00:00.000Z',
+    })
+
+    expect(result).toEqual(expect.objectContaining({
+      status: 'runtime_consumer_runtime_call_recorded',
+      canPersist: true,
+      runtimeCall: expect.objectContaining({
+        consumerKey: 'scheduleAccelerationRuntimeService',
+        runtimeEntryRef: 'scheduleAccelerationRuntimeService:recordScheduleAccelerationRecommendationAdoption',
+      }),
+    }))
+    expect(calls).toHaveLength(1)
+    expect(listDurationRuntimeConsumerBusinessPathRequiredIntegrations()
+      .map((item) => item.runtimeEntryRef))
+      .not.toContain('scheduleAccelerationRuntimeService:recordScheduleAccelerationRecommendationAdoption')
+  })
+
   it('records runtime consumer observations without writing runtime artifacts or facts', async () => {
     const {
       recordDurationRuntimeConsumerObservation,
@@ -179,6 +214,7 @@ describe('durationRuntimeConsumerObservationService', () => {
       publicationKey: 'duration-benchmark-runtime:base:p50',
       consumerKey: 'durationSuggestionService',
       consumerSurface: 'duration_suggestion',
+      sourceEvidenceRefs: ['runtime_publication:duration-benchmark:base:p50'],
       writesRuntimeDirectly: true,
       writesFactDirectly: true,
     })
@@ -207,6 +243,7 @@ describe('durationRuntimeConsumerObservationService', () => {
       publicationKey: 'learnable-parameter-runtime:confidence:project_override',
       consumerKey: 'projectRemainingDurationForecastService',
       consumerSurface: 'remaining_duration_forecast',
+      sourceEvidenceRefs: ['runtime_publication:forecast-confidence:project-override'],
     })
 
     expect(result).toEqual(expect.objectContaining({
@@ -230,6 +267,7 @@ describe('durationRuntimeConsumerObservationService', () => {
       publicationKey: 'duration_benchmark_runtime:base-v2',
       consumerKey: 'projectRemainingDurationForecastService',
       consumerSurface: 'remaining_duration_forecast',
+      sourceEvidenceRefs: ['runtime_publication:critical-path-rule:base-v2'],
     })
 
     expect(result).toEqual(expect.objectContaining({
@@ -237,6 +275,92 @@ describe('durationRuntimeConsumerObservationService', () => {
       canPersist: false,
       observation: null,
       reasons: ['runtime_consumer_observation_publication_key_not_allowed_for_asset'],
+    }))
+    expect(calls).toEqual([])
+  })
+
+  it('blocks construction organization runtime consumer observations without structured business type attribution', async () => {
+    const {
+      recordDurationRuntimeConsumerObservation,
+    } = await import('../services/durationRuntimeConsumerObservationService.js')
+    const { calls, queryExec } = createRecordingQueryExec()
+
+    const result = await recordDurationRuntimeConsumerObservation({
+      queryExec,
+      assetKey: 'construction_organization_plan_network',
+      publicationKey: 'construction-org-plan-network:option-ready',
+      consumerKey: 'scheduleAccelerationRuntimeService',
+      consumerSurface: 'schedule_acceleration_runtime',
+      observationContext: {},
+      sourceEvidenceRefs: ['runtime_consumption:schedule-acceleration-runtime:construction-organization'],
+      observedAt: '2026-06-23T06:00:00.000Z',
+    })
+
+    expect(result).toEqual(expect.objectContaining({
+      status: 'runtime_consumer_observation_blocked',
+      canPersist: false,
+      observation: null,
+      reasons: expect.arrayContaining(['business_type_required']),
+    }))
+    expect(calls).toEqual([])
+  })
+
+  it('blocks construction organization runtime consumer observations without project and option network anchors', async () => {
+    const {
+      recordDurationRuntimeConsumerObservation,
+    } = await import('../services/durationRuntimeConsumerObservationService.js')
+    const { calls, queryExec } = createRecordingQueryExec()
+
+    const result = await recordDurationRuntimeConsumerObservation({
+      queryExec,
+      assetKey: 'construction_organization_plan_network',
+      publicationKey: 'construction-org-plan-network:option-ready',
+      consumerKey: 'scheduleAccelerationRuntimeService',
+      consumerSurface: 'schedule_acceleration_runtime',
+      observationContext: {
+        businessType: 'hospital',
+      },
+      sourceEvidenceRefs: ['runtime_consumption:schedule-acceleration-runtime:construction-organization'],
+      observedAt: '2026-06-24T04:45:00.000Z',
+    })
+
+    expect(result).toEqual(expect.objectContaining({
+      status: 'runtime_consumer_observation_blocked',
+      canPersist: false,
+      observation: null,
+      reasons: expect.arrayContaining([
+        'project_id_required',
+        'option_network_identity_required',
+      ]),
+    }))
+    expect(calls).toEqual([])
+  })
+
+  it('blocks construction organization runtime consumer observations when product closeout projection evidence is supplied', async () => {
+    const {
+      recordDurationRuntimeConsumerObservation,
+    } = await import('../services/durationRuntimeConsumerObservationService.js')
+    const { calls, queryExec } = createRecordingQueryExec()
+
+    const result = await recordDurationRuntimeConsumerObservation({
+      queryExec,
+      assetKey: 'construction_organization_plan_network',
+      publicationKey: 'construction-org-plan-network:option-ready',
+      consumerKey: 'scheduleAccelerationRuntimeService',
+      consumerSurface: 'schedule_acceleration_runtime',
+      observationContext: {
+        businessType: 'hospital',
+        evidenceAction: 'collect_runtime_ready_use_case_option_closeout_claim_evidence_for_business_type',
+      },
+      sourceEvidenceRefs: ['runtime_consumption:schedule-acceleration-runtime:construction-organization'],
+      observedAt: '2026-06-23T06:30:00.000Z',
+    })
+
+    expect(result).toEqual(expect.objectContaining({
+      status: 'runtime_consumer_observation_blocked',
+      canPersist: false,
+      observation: null,
+      reasons: expect.arrayContaining(['product_outcome_projection_evidence_action_must_not_write_runtime_evidence']),
     }))
     expect(calls).toEqual([])
   })
@@ -308,12 +432,14 @@ describe('durationRuntimeConsumerObservationService', () => {
           publicationKey: 'forecast_residual_overlay_runtime:overlay-v3',
           publicationStatus: 'published',
           observationContext: { projectId: 'project-a' },
+          sourceEvidenceRefs: ['runtime_publication:forecast-residual-overlay:overlay-v3'],
         },
         {
           assetKey: 'wbs_reference_days',
           publicationKey: 'wbs_reference_days_runtime:reference-v3',
           publicationStatus: 'runtime_published',
           observationContext: { projectId: 'project-a' },
+          sourceEvidenceRefs: ['runtime_publication:wbs-reference-days:reference-v3'],
         },
       ],
     })
@@ -354,6 +480,7 @@ describe('durationRuntimeConsumerObservationService', () => {
         assetKey: 'forecast_confidence_weight',
         publicationKey: 'forecast_confidence_weight_runtime:weight-candidate',
         publicationStatus: 'candidate',
+        sourceEvidenceRefs: ['runtime_publication:forecast-confidence:weight-candidate'],
       }],
     })
 

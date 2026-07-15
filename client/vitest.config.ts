@@ -2,8 +2,12 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
+import { fileURLToPath } from 'url'
+
+const clientRoot = fileURLToPath(new URL('.', import.meta.url))
 
 export default defineConfig({
+  root: clientRoot,
   plugins: [react()],
   test: {
     globals: true,
@@ -43,7 +47,7 @@ export default defineConfig({
   resolve: {
     dedupe: ['react', 'react-dom'],
     alias: [
-      { find: '@', replacement: path.resolve(__dirname, './src') },
+      { find: '@', replacement: path.resolve(clientRoot, './src') },
     ],
   },
 })

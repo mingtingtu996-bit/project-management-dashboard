@@ -4,6 +4,7 @@ import { getAuthToken } from '@/lib/apiClient'
 export const DEFAULT_REALTIME_CHANNELS = ['notifications', 'project'] as const
 
 export interface BuildRealtimeUrlOptions {
+  companyId?: string | null
   projectId?: string | null
   userId?: string | null
   channels?: readonly string[]
@@ -35,15 +36,15 @@ export function buildRealtimeWebSocketUrl(
     url.searchParams.set('projectId', options.projectId)
   }
 
+  if (options.companyId) {
+    url.searchParams.set('companyId', options.companyId)
+  }
+
   if (options.userId) {
     url.searchParams.set('userId', options.userId)
   }
 
-  const token = getAuthToken()
-  if (token) {
-    url.searchParams.set('token', token)
-  }
-
+  // v1.4.20 SEC-5: token no longer passed via URL — sent as auth message after connection
   return url.toString()
 }
 

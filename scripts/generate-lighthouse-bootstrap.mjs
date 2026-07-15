@@ -1,4 +1,4 @@
-import fs from 'node:fs'
+﻿import fs from 'node:fs'
 import path from 'node:path'
 
 const repoRoot = process.cwd()
@@ -137,7 +137,7 @@ sudo docker compose --env-file deploy/env/server.production.env -f deploy/docker
 sudo docker compose --env-file deploy/env/server.production.env -f deploy/docker-compose.lighthouse.yml ps
 sudo docker compose --env-file deploy/env/server.production.env -f deploy/docker-compose.lighthouse.yml logs --tail=120 api
 sudo docker compose --env-file deploy/env/server.production.env -f deploy/docker-compose.lighthouse.yml logs --tail=120 web
-curl -i http://127.0.0.1/api/health
+curl -i http://127.0.0.1/api/readyz
 `
 
 const outDir = path.join(repoRoot, '.tmp')

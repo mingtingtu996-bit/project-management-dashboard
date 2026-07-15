@@ -9,6 +9,8 @@ export type DomainReleaseRuntimeClosureAssetType =
   | 'critical_path_rule_runtime'
   | 'metric_runtime'
   | 'seed_override_runtime'
+  | 'construction_organization_plan_network'
+  | 't2_rhythm_schedule_runtime'
 
 export type DomainReleaseRuntimeClosureSurface =
   | 'asset_type_domain_writer'
@@ -57,6 +59,8 @@ const CURRENT_REGISTERED_DOMAIN_RELEASE_ASSET_TYPES = [
   'critical_path_rule_runtime',
   'metric_runtime',
   'seed_override_runtime',
+  'construction_organization_plan_network',
+  't2_rhythm_schedule_runtime',
 ] as const
 
 const REQUIRED_DOMAIN_RELEASE_RUNTIME_CLOSURE_SURFACES = [
@@ -373,6 +377,49 @@ export function buildV14223DomainReleaseRuntimeClosureMatrix(): DomainReleaseRun
       verified('seed_override_runtime', 'rollback_writer_and_target', [
         'server/src/services/algorithmSeedLearningService.ts rollbackAlgorithmSeedOverrideRuntimePublication marks only scoped algorithm_seed_overrides inactive with rollback target evidence',
         'server/src/__tests__/algorithmSeedGovernanceFlow.test.ts',
+      ]),
+
+      verified('construction_organization_plan_network', 'asset_type_domain_writer', [
+        'server/src/services/constructionOrganizationPlanNetworkDomainWriter.ts applies approved construction organization plan-network drafts to task_dependencies with source_type=construction_organization_plan_network',
+        'server/src/__tests__/algorithmAssetGovernanceWorkbenchOperationService.test.ts',
+      ]),
+      verified('construction_organization_plan_network', 'runtime_consumer_verification', [
+        'server/src/services/constructionOrganizationPlanNetworkDraftService.ts reads runtime_consumer_observations for asset_key=construction_organization_plan_network',
+        'server/src/__tests__/constructionOrganizationPlanNetworkDraftService.test.ts',
+      ]),
+      verified('construction_organization_plan_network', 'impact_monitoring', [
+        'server/src/services/constructionOrganizationPlanNetworkRuntimeEvidenceService.ts records construction_organization_plan_network runtime impact_monitoring events',
+        'server/src/__tests__/constructionOrganizationPlanNetworkRuntimeEvidenceService.test.ts',
+      ]),
+      verified('construction_organization_plan_network', 'release_record', [
+        'server/src/services/constructionOrganizationPlanNetworkDomainWriter.ts persists construction_organization_plan_network_runtime_publications release records',
+        'server/migrations/231_v14225_construction_organization_plan_network_runtime_publications.sql',
+      ]),
+      verified('construction_organization_plan_network', 'rollback_writer_and_target', [
+        'server/src/services/constructionOrganizationPlanNetworkRuntimeEvidenceService.ts records rollback_execution verification for construction organization plan-network publications',
+        'server/src/services/constructionOrganizationPlanNetworkDomainWriter.ts records rollback targets on construction_organization_plan_network_runtime_publications',
+      ]),
+
+      verified('t2_rhythm_schedule_runtime', 'asset_type_domain_writer', [
+        'server/src/services/t2RhythmScheduleRuntimePublicationService.ts applies verified T2 schedule runtime publications to T2-owned task_dependencies and mapped task dates',
+        'server/src/__tests__/t2RhythmScheduleRuntimePublicationService.test.ts',
+      ]),
+      verified('t2_rhythm_schedule_runtime', 'runtime_consumer_verification', [
+        'server/src/services/projectCriticalPathService.ts consumes active task_dependencies including source_type=t2_rhythm_schedule_runtime through the canonical dependency read model',
+        'server/src/services/durationInputAssemblerService.ts and durationSuggestionService expose T2 phase-1 schedule evidence before runtime write',
+        'server/src/__tests__/t2RhythmScheduleRuntimePublicationService.test.ts',
+      ]),
+      verified('t2_rhythm_schedule_runtime', 'impact_monitoring', [
+        'server/src/services/t2RhythmScheduleRuntimePublicationService.ts records impact_monitoring events for T2 schedule runtime publications',
+        'server/src/__tests__/t2RhythmScheduleRuntimePublicationService.test.ts',
+      ]),
+      verified('t2_rhythm_schedule_runtime', 'release_record', [
+        'server/migrations/241_v14231_t2_rhythm_schedule_runtime_publications.sql',
+        'server/src/__tests__/v14223AlgorithmAssetGovernancePersistenceMigration.test.ts',
+      ]),
+      verified('t2_rhythm_schedule_runtime', 'rollback_writer_and_target', [
+        'server/src/services/t2RhythmScheduleRuntimePublicationService.ts rolls back T2-owned task_dependencies and restores mapped task date snapshots',
+        'server/src/__tests__/t2RhythmScheduleRuntimePublicationService.test.ts',
       ]),
     ],
   })

@@ -3,6 +3,7 @@ import { z } from 'zod'
 
 import { asyncHandler } from '../middleware/errorHandler.js'
 import { logger } from '../middleware/logger.js'
+import { authenticate } from '../middleware/auth.js'
 import { validate } from '../middleware/validation.js'
 
 const router = Router()
@@ -370,6 +371,7 @@ export function resetPerformanceReportsForTests() {
   performanceReportWindow.splice(0, performanceReportWindow.length)
 }
 
+// route-auth-public-approved: browser performance telemetry accepts anonymous runtime evidence.
 router.post('/', validate(performanceReportBodySchema), asyncHandler(async (req, res) => {
   const body = req.body as PerformanceReportBody
   const metadata = compactMetadata(body.metadata)
@@ -407,7 +409,7 @@ router.post('/', validate(performanceReportBodySchema), asyncHandler(async (req,
   })
 }))
 
-router.get('/summary', asyncHandler(async (_req, res) => {
+router.get('/summary', authenticate, asyncHandler(async (_req, res) => {
   res.setHeader('Cache-Control', 'no-store')
   res.json({
     success: true,

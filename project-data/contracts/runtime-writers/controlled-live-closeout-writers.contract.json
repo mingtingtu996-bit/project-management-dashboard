@@ -1,0 +1,38 @@
+{
+  "schemaVersion": "workbuddy-runtime-writer-contract/v1",
+  "writerId": "controlled_live_closeout_writers",
+  "mutationBoundary": "contract_only_no_db_mutation_no_runtime_write",
+  "allowedMode": "controlled_live_handoff",
+  "requiresUnlock": true,
+  "mayWriteBusinessFacts": true,
+  "mayWriteRuntimeAssets": true,
+  "controlledLiveAllowed": true,
+  "productionAllowed": false,
+  "allowedTables": [
+    "tasks",
+    "task_dependencies",
+    "duration_experience_samples",
+    "runtime_publication_tables"
+  ],
+  "forbiddenTables": [
+    "task_baselines",
+    "monthly_plans",
+    "monthly_plan_items",
+    "actual_duration_outcomes",
+    "critical_path",
+    "production_seed_rows"
+  ],
+  "requiredEvidence": [
+    "handoff_file",
+    "artifact_root",
+    "migration_governance_file",
+    "migration_governance_closed",
+    "mg07_pass",
+    "include_live_flag",
+    "confirm_live_handoff_flag",
+    "allow_write_flag",
+    "env_file_ref",
+    "rollback_target",
+    "readback_evidence"
+  ]
+}

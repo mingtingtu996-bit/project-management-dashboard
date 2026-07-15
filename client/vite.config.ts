@@ -10,8 +10,6 @@ export default defineConfig({
     dedupe: ['react', 'react-dom'],
     alias: {
       "@": path.resolve(__dirname, "./src"),
-      // 绕过 pnpm 符号链接问题，直接指定 chart.js 的真实路径
-      'chart.js': path.resolve(__dirname, './node_modules/.pnpm/chart.js@4.5.1/node_modules/chart.js/dist/chart.js'),
     },
   },
   build: {
@@ -23,14 +21,26 @@ export default defineConfig({
         manualChunks(id) {
           if (!id.includes('node_modules')) return undefined
 
-          if (id.includes('@dnd-kit')) return 'vendor-dnd'
-          if (id.includes('chart.js') || id.includes('react-chartjs-2')) return 'vendor-charts'
-          if (id.includes('xlsx')) return 'vendor-xlsx'
+          const normalizedId = id.replace(/\\/g, '/')
+
+          if (normalizedId.includes('/react/')
+            || normalizedId.includes('/react-dom/')
+            || normalizedId.includes('/scheduler/')
+            || normalizedId.includes('/react-router')
+          ) return 'vendor-react'
+          if (normalizedId.includes('/@supabase/')) return 'vendor-supabase'
+          if (normalizedId.includes('/@radix-ui/')) return 'vendor-radix'
+          if (normalizedId.includes('/@dnd-kit/')) return 'vendor-dnd'
+          if (normalizedId.includes('/chart.js/') || normalizedId.includes('/react-chartjs-2/')) return 'vendor-charts'
+          if (normalizedId.includes('/xlsx/')) return 'vendor-xlsx'
 
           return undefined
         },
       },
     },
+    // SheetJS is intentionally isolated as a lazy spreadsheet-only chunk.
+    // Keep the global warning close to the 500 kB default while allowing that fixed vendor boundary.
+    chunkSizeWarningLimit: 510,
     // 启用CSS代码分割
     cssCodeSplit: true,
     // 启用源代码映射（生产环境可关闭）

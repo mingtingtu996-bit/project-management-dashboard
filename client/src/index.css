@@ -1,5 +1,5 @@
 /* Google Fonts — display=swap 防止 FOUT 字体闪烁 (L16) */
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -152,15 +152,15 @@
   }
 
   .eyebrow {
-    @apply text-[10px] font-semibold tracking-[0.08em] text-slate-400;
+    @apply text-xs font-semibold tracking-wider text-slate-600;
   }
 
   .meta-text {
-    @apply text-[11px] leading-4 text-slate-500;
+    @apply text-xs leading-4 text-slate-600;
   }
 
   .meta-muted {
-    @apply text-[11px] leading-4 text-slate-400 tabular-nums;
+    @apply text-xs leading-4 text-slate-600 tabular-nums;
   }
 
   .meta-caption {
@@ -187,12 +187,16 @@
     @apply text-sm;
   }
 
+  .section-group-label {
+    @apply text-[13px] font-semibold tracking-tight text-slate-800;
+  }
+
   .metric-value-md {
-    @apply text-[22px];
+    @apply text-2xl;
   }
 
   .metric-value-lg {
-    @apply text-[26px];
+    @apply text-2xl;
   }
 
   .metric-value-xl {
@@ -204,7 +208,7 @@
   }
 
   .command-input-text {
-    @apply text-[13.5px];
+    @apply text-[13px] font-normal;
   }
 
   .command-item-text {
@@ -212,7 +216,7 @@
   }
 
   .shell-avatar-text {
-    @apply text-[10px] font-semibold leading-none;
+    @apply text-xs font-semibold leading-none;
   }
 
   .shell-identity-text {
@@ -224,7 +228,7 @@
   }
 
   .kbd-hint {
-    @apply text-[10.5px];
+    @apply text-[10.5px] text-slate-700;
   }
 
   .timeline-scale-label-narrow {
@@ -233,6 +237,15 @@
 
   .timeline-scale-hint-narrow {
     @apply text-[0.625rem] leading-3;
+  }
+
+  [data-radix-popper-content-wrapper]:has([data-onboarding-guide-content="true"]) {
+    pointer-events: none !important;
+  }
+
+  .workbuddy-onboarding-panel button,
+  .workbuddy-onboarding-panel a {
+    pointer-events: auto;
   }
 
   .num-display {
@@ -382,6 +395,11 @@
   to { opacity: 1; transform: translateY(0); }
 }
 
+@keyframes milestone-detail-in {
+  from { opacity: 0; transform: translateX(8px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
 @keyframes command-palette-overlay-in {
   from { opacity: 0; }
   to { opacity: 1; }
@@ -418,9 +436,10 @@
   *,
   *::before,
   *::after {
-    animation-duration: 0.01ms !important;
+    animation: none !important;
+    animation-duration: 0s !important;
     animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
+    transition-duration: 0s !important;
     scroll-behavior: auto !important;
   }
 

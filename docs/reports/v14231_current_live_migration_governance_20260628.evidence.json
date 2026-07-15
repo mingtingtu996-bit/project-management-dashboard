@@ -1,0 +1,56 @@
+{
+  "sourceArtifactPath": "artifacts/test-runs/20260628-migration-governance-current-live/production-migration-governance-current-live.json",
+  "reportPath": "docs/reports/v14231_current_live_migration_governance_20260628.md",
+  "runDate": "2026-06-28",
+  "scope": "sanitized-current-live-migration-governance-closeout-summary",
+  "closeoutReadback": {
+    "schemaMigrationsRowCount": 263,
+    "keyMigrationsLedgered": [
+      "246_v14231_advisor_public_rls_closeout.sql",
+      "247_v14231_users_active_session_guard_columns.sql",
+      "248_v14231_migration_drift_closeout.sql",
+      "249_v14231_data_lineage_global_reference_auth_predicate.sql"
+    ],
+    "keyCatalogMatches": true,
+    "apiSmokePass": true,
+    "postgresErrorsStable": true,
+    "advisorPass": true,
+    "allowValidate": true,
+    "allowWarmup": true,
+    "allowScheduler": true
+  },
+  "ledgeredMigrationFilenames": [
+    "245_v14231_algorithm_asset_registry_view_acl_hardening.sql",
+    "246_v14231_advisor_public_rls_closeout.sql",
+    "247_v14231_users_active_session_guard_columns.sql",
+    "248_v14231_migration_drift_closeout.sql",
+    "249_v14231_data_lineage_global_reference_auth_predicate.sql"
+  ],
+  "advisorPublicRlsReadback": [
+    {
+      "tableName": "project_key_node_snapshots",
+      "rlsEnabled": true,
+      "forceRlsEnabled": true,
+      "policyCount": 3
+    },
+    {
+      "tableName": "task_constraint_snapshots",
+      "rlsEnabled": true,
+      "forceRlsEnabled": true,
+      "policyCount": 3
+    },
+    {
+      "tableName": "data_lineage_entity_types",
+      "rlsEnabled": true,
+      "forceRlsEnabled": true,
+      "policyCount": 2
+    },
+    {
+      "tableName": "data_lineage_relation_rules",
+      "rlsEnabled": true,
+      "forceRlsEnabled": true,
+      "policyCount": 2
+    }
+  ],
+  "remainingBoundary": "This summary records only the 2026-06-28 current-live MG-01..MG-07 closeout run. It does not authorize old-object physical drops and does not close unrelated live concurrency, pressure, PoC, release-governance, manual approval, monitoring, or rollback blockers."
+}

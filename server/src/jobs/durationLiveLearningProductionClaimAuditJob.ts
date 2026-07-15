@@ -1,22 +1,13 @@
 import { logger } from '../middleware/logger.js'
 import { runJobWithRetry } from '../services/jobRuntime.js'
+import { PersistentWallClockJobTimer } from '../services/persistentJobScheduleService.js'
 import {
   buildDurationLiveLearningProductionClaimAuditFromDb,
   type DurationLiveLearningProductionClaimAuditFromDb,
 } from '../services/durationLiveLearningProductionEvidenceReaderService.js'
 
-const DAY_IN_MS = 24 * 60 * 60 * 1000
-
 function createJobId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
-}
-
-function nextDailyRunAt(hour: number, minute: number) {
-  const now = new Date()
-  const nextRun = new Date(now)
-  nextRun.setHours(hour, minute, 0, 0)
-  if (nextRun <= now) nextRun.setDate(nextRun.getDate() + 1)
-  return nextRun
 }
 
 export interface DurationLiveLearningProductionClaimAuditJobResult {
@@ -105,47 +96,35 @@ export async function runDurationLiveLearningProductionClaimAuditSweep(params: {
 }
 
 export class DurationLiveLearningProductionClaimAuditJob {
-  private timer: NodeJS.Timeout | null = null
-  private startTimer: NodeJS.Timeout | null = null
   private isRunning = false
   private lastRun: Date | null = null
   private nextRun: Date | null = null
   private lastResult: DurationLiveLearningProductionClaimAuditJobResult | null = null
+  private wallClockTimer = new PersistentWallClockJobTimer({
+    jobName: 'durationLiveLearningProductionClaimAuditJob',
+    schedule: { kind: 'daily', hour: 6, minute: 45 },
+    execute: () => this.execute('scheduler'),
+    onScheduled: ({ nextRun, delayMs }) => {
+      this.nextRun = nextRun
+      logger.info('durationLiveLearningProductionClaimAuditJob scheduled', {
+        nextRun: nextRun.toISOString(),
+        trigger: 'daily_06_45',
+        initialDelay: delayMs,
+      })
+    },
+    onError: (error) => logger.error('durationLiveLearningProductionClaimAuditJob scheduler failed', {
+      error: error instanceof Error ? error.message : String(error),
+    }),
+  })
 
   start() {
-    if (this.timer || this.startTimer) {
+    if (!this.wallClockTimer.start()) {
       logger.warn('durationLiveLearningProductionClaimAuditJob is already running')
-      return
     }
-
-    const nextRun = nextDailyRunAt(6, 45)
-    this.nextRun = nextRun
-    const initialDelay = Math.max(nextRun.getTime() - Date.now(), 0)
-    logger.info('durationLiveLearningProductionClaimAuditJob scheduled', {
-      nextRun: nextRun.toISOString(),
-      trigger: 'daily_06_45',
-      initialDelay,
-    })
-
-    this.startTimer = setTimeout(() => {
-      this.startTimer = null
-      void this.execute('scheduler')
-      this.timer = setInterval(() => {
-        this.nextRun = new Date(Date.now() + DAY_IN_MS)
-        void this.execute('scheduler')
-      }, DAY_IN_MS)
-    }, initialDelay)
   }
 
   stop() {
-    if (this.startTimer) {
-      clearTimeout(this.startTimer)
-      this.startTimer = null
-    }
-    if (this.timer) {
-      clearInterval(this.timer)
-      this.timer = null
-    }
+    this.wallClockTimer.stop()
     this.nextRun = null
     logger.info('durationLiveLearningProductionClaimAuditJob stopped')
   }
@@ -153,7 +132,7 @@ export class DurationLiveLearningProductionClaimAuditJob {
   getStatus() {
     return {
       isRunning: this.isRunning,
-      isScheduled: this.timer !== null || this.startTimer !== null,
+      isScheduled: this.wallClockTimer.getStatus().isScheduled,
       lastRun: this.lastRun ? this.lastRun.toISOString() : null,
       nextRun: this.nextRun ? this.nextRun.toISOString() : null,
       lastResult: this.lastResult,
@@ -197,6 +176,7 @@ export class DurationLiveLearningProductionClaimAuditJob {
         jobId,
         error: error instanceof Error ? error.message : String(error),
       })
+      if (triggeredBy === 'scheduler') throw error
       return null
     } finally {
       this.isRunning = false

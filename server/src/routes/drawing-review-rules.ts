@@ -2,7 +2,7 @@ import { Router, type Request, type Router as ExpressRouter } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 
 import { asyncHandler } from '../middleware/errorHandler.js'
-import { authenticate, requireProjectEditor } from '../middleware/auth.js'
+import { authenticate, requireProjectEditor, requireProjectMember } from '../middleware/auth.js'
 import { executeSQL, executeSQLOne } from '../services/dbService.js'
 import {
   DEFAULT_DRAWING_PACKAGE_TEMPLATES,
@@ -62,50 +62,37 @@ function readProjectId(req: Pick<Request, 'body' | 'query'>) {
   return normalizeText(value, null) ?? undefined
 }
 
-function isMissingTableError(error: unknown, tableName: string): boolean {
-  const message = error instanceof Error ? error.message : String(error)
-  return (
-    message.includes(tableName) &&
-    (/schema cache/i.test(message) || /does not exist/i.test(message) || /could not find the table/i.test(message))
-  )
-}
-
-async function loadOptionalRows<T>(sql: string, params: unknown[], tableName: string): Promise<T[]> {
-  try {
-    return await executeSQL<T>(sql, params)
-  } catch (error) {
-    if (isMissingTableError(error, tableName)) {
-      return []
-    }
-    throw error
-  }
+async function withMissingTableFallback<T>(_tableName: string, operation: () => Promise<T[]>): Promise<T[]> {
+  return operation()
 }
 
 async function loadRuleById(id: string): Promise<DrawingReviewRuleSource | null> {
   return executeSQLOne<DrawingReviewRuleSource>(`${DRAWING_REVIEW_RULE_SELECT} WHERE id = ? LIMIT 1`, [id])
 }
 
+async function loadGlobalReviewRules() {
+  return withMissingTableFallback('drawing_review_rules', () => executeSQL<DrawingReviewRuleSource>(
+    `${DRAWING_REVIEW_RULE_SELECT} WHERE project_id IS NULL ORDER BY created_at ASC`,
+    [],
+  ))
+}
+
+async function loadProjectReviewRules(projectId: string) {
+  return withMissingTableFallback('drawing_review_rules', () => executeSQL<DrawingReviewRuleSource>(
+    `${DRAWING_REVIEW_RULE_SELECT} WHERE project_id = ? ORDER BY created_at ASC`,
+    [projectId],
+  ))
+}
+
 async function loadProjectScopedReviewRules(projectId: string | null | undefined) {
   const normalizedProjectId = normalizeText(projectId)
   if (!normalizedProjectId) {
-    return loadOptionalRows<DrawingReviewRuleSource>(
-      `${DRAWING_REVIEW_RULE_SELECT} ORDER BY project_id DESC, created_at ASC`,
-      [],
-      'drawing_review_rules',
-    )
+    return loadGlobalReviewRules()
   }
 
   const [projectRules, globalRules] = await Promise.all([
-    loadOptionalRows<DrawingReviewRuleSource>(
-      `${DRAWING_REVIEW_RULE_SELECT} WHERE project_id = ? ORDER BY created_at ASC`,
-      [normalizedProjectId],
-      'drawing_review_rules',
-    ),
-    loadOptionalRows<DrawingReviewRuleSource>(
-      `${DRAWING_REVIEW_RULE_SELECT} WHERE project_id IS NULL ORDER BY created_at ASC`,
-      [],
-      'drawing_review_rules',
-    ),
+    loadProjectReviewRules(normalizedProjectId),
+    loadGlobalReviewRules(),
   ])
 
   return [...projectRules, ...globalRules]
@@ -201,7 +188,13 @@ function validateRulePayload(payload: ReturnType<typeof buildRulePayload>) {
 }
 
 export function registerDrawingReviewRuleRoutes(router: ExpressRouter, basePath = '/review-rules') {
-  router.get(routePath(basePath), asyncHandler(async (req, res) => {
+  const requireProjectMemberWhenScoped = (req: Request, res: any, next: any) => {
+    const projectId = readProjectId(req)
+    if (!projectId) return next()
+    return requireProjectMember(() => projectId)(req, res, next)
+  }
+
+  router.get(routePath(basePath), requireProjectMemberWhenScoped, asyncHandler(async (req, res) => {
     const projectId = normalizeText(req.query.projectId ?? req.query.project_id)
     const rules = await loadProjectScopedReviewRules(projectId)
 
@@ -286,6 +279,13 @@ export function registerDrawingReviewRuleRoutes(router: ExpressRouter, basePath 
           timestamp: new Date().toISOString(),
         })
       }
+      if (!normalizeText(existingRule.project_id, null)) {
+        return res.status(403).json({
+          success: false,
+          error: { code: 'SYSTEM_RULE_READ_ONLY', message: '系统审图规则只读，不能在项目内直接修改' },
+          timestamp: new Date().toISOString(),
+        })
+      }
 
       const body = asRecord(req.body)
       const payload = buildRulePayload(body, existingRule)
@@ -303,7 +303,7 @@ export function registerDrawingReviewRuleRoutes(router: ExpressRouter, basePath 
         `UPDATE drawing_review_rules
             SET package_code = ?, discipline_type = ?, document_purpose = ?, default_review_mode = ?,
                 review_basis = ?, reviewer_id = ?, is_active = ?, updated_at = ?
-          WHERE id = ?`,
+          WHERE id = ? AND project_id = ?`,
         [
           payload.package_code,
           payload.discipline_type,
@@ -314,6 +314,7 @@ export function registerDrawingReviewRuleRoutes(router: ExpressRouter, basePath 
           payload.is_active ? 1 : 0,
           now,
           id,
+          existingRule.project_id,
         ],
       )
 
@@ -343,8 +344,22 @@ export function registerDrawingReviewRuleRoutes(router: ExpressRouter, basePath 
           timestamp: new Date().toISOString(),
         })
       }
+      if (!normalizeText(existingRule.project_id, null)) {
+        return res.status(403).json({
+          success: false,
+          error: { code: 'SYSTEM_RULE_READ_ONLY', message: '系统审图规则只读，不能在项目内直接删除' },
+          timestamp: new Date().toISOString(),
+        })
+      }
 
-      await executeSQL('DELETE FROM drawing_review_rules WHERE id = ?', [id])
+      // v1.4.15: retention decision must block unsafe physical deletes.
+      const { enforceRetentionOrBlock, buildRetentionBlockedApiError, buildRetentionBlockedHttpStatus } = await import('../services/deletionRetentionGovernanceService.js')
+      const retention = await enforceRetentionOrBlock({ entityType: 'drawing_review_rule', entityId: id, projectId: existingRule.project_id ?? null, userId: req.user?.id ?? null, userAction: 'delete' })
+      if (retention.blocked) {
+        return res.status(buildRetentionBlockedHttpStatus(retention.result)).json({ success: false, error: buildRetentionBlockedApiError(retention.reason, retention.result), timestamp: new Date().toISOString() })
+      }
+
+      await executeSQL('DELETE FROM drawing_review_rules WHERE id = ? AND project_id = ?', [id, existingRule.project_id])
 
       res.json({
         success: true,

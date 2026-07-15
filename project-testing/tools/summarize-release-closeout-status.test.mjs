@@ -22,6 +22,10 @@ test('status index reports missing handoff pack when no reports exist', async ()
     assert.equal(index.overallStatus, 'missing-handoff-pack');
     assert.equal(index.mayRunLiveOrDb, false);
     assert.equal(index.mayCloseAll, false);
+    assert.equal(index.decisionScope, 'closeout-status-index');
+    assert.equal(index.decisionAuthority.authoritativeForRelease, false);
+    assert.equal(index.decisionAuthority.authoritativeForProduction, false);
+    assert.equal(index.decisionAuthority.releaseDecisionArtifact, 'v1424-release-decision.json');
     assert.equal(index.stages.handoffPack.status, 'missing');
     assert.ok(index.nextActions.some((action) => action.includes('generate-release-handoff-pack')));
   } finally {
@@ -65,10 +69,11 @@ test('status index summarizes a generated handoff with failing readiness and ope
       schemaVersion: 'workbuddy-release-closeout-decision/v1',
       status: 'fail',
       mayCloseAll: false,
-      openGateCount: 2,
+      openGateCount: 3,
       decision: {
         openGateIds: [
           'c18-l07-l15-live-diagnostics',
+          'c15-live-learning-closeout',
           'old-object-physical-drop-closeout',
         ],
       },
@@ -85,8 +90,10 @@ test('status index summarizes a generated handoff with failing readiness and ope
     assert.deepEqual(index.openGateIds, [
       'c18-l07-l15-live-diagnostics',
       'old-object-physical-drop-closeout',
+      'c15-live-learning-closeout',
     ]);
     assert.ok(index.nextActions.some((action) => action.includes('missing flag')));
+    assert.ok(index.nextActions.some((action) => action.includes('Keep 3 gate(s) open')));
   } finally {
     await rm(reportRoot, { recursive: true, force: true });
   }
@@ -251,6 +258,49 @@ test('status index reports ready-for-live-db-execution when handoff readiness pa
   }
 });
 
+test('status index reports open when selected closeout decision has open gates', async () => {
+  const reportRoot = await mkdtemp(path.join(tmpdir(), 'workbuddy-status-open-decision-'));
+
+  try {
+    await writeJson(path.join(reportRoot, 'handoff-20260704-164200', 'handoff-plan.json'), {
+      schemaVersion: 'workbuddy-release-handoff-pack/v1',
+      gates: [{ id: 'c18-l07-l15-live-diagnostics' }],
+    });
+    await writeJson(path.join(reportRoot, 'handoff-20260704-164200', 'handoff-readiness.json'), {
+      schemaVersion: 'workbuddy-release-handoff-readiness/v1',
+      status: 'pass',
+      readyToRun: true,
+      blockedGateCount: 0,
+      secretLeakCount: 0,
+      gates: [],
+    });
+    await writeJson(path.join(reportRoot, 'release-v1.4.24-20260702-125254', 'closeout-decision.json'), {
+      schemaVersion: 'workbuddy-release-closeout-decision/v1',
+      evaluatedAt: '2026-07-04T08:44:14.000Z',
+      status: 'fail',
+      mayCloseAll: false,
+      openGateCount: 1,
+      gates: [],
+      decision: {
+        openGateIds: ['c18-l07-l15-live-diagnostics'],
+      },
+    });
+
+    const index = await summarizeReleaseCloseoutStatus({
+      reportRoot,
+      currentReleaseDir: path.join(reportRoot, 'release-v1.4.24-20260702-125254'),
+      now: new Date('2026-07-04T08:45:00.000Z'),
+    });
+
+    assert.equal(index.overallStatus, 'open');
+    assert.equal(index.mayCloseAll, false);
+    assert.deepEqual(index.openGateIds, ['c18-l07-l15-live-diagnostics']);
+    assert.ok(index.nextActions.some((action) => action.includes('Keep 1 gate(s) open')));
+  } finally {
+    await rm(reportRoot, { recursive: true, force: true });
+  }
+});
+
 test('status index does not close when selected handoff readiness fails even if archived closeout passed', async () => {
   const reportRoot = await mkdtemp(path.join(tmpdir(), 'workbuddy-status-cross-env-'));
 
@@ -323,6 +373,93 @@ test('status index does not close when selected handoff readiness fails even if 
     assert.equal(index.consistencyIssues.length, 1);
     assert.equal(index.consistencyIssues[0].code, 'closeout-decision-ignored-while-handoff-not-ready');
     assert.ok(index.nextActions.some((action) => action.includes('env file is empty: deploy/env/server.production.env')));
+  } finally {
+    await rm(reportRoot, { recursive: true, force: true });
+  }
+});
+
+test('status index scoped to a current release dir does not reuse older closeout decisions', async () => {
+  const reportRoot = await mkdtemp(path.join(tmpdir(), 'workbuddy-status-current-release-'));
+
+  try {
+    await writeJson(path.join(reportRoot, 'handoff-20260704-164010', 'handoff-plan.json'), {
+      schemaVersion: 'workbuddy-release-handoff-pack/v1',
+      gates: [{ id: 'c18-l07-l15-live-diagnostics' }],
+    });
+    await writeJson(path.join(reportRoot, 'handoff-20260704-164010', 'handoff-readiness.json'), {
+      schemaVersion: 'workbuddy-release-handoff-readiness/v1',
+      generatedAt: '2026-07-04T08:40:10.000Z',
+      status: 'pass',
+      readyToRun: true,
+      blockedGateCount: 0,
+      secretLeakCount: 0,
+      gates: [],
+    });
+    await writeJson(path.join(reportRoot, 'release-20260630-live-closeout-staging', 'closeout-decision.json'), {
+      schemaVersion: 'workbuddy-release-closeout-decision/v1',
+      evaluatedAt: '2026-06-30T12:00:00.000Z',
+      status: 'pass',
+      mayCloseAll: true,
+      openGateCount: 0,
+      gates: [],
+      decision: { openGateIds: [] },
+    });
+    await writeJson(path.join(reportRoot, 'release-v1.4.24-20260702-125254', 'summary.json'), {
+      schemaVersion: 'workbuddy-v1424-release-summary/v1',
+      decision: 'release-blocked',
+    });
+
+    const index = await summarizeReleaseCloseoutStatus({
+      reportRoot,
+      currentReleaseDir: path.join(reportRoot, 'release-v1.4.24-20260702-125254'),
+      now: new Date('2026-07-04T08:41:00.000Z'),
+    });
+
+    assert.equal(index.overallStatus, 'ready-for-live-db-execution');
+    assert.equal(index.mayCloseAll, false);
+    assert.equal(index.inputs.closeoutDecision.path, path.join(reportRoot, 'release-v1.4.24-20260702-125254', 'closeout-decision.json'));
+    assert.equal(index.inputs.closeoutDecision.exists, false);
+    assert.ok(index.consistencyIssues.some((issue) => issue.code === 'current-release-closeout-decision-missing'));
+  } finally {
+    await rm(reportRoot, { recursive: true, force: true });
+  }
+});
+
+test('status index scoped to a current release dir does not reuse old handoff readiness for a new handoff pack', async () => {
+  const reportRoot = await mkdtemp(path.join(tmpdir(), 'workbuddy-status-current-handoff-'));
+
+  try {
+    await writeJson(path.join(reportRoot, 'handoff-20260704-164010', 'handoff-plan.json'), {
+      schemaVersion: 'workbuddy-release-handoff-pack/v1',
+      generatedAt: '2026-07-04T08:40:10.000Z',
+      outputDir: path.join(reportRoot, 'handoff-20260704-164010'),
+      gates: [{ id: 'c18-l07-l15-live-diagnostics' }],
+    });
+    await writeJson(path.join(reportRoot, 'github-production-closeout-readiness-28467170732', 'handoff-readiness.json'), {
+      schemaVersion: 'workbuddy-release-handoff-readiness/v1',
+      evaluatedAt: '2026-06-30T18:32:05.190Z',
+      handoffFile: path.join(reportRoot, 'production-closeout-readiness-28467170732', 'production-handoff.generated.json'),
+      status: 'pass',
+      readyToRun: true,
+      blockedGateCount: 0,
+      secretLeakCount: 0,
+      gates: [],
+    });
+    await writeJson(path.join(reportRoot, 'release-v1.4.24-20260702-125254', 'summary.json'), {
+      schemaVersion: 'workbuddy-v1424-release-summary/v1',
+      decision: 'release-blocked',
+    });
+
+    const index = await summarizeReleaseCloseoutStatus({
+      reportRoot,
+      currentReleaseDir: path.join(reportRoot, 'release-v1.4.24-20260702-125254'),
+      now: new Date('2026-07-04T08:41:00.000Z'),
+    });
+
+    assert.equal(index.overallStatus, 'handoff-not-ready');
+    assert.equal(index.mayRunLiveOrDb, false);
+    assert.equal(index.inputs.handoffReadiness.exists, false);
+    assert.ok(index.consistencyIssues.some((issue) => issue.code === 'current-handoff-readiness-missing'));
   } finally {
     await rm(reportRoot, { recursive: true, force: true });
   }

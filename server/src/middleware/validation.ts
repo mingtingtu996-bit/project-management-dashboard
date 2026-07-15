@@ -17,6 +17,7 @@ const HEALTH_STATUS_VALUES = [
   '\u4e9a\u5065\u5eb7',
   '\u9884\u8b66',
   '\u5371\u9669',
+  '\u5f85\u5b8c\u5584',
 ] as const
 
 const CONDITION_TYPE_VALUES = [
@@ -76,6 +77,9 @@ export const projectSchema = z.object({
   id: z.string().optional(),
   name: z.string().min(1).max(200),
   description: z.string().optional(),
+  company_id: z.string().uuid().optional().nullable(),
+  companyId: z.string().uuid().optional().nullable(),
+  project_visibility: z.enum(['private', 'company_visible', 'invite_only']).optional(),
   status: z.enum(PROJECT_STATUS_VALUES).default('\u672a\u5f00\u59cb'),
   project_type: z.string().optional().nullable(),
   building_type: z.string().optional().nullable(),
@@ -94,6 +98,7 @@ export const projectSchema = z.object({
   total_investment: z.number().optional().nullable(),
   budget: z.number().optional().nullable(),
   location: z.string().optional().nullable(),
+  metadata: z.record(z.unknown()).optional().nullable(),
   health_score: z.number().int().min(0).max(100).optional(),
   health_status: z.enum(HEALTH_STATUS_VALUES).optional(),
   current_phase: z.enum(['pre-construction', 'construction', 'completion', 'delivery']).optional(),
@@ -104,20 +109,19 @@ export const projectSchema = z.object({
 })
 
 export const projectUpdateSchema = projectSchema.partial()
+export const projectPatchSchema = projectUpdateSchema
 
 const taskBaseSchema = z.object({
   project_id: uuidSchema,
   title: z.string().min(1).max(500),
   description: z.string().optional().nullable(),
-  status: z.enum(['todo', 'pending', 'in_progress', 'completed', 'blocked']).default('todo'),
+  status: z.string().default('todo'),
   priority: z.enum(['low', 'medium', 'high', 'urgent', 'critical']).default('medium'),
   start_date: z.string({ required_error: 'start_date 不能为空' }).min(1, 'start_date 不能为空'),
   end_date: z.string({ required_error: 'end_date 不能为空' }).min(1, 'end_date 不能为空'),
   progress: z.number().int().min(0).max(100).default(0),
   assignee: z.string().optional().nullable(),
   assignee_user_id: uuidSchema.optional().nullable(),
-  assignee_unit: z.string().optional().nullable(),
-  responsible_unit: z.string().optional().nullable(),
   participant_unit_id: uuidSchema.optional().nullable(),
   assignee_name: z.string().optional().nullable(),
   parent_id: uuidSchema.optional().nullable(),
@@ -125,8 +129,26 @@ const taskBaseSchema = z.object({
   dependencies: z.array(z.string()).optional().nullable(),
   milestone_id: uuidSchema.optional().nullable(),
   specialty_type: z.string().optional().nullable(),
-  phase_id: uuidSchema.optional().nullable(),
-  reference_duration: z.number().optional().nullable(),
+  // v1.4.22.1 engineering object references (final seven-type range tree)
+  engineeringObjectId: uuidSchema.optional().nullable(),
+  phaseObjectId: uuidSchema.optional().nullable(),
+  sectionObjectId: uuidSchema.optional().nullable(),
+  buildingObjectId: uuidSchema.optional().nullable(),
+  basementObjectId: uuidSchema.optional().nullable(),
+  floorObjectId: uuidSchema.optional().nullable(),
+  physicalZoneObjectId: uuidSchema.optional().nullable(),
+  functionalAreaObjectId: uuidSchema.optional().nullable(),
+  // snake_case aliases
+  engineering_object_id: uuidSchema.optional().nullable(),
+  phase_object_id: uuidSchema.optional().nullable(),
+  section_object_id: uuidSchema.optional().nullable(),
+  building_object_id: uuidSchema.optional().nullable(),
+  basement_object_id: uuidSchema.optional().nullable(),
+  floor_object_id: uuidSchema.optional().nullable(),
+  physical_zone_object_id: uuidSchema.optional().nullable(),
+  functional_area_object_id: uuidSchema.optional().nullable(),
+  duration_calibration_source: z.string().optional().nullable(),
+  duration_provenance: z.string().optional().nullable(),
   first_progress_at: z.string().optional().nullable(),
   is_critical: z.boolean().optional().nullable(),
   is_milestone: z.boolean().optional().nullable(),
@@ -134,16 +156,34 @@ const taskBaseSchema = z.object({
   sort_order: z.number().int().optional().nullable(),
   wbs_code: z.string().optional().nullable(),
   wbs_level: z.number().int().min(0).max(10).optional().nullable(),
-  ai_duration: z.number().optional().nullable(),
+  template_node_id: uuidSchema.optional().nullable(),
+  engineering_category_id: uuidSchema.optional().nullable(),
+  wbs_node_type: z.enum(['division', 'sub_division', 'item_work', 'process', 'activity_step', 'custom']).optional().nullable(),
+  standard_work_code: z.string().optional().nullable(),
+  standard_work_name: z.string().optional().nullable(),
   delay_reason: z.string().optional().nullable(),
   updated_at: z.string().optional().nullable(),
   planned_start_date: z.string().optional().nullable(),
   planned_end_date: z.string().optional().nullable(),
   actual_start_date: z.string().optional().nullable(),
   actual_end_date: z.string().optional().nullable(),
-  planned_duration: z.number().optional().nullable(),
-  standard_duration: z.number().optional().nullable(),
-  ai_adjusted_duration: z.number().optional().nullable(),
+  progress_method: z.string().optional().nullable(),
+  planned_quantity: z.number().optional().nullable(),
+  completed_quantity: z.number().optional().nullable(),
+  quantity_unit: z.string().optional().nullable(),
+  progress_weight: z.number().optional().nullable(),
+  completion_rule: z.string().optional().nullable(),
+  drawing_required: z.boolean().optional().nullable(),
+  material_required: z.boolean().optional().nullable(),
+  acceptance_required: z.boolean().optional().nullable(),
+  quality_required: z.boolean().optional().nullable(),
+  standard_task_metadata: z.record(z.unknown()).optional().nullable(),
+  task_code: z.unknown().optional(),
+  task_code_version: z.unknown().optional(),
+  task_code_rule_id: z.unknown().optional(),
+  task_code_generated_at: z.unknown().optional(),
+  wbs_path: z.unknown().optional(),
+  is_leaf: z.unknown().optional(),
 })
 
 type TaskDateWindowInput = Partial<{
@@ -237,8 +277,49 @@ function applyTaskDateValidation(
   }
 }
 
+const clientForbiddenTaskFields = [
+  'task_code',
+  'task_code_version',
+  'task_code_rule_id',
+  'task_code_generated_at',
+] as const
+
+const backendManagedTaskFields = ['wbs_path', 'is_leaf', 'standard_work_code', 'standard_work_name'] as const
+const actualTimeWriteForbiddenTaskFields = ['actual_start_date', 'actual_end_date'] as const
+
+// v1.4.6: internal lineage fields rejected from normal API
+const lineageForbiddenTaskFields = [
+  'source_entity_type', 'source_entity_id', 'mapping_status',
+  'batch_id', 'lineage_link_id', 'import_row_id',
+  'chain_id', 'split_from', 'merged_from',
+] as const
+
+function rejectClientManagedTaskFields(data: Record<string, unknown>, ctx: z.RefinementCtx) {
+  for (const field of clientForbiddenTaskFields) {
+    if (data[field] !== undefined) {
+      ctx.addIssue({ code: 'custom', message: `Field ${field} 不允许前端传入`, path: [field] })
+    }
+  }
+  for (const field of lineageForbiddenTaskFields) {
+    if (data[field] !== undefined) {
+      ctx.addIssue({ code: 'custom', message: `内部字段 ${field} 不允许前端传入`, path: [field] })
+    }
+  }
+  for (const field of actualTimeWriteForbiddenTaskFields) {
+    if (data[field] !== undefined) {
+      ctx.addIssue({ code: 'custom', message: `执行实际时间 ${field} 由后端根据进度/状态自动生成`, path: [field] })
+    }
+  }
+  for (const field of backendManagedTaskFields) {
+    if (data[field] !== undefined) {
+      ctx.addIssue({ code: 'custom', message: `Field ${field} 由后端计算`, path: [field] })
+    }
+  }
+}
+
 export const taskSchema = taskBaseSchema.superRefine((data, ctx) => {
   applyTaskDateValidation(data, ctx, { requireBothDates: true })
+  rejectClientManagedTaskFields(data as Record<string, unknown>, ctx)
 })
 
 export const taskUpdateSchema = taskBaseSchema.partial().extend({
@@ -246,8 +327,8 @@ export const taskUpdateSchema = taskBaseSchema.partial().extend({
   force: z.boolean().optional(),
 }).superRefine((data, ctx) => {
   applyTaskDateValidation(data, ctx, { requireBothDates: false })
+  rejectClientManagedTaskFields(data as Record<string, unknown>, ctx)
 })
-
 export const riskSchema = z.object({
   project_id: uuidSchema,
   title: z.string().min(1).max(500),
@@ -276,7 +357,7 @@ export const riskUpdateSchema = riskSchema.partial().extend({
   version: z.number().int().positive(),
 })
 
-// ─── Issues（10.1 基础模型）────────────────────────────────────────────────────
+// Issues（10.1 基础模型）
 export const issueSchema = z.object({
   project_id: uuidSchema,
   task_id: uuidSchema.optional().nullable(),
@@ -309,14 +390,14 @@ export const issueUpdateSchema = issueSchema.partial().extend({
 export const memberSchema = z.object({
   project_id: uuidSchema,
   user_id: uuidSchema,
-  role: z.enum(['owner', 'admin', 'editor', 'viewer']),
+  role: z.enum(['owner', 'admin', 'editor']),
   display_name: z.string().optional(),
 })
 
 export const invitationSchema = z.object({
   project_id: uuidSchema,
   code: z.string().length(8),
-  role: z.enum(['editor', 'viewer']),
+  role: z.enum(['editor']),
   status: z.enum(['active', 'used', 'revoked', 'expired']).default('active'),
   expires_at: z.string().datetime().optional(),
   created_by: uuidSchema,
@@ -324,11 +405,11 @@ export const invitationSchema = z.object({
 
 export const invitationCreateSchema = z.object({
   project_id: uuidSchema,
-  role: z.enum(['editor', 'viewer']),
+  role: z.enum(['editor']),
   expires_at: z.string().datetime().optional(),
 })
 
-export const conditionSchema = z.object({
+const conditionBaseSchema = z.object({
   task_id: uuidSchema,
   condition_name: z.string().min(1).max(200).optional(),
   name: z.string().min(1).max(200).optional(),
@@ -338,8 +419,8 @@ export const conditionSchema = z.object({
   drawing_package_code: z.string().max(100).optional().nullable(),
   is_satisfied: z.boolean().default(false),
   responsible_person: z.string().optional().nullable(),
-  responsible_unit: z.string().optional().nullable(),
-  target_date: z.string().min(1),
+  participant_unit_id: uuidSchema.optional().nullable(),
+  target_date: z.string().optional().nullable(),
   notes: z.string().optional().nullable(),
   project_id: uuidSchema.optional(),
   priority: z.string().optional(),
@@ -348,43 +429,35 @@ export const conditionSchema = z.object({
   assigned_to: z.string().optional(),
   satisfied_reason: z.string().max(40).optional().nullable(),
   satisfied_reason_note: z.string().max(2000).optional().nullable(),
-  change_source: z.enum(['system_auto', 'manual_adjusted', 'admin_force', 'approval']).optional(),
+  change_source: z.enum(['system_auto', 'manual_adjusted', 'approval']).optional(),
   change_reason: z.string().max(2000).optional().nullable(),
 })
 
-export const conditionUpdateSchema = conditionSchema.partial().extend({
+export const conditionSchema = conditionBaseSchema
+
+export const conditionUpdateSchema = conditionBaseSchema.partial().extend({
   id: uuidSchema.optional(),
-  target_date: z.string().min(1),
 })
 
 export const obstacleSchema = z.object({
   task_id: uuidSchema,
-  description: z.string().min(1).max(1000).optional().nullable(),
-  title: z.string().min(1).max(1000).optional().nullable(),
-  is_resolved: z.boolean().optional(),
+  description: z.string().min(1).max(1000),
   obstacle_type: z.enum(OBSTACLE_TYPE_VALUES).optional().default('\u5176\u4ed6'),
   severity: z.enum(OBSTACLE_SEVERITY_VALUES).optional().default('\u4e2d'),
   status: z.enum(OBSTACLE_STATUS_VALUES).optional().default('\u5f85\u5904\u7406'),
   responsible_person: z.string().optional().nullable(),
-  responsible_unit: z.string().optional().nullable(),
   expected_resolution_date: z.string().optional().nullable(),
   resolution_notes: z.string().optional().nullable(),
   resolution: z.string().optional().nullable(),
   project_id: uuidSchema.optional(),
-}).refine(
-  (data) => !!(data.description?.trim() || data.title?.trim()),
-  { message: 'description or title is required' }
-)
+})
 
 export const obstacleUpdateSchema = z.object({
   description: z.string().min(1).max(1000).optional().nullable(),
-  title: z.string().min(1).max(1000).optional().nullable(),
-  is_resolved: z.boolean().optional(),
   obstacle_type: z.enum(OBSTACLE_TYPE_VALUES).optional(),
   severity: z.enum(OBSTACLE_SEVERITY_VALUES).optional(),
   status: z.enum(OBSTACLE_STATUS_VALUES).optional(),
   responsible_person: z.string().optional().nullable(),
-  responsible_unit: z.string().optional().nullable(),
   expected_resolution_date: z.string().optional().nullable(),
   resolution_notes: z.string().optional().nullable(),
   resolution: z.string().optional().nullable(),

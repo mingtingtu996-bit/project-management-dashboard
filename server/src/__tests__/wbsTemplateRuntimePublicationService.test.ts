@@ -152,6 +152,134 @@ describe('wbsTemplateRuntimePublicationService', () => {
     expect(calls.map((call) => call.sql).join('\n').toLowerCase()).toContain('insert into public.wbs_template_runtime_publications')
   })
 
+  it('persists default master-plan runtime publications without runtime PM approval evidence', async () => {
+    const calls: Array<{ sql: string; params?: unknown[] }> = []
+    const queryExec = async (sql: string, params?: unknown[]) => {
+      calls.push({ sql, params })
+      return []
+    }
+
+    const result = await persistWbsTemplateRuntimePublication({
+      readiness: {
+        status: 'default_master_plan_publication_ready',
+        defaultMasterPlanLineage: {
+          assetType: 'default_master_plan',
+          defaultMasterPlanVersionId: 'baseline-reviewed',
+          acceptedBaselineId: 'baseline-reviewed',
+          projectId: '22222222-2222-4222-8222-222222222222',
+          generationMode: 'managed_frontier_default_master_plan',
+          runtimeAssetKey: 'runtime.default_master_plan.22222222-2222-4222-8222-222222222222',
+          dependencyWriterReleaseRecordTarget: 'runtime.default_master_plan.22222222-2222-4222-8222-222222222222',
+          runtimePublicationKey: 'runtime.default_master_plan.22222222-2222-4222-8222-222222222222',
+          rollbackTarget: 'rollback:runtime.default_master_plan.22222222-2222-4222-8222-222222222222',
+          durationCalibrationEvidenceRef: 'duration-calibration-evidence.json',
+          dependencyWriterEvidenceRef: 'dependency-writer-evidence.json',
+        },
+        missingReasons: [],
+      } as any,
+      companyId: '11111111-1111-4111-8111-111111111111',
+      projectId: '22222222-2222-4222-8222-222222222222',
+      queryExec,
+      executedAt: '2026-07-02T06:00:00.000Z',
+    })
+
+    expect(result).toEqual(expect.objectContaining({
+      status: 'wbs_template_runtime_published',
+      assetKind: 'default_master_plan',
+      publicationKey: 'runtime.default_master_plan.22222222-2222-4222-8222-222222222222',
+      rollbackTarget: 'rollback:runtime.default_master_plan.22222222-2222-4222-8222-222222222222',
+      writesWbsTemplateRuntime: true,
+      writesTemplatesDirectly: false,
+      writesTasksOrBaselinesDirectly: false,
+      writesSeedRuntimeDirectly: false,
+      reasons: [],
+    }))
+    const insertCall = calls.find((call) => call.sql.toLowerCase().includes('insert into public.wbs_template_runtime_publications'))
+    expect(insertCall?.params?.[1]).toBe('default_master_plan')
+    expect(insertCall?.params?.[2]).toBe('baseline-reviewed')
+    expect(insertCall?.params?.[6]).toEqual(expect.objectContaining({
+      acceptedBaselineId: 'baseline-reviewed',
+      generationMode: 'managed_frontier_default_master_plan',
+      runtimeAssetKey: 'runtime.default_master_plan.22222222-2222-4222-8222-222222222222',
+    }))
+    const joinedSql = calls.map((call) => call.sql).join('\n').toLowerCase()
+    expect(joinedSql).not.toContain('insert into public.tasks')
+    expect(joinedSql).not.toContain('update public.tasks')
+    expect(joinedSql).not.toContain('task_baselines')
+    expect(joinedSql).not.toContain('algorithm_seed_records')
+  })
+
+  it('blocks default master-plan runtime publication when learned-asset publication controls are missing', async () => {
+    const queryExec = async () => {
+      throw new Error('queryExec should not be called for blocked default master-plan publication')
+    }
+
+    await expect(persistWbsTemplateRuntimePublication({
+      readiness: {
+        status: 'default_master_plan_publication_ready',
+        defaultMasterPlanLineage: {
+          assetType: 'default_master_plan',
+          defaultMasterPlanVersionId: 'baseline-reviewed',
+          acceptedBaselineId: 'baseline-reviewed',
+          projectId: '22222222-2222-4222-8222-222222222222',
+          generationMode: 'managed_frontier_default_master_plan',
+          runtimeAssetKey: 'runtime.default_master_plan.22222222-2222-4222-8222-222222222222',
+          dependencyWriterReleaseRecordTarget: 'runtime.default_master_plan.22222222-2222-4222-8222-222222222222',
+          runtimePublicationKey: 'runtime.default_master_plan.22222222-2222-4222-8222-222222222222',
+          rollbackTarget: 'rollback:runtime.default_master_plan.22222222-2222-4222-8222-222222222222',
+          durationCalibrationEvidenceRef: '',
+          dependencyWriterEvidenceRef: '',
+        },
+        missingReasons: [],
+      } as any,
+      companyId: '11111111-1111-4111-8111-111111111111',
+      projectId: '22222222-2222-4222-8222-222222222222',
+      queryExec,
+    })).resolves.toEqual(expect.objectContaining({
+      status: 'blocked',
+      writesWbsTemplateRuntime: false,
+      reasons: expect.arrayContaining([
+        'duration_calibration_evidence_ref_required',
+        'dependency_writer_evidence_ref_required',
+      ]),
+    }))
+  })
+
+  it('blocks default master-plan runtime publication when lineage project does not match the publication scope', async () => {
+    const queryExec = async () => {
+      throw new Error('queryExec should not be called for project-mismatched default master-plan publication')
+    }
+
+    await expect(persistWbsTemplateRuntimePublication({
+      readiness: {
+        status: 'default_master_plan_publication_ready',
+        defaultMasterPlanLineage: {
+          assetType: 'default_master_plan',
+          defaultMasterPlanVersionId: 'baseline-reviewed',
+          acceptedBaselineId: 'baseline-reviewed',
+          projectId: 'project-from-other-chain',
+          generationMode: 'managed_frontier_default_master_plan',
+          runtimeAssetKey: 'runtime.default_master_plan.project-from-other-chain',
+          dependencyWriterReleaseRecordTarget: 'runtime.default_master_plan.project-from-other-chain',
+          runtimePublicationKey: 'runtime.default_master_plan.project-from-other-chain',
+          rollbackTarget: 'rollback:runtime.default_master_plan.project-from-other-chain',
+          durationCalibrationEvidenceRef: 'duration-calibration-evidence.json',
+          dependencyWriterEvidenceRef: 'dependency-writer-evidence.json',
+        },
+        missingReasons: [],
+      } as any,
+      companyId: '11111111-1111-4111-8111-111111111111',
+      projectId: '22222222-2222-4222-8222-222222222222',
+      queryExec,
+    })).resolves.toEqual(expect.objectContaining({
+      status: 'blocked',
+      writesWbsTemplateRuntime: false,
+      reasons: expect.arrayContaining([
+        'default_master_plan_project_id_mismatch',
+      ]),
+    }))
+  })
+
   it('blocks runtime publication when readiness is not ready or company scope is missing', async () => {
     const queryExec = async () => {
       throw new Error('queryExec should not be called for blocked publication')
@@ -247,6 +375,42 @@ describe('wbsTemplateRuntimePublicationService', () => {
       assetKind: 'special_work_duration_seed',
       assetVersionId: 'special-seed-version-v2',
       reasons: [],
+    }))
+  })
+
+  it('keeps default master-plan runtime publications non-consumable without a project scope', async () => {
+    const queryExec: WbsTemplateRuntimePublicationQueryExec = async <T = Record<string, unknown>>() => [{
+      publication_key: 'runtime.default_master_plan.22222222-2222-4222-8222-222222222222',
+      asset_kind: 'default_master_plan',
+      asset_version_id: 'baseline-reviewed',
+      runtime_publication_status: 'runtime_published',
+      runtime_lineage: {
+        assetType: 'default_master_plan',
+        acceptedBaselineId: 'baseline-reviewed',
+        projectId: '22222222-2222-4222-8222-222222222222',
+        generationMode: 'managed_frontier_default_master_plan',
+        runtimeAssetKey: 'runtime.default_master_plan.22222222-2222-4222-8222-222222222222',
+        dependencyWriterReleaseRecordTarget: 'runtime.default_master_plan.22222222-2222-4222-8222-222222222222',
+        runtimePublicationKey: 'runtime.default_master_plan.22222222-2222-4222-8222-222222222222',
+        rollbackTarget: 'rollback:runtime.default_master_plan.22222222-2222-4222-8222-222222222222',
+        durationCalibrationEvidenceRef: 'duration-calibration-evidence.json',
+        dependencyWriterEvidenceRef: 'dependency-writer-evidence.json',
+      },
+      rollback_target: 'rollback:runtime.default_master_plan.22222222-2222-4222-8222-222222222222',
+      company_id: '11111111-1111-4111-8111-111111111111',
+      project_id: '22222222-2222-4222-8222-222222222222',
+    }] as T[]
+
+    await expect(resolveWbsTemplateRuntimePublication({
+      publicationKey: 'runtime.default_master_plan.22222222-2222-4222-8222-222222222222',
+      companyId: '11111111-1111-4111-8111-111111111111',
+      queryExec,
+    })).resolves.toEqual(expect.objectContaining({
+      runtimeConsumable: false,
+      assetKind: 'default_master_plan',
+      reasons: expect.arrayContaining([
+        'project_scope_required_for_default_master_plan_runtime_consumer',
+      ]),
     }))
   })
 })

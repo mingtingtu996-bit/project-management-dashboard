@@ -15,8 +15,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
 import { cn } from '@/lib/utils'
 import { AlertTriangle, CheckCircle2, FileDiff, FolderGit2, RotateCcw, ShieldAlert } from 'lucide-react'
-
-import { BaselineDiffView, type BaselineDiffItem, type BaselineDiffKind } from './BaselineDiffView'
+import { BaselineDiffView, type BaselineDiffItem, type BaselineDiffKind } from '@/components/planning/baseline'
 
 export type BaselineConfirmState = 'ready' | 'stale' | 'failed'
 
@@ -42,6 +41,7 @@ export interface BaselineConfirmDialogProps {
   confirming?: boolean
   onConfirm?: () => void
   onRetry?: () => void
+  onBackToPlanTable?: () => void
   canQueueRealignment?: boolean
   onQueueRealignment?: () => void
   onOpenRevisionPool?: () => void
@@ -122,9 +122,7 @@ export function BaselineConfirmDialog({
   confirming = false,
   onConfirm,
   onRetry,
-  canQueueRealignment = false,
-  onQueueRealignment,
-  onOpenRevisionPool,
+  onBackToPlanTable,
 }: BaselineConfirmDialogProps) {
   const [showDiff, setShowDiff] = useState(false)
 
@@ -141,10 +139,10 @@ export function BaselineConfirmDialog({
   const changePercent = Math.min(100, Math.max(0, counts.total * 5))
   const impactLabel =
     changePercent < 5
-      ? '影响较小，可安全确认'
+      ? '小幅调整'
       : changePercent > 20
-        ? '影响范围较大，建议仔细检查'
-        : '影响适中，建议复核关键项'
+        ? '较大调整，请复核关键节点'
+        : '常规调整'
   const impactClass =
     changePercent < 5
       ? 'bg-emerald-50 text-emerald-700'
@@ -192,7 +190,7 @@ export function BaselineConfirmDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-base">
             <FileDiff className="h-4 w-4 text-blue-500" />
-            基线确认弹窗
+            保存发布项目基线
           </DialogTitle>
           <DialogDescription className="sr-only">
           </DialogDescription>
@@ -265,29 +263,17 @@ export function BaselineConfirmDialog({
                   ) : null}
                   {isRealignmentFailure ? (
                     <div className="flex flex-wrap gap-2">
-                      {onOpenRevisionPool ? (
+                      {onBackToPlanTable ? (
                         <Button
                           type="button"
                           variant="outline"
                           size="sm"
                           className="gap-2 border-amber-300 bg-white/80 text-amber-900 hover:bg-amber-100"
-                          data-testid="baseline-confirm-open-revision-pool"
-                          onClick={onOpenRevisionPool}
+                          data-testid="baseline-confirm-back-to-plan-table"
+                          onClick={onBackToPlanTable}
                         >
                           <FolderGit2 className="h-4 w-4" />
-                          打开计划修订候选
-                        </Button>
-                      ) : null}
-                      {canQueueRealignment && onQueueRealignment ? (
-                        <Button
-                          type="button"
-                          size="sm"
-                          className="gap-2"
-                          data-testid="baseline-confirm-queue-realignment"
-                          onClick={onQueueRealignment}
-                        >
-                          <RotateCcw className="h-4 w-4" />
-                          进入编辑模式
+                          回到总进度计划表
                         </Button>
                       ) : null}
                     </div>
@@ -314,11 +300,11 @@ export function BaselineConfirmDialog({
             </div>
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
               <div className="rounded-xl border border-white bg-white px-3 py-2">
-                <div className="text-xs text-slate-500">当前版本</div>
+                <div className="text-xs text-slate-500">基准版本</div>
                 <div className="mt-1 text-lg font-semibold text-slate-900">{summary.fromVersionLabel}</div>
               </div>
               <div className="rounded-xl border border-white bg-white px-3 py-2">
-                <div className="text-xs text-slate-500">目标版本</div>
+                <div className="text-xs text-slate-500">发布版本</div>
                 <div className="mt-1 text-lg font-semibold text-slate-900">{summary.toVersionLabel}</div>
               </div>
               {(['新增', '修改', '里程碑变动'] as BaselineDiffKind[]).map((kind) => (
@@ -329,10 +315,10 @@ export function BaselineConfirmDialog({
               ))}
             </div>
             <div className="flex flex-wrap gap-2 text-xs text-slate-600">
-              <Badge variant="outline">影响条目 {modifiedItemCount}</Badge>
-              <Badge variant="outline">关键路径 {criticalPathChangeCount}</Badge>
-              <Badge variant="outline">映射影响 {mappingAffectedCount}</Badge>
-              <Badge variant="outline">影响占比 {changePercent}%</Badge>
+              <Badge variant="outline">调整条目 {modifiedItemCount}</Badge>
+              <Badge variant="outline">关键线路 {criticalPathChangeCount}</Badge>
+              <Badge variant="outline">结构校核 {mappingAffectedCount}</Badge>
+              <Badge variant="outline">调整占比 {changePercent}%</Badge>
             </div>
             {topChanges.length ? (
               <div className="space-y-2">
@@ -349,7 +335,7 @@ export function BaselineConfirmDialog({
           {noDiff ? (
             <Alert className="border-slate-200 bg-slate-50 text-slate-700">
               <FileDiff className="h-4 w-4" />
-              <AlertDescription>当前版本与对比版本没有差异，可直接关闭弹窗或回到草稿继续整理。</AlertDescription>
+              <AlertDescription>当前版本与对比版本没有差异，可直接关闭弹窗或回到总进度计划表继续整理。</AlertDescription>
             </Alert>
           ) : null}
 
@@ -388,7 +374,7 @@ export function BaselineConfirmDialog({
               variant="outline"
               onClick={() => onOpenChange(false)}
             >
-              {isRealignmentFailure ? '回到草稿继续处理' : '关闭'}
+              {isRealignmentFailure ? '回到计划表继续处理' : '关闭'}
             </Button>
             <Button
               type="button"

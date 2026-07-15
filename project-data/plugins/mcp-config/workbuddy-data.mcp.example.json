@@ -1,0 +1,31 @@
+{
+  "mcpServers": {
+    "workbuddy-supabase-readonly": {
+      "command": "C:/Users/jjj64/WorkBuddy/20260318232610/project-data/plugins/mcp-servers/node_modules/.bin/mcp-server-supabase.cmd",
+      "args": [
+        "--read-only",
+        "--project-ref",
+        "${WORKBUDDY_SUPABASE_PROJECT_REF}"
+      ],
+      "env": {
+        "SUPABASE_ACCESS_TOKEN": "set-outside-repo",
+        "WORKBUDDY_SUPABASE_PROJECT_REF": "set-outside-repo"
+      }
+    },
+    "workbuddy-toolbox-postgres-readonly": {
+      "command": "C:/Users/jjj64/WorkBuddy/20260318232610/project-data/plugins/mcp-servers/node_modules/.bin/toolbox.cmd",
+      "args": [
+        "--config",
+        "C:/Users/jjj64/WorkBuddy/20260318232610/project-data/plugins/mcp-config/toolbox-postgres-readonly.tools.example.yaml",
+        "--stdio"
+      ],
+      "env": {
+        "WORKBUDDY_PG_HOST": "set-outside-repo",
+        "WORKBUDDY_PG_PORT": "5432",
+        "WORKBUDDY_PG_DATABASE": "set-outside-repo",
+        "WORKBUDDY_PG_USER": "set-outside-repo",
+        "WORKBUDDY_PG_PASSWORD": "set-outside-repo"
+      }
+    }
+  }
+}

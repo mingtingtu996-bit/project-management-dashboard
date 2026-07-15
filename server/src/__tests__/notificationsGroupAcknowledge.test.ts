@@ -10,6 +10,10 @@ const mocks = vi.hoisted(() => ({
   acknowledgeWarningNotification: vi.fn(),
   muteWarningNotification: vi.fn(),
   deleteNotificationById: vi.fn(),
+  upsertNotificationUserState: vi.fn(async (
+    _payload: Record<string, unknown>,
+    _options: { onConflict: string },
+  ) => ({ data: null, error: null })),
 }))
 
 vi.mock('../middleware/auth.js', () => ({
@@ -17,6 +21,13 @@ vi.mock('../middleware/auth.js', () => ({
     req.user = { id: 'user-1' }
     next()
   }),
+}))
+
+vi.mock('../auth/access.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../auth/access.js')>(),
+  canAccessProject: vi.fn(async () => true),
+  getCurrentCompanyMembership: vi.fn(async () => ({ companyId: 'company-1', role: 'regular' })),
+  getVisibleProjectIds: vi.fn(async () => ['project-1']),
 }))
 
 vi.mock('../services/warningService.js', () => ({
@@ -59,6 +70,23 @@ vi.mock('../services/warningChainService.js', () => ({
   persistNotification: mocks.persistNotification,
 }))
 
+vi.mock('../services/dbService.js', () => ({
+  supabase: {
+    from: vi.fn(() => {
+      const builder: Record<string, any> = {
+        select: vi.fn(() => builder),
+        eq: vi.fn(() => builder),
+        in: vi.fn(() => builder),
+        upsert: mocks.upsertNotificationUserState,
+        then: (resolve: (value: { data: never[]; error: null }) => unknown) => (
+          Promise.resolve(resolve({ data: [], error: null }))
+        ),
+      }
+      return builder
+    }),
+  },
+}))
+
 function buildApp(router: express.Router) {
   const app = express()
   app.use(express.json())
@@ -70,8 +98,8 @@ describe('notifications acknowledge-group route', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.listNotifications.mockResolvedValue([
-      { id: 'warning-1', source_entity_type: 'warning' },
-      { id: 'system-1', source_entity_type: 'system' },
+      { id: 'warning-1', source_entity_type: 'warning', recipients: ['user-1'], metadata: { origin: 'warning' } },
+      { id: 'system-1', source_entity_type: 'system', recipients: ['user-1'], metadata: { origin: 'system' } },
     ])
   })
 
@@ -83,14 +111,38 @@ describe('notifications acknowledge-group route', () => {
 
     expect(response.status).toBe(200)
     expect(mocks.listNotifications).toHaveBeenCalledWith({ ids: ['warning-1', 'system-1'] })
-    expect(mocks.acknowledgeWarningNotification).toHaveBeenCalledWith('warning-1', 'user-1')
-    expect(mocks.updateNotificationsByIds).toHaveBeenCalledWith(
-      ['system-1'],
+    expect(mocks.acknowledgeWarningNotification).not.toHaveBeenCalled()
+    expect(mocks.updateNotificationsByIds).not.toHaveBeenCalled()
+    expect(mocks.updateNotificationById).not.toHaveBeenCalled()
+    expect(mocks.upsertNotificationUserState).toHaveBeenCalledTimes(2)
+    expect(mocks.upsertNotificationUserState).toHaveBeenCalledWith(
       expect.objectContaining({
-        status: 'acknowledged',
+        notification_id: 'warning-1',
+        user_id: 'user-1',
         is_read: true,
+        is_acknowledged: true,
+        read_at: expect.any(String),
+        acknowledged_at: expect.any(String),
+        updated_at: expect.any(String),
       }),
+      { onConflict: 'notification_id,user_id' },
     )
+    expect(mocks.upsertNotificationUserState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        notification_id: 'system-1',
+        user_id: 'user-1',
+        is_read: true,
+        is_acknowledged: true,
+        read_at: expect.any(String),
+        acknowledged_at: expect.any(String),
+        updated_at: expect.any(String),
+      }),
+      { onConflict: 'notification_id,user_id' },
+    )
+    const acknowledgmentTimes = mocks.upsertNotificationUserState.mock.calls.map(
+      ([payload]) => (payload as { acknowledged_at: string }).acknowledged_at,
+    )
+    expect(new Set(acknowledgmentTimes)).toHaveLength(1)
   })
 
   it('accepts project_id and user_id aliases when reading notifications', async () => {
@@ -127,5 +179,6 @@ describe('notifications acknowledge-group route', () => {
     expect(response.body.error.code).toBe('VALIDATION_ERROR')
     expect(mocks.muteWarningNotification).not.toHaveBeenCalled()
     expect(mocks.updateNotificationById).not.toHaveBeenCalled()
+    expect(mocks.upsertNotificationUserState).not.toHaveBeenCalled()
   })
 })

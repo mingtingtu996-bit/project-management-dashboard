@@ -66,6 +66,13 @@ export function normalizeDate(value: DateLike): string | null {
   return text.slice(0, 10)
 }
 
+function localDateKey(date = new Date()): string {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
 export function normalizeCertificateType(
   value: string | null | undefined,
   fallbackIndex = 0
@@ -373,7 +380,7 @@ function getExpectedReadyDate(certificates: CertificateBoardItem[], workItems: C
 }
 
 function countOverdueItems(certificates: CertificateBoardItem[], workItems: CertificateWorkItem[], now = new Date()) {
-  const today = now.toISOString().slice(0, 10)
+  const today = localDateKey(now)
 
   const overdueCertificates = certificates.filter((certificate) => {
     const planned = normalizeDate(certificate.planned_finish_date)
@@ -399,7 +406,7 @@ function countWeeklyActions(workItems: CertificateWorkItem[], now = new Date()) 
   return workItems.filter((item) => {
     const due = normalizeDate(item.next_action_due_date ?? item.planned_finish_date)
     if (!due) return false
-    return due >= start.toISOString().slice(0, 10) && due <= end.toISOString().slice(0, 10) && !isCertificateWorkItemCompleteStatus(item.status)
+    return due >= localDateKey(start) && due <= localDateKey(end) && !isCertificateWorkItemCompleteStatus(item.status)
   }).length
 }
 
@@ -408,7 +415,7 @@ function collectCriticalItems(
   workItems: CertificateWorkItem[],
   now = new Date(),
 ): CertificateBoardCriticalItem[] {
-  const today = now.toISOString().slice(0, 10)
+  const today = localDateKey(now)
 
   const collect = (
     itemType: CertificateBoardCriticalItem['itemType'],
@@ -627,7 +634,7 @@ export function buildLicenseLedgerReadModel(params: {
       )
     : workItems
   const annotatedItems = filteredItems.map((item) => annotateWorkItemLinks(item, issues, risks))
-  const today = new Date().toISOString().slice(0, 10)
+  const today = localDateKey()
 
   return {
     items: annotatedItems,
@@ -674,7 +681,20 @@ export function buildLicenseDetailReadModel(params: {
         },
       ]
   const certificates = buildCertificateItems(certificateSources, Boolean(params.certificates?.length))
-  const certificate = certificates[0]
+  const requestedCertificateSource = params.certificate ?? certificateSources[0] ?? null
+  const requestedCertificateId = normalizeText(requestedCertificateSource?.id, '')
+  const requestedCertificateType = requestedCertificateSource
+    ? normalizeCertificateType(
+        requestedCertificateSource.certificate_type ??
+          requestedCertificateSource.milestone_type ??
+          requestedCertificateSource.milestone_name,
+        0,
+      )
+    : null
+  const certificate =
+    certificates.find((item) => requestedCertificateId && item.id === requestedCertificateId) ??
+    certificates.find((item) => requestedCertificateType && item.certificate_type === requestedCertificateType) ??
+    certificates[0]
   const workItems = params.workItems ?? []
   const dependencies = params.dependencies ?? []
   const conditions = params.conditions ?? []

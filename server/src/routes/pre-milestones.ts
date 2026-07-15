@@ -1,9 +1,12 @@
-﻿// 前期证照 API 路由
+// 前期证照 API 路由
 
 import { Router, type Request } from 'express'
-import { createRisk, createTask, executeSQL, executeSQLOne, getIssues, getRisks } from '../services/dbService.js'
+import { createRisk, executeSQL, executeSQLOne, getIssues, getRisks } from '../services/dbService.js'
+import { query as rawQuery } from '../database.js'
+import { createTaskInMainChain } from '../services/taskWriteChainService.js'
+import { createEngineeringObject } from '../services/engineeringObjectService.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
-import { authenticate, requireProjectEditor } from '../middleware/auth.js'
+import { authenticate, requireProjectEditor, requireProjectMember } from '../middleware/auth.js'
 import { logger } from '../middleware/logger.js'
 import { isActiveIssue } from '../utils/issueStatus.js'
 import { isActiveRisk } from '../utils/riskStatus.js'
@@ -24,6 +27,7 @@ import {
   normalizeCertificateType,
 } from '../services/preMilestoneBoardService.js'
 import { syncAcceptanceRequirementsBySource } from '../services/acceptanceFlowService.js'
+import { listActiveEntityLinksForEntity } from '../services/projectLinkingService.js'
 import {
   CERTIFICATE_DEPENDENCY_COLUMNS,
   CERTIFICATE_WORK_ITEM_COLUMNS,
@@ -31,6 +35,10 @@ import {
   PRE_MILESTONE_CONDITION_COLUMNS,
   WBS_TEMPLATE_DEFAULT_COLUMNS,
 } from '../services/sqlColumns.js'
+import {
+  getPreMilestoneProjectReadVersion,
+  markPreMilestoneProjectChanged,
+} from '../services/preMilestoneReadCache.js'
 import type {
   CertificateBoardResponse,
   CertificateDependency,
@@ -51,10 +59,73 @@ const CERTIFICATE_WORK_ITEM_SELECT = `SELECT ${CERTIFICATE_WORK_ITEM_COLUMNS} FR
 const CERTIFICATE_DEPENDENCY_SELECT = `SELECT ${CERTIFICATE_DEPENDENCY_COLUMNS} FROM certificate_dependencies`
 const PRE_MILESTONE_CONDITION_SELECT = `SELECT ${PRE_MILESTONE_CONDITION_COLUMNS} FROM pre_milestone_conditions`
 const WBS_TEMPLATE_DEFAULT_SELECT = `SELECT ${WBS_TEMPLATE_DEFAULT_COLUMNS} FROM wbs_templates`
+const PRE_MILESTONE_ISSUE_COLUMNS = [
+  'id',
+  'project_id',
+  'task_id',
+  'title',
+  'description',
+  'source_type',
+  'source_id',
+  'source_entity_type',
+  'source_entity_id',
+  'chain_id',
+  'severity',
+  'priority',
+  'pending_manual_close',
+  'status',
+  'closed_reason',
+  'closed_at',
+  'created_at',
+  'updated_at',
+  'version',
+].join(', ')
+const PRE_MILESTONE_RISK_COLUMNS = [
+  'id',
+  'project_id',
+  'task_id',
+  'title',
+  'description',
+  'risk_category',
+  'level',
+  'probability',
+  'impact',
+  'status',
+  'source_type',
+  'source_id',
+  'source_entity_type',
+  'source_entity_id',
+  'chain_id',
+  'pending_manual_close',
+  'linked_issue_id',
+  'closed_reason',
+  'closed_at',
+  'created_at',
+  'updated_at',
+  'version',
+].join(', ')
+const PRE_MILESTONE_READ_CACHE_TTL_MS = Number(
+  process.env.PRE_MILESTONE_READ_CACHE_TTL_MS
+    ?? (process.env.NODE_ENV === 'test' || process.env.VITEST === 'true' ? 0 : 300_000),
+)
 
 type ProjectIdRow = {
   project_id?: string | null
 }
+
+type PreMilestoneProjectReadModel = {
+  certificates: PreMilestoneRouteRecord[]
+  workItems: CertificateWorkItem[]
+  dependencies: CertificateDependency[]
+}
+
+type PreMilestoneReadCacheEntry = {
+  expiresAt: number
+  version: number
+  promise: Promise<PreMilestoneProjectReadModel>
+}
+
+const preMilestoneReadCache = new Map<string, PreMilestoneReadCacheEntry>()
 
 type ProjectLookupRow = {
   id: string
@@ -137,6 +208,16 @@ function isTruthyLike(value: unknown) {
   return value === true || value === 1 || value === '1'
 }
 
+function normalizeDirectRows<T>(rows: Array<Record<string, unknown>>): T[] {
+  return rows.map((row) => {
+    const normalized: Record<string, unknown> = {}
+    for (const [key, value] of Object.entries(row)) {
+      normalized[key] = value instanceof Date ? value.toISOString() : value
+    }
+    return normalized as T
+  })
+}
+
 function getCertificateRecordId(record: PreMilestoneRouteRecord | null | undefined, fallback = '') {
   return String(record?.id ?? fallback).trim()
 }
@@ -174,15 +255,33 @@ function buildGeneratedWbsNodes(rawNodes: WbsTemplateNode[]): GeneratedWbsNode[]
   })
 }
 
+async function ensureGeneratedWbsScopeObject(projectId: string): Promise<string> {
+  // v1.4.22.1: generated WBS scope belongs to the final 7-type range tree as an engineering area.
+  const existing = await executeSQLOne(
+    `SELECT id FROM engineering_objects
+     WHERE project_id = ? AND object_type = 'physical_zone' AND object_name = 'Project Scope' AND status = 'active'
+     LIMIT 1`,
+    [projectId],
+  ) as { id?: string } | null
+  if (existing?.id) return existing.id
+
+  const created = await createEngineeringObject({
+    projectId,
+    objectType: 'physical_zone',
+    objectName: 'Project Scope',
+    metadata: { systemGenerated: true, source: 'pre_milestone_wbs', generated_scope_kind: 'wbs_project_scope' },
+  })
+  return created.id
+}
+
 async function seedProjectWbsArtifacts(params: {
   projectId: string
   nodes: GeneratedWbsNode[]
   createdBy?: string | null
-  ts: string
 }) {
   const taskParentIdsByLevel = new Map<number, string>()
-  let structureCount = 0
   let taskCount = 0
+  const defaultScopeObjectId = await ensureGeneratedWbsScopeObject(params.projectId)
 
   const resetTaskLineageFromLevel = (level: number) => {
     for (const key of [...taskParentIdsByLevel.keys()]) {
@@ -192,31 +291,8 @@ async function seedProjectWbsArtifacts(params: {
 
   for (const node of params.nodes) {
     try {
-      const nodeId = uuidv4()
-      await executeSQL(
-        `INSERT INTO wbs_structure (id, project_id, node_name, level, sort_order, status, description, wbs_code, wbs_path, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, '待开始', ?, ?, ?, ?, ?)`,
-        [
-          nodeId,
-          params.projectId,
-          node.title,
-          node.level,
-          node.sort_order,
-          node.description ?? null,
-          node.wbs_code,
-          node.wbs_path,
-          params.ts,
-          params.ts,
-        ]
-      )
-      structureCount += 1
-    } catch (error) {
-      logger.warn('Failed to insert WBS structure node', { node, error })
-    }
-
-    try {
       const parentId = node.level > 1 ? taskParentIdsByLevel.get(node.level - 1) ?? null : null
-      const createdTask = await createTask({
+      const { task: createdTask } = await createTaskInMainChain({
         project_id: params.projectId,
         parent_id: parentId,
         title: node.title,
@@ -227,8 +303,9 @@ async function seedProjectWbsArtifacts(params: {
         wbs_level: node.level,
         wbs_code: node.wbs_code,
         sort_order: node.sort_order,
+        engineering_object_id: defaultScopeObjectId,
         created_by: params.createdBy ?? null,
-      } as any, { skipSnapshotWrite: true })
+      } as any, params.createdBy ?? null)
       if (createdTask?.id) {
         taskParentIdsByLevel.set(node.level, createdTask.id)
         for (const key of [...taskParentIdsByLevel.keys()]) {
@@ -244,10 +321,23 @@ async function seedProjectWbsArtifacts(params: {
     }
   }
 
-  return { structureCount, taskCount }
+  return { taskCount }
 }
 
-async function loadProjectCertificates(projectId: string) {
+async function loadProjectCertificatesFresh(projectId: string) {
+  try {
+    const { rows } = await rawQuery(
+      `SELECT ${PRE_MILESTONE_COLUMNS}
+       FROM pre_milestones
+       WHERE project_id::text = $1
+       ORDER BY created_at ASC`,
+      [projectId],
+    )
+    return normalizeDirectRows<PreMilestoneRouteRecord>(rows).map((row) => normalizePreMilestoneRecord(row))
+  } catch (error) {
+    logger.warn('Falling back to Supabase REST for pre-milestone certificate read model', { projectId, error })
+  }
+
   const rows = await executeSQL<PreMilestoneRouteRecord>(
     `${PRE_MILESTONE_SELECT} WHERE project_id = ? ORDER BY created_at ASC`,
     [projectId],
@@ -255,25 +345,148 @@ async function loadProjectCertificates(projectId: string) {
   return rows.map((row) => normalizePreMilestoneRecord(row))
 }
 
-async function loadProjectWorkItems(projectId: string) {
+async function loadProjectWorkItemsFresh(projectId: string) {
+  try {
+    const { rows } = await rawQuery(
+      `SELECT ${CERTIFICATE_WORK_ITEM_COLUMNS}
+       FROM certificate_work_items
+       WHERE project_id::text = $1
+       ORDER BY sort_order ASC NULLS LAST, created_at ASC`,
+      [projectId],
+    )
+    return normalizeDirectRows<CertificateWorkItem>(rows)
+  } catch (error) {
+    logger.warn('Falling back to Supabase REST for pre-milestone work item read model', { projectId, error })
+  }
+
   return await executeSQL<CertificateWorkItem>(
     `${CERTIFICATE_WORK_ITEM_SELECT} WHERE project_id = ? ORDER BY sort_order ASC, created_at ASC`,
     [projectId],
   )
 }
 
-async function loadProjectDependencies(projectId: string) {
+async function loadProjectDependenciesFresh(projectId: string) {
+  try {
+    const { rows } = await rawQuery(
+      `SELECT ${CERTIFICATE_DEPENDENCY_COLUMNS}
+       FROM certificate_dependencies
+       WHERE project_id::text = $1
+       ORDER BY created_at ASC`,
+      [projectId],
+    )
+    return normalizeDirectRows<CertificateDependency>(rows)
+  } catch (error) {
+    logger.warn('Falling back to Supabase REST for pre-milestone dependency read model', { projectId, error })
+  }
+
   return await executeSQL<CertificateDependency>(
     `${CERTIFICATE_DEPENDENCY_SELECT} WHERE project_id = ? ORDER BY created_at ASC`,
     [projectId],
   )
 }
 
+async function loadProjectReadModelFresh(projectId: string): Promise<PreMilestoneProjectReadModel> {
+  const [certificates, workItems, dependencies] = await Promise.all([
+    loadProjectCertificatesFresh(projectId),
+    loadProjectWorkItemsFresh(projectId),
+    loadProjectDependenciesFresh(projectId),
+  ])
+  return { certificates, workItems, dependencies }
+}
+
+async function loadProjectReadModel(projectId: string): Promise<PreMilestoneProjectReadModel> {
+  const version = getPreMilestoneProjectReadVersion(projectId)
+  const cached = preMilestoneReadCache.get(projectId)
+  if (cached && cached.version === version && cached.expiresAt > Date.now()) {
+    return cached.promise
+  }
+
+  const promise = loadProjectReadModelFresh(projectId)
+  preMilestoneReadCache.set(projectId, {
+    expiresAt: Date.now() + PRE_MILESTONE_READ_CACHE_TTL_MS,
+    version,
+    promise,
+  })
+  try {
+    return await promise
+  } catch (error) {
+    const current = preMilestoneReadCache.get(projectId)
+    if (current?.promise === promise) {
+      preMilestoneReadCache.delete(projectId)
+    }
+    throw error
+  }
+}
+
+export async function warmPreMilestoneBoardCache(projectId: string) {
+  return loadProjectReadModel(projectId)
+}
+
+async function loadProjectCertificates(projectId: string) {
+  return (await loadProjectReadModel(projectId)).certificates
+}
+
+async function loadProjectWorkItems(projectId: string) {
+  return (await loadProjectReadModel(projectId)).workItems
+}
+
+async function loadProjectDependencies(projectId: string) {
+  return (await loadProjectReadModel(projectId)).dependencies
+}
+
 async function loadCertificateConditions(certificateId: string) {
+  try {
+    const { rows } = await rawQuery(
+      `SELECT ${PRE_MILESTONE_CONDITION_COLUMNS}
+       FROM pre_milestone_conditions
+       WHERE pre_milestone_id::text = $1
+       ORDER BY created_at ASC`,
+      [certificateId],
+    )
+    return normalizeDirectRows<PreMilestoneCondition>(rows)
+  } catch (error) {
+    logger.warn('Falling back to Supabase REST for pre-milestone condition detail read', { certificateId, error })
+  }
+
   return await executeSQL<PreMilestoneCondition>(
     `${PRE_MILESTONE_CONDITION_SELECT} WHERE pre_milestone_id = ? ORDER BY created_at ASC`,
     [certificateId],
   )
+}
+
+async function loadProjectIssuesFast(projectId: string): Promise<Issue[]> {
+  try {
+    const { rows } = await rawQuery(
+      `SELECT ${PRE_MILESTONE_ISSUE_COLUMNS}
+       FROM issues
+       WHERE project_id::text = $1
+       ORDER BY created_at DESC`,
+      [projectId],
+    )
+    return normalizeDirectRows<Issue>(rows)
+  } catch (error) {
+    logger.warn('Falling back to Supabase REST for pre-milestone issue links', { projectId, error })
+    return getIssues(projectId).catch(() => [])
+  }
+}
+
+async function loadProjectRisksFast(projectId: string): Promise<Risk[]> {
+  try {
+    const { rows } = await rawQuery(
+      `SELECT ${PRE_MILESTONE_RISK_COLUMNS}
+       FROM risks
+       WHERE project_id::text = $1
+       ORDER BY created_at DESC`,
+      [projectId],
+    )
+    return normalizeDirectRows<Risk>(rows).map((risk) => ({
+      ...risk,
+      risk_category: (risk as any).risk_category ?? (risk as any).category,
+    })) as Risk[]
+  } catch (error) {
+    logger.warn('Falling back to Supabase REST for pre-milestone risk links', { projectId, error })
+    return getRisks(projectId).catch(() => [])
+  }
 }
 
 function resolveCertificateTypeFromParam(certificateId: string) {
@@ -459,7 +672,7 @@ function resolveEscalationTarget(params: {
   }
 }
 
-router.get('/board', asyncHandler(async (req, res) => {
+router.get('/board', requireProjectMember((req) => readProjectId(req) || undefined), asyncHandler(async (req, res) => {
   const projectId = readProjectId(req)
   if (!projectId) {
     const response: ApiResponse = {
@@ -483,7 +696,7 @@ router.get('/board', asyncHandler(async (req, res) => {
   res.json(response)
 }))
 
-router.get('/ledger', asyncHandler(async (req, res) => {
+router.get('/ledger', requireProjectMember((req) => readProjectId(req) || undefined), asyncHandler(async (req, res) => {
   const projectId = readProjectId(req)
   if (!projectId) {
     const response: ApiResponse = {
@@ -495,12 +708,12 @@ router.get('/ledger', asyncHandler(async (req, res) => {
   }
 
   const certificateId = req.query.certificateId as string | undefined
-  const [workItems, dependencies, issues, risks] = await Promise.all([
-    loadProjectWorkItems(projectId),
-    loadProjectDependencies(projectId),
-    getIssues(projectId).catch(() => []),
-    getRisks(projectId).catch(() => []),
+  const [readModel, issues, risks] = await Promise.all([
+    loadProjectReadModel(projectId),
+    loadProjectIssuesFast(projectId),
+    loadProjectRisksFast(projectId),
   ])
+  const { workItems, dependencies } = readModel
   const data = buildLicenseLedgerReadModel({ workItems, dependencies, issues, risks, certificateId: certificateId || null })
 
   const response: ApiResponse<CertificateLedgerResponse> = {
@@ -511,7 +724,7 @@ router.get('/ledger', asyncHandler(async (req, res) => {
   res.json(response)
 }))
 
-router.get('/:certificateId/detail', asyncHandler(async (req, res) => {
+router.get('/:certificateId/detail', requireProjectMember((req) => readProjectId(req) || undefined), asyncHandler(async (req, res) => {
   const projectId = readProjectId(req)
   const { certificateId } = req.params
 
@@ -524,7 +737,7 @@ router.get('/:certificateId/detail', asyncHandler(async (req, res) => {
     return res.status(400).json(response)
   }
 
-  const certificates = await loadProjectCertificates(projectId)
+  const { certificates, workItems, dependencies } = await loadProjectReadModel(projectId)
   const matchedCertificate = findCertificateByRequestId(certificates, certificateId)
   const certificate =
     matchedCertificate ??
@@ -554,15 +767,13 @@ router.get('/:certificateId/detail', asyncHandler(async (req, res) => {
     certificate,
     ...certificates.filter((item) => String(item.id ?? '') !== resolvedCertificateId),
   ]
-  const [workItems, dependencies, conditions, warnings, issues, risks] = await Promise.all([
-    loadProjectWorkItems(projectId),
-    loadProjectDependencies(projectId),
+  const [conditions, warnings, issues, risks] = await Promise.all([
     matchedCertificate && getCertificateRecordId(certificate)
       ? loadCertificateConditions(getCertificateRecordId(certificate))
       : Promise.resolve([] as PreMilestoneCondition[]),
     warningService.scanPreMilestoneWarnings(projectId).catch(() => []),
-    getIssues(projectId).catch(() => []),
-    getRisks(projectId).catch(() => []),
+    loadProjectIssuesFast(projectId),
+    loadProjectRisksFast(projectId),
   ])
   const records = [
     {
@@ -778,7 +989,7 @@ router.post(
 )
 
 // 获取项目的所有前期证照
-router.get('/', asyncHandler(async (req, res) => {
+router.get('/', requireProjectMember((req) => readProjectId(req) || undefined), asyncHandler(async (req, res) => {
   const projectId = req.query.projectId as string
 
   if (!projectId) {
@@ -806,7 +1017,10 @@ router.get('/', asyncHandler(async (req, res) => {
 }))
 
 // 获取单个前期证照
-router.get('/:id', asyncHandler(async (req, res) => {
+router.get('/:id', requireProjectMember(async (req) => {
+  const row = await executeSQLOne<ProjectIdRow>('SELECT project_id FROM pre_milestones WHERE id = ? LIMIT 1', [req.params.id])
+  return row?.project_id ?? undefined
+}), asyncHandler(async (req, res) => {
   const { id } = req.params
   logger.info('Fetching pre-milestone', { id })
 
@@ -936,6 +1150,7 @@ router.post(
       ts,
     ]
   )
+  markPreMilestoneProjectChanged(normalizedCreatePayload.project_id)
 
   const data = normalizePreMilestoneRecord(
     await executeSQLOne(`${PRE_MILESTONE_SELECT} WHERE id = ? LIMIT 1`, [id]),
@@ -988,7 +1203,9 @@ router.put(
     return res.status(404).json(response)
   }
 
-  const normalizedStatus = Object.prototype.hasOwnProperty.call(req.body, 'status')
+  const hasBodyField = (field: string) => Object.prototype.hasOwnProperty.call(req.body ?? {}, field)
+
+  const normalizedStatus = hasBodyField('status')
     ? normalizeIncomingCertificateStatus(req.body.status)
     : null
 
@@ -1007,7 +1224,7 @@ router.put(
       return res.status(400).json(response)
     }
   }
-  const normalizedStage = Object.prototype.hasOwnProperty.call(req.body, 'current_stage')
+  const normalizedStage = hasBodyField('current_stage')
     ? normalizeIncomingCertificateStage(req.body.current_stage, current.current_stage ?? current.milestone_type)
     : null
   const nextCertificateType = normalizeLookupKey(req.body.certificate_type)
@@ -1083,66 +1300,114 @@ router.put(
   }
 
   const ts = new Date().toISOString().slice(0, 19).replace('T', ' ')
-  const setClauses: string[] = ['updated_at = ?']
-  const params: any[] = [ts]
+  const hasCertificateTypeUpdate = hasBodyField('certificate_type') || hasBodyField('milestone_type')
+  const hasCertificateNameUpdate = hasBodyField('certificate_name') || hasBodyField('milestone_name') || hasBodyField('name')
+  const hasPlannedFinishUpdate = hasBodyField('planned_finish_date') || hasBodyField('planned_end_date') || hasBodyField('planned_date')
+  const hasActualFinishUpdate = hasBodyField('actual_finish_date') || hasBodyField('actual_end_date') || hasBodyField('actual_date')
+  const hasAuthorityUpdate = hasBodyField('approving_authority') || hasBodyField('issuing_authority')
+  const hasNextActionUpdate = hasBodyField('next_action') || hasBodyField('description')
 
-  const fieldMap: Record<string, any> = {
-    milestone_type: Object.prototype.hasOwnProperty.call(req.body, 'certificate_type') || Object.prototype.hasOwnProperty.call(req.body, 'milestone_type')
-      ? normalizedUpdatePayload.milestone_type
-      : undefined,
-    milestone_name: Object.prototype.hasOwnProperty.call(req.body, 'certificate_name') || Object.prototype.hasOwnProperty.call(req.body, 'milestone_name') || Object.prototype.hasOwnProperty.call(req.body, 'name')
-      ? normalizedUpdatePayload.milestone_name
-      : undefined,
-    certificate_type: Object.prototype.hasOwnProperty.call(req.body, 'certificate_type') || Object.prototype.hasOwnProperty.call(req.body, 'milestone_type')
-      ? normalizedUpdatePayload.certificate_type
-      : undefined,
-    certificate_name: Object.prototype.hasOwnProperty.call(req.body, 'certificate_name') || Object.prototype.hasOwnProperty.call(req.body, 'milestone_name') || Object.prototype.hasOwnProperty.call(req.body, 'name')
-      ? normalizedUpdatePayload.certificate_name
-      : undefined,
-    status: normalizedStatus ?? undefined,
-    certificate_no: req.body.certificate_no !== undefined ? normalizedUpdatePayload.certificate_no : undefined,
-    issue_date: req.body.issue_date,
-    expiry_date: req.body.expiry_date,
-    current_stage: Object.prototype.hasOwnProperty.call(req.body, 'current_stage') ? normalizedUpdatePayload.current_stage : undefined,
-    planned_finish_date: req.body.planned_finish_date !== undefined || req.body.planned_end_date !== undefined || req.body.planned_date !== undefined
+  const nextPreMilestoneUpdate = {
+    milestone_type: hasCertificateTypeUpdate ? normalizedUpdatePayload.milestone_type : current.milestone_type ?? null,
+    milestone_name: hasCertificateNameUpdate ? normalizedUpdatePayload.milestone_name : current.milestone_name ?? null,
+    certificate_type: hasCertificateTypeUpdate ? normalizedUpdatePayload.certificate_type : current.certificate_type ?? null,
+    certificate_name: hasCertificateNameUpdate ? normalizedUpdatePayload.certificate_name : current.certificate_name ?? null,
+    application_date: hasBodyField('application_date') ? req.body.application_date ?? null : current.application_date ?? null,
+    issue_date: hasBodyField('issue_date') ? req.body.issue_date ?? null : current.issue_date ?? null,
+    expiry_date: hasBodyField('expiry_date') ? req.body.expiry_date ?? null : current.expiry_date ?? null,
+    status: normalizedStatus ?? current.status,
+    certificate_no: hasBodyField('certificate_no') ? normalizedUpdatePayload.certificate_no : resolvePersistedCertificateNo(current),
+    current_stage: hasBodyField('current_stage') ? normalizedUpdatePayload.current_stage : current.current_stage ?? null,
+    planned_finish_date: hasPlannedFinishUpdate
       ? normalizedUpdatePayload.planned_finish_date
-      : undefined,
-    actual_finish_date: req.body.actual_finish_date !== undefined || req.body.actual_end_date !== undefined || req.body.actual_date !== undefined
+      : normalizeDate(current.planned_finish_date ?? current.planned_end_date ?? current.planned_date),
+    actual_finish_date: hasActualFinishUpdate
       ? normalizedUpdatePayload.actual_finish_date
-      : undefined,
-    approving_authority: req.body.approving_authority !== undefined || req.body.issuing_authority !== undefined
-      ? normalizedUpdatePayload.approving_authority
-      : undefined,
-    issuing_authority: req.body.approving_authority !== undefined || req.body.issuing_authority !== undefined
-      ? normalizedUpdatePayload.approving_authority
-      : undefined,
-    next_action: req.body.next_action !== undefined || req.body.description !== undefined
-      ? normalizedUpdatePayload.next_action
-      : undefined,
-    next_action_due_date: req.body.next_action_due_date !== undefined
+      : normalizeDate(current.actual_finish_date ?? current.actual_end_date ?? current.actual_date),
+    approving_authority: hasAuthorityUpdate ? normalizedUpdatePayload.approving_authority : current.approving_authority ?? null,
+    issuing_authority: hasAuthorityUpdate ? normalizedUpdatePayload.approving_authority : current.issuing_authority ?? null,
+    next_action: hasNextActionUpdate ? normalizedUpdatePayload.next_action : current.next_action ?? null,
+    next_action_due_date: hasBodyField('next_action_due_date')
       ? normalizedUpdatePayload.next_action_due_date
-      : undefined,
-    is_blocked: Object.prototype.hasOwnProperty.call(req.body, 'is_blocked') ? (normalizedUpdatePayload.is_blocked ? 1 : 0) : undefined,
-    block_reason: req.body.block_reason !== undefined ? normalizedUpdatePayload.block_reason : undefined,
-    latest_record_at: req.body.latest_record_at !== undefined ? normalizedUpdatePayload.latest_record_at : undefined,
-    description: req.body.description,
-    phase_id: req.body.phase_id,
-    lead_unit: req.body.lead_unit,
-    planned_start_date: req.body.planned_start_date,
-    planned_end_date: req.body.planned_end_date,
-    responsible_user_id: req.body.responsible_user_id,
-    sort_order: req.body.sort_order,
+      : normalizeDate(current.next_action_due_date),
+    is_blocked: hasBodyField('is_blocked') ? (normalizedUpdatePayload.is_blocked ? 1 : 0) : (current.is_blocked ? 1 : 0),
+    block_reason: hasBodyField('block_reason') ? normalizedUpdatePayload.block_reason : current.block_reason ?? null,
+    latest_record_at: hasBodyField('latest_record_at') ? normalizedUpdatePayload.latest_record_at : current.latest_record_at ?? null,
+    description: hasBodyField('description') ? req.body.description ?? null : current.description ?? null,
+    phase_id: hasBodyField('phase_id') ? req.body.phase_id ?? null : current.phase_id ?? null,
+    lead_unit: hasBodyField('lead_unit') ? req.body.lead_unit ?? null : current.lead_unit ?? null,
+    planned_start_date: hasBodyField('planned_start_date') ? req.body.planned_start_date ?? null : current.planned_start_date ?? null,
+    planned_end_date: hasBodyField('planned_end_date') ? req.body.planned_end_date ?? null : current.planned_end_date ?? null,
+    responsible_user_id: hasBodyField('responsible_user_id') ? req.body.responsible_user_id ?? null : current.responsible_user_id ?? null,
+    sort_order: hasBodyField('sort_order') ? req.body.sort_order ?? null : current.sort_order ?? null,
+    notes: current.notes ?? null,
   }
 
-  for (const [col, val] of Object.entries(fieldMap)) {
-    if (val !== undefined) {
-      setClauses.push(`${col} = ?`)
-      params.push(val)
-    }
-  }
-
-  params.push(id)
-  await executeSQL(`UPDATE pre_milestones SET ${setClauses.join(', ')} WHERE id = ?`, params)
+  await executeSQL(
+    `UPDATE pre_milestones
+     SET milestone_type = ?,
+         milestone_name = ?,
+         certificate_type = ?,
+         certificate_name = ?,
+         application_date = ?,
+         issue_date = ?,
+         expiry_date = ?,
+         status = ?,
+         certificate_no = ?,
+         current_stage = ?,
+         planned_finish_date = ?,
+         actual_finish_date = ?,
+         approving_authority = ?,
+         issuing_authority = ?,
+         next_action = ?,
+         next_action_due_date = ?,
+         is_blocked = ?,
+         block_reason = ?,
+         latest_record_at = ?,
+         description = ?,
+         phase_id = ?,
+         lead_unit = ?,
+         planned_start_date = ?,
+         planned_end_date = ?,
+         responsible_user_id = ?,
+         sort_order = ?,
+         notes = ?,
+         updated_at = ?
+     WHERE id = ? AND project_id = ?`,
+    [
+      nextPreMilestoneUpdate.milestone_type,
+      nextPreMilestoneUpdate.milestone_name,
+      nextPreMilestoneUpdate.certificate_type,
+      nextPreMilestoneUpdate.certificate_name,
+      nextPreMilestoneUpdate.application_date,
+      nextPreMilestoneUpdate.issue_date,
+      nextPreMilestoneUpdate.expiry_date,
+      nextPreMilestoneUpdate.status,
+      nextPreMilestoneUpdate.certificate_no,
+      nextPreMilestoneUpdate.current_stage,
+      nextPreMilestoneUpdate.planned_finish_date,
+      nextPreMilestoneUpdate.actual_finish_date,
+      nextPreMilestoneUpdate.approving_authority,
+      nextPreMilestoneUpdate.issuing_authority,
+      nextPreMilestoneUpdate.next_action,
+      nextPreMilestoneUpdate.next_action_due_date,
+      nextPreMilestoneUpdate.is_blocked,
+      nextPreMilestoneUpdate.block_reason,
+      nextPreMilestoneUpdate.latest_record_at,
+      nextPreMilestoneUpdate.description,
+      nextPreMilestoneUpdate.phase_id,
+      nextPreMilestoneUpdate.lead_unit,
+      nextPreMilestoneUpdate.planned_start_date,
+      nextPreMilestoneUpdate.planned_end_date,
+      nextPreMilestoneUpdate.responsible_user_id,
+      nextPreMilestoneUpdate.sort_order,
+      nextPreMilestoneUpdate.notes,
+      ts,
+      id,
+      String(current.project_id ?? ''),
+    ],
+  )
+  markPreMilestoneProjectChanged(current.project_id)
 
   await syncAcceptanceRequirementsBySource({
     projectId: String(current.project_id ?? ''),
@@ -1152,7 +1417,7 @@ router.put(
   })
 
   const data = normalizePreMilestoneRecord(
-    await executeSQLOne(`${PRE_MILESTONE_SELECT} WHERE id = ? LIMIT 1`, [id]),
+    await executeSQLOne(`${PRE_MILESTONE_SELECT} WHERE id = ? AND project_id = ? LIMIT 1`, [id, String(current.project_id ?? '')]),
   )
 
   const response: ApiResponse<PreMilestone> = {
@@ -1177,8 +1442,40 @@ router.delete(
   asyncHandler(async (req, res) => {
   const { id } = req.params
   logger.info('Deleting pre-milestone', { id })
+  const current = await executeSQLOne<ProjectIdRow>(
+    'SELECT project_id FROM pre_milestones WHERE id = ? LIMIT 1',
+    [id],
+  )
 
-  await executeSQL('DELETE FROM pre_milestones WHERE id = ?', [id])
+  if (current?.project_id) {
+    const activeLinks = await listActiveEntityLinksForEntity({
+      projectId: String(current.project_id),
+      entityType: 'pre_milestone',
+      entityId: id,
+    })
+    if (activeLinks.length > 0) {
+      const response: ApiResponse = {
+        success: false,
+        error: {
+          code: 'PRE_MILESTONE_LINKED',
+          message: 'This certificate milestone still has active task/drawing links. Deactivate or archive the linkage before deleting.',
+          details: { activeLinkCount: activeLinks.length },
+        },
+        timestamp: new Date().toISOString(),
+      }
+      return res.status(422).json(response)
+    }
+  }
+
+  // v1.4.15: retention decision must block unsafe physical deletes.
+  const { enforceRetentionOrBlock, buildRetentionBlockedApiError, buildRetentionBlockedHttpStatus } = await import('../services/deletionRetentionGovernanceService.js')
+  const retention = await enforceRetentionOrBlock({ entityType: 'pre_milestone', entityId: id, userId: req.user?.id ?? null, userAction: 'delete' })
+  if (retention.blocked) {
+    return res.status(buildRetentionBlockedHttpStatus(retention.result)).json({ success: false, error: buildRetentionBlockedApiError(retention.reason, retention.result), timestamp: new Date().toISOString() })
+  }
+
+  await executeSQL('DELETE FROM pre_milestones WHERE id = ? AND project_id = ?', [id, String(current?.project_id ?? '')])
+  markPreMilestoneProjectChanged(current?.project_id)
 
   const response: ApiResponse = {
     success: true,
@@ -1341,7 +1638,6 @@ router.post(
       projectId: milestone.project_id,
       nodes: defaultNodes,
       createdBy: req.user?.id ?? null,
-      ts,
     })
 
     // 标记项目已生成WBS
@@ -1354,7 +1650,7 @@ router.post(
       success: true,
       data: {
         project_id: milestone.project_id,
-        nodes_generated: generated.structureCount,
+        nodes_generated: generated.taskCount,
         task_nodes_generated: generated.taskCount,
         message: '已生成默认施工阶段WBS结构'
       },
@@ -1369,7 +1665,6 @@ router.post(
     projectId: milestone.project_id,
     nodes: templateNodes,
     createdBy: req.user?.id ?? null,
-    ts,
   })
 
   // 标记项目已生成WBS
@@ -1382,7 +1677,7 @@ router.post(
     success: true,
     data: {
       project_id: milestone.project_id,
-      nodes_generated: generated.structureCount,
+      nodes_generated: generated.taskCount,
       task_nodes_generated: generated.taskCount,
       template_name: template.template_name,
       message: '已根据模板生成施工阶段WBS结构'

@@ -11,28 +11,26 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
-import type { Project } from '@/lib/localDb'
+import type { ProjectCatalogItem } from '@/lib/projectApi'
 import type { ProjectFormStatus } from '../types'
 
 const STATUS_OPTIONS: ProjectFormStatus[] = ['未开始', '进行中', '已完成', '已暂停']
 
 interface CompanyCockpitDialogsProps {
-  dialogOpen: boolean
-  onDialogChange: (open: boolean) => void
-  dialogMode: 'create' | 'edit'
+  editTarget: ProjectCatalogItem | null
+  onEditTargetChange: (project: ProjectCatalogItem | null) => void
   form: { name: string; description: string; status: ProjectFormStatus }
   onFormChange: (next: { name: string; description: string; status: ProjectFormStatus }) => void
   submitting: boolean
   onSubmit: () => void
-  deleteTarget: Project | null
-  onDeleteTargetChange: (project: Project | null) => void
+  deleteTarget: ProjectCatalogItem | null
+  onDeleteTargetChange: (project: ProjectCatalogItem | null) => void
   onDelete: () => void
 }
 
 export function CompanyCockpitDialogs({
-  dialogOpen,
-  onDialogChange,
-  dialogMode,
+  editTarget,
+  onEditTargetChange,
   form,
   onFormChange,
   submitting,
@@ -41,15 +39,13 @@ export function CompanyCockpitDialogs({
   onDeleteTargetChange,
   onDelete,
 }: CompanyCockpitDialogsProps) {
-  const isEditMode = dialogMode === 'edit'
-
   return (
     <>
-      <Dialog open={dialogOpen} onOpenChange={onDialogChange}>
+      <Dialog open={Boolean(editTarget)} onOpenChange={(open) => !open && onEditTargetChange(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{isEditMode ? '编辑项目' : '新建项目'}</DialogTitle>
-            <DialogDescription className="sr-only">{isEditMode ? '编辑项目' : '新建项目'}</DialogDescription>
+            <DialogTitle>编辑项目</DialogTitle>
+            <DialogDescription className="sr-only">编辑项目基础信息</DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4">
@@ -95,11 +91,11 @@ export function CompanyCockpitDialogs({
           </div>
 
           <DialogFooter>
-            <Button variant="outline" onClick={() => onDialogChange(false)} disabled={submitting}>
+            <Button variant="outline" onClick={() => onEditTargetChange(null)} disabled={submitting}>
               取消
             </Button>
             <Button onClick={onSubmit} loading={submitting}>
-              {isEditMode ? '保存变更' : '创建项目'}
+              保存变更
             </Button>
           </DialogFooter>
         </DialogContent>

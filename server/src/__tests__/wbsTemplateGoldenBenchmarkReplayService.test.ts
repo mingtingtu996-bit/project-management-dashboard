@@ -4,12 +4,19 @@ import {
   evaluateWbsTemplateGoldenBenchmarkRunGate,
   WBS_TEMPLATE_GOLDEN_BENCHMARK_GATE_THRESHOLDS,
 } from '../services/wbsTemplateGoldenBenchmarkGateService.js'
-import { generateWbsTemplateRows, loadWbsTemplateNodes } from '../services/wbsTemplateGenerationService.js'
+import {
+  generateWbsTemplatePhaseChainRows,
+  generateWbsTemplateRows,
+  loadWbsTemplateNodes,
+} from '../services/wbsTemplateGenerationService.js'
 import { runWbsTemplateGoldenBenchmarkReplay } from '../services/wbsTemplateGoldenBenchmarkReplayService.js'
 
 type GenerateWbsTemplateRowsResult = Awaited<ReturnType<typeof generateWbsTemplateRows>>
+type GenerateWbsTemplatePhaseChainRowsResult = Awaited<ReturnType<typeof generateWbsTemplatePhaseChainRows>>
+type MockGeneratedReplayRow = Record<string, any>
 
 vi.mock('../services/wbsTemplateGenerationService.js', () => ({
+  generateWbsTemplatePhaseChainRows: vi.fn(),
   generateWbsTemplateRows: vi.fn(),
   loadWbsTemplateNodes: vi.fn(),
 }))
@@ -165,6 +172,75 @@ function addDays(date: string, days: number) {
   return next.toISOString().slice(0, 10)
 }
 
+function resolveEntryFromBatchId(generationBatchId: string) {
+  const projectCode = generationBatchId.split(':')[1]
+  return WBS_TEMPLATE_REAL_PROJECT_COVERAGE_MATRIX.find((item) => item.projectCode === projectCode)
+    ?? WBS_TEMPLATE_REAL_PROJECT_COVERAGE_MATRIX[0]
+}
+
+function buildGeneratedReplayResult(
+  entry: typeof WBS_TEMPLATE_REAL_PROJECT_COVERAGE_MATRIX[number],
+  rows: MockGeneratedReplayRow[],
+  generationBatchId = `golden-runtime:${entry.projectCode}`,
+): GenerateWbsTemplateRowsResult {
+  return {
+    generationBatchId,
+    templateId: entry.requiredTemplateIds[0] ?? 'fallback-template',
+    templateIds: [...entry.requiredTemplateIds],
+    generationDepth: 'process',
+    rows,
+    scopeCombos: [],
+    rowLimit: rows.length,
+    rowLimitPolicy: 'single_batch',
+    splitByPhaseApplied: false,
+    generationBatches: [{
+      batchId: generationBatchId,
+      phaseObjectId: null,
+      scopeIndexes: [],
+      rowCount: rows.length,
+      templateIds: [...entry.requiredTemplateIds],
+      rowLimit: rows.length,
+      rowLimitExceeded: false,
+    }],
+    suppressedCoreQualityCodes: [],
+    governanceWarnings: [],
+    phaseWindows: [],
+    durationAssetUtilizationSummary: {
+      source: 'default_master_plan_duration_asset_utilization_summary',
+      evidenceLevel: 'candidate_duration_asset_utilization_l1',
+      mutationBoundary: 'summary_only_no_db_mutation_no_runtime_no_business_fact_write',
+      scheduleRowCount: rows.length,
+      standardWorkDurationSeedRowCount: rows.length,
+      t2RhythmTemplateRowCount: rows.length,
+      projectScaleQuantityProxyRowCount: Math.max(1, rows.length - 1),
+      dependencyAssetConsumedRowCount: Math.max(1, rows.length - 2),
+      dependencyTimingAssetConsumedRowCount: Math.max(1, rows.length - 3),
+      processSeasonalDurationAssetRowCount: 0,
+      runtimeReferenceDaysRowCount: 0,
+      constructionCalendarRowCount: rows.length,
+      rowsMissingDurationAssetCount: 0,
+      rowsMissingT2RhythmTemplateCount: 0,
+      uniqueStandardWorkDurationSeedStableCodes: [...entry.requiredStableCodePrefixes],
+      uniqueT2RhythmTemplateIds: [`t2-golden-${entry.projectCode}`],
+      uniqueDependencyAssetStableCodes: [`dependency-golden-${entry.projectCode}`],
+      durationCalibrationSource: 'standard_work_duration_seed+t2_rhythm_template+real_plan_evidence',
+      productionWritePolicy: 'candidate_only_no_task_dependencies_write',
+    },
+  } as unknown as GenerateWbsTemplateRowsResult
+}
+
+function buildPhaseChainReplayResult(
+  entry: typeof WBS_TEMPLATE_REAL_PROJECT_COVERAGE_MATRIX[number],
+  rows: MockGeneratedReplayRow[],
+  generationBatchId = `golden-runtime:${entry.projectCode}`,
+): GenerateWbsTemplatePhaseChainRowsResult {
+  return {
+    ...buildGeneratedReplayResult(entry, rows, generationBatchId),
+    splitByPhaseApplied: true,
+    scheduleTrustGate: {} as never,
+  } as GenerateWbsTemplatePhaseChainRowsResult
+}
+
 function buildLegacyAliasOnlyReplayRows(params: {
   requiredTemplateIds: readonly string[]
   requiredStableCodePrefixes: readonly string[]
@@ -213,6 +289,7 @@ function buildLegacyAliasOnlyReplayRows(params: {
 
 describe('wbsTemplateGoldenBenchmarkReplayService', () => {
   beforeEach(() => {
+    vi.mocked(generateWbsTemplatePhaseChainRows).mockReset()
     vi.mocked(generateWbsTemplateRows).mockReset()
     vi.mocked(loadWbsTemplateNodes).mockReset()
     vi.mocked(loadWbsTemplateNodes).mockImplementation(async (templateId) => [
@@ -252,9 +329,7 @@ describe('wbsTemplateGoldenBenchmarkReplayService', () => {
     ] as any)
     vi.mocked(generateWbsTemplateRows).mockImplementation(async (params) => {
       const generationBatchId = String((params.operation as Record<string, unknown>).generationBatchId ?? '')
-      const projectCode = generationBatchId.split(':').at(-1)
-      const entry = WBS_TEMPLATE_REAL_PROJECT_COVERAGE_MATRIX.find((item) => item.projectCode === projectCode)
-        ?? WBS_TEMPLATE_REAL_PROJECT_COVERAGE_MATRIX[0]
+      const entry = resolveEntryFromBatchId(generationBatchId)
       const expectedDurationDaysRange = (entry as unknown as { expectedDurationDaysRange?: [number, number] }).expectedDurationDaysRange
         ?? [365, 365]
       const expectedRuntimeReplayRowCountRange = entry.expectedRuntimeReplayRowCountRange ?? entry.expectedRowCountRange
@@ -264,40 +339,35 @@ describe('wbsTemplateGoldenBenchmarkReplayService', () => {
         durationDays: Math.round((expectedDurationDaysRange[0] + expectedDurationDaysRange[1]) / 2),
         rowCount: Math.round((expectedRuntimeReplayRowCountRange[0] + expectedRuntimeReplayRowCountRange[1]) / 2),
       })
-      return {
-        generationBatchId,
-        templateId: entry.requiredTemplateIds[0] ?? 'fallback-template',
-        templateIds: [...entry.requiredTemplateIds],
-        generationDepth: 'process',
-        rows,
-        scopeCombos: [],
-        rowLimit: rows.length,
-        rowLimitPolicy: 'single_batch',
-        splitByPhaseApplied: false,
-        generationBatches: [{
-          batchId: generationBatchId,
-          phaseObjectId: null,
-          scopeIndexes: [],
-          rowCount: rows.length,
-          templateIds: [...entry.requiredTemplateIds],
-          rowLimit: rows.length,
-          rowLimitExceeded: false,
-        }],
-        suppressedCoreQualityCodes: [],
-        governanceWarnings: [],
-        phaseWindows: [],
-      } as unknown as GenerateWbsTemplateRowsResult
+      return buildGeneratedReplayResult(entry, rows, generationBatchId)
+    })
+    vi.mocked(generateWbsTemplatePhaseChainRows).mockImplementation(async (params) => {
+      const firstOperation = params.operations[0] as Record<string, unknown> | undefined
+      const generationBatchId = String(firstOperation?.generationBatchId ?? '')
+      const entry = resolveEntryFromBatchId(generationBatchId)
+      const expectedDurationDaysRange = entry.expectedDurationDaysRange ?? [365, 365]
+      const expectedRuntimeReplayRowCountRange = entry.expectedRuntimeReplayRowCountRange ?? entry.expectedRowCountRange
+      const rows = buildGovernedReplayRows({
+        requiredTemplateIds: entry.requiredTemplateIds,
+        requiredStableCodePrefixes: entry.requiredStableCodePrefixes,
+        durationDays: Math.round((expectedDurationDaysRange[0] + expectedDurationDaysRange[1]) / 2),
+        rowCount: Math.round((expectedRuntimeReplayRowCountRange[0] + expectedRuntimeReplayRowCountRange[1]) / 2),
+      })
+      return buildPhaseChainReplayResult(entry, rows, generationBatchId)
     })
   })
 
   it('produces governed replay results for all 13 real-project scenarios using contextual plan-reference duration evidence', async () => {
     const results = await runWbsTemplateGoldenBenchmarkReplay()
 
-    expect(generateWbsTemplateRows).toHaveBeenCalledTimes(WBS_TEMPLATE_REAL_PROJECT_COVERAGE_MATRIX.length)
-    for (const call of vi.mocked(generateWbsTemplateRows).mock.calls) {
+    expect(generateWbsTemplatePhaseChainRows).toHaveBeenCalledTimes(WBS_TEMPLATE_REAL_PROJECT_COVERAGE_MATRIX.length)
+    expect(generateWbsTemplateRows).not.toHaveBeenCalled()
+    for (const call of vi.mocked(generateWbsTemplatePhaseChainRows).mock.calls) {
       expect(call[0]).not.toHaveProperty('durationSuggestionMode')
       expect(call[0]).toHaveProperty('diagnosticDurationSuggestionMode', 'benchmark_plan_reference')
-      expect(call[0].operation as Record<string, unknown>).not.toHaveProperty('durationSuggestionMode')
+      for (const operation of call[0].operations as Array<Record<string, unknown>>) {
+        expect(operation).not.toHaveProperty('durationSuggestionMode')
+      }
     }
 
     expect(results).toHaveLength(WBS_TEMPLATE_GOLDEN_BENCHMARK_GATE_THRESHOLDS.expectedScenarioCount)
@@ -342,7 +412,8 @@ describe('wbsTemplateGoldenBenchmarkReplayService', () => {
   it('can replay a targeted scenario without running the full 13-scenario matrix', async () => {
     const results = await runWbsTemplateGoldenBenchmarkReplay({ projectCodes: ['J'] })
 
-    expect(generateWbsTemplateRows).toHaveBeenCalledTimes(1)
+    expect(generateWbsTemplatePhaseChainRows).toHaveBeenCalledTimes(1)
+    expect(generateWbsTemplateRows).not.toHaveBeenCalled()
     expect(results).toHaveLength(1)
     expect(results[0]).toEqual(expect.objectContaining({
       projectCode: 'J',
@@ -350,30 +421,31 @@ describe('wbsTemplateGoldenBenchmarkReplayService', () => {
     }))
   })
 
+  it('surfaces duration asset utilization summary from generated golden replay outputs', async () => {
+    const results = await runWbsTemplateGoldenBenchmarkReplay({ projectCodes: ['J'] })
+
+    expect(results).toHaveLength(1)
+    expect(results[0]?.durationAssetUtilizationSummary).toEqual(expect.objectContaining({
+      source: 'default_master_plan_duration_asset_utilization_summary',
+      evidenceLevel: 'candidate_duration_asset_utilization_l1',
+      productionWritePolicy: 'candidate_only_no_task_dependencies_write',
+      rowsMissingDurationAssetCount: 0,
+      rowsMissingT2RhythmTemplateCount: 0,
+    }))
+    expect(results[0]?.durationAssetUtilizationSummary?.standardWorkDurationSeedRowCount).toBe(results[0]?.actualGeneratedRowCount)
+    expect(results[0]?.durationAssetUtilizationSummary?.t2RhythmTemplateRowCount).toBe(results[0]?.actualGeneratedRowCount)
+  })
+
   it('uses real generated row count as runtime gate evidence instead of clamping to the anchor range', async () => {
-    vi.mocked(generateWbsTemplateRows).mockImplementationOnce(async (params) => {
-      const generationBatchId = String((params.operation as Record<string, unknown>).generationBatchId ?? '')
+    vi.mocked(generateWbsTemplatePhaseChainRows).mockImplementationOnce(async (params) => {
+      const generationBatchId = String((params.operations[0] as Record<string, unknown> | undefined)?.generationBatchId ?? '')
       const entry = WBS_TEMPLATE_REAL_PROJECT_COVERAGE_MATRIX.find((item) => item.projectCode === 'J')!
       const rows = buildGovernedReplayRows({
         requiredTemplateIds: entry.requiredTemplateIds,
         requiredStableCodePrefixes: entry.requiredStableCodePrefixes,
         durationDays: Math.round((entry.expectedDurationDaysRange[0] + entry.expectedDurationDaysRange[1]) / 2),
       })
-      return {
-        generationBatchId,
-        templateId: entry.requiredTemplateIds[0] ?? 'fallback-template',
-        templateIds: [...entry.requiredTemplateIds],
-        generationDepth: 'process',
-        rows,
-        scopeCombos: [],
-        rowLimit: rows.length,
-        rowLimitPolicy: 'single_batch',
-        splitByPhaseApplied: false,
-        generationBatches: [],
-        suppressedCoreQualityCodes: [],
-        governanceWarnings: [],
-        phaseWindows: [],
-      } as unknown as GenerateWbsTemplateRowsResult
+      return buildPhaseChainReplayResult(entry, rows, generationBatchId)
     })
 
     const results = await runWbsTemplateGoldenBenchmarkReplay({ projectCodes: ['J'] })
@@ -387,11 +459,11 @@ describe('wbsTemplateGoldenBenchmarkReplayService', () => {
   it('narrows benchmark generation to scenario coverage prefixes instead of selecting full template roots', async () => {
     await runWbsTemplateGoldenBenchmarkReplay({ projectCodes: ['J'] })
 
-    const operation = vi.mocked(generateWbsTemplateRows).mock.calls[0]?.[0].operation as Record<string, unknown>
-    const selections = operation.selectedNodesByTemplate as Record<string, string[]>
-    expect(selections).toBeDefined()
-    expect(Object.values(selections).every((selectedNodeIds) => selectedNodeIds.length > 0)).toBe(true)
-    const selected = Object.values(selections).flat()
+    const operations = vi.mocked(generateWbsTemplatePhaseChainRows).mock.calls[0]?.[0].operations as Array<Record<string, unknown>>
+    const selected = operations.flatMap((operation) => (
+      Object.values(operation.selectedNodesByTemplate as Record<string, string[]>).flat()
+    ))
+    expect(selected.length).toBeGreaterThan(0)
     expect(selected.some((code) => code.startsWith('MIC'))).toBe(true)
     expect(selected.some((code) => code.startsWith('IBU'))).toBe(true)
     expect(selected.some((code) => code.startsWith('IKU'))).toBe(true)
@@ -405,40 +477,26 @@ describe('wbsTemplateGoldenBenchmarkReplayService', () => {
       emitGenerationStageTimings: true,
     })
 
-    expect(generateWbsTemplateRows).toHaveBeenCalledTimes(1)
-    expect(vi.mocked(generateWbsTemplateRows).mock.calls[0]?.[0]).toEqual(expect.objectContaining({
+    expect(generateWbsTemplatePhaseChainRows).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(generateWbsTemplatePhaseChainRows).mock.calls[0]?.[0]).toEqual(expect.objectContaining({
       diagnosticDurationSuggestionMode: 'fast_template',
     }))
-    expect(vi.mocked(generateWbsTemplateRows).mock.calls[0]?.[0].operation).toEqual(expect.objectContaining({
-      diagnosticStageTimings: true,
-    }))
+    expect(vi.mocked(generateWbsTemplatePhaseChainRows).mock.calls[0]?.[0].operations).toEqual(
+      expect.arrayContaining([expect.objectContaining({ diagnosticStageTimings: true })]),
+    )
   })
 
   it('reports a benchmark-controlled schedule span while preserving raw proof-surface span evidence', async () => {
     const entry = WBS_TEMPLATE_REAL_PROJECT_COVERAGE_MATRIX.find((item) => item.projectCode === 'J')!
-    vi.mocked(generateWbsTemplateRows).mockImplementationOnce(async (params) => {
-      const generationBatchId = String((params.operation as Record<string, unknown>).generationBatchId ?? '')
+    vi.mocked(generateWbsTemplatePhaseChainRows).mockImplementationOnce(async (params) => {
+      const generationBatchId = String((params.operations[0] as Record<string, unknown> | undefined)?.generationBatchId ?? '')
       const rows = buildGovernedReplayRows({
         requiredTemplateIds: entry.requiredTemplateIds,
         requiredStableCodePrefixes: entry.requiredStableCodePrefixes,
         durationDays: 30,
         rowCount: Math.round(((entry.expectedRuntimeReplayRowCountRange ?? entry.expectedRowCountRange)[0] + (entry.expectedRuntimeReplayRowCountRange ?? entry.expectedRowCountRange)[1]) / 2),
       })
-      return {
-        generationBatchId,
-        templateId: entry.requiredTemplateIds[0] ?? 'fallback-template',
-        templateIds: [...entry.requiredTemplateIds],
-        generationDepth: 'process',
-        rows,
-        scopeCombos: [],
-        rowLimit: rows.length,
-        rowLimitPolicy: 'single_batch',
-        splitByPhaseApplied: false,
-        generationBatches: [],
-        suppressedCoreQualityCodes: [],
-        governanceWarnings: [],
-        phaseWindows: [],
-      } as unknown as GenerateWbsTemplateRowsResult
+      return buildPhaseChainReplayResult(entry, rows, generationBatchId)
     })
 
     const [result] = await runWbsTemplateGoldenBenchmarkReplay({ projectCodes: ['J'] })
@@ -458,30 +516,14 @@ describe('wbsTemplateGoldenBenchmarkReplayService', () => {
   })
 
   it('does not count legacy snake_case duration output aliases as governed replay evidence', async () => {
-    vi.mocked(generateWbsTemplateRows).mockImplementation(async (params) => {
-      const generationBatchId = String((params.operation as Record<string, unknown>).generationBatchId ?? '')
-      const projectCode = generationBatchId.split(':').at(-1)
-      const entry = WBS_TEMPLATE_REAL_PROJECT_COVERAGE_MATRIX.find((item) => item.projectCode === projectCode)
-        ?? WBS_TEMPLATE_REAL_PROJECT_COVERAGE_MATRIX[0]
+    vi.mocked(generateWbsTemplatePhaseChainRows).mockImplementation(async (params) => {
+      const generationBatchId = String((params.operations[0] as Record<string, unknown> | undefined)?.generationBatchId ?? '')
+      const entry = resolveEntryFromBatchId(generationBatchId)
       const rows = buildLegacyAliasOnlyReplayRows({
         requiredTemplateIds: entry.requiredTemplateIds,
         requiredStableCodePrefixes: entry.requiredStableCodePrefixes,
       })
-      return {
-        generationBatchId,
-        templateId: entry.requiredTemplateIds[0] ?? 'fallback-template',
-        templateIds: [...entry.requiredTemplateIds],
-        generationDepth: 'process',
-        rows,
-        scopeCombos: [],
-        rowLimit: rows.length,
-        rowLimitPolicy: 'single_batch',
-        splitByPhaseApplied: false,
-        generationBatches: [],
-        suppressedCoreQualityCodes: [],
-        governanceWarnings: [],
-        phaseWindows: [],
-      } as unknown as GenerateWbsTemplateRowsResult
+      return buildPhaseChainReplayResult(entry, rows, generationBatchId)
     })
 
     const results = await runWbsTemplateGoldenBenchmarkReplay()

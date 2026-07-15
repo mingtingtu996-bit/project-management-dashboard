@@ -1,7 +1,7 @@
 {
   "schemaVersion": "workbuddy-release-test-matrix/v1",
   "generatedAt": "2026-06-29T01:45:00+08:00",
-  "scope": "Release dashboard inventory for local gates plus deferred live/db closeout gates. Local profiles are runnable when dependencies and target environments are available; real-environment gates still require explicit unlock and evidence discipline.",
+  "scope": "Release dashboard inventory for local gates, personal solo-live readiness, plus deferred live/db closeout gates. Local profiles are runnable when dependencies and target environments are available; real-environment gates still require explicit unlock and evidence discipline.",
   "concurrencyPolicy": {
     "activeLiveThread": false,
     "doNotModify": [
@@ -44,10 +44,94 @@
       "purpose": "Vitest unit, route, contract, and governance tests.",
       "commands": [
         "npx vitest run --config client/vitest.config.ts",
-        "npx vitest run --config server/vitest.config.ts",
+        "npm run testing:server-vitest:slices -- --project server-default --output <artifact-root>/server-vitest-default-slices.json",
         "npm run acceptance:v1"
       ],
       "mutationBoundary": "test harness only"
+    },
+    {
+      "id": "local-deterministic-readiness",
+      "tier": "tooling_readiness",
+      "status": "ready",
+      "purpose": "Read-only readiness check for deterministic non-live testing: MSW handlers, DB_CONNECTION_STRING override, boot validation switch, and GitHub Actions Postgres service-container template.",
+      "commands": [
+        "node project-testing/tools/check-local-deterministic-readiness.mjs --output project-testing/reports/local-deterministic-readiness.json"
+      ],
+      "artifactRoot": "project-testing/reports",
+      "mutationBoundary": "read-only repo inspection; no app server, live Supabase, DB connection, migration, or production write"
+    },
+    {
+      "id": "msw-deterministic-page-data",
+      "tier": "local_browser_msw",
+      "status": "ready",
+      "purpose": "Deterministic frontend/page gates backed by MSW fixtures instead of real backend or live Supabase data.",
+      "commands": [
+        "npm exec --workspace=client -- vitest run src/pages/__tests__/CompanyCockpit.msw.test.tsx"
+      ],
+      "commandTemplates": [
+        "npm exec --workspace=client -- vitest run <selected-msw-backed-page-test>",
+        "npx playwright test <selected-page-smoke> --config <msw-enabled-playwright-config>"
+      ],
+      "recommendedTools": [
+        "msw",
+        "Playwright"
+      ],
+      "blockingPrerequisites": [
+        "Additional pages should define their API fixture contract before being added to this gate.",
+        "Each promoted page should cover loading, empty, success, permission-denied, and error states where applicable.",
+        "Exploratory or manual observations must be converted into repeatable Vitest or Playwright assertions before being counted here."
+      ],
+      "mutationBoundary": "mocked API responses only; cannot close live, DB, RLS, storage, or production-readiness gates"
+    },
+    {
+      "id": "local-api-contract-boundary",
+      "tier": "local_api_contract",
+      "status": "inventory_only",
+      "purpose": "Future route/client-service contract checks that validate API shape and error semantics without a live Supabase dependency.",
+      "commands": [],
+      "commandTemplates": [
+        "npm exec --workspace=server -- vitest run <selected-route-contract-test>",
+        "npm exec --workspace=client -- vitest run <selected-api-client-contract-test>"
+      ],
+      "blockingPrerequisites": [
+        "Identify authoritative request/response contracts for the selected route.",
+        "Keep contract fixtures in source-controlled test files or project-testing artifacts without secrets.",
+        "Do not use contract-only evidence to close live data, RLS, concurrency, or migration gates."
+      ],
+      "mutationBoundary": "local contract assertions only; no live service and no production writes"
+    },
+    {
+      "id": "container-postgres-integration",
+      "tier": "container_db",
+      "status": "inventory_only",
+      "purpose": "Future backend integration slice against an ephemeral PostgreSQL database through DB_CONNECTION_STRING, using GitHub Actions service containers first and Testcontainers later if local Docker capacity is acceptable.",
+      "commands": [],
+      "commandTemplates": [
+        "Use project-testing/plugins/github-actions-postgres-service-container.example.yml as the workflow promotion template.",
+        "DB_CONNECTION_STRING=postgresql://workbuddy_runtime_login:<password>@127.0.0.1:5432/workbuddy_test npm run testing:server-vitest:slices -- --project server-default --output <artifact-root>/server-vitest-container-db-slices.json"
+      ],
+      "recommendedTools": [
+        "GitHub Actions service containers",
+        "@testcontainers/postgresql"
+      ],
+      "blockingPrerequisites": [
+        "An ephemeral schema migration and seed command must be selected before this becomes ready.",
+        "The CI workflow must not use SUPABASE_MIGRATION_URL, service-role secrets, or production Supabase credentials.",
+        "Container evidence can support SQL integration readiness but cannot close Supabase-specific RLS, Advisor, storage, or live migration evidence."
+      ],
+      "artifactRoot": "project-testing/reports",
+      "mutationBoundary": "ephemeral container database only; no live Supabase, no production database, no persistent mutation"
+    },
+    {
+      "id": "server-wbs-long-observable",
+      "tier": "planned",
+      "status": "inventory_only",
+      "purpose": "Heavy server WBS, generation, and scheduling Vitest files run through observable per-file slices instead of a silent all-project Vitest run.",
+      "commands": [
+        "npm run testing:server-vitest:slices -- --project server-wbs-long --timeout-ms 420000 --output <artifact-root>/server-vitest-wbs-long-slices.json"
+      ],
+      "artifactRoot": "project-testing/reports",
+      "mutationBoundary": "local heavy test execution only; no live or DB commands run"
     },
     {
       "id": "backend-governance-guards",
@@ -78,11 +162,12 @@
         "verify:company-cockpit",
         "verify:responsibility",
         "verify:dashboard",
-        "verify:notifications",
-        "verify:task-summary",
-        "verify:team-members",
-        "verify:join-project"
-      ],
+          "verify:notifications",
+          "verify:task-summary",
+          "verify:team-members",
+          "verify:workspace-company-create-switch",
+          "verify:join-project"
+        ],
       "artifactRoot": "project-testing/artifacts/browser-checks",
       "mutationBoundary": "local browser/test API behavior only"
     },
@@ -167,13 +252,13 @@
       "id": "v14231-closeout-local",
       "tier": "local_static",
       "status": "ready",
-      "purpose": "Non-live v1.4.23.1 closeout contracts and client contracts.",
+      "purpose": "Non-live v1.4.23.1 capability closeout contracts and client contracts; `production-ready` rows here are capability-status rows, not realTestEnvironmentReady, soloLiveReady, or live production outcome evidence.",
       "commands": [
         "npm run verify:v14231-non-live-closeout",
         "npm run verify:v14231-client-contracts",
         "npm run verify:v14231-closeout"
       ],
-      "mutationBoundary": "non-live closeout contract verification"
+      "mutationBoundary": "non-live capability closeout contract verification; cannot close realTestEnvironmentReady, soloLiveReady, or productionReady environment gates"
     },
     {
       "id": "testing-tool-readiness",
@@ -185,6 +270,141 @@
       ],
       "artifactRoot": "project-testing/reports",
       "mutationBoundary": "read-only local file/env/package inspection; no app, live, DB, or browser execution"
+    },
+    {
+      "id": "default-master-plan-executable-generation-quality",
+      "tier": "local_static",
+      "status": "ready",
+      "purpose": "Generate all 11 wizard default master-plan business types and fail closed on method conflicts, duration-asset semantic mismatches, dependency cycles, disconnected primary networks, multiple roots or terminals, and critical paths that do not continuously cover project start through handover.",
+      "commands": [
+        "npm run verify:default-master-plan:executable-simulation",
+        "npm run verify:default-master-plan:construction-quality",
+        "npm exec --workspace=server -- vitest run src/__tests__/defaultMasterPlanFinalNetworkEvaluation.test.ts",
+        "npm exec --workspace=server -- vitest run src/__tests__/wizardGenerationSideEffects.test.ts -t \"claimed-ready master plan|executable assembly|executable default master plan\""
+      ],
+      "artifactRoot": "project-testing/reports/executable-default-master-plan-20260710",
+      "expectedArtifacts": [
+        "all-business-type-plans.json",
+        "all-business-type-summary.md",
+        "general_civil-complete-plan.json",
+        "general_civil-complete-plan.md"
+      ],
+      "mutationBoundary": "local static wizard generation and report-file writes only; no DB, task, dependency, runtime seed, publication, staging, or production writes"
+    },
+    {
+      "id": "default-master-plan-evidence-source-kit",
+      "tier": "tooling_readiness",
+      "status": "ready",
+      "purpose": "Read-only source-kit inventory for default master-plan review, duration calibration, dependency writer, runtime publication, and post-publish smoke source inputs.",
+      "commands": [
+        "npm run evidence:default-master-plan:candidate-hygiene",
+        "npm run evidence:default-master-plan:sources",
+        "npm run evidence:default-master-plan:real-outcome-package",
+        "npm run evidence:default-master-plan:completed-task-export",
+        "npm run evidence:default-master-plan:real-duration-sample-template",
+        "npm run evidence:default-master-plan:real-duration-sample-from-task-export",
+        "npm run evidence:default-master-plan:real-duration-sample-preflight",
+        "npm run evidence:default-master-plan:candidate-refresh-db-repair-readiness",
+        "node project-testing/tools/check-default-master-plan-real-duration-sample-collection-kit-preflight.mjs --collection-kit project-testing/reports/default-master-plan-production-readiness/real-duration-sample-collection-kit.json --output project-testing/reports/default-master-plan-production-readiness/real-duration-sample-collection-kit-preflight.json --checked-by <operator-id>",
+        "node project-testing/tools/build-default-master-plan-real-duration-sample-material-from-collection-kit-preflight.mjs --collection-package project-testing/reports/default-master-plan-production-readiness/duration-sample-collection-package.json --collection-kit-preflight project-testing/reports/default-master-plan-production-readiness/real-duration-sample-collection-kit-preflight.json --output project-testing/reports/default-master-plan-production-readiness/real-duration-sample-material.json --prepared-by <operator-id>",
+        "npm run evidence:default-master-plan:real-duration-sample-export",
+        "node project-testing/tools/check-default-master-plan-runtime-seed-import-readiness.mjs",
+        "node project-testing/tools/check-default-master-plan-candidate-baseline-materialization-readiness.mjs",
+        "npm run evidence:default-master-plan:real-evidence-gaps",
+        "npm run evidence:default-master-plan:blocked-gate-checklist",
+        "npm run evidence:default-master-plan:blocked-gate-checklist-freshness",
+        "node project-testing/tools/plan-default-master-plan-read-only-evidence-queue.mjs --input project-testing/reports/default-master-plan-production-readiness/real-evidence-gap-summary.json --output project-testing/reports/default-master-plan-production-readiness/read-only-evidence-queue-plan.json --markdown project-testing/reports/default-master-plan-production-readiness/read-only-evidence-queue-plan.md --plan-only",
+        "npm run evidence:default-master-plan:test-concurrent"
+      ],
+      "artifactRoot": "project-testing/reports/default-master-plan-production-readiness",
+      "mutationBoundary": "read-only source export, no-write material preflight, and no-write readiness seal inspection; no runtime seed import, no duration sample writes, no runtime writers, no publication, no smoke"
+    },
+    {
+      "id": "default-master-plan-staging-runtime-evidence",
+      "tier": "live_only",
+      "status": "deferred_live",
+      "purpose": "Controlled staging write, dependency materialization, runtime publication, readback smoke, and rollback drill for an explicitly authorized default master-plan test project.",
+      "commands": [
+        "npm run evidence:default-master-plan:staging-runtime"
+      ],
+      "unlockPolicy": {
+        "profile": "live",
+        "requiredFlags": [
+          "--include-staging",
+          "--confirm-staging-handoff",
+          "--allow-write"
+        ],
+        "liveHandoffRequired": true,
+        "dbReadyRequired": true,
+        "writeApprovalRequired": true,
+        "manualApprovalRequired": true,
+        "operationMode": "staging_controlled_write_publish_rollback"
+      },
+      "artifactRoot": "project-testing/reports/default-master-plan-production-readiness/staging-runtime",
+      "expectedArtifacts": [
+        "staging-authorization.json",
+        "dependency-writer-result.json",
+        "critical-path-readback.json",
+        "api-read-smoke.json",
+        "ui-consumption-smoke.json",
+        "rollback-verification.json",
+        "staging-runtime-evidence-summary.json"
+      ],
+      "blockingPrerequisites": [
+        "Explicit staging authorization file matching baseline/project/company/environment is required.",
+        "The selected env-file must point at the database containing the authorized test baseline.",
+        "The staging report must record env-file fingerprint, Supabase project ref, database host, and connection source without secrets.",
+        "This gate may write staging task carriers, duration samples, task dependencies, runtime publication rows, and rollback events.",
+        "This gate cannot claim production-ready or replace production/live real outcome evidence."
+      ],
+      "passCriteria": [
+        "The staging runtime evidence runner exits with status staging_runtime_evidence_written and no blockers.",
+        "The summary records taskCarrierCount, durationSampleCount, appliedDependencyCount, source manifest export, and rollback verification.",
+        "Readiness may reach staging_runtime_chain_passed, but productionReady must remain false until real production/live outcome evidence exists."
+      ],
+      "mutationBoundary": "authorized staging controlled write/publish/rollback only; no production-ready claim, no production seed write, no confirmed production baseline write"
+    },
+    {
+      "id": "solo-live-personal-real-environment",
+      "tier": "solo_live",
+      "status": "deferred_live",
+      "purpose": "Personal real-environment readiness lane for a single-owner staging or personal live deployment. It separates realTestEnvironmentReady and soloLiveReady from company-grade productionReady.",
+      "commands": [
+        "npm run testing:solo-live-readiness -- --handoff-file project-testing/runbooks/solo-live-handoff-template.json --output project-testing/reports/solo-live-readiness.json"
+      ],
+      "unlockPolicy": {
+        "profile": "solo-live",
+        "requiredFlags": [
+          "--include-solo-live",
+          "--confirm-solo-live-owner"
+        ],
+        "soloOwnerRequired": true,
+        "selfApprovalRequired": true,
+        "rollbackOwnerRequired": true,
+        "monitoringOwnerRequired": true,
+        "operationMode": "personal_real_environment_readiness"
+      },
+      "artifactRoot": "project-testing/reports",
+      "expectedArtifacts": [
+        "solo-live-readiness.json",
+        "solo-live-handoff.json",
+        "api-health.json",
+        "api-read-smoke.json",
+        "ui-smoke.json",
+        "rollback-plan.md",
+        "monitoring-plan.md"
+      ],
+      "blockingPrerequisites": [
+        "A personal handoff file must name the operator, Supabase project ref, environment, and API health evidence before realTestEnvironmentReady can pass.",
+        "soloLiveReady requires a non-local base URL, deployment ref, self-approval ref, rollback owner, monitoring owner, rollback plan, monitoring plan, API read smoke, and UI smoke.",
+        "This lane must keep productionReady=false and must not be used to bypass production/live real outcome evidence."
+      ],
+      "passCriteria": [
+        "The solo-live readiness checker exits with status staging_real_test_ready or solo_live_ready.",
+        "staging_real_test_ready may close personal real-test environment setup only.",
+        "solo_live_ready may close personal live readiness only; productionReady remains false."
+      ],
+      "mutationBoundary": "read-only handoff and evidence reference check; no live write, no production mutation, no runtime publication, no rollback execution, and no production-ready claim"
     },
     {
       "id": "live-evidence-and-workspace-isolation",
@@ -544,8 +764,19 @@
         "npm run migrate:check --workspace=server",
         "npm run migrate:diagnose --workspace=server",
         "npm run migrate:drift --workspace=server",
-        "npm run migrate:production-governance:evidence --workspace=server -- --output-file <artifact-root-from-server>/production-migration-governance-evidence.json --operator release-dashboard-db-profile",
+        "npm run evidence:supabase-advisor:management-api-preflight -- --env-file deploy/env/staging.env --output <artifact-root>/supabase-advisor-management-api-preflight.json --advisor-output <artifact-root>/supabase-advisor-management-api-export.json --operator release-dashboard-db-profile",
+        "npm run evidence:supabase-advisor:management-api -- --env-file deploy/env/staging.env --output <artifact-root>/supabase-advisor-management-api-export.json --operator release-dashboard-db-profile",
+        "npm run evidence:supabase-advisor:dashboard-ui-template -- --env-file deploy/env/staging.env --output <artifact-root>/supabase-advisor-dashboard-ui-capture.template.json --operator release-dashboard-db-profile",
+        "npm run evidence:supabase-advisor:dashboard-ui-normalize -- --input <operator-captured-dashboard-advisor-json> --output <artifact-root>/supabase-advisor-management-api-export.json --project-ref <project-ref> --dashboard-url <supabase-dashboard-project-advisor-url> --operator release-dashboard-db-profile",
+        "npm run migrate:production-governance:evidence --workspace=server -- --output-file <artifact-root-from-server>/production-migration-governance-evidence.json --operator release-dashboard-db-profile --advisor-export-file <artifact-root-from-server>/supabase-advisor-management-api-export.json",
         "npm run migrate:production-governance --workspace=server -- --evidence-file <artifact-root-from-server>/production-migration-governance-evidence.json"
+      ],
+      "blockingPrerequisites": [
+        "A Supabase Management API token, provided as SUPABASE_MANAGEMENT_API_TOKEN, SUPABASE_ACCESS_TOKEN, or SUPABASE_API_TOKEN outside the repository, must be available before the formal Management API Advisor export can run.",
+        "If no Management API token is available, use the Dashboard UI Advisor JSON capture fallback: generate the fill-in Dashboard UI capture template with evidence:supabase-advisor:dashboard-ui-template, populate it from the logged-in Supabase Dashboard Advisor page, then normalize it with evidence:supabase-advisor:dashboard-ui-normalize; it must include the dashboard project URL, project ref, current security/performance issue counts, and must not be derived from CLI db advisors.",
+        "A Dashboard UI capture template is not evidence. It must have templateOnly=false and current Dashboard counts before normalization.",
+        "A CLI Advisor rescan file is supporting evidence only; it cannot replace the Dashboard UI or Management API Advisor export required by MG-07.",
+        "The production governance evidence command must receive --advisor-export-file pointing at the current-run formal Advisor export artifact."
       ],
       "mutationBoundary": "database access required; may be read-only or migration-affecting depending on command"
     },

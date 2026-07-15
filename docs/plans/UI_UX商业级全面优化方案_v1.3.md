@@ -1,5 +1,7 @@
 # WorkBuddy UI/UX 商业级全面优化方案
 
+> **2026-07-13 现行覆盖**：本文件继续作为设计语言与通用交互规则来源，但其中的历史页面清单不再具有路由权威性。PlanningWorkspace、CompanyProjectTemplateLibrary 和独立 WBSTemplates 页面已退役；WBS 模板能力嵌入 Gantt 新建/导入计划流程。现行路由以 `client/src/App.tsx` 为准。
+
 ## Context
 
 > 母文件需求总数：**295 条**（R001-R295）。上线测试门禁用于证明 295 条可发布，不计入需求数量。

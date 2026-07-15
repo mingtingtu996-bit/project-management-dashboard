@@ -1,4 +1,4 @@
-import assert from 'node:assert/strict'
+﻿import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
@@ -14,7 +14,7 @@ test('buildSummaryUrl derives the performance summary endpoint from a base url o
     'http://127.0.0.1/api/performance-reports/summary',
   )
   assert.equal(
-    buildSummaryUrl('http://127.0.0.1/api/health'),
+    buildSummaryUrl('http://127.0.0.1/api/readyz'),
     'http://127.0.0.1/api/performance-reports/summary',
   )
   assert.equal(

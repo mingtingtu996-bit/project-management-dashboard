@@ -4,12 +4,12 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { chromium } from 'playwright'
-import { primeBrowserAuth } from './browser-auth-fixture.mjs'
+import { primeBrowserAuth, readFullAppTestManifest } from './browser-auth-fixture.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const scriptsDir = dirname(__filename)
 const repoRoot = join(scriptsDir, '..')
-const outputDir = join(repoRoot, 'artifacts', 'browser-checks')
+const outputDir = join(repoRoot, 'project-testing', 'artifacts', 'browser-checks')
 const previewScript = join(repoRoot, 'scripts', 'serve-client-dist.mjs')
 const distIndexFile = join(repoRoot, 'client', 'dist', 'index.html')
 
@@ -18,7 +18,7 @@ const apiBaseUrl = process.env.API_BASE_URL || 'http://127.0.0.1:3001'
 const shouldUseMockApi = process.env.MOCK_API !== 'false'
 const shouldStartPreview = process.env.START_PREVIEW !== 'false'
 
-const projectId = process.env.PROJECT_ID || '422ba093-7a94-4e91-a47a-c1b865185e86'
+let projectId = process.env.PROJECT_ID || '422ba093-7a94-4e91-a47a-c1b865185e86'
 const now = new Date().toISOString()
 
 const mockProject = {
@@ -36,7 +36,7 @@ const mockAuth = {
   user: {
     id: 'user-1',
     username: 'zhangsan',
-    display_name: '张三',
+    display_name: '寮犱笁',
     globalRole: 'company_admin',
   },
 }
@@ -46,7 +46,7 @@ const mockMembers = [
     id: 'member-1',
     userId: 'user-1',
     username: 'zhangsan',
-    displayName: '张三',
+    displayName: '寮犱笁',
     email: 'zhangsan@example.com',
     permissionLevel: 'owner',
     globalRole: 'company_admin',
@@ -155,15 +155,39 @@ async function openTeamManagementDrawer(page, targetUrl) {
     attempts: 2,
     timeoutMs: 15000,
   })
+  const projectAccessResponsePromise = waitForProjectAccessResponse(page)
   await gotoWithRetry(page, targetUrl, {
     label: 'Project dashboard navigation',
     attempts: 3,
     timeoutMs: 25000,
   })
   await page.getByTestId('dashboard-page').waitFor({ state: 'visible', timeout: 20000 })
+  await projectAccessResponsePromise
   await page.getByLabel('打开用户菜单').click()
-  await page.getByRole('menuitem', { name: '团队管理' }).click()
+  const teamManagementItem = page.getByRole('menuitem', { name: '团队管理' })
+  await teamManagementItem.waitFor({ state: 'visible', timeout: 30000 })
+  await teamManagementItem.click()
   await page.getByTestId('team-management-panel').waitFor({ state: 'visible', timeout: 20000 })
+}
+
+async function waitForProjectAccessResponse(page) {
+  if (shouldUseMockApi) return null
+
+  const response = await page.waitForResponse(
+    (candidate) => {
+      const url = new URL(candidate.url())
+      return url.pathname === `/api/members/${projectId}/me`
+    },
+    { timeout: 30000 },
+  )
+  const payload = await response.json().catch(() => null)
+  if (!response.ok() || payload?.success === false) {
+    throw new Error(`Project access check failed with ${response.status()}: ${JSON.stringify(payload)}`)
+  }
+  if (payload?.data?.canManageTeam !== true) {
+    throw new Error(`Project access check did not grant team management: ${JSON.stringify(payload?.data ?? payload)}`)
+  }
+  return payload.data
 }
 
 async function ensureDistExists() {
@@ -231,7 +255,6 @@ function buildMockResponse(urlString) {
     || pathname === '/api/task-obstacles'
     || pathname === '/api/warnings'
     || pathname === '/api/issues'
-    || pathname === '/api/delay-requests'
     || pathname === '/api/change-logs'
     || pathname === '/api/tasks/progress-snapshots'
   ) {
@@ -241,9 +264,26 @@ function buildMockResponse(urlString) {
   return json({ success: true, data: [] })
 }
 
+async function resolveProjectId() {
+  if (process.env.PROJECT_ID || shouldUseMockApi) return projectId
+
+  const manifest = await readFullAppTestManifest()
+  const manifestProjectId = manifest.projects?.standard?.id
+  if (!manifestProjectId) {
+    throw new Error('MOCK_API=false requires manifest.projects.standard.id')
+  }
+  projectId = manifestProjectId
+  mockProject.id = projectId
+  mockInvitations.forEach((invitation) => {
+    invitation.projectId = projectId
+  })
+  return projectId
+}
+
 async function main() {
   await mkdir(outputDir, { recursive: true })
   await ensureDistExists()
+  await resolveProjectId()
 
   let previewProcess = null
   const previewAlreadyReady = await isHttpReady(baseUrl)
@@ -260,6 +300,7 @@ async function main() {
   const consoleErrors = []
   const pageErrors = []
   const apiFailures = []
+  const requestedPaths = []
 
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1600 } })
@@ -278,6 +319,8 @@ async function main() {
 
     await page.route(`${baseUrl}/api/**`, async (route) => {
       const requestUrl = route.request().url()
+      const requestPath = new URL(requestUrl).pathname + new URL(requestUrl).search
+      requestedPaths.push(requestPath)
 
       if (shouldUseMockApi) {
         await route.fulfill(buildMockResponse(requestUrl))
@@ -287,6 +330,9 @@ async function main() {
       const forwardUrl = requestUrl.replace(baseUrl, apiBaseUrl)
       try {
         const response = await route.fetch({ url: forwardUrl })
+        if (response.status() >= 400) {
+          apiFailures.push({ url: forwardUrl, status: response.status(), statusText: response.statusText() })
+        }
         await route.fulfill({ response })
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
@@ -311,7 +357,7 @@ async function main() {
     await page.getByTestId('pending-assignee-row').waitFor({ state: 'visible', timeout: 10000 })
 
     await page.getByTestId('team-management-tab-invitations').click()
-    await page.getByTestId('team-management-invitation-row-inv-1').waitFor({ state: 'visible', timeout: 10000 })
+    await page.locator('[data-testid^="team-management-invitation-row-"]').first().waitFor({ state: 'visible', timeout: 10000 })
 
     await page.getByTestId('team-management-create-invitation').click()
     await page.getByTestId('team-management-create-invitation-dialog').waitFor({ state: 'visible', timeout: 10000 })
@@ -326,6 +372,7 @@ async function main() {
       initialUrl,
       pendingAssigneeVisible: true,
       invitationDialogVisible: true,
+      requestedPaths,
       apiFailures,
       consoleErrors,
       pageErrors,
@@ -341,6 +388,7 @@ async function main() {
     const failurePayload = {
       mode: shouldUseMockApi ? 'mock-api' : 'proxy-api',
       error: error instanceof Error ? error.message : String(error),
+      requestedPaths,
       apiFailures,
       consoleErrors,
       pageErrors,

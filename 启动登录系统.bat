@@ -86,7 +86,7 @@ echo.
 echo 📋 服务地址:
 echo   - 后端: http://localhost:3001
 echo   - 前端: http://localhost:5173
-echo   - 健康检查: http://localhost:3001/api/health
+echo   - 就绪检查: http://localhost:3001/api/readyz
 echo.
 echo 📋 默认登录账号:
 echo   - 用户名: admin

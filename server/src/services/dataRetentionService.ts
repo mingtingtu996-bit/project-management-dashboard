@@ -13,11 +13,13 @@ const OPERATION_LOG_RETENTION_DAYS = 90
 const JOB_FAILURE_RETENTION_DAYS = 30
 
 export class DataRetentionService {
-  async runRetentionPolicy(): Promise<DataRetentionResult> {
-    const operationLogsDeleted = await this.cleanupOperationLogs()
+  async runRetentionPolicy(projectIds?: string[] | null): Promise<DataRetentionResult> {
+    const operationLogsDeleted = await this.cleanupOperationLogs(projectIds)
     const taskProgressSnapshotsDeleted = await this.cleanupTaskProgressSnapshots()
     const changeLogsDeleted = await this.cleanupArchivedChangeLogs()
-    const jobFailuresDeleted = await cleanupJobFailures(JOB_FAILURE_RETENTION_DAYS)
+    const jobFailuresDeleted = Array.isArray(projectIds)
+      ? 0
+      : await cleanupJobFailures(JOB_FAILURE_RETENTION_DAYS)
 
     logger.info('[dataRetentionService] retention policy executed', {
       operationLogsDeleted,
@@ -34,12 +36,27 @@ export class DataRetentionService {
     }
   }
 
-  private async cleanupOperationLogs() {
-    const result = await query(
-      `DELETE FROM public.operation_logs
-        WHERE created_at < NOW() - ($1 * INTERVAL '1 day')`,
-      [OPERATION_LOG_RETENTION_DAYS],
-    )
+  // workspace-isolation-system-job-approved: retention cleanup is a scheduled maintenance boundary; optional projectIds narrows the system job and no rows are returned to a tenant request.
+  private async cleanupOperationLogs(projectIds?: string[] | null) {
+    const scopedProjectIds = Array.isArray(projectIds)
+      ? [...new Set(projectIds.map((projectId) => String(projectId ?? '').trim()).filter(Boolean))]
+      : null
+    if (scopedProjectIds && scopedProjectIds.length === 0) {
+      return 0
+    }
+
+    const result = scopedProjectIds
+      ? await query(
+        `DELETE FROM public.operation_logs
+          WHERE created_at < NOW() - ($1 * INTERVAL '1 day')
+            AND project_id = ANY($2::uuid[])`,
+        [OPERATION_LOG_RETENTION_DAYS, scopedProjectIds],
+      )
+      : await query(
+        `DELETE FROM public.operation_logs
+          WHERE created_at < NOW() - ($1 * INTERVAL '1 day')`,
+        [OPERATION_LOG_RETENTION_DAYS],
+      )
 
     return result.rowCount ?? 0
   }

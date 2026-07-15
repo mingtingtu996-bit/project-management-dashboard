@@ -13,13 +13,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { useAuth } from '@/context/AuthContext'
 
 interface ChangePasswordDialogProps {
   isOpen: boolean;
   onClose: () => void;
+  required?: boolean;
 }
 
-export const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({ isOpen, onClose }) => {
+export const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({ isOpen, onClose, required = false }) => {
+  const { changePassword } = useAuth()
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -74,21 +77,15 @@ export const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({ isOp
 
     setLoading(true);
     try {
-      const res = await fetch('/api/auth/change-password', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ oldPassword, newPassword }),
-      });
-      const data = await res.json();
-      if (data.success) {
+      const result = await changePassword(oldPassword, newPassword)
+      if (result.success) {
         onClose();
         setOldPassword('');
         setNewPassword('');
         setConfirmPassword('');
         setFieldErrors({});
       } else {
-        setError(data.message || '修改失败');
+        setError(result.message || '修改失败');
       }
     } catch {
       setError('修改失败，请稍后重试');
@@ -98,7 +95,7 @@ export const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({ isOp
   };
 
   const handleClose = () => {
-    if (!loading) {
+    if (!loading && !required) {
       setError('');
       setOldPassword('');
       setNewPassword('');
@@ -114,16 +111,19 @@ export const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({ isOp
     }}>
       <DialogContent
         className="max-h-[calc(100vh-4rem)] max-w-xl overflow-y-auto"
+        showClose={!required}
         onEscapeKeyDown={(event) => {
-          if (loading) event.preventDefault();
+          if (loading || required) event.preventDefault();
         }}
         onInteractOutside={(event) => {
-          if (loading) event.preventDefault();
+          if (loading || required) event.preventDefault();
         }}
       >
         <DialogHeader>
           <DialogTitle>修改密码</DialogTitle>
-          <DialogDescription>修改当前账号密码。</DialogDescription>
+          <DialogDescription>
+            {required ? '首次登录必须修改临时密码。' : '修改当前账号密码。'}
+          </DialogDescription>
         </DialogHeader>
 
         {error && (
@@ -214,9 +214,11 @@ export const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({ isOp
           </div>
 
           <DialogFooter className="gap-3 pt-2">
-            <Button variant="outline" type="button" onClick={handleClose} disabled={loading} className="flex-1">
-              取消
-            </Button>
+            {!required ? (
+              <Button variant="outline" type="button" onClick={handleClose} disabled={loading} className="flex-1">
+                取消
+              </Button>
+            ) : null}
             <Button type="submit" loading={loading} className="flex-1">
               确认修改
             </Button>

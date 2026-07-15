@@ -181,7 +181,9 @@ describe('Drawings view modes', () => {
       const payload = url.includes('/ledger') ? ledgerResponse : boardResponse
       return {
         ok: true,
+        status: 200,
         json: async () => payload,
+        text: async () => JSON.stringify(payload),
       } as Response
     }) as unknown as typeof fetch
   })

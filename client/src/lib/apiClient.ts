@@ -8,13 +8,19 @@ import { reportApiPerformanceEvidence } from '@/lib/performanceEvidenceReporter'
  */
 
 const TOKEN_STORAGE_KEYS = ['auth_token', 'access_token'] as const
+const COMPANY_STORAGE_KEY = 'current_company_id'
+export const COMPANY_CONTEXT_CHANGED_EVENT = 'workbuddy:company-context-changed'
 const DEV_BACKEND_HINT = '接口服务暂不可用，请先启动本地后端（默认 3001，可使用 启动登录系统.bat）后重试。'
 const SERVER_UNAVAILABLE_HINT = '接口服务暂不可用，请确认后端服务已启动后重试。'
 const OFFLINE_WRITE_BLOCK_MESSAGE = '当前处于离线状态，无法保存或提交内容，请恢复网络后重试。'
 const API_ERROR_TOAST_EVENT = 'workbuddy:api-error'
+export const AUTH_SESSION_EXPIRED_EVENT = 'workbuddy:auth-session-expired'
+export const COMMERCIAL_UPGRADE_REQUIRED_EVENT = 'workbuddy:commercial-upgrade-required'
 const API_ERROR_TOAST_DEDUPE_MS = 4000
 const DEFAULT_API_READ_CACHE_TTL_MS = 2500
 const MAX_API_READ_CACHE_ENTRIES = 80
+const PERMISSION_SYSTEM_DISABLED = new Set(['1', 'true', 'yes', 'on'])
+  .has(String(import.meta.env.VITE_DISABLE_PERMISSION_SYSTEM ?? '').trim().toLowerCase())
 
 export type ApiErrorCode = 'backend_unavailable' | 'network_error' | 'http_error'
 export type ApiRuntimeCacheMode = 'default' | 'off'
@@ -38,6 +44,15 @@ type ApiErrorToastDetail = {
 declare global {
   interface WindowEventMap {
     [API_ERROR_TOAST_EVENT]: CustomEvent<ApiErrorToastDetail>
+    [AUTH_SESSION_EXPIRED_EVENT]: CustomEvent<{ url: string; message: string }>
+    [COMMERCIAL_UPGRADE_REQUIRED_EVENT]: CustomEvent<{
+      url: string
+      code: string
+      message: string
+      upgradePath: string
+      details: Record<string, unknown> | null
+    }>
+    [COMPANY_CONTEXT_CHANGED_EVENT]: CustomEvent<{ previousCompanyId: string | null; companyId: string | null }>
   }
 }
 
@@ -46,14 +61,28 @@ export class ApiClientError extends Error {
   url: string
   code: ApiErrorCode
   rawText: string
+  serverCode: string | null
+  serverDetails: Record<string, unknown> | null
+  upgradePath: string | null
 
-  constructor(message: string, options: { status?: number | null; url: string; code: ApiErrorCode; rawText?: string }) {
+  constructor(message: string, options: {
+    status?: number | null
+    url: string
+    code: ApiErrorCode
+    rawText?: string
+    serverCode?: string | null
+    serverDetails?: Record<string, unknown> | null
+    upgradePath?: string | null
+  }) {
     super(message)
     this.name = 'ApiClientError'
     this.status = options.status ?? null
     this.url = options.url
     this.code = options.code
     this.rawText = options.rawText ?? ''
+    this.serverCode = options.serverCode ?? null
+    this.serverDetails = options.serverDetails ?? null
+    this.upgradePath = options.upgradePath ?? null
   }
 }
 
@@ -104,6 +133,30 @@ function parseErrorText(errorText: string): string | null {
 
 function inferServiceUnavailableMessage(url: string): string {
   return isLocalDevApi(url) ? DEV_BACKEND_HINT : SERVER_UNAVAILABLE_HINT
+}
+
+function parseStructuredServerError(errorText: string) {
+  const parsed = safeJsonParse<unknown>(errorText, null, 'structured api error payload')
+  if (!parsed || typeof parsed !== 'object') {
+    return { serverCode: null, serverDetails: null, upgradePath: null }
+  }
+
+  const root = parsed as Record<string, unknown>
+  const errorBlock = root.error && typeof root.error === 'object'
+    ? root.error as Record<string, unknown>
+    : root
+  const details = errorBlock.details && typeof errorBlock.details === 'object'
+    ? errorBlock.details as Record<string, unknown>
+    : null
+  const serverCode = typeof errorBlock.code === 'string' ? errorBlock.code.trim() || null : null
+  const directUpgradePath = typeof errorBlock.upgradePath === 'string' ? errorBlock.upgradePath.trim() : ''
+  const detailUpgradePath = typeof details?.upgradePath === 'string' ? details.upgradePath.trim() : ''
+
+  return {
+    serverCode,
+    serverDetails: details,
+    upgradePath: directUpgradePath || detailUpgradePath || null,
+  }
 }
 
 function getApiErrorToastPayload(error: ApiClientError, method: string): ApiErrorToastDetail | null {
@@ -162,6 +215,7 @@ function dispatchApiErrorToast(error: ApiClientError, method: string): void {
 
 function buildHttpError(url: string, status: number, errorText: string): ApiClientError {
   const parsedMessage = parseErrorText(errorText)
+  const structured = parseStructuredServerError(errorText)
   const isBackendUnavailable =
     isApiPath(url) &&
     status >= 500 &&
@@ -181,6 +235,7 @@ function buildHttpError(url: string, status: number, errorText: string): ApiClie
     url,
     code: 'http_error',
     rawText: errorText,
+    ...structured,
   })
 }
 
@@ -212,6 +267,7 @@ export function bindApiErrorToToast(): void {
 
 function getStoredToken(): string | null {
   if (typeof window === 'undefined') return null
+  if (PERMISSION_SYSTEM_DISABLED) return null
 
   for (const key of TOKEN_STORAGE_KEYS) {
     const token = safeStorageGet(localStorage, key)
@@ -235,6 +291,67 @@ export function persistAuthToken(token: string | null): void {
   for (const key of TOKEN_STORAGE_KEYS) {
     safeStorageRemove(localStorage, key)
   }
+  safeStorageRemove(localStorage, COMPANY_STORAGE_KEY)
+}
+
+export function persistCurrentCompanyId(companyId: string | null | undefined): void {
+  if (typeof window === 'undefined') return
+  const normalized = String(companyId ?? '').trim()
+  const previous = safeStorageGet(localStorage, COMPANY_STORAGE_KEY)?.trim() || ''
+  clearApiClientRuntimeCache()
+  if (normalized) {
+    safeStorageSet(localStorage, COMPANY_STORAGE_KEY, normalized)
+  } else {
+    safeStorageRemove(localStorage, COMPANY_STORAGE_KEY)
+  }
+  if (previous !== normalized) {
+    window.dispatchEvent(new CustomEvent(COMPANY_CONTEXT_CHANGED_EVENT, {
+      detail: {
+        previousCompanyId: previous || null,
+        companyId: normalized || null,
+      },
+    }))
+  }
+}
+
+function isAuthSessionExpiredError(error: ApiClientError): boolean {
+  if (error.status !== 401) return false
+  if (/\/api\/auth\/(login|register)\b/.test(error.url)) return false
+
+  const content = `${error.message}\n${error.rawText}`
+  return /INVALID_TOKEN|UNAUTHORIZED|认证token|token已过期|Token验证失败/i.test(content)
+}
+
+function dispatchAuthSessionExpired(error: ApiClientError): void {
+  if (typeof window === 'undefined' || !isAuthSessionExpiredError(error)) return
+
+  persistAuthToken(null)
+  window.dispatchEvent(
+    new CustomEvent(AUTH_SESSION_EXPIRED_EVENT, {
+      detail: {
+        url: error.url,
+        message: error.message || '登录状态已过期，请重新登录。',
+      },
+    }),
+  )
+}
+
+function dispatchCommercialUpgradeRequired(error: ApiClientError): void {
+  if (
+    typeof window === 'undefined'
+    || error.status !== 402
+    || !error.serverCode?.startsWith('COMMERCIAL_')
+  ) return
+
+  window.dispatchEvent(new CustomEvent(COMMERCIAL_UPGRADE_REQUIRED_EVENT, {
+    detail: {
+      url: error.url,
+      code: error.serverCode,
+      message: error.message,
+      upgradePath: error.upgradePath || '/settings/billing',
+      details: error.serverDetails,
+    },
+  }))
 }
 
 export function getAuthToken(): string {
@@ -243,7 +360,11 @@ export function getAuthToken(): string {
 
 export function getAuthHeaders(): HeadersInit {
   const token = getStoredToken()
-  return token ? { Authorization: `Bearer ${token}` } : {}
+  const companyId = typeof window === 'undefined' ? '' : safeStorageGet(localStorage, COMPANY_STORAGE_KEY)
+  return {
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(companyId ? { 'X-Company-Id': companyId } : {}),
+  }
 }
 
 export function isAbortError(error: unknown): boolean {
@@ -414,8 +535,9 @@ export async function authFetch<T = unknown>(
         throw buildHttpError(url, response.status, errorText)
       }
 
-      const data = await response.json()
-      const payload = (data.data ?? data) as T
+      const responseText = response.status === 204 || response.status === 205 ? '' : await response.text()
+      const data = responseText.trim() ? JSON.parse(responseText) : undefined
+      const payload = data === undefined ? undefined as T : (data.data ?? data) as T
 
       void reportApiPerformanceEvidence({
         url,
@@ -447,6 +569,8 @@ export async function authFetch<T = unknown>(
     }
 
     if (error instanceof ApiClientError) {
+      dispatchAuthSessionExpired(error)
+      dispatchCommercialUpgradeRequired(error)
       if (error.message !== OFFLINE_WRITE_BLOCK_MESSAGE) {
         void reportApiPerformanceEvidence({
           url,

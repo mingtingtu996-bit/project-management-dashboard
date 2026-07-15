@@ -91,7 +91,7 @@ export const PROJECT_NAVIGATION_LABELS = {
   planning: '\u8ba1\u5212\u7f16\u5236',
   baseline: '\u9879\u76ee\u57fa\u7ebf',
   monthlyPlan: '\u6708\u5ea6\u8ba1\u5212',
-  closeout: '\u6708\u672b\u5173\u8d26\u5de5\u4f5c\u53f0',
+  closeout: '\u6708\u672b\u5173\u8d26',
   revisionPool: '\u8ba1\u5212\u4fee\u8ba2\u5019\u9009',
   projectHome: '\u9879\u76ee\u603b\u89c8',
   notifications: '\u63d0\u9192\u4e2d\u5fc3',
@@ -116,7 +116,6 @@ export const PROJECT_NAVIGATION: NavigationItem[] = [
     children: [
       { key: 'planning-baseline', label: PROJECT_NAVIGATION_LABELS.baseline, href: '/projects/:id/planning/baseline', permission: 'view:task' },
       { key: 'planning-monthly', label: PROJECT_NAVIGATION_LABELS.monthlyPlan, href: '/projects/:id/planning/monthly', permission: 'view:task' },
-      { key: 'planning-wbs-templates', label: PROJECT_NAVIGATION_LABELS.wbsTemplates, href: '/projects/:id/planning/wbs-templates', permission: 'view:task' },
     ],
   },
   {
@@ -170,7 +169,7 @@ const PLANNING_TARGETS: Record<string, Pick<NotificationTarget, 'key' | 'label' 
   closeout: {
     key: 'planning',
     label: PROJECT_NAVIGATION_LABELS.closeout,
-    href: '/projects/:id/tasks/closeout',
+    href: '/projects/:id/planning/monthly?view=closeout',
   },
 }
 
@@ -183,12 +182,24 @@ function normalizeText(...parts: Array<string | undefined>) {
 }
 
 export function getShellNavigationMeta(pathname: string): ShellNavigationMeta {
+  if (pathname === '/workspace') {
+    return { title: '\u5de5\u4f5c\u53f0', contextLabel: '\u4e2a\u4eba\u5de5\u4f5c\u5165\u53e3' }
+  }
+
+  if (pathname === '/demo') {
+    return { title: '\u4ea7\u54c1\u9884\u89c8', contextLabel: '\u53ea\u8bfb\u6f14\u793a' }
+  }
+
   if (pathname === '/company') {
     return { title: PROJECT_NAVIGATION_LABELS.company, contextLabel: '\u516c\u53f8\u7ea7\u603b\u89c8' }
   }
 
   if (pathname === '/notifications') {
     return { title: PROJECT_NAVIGATION_LABELS.notifications, contextLabel: '\u63d0\u9192\u805a\u5408' }
+  }
+
+  if (pathname === '/settings/billing') {
+    return { title: '套餐与权益', contextLabel: '公司设置' }
   }
 
   if (pathname.includes('/reports')) {
@@ -203,13 +214,6 @@ export function getShellNavigationMeta(pathname: string): ShellNavigationMeta {
     return {
       title: `${PROJECT_NAVIGATION_LABELS.tasks} / ${PROJECT_NAVIGATION_LABELS.taskSummary}`,
       contextLabel: '\u4efb\u52a1\u7ed3\u679c\u603b\u7ed3',
-    }
-  }
-
-  if (pathname.includes('/tasks/closeout')) {
-    return {
-      title: `${PROJECT_NAVIGATION_LABELS.tasks} / ${PROJECT_NAVIGATION_LABELS.closeout}`,
-      contextLabel: '\\u4efb\\u52a1\\u5217\\u8868 / \\u6708\\u672b\\u5173\\u8d26',
     }
   }
 
@@ -233,17 +237,6 @@ export function getShellNavigationMeta(pathname: string): ShellNavigationMeta {
 
   if (pathname.includes('/milestones')) {
     return { title: PROJECT_NAVIGATION_LABELS.milestones, contextLabel: '\u5173\u952e\u8282\u70b9' }
-  }
-
-  if (pathname.includes('/planning/wbs-templates')) {
-    return {
-      title: `${PROJECT_NAVIGATION_LABELS.planning} / ${PROJECT_NAVIGATION_LABELS.wbsTemplates}`,
-      contextLabel: PROJECT_NAVIGATION_LABELS.planning,
-    }
-  }
-
-  if (pathname.includes('/wbs-templates')) {
-    return { title: PROJECT_NAVIGATION_LABELS.wbsTemplates, contextLabel: '\u7ed3\u6784\u6a21\u677f' }
   }
 
   if (pathname.includes('/drawings')) {
@@ -341,7 +334,7 @@ export function resolveNotificationTarget(notification: NotificationLike, curren
       return buildTarget(
         'planning',
         `${PROJECT_NAVIGATION_LABELS.planning} / ${PROJECT_NAVIGATION_LABELS.closeout}`,
-        '/projects/:id/tasks/closeout',
+        '/projects/:id/planning/monthly?view=closeout',
         projectId,
       )
     }
@@ -407,8 +400,11 @@ export function resolveNotificationTarget(notification: NotificationLike, curren
     )
   }
 
-  if (sourceEntityType === 'change_log') {
-    return buildTarget('reports', PROJECT_NAVIGATION_LABELS.reports, '/projects/:id/reports?view=change_log', projectId)
+  if (
+    sourceEntityType === 'progress_deviation' ||
+    /progress[_-]?deviation|进度偏差|偏差分析/.test(token)
+  ) {
+    return buildTarget('reports', PROJECT_NAVIGATION_LABELS.reports, '/projects/:id/reports?view=progress_deviation', projectId)
   }
 
   if (sourceEntityType === 'report') {

@@ -1,82 +1,58 @@
 import { logger } from '../middleware/logger.js'
 import { DataRetentionService } from '../services/dataRetentionService.js'
 import { runJobWithRetry } from '../services/jobRuntime.js'
-
-const MAX_TIMEOUT_MS = 2_147_483_647
+import { PersistentWallClockJobTimer } from '../services/persistentJobScheduleService.js'
 
 export class DataRetentionJob {
-  private timer: NodeJS.Timeout | null = null
   private isRunning = false
   private nextRun: Date | null = null
   private lastRun: Date | null = null
   private service = new DataRetentionService()
+  private wallClockTimer = new PersistentWallClockJobTimer({
+    jobName: 'dataRetentionJob',
+    schedule: { kind: 'monthly', dayOfMonth: 1, hour: 4, minute: 15 },
+    catchUp: { limit: 1, maxAgeMs: 35 * 24 * 60 * 60 * 1_000 },
+    execute: () => this.execute('scheduler'),
+    onScheduled: ({ nextRun, delayMs }) => {
+      this.nextRun = nextRun
+      logger.info('dataRetentionJob scheduled', {
+        nextRun: nextRun.toISOString(),
+        trigger: 'monthly_day_1_04_15',
+        remainingMs: delayMs,
+      })
+    },
+    onError: (error) => logger.error('dataRetentionJob scheduler failed', {
+      error: error instanceof Error ? error.message : String(error),
+    }),
+  })
 
   start() {
-    if (this.timer) {
+    if (!this.wallClockTimer.start()) {
       logger.warn('dataRetentionJob is already running')
-      return
     }
-
-    this.scheduleNextRun()
   }
 
   stop() {
-    if (this.timer) {
-      clearTimeout(this.timer)
-      this.timer = null
-      this.nextRun = null
+    if (this.wallClockTimer.stop()) {
       logger.info('dataRetentionJob stopped')
     }
+    this.nextRun = null
   }
 
   getStatus() {
     return {
       isRunning: this.isRunning,
-      isScheduled: this.timer !== null,
+      isScheduled: this.wallClockTimer.getStatus().isScheduled,
       lastRun: this.lastRun ? this.lastRun.toISOString() : null,
       nextRun: this.nextRun ? this.nextRun.toISOString() : null,
     }
   }
 
-  async executeNow() {
-    return this.execute('manual')
+  async executeNow(projectIds?: string[] | null) {
+    return this.execute('manual', projectIds)
   }
 
-  private scheduleNextRun() {
-    const now = new Date()
-    const nextRun = new Date(now.getFullYear(), now.getMonth(), 1, 4, 15, 0, 0)
-    if (nextRun <= now) {
-      nextRun.setMonth(nextRun.getMonth() + 1)
-    }
-
-    this.scheduleForDate(nextRun)
-  }
-
-  private scheduleForDate(targetDate: Date) {
-    const delay = Math.max(targetDate.getTime() - Date.now(), 0)
-    this.nextRun = targetDate
-
-    logger.info('dataRetentionJob scheduled', {
-      nextRun: targetDate.toISOString(),
-      remainingMs: delay,
-    })
-
-    if (delay > MAX_TIMEOUT_MS) {
-      this.timer = setTimeout(() => {
-        this.timer = null
-        this.scheduleForDate(targetDate)
-      }, MAX_TIMEOUT_MS)
-      return
-    }
-
-    this.timer = setTimeout(async () => {
-      this.timer = null
-      await this.execute('scheduler')
-      this.scheduleNextRun()
-    }, delay)
-  }
-
-  private async execute(triggeredBy: 'scheduler' | 'manual') {
+  private async execute(triggeredBy: 'scheduler' | 'manual', projectIds?: string[] | null) {
     if (this.isRunning) {
       logger.warn('dataRetentionJob is already running, skip tick')
       return null
@@ -93,7 +69,7 @@ export class DataRetentionJob {
           triggeredBy,
           jobId,
         },
-        async () => this.service.runRetentionPolicy(),
+        async () => this.service.runRetentionPolicy(projectIds),
       )
 
       logger.info('dataRetentionJob completed', {
@@ -110,6 +86,7 @@ export class DataRetentionJob {
         jobId,
         error: error instanceof Error ? error.message : String(error),
       })
+      if (triggeredBy === 'scheduler') throw error
       return null
     } finally {
       this.isRunning = false

@@ -1,6 +1,7 @@
 import { Router } from 'express'
 
 import { getVisibleProjectIds } from '../auth/access.js'
+import { getRequestCompanyId } from '../auth/companyContext.js'
 import { authenticate, requireProjectMember } from '../middleware/auth.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import { logger } from '../middleware/logger.js'
@@ -8,9 +9,10 @@ import type { ApiResponse } from '../types/index.js'
 import {
   getMetricRegistryEntry,
   isRegisteredMetric,
+  listMetricRegistry,
   type MetricGranularity,
   type MetricGroupBy,
-} from '../analytics/metricRegistry.js'
+} from '../services/metricRegistryService.js'
 import { getCompanyTrendAnalytics } from '../services/companyTrendAnalyticsService.js'
 import {
   getProjectTrendAnalytics,
@@ -21,6 +23,16 @@ import {
 const router = Router()
 
 router.use(authenticate)
+
+router.get('/metrics', asyncHandler(async (_req, res) => {
+  const data = listMetricRegistry().filter((metric) => metric.frontendVisible !== false)
+  const response: ApiResponse<typeof data> = {
+    success: true,
+    data,
+    timestamp: new Date().toISOString(),
+  }
+  res.json(response)
+}))
 
 function getQueryValue(value: unknown): string | undefined {
   if (typeof value === 'string') {
@@ -141,7 +153,7 @@ router.get('/company-trend', asyncHandler(async (req, res) => {
 
   let visibleProjectIds: string[] | null = null
   if (req.user?.id) {
-    const ids = await getVisibleProjectIds(req.user.id, req.user.globalRole)
+    const ids = await getVisibleProjectIds(req.user.id, req.user.globalRole, getRequestCompanyId(req))
     visibleProjectIds = ids ? [...ids] : null
   }
 
@@ -156,7 +168,7 @@ router.get('/company-trend', asyncHandler(async (req, res) => {
       from: getQueryValue(req.query.from),
       to: getQueryValue(req.query.to),
       granularity,
-      projectIds: visibleProjectIds,
+      projectIds: visibleProjectIds ?? [],
     })
 
     const response: ApiResponse<typeof data> = {

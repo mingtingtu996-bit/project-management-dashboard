@@ -4,8 +4,6 @@ import { enqueueProjectHealthUpdate } from './projectHealthService.js'
 const DRAWING_CONDITION_TYPES = ['图纸', 'drawing']
 const MATERIAL_CONDITION_TYPES = ['材料', 'material']
 
-let drawingLinkColumnsEnsured = false
-
 function normalizeNullableText(value: unknown) {
   if (value == null) return null
   const normalized = String(value).trim()
@@ -42,7 +40,8 @@ async function markConditionsSatisfied(params: {
             confirmed_at = COALESCE(confirmed_at, $3::timestamptz),
             confirmed_by = COALESCE(confirmed_by, $4),
             updated_at = $5::timestamptz
-      WHERE id = ANY($6::uuid[])`,
+      WHERE id = ANY($6::uuid[])
+        AND project_id = $7`,
     [
       params.reason,
       normalizeNullableText(params.reasonNote),
@@ -50,26 +49,12 @@ async function markConditionsSatisfied(params: {
       normalizeNullableText(params.confirmedBy),
       timestamp,
       conditionIds,
+      params.projectId,
     ],
   )
 
   enqueueProjectHealthUpdate(params.projectId, 'task_condition_auto_satisfied')
   return conditionIds.length
-}
-
-export async function ensureTaskConditionDrawingPackageColumns() {
-  if (drawingLinkColumnsEnsured) return
-
-  await rawQuery('ALTER TABLE public.task_conditions ADD COLUMN IF NOT EXISTS drawing_package_id UUID NULL')
-  await rawQuery('ALTER TABLE public.task_conditions ADD COLUMN IF NOT EXISTS drawing_package_code TEXT NULL')
-  await rawQuery(
-    'CREATE INDEX IF NOT EXISTS idx_task_conditions_drawing_package_id ON public.task_conditions (drawing_package_id)',
-  )
-  await rawQuery(
-    'CREATE INDEX IF NOT EXISTS idx_task_conditions_drawing_package_code ON public.task_conditions (drawing_package_code)',
-  )
-
-  drawingLinkColumnsEnsured = true
 }
 
 export async function autoSatisfyDrawingPackageConditions(params: {
@@ -82,8 +67,6 @@ export async function autoSatisfyDrawingPackageConditions(params: {
   const drawingPackageId = normalizeNullableText(params.drawingPackageId)
   const drawingPackageCode = normalizeNullableText(params.drawingPackageCode)
   if (!drawingPackageId && !drawingPackageCode) return 0
-
-  await ensureTaskConditionDrawingPackageColumns()
 
   let rows: Array<{ id?: string | null }> = []
   if (drawingPackageId && drawingPackageCode) {
@@ -142,39 +125,64 @@ export async function autoSatisfyDrawingPackageConditions(params: {
 
 export async function autoSatisfyMaterialConditions(params: {
   projectId: string
-  responsibleUnit?: string | null
+  participantUnitId?: string | null
+  materialId?: string | null
   satisfiedAt?: string | null
   confirmedBy?: string | null
 }) {
-  const responsibleUnit = normalizeNullableText(params.responsibleUnit)
-  if (!responsibleUnit) return 0
+  const participantUnitId = normalizeNullableText(params.participantUnitId)
+  const materialId = normalizeNullableText(params.materialId)
 
-  const rows = (
-    await rawQuery(
-      `SELECT id
-         FROM public.task_conditions
-        WHERE project_id = $1
-          AND is_satisfied = FALSE
-          AND condition_type = ANY($2::text[])
-          AND responsible_unit = $3`,
-      [params.projectId, MATERIAL_CONDITION_TYPES, responsibleUnit],
-    )
-  ).rows as Array<{ id?: string | null }>
+  // v1.4.21: Prefer precise materialId/source_ref_id matching over participantUnit bulk
+  let conditionIds: string[] = []
 
-  const conditionIds = rows
-    .map((row) => normalizeNullableText(row.id))
-    .filter((value): value is string => Boolean(value))
+  if (materialId) {
+    // Precise: match conditions with source_ref_id = materialId
+    const preciseRows = (
+      await rawQuery(
+        `SELECT id
+           FROM public.task_conditions
+          WHERE project_id = $1
+            AND is_satisfied = FALSE
+            AND condition_type = ANY($2::text[])
+            AND source_ref_id = $3`,
+        [params.projectId, MATERIAL_CONDITION_TYPES, materialId],
+      )
+    ).rows as Array<{ id?: string | null }>
+
+    conditionIds = preciseRows
+      .map((row) => normalizeNullableText(row.id))
+      .filter((value): value is string => Boolean(value))
+  }
+
+  // Fallback: participantUnit bulk match (only if no materialId or no precise matches)
+  if (conditionIds.length === 0 && participantUnitId) {
+    const bulkRows = (
+      await rawQuery(
+        `SELECT id
+           FROM public.task_conditions
+          WHERE project_id = $1
+            AND is_satisfied = FALSE
+            AND condition_type = ANY($2::text[])
+            AND participant_unit_id = $3::uuid
+            AND source_ref_id IS NULL`,
+        [params.projectId, MATERIAL_CONDITION_TYPES, participantUnitId],
+      )
+    ).rows as Array<{ id?: string | null }>
+
+    conditionIds = bulkRows
+      .map((row) => normalizeNullableText(row.id))
+      .filter((value): value is string => Boolean(value))
+  }
+
+  if (conditionIds.length === 0) return 0
 
   return await markConditionsSatisfied({
     projectId: params.projectId,
     conditionIds,
     reason: 'linked_material_arrived',
-    reasonNote: `责任单位 ${responsibleUnit} 的关联材料已到货`,
+    reasonNote: '关联责任单位的材料已到货',
     satisfiedAt: params.satisfiedAt,
     confirmedBy: params.confirmedBy,
   })
-}
-
-export function __resetTaskConditionLinkageCacheForTests() {
-  drawingLinkColumnsEnsured = false
 }

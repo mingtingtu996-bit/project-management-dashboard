@@ -6,7 +6,6 @@ import { zhCN } from 'date-fns/locale'
 import { EmptyState } from '@/components/EmptyState'
 import { Breadcrumb } from '@/components/Breadcrumb'
 import { PageHeader } from '@/components/PageHeader'
-import { DeleteProtectionDialog } from '@/components/DeleteProtectionDialog'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -17,7 +16,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
@@ -34,9 +32,8 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useApi } from '@/hooks/useApi'
-import { useAuth } from '@/hooks/useAuth'
+import { useAuth } from '@/context/AuthContext'
 import { useAuthDialog } from '@/hooks/useAuthDialog'
 import { useReminderSettings } from '@/hooks/useReminderSettings'
 import {
@@ -52,8 +49,8 @@ import {
 import { toast } from '@/hooks/use-toast'
 import { getApiErrorMessage, isBackendUnavailableError } from '@/lib/apiClient'
 import { buildMutedUntil, getMuteDurationActionLabel, MUTE_DURATION_OPTIONS, type AllowedMuteHours } from '@/lib/muteDurations'
-import { getCachedProjects } from '@/lib/projectPersistence'
 import { isRealtimeNotificationEvent } from '@/lib/realtime'
+import { translateSourceType } from '@/lib/lineagePresentation'
 import { cn } from '@/lib/utils'
 import { PROJECT_NAVIGATION_LABELS, resolveNotificationTarget } from '@/config/navigation'
 import {
@@ -73,7 +70,6 @@ import {
   Search,
   Settings,
   ShieldAlert,
-  Trash2,
   Wifi,
   WifiOff,
 } from 'lucide-react'
@@ -90,6 +86,13 @@ type ReminderTypeFilter =
   | 'business-warning'
   | 'system-exception'
   | 'flow-reminder'
+type TouchpointFilter =
+  | 'all'
+  | 'persistent'
+  | 'dashboard_todo'
+  | 'popup'
+  | 'page_banner'
+  | 'system_record'
 type NotificationTargetKey = 'dashboard' | 'reports' | 'tasks' | 'task-summary' | 'planning' | 'risks' | 'license' | 'special' | 'project-home'
 
 interface NotificationApiItem {
@@ -122,6 +125,18 @@ interface NotificationApiItem {
   metadata?: Record<string, unknown>
   resolved_source?: string | null
   resolvedSource?: string | null
+  lifecycle_status?: string | null
+  lifecycleStatus?: string | null
+  touchpoint_type?: string | null
+  touchpointType?: string | null
+  scope_type?: string | null
+  scopeType?: string | null
+  dedupe_key?: string | null
+  dedupeKey?: string | null
+  target_route?: string | null
+  targetRoute?: string | null
+  target_label?: string | null
+  targetLabel?: string | null
   created_at?: string
   createdAt?: string
   updated_at?: string
@@ -150,6 +165,12 @@ interface NormalizedNotification {
   data?: Record<string, unknown>
   metadata?: Record<string, unknown>
   resolvedSource?: string | null
+  lifecycleStatus?: string
+  touchpointType?: string
+  scopeType?: string
+  dedupeKey?: string
+  targetRoute?: string
+  targetLabel?: string
   createdAt: string
   updatedAt?: string
   status?: string
@@ -177,12 +198,6 @@ interface NotificationGroup {
   expiredMuteCount: number
   highestSeverityRank: number
   latestCreatedAt: string
-}
-
-interface NotificationDeleteTarget {
-  id: string
-  title: string
-  targetLabel: string
 }
 
 interface NotificationCounts {
@@ -218,6 +233,15 @@ const TYPE_FILTER_OPTIONS: Array<{ value: ReminderTypeFilter; label: string }> =
   { value: 'business-warning', label: '业务预警' },
   { value: 'system-exception', label: '系统异常' },
   { value: 'flow-reminder', label: '流程催办' },
+]
+
+const TOUCHPOINT_FILTER_OPTIONS: Array<{ value: TouchpointFilter; label: string }> = [
+  { value: 'all', label: '全部触点' },
+  { value: 'dashboard_todo', label: '今日待办' },
+  { value: 'persistent', label: '通知中心' },
+  { value: 'popup', label: '弹窗' },
+  { value: 'page_banner', label: '页面横幅' },
+  { value: 'system_record', label: '系统记录' },
 ]
 
 function isPlanningMappingNotification(notification: Pick<
@@ -272,6 +296,12 @@ function normalizeNotification(raw: NotificationApiItem): NormalizedNotification
     data: raw.data,
     metadata,
     resolvedSource: raw.resolved_source ?? raw.resolvedSource ?? null,
+    lifecycleStatus: raw.lifecycle_status ?? raw.lifecycleStatus ?? undefined,
+    touchpointType: raw.touchpoint_type ?? raw.touchpointType ?? undefined,
+    scopeType: raw.scope_type ?? raw.scopeType ?? undefined,
+    dedupeKey: raw.dedupe_key ?? raw.dedupeKey ?? undefined,
+    targetRoute: raw.target_route ?? raw.targetRoute ?? undefined,
+    targetLabel: raw.target_label ?? raw.targetLabel ?? undefined,
     createdAt: raw.created_at ?? raw.createdAt ?? new Date().toISOString(),
     updatedAt,
     status: raw.status,
@@ -470,6 +500,18 @@ function getNotificationStateLabel(notification: NormalizedNotification) {
   return '未读'
 }
 
+function getNotificationBusinessGroupKey(notification: NormalizedNotification, target: NotificationTarget) {
+  const reminderTab = getReminderTab(notification)
+  const touchpointType = notification.touchpointType || 'persistent'
+  if (notification.dedupeKey) {
+    return `${reminderTab}:${touchpointType}:${notification.dedupeKey}`
+  }
+  if (notification.sourceEntityType && notification.sourceEntityId) {
+    return `${reminderTab}:${touchpointType}:${notification.sourceEntityType}:${notification.sourceEntityId}`
+  }
+  return `${reminderTab}:${target.key}`
+}
+
 function normalizeNotificationCounts(value: unknown): NotificationCounts {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return EMPTY_NOTIFICATION_COUNTS
@@ -502,6 +544,7 @@ export default function Notifications() {
   const lastRealtimeEvent = useLastRealtimeEvent()
   const setConnectionMode = useSetConnectionMode()
   const notifications = useNotifications()
+  const projects = useStore((state) => state.projects)
   const setNotifications = useStore((state) => state.setNotifications)
   const setSharedSliceStatus = useStore((state) => state.setSharedSliceStatus)
   const api = useApi()
@@ -518,14 +561,11 @@ export default function Notifications() {
   const [scope, setScope] = useState<ReminderScope>('company')
   const [tab, setTab] = useState<ReminderTab>('all')
   const [typeFilter, setTypeFilter] = useState<ReminderTypeFilter>('all')
+  const [touchpointFilter, setTouchpointFilter] = useState<TouchpointFilter>('all')
   const [searchQuery, setSearchQuery] = useState('')
   const [systemExceptionFilter, setSystemExceptionFilter] = useState<'all' | 'mapping'>('all')
   const [settingsPanelOpen, setSettingsPanelOpen] = useState(false)
   const [muteDurationHours, setMuteDurationHours] = useState<AllowedMuteHours>(24)
-  const [deleteTarget, setDeleteTarget] = useState<NotificationDeleteTarget | null>(null)
-  const [deleteSubmitting, setDeleteSubmitting] = useState(false)
-  const [bulkDeleteIds, setBulkDeleteIds] = useState<string[]>([])
-  const [bulkDeleteSubmitting, setBulkDeleteSubmitting] = useState(false)
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({})
   const [notificationCounts, setNotificationCounts] = useState<NotificationCounts>(EMPTY_NOTIFICATION_COUNTS)
   const realtimeRefreshTimeoutRef = useRef<number | null>(null)
@@ -549,9 +589,9 @@ export default function Notifications() {
 
     if (!nextProjectId) return
 
-    const cachedProject = getCachedProjects().find((project) => project.id === nextProjectId) ?? null
-    if (cachedProject) {
-      setCurrentProject(cachedProject as never)
+    const project = projects.find((candidate) => candidate.id === nextProjectId) ?? null
+    if (project) {
+      setCurrentProject(project)
     }
     setScope('current-project')
   }, [location.search, setCurrentProject])
@@ -579,7 +619,7 @@ export default function Notifications() {
         ? currentProject?.id ?? projectIdFromQuery
         : undefined
 
-      let url = '/api/notifications?limit=100'
+      let url = '/api/notifications?limit=100&touchpointType=all'
       if (effectiveProjectId) {
         url += `&projectId=${effectiveProjectId}`
       }
@@ -763,72 +803,6 @@ export default function Notifications() {
     }
   }
 
-  const requestDeleteNotification = (item: DecoratedNotification) => {
-    setDeleteTarget({
-      id: item.id,
-      title: item.title,
-      targetLabel: item.target.label,
-    })
-  }
-
-  const deleteNotification = async () => {
-    if (!deleteTarget) return
-
-    try {
-      setDeleteSubmitting(true)
-      await api.delete(`/api/notifications/${deleteTarget.id}`)
-      setNotifications(notifications.filter((item) => item.id !== deleteTarget.id))
-      setDeleteTarget(null)
-      void loadNotifications({ silent: true })
-      toast({
-        title: '提醒已删除',
-        description: `“${deleteTarget.title}”已从提醒中心移除，不会影响原业务数据。`,
-      })
-    } catch (error) {
-      console.error('Failed to delete notification:', error)
-      toast({
-        title: '删除提醒失败',
-        description: getApiErrorMessage(error, '请稍后重试。'),
-        variant: 'destructive',
-      })
-    } finally {
-      setDeleteSubmitting(false)
-    }
-  }
-
-  const requestBulkDeleteProcessed = () => {
-    const ids = filteredNotifications
-      .filter((item) => item.isRead || item.isMuted || item.status === 'acknowledged')
-      .map((item) => item.id)
-    setBulkDeleteIds(ids)
-  }
-
-  const deleteBulkNotifications = async () => {
-    if (bulkDeleteIds.length === 0) return
-
-    try {
-      setBulkDeleteSubmitting(true)
-      await Promise.all(bulkDeleteIds.map((id) => api.delete(`/api/notifications/${id}`)))
-      const deleted = new Set(bulkDeleteIds)
-      setNotifications(notifications.filter((item) => !deleted.has(item.id)))
-      setBulkDeleteIds([])
-      void loadNotifications({ silent: true })
-      toast({
-        title: '已批量删除提醒',
-        description: `已移除 ${bulkDeleteIds.length} 条已处理提醒。`,
-      })
-    } catch (error) {
-      console.error('Failed to bulk delete notifications:', error)
-      toast({
-        title: '批量删除失败',
-        description: getApiErrorMessage(error, '请稍后重试。'),
-        variant: 'destructive',
-      })
-    } finally {
-      setBulkDeleteSubmitting(false)
-    }
-  }
-
   const exportFilteredNotifications = () => {
     const header = ['标题', '内容', '类型', '状态', '处理入口', '负责人', '时间']
     const escapeCsvCell = (value: string | number | null | undefined) => {
@@ -857,9 +831,12 @@ export default function Notifications() {
   const decoratedNotifications = useMemo(
     () =>
       notifications.map((item) => {
-        const target = resolveNotificationTarget(item, currentProject?.id)
-        const groupLabel = target.label
-        const groupKey = `${getReminderTab(item)}:${target.key}`
+        const resolvedTarget = resolveNotificationTarget(item, currentProject?.id)
+        const target = item.targetRoute
+          ? { ...resolvedTarget, href: item.targetRoute, label: item.targetLabel || resolvedTarget.label }
+          : resolvedTarget
+        const groupLabel = item.targetLabel || target.label
+        const groupKey = getNotificationBusinessGroupKey(item, target)
 
         return {
           ...item,
@@ -888,6 +865,8 @@ export default function Notifications() {
         (tab === 'unread' && !item.isRead && !item.isMuted) ||
         (tab === 'processed' && (item.isRead || item.isMuted || item.status === 'acknowledged'))
       const typeMatch = typeFilter === 'all' || getReminderTab(item) === typeFilter
+      const itemTouchpointType = item.touchpointType || 'persistent'
+      const touchpointMatch = touchpointFilter === 'all' || itemTouchpointType === touchpointFilter
       const systemExceptionMatch =
         typeFilter !== 'system-exception' ||
         systemExceptionFilter === 'all' ||
@@ -899,9 +878,9 @@ export default function Notifications() {
         item.target.label.toLowerCase().includes(normalizedQuery) ||
         (item.assignee ?? '').toLowerCase().includes(normalizedQuery)
 
-      return tabMatch && typeMatch && systemExceptionMatch && searchMatch
+      return tabMatch && typeMatch && touchpointMatch && systemExceptionMatch && searchMatch
     })
-  }, [decoratedNotifications, searchQuery, systemExceptionFilter, tab, typeFilter])
+  }, [decoratedNotifications, searchQuery, systemExceptionFilter, tab, touchpointFilter, typeFilter])
 
   const groupedNotifications = useMemo(() => {
     const groups = new Map<string, NotificationGroup>()
@@ -966,20 +945,22 @@ export default function Notifications() {
 
   const scopeLabel = scope === 'company' ? '\u516c\u53f8\u7ea7\u805a\u5408' : '\u5f53\u524d\u9879\u76ee\u805a\u7126'
   const currentTabCount = filteredNotifications.length
-  const processedDeleteCount = filteredNotifications.filter((item) => item.isRead || item.isMuted || item.status === 'acknowledged').length
   const hasActiveFilters =
     tab !== 'all' ||
     typeFilter !== 'all' ||
+    touchpointFilter !== 'all' ||
     systemExceptionFilter !== 'all' ||
     searchQuery.trim().length > 0
   const resetNotificationFilters = () => {
     setTab('all')
     setTypeFilter('all')
+    setTouchpointFilter('all')
     setSystemExceptionFilter('all')
     setSearchQuery('')
   }
   const tabCounts: Record<ReminderTab, number> = {
     all: decoratedNotifications.length,
+    // eslint-disable-next-line -- frontend-bi-aggregation-approved
     unread: decoratedNotifications.filter((item) => !item.isRead && !item.isMuted).length,
     processed: decoratedNotifications.filter((item) => item.isRead || item.isMuted || item.status === 'acknowledged').length,
   }
@@ -988,6 +969,14 @@ export default function Notifications() {
     'business-warning': decoratedNotifications.filter((item) => getReminderTab(item) === 'business-warning').length,
     'system-exception': decoratedNotifications.filter((item) => getReminderTab(item) === 'system-exception').length,
     'flow-reminder': decoratedNotifications.filter((item) => getReminderTab(item) === 'flow-reminder').length,
+  }
+  const touchpointCounts: Record<TouchpointFilter, number> = {
+    all: decoratedNotifications.length,
+    persistent: decoratedNotifications.filter((item) => (item.touchpointType || 'persistent') === 'persistent').length,
+    dashboard_todo: decoratedNotifications.filter((item) => (item.touchpointType || 'persistent') === 'dashboard_todo').length,
+    popup: decoratedNotifications.filter((item) => (item.touchpointType || 'persistent') === 'popup').length,
+    page_banner: decoratedNotifications.filter((item) => (item.touchpointType || 'persistent') === 'page_banner').length,
+    system_record: decoratedNotifications.filter((item) => (item.touchpointType || 'persistent') === 'system_record').length,
   }
   const connectionLabel =
     connectionMode === 'polling'
@@ -1060,7 +1049,7 @@ export default function Notifications() {
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => navigate(`/company?login=1&redirect=${encodeURIComponent(redirectTarget)}`)}
+                onClick={() => navigate(`/workspace?login=1&redirect=${encodeURIComponent(redirectTarget)}`)}
               >
                 前往登录入口
               </Button>
@@ -1137,10 +1126,6 @@ export default function Notifications() {
             <DropdownMenuItem onClick={() => void markAllAsRead()} disabled={pendingCount === 0}>
               全部标记已读
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={requestBulkDeleteProcessed} disabled={processedDeleteCount === 0}>
-              批量删除已处理
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
             <DropdownMenuItem onClick={exportFilteredNotifications} disabled={filteredNotifications.length === 0}>
               导出当前筛选
             </DropdownMenuItem>
@@ -1400,6 +1385,20 @@ export default function Notifications() {
             ))}
           </div>
 
+          <div className="flex flex-wrap items-center gap-2" data-testid="notifications-touchpoint-chips">
+            {TOUCHPOINT_FILTER_OPTIONS.map((option) => (
+              <Button
+                key={option.value}
+                type="button"
+                size="sm"
+                variant={touchpointFilter === option.value ? 'default' : 'outline'}
+                onClick={() => setTouchpointFilter(option.value)}
+              >
+                {option.label}({touchpointCounts[option.value]})
+              </Button>
+            ))}
+          </div>
+
           {typeFilter === 'system-exception' ? (
             <div className="flex flex-wrap items-center gap-2">
               <Button
@@ -1468,7 +1467,7 @@ export default function Notifications() {
                             {groupTypeLabel ? <span>{groupTypeLabel}</span> : null}
                             <span>{`${group.items.length} 条同类提醒`}</span>
                             {group.items.some((item) => isPlanningMappingNotification(item)) ? (
-                              <span>S2 mapping</span>
+                              <span>计划关联</span>
                             ) : null}
                           </div>
                         </div>
@@ -1505,7 +1504,7 @@ export default function Notifications() {
                         const TargetIcon = getTargetIcon(target)
                         const timestamp = format(new Date(item.createdAt), 'MM\u6708dd\u65e5 HH:mm', { locale: zhCN })
                         const typeLabel = getReminderTypeLabel(item)
-                        const sourceLabel = item.sourceEntityType ?? item.resolvedSource ?? '系统'
+                        const sourceLabel = translateSourceType(item.sourceEntityType) || item.resolvedSource || '系统'
 
                         return (
                           <div
@@ -1575,7 +1574,7 @@ export default function Notifications() {
                                   {isPlanningMappingNotification(item) ? (
                                     <div>
                                       <div className="font-medium text-slate-700">异常标识</div>
-                                      <div className="mt-1">S2 mapping</div>
+                                      <div className="mt-1">计划关联</div>
                                     </div>
                                   ) : null}
                                 </div>
@@ -1604,20 +1603,6 @@ export default function Notifications() {
                                 {getMuteDurationActionLabel(muteDurationHours)}
                               </Button>
 
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    aria-label={`删除提醒 ${item.title}`}
-                                    data-testid={`notification-delete-action-${item.id}`}
-                                    onClick={() => requestDeleteNotification(item)}
-                                  >
-                                    <Trash2 className="h-4 w-4" />
-                                  </Button>
-                                </TooltipTrigger>
-                                <TooltipContent>删除提醒</TooltipContent>
-                              </Tooltip>
                             </div>
                           </div>
                         )
@@ -1638,44 +1623,6 @@ export default function Notifications() {
         )}
       </section>
 
-      <DeleteProtectionDialog
-        open={Boolean(deleteTarget)}
-        onOpenChange={(open) => {
-          if (!open) {
-            setDeleteTarget(null)
-          }
-        }}
-        title="删除提醒"
-        description={
-          deleteTarget
-            ? `确认删除“${deleteTarget.title}”这条提醒？删除后只会从提醒中心移除，不会删除对应业务数据。`
-            : '确认删除当前提醒。'
-        }
-        warning={
-          deleteTarget
-            ? `来源模块：${deleteTarget.targetLabel}`
-            : undefined
-        }
-        confirmLabel="确认删除"
-        loading={deleteSubmitting}
-        onConfirm={() => void deleteNotification()}
-        testId="notification-delete-guard"
-      />
-      <DeleteProtectionDialog
-        open={bulkDeleteIds.length > 0}
-        onOpenChange={(open) => {
-          if (!open && !bulkDeleteSubmitting) {
-            setBulkDeleteIds([])
-          }
-        }}
-        title="批量删除提醒"
-        description={`确认删除当前筛选中的 ${bulkDeleteIds.length} 条已处理提醒？删除后只会从提醒中心移除，不会删除对应业务数据。`}
-        warning="批量删除仅作用于已读、已知悉或静音提醒，未读提醒会保留。"
-        confirmLabel="确认删除"
-        loading={bulkDeleteSubmitting}
-        onConfirm={() => void deleteBulkNotifications()}
-        testId="notification-bulk-delete-guard"
-      />
     </div>
   )
 }

@@ -1,5 +1,5 @@
 {
-  "last_updated": "2026-04-29T22:10:00.000+08:00",
+  "last_updated": "2026-07-12T21:46:52.6372704+08:00",
   "uiux_v1_3": {
     "source": "docs/plans/UI_UX商业级全面优化方案_v1.3.md",
     "execution_plan": "docs/plans/UI_UX优化执行方案.md",
@@ -2929,6 +2929,99 @@
         "16.1"
       ]
     }
+  },
+  "nonresidential_master_plan_asset_closure_20260712": {
+    "status": "local_plan_generation_verified_shared_workspace_guard_and_staging_production_pending",
+    "scope": [
+      "industrial",
+      "transportation_hub",
+      "sports_culture",
+      "data_center",
+      "renovation",
+      "modular_building",
+      "all_11_business_types_regression"
+    ],
+    "implementation": {
+      "strategy_variants_per_business_type": 4,
+      "dedicated_item_packs_per_business_type": 16,
+      "dedicated_processes_per_business_type": 80,
+      "new_subtype_duration_profiles": 9,
+      "dedicated_t2_templates": {
+        "industrial": 6,
+        "transportation_hub": 7,
+        "sports_culture": 5
+      },
+      "curated_l2_process_edges": 192,
+      "specialty_l3_mainline_handoffs": 45,
+      "new_subtype_ingress_internal_egress_handoffs": 27,
+      "unbounded_same_project_specialty_process_rules": 0,
+      "wizard_consumption": "base master-control packs plus selected organization-variant overlay; the selected variant T2 enters duration formula lineage; unrelated subtype overlays remain excluded",
+      "managed_frontier_dependency_projection": "hidden process-level specialty rules project to exact item-pack anchors with bounded organization-compatible scope and preserved rule lineage",
+      "specialty_execution_phase_mapping": "industrial, transportation-hub, sports/culture, and data-center specialty packs map to field construction phases instead of management_support fallback",
+      "project_root_policy": "startup primary-control row is the unique project root; synthetic component releases preserve original SS lag",
+      "temporal_plausibility_gates": [
+        "master_plan_synthetic_dependency_phase_inversion",
+        "master_plan_late_activity_phase_misclassified",
+        "project_fact_task_contradiction",
+        "late_activity_missing_physical_handoff",
+        "contractual_closeout_missing_business_handoff"
+      ]
+    },
+    "local_verification": {
+      "server_typecheck": "passed",
+      "client_typecheck": "passed",
+      "focused_backend_tests": "4 files / 46 tests passed; 12 strategy variants, specialty assets, wizard subtype selection, and 11-type/18-subtype registry contract verified",
+      "focused_client_tests": "1 file / 3 tests passed; three specialty business types expose four subtype choices each",
+      "executable_assembly_service": "12 tests passed; nested commissioning chains that only trace to project start are actively repaired to a physical work control",
+      "construction_quality_audit": "16 tests passed; project-fact/task and project-fact/duration-asset contradictions, direct or transitive late-work physical handoff gaps, incorrect strict terminal-to-filing-to-property chains, and an entirely missing non-residential closeout chain are blockers",
+      "nine_subtype_real_generation": "1 targeted long-running test passed; all 9 non-default subtypes consumed matching policy, packs, T2 assets, duration lineage, L3 lineage, and field execution phases",
+      "all_11_business_type_generation": "enhanced executable contract passed for all 11 business types in 291.681 seconds, including explicit declared terminal control, filing, and property handover checks; prior construction-organization network and bounded dependency regressions remain retained",
+      "bounded_dependency_fallback": "1 targeted test passed; missing scope fields do not create project-wide Cartesian edges",
+      "fresh_executable_simulation": "passed at project-testing/reports/executable-default-master-plan-current-20260712-r8; all 11 types have one root, one sink, continuous CPM, zero project-fact or duration-asset contradictions, zero direct/transitive late activities missing physical handoff, and zero strict contractual-closeout chain gaps",
+      "corrected_runtime_examples": {
+        "industrial_fire_explosion_environment_commissioning": "2027-09-06 to 2027-09-10; previously started 2026-08-01",
+        "transportation_hub_full_network_commissioning": "2027-10-07 to 2027-10-16; previously started 2026-08-01",
+        "data_center_ups_commissioning": "2027-09-11 to 2027-10-09; previously started 2026-08-01"
+      },
+      "workspace_isolation_guard": "failed on current shared worktree with 17 reported path-level findings; current correction target hits 0",
+      "duration_architecture_guard": "passed; 974 duration boundary files scanned; legacy debt 0",
+      "construction_organization_hydration_guard": "passed; 649 files scanned",
+      "business_type_registry_guard": "passed; 4 tests"
+    },
+    "broad_non_live_closeout": {
+      "status": "blocked_by_historical_c16_ledger_count_drift",
+      "blocking_items": [
+        "historical C-16 ledger count phrase is 84 routes / 405 services / 28 jobs / 77 metrics / 311 migrations while the current contract requires 84 / 406 / 28 / 77 / 315"
+      ],
+      "migration_entry_points": "passed; 3 tests",
+      "scope_attribution": "not introduced by this nonresidential strategy, asset, duration, or dependency implementation; historical audit and ledger files were preserved"
+    },
+    "independent_review_blockers": [],
+    "current_non_scope_gate_blockers": [
+      "shared workspace-isolation guard is not green; do not claim repository-wide local closeout"
+    ],
+    "known_local_quality_followups": [
+      "simple-plan predecessor display remains dense on a few convergence controls; CPM is valid, but the table should later collapse repeated predecessor labels without changing dependency truth"
+    ],
+    "independent_review_remediation": [
+      "local verified: explicit wizard subtype facts select every organization variant and override conflicting generic signals",
+      "local verified: matching subtype packs survive applicability filtering while unrelated subtype packs are excluded",
+      "local verified: organization variant selects the preferred T2 asset and records it in the generated duration formula lineage",
+      "local verified: each of the 9 non-default subtype branches has L3 ingress, internal handoff, and egress lineage",
+      "local verified: specialty process rules do not use same_project and generated edges are bounded by organization-compatible scope",
+      "review remediation verified: shallow modular foundations consume shallow_foundation_concrete_structure; zero-basement deep foundations keep support controls but replace basement structure with deep-foundation handover",
+      "review remediation verified: late commissioning audit and assembly traverse predecessor chains and reject or repair synthetic-start-only ancestry",
+      "review remediation verified: every non-residential closeout row carries an explicit terminal stable code and role, the generated chain is terminal -> completion filing -> property handover, and complete chain absence is blocking"
+    ],
+    "environment_status": {
+      "local": "plan_generation_implementation_and_behavior_verified; repository-wide workspace-isolation guard remains red outside this correction",
+      "staging": "not_deployed_not_verified",
+      "production_live": "not_deployed_not_verified",
+      "database_mutation": false,
+      "runtime_publication": false,
+      "monitoring_or_rollback_execution": false
+    },
+    "plan": "docs/superpowers/plans/2026-07-12-nonres-construction-organization-strategy-dependency.md"
   },
   "model_ownership": {
     "A": {

@@ -1,11 +1,13 @@
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
-import { MetricCard } from '@/components/ui/metric-card'
+import { MetricCard, type MetricAvailability } from '@/components/ui/metric-card'
 import { Separator } from '@/components/ui/separator'
-import { memo, useEffect, useState } from 'react'
+import { memo, type ReactNode, useEffect, useState } from 'react'
 import { safeStorageSet } from '@/lib/browserStorage'
-import { GitBranch, MoreHorizontal, Search, SlidersHorizontal, Trash2, X } from 'lucide-react'
+import { Activity, AlertTriangle, Gauge, GitBranch, ListTree, MoreHorizontal, Search, SlidersHorizontal, Trash2, X } from 'lucide-react'
+import { getConstructionEfficiencyMetric } from '@/lib/constructionEfficiency'
+import type { ProjectSummary } from '@/services/dashboardApi'
 import {
   Select,
   SelectContent,
@@ -21,74 +23,118 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 
-import { SPECIALTY_TYPES } from './GanttViewTypes'
 
-export interface ProjectStatsData {
-  totalTasks: number
-  completedTasks: number
-  inProgressTasks: number
-  overdueTask: number
-  laggedTaskCount: number
-  pendingStartTasks: number
-  readyToStartTasks: number
-  criticalPathSummary: string
+export interface TaskListMetricCardsProps {
+  summary: ProjectSummary | null
+  summaryPending?: boolean
 }
 
-export interface GanttMetricCardsProps {
-  projectStats: ProjectStatsData
+function metricCount(value: unknown): number {
+  const next = Number(value)
+  return Number.isFinite(next) ? next : 0
 }
 
-export const GanttMetricCards = memo(function GanttMetricCards({ projectStats }: GanttMetricCardsProps) {
-  const exceptionCount = projectStats.overdueTask + projectStats.laggedTaskCount + projectStats.pendingStartTasks
-  const cards = [
-    { eyebrow: 'TASKS', label: '总任务数', value: projectStats.totalTasks, tone: 'slate' as const, helper: '全部' },
+type TaskListMetricCardModel = {
+  eyebrow: string
+  label: string
+  value: number | null
+  unit?: string
+  tone: 'primary' | 'success' | 'warning' | 'danger' | 'info' | 'slate'
+  helper: string
+  trend?: ReactNode
+  icon: ReactNode
+  availability?: MetricAvailability
+  sparkline?: number[]
+}
+
+export const TaskListMetricCards = memo(function TaskListMetricCards({ summary, summaryPending = false }: TaskListMetricCardsProps) {
+  const totalTasks = metricCount(summary?.totalTasks)
+  const leafTaskCount = metricCount(summary?.leafTaskCount ?? summary?.totalTasks)
+  const inProgressTaskCount = metricCount(summary?.inProgressTaskCount)
+  const pendingConditionTaskCount = metricCount(summary?.pendingConditionTaskCount)
+  const activeObstacleTaskCount = metricCount(summary?.activeObstacleTaskCount)
+  const blockedTaskCount = activeObstacleTaskCount + pendingConditionTaskCount
+  const activePercent = leafTaskCount > 0 ? Math.round((inProgressTaskCount / leafTaskCount) * 100) : 0
+  const metricAvailability = summaryPending ? 'data_pending' as const : 'ready' as const
+  const productivityDistribution = summary?.monthlyProductivityDistribution
+  const constructionEfficiency = getConstructionEfficiencyMetric(
+    summary?.monthlyProductivityDistribution?.monthlyAverageP,
+    productivityDistribution,
+  )
+  const pendingHelper = '摘要加载中'
+  const cards: TaskListMetricCardModel[] = [
+    {
+      eyebrow: 'TASKS',
+      label: '任务总数',
+      value: summaryPending ? null : totalTasks,
+      tone: 'slate' as const,
+      helper: summaryPending ? pendingHelper : `叶子 ${leafTaskCount}`,
+      trend: '待积累 较上周',
+      icon: <ListTree className="h-4 w-4" />,
+    },
     {
       eyebrow: 'ACTIVE',
       label: '进行中',
-      value: projectStats.inProgressTasks,
+      value: summaryPending ? null : inProgressTaskCount,
       tone: 'primary' as const,
-      helper: projectStats.inProgressTasks > 0 ? '持续推进' : '暂无',
+      helper: summaryPending ? pendingHelper : `占比 ${activePercent}%`,
+      trend: '待积累 较上周',
+      icon: <Activity className="h-4 w-4" />,
     },
     {
-      eyebrow: 'DONE',
-      label: '已完成',
-      value: projectStats.completedTasks,
-      tone: 'success' as const,
-      helper: projectStats.totalTasks > 0 ? `${Math.round((projectStats.completedTasks / projectStats.totalTasks) * 100)}%` : '0%',
+      eyebrow: 'EFFICIENCY',
+      label: '施工效率',
+      value: summaryPending ? null : constructionEfficiency.value,
+      unit: constructionEfficiency.unit,
+      tone: constructionEfficiency.tone,
+      helper: summaryPending ? pendingHelper : '月度综合 P',
+      trend: constructionEfficiency.hint,
+      icon: <Gauge className="h-4 w-4" />,
+      availability: summaryPending ? 'data_pending' as const : constructionEfficiency.availability,
+      sparkline: constructionEfficiency.sparkline,
     },
     {
-      eyebrow: 'RISK',
-      label: '异常',
-      value: exceptionCount,
-      tone: exceptionCount > 0 ? 'warning' as const : 'slate' as const,
-      helper: exceptionCount > 0 ? `逾期 ${projectStats.overdueTask} / 进度落后 ${projectStats.laggedTaskCount}` : '暂无',
-      tooltip: `逾期：已超过计划完成日期。异常（进度落后）：进度落后但未超期的任务。条件未满足：${projectStats.pendingStartTasks} 项。`,
+      eyebrow: 'BLOCKED',
+      label: '阻碍',
+      value: summaryPending ? null : blockedTaskCount,
+      tone: blockedTaskCount > 0 ? 'danger' as const : 'slate' as const,
+      helper: summaryPending ? pendingHelper : `阻碍任务 ${activeObstacleTaskCount} / 条件未满足 ${pendingConditionTaskCount}`,
+      trend: '待积累 较上周',
+      icon: <AlertTriangle className="h-4 w-4" />,
     },
   ]
 
   return (
-    <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
+    <>
       {cards.map((card) => (
         <MetricCard
           key={card.label}
           eyebrow={card.eyebrow}
           title={card.label}
           value={card.value}
-          hint={'tooltip' in card && card.tooltip ? `${card.helper} · ${card.tooltip}` : card.helper}
+          unit={card.unit}
+          hint={card.helper}
+          trend={summaryPending ? undefined : card.trend}
+          icon={card.icon}
           tone={card.tone}
+          availability={card.availability ?? metricAvailability}
+          sparkline={card.sparkline}
+          density="compact"
+          animateValue={false}
         />
       ))}
-    </div>
+    </>
   )
 })
 
-GanttMetricCards.displayName = 'GanttMetricCards'
+TaskListMetricCards.displayName = 'TaskListMetricCards'
 
 export interface GanttBatchBarProps {
   allSelected: boolean
   someSelected: boolean
   selectedCount: number
   batchUpdating?: boolean
+  canBatchEdit?: boolean
   projectMembers: Array<{ userId: string; displayName: string }>
   participantUnits: Array<{ id: string; unit_name: string; unit_type?: string | null }>
   onToggleSelectAll: () => void
@@ -98,9 +144,11 @@ export interface GanttBatchBarProps {
     assignee_name?: string | null
     assignee_user_id?: string | null
     participant_unit_id?: string | null
-    responsible_unit?: string | null
+    progress?: number | null
     dateShiftDays?: number | null
   }) => void | Promise<void>
+  onApplyCurrentScope?: () => void
+  canApplyCurrentScope?: boolean
   onBatchDelete: () => void
 }
 
@@ -109,37 +157,37 @@ export const GanttBatchBar = memo(function GanttBatchBar({
   someSelected,
   selectedCount,
   batchUpdating = false,
+  canBatchEdit = true,
   projectMembers,
   participantUnits,
   onToggleSelectAll,
   onClearSelection,
   onApplyBatchUpdate,
+  onApplyCurrentScope,
+  canApplyCurrentScope,
   onBatchDelete,
 }: GanttBatchBarProps) {
-  const [status, setStatus] = useState('')
   const [assigneeUserId, setAssigneeUserId] = useState('__manual__')
   const [assigneeName, setAssigneeName] = useState('')
-  const [participantUnitId, setParticipantUnitId] = useState('__manual__')
-  const [responsibleUnit, setResponsibleUnit] = useState('')
+  const [participantUnitId, setParticipantUnitId] = useState('__none__')
+  const [targetProgress, setTargetProgress] = useState('')
   const [dateShiftDays, setDateShiftDays] = useState('')
 
   const selectedMember = projectMembers.find((member) => member.userId === assigneeUserId) ?? null
   const selectedUnit = participantUnits.find((unit) => unit.id === participantUnitId) ?? null
   const hasAnyBatchChange =
-    Boolean(status) ||
     Boolean(assigneeName.trim()) ||
     assigneeUserId !== '__manual__' ||
-    Boolean(responsibleUnit.trim()) ||
-    participantUnitId !== '__manual__' ||
+    participantUnitId !== '__none__' ||
+    Boolean(targetProgress.trim()) ||
     Boolean(dateShiftDays.trim())
 
   useEffect(() => {
     if (selectedCount === 0) {
-      setStatus('')
       setAssigneeUserId('__manual__')
       setAssigneeName('')
-      setParticipantUnitId('__manual__')
-      setResponsibleUnit('')
+      setParticipantUnitId('__none__')
+      setTargetProgress('')
       setDateShiftDays('')
     }
   }, [selectedCount])
@@ -149,16 +197,17 @@ export const GanttBatchBar = memo(function GanttBatchBar({
   }
 
   const applyBatch = async () => {
+    if (!canBatchEdit) return
+
     const payload: {
       status?: string | null
       assignee_name?: string | null
       assignee_user_id?: string | null
       participant_unit_id?: string | null
-      responsible_unit?: string | null
+      progress?: number | null
       dateShiftDays?: number | null
     } = {}
 
-    if (status) payload.status = status
     if (assigneeUserId !== '__manual__') {
       payload.assignee_user_id = assigneeUserId
       payload.assignee_name = selectedMember?.displayName ?? null
@@ -167,12 +216,15 @@ export const GanttBatchBar = memo(function GanttBatchBar({
       payload.assignee_name = assigneeName.trim()
     }
 
-    if (participantUnitId !== '__manual__') {
+    if (participantUnitId !== '__none__') {
       payload.participant_unit_id = participantUnitId
-      payload.responsible_unit = selectedUnit?.unit_name ?? null
-    } else if (responsibleUnit.trim()) {
-      payload.participant_unit_id = null
-      payload.responsible_unit = responsibleUnit.trim()
+    }
+
+    if (targetProgress.trim()) {
+      const parsedProgress = Number(targetProgress)
+      if (Number.isFinite(parsedProgress)) {
+        payload.progress = Math.max(0, Math.min(100, Math.round(parsedProgress)))
+      }
     }
 
     if (dateShiftDays.trim()) {
@@ -192,8 +244,8 @@ export const GanttBatchBar = memo(function GanttBatchBar({
       style={{ transform: selectedCount > 0 ? 'translateY(0)' : 'translateY(100%)' }}
       aria-live="polite"
     >
-      <div className="mx-4">
-        <Card data-testid="batch-action-bar" className="border-slate-200/70 bg-white shadow-[var(--el-3)]">
+      <div className="px-4 lg:px-0">
+        <Card data-testid="batch-action-bar" className="border-slate-200/70 bg-white shadow-[var(--el-2)]">
           <CardContent className="flex flex-col gap-3 p-5 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex flex-wrap items-center gap-3">
               <label className="flex cursor-pointer items-center gap-3 select-none">
@@ -224,49 +276,45 @@ export const GanttBatchBar = memo(function GanttBatchBar({
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              <Select value={status} onValueChange={setStatus}>
-                <SelectTrigger className="h-9 w-32 border-slate-200 bg-white text-slate-700">
-                  <SelectValue placeholder="状态不变" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="todo">待开始</SelectItem>
-                  <SelectItem value="in_progress">进行中</SelectItem>
-                  <SelectItem value="completed">已完成</SelectItem>
-                </SelectContent>
-              </Select>
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
-                  onClick={() => void applyBatch()}
-                  disabled={batchUpdating || selectedCount === 0 || !status}
-                  loading={batchUpdating}
-                  data-testid="gantt-batch-apply"
-                  className="gap-1.5 border-blue-200 bg-white text-blue-700 hover:bg-blue-50"
+                  onClick={onApplyCurrentScope}
+                  disabled={batchUpdating || !canBatchEdit || selectedCount === 0 || !canApplyCurrentScope}
+                  data-testid="gantt-batch-apply-scope"
+                  className="gap-1.5 border-blue-200 bg-white text-blue-700 hover:bg-blue-50 hover:text-blue-800"
                 >
-                  <SlidersHorizontal className="h-4 w-4" />
-                  状态变更
+                  应用当前作用域
                 </Button>
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
                   onClick={onBatchDelete}
-                  disabled={batchUpdating || selectedCount === 0}
+                  disabled={batchUpdating || !canBatchEdit || selectedCount === 0}
                   data-testid="gantt-batch-delete"
-                  className="gap-1.5 border-red-300 bg-white text-red-600 hover:bg-red-50 hover:text-red-700"
+                  className="gap-1.5 border-rose-200 bg-white text-rose-600 hover:bg-rose-50 hover:text-rose-700"
                 >
                   <Trash2 className="h-4 w-4" />
                   删除
                 </Button>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button type="button" variant="ghost" size="sm" className="gap-1.5 text-slate-600" data-testid="gantt-batch-more">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="gap-1.5 text-slate-600"
+                    data-testid="gantt-batch-more"
+                    disabled={batchUpdating || !canBatchEdit}
+                    title={canBatchEdit ? '批量改字段' : '请先点击编辑表格'}
+                  >
                     <MoreHorizontal className="h-4 w-4" />
                     更多操作
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-96 space-y-3 rounded-2xl border-slate-200 p-4 shadow-[var(--el-3)]">
+                <DropdownMenuContent align="end" className="w-96 space-y-3 rounded-2xl border-slate-200 p-4 shadow-[var(--el-2)]">
                   <DropdownMenuLabel className="px-0 py-0 text-sm text-slate-900">批量责任与日期</DropdownMenuLabel>
                   <div className="space-y-2">
                     <div className="text-xs text-slate-500">责任人</div>
@@ -301,10 +349,10 @@ export const GanttBatchBar = memo(function GanttBatchBar({
                     <div className="text-xs text-slate-500">责任单位</div>
                     <Select value={participantUnitId} onValueChange={setParticipantUnitId}>
                       <SelectTrigger className="h-10 border-slate-200 bg-white text-slate-700">
-                        <SelectValue placeholder="手工输入" />
+                        <SelectValue placeholder="选择参建单位" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="__manual__">手工输入</SelectItem>
+                        <SelectItem value="__none__">不更新责任单位</SelectItem>
                         {participantUnits.map((unit) => (
                           <SelectItem key={unit.id} value={unit.id}>
                             {unit.unit_type ? `${unit.unit_name} · ${unit.unit_type}` : unit.unit_name}
@@ -312,18 +360,26 @@ export const GanttBatchBar = memo(function GanttBatchBar({
                         ))}
                       </SelectContent>
                     </Select>
-                    {participantUnitId === '__manual__' ? (
-                      <Input
-                        value={responsibleUnit}
-                        onChange={(event) => setResponsibleUnit(event.target.value)}
-                        placeholder="输入责任单位或部门"
-                        className="h-10"
-                      />
-                    ) : (
+                    {participantUnitId !== '__none__' ? (
                       <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
-                        {selectedUnit?.unit_name || '已选择单位'}
+                        {participantUnits.find(u => u.id === participantUnitId)?.unit_name || '已选择单位'}
                       </div>
-                    )}
+                    ) : null}
+                  </div>
+                  <DropdownMenuSeparator />
+                  <div className="space-y-2">
+                    <div className="text-xs text-slate-500">目标进度</div>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={100}
+                      value={targetProgress}
+                      onChange={(event) => setTargetProgress(event.target.value)}
+                      placeholder="0-100"
+                      className="h-10"
+                      data-testid="gantt-bulk-progress-input"
+                    />
+                    <div className="text-xs text-slate-500">按选中任务统一更新进度百分比</div>
                   </div>
                   <DropdownMenuSeparator />
                   <div className="space-y-2">
@@ -341,7 +397,7 @@ export const GanttBatchBar = memo(function GanttBatchBar({
                     type="button"
                     size="sm"
                     onClick={() => void applyBatch()}
-                    disabled={batchUpdating || selectedCount === 0 || !hasAnyBatchChange}
+                    disabled={batchUpdating || !canBatchEdit || selectedCount === 0 || !hasAnyBatchChange}
                     loading={batchUpdating}
                     className="w-full"
                   >
@@ -400,7 +456,8 @@ export const GanttFilterBar = memo(function GanttFilterBar({
   onBuildingChange,
   onClearAll,
   onClose,
-}: GanttFilterBarProps) {
+  specialtyOptions,
+}: GanttFilterBarProps & { specialtyOptions?: string[] }) {
   const controlClass =
     'h-10 rounded-xl border-slate-100 bg-white text-sm shadow-[var(--el-1)] transition-colors focus-visible:border-blue-300 focus-visible:ring-2 focus-visible:ring-blue-100'
 
@@ -491,10 +548,8 @@ export const GanttFilterBar = memo(function GanttFilterBar({
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">全部专项</SelectItem>
-              {SPECIALTY_TYPES.map((specialty) => (
-                <SelectItem key={specialty.value} value={specialty.value}>
-                  {specialty.label}
-                </SelectItem>
+              {(specialtyOptions as string[])?.map((s: string) => (
+                <SelectItem key={s} value={s}>{s}</SelectItem>
               ))}
             </SelectContent>
           </Select>

@@ -150,6 +150,7 @@ export default function DashboardCompareCard({ projectId, embedded = false }: Da
     const params = new URLSearchParams({
       periods: JSON.stringify(periods),
       granularity,
+      summaryOnly: 'true',
     })
 
     setLoadingByGranularity((current) => ({ ...current, [granularity]: true }))
@@ -182,6 +183,7 @@ export default function DashboardCompareCard({ projectId, embedded = false }: Da
   const loading = loadingByGranularity[granularity]
   const currentRow = rows[rows.length - 1] ?? null
   const previousRow = rows.length > 1 ? rows[rows.length - 2] : null
+  const hasCurrentSummary = Boolean(currentRow?.summary)
   const compareMetrics = useMemo(() => {
     const current = currentRow?.summary
     const previous = previousRow?.summary
@@ -227,7 +229,7 @@ export default function DashboardCompareCard({ projectId, embedded = false }: Da
             />
             <Link
               data-testid="dashboard-compare-reports-link"
-              to={projectId ? `/projects/${projectId}/reports?view=change_log` : '/reports?view=change_log'}
+              to={projectId ? `/projects/${projectId}/reports?view=progress_deviation` : '/reports?view=progress_deviation'}
               className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 transition-colors hover:text-blue-800"
             >
               查看详情
@@ -237,19 +239,39 @@ export default function DashboardCompareCard({ projectId, embedded = false }: Da
         }
       />
 
-      <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        {compareMetrics.map((item) => (
-          <div key={item.label} className="rounded-xl border border-slate-200/60 bg-slate-50/60 px-4 py-3">
-            <div className="meta-text">{item.label}</div>
-            <div className={cn('num-mono mt-1 text-lg font-semibold text-slate-900', item.value === 0 && 'text-slate-400')}>
-              {item.value}
+      {loading ? (
+        <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50/70 px-4 py-5 text-sm text-slate-600">
+          对比数据加载中
+        </div>
+      ) : !hasCurrentSummary ? (
+        <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50/70 px-4 py-5">
+          <div className="text-sm font-medium text-slate-900">暂无对比数据</div>
+          <p className="mt-1 text-xs leading-5 text-slate-500">
+            当前周期还没有形成可比较的现场快照；录入进度或切换周期后再查看。
+          </p>
+          <Link
+            to={projectId ? `/projects/${projectId}/reports?view=progress_deviation` : '/reports?view=progress_deviation'}
+            className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-blue-600 transition-colors hover:text-blue-800"
+          >
+            查看报表
+            <ArrowRight className="h-3.5 w-3.5" />
+          </Link>
+        </div>
+      ) : (
+        <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {compareMetrics.map((item) => (
+            <div key={item.label} className="rounded-xl border border-slate-200/60 bg-slate-50/60 px-4 py-3">
+              <div className="meta-text">{item.label}</div>
+              <div className={cn('num-mono mt-1 text-lg font-semibold text-slate-900', item.value === 0 && 'text-slate-400')}>
+                {item.value}
+              </div>
+              <div className={cn('meta-muted mt-1', deltaTone(item.delta, item.inverse))}>
+                {previousPeriodLabel} {formatNumberDelta(item.delta, item.suffix)}
+              </div>
             </div>
-            <div className={cn('meta-muted mt-1', deltaTone(item.delta, item.inverse))}>
-              {previousPeriodLabel} {formatNumberDelta(item.delta, item.suffix)}
-            </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
 
       <span className="sr-only" aria-live="polite">
         {loading ? '对比数据加载中' : ''}

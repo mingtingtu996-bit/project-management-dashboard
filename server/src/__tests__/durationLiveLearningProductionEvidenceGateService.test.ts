@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import {
   buildDurationLiveLearningCompletionAudit,
@@ -46,9 +46,8 @@ const learnableAssetKeys: DurationLiveLearningAssetKey[] = [
   'critical_path_rule_candidate',
 ]
 
-const serviceSourcePath = resolve(
-  process.cwd(),
-  'server/src/services/durationLiveLearningProductionEvidenceGateService.ts',
+const serviceSourcePath = fileURLToPath(
+  new URL('../services/durationLiveLearningProductionEvidenceGateService.ts', import.meta.url),
 )
 
 const durationOutcomeProductionSourceTables = [
@@ -496,8 +495,10 @@ function buildReadyBusinessPathSourceFiles() {
       sourcePath: 'server/src/services/scheduleAccelerationRuntimeService.ts',
       sourceText: `
         import { recordScheduleAccelerationRuntimeConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
+        import { CONSTRUCTION_ORGANIZATION_PLAN_NETWORK_ASSET_KEY } from './constructionOrganizationRuntimeLineageService.js'
         const SCHEDULE_ACCELERATION_RUNTIME_CONSUMER_ASSET_KEYS = new Set([
           'critical_path_rule_candidate',
+          CONSTRUCTION_ORGANIZATION_PLAN_NETWORK_ASSET_KEY,
         ])
         export async function evaluateRuntimeScheduleAcceleration() {
           await recordScheduleAccelerationRuntimeConsumedArtifacts({ queryExec, artifacts: [] })

@@ -18,28 +18,39 @@ import { FeedbackButton } from '@/components/monitoring/FeedbackModal'
 import { ShortcutsHelp, useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts'
 import { AuthDialogProvider, useAuthDialog } from '@/hooks/useAuthDialog'
 import { useRealtimeConnection } from '@/hooks/useRealtimeConnection'
+import { useProjectClimateAutoLocation } from '@/hooks/useProjectClimateAutoLocation'
 import { useScrollRestoration } from '@/hooks/useScrollRestoration'
 import { useSetCurrentUser, useSetProjects } from '@/hooks/useStore'
-import { getCachedProjects, syncProjectCacheFromApi } from '@/lib/projectPersistence'
-import { getAuthToken } from '@/lib/apiClient'
-import { startAutoBackup, stopAutoBackup } from '@/lib/backup'
-import { userDb, generateId } from '@/lib/localDb'
-import { generateDeviceId } from '@/lib/utils'
-import { AuthProvider } from '@/context/AuthContext'
-import { useAuth } from '@/hooks/useAuth'
+import { fetchProjectsFromApi } from '@/lib/projectApi'
+import {
+  AUTH_SESSION_EXPIRED_EVENT,
+  COMMERCIAL_UPGRADE_REQUIRED_EVENT,
+  COMPANY_CONTEXT_CHANGED_EVENT,
+  getAuthToken,
+} from '@/lib/apiClient'
+import { getRouteProjectId, isReservedProjectRouteId, isReservedProjectRoutePath } from '@/lib/projectRouteGuards'
+import { AuthProvider, useAuth } from '@/context/AuthContext'
 import { PROJECT_NAVIGATION_LABELS } from '@/config/navigation'
 import { LoadingState } from '@/components/ui/loading-state'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { Toaster } from '@/components/ui/toaster'
 
 const initialHash = typeof window !== 'undefined' ? window.location.hash : ''
-const initialGanttModulePromise = initialHash.includes('/gantt')
+const initialRoutePath = initialHash.startsWith('#') ? initialHash.slice(1).split(/[?#]/)[0] : ''
+const initialRouteSearch = initialHash.startsWith('#') ? initialHash.slice(1).split('?')[1]?.split('#')[0] ?? '' : ''
+const isInitialModelingWorkbenchRoute = /^\/projects\/[^/]+\/gantt$/.test(initialRoutePath)
+  && ['generate', 'adjust'].includes(new URLSearchParams(initialRouteSearch).get('modelingWorkbench') ?? '')
+const isInitialTaskListRoute = /^\/projects\/[^/]+\/gantt$/.test(initialRoutePath) && !isInitialModelingWorkbenchRoute
+const initialGanttModulePromise = isInitialTaskListRoute
   ? import('@/pages/GanttView')
   : null
 
 const Dashboard = lazy(() => import('@/pages/Dashboard'))
 const CompanyCockpit = lazy(() => import('@/pages/CompanyCockpit'))
+const WorkspacePage = lazy(() => import('@/pages/WorkspacePage'))
+const DemoPreviewPage = lazy(() => import('@/pages/DemoPreviewPage'))
 const GanttView = lazy(() => initialGanttModulePromise ?? import('@/pages/GanttView'))
+const PlanningModelingWorkbenchRoute = lazy(() => import('@/pages/GanttView/PlanningModelingWorkbenchRoute'))
 const RiskManagement = lazy(() => import('@/pages/RiskManagement'))
 const Milestones = lazy(() => import('@/pages/Milestones'))
 const AcceptanceTimeline = lazy(() => import('@/pages/AcceptanceTimeline'))
@@ -49,32 +60,38 @@ const Reports = lazy(() => import('@/pages/Reports'))
 const Materials = lazy(() => import('@/pages/Materials'))
 const TaskSummary = lazy(() => import('@/pages/TaskSummary'))
 const ResponsibilityView = lazy(() => import('@/pages/ResponsibilityView'))
-const WBSTemplates = lazy(() => import('@/pages/WBSTemplates'))
 const JoinProject = lazy(() => import('@/pages/JoinProject'))
 const BaselinePage = lazy(() => import('@/pages/planning/BaselinePage'))
 const MonthlyPlanPage = lazy(() => import('@/pages/planning/MonthlyPlanPage'))
-const CloseoutPage = lazy(() => import('@/pages/planning/CloseoutPage'))
-const PlanningWorkspace = lazy(() => import('@/pages/planning/PlanningWorkspace'))
 const Drawings = lazy(() => import('@/pages/Drawings'))
 const MonitoringDashboard = lazy(() => import('@/components/monitoring/MonitoringDashboard'))
+const CustomBusinessTypeAdmin = lazy(() => import('@/pages/CustomBusinessTypeAdmin'))
+const DurationAccuracyAdmin = lazy(() => import('@/pages/DurationAccuracyAdmin'))
+const RuleAssetGovernanceWorkbenchAdmin = lazy(() => import('@/pages/RuleAssetGovernanceWorkbenchAdmin'))
+const BillingSettings = lazy(() => import('@/pages/BillingSettings'))
 const PENDING_AUTH_REDIRECT_KEY = 'pending_auth_redirect'
-let lastProjectCacheSyncKey: string | null = null
-let projectCacheSyncPromise: Promise<ReturnType<typeof getCachedProjects>> | null = null
+const DASHBOARD_FIRST_SCREEN_BACKGROUND_SYNC_DELAY_MS = 5_000
+let activeProjectSyncKey: string | null = null
+let projectSyncPromise: ReturnType<typeof fetchProjectsFromApi> | null = null
 
 if (initialGanttModulePromise) {
   void initialGanttModulePromise
 }
 
 function syncProjectsForKey(syncKey: string) {
-  if (lastProjectCacheSyncKey === syncKey) {
-    return projectCacheSyncPromise ?? Promise.resolve(getCachedProjects())
+  if (activeProjectSyncKey === syncKey && projectSyncPromise) {
+    return projectSyncPromise
   }
 
-  lastProjectCacheSyncKey = syncKey
-  projectCacheSyncPromise = syncProjectCacheFromApi().finally(() => {
-    projectCacheSyncPromise = null
+  activeProjectSyncKey = syncKey
+  projectSyncPromise = fetchProjectsFromApi().finally(() => {
+    projectSyncPromise = null
   })
-  return projectCacheSyncPromise
+  return projectSyncPromise
+}
+
+function isDashboardProjectRoutePath(pathname: string) {
+  return /^\/projects\/[^/]+\/dashboard$/.test(pathname)
 }
 
 function setPendingAuthRedirect(value: string | null) {
@@ -107,13 +124,29 @@ function withRouteBoundary(element: ReactElement) {
   )
 }
 
-function PlanningCloseoutRedirect() {
+function ProjectRouteElement() {
   const { id } = useParams<{ id: string }>()
-  if (!id) {
-    return <Navigate to="/company" replace />
+
+  if (isReservedProjectRouteId(id)) {
+    return <NotFoundPage />
   }
 
-  return <Navigate to={`/projects/${id}/tasks/closeout`} replace />
+  return (
+    <ErrorBoundary>
+      <ProjectLayout />
+    </ErrorBoundary>
+  )
+}
+
+function GanttRouteElement() {
+  const location = useLocation()
+  const modelingWorkbenchMode = new URLSearchParams(location.search).get('modelingWorkbench')
+
+  if (modelingWorkbenchMode === 'generate' || modelingWorkbenchMode === 'adjust') {
+    return withRouteBoundary(<PlanningModelingWorkbenchRoute />)
+  }
+
+  return withRouteBoundary(<GanttView />)
 }
 
 function AppContent() {
@@ -129,10 +162,20 @@ function AppContent() {
   const navigate = useNavigate()
   const { isAuthenticated, loading: authLoading, user } = useAuth()
   const hasStoredToken = Boolean(getAuthToken())
-  useRealtimeConnection({ enabled: isAuthenticated && !authLoading, authenticatedUserId: user?.id ?? null })
+  const isWorkspaceShellRoute = location.pathname === '/workspace'
+    || location.pathname === '/demo'
+    || location.pathname === '/settings/billing'
+    || isReservedProjectRoutePath(location.pathname)
+  const isModelingWorkbenchRoute = /^\/projects\/[^/]+\/gantt$/.test(location.pathname)
+    && ['generate', 'adjust'].includes(new URLSearchParams(location.search).get('modelingWorkbench') ?? '')
+  useRealtimeConnection({
+    enabled: isAuthenticated && !authLoading,
+    authenticatedUserId: user?.id ?? null,
+    currentCompanyId: user?.currentCompanyId ?? null,
+  })
 
-  const projectMatch = location.pathname.match(/\/projects\/([^/]+)/)
-  const projectId = projectMatch?.[1] ?? null
+  const projectId = getRouteProjectId(location.pathname)
+  useProjectClimateAutoLocation(projectId, isAuthenticated && !authLoading)
 
   const navShortcuts = useCallback(() => {
     if (!projectId) return []
@@ -177,17 +220,13 @@ function AppContent() {
   )
 
   useEffect(() => {
-    setProjects(getCachedProjects())
-
     const initUser = () => {
       if (isAuthenticated && user) {
         setCurrentUser({
           id: user.id,
           username: user.username,
           email: user.email,
-          role: user.role,
           global_role: user.globalRole,
-          device_id: user.username,
           display_name: user.display_name || user.username,
           joined_at: new Date().toISOString(),
           last_active: new Date().toISOString(),
@@ -196,24 +235,7 @@ function AppContent() {
         return
       }
 
-      const deviceId = generateDeviceId()
-      const existingUser = userDb.findByDeviceId(deviceId)
-
-      if (existingUser) {
-        userDb.update(existingUser.id, { last_active: new Date().toISOString() })
-        setCurrentUser(existingUser)
-      } else {
-        const newUser = {
-          id: generateId(),
-          device_id: deviceId,
-          display_name: `用户_${deviceId.slice(0, 6)}`,
-          joined_at: new Date().toISOString(),
-          last_active: new Date().toISOString(),
-        }
-        userDb.create(newUser)
-        setCurrentUser(newUser)
-      }
-
+      setCurrentUser(null)
       setLoading(false)
     }
 
@@ -230,12 +252,12 @@ function AppContent() {
   useEffect(() => {
     if (authLoading) return undefined
     if (!isAuthenticated) {
-      setProjects(getCachedProjects())
+      setProjects([])
       return undefined
     }
 
     let cancelled = false
-    const syncKey = user?.id ? `user:${user.id}` : isAuthenticated ? 'auth' : 'anon'
+    const syncKey = user?.id ? `user:${user.id}:company:${user.currentCompanyId ?? 'no-company'}` : isAuthenticated ? 'auth' : 'anon'
     const runSync = () => {
       void syncProjectsForKey(syncKey)
         .then((projects) => {
@@ -243,7 +265,7 @@ function AppContent() {
             setProjects(projects)
           }
           if (import.meta.env.DEV && !cancelled) {
-            console.log('[sync] synced backend projects to cache', projects.length)
+            console.log('[sync] loaded backend projects', projects.length)
           }
         })
         .catch((error) => {
@@ -260,19 +282,28 @@ function AppContent() {
       }
     }
 
-    const timer = window.setTimeout(runSync, hasStoredToken ? 1800 : 1200)
+    const backgroundSyncDelayMs = isDashboardProjectRoutePath(location.pathname)
+      ? DASHBOARD_FIRST_SCREEN_BACKGROUND_SYNC_DELAY_MS
+      : hasStoredToken ? 1800 : 1200
+    const timer = window.setTimeout(runSync, backgroundSyncDelayMs)
     return () => {
       cancelled = true
       window.clearTimeout(timer)
     }
-  }, [authLoading, hasStoredToken, isAuthenticated, location.pathname, setProjects, user?.id])
+  }, [authLoading, hasStoredToken, isAuthenticated, location.pathname, setProjects, user?.currentCompanyId, user?.id])
 
   useEffect(() => {
-    startAutoBackup()
-    return () => {
-      stopAutoBackup()
+    if (typeof window === 'undefined') return undefined
+
+    const handleCompanyContextChanged = () => {
+      activeProjectSyncKey = null
+      projectSyncPromise = null
+      setProjects([])
     }
-  }, [])
+
+    window.addEventListener(COMPANY_CONTEXT_CHANGED_EVENT, handleCompanyContextChanged)
+    return () => window.removeEventListener(COMPANY_CONTEXT_CHANGED_EVENT, handleCompanyContextChanged)
+  }, [setProjects])
 
   useEffect(() => {
     if (authLoading || isAuthenticated) return
@@ -288,6 +319,30 @@ function AppContent() {
     openLoginDialog()
     navigate(location.pathname, { replace: true })
   }, [authLoading, isAuthenticated, location.pathname, location.search, navigate, openLoginDialog])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+
+    const handleSessionExpired = () => {
+      const currentTarget = `${location.pathname}${location.search}`
+      setPendingAuthRedirect(currentTarget)
+      openLoginDialog()
+    }
+
+    window.addEventListener(AUTH_SESSION_EXPIRED_EVENT, handleSessionExpired)
+    return () => window.removeEventListener(AUTH_SESSION_EXPIRED_EVENT, handleSessionExpired)
+  }, [location.pathname, location.search, openLoginDialog])
+
+  useEffect(() => {
+    const handleCommercialUpgradeRequired = (event: CustomEvent<{ upgradePath: string; code: string }>) => {
+      const upgradePath = event.detail.upgradePath || '/settings/billing'
+      if (location.pathname === upgradePath) return
+      navigate(`${upgradePath}?reason=${encodeURIComponent(event.detail.code)}`)
+    }
+
+    window.addEventListener(COMMERCIAL_UPGRADE_REQUIRED_EVENT, handleCommercialUpgradeRequired)
+    return () => window.removeEventListener(COMMERCIAL_UPGRADE_REQUIRED_EVENT, handleCommercialUpgradeRequired)
+  }, [location.pathname, navigate])
 
   useEffect(() => {
     if (authLoading || !isAuthenticated) return
@@ -317,10 +372,10 @@ function AppContent() {
   return (
     <div className="flex h-screen overflow-hidden bg-slate-50 text-slate-900">
       <SkipLink targetId="main-content" />
-      <Sidebar />
+      {!isWorkspaceShellRoute && !isModelingWorkbenchRoute ? <Sidebar /> : null}
       <div className="flex flex-1 flex-col overflow-hidden">
-        <Header onOpenCommandPalette={() => setCommandPaletteOpen(true)} />
-        <OfflineBanner />
+        {!isModelingWorkbenchRoute ? <Header onOpenCommandPalette={() => setCommandPaletteOpen(true)} /> : null}
+        {!isModelingWorkbenchRoute ? <OfflineBanner /> : null}
         <main
           id="main-content"
           role="main"
@@ -330,21 +385,22 @@ function AppContent() {
         >
           <div className="w-full">
             <PageErrorBoundary>
-              <Routes>
-                <Route path="/" element={<Navigate to="/company" replace />} />
+              <Routes key={location.pathname}>
+                <Route path="/" element={<Navigate to="/workspace" replace />} />
+                <Route path="/workspace" element={withRouteBoundary(<WorkspacePage />)} />
+                <Route path="/demo" element={withRouteBoundary(<DemoPreviewPage />)} />
                 <Route path="/company" element={withRouteBoundary(<CompanyCockpit />)} />
-                <Route path="/projects" element={<Navigate to="/company" replace />} />
+                <Route path="/settings/billing" element={withRouteBoundary(<BillingSettings />)} />
+                <Route path="/admin/business-types" element={withRouteBoundary(<CustomBusinessTypeAdmin />)} />
+                <Route path="/admin/duration-accuracy" element={withRouteBoundary(<DurationAccuracyAdmin />)} />
+                <Route path="/admin/rule-assets/governance-workbench" element={withRouteBoundary(<RuleAssetGovernanceWorkbenchAdmin />)} />
                 <Route
                   path="/projects/:id"
-                  element={
-                    <ErrorBoundary>
-                      <ProjectLayout />
-                    </ErrorBoundary>
-                  }
+                  element={<ProjectRouteElement />}
                 >
                   <Route index element={<Navigate to="dashboard" replace />} />
                   <Route path="dashboard" element={withRouteBoundary(<Dashboard />)} />
-                  <Route path="gantt" element={withRouteBoundary(<GanttView />)} />
+                  <Route path="gantt" element={<GanttRouteElement />} />
                   <Route path="risks" element={withRouteBoundary(<RiskManagement />)} />
                   <Route path="milestones" element={withRouteBoundary(<Milestones />)} />
                   <Route path="acceptance" element={withRouteBoundary(<AcceptanceTimeline />)} />
@@ -352,17 +408,12 @@ function AppContent() {
                   <Route path="reports" element={withRouteBoundary(<Reports />)} />
                   <Route path="task-summary" element={withRouteBoundary(<TaskSummary />)} />
                   <Route path="responsibility" element={withRouteBoundary(<ResponsibilityView />)} />
-                  <Route path="planning/wbs-templates" element={withRouteBoundary(<WBSTemplates />)} />
-                  <Route path="wbs-templates" element={<Navigate to="planning/wbs-templates" replace />} />
+                  <Route path="planning" element={<Navigate to="baseline" replace />} />
                   <Route path="planning/baseline" element={withRouteBoundary(<BaselinePage />)} />
                   <Route path="planning/monthly" element={withRouteBoundary(<MonthlyPlanPage />)} />
-                  <Route path="tasks/closeout" element={withRouteBoundary(<CloseoutPage />)} />
-                  <Route path="planning/closeout" element={<PlanningCloseoutRedirect />} />
-                  <Route path="planning/*" element={withRouteBoundary(<PlanningWorkspace />)} />
                   <Route path="drawings" element={withRouteBoundary(<Drawings />)} />
                   <Route path="materials" element={withRouteBoundary(<Materials />)} />
                 </Route>
-                <Route path="/dashboard" element={<Navigate to="/company" replace />} />
                 <Route path="/notifications" element={withRouteBoundary(<Notifications />)} />
                 <Route path="/monitoring" element={withRouteBoundary(<MonitoringDashboard />)} />
                 <Route path="/join/:code" element={withRouteBoundary(<JoinProject />)} />
@@ -373,10 +424,10 @@ function AppContent() {
         </main>
       </div>
       <Toaster />
-      <OnboardingGuide />
-      <CommandPalette open={commandPaletteOpen} onOpenChange={setCommandPaletteOpen} />
-      <ShortcutsHelp open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
-      <FeedbackButton />
+      {!isModelingWorkbenchRoute ? <OnboardingGuide /> : null}
+      {!isModelingWorkbenchRoute ? <CommandPalette open={commandPaletteOpen} onOpenChange={setCommandPaletteOpen} /> : null}
+      {!isModelingWorkbenchRoute ? <ShortcutsHelp open={shortcutsOpen} onOpenChange={setShortcutsOpen} /> : null}
+      {!isModelingWorkbenchRoute ? <FeedbackButton /> : null}
       <LoginDialog isOpen={showLoginDialog} onClose={closeLoginDialog} />
       <ConditionWarningModal projectId={projectId ?? undefined} />
     </div>
@@ -388,7 +439,7 @@ export default function App() {
     <AuthProvider>
       <AuthDialogProvider>
         <TooltipProvider delayDuration={300}>
-          <HashRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+          <HashRouter future={{ v7_relativeSplatPath: true }}>
             <AppContent />
           </HashRouter>
         </TooltipProvider>

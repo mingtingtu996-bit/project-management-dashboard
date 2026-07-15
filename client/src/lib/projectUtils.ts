@@ -9,42 +9,6 @@
 import type { Project } from './supabase';
 
 /**
- * 计算剩余天数
- * 
- * @param plannedEndDate - 计划结束日期
- * @returns 剩余天数（负数表示已延期）
- * 
- * @example
- * ```typescript
- * const days = getRemainingDays('2026-12-31');
- * console.log(days); // 剩余天数，Infinity 表示无结束日期
- * ```
- */
-export function getRemainingDays(plannedEndDate: string | null | undefined): number {
-  if (!plannedEndDate) return Infinity;
-  return Math.ceil((new Date(plannedEndDate).getTime() - Date.now()) / 86400000);
-}
-
-/**
- * 按剩余天数排序
- * 
- * @param items - 包含项目信息的对象数组
- * @returns 按剩余天数升序排序的数组
- * 
- * @example
- * ```typescript
- * const sorted = sortByRemainingDays(projectStats);
- * ```
- */
-export function sortByRemainingDays<T extends { project: { planned_end_date?: string | null } }>(items: T[]): T[] {
-  return [...items].sort((a, b) => {
-    const dA = getRemainingDays(a.project.planned_end_date);
-    const dB = getRemainingDays(b.project.planned_end_date);
-    return dA - dB;
-  });
-}
-
-/**
  * 项目名取首字缩写（最多2字）
  * 
  * @param name - 项目名称
@@ -129,37 +93,6 @@ export function getProjectStage(project: Project): ProjectStageInfo {
   
   // 前期阶段：未开工
   return { stage: 'pre', label: '前期' };
-}
-
-/**
- * 剩余天数计算结果
- */
-export interface RemainingDaysResult {
-  days: number;
-  isOverdue: boolean;
-}
-
-/**
- * 计算项目剩余天数
- * 
- * @param project - 项目对象
- * @returns 剩余天数和是否延期
- * 
- * @example
- * ```typescript
- * const result = calcProjectRemainingDays(project);
- * console.log(result.days, result.isOverdue);
- * ```
- */
-export function calcProjectRemainingDays(project: Project): RemainingDaysResult {
-  if (!project.planned_end_date) return { days: 0, isOverdue: false };
-  
-  const endDate = new Date(project.planned_end_date);
-  const now = new Date();
-  const diffTime = endDate.getTime() - now.getTime();
-  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-  
-  return { days: Math.abs(diffDays), isOverdue: diffDays < 0 };
 }
 
 /**

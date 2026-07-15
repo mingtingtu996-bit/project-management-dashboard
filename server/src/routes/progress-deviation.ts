@@ -16,6 +16,47 @@ const router = Router()
 
 router.use(authenticate)
 
+const PROGRESS_DEVIATION_CACHE_TTL_MS = 15_000
+
+type ResponseCacheEntry<T> = {
+  expiresAt: number
+  promise: Promise<ApiResponse<T>>
+}
+
+const progressDeviationLockCache = new Map<
+  string,
+  ResponseCacheEntry<{ lock: BaselineVersionLock | null }>
+>()
+const progressDeviationAnalysisCache = new Map<
+  string,
+  ResponseCacheEntry<ProgressDeviationAnalysisResponse>
+>()
+
+function getCachedResponse<T>(
+  cache: Map<string, ResponseCacheEntry<T>>,
+  key: string,
+  factory: () => Promise<ApiResponse<T>>
+) {
+  const now = Date.now()
+  const cached = cache.get(key)
+  if (cached && cached.expiresAt > now) {
+    return cached.promise
+  }
+  if (cached) {
+    cache.delete(key)
+  }
+
+  const promise = factory().catch((error) => {
+    cache.delete(key)
+    throw error
+  })
+  cache.set(key, {
+    expiresAt: now + PROGRESS_DEVIATION_CACHE_TTL_MS,
+    promise,
+  })
+  return promise
+}
+
 function badRequest(message: string, code = 'VALIDATION_ERROR') {
   return {
     success: false,
@@ -42,12 +83,18 @@ router.get(
     }
 
     try {
-      const lock = await readBaselineVersionLock(projectId, baselineVersionId)
-      const response: ApiResponse<{ lock: BaselineVersionLock | null }> = {
-        success: true,
-        data: { lock },
-        timestamp: new Date().toISOString(),
-      }
+      const response = await getCachedResponse(
+        progressDeviationLockCache,
+        `${projectId}:${baselineVersionId}`,
+        async () => {
+          const lock = await readBaselineVersionLock(projectId, baselineVersionId)
+          return {
+            success: true,
+            data: { lock },
+            timestamp: new Date().toISOString(),
+          }
+        }
+      )
       res.json(response)
     } catch (error) {
       if (error instanceof PlanningDraftLockServiceError) {
@@ -71,19 +118,31 @@ router.get(
     }
 
     try {
-      const data = await getProgressDeviationAnalysisOrThrow({
-        project_id: projectId,
-        baseline_version_id: baselineVersionId,
-        monthly_plan_version_id: monthlyPlanVersionId,
-        lock: parseBoolean(req.query.lock),
-        actorUserId: req.user?.id ?? 'system',
-      })
+      const lockRequested = parseBoolean(req.query.lock)
+      const buildResponse = async (): Promise<ApiResponse<ProgressDeviationAnalysisResponse>> => {
+        const data = await getProgressDeviationAnalysisOrThrow({
+          project_id: projectId,
+          baseline_version_id: baselineVersionId,
+          monthly_plan_version_id: monthlyPlanVersionId,
+          lock: lockRequested,
+          actorUserId: req.user?.id ?? 'system',
+          deferDataGapNotification: !lockRequested,
+        })
 
-      const response: ApiResponse<ProgressDeviationAnalysisResponse> = {
-        success: true,
-        data,
-        timestamp: new Date().toISOString(),
+        return {
+          success: true,
+          data,
+          timestamp: new Date().toISOString(),
+        }
       }
+
+      const response = lockRequested
+        ? await buildResponse()
+        : await getCachedResponse(
+            progressDeviationAnalysisCache,
+            `${projectId}:${baselineVersionId}:${monthlyPlanVersionId ?? 'none'}`,
+            buildResponse
+          )
       res.json(response)
     } catch (error) {
       if (error instanceof ProgressDeviationServiceError) {

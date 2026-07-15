@@ -1,16 +1,12 @@
 import { Link } from 'react-router-dom'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Activity,
   AlertTriangle,
+  ArrowRight,
   CheckCircle,
-  ChevronRight,
-  Clock3,
+  ClipboardCheck,
   LayoutDashboard,
   RefreshCw,
-  ShieldCheck,
-  TrendingDown,
-  TrendingUp,
 } from 'lucide-react'
 import {
   Area,
@@ -25,11 +21,21 @@ import {
 import { Breadcrumb } from '@/components/Breadcrumb'
 import { ChartAccessibleWrapper } from '@/components/ChartAccessibleWrapper'
 import DashboardCompareCard from '@/components/DashboardCompareCard'
-import { DashboardHealthCards } from '@/components/DashboardHealthCards'
-import DashboardMilestoneCard from '@/components/DashboardMilestoneCard'
+import {
+  DashboardHealthCards,
+  type DashboardBusinessHealthDetails,
+  type HealthDetailsStatus,
+} from '@/components/DashboardHealthCards'
 import { DataConfidenceBreakdown } from '@/components/DataConfidenceBreakdown'
 import { EmptyState } from '@/components/EmptyState'
+import { V14231PageReadinessBoundary } from '@/components/governance/V14231PageReadinessBoundary'
+import { ProjectRemainingForecastCard } from '@/components/ProjectRemainingForecastCard'
 import RecentTasksCard from '@/components/RecentTasksCard'
+import {
+  ConstructionOrganizationScenarioSummary,
+  type ConstructionOrganizationUseCase,
+} from '@/components/planning/ConstructionOrganizationScenarioSummary'
+import { Card, CardContent } from '@/components/ui/card'
 import { CardHead } from '@/components/ui/card-head'
 import { chartTooltipCursor } from '@/components/ui/chart-tooltip'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -39,87 +45,68 @@ import { LoadingState } from '@/components/ui/loading-state'
 import { LucideIcon } from '@/components/ui/lucide-icon'
 import { MetricCard as SharedMetricCard } from '@/components/ui/metric-card'
 import { Separator } from '@/components/ui/separator'
-import { StatusBadge } from '@/components/ui/status-badge'
+import { DurationBasisBadge } from '@/components/planning/DurationBasisBadge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { PROJECT_NAVIGATION_LABELS } from '@/config/navigation'
+import { usePermissions } from '@/hooks/usePermissions'
 import { useStore } from '@/hooks/useStore'
 import { useToast } from '@/hooks/use-toast'
-import { apiGet, isAbortError } from '@/lib/apiClient'
+import { ApiClientError, apiGet, isAbortError } from '@/lib/apiClient'
 import { CHART_NEUTRAL, CHART_SERIES } from '@/lib/chartPalette'
-import { getTaskDisplayStatus, isCompletedTask } from '@/lib/taskBusinessStatus'
+import { inclusiveDurationDays } from '@/lib/durationDays'
+import { getProjectDisplayName } from '@/lib/projectDisplay'
 import { cn } from '@/lib/utils'
 import { DashboardApiService, type ProjectSummary } from '@/services/dashboardApi'
 import { DataQualityApiService, type DataQualityProjectSummary } from '@/services/dataQualityApi'
+import type { WbsConstructionOrganizationScenarioSummary } from '@/services/wbsTemplateGenerationApi'
 
 type ProjectStatus = '未开始' | '进行中' | '已完成' | '已暂停'
 type CurrentProjectEntity = NonNullable<ReturnType<typeof useStore.getState>['currentProject']>
 
-type DashboardWarningItem = {
+type TodayProgressItem = {
   id: string
+  taskId: string
   title: string
-  description: string
-  warning_level: 'info' | 'warning' | 'critical'
-  is_acknowledged?: boolean
-  created_at?: string
-  status?: string | null
+  previousProgress: number
+  currentProgress: number
+  delta: number
+  changedAt?: string
 }
 
-type DashboardIssueItem = {
-  id: string
-  title: string
-  description?: string | null
-  severity?: 'critical' | 'high' | 'medium' | 'low'
-  task_id?: string | null
-  created_at?: string
+type BusinessHealthScorePayload = {
+  score?: number
+  details?: DashboardBusinessHealthDetails | null
+  degraded?: boolean
+  degradationReason?: string
   status?: string
 }
 
-type DashboardProblemItem = {
-  id: string
-  title?: string
-  description?: string
-  severity?: string
-  task_id?: string | null
-  created_at?: string
-  status?: string
-  is_resolved?: boolean | number | null
+const DASHBOARD_SECONDARY_READ_DELAY_MS = 2_800
+const DASHBOARD_DEFAULT_SUPPORT_TAB_DELAY_MS = 2_600
+const DASHBOARD_PROJECT_IDENTITY_FALLBACK = '当前项目'
+const GENERIC_PROJECT_IDENTITY_LABELS = new Set(['项目', DASHBOARD_PROJECT_IDENTITY_FALLBACK, '未命名项目', '项目工作台'])
+
+function readConstructionOrganizationScenarioFromProject(
+  project: CurrentProjectEntity | null | undefined,
+): WbsConstructionOrganizationScenarioSummary | null {
+  const metadata = project?.metadata
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null
+  const record = metadata as Record<string, unknown>
+  const scenario = record.constructionOrganizationScenario ?? record.constructionOrganizationScenarioSummary
+  if (!scenario || typeof scenario !== 'object' || Array.isArray(scenario)) return null
+  return scenario as WbsConstructionOrganizationScenarioSummary
 }
 
-type DashboardChangeLogItem = {
-  id: string
-  entity_type: string
-  field_name: string
-  change_reason?: string | null
-  changed_at?: string
-}
-
-type TodayLiveType = 'warning' | 'due_task' | 'change' | 'new_risk'
-
-type TodayLiveItem = {
-  id: string
-  type: TodayLiveType
-  priority: number
-  title: string
-  detail: string
-  meta: string
-  created_at?: string
-}
-
-type DashboardMilestoneStatus = 'completed' | 'pending' | 'delayed'
-
-type DashboardMilestonePanelItem = {
-  id: string
-  name: string
-  dueDate: string
-  status: DashboardMilestoneStatus
-  progress?: number
-  projectId: string
-}
-
-function toDashboardMilestoneStatus(status: string, daysRemaining?: number): DashboardMilestoneStatus {
-  if (status === 'completed') return 'completed'
-  if (status === 'overdue' || (typeof daysRemaining === 'number' && daysRemaining < 0)) return 'delayed'
-  return 'pending'
+function readConstructionOrganizationUseCase(
+  scenario: WbsConstructionOrganizationScenarioSummary | null,
+): ConstructionOrganizationUseCase {
+  if (!scenario || typeof scenario !== 'object') return 'newProjectPlanning'
+  const projectLevelSnapshot = scenario.projectLevelSnapshot
+  const snapshotRecord = projectLevelSnapshot && typeof projectLevelSnapshot === 'object' && !Array.isArray(projectLevelSnapshot)
+    ? projectLevelSnapshot as Record<string, unknown>
+    : null
+  const mode = String(scenario.mode ?? snapshotRecord?.mode ?? '').trim()
+  return mode === 'starting_line' ? 'startingLineOnboarding' : 'newProjectPlanning'
 }
 
 function normalizeWeeklyDigestData<T extends { project_id?: string | null }>(value: T | null | undefined): T | null {
@@ -153,64 +140,33 @@ function normalizeProjectStatus(status?: string | null): ProjectStatus {
 }
 
 function getDashboardProjectStatusLabel(summaryData: ProjectSummary | null, currentStatus: ProjectStatus) {
-  const rawStatus = summaryData?.statusLabel || currentStatus
-  if (rawStatus !== '已完成') return rawStatus
-
-  const progress = summaryData?.overallProgress
-  const tasksComplete =
-    summaryData?.totalTasks == null ||
-    summaryData.totalTasks <= 0 ||
-    (summaryData.completedTaskCount ?? 0) >= summaryData.totalTasks
-  const milestonesComplete =
-    summaryData?.totalMilestones == null ||
-    summaryData.totalMilestones <= 0 ||
-    (summaryData.completedMilestones ?? 0) >= summaryData.totalMilestones
-  const progressComplete = progress == null || progress >= 99.5
-
-  if (progressComplete && tasksComplete && milestonesComplete) return '已完成'
-  if ((progress ?? 0) <= 0) return '未开始'
-  return '进行中'
+  return summaryData?.statusLabel || currentStatus
 }
 
-function getHealthStatusKey(score: number): string {
-  if (score >= 80) return 'completed'
-  if (score >= 60) return 'in_progress'
-  if (score >= 40) return 'warning'
-  return 'critical'
+function normalizeDashboardProjectIdentity(value?: string | null) {
+  const displayName = getProjectDisplayName(value, '').trim()
+  return displayName && !GENERIC_PROJECT_IDENTITY_LABELS.has(displayName) ? displayName : ''
 }
 
-function getConfidenceStatusKey(score: number): string {
-  if (score >= 85) return 'completed'
-  if (score >= 70) return 'in_progress'
-  return 'warning'
+function resolveDashboardProjectIdentity(currentProject: CurrentProjectEntity, summaryData: ProjectSummary | null) {
+  return (
+    normalizeDashboardProjectIdentity(summaryData?.name)
+    || normalizeDashboardProjectIdentity(currentProject.name)
+    || DASHBOARD_PROJECT_IDENTITY_FALLBACK
+  )
 }
 
-function getCalendarDayKey(value: Date | string) {
-  const date = value instanceof Date ? value : new Date(value)
-  if (Number.isNaN(date.getTime())) return ''
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-
-function isSameCalendarDay(value: string | null | undefined, targetDayKey: string) {
-  if (!value) return false
-  return getCalendarDayKey(value) === targetDayKey
-}
-
-function formatLiveTime(value?: string | null) {
-  if (!value) return '时间待补充'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return '时间待补充'
-  return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
-}
-
-function formatLiveTaskDate(value?: string | null) {
-  if (!value) return '日期待补充'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return '日期待补充'
-  return date.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })
+function getMetricChipClass(score: number | null | undefined, fallbackTone: 'blue' | 'slate' = 'slate') {
+  const base = 'dashboard-title-metric-chip inline-flex h-6 items-center rounded-full px-2.5 text-sm font-medium ring-1 ring-inset'
+  if (score === null || score === undefined || !Number.isFinite(score)) {
+    return cn(base, fallbackTone === 'blue'
+      ? 'bg-blue-50 text-blue-700 ring-blue-200'
+      : 'bg-slate-100 text-slate-600 ring-slate-200')
+  }
+  if (score >= 80) return cn(base, 'bg-emerald-50 text-emerald-700 ring-emerald-200')
+  if (score >= 60) return cn(base, 'bg-blue-50 text-blue-700 ring-blue-200')
+  if (score >= 40) return cn(base, 'bg-amber-50 text-amber-700 ring-amber-200')
+  return cn(base, 'bg-rose-50 text-rose-700 ring-rose-200')
 }
 
 function formatProjectDate(value?: string | null) {
@@ -220,242 +176,652 @@ function formatProjectDate(value?: string | null) {
   return date.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' })
 }
 
+function diffCalendarDays(start?: string | null, end?: string | null) {
+  return inclusiveDurationDays(start, end)
+}
+
+function getDashboardPlanTaskCount(summaryData: ProjectSummary | null) {
+  return Math.max(0, Number(summaryData?.totalTasks ?? summaryData?.leafTaskCount ?? 0))
+}
+
+function getDashboardPlanPhaseCount(summaryData: ProjectSummary | null) {
+  const value = Number(summaryData?.planPhaseCount ?? 0)
+  return Number.isFinite(value) && value > 0 ? Math.round(value) : null
+}
+
+function hasDashboardExecutionData(summaryData: ProjectSummary | null, todayProgressItems: TodayProgressItem[]) {
+  return (
+    todayProgressItems.length > 0
+    || Number(summaryData?.overallProgress ?? 0) > 0
+    || Number(summaryData?.taskProgress ?? 0) > 0
+    || Number(summaryData?.completedTaskCount ?? 0) > 0
+    || Number(summaryData?.inProgressTaskCount ?? 0) > 0
+  )
+}
+
+function getDashboardPlanDurationDays(summaryData: ProjectSummary | null, currentProject: CurrentProjectEntity) {
+  const plannedStart = summaryData?.plannedStartDate ?? currentProject.planned_start_date ?? currentProject.start_date ?? null
+  const plannedEnd = summaryData?.plannedEndDate ?? currentProject.planned_end_date ?? currentProject.end_date ?? null
+  return diffCalendarDays(plannedStart, plannedEnd)
+}
+
 function getMinutesAgo(timestamp: number) {
   if (!timestamp) return '--'
   const minutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60000))
   return minutes <= 0 ? '刚刚' : `${minutes} 分钟前`
 }
 
-function normalizeWarningRows(value: unknown): DashboardWarningItem[] {
-  if (!Array.isArray(value)) return []
-  const rows: DashboardWarningItem[] = []
-  for (const item of value) {
-    if (!item || typeof item !== 'object') continue
-    const row = item as Record<string, unknown>
-    rows.push({
-      id: String(row.id ?? ''),
-      title: String(row.title ?? '未命名预警'),
-      description: String(row.description ?? ''),
-      warning_level:
-        (String(row.warning_level ?? 'info').trim().toLowerCase() as DashboardWarningItem['warning_level']) || 'info',
-      is_acknowledged: Boolean(row.is_acknowledged),
-      created_at: row.created_at ? String(row.created_at) : undefined,
-      status: row.status ? String(row.status) : null,
-    })
-  }
-  return rows.filter((row) => row.id)
+function clampProgress(value: unknown) {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return 0
+  return Math.max(0, Math.min(100, Math.round(numeric)))
 }
 
-function normalizeIssueRows(value: unknown): DashboardIssueItem[] {
-  if (!Array.isArray(value)) return []
-  const rows: DashboardIssueItem[] = []
-  for (const item of value) {
-    if (!item || typeof item !== 'object') continue
-    const row = item as Record<string, unknown>
-    rows.push({
-      id: String(row.id ?? ''),
-      title: String(row.title ?? '未命名问题'),
-      description: row.description ? String(row.description) : null,
-      severity: row.severity ? (String(row.severity) as DashboardIssueItem['severity']) : undefined,
-      task_id: row.task_id ? String(row.task_id) : null,
-      created_at: row.created_at ? String(row.created_at) : undefined,
-      status: row.status ? String(row.status) : undefined,
-    })
-  }
-  return rows.filter((row) => row.id)
-}
-
-function normalizeProblemRows(value: unknown): DashboardProblemItem[] {
-  if (!Array.isArray(value)) return []
-  const rows: DashboardProblemItem[] = []
-  for (const item of value) {
-    if (!item || typeof item !== 'object') continue
-    const row = item as Record<string, unknown>
-    rows.push({
-      id: String(row.id ?? ''),
-      title: row.title ? String(row.title) : undefined,
-      description: row.description ? String(row.description) : undefined,
-      severity: row.severity ? String(row.severity) : undefined,
-      task_id: row.task_id ? String(row.task_id) : null,
-      created_at: row.created_at ? String(row.created_at) : undefined,
-      status: row.status ? String(row.status) : undefined,
-      is_resolved: typeof row.is_resolved === 'boolean' || typeof row.is_resolved === 'number' ? row.is_resolved : null,
-    })
-  }
-  return rows.filter((row) => row.id)
-}
-
-function normalizeChangeLogRows(value: unknown): DashboardChangeLogItem[] {
-  if (!Array.isArray(value)) return []
-  const rows: DashboardChangeLogItem[] = []
-  for (const item of value) {
-    if (!item || typeof item !== 'object') continue
-    const row = item as Record<string, unknown>
-    rows.push({
-      id: String(row.id ?? ''),
-      entity_type: String(row.entity_type ?? '记录'),
-      field_name: String(row.field_name ?? '字段'),
-      change_reason: row.change_reason ? String(row.change_reason) : null,
-      changed_at: row.changed_at ? String(row.changed_at) : undefined,
-    })
-  }
-  return rows.filter((row) => row.id)
-}
-
-function normalizeApiTodayLiveItems(value: unknown): TodayLiveItem[] {
+function normalizeApiTodayProgressItems(value: unknown): TodayProgressItem[] {
   if (!Array.isArray(value)) return []
 
   return value
-    .map((item, index): TodayLiveItem | null => {
+    .map((item, index): TodayProgressItem | null => {
       if (!item || typeof item !== 'object') return null
       const row = item as Record<string, unknown>
-      const type = String(row.type ?? '').trim() as TodayLiveType
-      if (!['warning', 'due_task', 'change', 'new_risk'].includes(type)) return null
-      const createdAt = row.created_at ? String(row.created_at) : undefined
+      const taskId = String(row.taskId ?? row.task_id ?? '').trim()
+      const previousProgress = clampProgress(row.previousProgress ?? row.previous_progress)
+      const currentProgress = clampProgress(row.currentProgress ?? row.current_progress)
+      const rawDelta = Number(row.delta)
       return {
-        id: String(row.id ?? `${type}-${createdAt ?? index}-${row.title ?? index}`),
-        type,
-        priority: Number(row.priority ?? 99),
-        title: String(row.title ?? '未命名事项'),
-        detail: String(row.detail ?? ''),
-        meta: formatLiveTime(createdAt),
-        created_at: createdAt,
+        id: String(row.id ?? `today-progress-${taskId || index}`),
+        taskId,
+        title: String(row.title ?? '未命名任务'),
+        previousProgress,
+        currentProgress,
+        delta: Number.isFinite(rawDelta) ? rawDelta : currentProgress - previousProgress,
+        changedAt: row.changedAt ? String(row.changedAt) : row.changed_at ? String(row.changed_at) : undefined,
       }
     })
-    .filter((item): item is TodayLiveItem => Boolean(item))
+    .filter((item): item is TodayProgressItem => item !== null && item.previousProgress !== item.currentProgress)
 }
 
-function sortTodayLiveItems(items: TodayLiveItem[]) {
+function sortTodayProgressItems(items: TodayProgressItem[]) {
   return [...items].sort((left, right) => {
-    if (left.priority !== right.priority) return left.priority - right.priority
-    return new Date(right.created_at ?? '').getTime() - new Date(left.created_at ?? '').getTime()
+    const dateDiff = new Date(right.changedAt ?? '').getTime() - new Date(left.changedAt ?? '').getTime()
+    if (Number.isFinite(dateDiff) && dateDiff !== 0) return dateDiff
+    return Math.abs(right.delta) - Math.abs(left.delta)
   })
 }
 
-function formatMetricTrend(value: number, invertTone = false) {
-  if (value === 0) {
-    return { label: '持平 较上周', className: 'text-slate-400', icon: null }
+type DashboardProgressSeverity = 'ahead' | 'normal' | 'warning' | 'danger' | 'unknown'
+
+function readSummaryNumber(value: unknown): number | null {
+  if (value === null || value === undefined) return null
+  if (typeof value === 'string' && value.trim() === '') return null
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? numeric : null
+}
+
+function getDashboardProgressConclusion(summaryData: ProjectSummary | null) {
+  const actual = readSummaryNumber(summaryData?.overallProgress)
+  const planned = readSummaryNumber(summaryData?.plannedProgress)
+  const deviation = readSummaryNumber(summaryData?.progressDeviation)
+
+  if (actual === null || planned === null || deviation === null) {
+    return {
+      severity: 'unknown' as DashboardProgressSeverity,
+      label: '等待计划进度口径',
+      detail: `实际 ${actual === null ? '--' : Math.round(actual)}% / 计划 --`,
+      actual,
+      planned,
+      deviation,
+    }
   }
 
-  const isPositive = value > 0
-  const isGood = invertTone ? !isPositive : isPositive
+  // 计划应到与实际都接近 0：项目尚未产生有效进度。不得判成 'normal / 基本贴合计划'
+  // （那会把"还没开始/该开工却零录入"误导成"在计划轨道上"）。改为显式提醒去录进展。
+  if (planned < 1 && actual < 1) {
+    return {
+      severity: 'warning' as DashboardProgressSeverity,
+      label: '计划已开始，暂无进展录入',
+      detail: '录入现场进展后，偏差与完工预测才会更新',
+      actual,
+      planned,
+      deviation,
+    }
+  }
+
+  const roundedDeviation = Math.round(deviation)
+  const severity: DashboardProgressSeverity =
+    roundedDeviation <= -10
+      ? 'danger'
+      : roundedDeviation <= -3
+        ? 'warning'
+        : roundedDeviation >= 3
+          ? 'ahead'
+          : 'normal'
+  const label = roundedDeviation < 0
+    ? `进度偏差 ${roundedDeviation}%，落后计划`
+    : roundedDeviation > 0
+      ? `进度偏差 +${roundedDeviation}%，超前计划`
+      : '基本按计划'
+
   return {
-    label: `${isPositive ? '+' : '-'}${Math.abs(value)} 较上周`,
-    className: isGood ? 'text-emerald-700' : 'text-rose-700',
-    icon: isPositive ? TrendingUp : TrendingDown,
+    severity,
+    label,
+    detail: `实际 ${Math.round(actual)}% / 计划应到 ${Math.round(planned)}%`,
+    actual,
+    planned,
+    deviation,
   }
 }
 
-function DashboardMetricCards({
+function getProgressSeverityTheme(severity: DashboardProgressSeverity) {
+  switch (severity) {
+    case 'danger':
+      return {
+        rail: 'border-slate-200 bg-white border-l-4 border-l-rose-500',
+        text: 'text-rose-700',
+        dot: 'bg-rose-500',
+        pill: 'bg-white text-rose-700 ring-rose-200',
+      }
+    case 'warning':
+      return {
+        rail: 'border-amber-200 bg-amber-50/70',
+        text: 'text-amber-700',
+        dot: 'bg-amber-500',
+        pill: 'bg-amber-100 text-amber-800 ring-amber-200',
+      }
+    case 'ahead':
+      return {
+        rail: 'border-emerald-200 bg-emerald-50/70',
+        text: 'text-emerald-700',
+        dot: 'bg-emerald-500',
+        pill: 'bg-emerald-100 text-emerald-700 ring-emerald-200',
+      }
+    case 'normal':
+      return {
+        rail: 'border-slate-200 bg-slate-50/70',
+        text: 'text-slate-700',
+        dot: 'bg-slate-500',
+        pill: 'bg-slate-100 text-slate-700 ring-slate-200',
+      }
+    default:
+      return {
+        rail: 'border-slate-200 bg-white',
+        text: 'text-slate-700',
+        dot: 'bg-slate-400',
+        pill: 'bg-slate-100 text-slate-600 ring-slate-200',
+      }
+  }
+}
+
+function formatDashboardSummaryDate(value?: string | null) {
+  if (!value) return null
+  return `数据时点 ${formatProjectDate(value)}`
+}
+
+function DashboardDecisionOverview({
   summaryData,
-  todayTodoCount,
+  currentProject,
+  summaryLoading,
 }: {
   summaryData: ProjectSummary | null
-  todayTodoCount: number
+  currentProject: CurrentProjectEntity
+  summaryLoading: boolean
 }) {
-  const overallProgress = Math.round(summaryData?.overallProgress ?? 0)
-  const monthDeviation = Math.round(summaryData?.scheduleVarianceDays ?? summaryData?.delayDays ?? 0)
-  const activeRisks = summaryData?.activeRiskCount ?? 0
-  const steadySparkline = [50, 50, 50, 50, 50]
-  const deviationSparkline = monthDeviation === 0 ? steadySparkline : [42, 46, 44, 50, 56]
-  const riskSparkline = activeRisks === 0 ? steadySparkline : [32, 36, 34, 43, 50]
+  const conclusion = getDashboardProgressConclusion(summaryData)
+  const theme = getProgressSeverityTheme(conclusion.severity)
+  const resolvedProjectId = currentProject.id ?? summaryData?.id ?? ''
+  const ganttHref = resolvedProjectId ? `/projects/${encodeURIComponent(resolvedProjectId)}/gantt` : '/workspace'
+  const showSummarySkeleton = summaryLoading && !summaryData
+  const summaryDateLabel = formatDashboardSummaryDate(summaryData?.summaryAsOf)
+  const plannedEnd = summaryData?.plannedEndDate ?? currentProject.planned_end_date ?? currentProject.end_date ?? null
+  const daysUntilPlannedEnd = summaryData?.daysUntilPlannedEnd ?? null
+  const hasForecastPlanWindow = Boolean(plannedEnd)
+  const forecastMissingProgress = !summaryData || conclusion.actual === null
+  const forecastNeedsProgress = !forecastMissingProgress && (conclusion.actual ?? 0) < 1
+  const missingPlanProgressBasis = !forecastMissingProgress && !forecastNeedsProgress && (conclusion.planned === null || conclusion.deviation === null)
+  const forecastLabel = forecastMissingProgress
+    ? '进度数据待补'
+    : forecastNeedsProgress
+      ? '录入进展后可预测'
+      : missingPlanProgressBasis
+        ? '计划应到口径待补'
+        : conclusion.severity === 'danger'
+          ? '按当前偏差，完工存在晚于计划风险'
+          : conclusion.severity === 'warning'
+            ? '按当前偏差，需盯紧计划完工窗口'
+            : conclusion.severity === 'ahead'
+              ? '当前进度支撑计划完工窗口'
+              : '当前进度基本贴合计划窗口'
 
-  const metrics = [
+  return (
+    <section
+      data-testid="dashboard-decision-overview"
+      className={cn('grid grid-cols-1 gap-5 rounded-xl border p-5 shadow-[var(--el-1)] xl:grid-cols-[minmax(0,1fr)_22rem]', theme.rail)}
+    >
+      <Link
+        to={ganttHref}
+        data-testid="dashboard-decision-drilldown"
+        aria-label="查看进度偏差根源"
+        className="group min-w-0 space-y-5 rounded-lg outline-none transition-colors focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+      >
+        {showSummarySkeleton ? (
+          <>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className={cn('h-2.5 w-2.5 rounded-full', theme.dot)} />
+              <span className="meta-muted">执行摘要读取中</span>
+            </div>
+            <div className="space-y-3">
+              <div className="h-7 w-64 max-w-full animate-pulse rounded bg-slate-200" />
+              <div className="h-4 w-48 max-w-full animate-pulse rounded bg-slate-100" />
+            </div>
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
+              {['实际进度', '计划应到', '偏差'].map((label) => (
+                <div key={label} className="rounded-lg border border-white/70 bg-white/80 px-4 py-3 shadow-[var(--el-1)]">
+                  <div className="meta-text">{label}</div>
+                  <div className="mt-2 h-6 w-16 animate-pulse rounded bg-slate-200" />
+                </div>
+              ))}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className={cn('h-2.5 w-2.5 rounded-full', theme.dot)} />
+              {summaryDateLabel ? <span className="meta-muted">{summaryDateLabel}</span> : null}
+            </div>
+            <div>
+              <h2 className={cn('heading-2 font-semibold tracking-normal', theme.text)}>
+                {conclusion.label}
+              </h2>
+              <p className="mt-2 text-sm text-slate-600">{conclusion.detail}</p>
+            </div>
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
+              {[
+                { label: '实际进度', value: conclusion.actual === null ? '--' : `${Math.round(conclusion.actual)}%`, emphasis: false },
+                { label: '计划应到', value: conclusion.planned === null ? '--' : `${Math.round(conclusion.planned)}%`, emphasis: false },
+                { label: '偏差', value: conclusion.deviation === null ? '--' : `${conclusion.deviation > 0 ? '+' : ''}${Math.round(conclusion.deviation)}%`, emphasis: true },
+              ].map((item) => (
+                <div key={item.label} className="rounded-lg border border-white/70 bg-white/80 px-4 py-3 shadow-[var(--el-1)]">
+                  <div className="meta-text">{item.label}</div>
+                  <div className={cn('num-display mt-1 text-xl font-semibold', item.emphasis ? theme.text : 'text-slate-900')}>{item.value}</div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+        <span className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 group-hover:text-blue-800">
+          查看进度根源
+          <ArrowRight className="h-3.5 w-3.5" />
+        </span>
+      </Link>
+
+      <Link
+        to={ganttHref}
+        data-testid="dashboard-forecast-summary"
+        aria-label="查看关键路径和工期预测依据"
+        className="rounded-xl border border-white/70 bg-white/85 p-4 shadow-[var(--el-1)] outline-none transition-colors hover:border-blue-200 hover:bg-white focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+      >
+        <div className="flex items-center justify-between gap-3">
+          <CardHead eyebrow="FORECAST" title="工期预测" />
+        </div>
+        <div className="mt-5 space-y-3">
+          {showSummarySkeleton ? (
+            <div className="space-y-3">
+              <div className="h-5 w-48 max-w-full animate-pulse rounded bg-slate-200" />
+              <div className="h-3 w-32 max-w-full animate-pulse rounded bg-slate-100" />
+            </div>
+          ) : (
+            <>
+              <div className="text-lg font-semibold leading-snug text-slate-900">{forecastLabel}</div>
+              <div className="space-y-2 text-xs text-slate-600">
+                <div className="flex items-center justify-between gap-3">
+                  <span>计划完工</span>
+                  <span className="num-mono text-slate-900">{hasForecastPlanWindow && !forecastNeedsProgress ? formatProjectDate(plannedEnd) : '--'}</span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span>距计划完工</span>
+                  <span className="num-mono text-slate-900">{hasForecastPlanWindow && !forecastNeedsProgress && daysUntilPlannedEnd != null ? `${daysUntilPlannedEnd} 天` : '--'}</span>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+        <span className="mt-4 inline-flex items-center gap-1 text-xs font-medium text-blue-600">
+          查看关键路径
+          <ArrowRight className="h-3.5 w-3.5" />
+        </span>
+      </Link>
+    </section>
+  )
+}
+
+function DashboardHealthWeaknessPanel({
+  healthDetails,
+  healthDetailsStatus,
+  projectId,
+}: {
+  healthDetails: DashboardBusinessHealthDetails | null
+  healthDetailsStatus: HealthDetailsStatus
+  projectId: string
+}) {
+  const rows = [
+    { key: 'progress', label: '进度兑现', value: healthDetails?.progressDeliveryScore, href: `/projects/${projectId}/gantt` },
+    { key: 'execution', label: '执行稳定度', value: healthDetails?.executionStabilityScore ?? healthDetails?.taskExecutionScore, href: `/projects/${projectId}/gantt` },
+    { key: 'target', label: '关键目标', value: healthDetails?.criticalTargetScore ?? healthDetails?.milestoneDeliveryScore, href: `/projects/${projectId}/milestones` },
+    { key: 'exception', label: '业务异常', value: healthDetails?.businessExceptionScore ?? healthDetails?.riskControlScore, href: `/projects/${projectId}/risks` },
+    { key: 'governance', label: '计划治理', value: healthDetails?.planGovernanceScore, href: `/projects/${projectId}/planning/baseline` },
+  ]
+    .map((item) => ({ ...item, value: readSummaryNumber(item.value) }))
+    .filter((item): item is { key: string; label: string; value: number; href: string } => item.value !== null)
+    .sort((left, right) => left.value - right.value)
+    .slice(0, 5)
+  const capReasons = (healthDetails?.capReasons ?? []).slice(0, 3)
+  const isDegraded = healthDetailsStatus === 'degraded'
+  const isUnavailable = healthDetailsStatus === 'unavailable' || isDegraded
+
+  return (
+    <section data-testid="dashboard-health-weakness-panel" className="surface-card p-5">
+      <CardHead
+        eyebrow="BREAKDOWN"
+        title="掉在哪"
+      />
+      <div className="mt-5">
+        {healthDetailsStatus === 'loading' ? (
+          <div
+            data-testid="dashboard-health-weakness-loading"
+            className="space-y-2"
+          >
+            <div className="text-xs text-slate-500">健康指标加载中</div>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+              {['进度兑现', '执行稳定度', '关键目标'].map((label) => (
+                <div key={label} className="rounded-lg border border-slate-200/70 bg-slate-50/80 px-3 py-2.5">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-xs font-medium text-slate-500">{label}</span>
+                    <span className="h-3 w-8 animate-pulse rounded bg-slate-200" />
+                  </div>
+                  <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white">
+                    <div className="h-full w-2/3 animate-pulse rounded-full bg-slate-200" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : isUnavailable || rows.length === 0 ? (
+          <div className="rounded-lg border border-slate-200/70 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+            {isDegraded
+              ? '健康指标暂不可用，先使用摘要健康参考；弱项明细稍后重试。'
+              : '健康指标暂不可用，先以摘要进度和风险信号为准。'}
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-5">
+            {rows.map((item, index) => (
+              <Link
+                key={item.key}
+                to={item.href}
+                className={cn(
+                  'rounded-lg border bg-white px-4 py-3 shadow-[var(--el-1)] transition-colors hover:border-blue-200 hover:bg-blue-50/40',
+                  index === 0 ? 'border-rose-200 ring-1 ring-rose-100' : 'border-slate-200/70',
+                )}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <span className="truncate text-sm font-medium text-slate-800">{item.label}</span>
+                  <span className={cn('num-mono text-sm font-semibold', item.value < 60 ? 'text-rose-700' : item.value < 80 ? 'text-amber-700' : 'text-slate-700')}>
+                    {Math.round(item.value)}
+                  </span>
+                </div>
+                <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-100">
+                  <div
+                    className={cn('h-full rounded-full', item.value < 60 ? 'bg-rose-500' : item.value < 80 ? 'bg-amber-500' : 'bg-slate-500')}
+                    style={{ width: `${Math.max(4, Math.min(100, Math.round(item.value)))}%` }}
+                  />
+                </div>
+              </Link>
+            ))}
+          </div>
+        )}
+      </div>
+      {capReasons.length > 0 ? (
+        <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50/70 px-4 py-3">
+          <div className="text-xs font-medium text-amber-800">影响健康分的原因</div>
+          <div className="mt-2 text-sm leading-6 text-amber-900">
+            {capReasons.join(' / ')}
+          </div>
+        </div>
+      ) : null}
+    </section>
+  )
+}
+
+function DashboardActionPanel({
+  summaryData,
+  projectId,
+}: {
+  summaryData: ProjectSummary | null
+  projectId: string
+}) {
+  const delayedCount = summaryData?.activeDelayedTasks ?? summaryData?.delayedTaskCount ?? 0
+  const riskCount = summaryData?.activeRiskCount ?? 0
+  const issueCount = summaryData?.activeIssueCount ?? 0
+  const obstacleCount = summaryData?.activeObstacleTaskCount ?? summaryData?.activeObstacleCount ?? 0
+  const conditionCount = summaryData?.pendingConditionTaskCount ?? 0
+  const todayActionCount = summaryData?.projectTodayActionCount ?? summaryData?.todayTodoCount ?? 0
+  const actions = [
+    delayedCount > 0
+      ? {
+        key: 'delay',
+        title: '先处理延期任务',
+        meta: `${delayedCount} 个延期任务，偏差 ${summaryData?.delayDays ?? 0} 天`,
+        href: `/projects/${projectId}/gantt`,
+        tone: 'danger',
+      }
+      : null,
+    riskCount + issueCount > 0
+      ? {
+        key: 'risk',
+        title: '压住风险与问题',
+        meta: `${riskCount} 个风险 / ${issueCount} 个问题`,
+        href: `/projects/${projectId}/risks`,
+        tone: 'warning',
+      }
+      : null,
+    obstacleCount + conditionCount > 0
+      ? {
+        key: 'blocker',
+        title: '解除阻碍与前置条件',
+        meta: `${obstacleCount} 个阻碍任务 / ${conditionCount} 个待满足条件`,
+        href: `/projects/${projectId}/gantt`,
+        tone: 'slate',
+      }
+      : null,
+    todayActionCount > 0
+      ? {
+        key: 'today',
+        title: '收拢今日待办',
+        meta: `${todayActionCount} 件今日待处理`,
+        href: `/projects/${projectId}/gantt`,
+        tone: 'slate',
+      }
+      : null,
+  ].filter((item): item is { key: string; title: string; meta: string; href: string; tone: string } => Boolean(item)).slice(0, 3)
+  const visibleActions = actions.length > 0
+    ? actions
+    : [{
+      key: 'review',
+      title: '复核今日计划',
+      meta: '暂无突出异常，建议确认关键节点和现场进度',
+      href: `/projects/${projectId}/gantt`,
+      tone: 'slate',
+    }]
+
+  return (
+    <section data-testid="dashboard-action-panel" className="surface-card p-5">
+      <CardHead eyebrow="ACTION" title="今天干这件" />
+      <div className="mt-5 grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1.35fr)_repeat(2,minmax(0,1fr))]">
+        {visibleActions.map((item, index) => (
+          <Link
+            key={item.key}
+            to={item.href}
+            className={cn(
+              'group rounded-lg border transition-colors hover:border-blue-200 hover:bg-blue-50/40',
+              index === 0
+                ? 'bg-white p-5 shadow-[var(--el-2)] ring-1 ring-blue-100'
+                : 'bg-slate-50/70 p-3.5 shadow-none',
+              index === 0 && item.tone === 'danger' && 'border-rose-200 bg-rose-50/60 ring-rose-100',
+              index === 0 && item.tone === 'warning' && 'border-amber-200 bg-amber-50/60 ring-amber-100',
+              index === 0 && item.tone === 'slate' && 'border-blue-200',
+              index > 0 && 'border-slate-200/70',
+            )}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className={cn('font-semibold text-slate-900', index === 0 ? 'text-base' : 'text-sm')}>{item.title}</div>
+                <div className={cn('mt-1 leading-5 text-slate-500', index === 0 ? 'text-sm' : 'text-xs')}>{item.meta}</div>
+                {index === 0 ? (
+                  <div className="mt-3 inline-flex items-center text-xs font-medium text-blue-700">
+                    打开处理页
+                    <ArrowRight className="ml-1 h-3.5 w-3.5" />
+                  </div>
+                ) : null}
+              </div>
+              <ArrowRight className={cn('shrink-0 text-slate-400 transition-colors group-hover:text-blue-600', index === 0 ? 'h-5 w-5' : 'h-4 w-4')} />
+            </div>
+          </Link>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function DashboardColdStartActivation({ projectId }: { projectId: string }) {
+  const ganttHref = `/projects/${encodeURIComponent(projectId)}/gantt`
+
+  return (
+    <Card
+      variant="surface"
+      data-testid="dashboard-cold-start-activation"
+      data-onboarding-target="dashboard-metrics"
+      className="motion-safe:animate-fade-in"
+    >
+      <CardContent padding="md" className="flex flex-col gap-4">
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0 space-y-2">
+            <div className="eyebrow">下一步</div>
+            <h3 className="text-lg font-semibold text-slate-900">
+              计划已生成，去录入第一条现场进展
+            </h3>
+            <p className="text-sm text-slate-500">
+              录入进度后，健康/偏差/下一步会自动浮现——这就是少录多得。
+            </p>
+          </div>
+          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-slate-200/60 bg-white text-blue-600">
+            <LucideIcon icon={ClipboardCheck} className="h-3.5 w-3.5" />
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-3 pt-1">
+          <Button asChild>
+            <Link data-testid="dashboard-activation-primary" to={ganttHref}>
+              <LucideIcon icon={ArrowRight} className="mr-2 h-4 w-4" />
+              去 Gantt 录进展
+            </Link>
+          </Button>
+          <Button asChild variant="outline">
+            <Link data-testid="dashboard-activation-secondary" to={ganttHref}>
+              先看看计划
+            </Link>
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+function DashboardReadyFactCards({
+  summaryData,
+  currentProject,
+}: {
+  summaryData: ProjectSummary | null
+  currentProject: CurrentProjectEntity
+}) {
+  const taskCount = getDashboardPlanTaskCount(summaryData)
+  const phaseCount = getDashboardPlanPhaseCount(summaryData)
+  const durationDays = getDashboardPlanDurationDays(summaryData, currentProject)
+  const facts = [
     {
-      key: 'progress',
-      eyebrow: 'PROGRESS',
-      label: '整体进度',
-      value: overallProgress,
-      unit: '%',
-      trend: formatMetricTrend(0),
-      sparkline: steadySparkline,
-      tone: 'primary' as const,
-      icon: Activity,
-    },
-    {
-      key: 'deviation',
-      eyebrow: 'DEVIATION',
-      label: '本月偏差',
-      value: monthDeviation,
-      unit: '天',
-      trend: formatMetricTrend(monthDeviation, true),
-      sparkline: deviationSparkline,
-      tone: monthDeviation > 0 ? 'warning' as const : 'success' as const,
-      icon: Clock3,
-    },
-    {
-      key: 'risks',
-      eyebrow: 'RISKS',
-      label: '活跃风险',
-      value: activeRisks,
+      key: 'tasks',
+      eyebrow: '总任务',
+      title: '计划任务',
+      value: taskCount,
       unit: '',
-      trend: formatMetricTrend(activeRisks, true),
-      sparkline: riskSparkline,
-      tone: activeRisks > 0 ? 'danger' as const : 'slate' as const,
-      icon: AlertTriangle,
+      hint: '项目计划汇总',
     },
     {
-      key: 'todos',
-      eyebrow: 'TODO',
-      label: '今日待办',
-      value: todayTodoCount,
-      unit: '',
-      trend: formatMetricTrend(0),
-      sparkline: steadySparkline,
-      tone: 'slate' as const,
-      icon: ShieldCheck,
+      key: 'phases',
+      eyebrow: '阶段',
+      title: '计划阶段',
+      value: phaseCount ?? '--',
+      unit: phaseCount ? '个' : '',
+      hint: '项目计划汇总',
+    },
+    {
+      key: 'duration',
+      eyebrow: '计划周期',
+      title: '计划工期',
+      value: durationDays ?? '--',
+      unit: durationDays ? '天' : '',
+      hint: '来自计划起止日期',
     },
   ]
 
   return (
-    <div data-testid="dashboard-hero-cards" data-onboarding-target="dashboard-metrics" className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-4">
-      {metrics.map((metric, index) => {
-        const TrendIcon = metric.trend.icon
-        return (
-          <SharedMetricCard
-            key={metric.key}
-            testId={`dashboard-hero-card-${metric.key}`}
-            eyebrow={metric.eyebrow}
-            title={metric.label}
-            value={metric.value}
-            unit={metric.unit}
-            trend={
-              <span className={cn('inline-flex items-center gap-1', metric.trend.className)}>
-                {TrendIcon ? <LucideIcon icon={TrendIcon} className="h-3 w-3" /> : null}
-                {metric.trend.label}
-              </span>
-            }
-            icon={<LucideIcon icon={metric.icon} className="h-3.5 w-3.5" />}
-            sparkline={metric.sparkline}
-            tone={metric.tone}
-            density="compact"
-            className="motion-safe:animate-fade-in"
-            style={{ animationDelay: `${index * 60}ms` }}
-          />
-        )
-      })}
+    <div data-testid="dashboard-ready-fact-cards" className="grid grid-cols-1 gap-5 md:grid-cols-3">
+      {facts.map((fact) => (
+        <SharedMetricCard
+          key={fact.key}
+          testId={`dashboard-ready-fact-${fact.key}`}
+          eyebrow={fact.eyebrow}
+          title={fact.title}
+          value={fact.value}
+          unit={fact.unit}
+          hint={fact.hint}
+          tone="slate"
+          density="compact"
+          animateValue={false}
+        />
+      ))}
     </div>
   )
 }
 
-const todayLiveTypeConfig: Record<TodayLiveType, { dot: string; label: string }> = {
-  warning: { dot: 'bg-rose-500', label: '预警' },
-  due_task: { dot: 'bg-amber-500', label: '到期' },
-  change: { dot: 'bg-blue-500', label: '变更' },
-  new_risk: { dot: 'bg-slate-400', label: '新增' },
+function DashboardPlanEmptyState({ projectId }: { projectId: string }) {
+  return (
+    <EmptyState
+      testId="dashboard-plan-empty-state"
+      icon={LayoutDashboard}
+      title="先生成项目计划"
+      description="几分钟建模 → 自动生成施工计划 → 开始管项目"
+      action={
+        <Button asChild>
+          <Link
+            data-testid="dashboard-plan-empty-action"
+            to={`/projects/${encodeURIComponent(projectId)}/gantt?modelingWorkbench=generate`}
+          >
+            去快速建模
+          </Link>
+        </Button>
+      }
+      className="max-w-none"
+    />
+  )
 }
 
-function TodayLiveListPanel({
-  projectId,
+function TodayProgressListPanel({
   loading,
   items,
-  totalCount,
+  error,
   embedded = false,
 }: {
-  projectId: string
   loading: boolean
-  items: TodayLiveItem[]
-  totalCount: number
+  items: TodayProgressItem[]
+  error?: string | null
   embedded?: boolean
 }) {
   const previewItems = items.slice(0, 4)
@@ -466,52 +832,65 @@ function TodayLiveListPanel({
       {!embedded ? (
         <CardHead
           eyebrow="TODAY"
-          title="今日动态"
-          action={
-            totalCount > 4 ? (
-              <Link to={`/projects/${projectId}/notifications`} className="text-xs font-medium text-blue-600 hover:text-blue-800">
-                全部
-                <ChevronRight className="ml-1 inline h-3.5 w-3.5" />
-              </Link>
-            ) : null
-          }
+          title="今日进展"
         />
       ) : null}
       <div className={cn(!embedded && 'mt-5')}>
         {loading ? (
-          <LoadingState label="今日动态加载中" description="" className="min-h-24 border-0 bg-transparent px-0 py-2 shadow-none" />
+          <LoadingState label="今日进展加载中" description="" className="min-h-24 border-0 bg-transparent px-0 py-2 shadow-none" />
+        ) : error ? (
+          <div className={cn('flex flex-col items-center justify-center text-center', embedded ? 'min-h-32' : 'min-h-56')}>
+            <AlertTriangle className="h-8 w-8 text-amber-500" />
+            <h3 className="mt-3 text-sm font-medium text-slate-900">今日进展暂不可用</h3>
+            <p className="mt-2 max-w-xs text-xs text-slate-500">{error}</p>
+          </div>
         ) : previewItems.length === 0 ? (
           <div className={cn('flex flex-col items-center justify-center text-center', embedded ? 'min-h-32' : 'min-h-56')}>
             <div className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-50 text-emerald-500 ring-1 ring-inset ring-emerald-200/60">
               <CheckCircle className="h-7 w-7" />
             </div>
-            <h3 className="mt-4 text-sm font-medium text-slate-900">今日待办均已完成</h3>
-            <p className="mt-2 text-xs text-slate-500">保持节奏，继续推进剩余里程碑。</p>
+            <h3 className="mt-4 text-sm font-medium text-slate-900">今日暂无进度变化</h3>
           </div>
         ) : (
           <ul className="max-h-72 space-y-2.5 overflow-y-auto overscroll-contain pr-1">
-            {previewItems.map((item) => {
-              const config = todayLiveTypeConfig[item.type]
-              return (
-                <li
-                  key={item.id}
-                  className="group grid grid-cols-[4rem_minmax(0,1fr)_auto] items-center gap-3 rounded-xl border border-slate-100 bg-white px-3.5 py-3 shadow-[var(--el-1)] transition-all duration-200 hover:border-slate-200 hover:shadow-[var(--el-2)]"
-                >
-                  <span className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500">
-                    <span className={cn('h-1.5 w-1.5 rounded-full', config.dot)} />
-                    {config.label}
-                  </span>
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-medium text-slate-800">{item.title}</div>
-                    {item.detail ? <div className="meta-muted mt-0.5 truncate">{item.detail}</div> : null}
+            {previewItems.map((item) => (
+              <li
+                key={item.id}
+                className="rounded-lg border border-slate-100 bg-white px-3.5 py-3 shadow-[var(--el-1)]"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0 truncate text-sm font-medium text-slate-800">{item.title}</div>
+                  <div className="num-mono shrink-0 text-xs text-slate-500">
+                    <span>{item.previousProgress}%</span>
+                    <span className="px-1 text-slate-300">→</span>
+                    <span className={item.delta >= 0 ? 'text-blue-600' : 'text-rose-600'}>{item.currentProgress}%</span>
                   </div>
-                  <span className="flex items-center justify-end gap-1.5">
-                    <span className="meta-muted num-mono text-right">{item.meta}</span>
-                    <ChevronRight className="h-3.5 w-3.5 text-slate-200 transition-colors group-hover:text-slate-500" aria-hidden="true" />
-                  </span>
-                </li>
-              )
-            })}
+                </div>
+                <div
+                  className="relative mt-2 h-1.5 overflow-hidden rounded-full bg-slate-100"
+                  role="img"
+                  aria-label={`${item.title}：${item.previousProgress}% 到 ${item.currentProgress}%`}
+                >
+                  {item.delta >= 0 ? (
+                    <>
+                      <span className="absolute inset-y-0 left-0 rounded-full bg-slate-300/80" style={{ width: `${item.previousProgress}%` }} />
+                      <span
+                        className="absolute inset-y-0 rounded-r-full bg-blue-600"
+                        style={{ left: `${item.previousProgress}%`, width: `${item.currentProgress - item.previousProgress}%` }}
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <span className="absolute inset-y-0 left-0 rounded-l-full bg-blue-600" style={{ width: `${item.currentProgress}%` }} />
+                      <span
+                        className="absolute inset-y-0 rounded-r-full bg-rose-300"
+                        style={{ left: `${item.currentProgress}%`, width: `${item.previousProgress - item.currentProgress}%` }}
+                      />
+                    </>
+                  )}
+                </div>
+              </li>
+            ))}
           </ul>
         )}
       </div>
@@ -524,27 +903,56 @@ function DashboardPageTitle({
   currentStatus,
   summaryData,
   dataQualitySummary,
+  healthDetails,
+  healthDetailsStatus,
   summaryLoading,
-  todayLiveLoading,
+  todayProgressLoading,
   fetchCompleteTime,
   onRefresh,
+  canRunDataQualityGovernance,
+  dataQualityActionLoading,
+  onRecomputeDataQualitySnapshot,
+  onResolveSourceDeletedFindings,
 }: {
   currentProject: CurrentProjectEntity
   currentStatus: ProjectStatus
   summaryData: ProjectSummary | null
   dataQualitySummary: DataQualityProjectSummary | null
+  healthDetails: DashboardBusinessHealthDetails | null
+  healthDetailsStatus: HealthDetailsStatus
   summaryLoading: boolean
-  todayLiveLoading: boolean
+  todayProgressLoading: boolean
   fetchCompleteTime: number
   onRefresh: () => void
+  canRunDataQualityGovernance: boolean
+  dataQualityActionLoading: boolean
+  onRecomputeDataQualitySnapshot: () => void
+  onResolveSourceDeletedFindings: () => void
 }) {
   const [confidenceDialogOpen, setConfidenceDialogOpen] = useState(false)
   const confidence = dataQualitySummary?.confidence
-  const healthScore = summaryData?.healthScore ?? 0
-  const progressValue = Math.round(summaryData?.overallProgress ?? 0)
-  const plannedStart = currentProject.planned_start_date || null
-  const plannedEnd = summaryData?.plannedEndDate || currentProject.planned_end_date || null
+  const sourceDeletedFindings = useMemo(
+    () => (dataQualitySummary?.findings ?? []).filter((item) => (
+      item.status === 'active' &&
+      (item.rule_code === 'SOURCE_DELETED_UNRESOLVED' || item.rule_type === 'source_deleted' || item.resolved_type === 'source_deleted')
+    )),
+    [dataQualitySummary?.findings],
+  )
+  const healthDetailsScore = healthDetailsStatus === 'ready'
+    ? (healthDetails?.businessHealthScore ?? healthDetails?.totalScore)
+    : undefined
+  const businessHealthScoreValue = readSummaryNumber(healthDetailsScore) ?? readSummaryNumber(summaryData?.businessHealthScore)
+  const businessHealthScore = businessHealthScoreValue === null ? null : Math.round(businessHealthScoreValue)
+  const progressValue = readSummaryNumber(summaryData?.overallProgress)
+  const healthProgressConflict = businessHealthScore !== null && businessHealthScore >= 60 && progressValue !== null && progressValue < 1
+  const businessHealthLabel = businessHealthScore === null
+    ? '业务健康 --'
+    : `业务健康 ${businessHealthScore}分${healthProgressConflict ? ' · 低信' : ''}`
+  const businessHealthChipScore = healthProgressConflict ? 40 : businessHealthScore
+  const plannedStart = summaryData?.plannedStartDate ?? null
+  const plannedEnd = summaryData?.plannedEndDate ?? null
   const projectStatusLabel = getDashboardProjectStatusLabel(summaryData, currentStatus)
+  const projectDisplayName = resolveDashboardProjectIdentity(currentProject, summaryData)
 
   return (
     <section data-testid="dashboard-page-title" className="pb-2">
@@ -552,38 +960,44 @@ function DashboardPageTitle({
         <div className="min-w-0 space-y-3">
           <Breadcrumb
             items={[
-              { label: currentProject.name || '项目', href: `/projects/${currentProject.id}/dashboard` },
+              { label: projectDisplayName, href: `/projects/${currentProject.id}/dashboard` },
               { label: PROJECT_NAVIGATION_LABELS.dashboard },
             ]}
           />
-          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-            <span className="badge-micro inline-flex h-5 items-center rounded-full bg-slate-100/80 px-2 font-medium text-slate-500 ring-1 ring-inset ring-slate-200/60">
-              {projectStatusLabel}
-            </span>
-            <span className="meta-muted">计划工期</span>
-            <span className="badge-micro num-mono inline-flex h-5 items-center rounded-full bg-slate-100/80 px-2 text-slate-500 ring-1 ring-inset ring-slate-200/60">
-              {formatProjectDate(plannedStart)} - {formatProjectDate(plannedEnd)}
-            </span>
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-slate-500">
+            <span>{projectStatusLabel}</span>
+            <span className="text-slate-300">/</span>
+            <span>计划工期</span>
+            <span className="num-mono text-slate-600">{formatProjectDate(plannedStart)} - {formatProjectDate(plannedEnd)}</span>
           </div>
           <div>
             <h1 className="dashboard-title truncate font-semibold tracking-tight text-slate-950">
-              {currentProject.name || '项目'}
+              {projectDisplayName}
             </h1>
-            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
-              <StatusBadge status={getHealthStatusKey(healthScore)} fallbackLabel={`健康度 ${healthScore}分`} className="badge-micro h-5 px-2">
-                健康度 {healthScore}分
-              </StatusBadge>
-              <StatusBadge
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-slate-500">
+              <span
+                data-testid="dashboard-business-health-chip"
+                className={getMetricChipClass(businessHealthChipScore)}
+                title={healthProgressConflict ? '进度尚未形成有效录入，业务健康分暂按低信号处理。' : undefined}
+              >
+                {businessHealthLabel}
+              </span>
+              <Button
+                type="button"
+                unstyled
                 data-testid="dashboard-data-quality-detail-trigger"
-                status={getConfidenceStatusKey(confidence?.score ?? 0)}
-                fallbackLabel={confidence ? `数据可靠性 ${Math.round(confidence.score)}%` : '数据可靠性 --'}
-                className={cn('badge-micro h-5 px-2', confidence && 'cursor-pointer hover:ring-2 hover:ring-blue-100')}
+                className={cn(
+                  getMetricChipClass(confidence?.score),
+                  'outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2',
+                  confidence ? 'cursor-pointer hover:bg-white' : 'cursor-default',
+                )}
                 onClick={confidence ? () => setConfidenceDialogOpen(true) : undefined}
+                disabled={!confidence}
               >
                 数据可靠性 {confidence ? `${Math.round(confidence.score)}%` : '--'}
-              </StatusBadge>
-              <span className="badge-micro num-mono inline-flex h-5 items-center rounded-full bg-blue-50 px-2 text-blue-700 ring-1 ring-inset ring-blue-200/60">
-                进度 {progressValue}%
+              </Button>
+              <span data-testid="dashboard-progress-chip" className={cn(getMetricChipClass(progressValue, 'blue'), 'num-mono')}>
+                进度 {progressValue === null ? '--' : `${Math.round(progressValue)}%`}
               </span>
             </div>
           </div>
@@ -595,16 +1009,16 @@ function DashboardPageTitle({
             variant="outline"
             size="sm"
             onClick={onRefresh}
-            loading={summaryLoading || todayLiveLoading}
+            loading={summaryLoading || todayProgressLoading}
             className="h-8 rounded-lg border-slate-200 bg-white px-2.5 text-xs"
           >
             <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
             刷新
           </Button>
           <Button asChild variant="outline" size="sm" className="h-8 rounded-lg border-slate-200 bg-white px-2.5 text-xs">
-            <Link to="/company">
+            <Link to="/workspace">
               <LayoutDashboard className="mr-1.5 h-3.5 w-3.5" />
-              返回公司驾驶舱
+              返回工作台
             </Link>
           </Button>
         </div>
@@ -618,6 +1032,29 @@ function DashboardPageTitle({
             </DialogHeader>
             <div className="space-y-4">
               <DataConfidenceBreakdown confidence={confidence} title="本月各维度降分贡献" />
+              {canRunDataQualityGovernance ? (
+                <div className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-200 pt-4">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={onRecomputeDataQualitySnapshot}
+                    loading={dataQualityActionLoading}
+                  >
+                    <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+                    重算快照
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={onResolveSourceDeletedFindings}
+                    loading={dataQualityActionLoading}
+                    disabled={sourceDeletedFindings.length === 0 || dataQualityActionLoading}
+                  >
+                    <CheckCircle className="mr-1.5 h-3.5 w-3.5" />
+                    标记来源已删除已处理
+                  </Button>
+                </div>
+              ) : null}
             </div>
           </DialogContent>
         </Dialog>
@@ -628,11 +1065,9 @@ function DashboardPageTitle({
 
 function WeeklyDigestPanel({
   projectId,
-  milestoneItems = [],
   embedded = false,
 }: {
   projectId: string
-  milestoneItems?: NonNullable<ProjectSummary['milestoneOverview']>['items']
   embedded?: boolean
 }) {
   type DigestData = {
@@ -683,33 +1118,21 @@ function WeeklyDigestPanel({
     }
   }, [projectId])
 
-  const fallbackMilestone = milestoneItems
-    .filter((item) => item.status !== 'completed')
-    .sort((left, right) => new Date(left.targetDate || left.current_planned_date || '').getTime() - new Date(right.targetDate || right.current_planned_date || '').getTime())[0]
-  const nearestMilestoneName = digest?.critical_nearest_milestone || fallbackMilestone?.name || '--'
-  const nearestMilestoneDelta = digest?.critical_nearest_delay_days ?? (() => {
-    const dateValue = fallbackMilestone?.targetDate || fallbackMilestone?.current_planned_date
-    if (!dateValue) return null
-    const due = new Date(dateValue)
-    if (Number.isNaN(due.getTime())) return null
-    const today = new Date()
-    today.setHours(0, 0, 0, 0)
-    due.setHours(0, 0, 0, 0)
-    return Math.ceil((today.getTime() - due.getTime()) / 86400000)
-  })()
+  const nearestMilestoneName = digest?.critical_nearest_milestone || '--'
+  const nearestMilestoneDelta = digest?.critical_nearest_delay_days ?? null
   const nearestMilestoneHint =
     nearestMilestoneDelta == null
       ? '等待关键节点数据'
       : nearestMilestoneDelta > 0
-        ? `延期 ${nearestMilestoneDelta} 天`
+        ? `延期 ${nearestMilestoneDelta} 个生产日`
         : nearestMilestoneDelta === 0
           ? '今日到期'
-          : `剩余 ${Math.abs(nearestMilestoneDelta)} 天`
+          : `剩余 ${Math.abs(nearestMilestoneDelta)} 个生产日`
   const focusItems = digest
     ? [
         ...(digest.top_delayed_tasks ?? []).slice(0, 3).map((task) => ({
           title: task.title,
-          meta: `${task.delay_days} 天延期${task.assignee ? ` · ${task.assignee}` : ''}`,
+          meta: `${task.delay_days} 个生产日延期${task.assignee ? ` · ${task.assignee}` : ''}`,
         })),
         (digest.critical_blocked_count ?? 0) > 0
           ? { title: '关键阻碍待解除', meta: `${digest.critical_blocked_count} 个阻碍影响关键路径` }
@@ -755,7 +1178,10 @@ function WeeklyDigestPanel({
                   >
                     {item.value}
                   </div>
-                  <div className="meta-muted mt-2">{item.hint}</div>
+                  <div className="meta-muted mt-2 inline-flex items-center gap-1.5">
+                    {item.hint.includes('生产日') ? <DurationBasisBadge basis="production" compact variant="outline" /> : null}
+                    <span>{item.hint}</span>
+                  </div>
                 </div>
               )
             })}
@@ -767,7 +1193,10 @@ function WeeklyDigestPanel({
                 {focusItems.map((item) => (
                   <div key={`${item.title}-${item.meta}`} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-lg bg-slate-50/60 px-3 py-2">
                     <span className="truncate text-xs font-medium text-slate-700">{item.title}</span>
-                    <span className="meta-muted max-w-[10rem] truncate text-right">{item.meta}</span>
+                    <span className="meta-muted inline-flex max-w-[12rem] items-center justify-end gap-1.5 truncate text-right">
+                      {item.meta.includes('生产日') ? <DurationBasisBadge basis="production" compact variant="outline" /> : null}
+                      <span className="truncate">{item.meta}</span>
+                    </span>
                   </div>
                 ))}
               </div>
@@ -905,7 +1334,7 @@ function DashboardMonthlyTrend({ projectId, embedded = false }: { projectId: str
             detailsClassName="sr-only"
           >
             <div className="h-[240px] w-full">
-              <ResponsiveContainer width="100%" height="100%">
+              <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1} initialDimension={{ width: 640, height: 240 }}>
                 <AreaChart data={trendData} margin={{ top: 8, right: 8, left: -12, bottom: 0 }}>
                   <defs>
                     <linearGradient id="dashboardTaskRate" x1="0" y1="0" x2="0" y2="1">
@@ -956,96 +1385,64 @@ function DashboardMonthlyTrend({ projectId, embedded = false }: { projectId: str
 export default function Dashboard() {
   const { toast } = useToast()
   const currentProject = useStore((state) => state.currentProject)
-  const tasks = useStore((state) => state.tasks)
-  const risks = useStore((state) => state.risks)
-  const warnings = useStore((state) => state.warnings)
-  const issueRows = useStore((state) => state.issueRows)
-  const problemRows = useStore((state) => state.problemRows)
-  const changeLogs = useStore((state) => state.changeLogs)
-  const sharedSliceStatus = useStore((state) => state.sharedSliceStatus)
+  const updateProject = useStore((state) => state.updateProject)
   const [summary, setSummary] = useState<ProjectSummary | null>(null)
   const [dataQualitySummary, setDataQualitySummary] = useState<DataQualityProjectSummary | null>(null)
+  const [healthDetails, setHealthDetails] = useState<DashboardBusinessHealthDetails | null>(null)
+  const [healthDetailsStatus, setHealthDetailsStatus] = useState<HealthDetailsStatus>('unavailable')
   const [summaryLoading, setSummaryLoading] = useState(false)
   const [summaryError, setSummaryError] = useState<string | null>(null)
-  const [todayLiveItems, setTodayLiveItems] = useState<TodayLiveItem[]>([])
-  const [todayLiveLoading, setTodayLiveLoading] = useState(false)
-  const [todayLiveError, setTodayLiveError] = useState<string | null>(null)
+  const [todayProgressItems, setTodayProgressItems] = useState<TodayProgressItem[]>([])
+  const [todayProgressLoading, setTodayProgressLoading] = useState(false)
+  const [todayProgressError, setTodayProgressError] = useState<string | null>(null)
   const [fetchCompleteTime, setFetchCompleteTime] = useState(0)
   const summaryAbortRef = useRef<AbortController | null>(null)
   const dataQualityAbortRef = useRef<AbortController | null>(null)
-  const todayLiveAbortRef = useRef<AbortController | null>(null)
+  const healthDetailsAbortRef = useRef<AbortController | null>(null)
+  const todayProgressAbortRef = useRef<AbortController | null>(null)
+  type DashboardSupportTab = 'forecast' | 'trend' | 'execution'
+  const [activeSupportTab, setActiveSupportTab] = useState<DashboardSupportTab | null>(null)
   const projectId = currentProject?.id ?? ''
-
+  const { isOwner } = usePermissions({ projectId })
+  const [dataQualityActionLoading, setDataQualityActionLoading] = useState(false)
   const currentStatus = normalizeProjectStatus(currentProject?.status)
+  const constructionOrganizationScenario = useMemo(
+    () => readConstructionOrganizationScenarioFromProject(currentProject),
+    [currentProject],
+  )
+  const constructionOrganizationUseCase = useMemo(
+    () => readConstructionOrganizationUseCase(constructionOrganizationScenario),
+    [constructionOrganizationScenario],
+  )
   const summaryData = summary
-  const scopedTasks = useMemo(
-    () => tasks.filter((task) => task.project_id === currentProject?.id),
-    [currentProject?.id, tasks],
-  )
-  const scopedRisks = useMemo(
-    () => risks.filter((risk) => risk.project_id === currentProject?.id),
-    [currentProject?.id, risks],
-  )
-  const focusTasks = useMemo(
-    () => scopedTasks.filter((task) => Boolean(task.id)).map((task) => ({ ...task, id: task.id || '' })),
-    [scopedTasks],
-  )
-  const milestonePanelData = useMemo(() => {
-    const overview = summaryData?.milestoneOverview
-    const items = overview?.items ?? []
-    const recentMilestones: DashboardMilestonePanelItem[] = items
-      .map((item) => ({
-        id: item.id,
-        name: item.name,
-        dueDate: item.targetDate || item.current_planned_date || item.planned_date || '',
-        status: toDashboardMilestoneStatus(item.status),
-        progress: item.progress,
-        projectId,
-      }))
-      .sort((left, right) => {
-        if (left.status !== right.status) {
-          const order: Record<DashboardMilestoneStatus, number> = { delayed: 0, pending: 1, completed: 2 }
-          return order[left.status] - order[right.status]
-        }
-        return new Date(left.dueDate || 0).getTime() - new Date(right.dueDate || 0).getTime()
-      })
+  useEffect(() => {
+    if (!currentProject || !projectId || !summaryData) return
+    const summaryProjectId = String(summaryData.id ?? '').trim()
+    if (summaryProjectId && summaryProjectId !== projectId) return
 
-    if (recentMilestones.length === 0 && summaryData?.nextMilestone) {
-      recentMilestones.push({
-        id: summaryData.nextMilestone.id,
-        name: summaryData.nextMilestone.name,
-        dueDate: summaryData.nextMilestone.targetDate,
-        status: toDashboardMilestoneStatus(summaryData.nextMilestone.status, summaryData.nextMilestone.daysRemaining),
-        progress: 0,
-        projectId,
-      })
-    }
+    const summaryName = normalizeDashboardProjectIdentity(summaryData.name)
+    if (!summaryName) return
 
-    return {
-      completed: overview?.stats?.completed ?? summaryData?.completedMilestones ?? 0,
-      total: overview?.stats?.total ?? summaryData?.totalMilestones ?? recentMilestones.length,
-      upcoming: overview?.stats?.upcomingSoon ?? recentMilestones.filter((item) => item.status === 'pending').length,
-      overdue: overview?.stats?.overdue ?? recentMilestones.filter((item) => item.status === 'delayed').length,
-      recentMilestones,
-    }
-  }, [projectId, summaryData])
-  const liveWarnings = useMemo(
-    () =>
-      normalizeWarningRows(warnings).filter(
-        (item) => String(item.status ?? '').trim().toLowerCase() !== 'resolved',
-      ),
-    [warnings],
+    const currentName = normalizeDashboardProjectIdentity(currentProject.name)
+    if (currentName === summaryName) return
+
+    updateProject(projectId, { name: summaryName } as Partial<CurrentProjectEntity>)
+  }, [currentProject, projectId, summaryData, updateProject])
+  const hasSummaryData = Boolean(summaryData)
+  const planTaskCount = getDashboardPlanTaskCount(summaryData)
+  const hasExecutionData = hasDashboardExecutionData(summaryData, todayProgressItems)
+  const shouldShowPlanEmptyState = hasSummaryData && planTaskCount === 0
+  const shouldShowColdStartActivation = hasSummaryData && planTaskCount > 0 && !hasExecutionData
+  const sourceDeletedFindingIds = useMemo(
+    () => (dataQualitySummary?.findings ?? [])
+      .filter((item) => (
+        item.status === 'active' &&
+        (item.rule_code === 'SOURCE_DELETED_UNRESOLVED' || item.rule_type === 'source_deleted' || item.resolved_type === 'source_deleted')
+      ))
+      .map((item) => item.id)
+      .filter(Boolean),
+    [dataQualitySummary?.findings],
   )
-  const liveIssues = useMemo(() => normalizeIssueRows(issueRows), [issueRows])
-  const liveProblems = useMemo(() => normalizeProblemRows(problemRows), [problemRows])
-  const liveChangeLogs = useMemo(() => normalizeChangeLogRows(changeLogs), [changeLogs])
-  const livePanelLoading =
-    Boolean(projectId) &&
-    (sharedSliceStatus.warnings.loading ||
-      sharedSliceStatus.issueRows.loading ||
-      sharedSliceStatus.problemRows.loading ||
-      sharedSliceStatus.changeLogs.loading)
-
   const loadSummary = useCallback(async (options?: { signal?: AbortSignal }) => {
     if (!projectId) return
 
@@ -1058,7 +1455,9 @@ export default function Dashboard() {
     setSummaryLoading(true)
     setSummaryError(null)
     try {
-      const nextSummary = await DashboardApiService.getProjectSummary(projectId, { signal: options.signal })
+      const nextSummary = await DashboardApiService.getProjectSummary(projectId, {
+        signal: options.signal,
+      })
       if (!options.signal?.aborted) {
         setSummary(nextSummary)
         setFetchCompleteTime(Date.now())
@@ -1081,37 +1480,37 @@ export default function Dashboard() {
     }
   }, [projectId, toast])
 
-  const loadTodayLive = useCallback(async (options?: { signal?: AbortSignal }) => {
+  const loadTodayProgress = useCallback(async (options?: { signal?: AbortSignal }) => {
     if (!projectId) {
-      setTodayLiveItems([])
-      setTodayLiveError(null)
+      setTodayProgressItems([])
+      setTodayProgressError(null)
       return
     }
 
     if (!options?.signal) {
-      todayLiveAbortRef.current?.abort()
-      todayLiveAbortRef.current = new AbortController()
-      options = { signal: todayLiveAbortRef.current.signal }
+      todayProgressAbortRef.current?.abort()
+      todayProgressAbortRef.current = new AbortController()
+      options = { signal: todayProgressAbortRef.current.signal }
     }
 
-    setTodayLiveLoading(true)
-    setTodayLiveError(null)
+    setTodayProgressLoading(true)
+    setTodayProgressError(null)
     try {
-      const response = await apiGet<unknown>(`/api/projects/${projectId}/dashboard/today-live`, {
+      const response = await apiGet<unknown>(`/api/projects/${projectId}/dashboard/today-progress`, {
         signal: options.signal,
         runtimeCache: 'off',
       })
       if (!options.signal?.aborted) {
-        setTodayLiveItems(sortTodayLiveItems(normalizeApiTodayLiveItems(response)))
+        setTodayProgressItems(sortTodayProgressItems(normalizeApiTodayProgressItems(response)))
       }
     } catch (error) {
       if (isAbortError(error)) return
-      console.error('Failed to load dashboard today-live items:', error)
-      setTodayLiveItems([])
-      setTodayLiveError('今日待处理接口暂时不可用，已使用本地共享数据兜底。')
+      console.error('Failed to load dashboard today progress items:', error)
+      setTodayProgressItems([])
+      setTodayProgressError('今日进展接口暂时不可用。')
     } finally {
       if (!options.signal?.aborted) {
-        setTodayLiveLoading(false)
+        setTodayProgressLoading(false)
       }
     }
   }, [projectId])
@@ -1140,6 +1539,38 @@ export default function Dashboard() {
     }
   }, [projectId])
 
+  const loadHealthDetails = useCallback(async (options?: { signal?: AbortSignal }) => {
+    if (!projectId) {
+      setHealthDetails(null)
+      setHealthDetailsStatus('unavailable')
+      return
+    }
+
+    if (!options?.signal) {
+      healthDetailsAbortRef.current?.abort()
+      healthDetailsAbortRef.current = new AbortController()
+      options = { signal: healthDetailsAbortRef.current.signal }
+    }
+
+    setHealthDetails(null)
+    setHealthDetailsStatus('loading')
+    try {
+      const payload = await apiGet<BusinessHealthScorePayload>(`/api/health-score/${projectId}`, {
+        signal: options.signal,
+        runtimeCache: 'off',
+      })
+      if (!options.signal?.aborted) {
+        setHealthDetails(payload?.details ?? null)
+        setHealthDetailsStatus(payload?.degraded ? 'degraded' : payload?.details ? 'ready' : 'unavailable')
+      }
+    } catch (error) {
+      if (isAbortError(error)) return
+      console.error('Failed to load dashboard health details:', error)
+      setHealthDetails(null)
+      setHealthDetailsStatus(error instanceof ApiClientError && error.status === 504 ? 'degraded' : 'unavailable')
+    }
+  }, [projectId])
+
   useEffect(() => {
     const controller = new AbortController()
     void loadSummary({ signal: controller.signal })
@@ -1150,150 +1581,188 @@ export default function Dashboard() {
   }, [loadSummary])
 
   useEffect(() => {
-    const controller = new AbortController()
-    void loadTodayLive({ signal: controller.signal })
+    if (!summaryData || !projectId) return undefined
 
+    const controller = new AbortController()
+    setHealthDetails(null)
+    setHealthDetailsStatus('loading')
+    const timer = window.setTimeout(() => {
+      void loadHealthDetails({ signal: controller.signal })
+      void loadDataQualitySummary({ signal: controller.signal })
+    }, DASHBOARD_SECONDARY_READ_DELAY_MS)
     return () => {
+      window.clearTimeout(timer)
       controller.abort()
     }
-  }, [loadTodayLive])
+  }, [loadDataQualitySummary, loadHealthDetails, projectId, summaryData?.id, fetchCompleteTime])
 
   useEffect(() => {
+    if (activeSupportTab !== 'execution') return undefined
     const controller = new AbortController()
-    void loadDataQualitySummary({ signal: controller.signal })
+    void loadTodayProgress({ signal: controller.signal })
 
     return () => {
       controller.abort()
     }
-  }, [loadDataQualitySummary])
+  }, [activeSupportTab, loadTodayProgress])
+
+  useEffect(() => {
+    if (!summaryData || !projectId || summaryLoading || activeSupportTab !== null) return undefined
+
+    const timer = window.setTimeout(() => {
+      setActiveSupportTab((current) => current ?? 'forecast')
+    }, DASHBOARD_DEFAULT_SUPPORT_TAB_DELAY_MS)
+
+    return () => {
+      window.clearTimeout(timer)
+    }
+  }, [activeSupportTab, projectId, summaryData?.id, summaryLoading])
 
   useEffect(() => {
     return () => {
       summaryAbortRef.current?.abort()
       dataQualityAbortRef.current?.abort()
-      todayLiveAbortRef.current?.abort()
+      healthDetailsAbortRef.current?.abort()
+      todayProgressAbortRef.current?.abort()
     }
   }, [])
 
-  const todayKey = getCalendarDayKey(new Date())
-  const todayDueTasks = useMemo(
-    () =>
-      scopedTasks
-        .filter((task) => !isCompletedTask(task) && isSameCalendarDay(task.planned_end_date || task.end_date, todayKey))
-        .sort((left, right) => String(left.planned_end_date || left.end_date || '').localeCompare(String(right.planned_end_date || right.end_date || '')))
-        .slice(0, 4)
-        .map<TodayLiveItem>((task) => ({
-          id: String(task.id),
-          type: 'due_task',
-          priority: 2,
-          title: task.title || task.name || '未命名任务',
-          detail: `状态 ${getTaskDisplayStatus(task)} · 当前进度 ${task.progress ?? 0}%`,
-          meta: `到期 ${formatLiveTaskDate(task.planned_end_date || task.end_date)}`,
-          created_at: String(task.planned_end_date || task.end_date || ''),
-        })),
-    [scopedTasks, todayKey],
-  )
-  const todayWarnings = useMemo(
-    () =>
-      liveWarnings
-        .filter((item) => item.is_acknowledged !== true && isSameCalendarDay(item.created_at, todayKey))
-        .slice(0, 4)
-        .map<TodayLiveItem>((item) => ({
-          id: item.id,
-          type: 'warning',
-          priority: 1,
-          title: item.title,
-          detail: item.description,
-          meta: `${formatLiveTime(item.created_at)} · ${item.warning_level === 'critical' ? '严重' : item.warning_level === 'warning' ? '关注' : '提示'}`,
-          created_at: item.created_at,
-        })),
-    [liveWarnings, todayKey],
-  )
-  const todayChanges = useMemo(
-    () =>
-      liveChangeLogs
-        .filter((item) => isSameCalendarDay(item.changed_at, todayKey))
-        .slice(0, 4)
-        .map<TodayLiveItem>((item) => ({
-          id: item.id,
-          type: 'change',
-          priority: 3,
-          title: `${item.entity_type} · ${item.field_name}`,
-          detail: item.change_reason || '未填写变更原因',
-          meta: formatLiveTime(item.changed_at),
-          created_at: item.changed_at,
-        })),
-    [liveChangeLogs, todayKey],
-  )
-  const todayNewIssues = useMemo(
-    () =>
-      liveIssues
-        .filter((item) => item.status !== 'closed' && isSameCalendarDay(item.created_at, todayKey))
-        .slice(0, 4)
-        .map<TodayLiveItem>((item) => ({
-          id: item.id,
-          type: 'new_risk',
-          priority: 4,
-          title: item.title,
-          detail: item.description || (item.task_id ? `关联任务 ${item.task_id}` : '未填写备注'),
-          meta: `${formatLiveTime(item.created_at)} · ${item.severity === 'critical' ? '严重' : item.severity === 'high' ? '高' : item.severity === 'low' ? '低' : '中'}`,
-          created_at: item.created_at,
-        })),
-    [liveIssues, todayKey],
-  )
-  const todayNewProblems = useMemo(
-    () =>
-      liveProblems
-        .filter((item) => item.is_resolved !== true && item.is_resolved !== 1 && isSameCalendarDay(item.created_at, todayKey))
-        .slice(0, 4)
-        .map<TodayLiveItem>((item) => ({
-          id: item.id,
-          type: 'new_risk',
-          priority: 4,
-          title: item.title || item.description || '未命名问题',
-          detail: item.description || (item.task_id ? `关联任务 ${item.task_id}` : '现场新增问题'),
-          meta: `${formatLiveTime(item.created_at)} · ${item.severity || '待分级'}`,
-          created_at: item.created_at,
-        })),
-    [liveProblems, todayKey],
-  )
-  const todayRiskAndProblemItems = useMemo(
-    () => [...todayNewIssues, ...todayNewProblems].slice(0, 4),
-    [todayNewIssues, todayNewProblems],
-  )
-  const localTodayLiveItems = useMemo(
-    () => sortTodayLiveItems([...todayWarnings, ...todayDueTasks, ...todayChanges, ...todayRiskAndProblemItems]),
-    [todayChanges, todayDueTasks, todayRiskAndProblemItems, todayWarnings],
-  )
-  const effectiveTodayLiveItems = todayLiveError ? localTodayLiveItems : todayLiveItems
-  const todayTodoCount = effectiveTodayLiveItems.length
-
   const refreshDashboard = useCallback(() => {
     void loadSummary()
-    void loadTodayLive()
+    void loadTodayProgress()
     void loadDataQualitySummary()
-  }, [loadDataQualitySummary, loadSummary, loadTodayLive])
+    void loadHealthDetails()
+  }, [loadDataQualitySummary, loadHealthDetails, loadSummary, loadTodayProgress])
+
+  const handleRecomputeDataQualitySnapshot = useCallback(async () => {
+    if (!projectId || dataQualityActionLoading) return
+    setDataQualityActionLoading(true)
+    try {
+      const nextSummary = await DataQualityApiService.recomputeSnapshot(projectId)
+      if (nextSummary) setDataQualitySummary(nextSummary)
+      toast({ title: '数据质量快照已重算' })
+    } catch (error) {
+      if (!isAbortError(error)) {
+        toast({
+          title: '重算快照失败',
+          description: '请稍后重试或检查数据质量接口。',
+          variant: 'destructive',
+        })
+      }
+    } finally {
+      setDataQualityActionLoading(false)
+    }
+  }, [dataQualityActionLoading, projectId, toast])
+
+  const handleResolveSourceDeletedFindings = useCallback(async () => {
+    if (!projectId || dataQualityActionLoading) return
+    if (sourceDeletedFindingIds.length === 0) {
+      toast({ title: '暂无来源已删除待处理项' })
+      return
+    }
+
+    setDataQualityActionLoading(true)
+    try {
+      const result = await DataQualityApiService.resolveSourceDeleted(projectId, { findingIds: sourceDeletedFindingIds })
+      await loadDataQualitySummary()
+      toast({
+        title: '来源已删除项已处理',
+        description: `已处理 ${result?.resolvedCount ?? sourceDeletedFindingIds.length} 条。`,
+      })
+    } catch (error) {
+      if (!isAbortError(error)) {
+        toast({
+          title: '处理来源已删除失败',
+          description: '请刷新后重试。',
+          variant: 'destructive',
+        })
+      }
+    } finally {
+      setDataQualityActionLoading(false)
+    }
+  }, [dataQualityActionLoading, loadDataQualitySummary, projectId, sourceDeletedFindingIds, toast])
 
   if (!currentProject) {
     return (
       <div className="page-shell" data-testid="dashboard-empty-state">
         <Breadcrumb
           items={[
-            { label: '公司驾驶舱', href: '/company' },
+            { label: '工作台', href: '/workspace' },
             { label: PROJECT_NAVIGATION_LABELS.dashboard },
           ]}
         />
+        <V14231PageReadinessBoundary pageKey="Dashboard 项目总览" />
         <EmptyState
           icon={LayoutDashboard}
           title="未选择项目"
           description={`请先进入一个项目，再查看项目${PROJECT_NAVIGATION_LABELS.dashboard}。`}
           action={
             <Button asChild>
-              <Link to="/company">返回公司驾驶舱</Link>
+              <Link to="/workspace">返回工作台</Link>
             </Button>
           }
           className="max-w-none"
         />
+      </div>
+    )
+  }
+
+  const dashboardIntro = (
+    <>
+      <DashboardPageTitle
+        currentProject={currentProject}
+        currentStatus={currentStatus}
+        summaryData={summaryData}
+        dataQualitySummary={dataQualitySummary}
+        healthDetails={healthDetails}
+        healthDetailsStatus={healthDetailsStatus}
+        summaryLoading={summaryLoading}
+        todayProgressLoading={todayProgressLoading}
+        fetchCompleteTime={fetchCompleteTime}
+        onRefresh={refreshDashboard}
+        canRunDataQualityGovernance={isOwner}
+        dataQualityActionLoading={dataQualityActionLoading}
+        onRecomputeDataQualitySnapshot={handleRecomputeDataQualitySnapshot}
+        onResolveSourceDeletedFindings={handleResolveSourceDeletedFindings}
+      />
+      <V14231PageReadinessBoundary pageKey="Dashboard 项目总览" />
+
+      {constructionOrganizationScenario ? (
+        <section data-testid="dashboard-construction-organization-scenario">
+          <ConstructionOrganizationScenarioSummary
+            scenario={constructionOrganizationScenario}
+            activeUseCase={constructionOrganizationUseCase}
+          />
+        </section>
+      ) : null}
+    </>
+  )
+
+  if (shouldShowPlanEmptyState) {
+    return (
+      <div data-testid="dashboard-page" className="page-shell page-enter">
+        {dashboardIntro}
+        <DashboardPlanEmptyState projectId={projectId} />
+        {summaryError ? (
+          <Alert variant="destructive">
+            <AlertDescription>{summaryError}</AlertDescription>
+          </Alert>
+        ) : null}
+      </div>
+    )
+  }
+
+  if (shouldShowColdStartActivation) {
+    return (
+      <div data-testid="dashboard-page" className="page-shell page-enter">
+        {dashboardIntro}
+        <DashboardColdStartActivation projectId={projectId} />
+        <DashboardReadyFactCards summaryData={summaryData} currentProject={currentProject} />
+        {summaryError ? (
+          <Alert variant="destructive">
+            <AlertDescription>{summaryError}</AlertDescription>
+          </Alert>
+        ) : null}
       </div>
     )
   }
@@ -1305,13 +1774,41 @@ export default function Dashboard() {
         currentStatus={currentStatus}
         summaryData={summaryData}
         dataQualitySummary={dataQualitySummary}
+        healthDetails={healthDetails}
+        healthDetailsStatus={healthDetailsStatus}
         summaryLoading={summaryLoading}
-        todayLiveLoading={todayLiveLoading}
+        todayProgressLoading={todayProgressLoading}
         fetchCompleteTime={fetchCompleteTime}
         onRefresh={refreshDashboard}
+        canRunDataQualityGovernance={isOwner}
+        dataQualityActionLoading={dataQualityActionLoading}
+        onRecomputeDataQualitySnapshot={handleRecomputeDataQualitySnapshot}
+        onResolveSourceDeletedFindings={handleResolveSourceDeletedFindings}
+      />
+      <V14231PageReadinessBoundary pageKey="Dashboard 项目总览" />
+
+      {constructionOrganizationScenario ? (
+        <section data-testid="dashboard-construction-organization-scenario">
+          <ConstructionOrganizationScenarioSummary
+            scenario={constructionOrganizationScenario}
+            activeUseCase={constructionOrganizationUseCase}
+          />
+        </section>
+      ) : null}
+
+      <DashboardDecisionOverview
+        summaryData={summaryData}
+        currentProject={currentProject}
+        summaryLoading={summaryLoading}
       />
 
-      <DashboardMetricCards summaryData={summaryData} todayTodoCount={todayTodoCount} />
+      <DashboardHealthWeaknessPanel
+        projectId={projectId}
+        healthDetails={healthDetails}
+        healthDetailsStatus={healthDetailsStatus}
+      />
+
+      <DashboardActionPanel summaryData={summaryData} projectId={projectId} />
 
       {summaryError ? (
         <Alert variant="destructive">
@@ -1319,80 +1816,84 @@ export default function Dashboard() {
         </Alert>
       ) : null}
 
-      <section data-testid="dashboard-attention-panel" className="grid grid-cols-1 gap-5 xl:grid-cols-12">
-        <div className="xl:col-span-8">
-          <RecentTasksCard projectId={projectId} tasks={focusTasks} />
-        </div>
-        <div className="xl:col-span-4">
-          <TodayLiveListPanel
-            projectId={projectId}
-            loading={todayLiveLoading || (Boolean(todayLiveError) && livePanelLoading)}
-            items={effectiveTodayLiveItems}
-            totalCount={effectiveTodayLiveItems.length}
-          />
-        </div>
-      </section>
-
       <Separator className="border-slate-100" />
 
       <section data-testid="dashboard-snapshot-panel">
-        <Tabs defaultValue="trend">
-          <TabsList className="h-auto w-full justify-start gap-6 rounded-none border-b border-slate-100 bg-transparent p-0 text-slate-500">
-            <TabsTrigger value="trend" className="relative rounded-none bg-transparent px-0 py-3 text-sm font-medium text-slate-500 shadow-none after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-slate-900 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600">
-              进度趋势
+        <Tabs value={activeSupportTab ?? ''} onValueChange={(value) => setActiveSupportTab(value as DashboardSupportTab)}>
+          <TabsList className="h-auto w-full justify-start gap-5 rounded-none border-b border-slate-100 bg-transparent p-0 text-slate-500">
+            <TabsTrigger value="forecast" onClick={() => setActiveSupportTab('forecast')} className="relative rounded-none bg-transparent px-0 py-2.5 text-xs font-medium text-slate-500 shadow-none after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-slate-800 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600">
+              预测详情
             </TabsTrigger>
-            <TabsTrigger value="milestone" className="relative rounded-none bg-transparent px-0 py-3 text-sm font-medium text-slate-500 shadow-none after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-slate-900 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600">
-              里程碑
+            <TabsTrigger value="trend" onClick={() => setActiveSupportTab('trend')} className="relative rounded-none bg-transparent px-0 py-2.5 text-xs font-medium text-slate-500 shadow-none after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-slate-800 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600">
+              趋势与周报
             </TabsTrigger>
-            <TabsTrigger value="execution" className="relative rounded-none bg-transparent px-0 py-3 text-sm font-medium text-slate-500 shadow-none after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-slate-900 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600">
-              执行概况
+            <TabsTrigger value="execution" onClick={() => setActiveSupportTab('execution')} className="relative rounded-none bg-transparent px-0 py-2.5 text-xs font-medium text-slate-500 shadow-none after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-slate-800 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600">
+              执行明细
             </TabsTrigger>
           </TabsList>
 
-          <div className="min-h-[25rem]">
+          <div className={activeSupportTab === null ? 'min-h-0' : 'min-h-[25rem]'}>
+            <TabsContent value="forecast" className="pt-5">
+              {activeSupportTab === 'forecast' ? (
+                <ProjectRemainingForecastCard
+                  projectId={projectId}
+                  targetEndDate={summaryData?.plannedEndDate ?? currentProject.planned_end_date ?? currentProject.end_date ?? null}
+                  testId="dashboard-project-remaining-forecast"
+                  title="预测依据"
+                  onOpenAcceleration={() => {
+                    window.location.href = `/projects/${projectId}/gantt`
+                  }}
+                />
+              ) : null}
+            </TabsContent>
+
             <TabsContent value="trend" className="pt-5">
-              <div className="surface-card p-5">
-                <div className="grid grid-cols-12 gap-5 border-b border-slate-100 pb-5">
-                  <div className="col-span-12 h-full xl:col-span-8">
-                    <DashboardMonthlyTrend projectId={currentProject.id ?? ''} embedded />
+              {activeSupportTab === 'trend' ? (
+                <div className="surface-card p-5">
+                  <div className="grid grid-cols-12 gap-5 border-b border-slate-100 pb-5">
+                    <div className="col-span-12 h-full xl:col-span-8">
+                      <DashboardMonthlyTrend projectId={currentProject.id ?? ''} embedded />
+                    </div>
+                    <div className="col-span-12 h-full xl:col-span-4">
+                      <WeeklyDigestPanel
+                        projectId={currentProject.id ?? ''}
+                        embedded
+                      />
+                    </div>
                   </div>
-                  <div className="col-span-12 h-full xl:col-span-4">
-                    <WeeklyDigestPanel
-                      projectId={currentProject.id ?? ''}
-                      milestoneItems={summaryData?.milestoneOverview?.items ?? []}
+                  <div className="pt-5">
+                    <DashboardCompareCard projectId={projectId} embedded />
+                  </div>
+                </div>
+              ) : null}
+            </TabsContent>
+
+            <TabsContent value="execution" className="pt-5">
+              {activeSupportTab === 'execution' ? (
+                <div className="space-y-5">
+                  <section data-testid="dashboard-attention-panel" className="grid grid-cols-1 gap-5 xl:grid-cols-12">
+                    <div className="xl:col-span-8">
+                      <RecentTasksCard projectId={projectId} />
+                    </div>
+                    <div className="space-y-5 xl:col-span-4">
+                      <TodayProgressListPanel
+                        loading={todayProgressLoading}
+                        items={todayProgressItems}
+                        error={todayProgressError}
+                      />
+                    </div>
+                  </section>
+                  <div className="surface-card p-5">
+                    <DashboardHealthCards
+                      summary={summaryData}
+                      projectId={projectId}
+                      healthDetails={healthDetails}
+                      healthDetailsStatus={healthDetailsStatus}
                       embedded
                     />
                   </div>
                 </div>
-                <div className="pt-5">
-                  <DashboardCompareCard projectId={projectId} embedded />
-                </div>
-              </div>
-            </TabsContent>
-
-            <TabsContent value="milestone" className="pt-5">
-              <div className="surface-card p-5">
-                <DashboardMilestoneCard
-                  completed={milestonePanelData.completed}
-                  total={milestonePanelData.total}
-                  upcoming={milestonePanelData.upcoming}
-                  overdue={milestonePanelData.overdue}
-                  recentMilestones={milestonePanelData.recentMilestones}
-                  embedded
-                />
-              </div>
-            </TabsContent>
-
-            <TabsContent value="execution" className="pt-5">
-              <div className="surface-card p-5">
-                <DashboardHealthCards
-                  summary={summaryData}
-                  tasks={scopedTasks}
-                  risks={scopedRisks}
-                  projectId={projectId}
-                  embedded
-                />
-              </div>
+              ) : null}
             </TabsContent>
           </div>
         </Tabs>

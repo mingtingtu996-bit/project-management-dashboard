@@ -12,7 +12,7 @@ param(
     [string]$ReleaseSha = $env:RELEASE_SHA,
     [string]$ComposeFile = "deploy/docker-compose.lighthouse.yml",
     [string]$EnvFile = "deploy/env/server.production.env",
-    [string]$HealthUrl = "http://127.0.0.1/api/health"
+    [string]$HealthUrl = "http://127.0.0.1/api/readyz"
 )
 
 $ErrorActionPreference = "Stop"

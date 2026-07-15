@@ -1,0 +1,21 @@
+{
+  "schemaVersion": "workbuddy-data-metric-catalog/v1",
+  "mutationBoundary": "catalog_only_no_db_mutation_no_runtime_write",
+  "metricSources": [
+    {
+      "id": "project_summary_metrics",
+      "sourceOfTruth": "projectExecutionSummaryService",
+      "consumerRule": "Frontend and route handlers must consume service output, not recompute business metrics ad hoc."
+    },
+    {
+      "id": "historical_trend_metrics",
+      "sourceOfTruth": "project_daily_snapshot",
+      "consumerRule": "Trend charts and BI history should use project_daily_snapshot unless a service-level exception is registered."
+    },
+    {
+      "id": "metric_registry_definitions",
+      "sourceOfTruth": "metricRegistryService",
+      "consumerRule": "New metric keys must be registered before public UI or report usage."
+    }
+  ]
+}

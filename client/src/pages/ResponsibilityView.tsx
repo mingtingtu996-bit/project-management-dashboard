@@ -67,7 +67,7 @@ interface ResponsibilityTaskDetail {
   planned_end_date?: string | null
   actual_end_date?: string | null
   is_delayed: boolean
-  is_critical: boolean
+  is_critical_path: boolean
   is_milestone: boolean
 }
 
@@ -75,6 +75,9 @@ interface ResponsibilitySubjectInsightRow {
   key: string
   label: string
   dimension: ResponsibilityDimension
+  insight_basis?: 'tasks.execution_owner_fields'
+  causal_attribution_policy?: 'excluded_use_progress_deviation_service'
+  causal_attribution_source?: 'progressDeviationService.responsibility_contribution'
   subject_user_id?: string | null
   subject_unit_id?: string | null
   primary_unit_key?: string | null
@@ -122,6 +125,12 @@ interface ResponsibilityWatchlist {
 interface ResponsibilityInsightsResponse {
   project_id: string
   generated_at: string
+  analysis_scope?: {
+    model: 'execution_performance_insight'
+    taskOwnershipBasis: 'tasks.execution_owner_fields'
+    causalAttributionPolicy: 'excluded_use_progress_deviation_service'
+    causalAttributionSource: 'progressDeviationService.responsibility_contribution'
+  }
   person_rows: ResponsibilitySubjectInsightRow[]
   unit_rows: ResponsibilitySubjectInsightRow[]
   watchlist: ResponsibilityWatchlist[]
@@ -734,15 +743,26 @@ export default function ResponsibilityView() {
       />
 
       <PageHeader
-        eyebrow="组织管理"
+        eyebrow="履约洞察"
         title="责任主体"
       >
+        <Badge variant="outline" className="h-9 rounded-lg px-3 text-xs font-medium">
+          履约洞察
+        </Badge>
         <Button
           variant="outline"
           size="sm"
           onClick={() => navigate(`/projects/${projectId}/task-summary`)}
         >
           返回任务总结
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => navigate(`/projects/${projectId}/reports?view=execution`)}
+        >
+          <BarChart3 className="mr-1.5 h-4 w-4" />
+          进度偏差归因
         </Button>
         <SegmentedControl
           options={[
@@ -926,7 +946,7 @@ export default function ResponsibilityView() {
                                   </TooltipTrigger>
                                   <TooltipContent>该主体关联的活跃风险数量</TooltipContent>
                                 </Tooltip>
-                                {` 路 閲嶇偣鎵胯缂哄彛 ${row.key_commitment_gap_count}`}
+                                {` · 重点承诺缺口 ${row.key_commitment_gap_count}`}
                               </>
                             )}
                         </p>
@@ -1012,18 +1032,18 @@ export default function ResponsibilityView() {
                             key={task.id}
                             type="button"
                             className={cn(
-                              'flex w-full items-center justify-between gap-4 px-4 py-3 text-left transition-colors hover:bg-blue-50/60',
+                              'flex h-auto min-h-[3.25rem] w-full items-center justify-between gap-4 whitespace-normal px-4 py-3 text-left transition-colors hover:bg-blue-50/60',
                               taskIndex % 2 === 0 ? 'bg-slate-50' : 'bg-white',
                             )}
                             onClick={() => navigate(`/projects/${projectId}/gantt?highlight=${encodeURIComponent(task.id)}`)}
                           >
-                            <div className="min-w-0 space-y-1">
+                            <div className="min-w-0 flex-1 space-y-1">
                               <div className="truncate text-sm font-medium text-slate-900">{task.title}</div>
                               <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                                <span>{task.assignee}</span>
-                                <span>{task.unit}</span>
-                                <span>{task.status_label}</span>
-                                <span>
+                                <span className="max-w-full truncate">{task.assignee}</span>
+                                <span className="max-w-full truncate">{task.unit}</span>
+                                <span className="max-w-full truncate">{task.status_label}</span>
+                                <span className="max-w-full truncate">
                                   计划完成 <span className="num-mono">{formatDate(task.planned_end_date)}</span>
                                 </span>
                               </div>

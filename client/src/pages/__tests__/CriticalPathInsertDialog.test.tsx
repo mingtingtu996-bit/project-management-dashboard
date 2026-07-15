@@ -74,7 +74,7 @@ describe('CriticalPathInsertDialog', () => {
         anchorType: 'before',
         leftTaskId: null,
         rightTaskId: 'task-b',
-        reason: '来自任务右键菜单：主体结构',
+        reason: '来自关键路径操作：主体结构',
       })
     })
   })

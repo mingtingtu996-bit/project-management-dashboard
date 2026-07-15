@@ -1,25 +1,20 @@
 ﻿// 通知中心API路由 - Phase 2
 
-import { Router } from 'express'
-import { WarningService } from '../services/warningService.js'
-import { OperationalNotificationService } from '../services/operationalNotificationService.js'
-import { planningGovernanceService } from '../services/planningGovernanceService.js'
+import { Router, type Request, type Response } from 'express'
 import { persistNotification } from '../services/warningChainService.js'
+import { supabase } from '../services/dbService.js'
+import { query as rawQuery } from '../database.js'
 import {
-  acknowledgeWarningNotification,
-  muteWarningNotification,
-} from '../services/upgradeChainService.js'
-import {
-  deleteNotificationById,
   findNotification,
   listNotifications,
   updateNotificationById,
-  updateNotificationsByIds,
 } from '../services/notificationStore.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
+import { getRequestCompanyId } from '../auth/companyContext.js'
 import { authenticate } from '../middleware/auth.js'
 import { logger } from '../middleware/logger.js'
 import { validate } from '../middleware/validation.js'
+import { canAccessProject, getCurrentCompanyMembership, getVisibleProjectIds } from '../auth/access.js'
 import { z } from 'zod'
 import type { ApiResponse } from '../types/index.js'
 import type { Notification } from '../types/db.js'
@@ -35,36 +30,79 @@ import {
   REQUEST_TIMEOUT_BUDGETS,
   runWithRequestBudget,
 } from '../services/requestBudgetService.js'
+import { getNotificationAnalytics } from '../services/notificationAnalyticsService.js'
+import { clearAttentionSummaryCache } from '../services/todoTouchpointService.js'
+import { getNotificationProducerAudit } from '../services/notificationProducerAuditService.js'
+import { getNotificationReconciliationCoverageMatrix } from '../services/notificationReconciliationService.js'
+import { getNotificationDeliveryGovernanceDiagnostics } from '../services/notificationDeliveryGovernanceService.js'
+import { planningGovernanceService } from '../services/planningGovernanceService.js'
 
 const router = Router()
 router.use(authenticate)
-const warningService = new WarningService()
-const operationalNotificationService = new OperationalNotificationService()
 const DEFAULT_PAGE_SIZE = 20
 const MAX_PAGE_SIZE = 100
-const DEFAULT_READ_SYNC_TTL_MS = process.env.NODE_ENV === 'test' ? 0 : 60_000
-const DEFAULT_READ_SYNC_DELAY_MS = process.env.NODE_ENV === 'test' ? 0 : 250
+const NOTIFICATION_FAST_CACHE_TTL_MS = 10_000
+const GOVERNANCE_NOTIFICATION_SYNC_TTL_MS = 60_000
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-interface NotificationReadSyncCacheEntry {
-  lastAttemptAt: number
-  pending?: Promise<void>
+type ResponseCacheEntry<T> = {
+  expiresAt: number
+  promise: Promise<T>
 }
 
-function parsePositiveInteger(value: string | undefined, fallback: number) {
-  const parsed = Number(value)
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+const notificationListFastCache = new Map<string, ResponseCacheEntry<Notification[]>>()
+const notificationSummaryFastCache = new Map<string, ResponseCacheEntry<Notification[]>>()
+const governanceNotificationSyncCache = new Map<string, ResponseCacheEntry<unknown>>()
+
+function clearNotificationFastCaches() {
+  notificationListFastCache.clear()
+  notificationSummaryFastCache.clear()
 }
 
-const notificationReadSyncTtlMs = parsePositiveInteger(
-  process.env.NOTIFICATION_READ_SYNC_TTL_MS,
-  DEFAULT_READ_SYNC_TTL_MS,
-)
-const notificationReadSyncDelayMs = parsePositiveInteger(
-  process.env.NOTIFICATION_READ_SYNC_DELAY_MS,
-  DEFAULT_READ_SYNC_DELAY_MS,
-)
-const notificationReadSyncCache = new Map<string, NotificationReadSyncCacheEntry>()
-const shouldAwaitReadSync = process.env.NODE_ENV === 'test'
+async function syncProjectGovernanceNotificationsForRead(projectId?: string | null) {
+  if (!projectId) return
+  const now = Date.now()
+  const cached = governanceNotificationSyncCache.get(projectId)
+  if (cached && cached.expiresAt > now) {
+    return cached.promise
+  }
+  if (cached) {
+    governanceNotificationSyncCache.delete(projectId)
+  }
+
+  const promise = planningGovernanceService.persistProjectGovernanceNotifications(projectId)
+    .catch((error) => {
+      governanceNotificationSyncCache.delete(projectId)
+      throw error
+    })
+  governanceNotificationSyncCache.set(projectId, { expiresAt: now + GOVERNANCE_NOTIFICATION_SYNC_TTL_MS, promise })
+  return promise
+}
+
+async function readThroughCache<T>(
+  cache: Map<string, ResponseCacheEntry<T>>,
+  key: string,
+  loader: () => Promise<T>,
+) {
+  const now = Date.now()
+  const cached = cache.get(key)
+  if (cached && cached.expiresAt > now) {
+    return cached.promise
+  }
+  if (cached) {
+    cache.delete(key)
+  }
+
+  const promise = loader().catch((error) => {
+    const current = cache.get(key)
+    if (current?.promise === promise) {
+      cache.delete(key)
+    }
+    throw error
+  })
+  cache.set(key, { expiresAt: now + NOTIFICATION_FAST_CACHE_TTL_MS, promise })
+  return promise
+}
 
 const notificationIdParamSchema = z.object({
   id: z.string().trim().min(1, 'id 不能为空'),
@@ -79,6 +117,11 @@ const notificationsQuerySchema = z.object({
   offset: z.union([z.string(), z.number()]).optional(),
   unreadOnly: z.union([z.string(), z.number(), z.boolean()]).optional(),
   unread_only: z.union([z.string(), z.number(), z.boolean()]).optional(),
+  touchpointType: z.string().trim().optional(),
+  touchpoint_type: z.string().trim().optional(),
+  category: z.string().trim().optional(),
+  type: z.string().trim().optional(),
+  types: z.union([z.string(), z.array(z.string())]).optional(),
 }).passthrough()
 
 const notificationSummaryQuerySchema = z.object({
@@ -86,6 +129,14 @@ const notificationSummaryQuerySchema = z.object({
   project_id: z.string().trim().min(1).optional(),
   userId: z.string().trim().min(1).optional(),
   user_id: z.string().trim().min(1).optional(),
+}).passthrough()
+
+const notificationAnalyticsQuerySchema = z.object({
+  projectId: z.string().trim().min(1).optional(),
+  project_id: z.string().trim().min(1).optional(),
+  since: z.string().trim().optional(),
+  until: z.string().trim().optional(),
+  limit: z.union([z.string(), z.number()]).optional(),
 }).passthrough()
 
 const acknowledgeGroupBodySchema = z.object({
@@ -143,9 +194,111 @@ function isReadFlag(value: unknown) {
   return value === true || value === 1 || value === '1'
 }
 
+function getNotificationUserId(notification: Notification) {
+  return String(notification.user_id ?? '').trim()
+}
+
+function isDirectNotificationRecipient(notification: Notification, userId: string) {
+  if (!userId) return false
+  if (getNotificationUserId(notification) === userId) return true
+  return normalizeRecipients(notification.recipients).includes(userId)
+}
+
+function isNotificationRecipient(notification: Notification, userId: string) {
+  if (isDirectNotificationRecipient(notification, userId)) return true
+  return Boolean(notification.is_broadcast && !notification.project_id)
+}
+
 function matchesNotificationRecipient(notification: Notification, userId?: string) {
   if (!userId) return true
-  return normalizeRecipients(notification.recipients).includes(userId)
+  return isNotificationRecipient(notification, userId)
+}
+
+type PersonalNotificationState = {
+  actor_id?: string
+  is_read?: boolean
+  is_acknowledged?: boolean
+  is_muted?: boolean
+  is_hidden?: boolean
+  read_at?: string
+  acknowledged_at?: string
+  muted_at?: string
+  hidden_at?: string
+  muted_until?: string
+  muted_hours?: number
+  mute_duration?: string
+  updated_at?: string
+}
+
+async function fetchUserNotificationStates(userId: string, notificationIds: string[]): Promise<Map<string, PersonalNotificationState>> {
+  const map = new Map<string, PersonalNotificationState>()
+  if (!notificationIds.length) return map
+  if (!UUID_PATTERN.test(userId)) return map
+
+  try {
+    const result = await rawQuery(
+      `
+        SELECT notification_id, is_read, is_acknowledged, is_muted, is_hidden, read_at, acknowledged_at, muted_at, muted_until, hidden_at
+        FROM public.notification_user_states
+        WHERE user_id = $1
+          AND notification_id::text = ANY($2::text[])
+      `,
+      [userId, notificationIds],
+    )
+
+    for (const row of (result.rows ?? [])) {
+      const mutedUntil = row.muted_until ?? (row.is_muted ? '9999-12-31' : undefined)
+      map.set(String(row.notification_id), {
+        is_read: row.is_read,
+        is_acknowledged: row.is_acknowledged,
+        is_muted: row.is_muted,
+        is_hidden: row.is_hidden,
+        read_at: row.read_at,
+        acknowledged_at: row.acknowledged_at,
+        muted_at: row.muted_at,
+        hidden_at: row.hidden_at,
+        muted_until: mutedUntil,
+      })
+    }
+    return map
+  } catch {
+    // Fall back for test databases that do not include the v1.4.13 state table.
+  }
+
+  let rows: Array<Record<string, any>> = []
+  try {
+    const result = await (supabase as any)
+      .from('notification_user_states')
+      .select('notification_id, is_read, is_acknowledged, is_muted, is_hidden, read_at, acknowledged_at, muted_at, muted_until, hidden_at')
+      .eq('user_id', userId)
+      .in('notification_id', notificationIds)
+    rows = result.data ?? []
+  } catch {
+    return map
+  }
+
+  for (const row of rows) {
+    const mutedUntil = row.muted_until ?? (row.is_muted ? '9999-12-31' : undefined)
+    map.set(row.notification_id, {
+      is_read: row.is_read,
+      is_acknowledged: row.is_acknowledged,
+      is_muted: row.is_muted,
+      is_hidden: row.is_hidden,
+      read_at: row.read_at,
+      acknowledged_at: row.acknowledged_at,
+      muted_at: row.muted_at,
+      hidden_at: row.hidden_at,
+      muted_until: mutedUntil,
+    })
+  }
+  return map
+}
+
+async function upsertUserNotificationState(userId: string, notificationId: string, patch: Record<string, unknown>) {
+  await (supabase as any)
+    .from('notification_user_states')
+    .upsert({ notification_id: notificationId, user_id: userId, ...patch, updated_at: new Date().toISOString() },
+      { onConflict: 'notification_id,user_id' })
 }
 
 function isMutedNotification(notification: Notification) {
@@ -312,6 +465,38 @@ function serializeNotification(notification: Notification) {
   }
 }
 
+function isNotificationCurrentlyVisible(notification: Notification) {
+  if (String(notification.status ?? '').trim().toLowerCase() === 'hidden') return false
+  const expiresAt = notification.expires_at
+  if (!expiresAt) return true
+  const expiresAtMs = new Date(expiresAt).getTime()
+  return Number.isNaN(expiresAtMs) || expiresAtMs > Date.now()
+}
+
+function applyPersonalStateToNotification(
+  notification: Notification,
+  state?: PersonalNotificationState,
+): Notification {
+  if (!state) return notification
+  const stateRead = Boolean(state.is_read || state.is_acknowledged || state.read_at || state.acknowledged_at)
+  const mutedUntil = state.muted_until ?? (state.is_muted ? '9999-12-31' : undefined)
+  return {
+    ...notification,
+    is_read: stateRead ? true : notification.is_read,
+    status: state.is_muted ? 'muted' : stateRead ? 'read' : notification.status,
+    muted_until: mutedUntil ?? notification.muted_until,
+  }
+}
+
+function applyPersonalStatesToNotifications(
+  notifications: Notification[],
+  userId: string | undefined,
+  states: Map<string, PersonalNotificationState>,
+) {
+  if (!userId || states.size === 0) return notifications
+  return notifications.map((item) => applyPersonalStateToNotification(item, states.get(item.id)))
+}
+
 function buildValidationError(message: string, details?: unknown): ApiResponse {
   return {
     success: false,
@@ -322,6 +507,20 @@ function buildValidationError(message: string, details?: unknown): ApiResponse {
     },
     timestamp: new Date().toISOString(),
   }
+}
+
+function getNotificationTypeFilters(req: Request) {
+  const category = String(req.query.category ?? '').trim() || undefined
+  const type = String(req.query.type ?? '').trim() || undefined
+  const rawTypes = req.query.types
+  const types = Array.isArray(rawTypes)
+    ? rawTypes.map((item) => String(item ?? '').trim()).filter(Boolean)
+    : String(rawTypes ?? '')
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean)
+
+  return { category, type, types: types.length > 0 ? types : undefined }
 }
 
 function applyNotificationFilters(
@@ -343,99 +542,221 @@ function applyNotificationFilters(
   return filtered.slice(options.offset, options.offset + options.limit)
 }
 
-async function listPersistedNotifications() {
-  return await listNotifications()
+async function listVisibleNotificationsFast(options: {
+  req: Request
+  projectId?: string
+  touchpointType?: string
+  category?: string
+  type?: string
+  types?: string[]
+  limit?: number
+  offset?: number
+}) {
+  const userId = options.req.user?.id
+  if (!userId) return null
+
+  const requestedCompanyId = getRequestCompanyId(options.req)
+  const membership = await getCurrentCompanyMembership(userId, requestedCompanyId)
+  const companyId = membership?.companyId ?? null
+  const visibleProjectIds = await getVisibleProjectIds(userId, options.req.user?.globalRole, companyId)
+  const canSeeAllProjects = visibleProjectIds === null
+  const projectIds = canSeeAllProjects ? null : visibleProjectIds
+
+  const cacheKey = JSON.stringify({
+    userId,
+    companyId,
+    projectIds,
+    projectId: options.projectId ?? null,
+    touchpointType: options.touchpointType ?? null,
+    category: options.category ?? null,
+    type: options.type ?? null,
+    types: options.types ?? null,
+    limit: options.limit ?? null,
+    offset: options.offset ?? 0,
+  })
+
+  const cache = options.limit === undefined && !options.offset
+    ? notificationSummaryFastCache
+    : notificationListFastCache
+
+  return readThroughCache(cache, cacheKey, async () => {
+    const result = await rawQuery(
+      `
+        SELECT n.*
+          FROM public.notifications n
+         WHERE COALESCE(n.lifecycle_status, 'active') <> 'archived'
+           AND COALESCE(n.status, '') <> 'hidden'
+           AND (n.expires_at IS NULL OR n.expires_at > now())
+           AND ($5::text IS NULL OR n.touchpoint_type = $5::text)
+           AND ($6::text IS NULL OR n.category = $6::text)
+           AND ($7::text IS NULL OR n.type = $7::text)
+           AND ($8::text[] IS NULL OR n.type = ANY($8::text[]))
+           AND ($11::text IS NULL OR n.project_id::text = $11::text)
+           AND (
+             n.user_id::text = $1::text
+             OR (to_jsonb(n.recipients) ? $1::text)
+             OR (
+               n.project_id IS NOT NULL
+               AND ($3::boolean = true OR n.project_id::text = ANY($4::text[]))
+             )
+             OR (
+               n.project_id IS NULL
+               AND COALESCE(n.is_broadcast, false) = true
+               AND (
+                 (n.company_id IS NOT NULL AND $2::text IS NOT NULL AND n.company_id::text = $2::text)
+                 OR (n.company_id IS NULL AND COALESCE(n.is_system, false) = true)
+               )
+             )
+           )
+         ORDER BY n.created_at DESC
+         LIMIT COALESCE($9::int, 2147483647)
+         OFFSET $10::int
+      `,
+      [
+        userId,
+        companyId,
+        canSeeAllProjects,
+        projectIds ?? [],
+        options.touchpointType ?? null,
+        options.category ?? null,
+        options.type ?? null,
+        options.types ?? null,
+        options.limit ?? null,
+        options.offset ?? 0,
+        options.projectId ?? null,
+      ],
+    )
+
+    return (result.rows ?? []) as Notification[]
+  })
 }
 
-async function listPersistedNotificationsForScope(projectId?: string) {
-  return await listNotifications(projectId ? { projectId } : {})
-}
+async function listPersistedNotificationsForScope(req: Request, projectId?: string, touchpointType?: string) {
+  const { category, type, types } = getNotificationTypeFilters(req)
 
-async function syncNotificationState(projectId?: string) {
-  const syncTasks = [
-    ['condition_expired_issue_sync', () => warningService.syncConditionExpiredIssues(projectId)],
-    ['acceptance_expired_issue_sync', () => warningService.syncAcceptanceExpiredIssues(projectId)],
-    ['warning_auto_escalation', () => warningService.autoEscalateWarnings(projectId)],
-    ['risk_auto_escalation', () => warningService.autoEscalateRisksToIssues(projectId)],
-    ['warning_persistence_sync', () => warningService.syncActiveWarnings(projectId)],
-    ['planning_governance_sync', () => planningGovernanceService.persistProjectGovernanceNotifications(projectId)],
-    [
-      'operational_notification_sync',
-      () => (projectId
-        ? operationalNotificationService.syncProjectNotifications(projectId)
-        : operationalNotificationService.syncAllProjectNotifications()),
-    ],
-  ] as const
-
-  const results = await Promise.allSettled(syncTasks.map(([, run]) => run()))
-  for (const [index, result] of results.entries()) {
-    if (result.status === 'fulfilled') continue
-    logger.warn('Notification state sync step failed, falling back to persisted notifications', {
-      step: syncTasks[index][0],
-      projectId: projectId ?? null,
-      error: result.reason instanceof Error ? result.reason.message : String(result.reason),
-    })
+  if (projectId) {
+    return await listNotifications({ projectId, touchpointType, category, type, types })
   }
+
+  const membership = req.user?.id
+    ? await getCurrentCompanyMembership(req.user.id, getRequestCompanyId(req))
+    : null
+  return await listNotifications({
+    companyId: membership?.companyId ?? null,
+    scopeUserId: req.user?.id,
+    touchpointType,
+    category,
+    type,
+    types,
+  })
 }
 
-async function syncNotificationStateForRead(projectId?: string) {
-  if (!projectId) {
-    logger.info('Skipping on-read notification sync without project scope; using persisted notifications only')
-    return
+function notificationNotFound(res: Response) {
+  return res.status(404).json({
+    success: false,
+    error: { code: 'NOT_FOUND', message: '通知不存在' },
+    timestamp: new Date().toISOString(),
+  })
+}
+
+function notificationForbidden(res: Response) {
+  return res.status(403).json({
+    success: false,
+    error: { code: 'FORBIDDEN', message: '当前账号不能处理该通知' },
+    timestamp: new Date().toISOString(),
+  })
+}
+
+function isInternalNotificationMutation(req: Request) {
+  const serviceToken = String(req.headers['x-service-token'] ?? '').trim()
+  return (serviceToken === process.env.INTERNAL_SERVICE_TOKEN) || ((req as any).isService === true)
+}
+
+async function canHandleNotification(req: Request, notification: Notification) {
+  const userId = req.user?.id
+  if (!userId) return false
+  const membership = await getCurrentCompanyMembership(userId, getRequestCompanyId(req))
+  const currentCompanyId = String(membership?.companyId ?? '').trim()
+  const notificationCompanyId = String(notification.company_id ?? '').trim()
+
+  if (notification.project_id) {
+    return await canAccessProject(userId, notification.project_id, notificationCompanyId || currentCompanyId || null)
   }
 
-  const now = Date.now()
-  const cached = notificationReadSyncCache.get(projectId)
-  if (cached?.pending) {
-    if (shouldAwaitReadSync) {
-      await cached.pending
+  if (notificationCompanyId && notificationCompanyId !== currentCompanyId) {
+    return false
+  }
+
+  if (isDirectNotificationRecipient(notification, userId)) return true
+  if (notification.is_broadcast) {
+    if (!notificationCompanyId) return Boolean(notification.is_system)
+    return notificationCompanyId === currentCompanyId
+  }
+  return false
+}
+
+async function filterVisibleNotifications(req: Request, notifications: Notification[]) {
+  const visible: Notification[] = []
+  for (const item of notifications) {
+    if (!isNotificationCurrentlyVisible(item)) continue
+    if (await canHandleNotification(req, item)) {
+      visible.push(item)
     }
-    return
+  }
+  return visible
+}
+
+async function resolveNotificationUserFilter(req: Request, res: Response, requestedUserId?: string) {
+  if (!requestedUserId) return undefined
+  if (requestedUserId === req.user?.id) return requestedUserId
+  const membership = req.user?.id
+    ? await getCurrentCompanyMembership(req.user.id, getRequestCompanyId(req))
+    : null
+  if (membership?.role === 'company_admin') return requestedUserId
+  res.status(403).json({
+    success: false,
+    error: { code: 'FORBIDDEN', message: '当前账号不能查看其他用户的提醒' },
+    timestamp: new Date().toISOString(),
+  })
+  return null
+}
+
+async function loadNotificationForPersonalAction(req: Request, res: Response, id: string) {
+  const notification = await findNotification({ id })
+  if (!notification) {
+    notificationNotFound(res)
+    return null
   }
 
-  if (cached && now - cached.lastAttemptAt < notificationReadSyncTtlMs) {
-    logger.debug('Skipping on-read notification sync within freshness window', {
-      projectId,
-      ageMs: now - cached.lastAttemptAt,
-      ttlMs: notificationReadSyncTtlMs,
-    })
-    return
+  if (!await canHandleNotification(req, notification)) {
+    notificationForbidden(res)
+    return null
   }
 
-  const entry: NotificationReadSyncCacheEntry = { lastAttemptAt: now }
-  const runSync = () => runWithRequestBudget(
-    {
-      operation: 'notifications.state_sync',
-      timeoutMs: REQUEST_TIMEOUT_BUDGETS.notificationReadMs,
-    },
-    () => syncNotificationState(projectId),
-  )
-    .catch((error) => {
-      logger.warn('Notification state sync budget exceeded, falling back to persisted notifications', {
-        projectId,
-        error: error instanceof Error ? error.message : String(error),
-      })
-    })
-    .finally(() => {
-      const latest = notificationReadSyncCache.get(projectId)
-      if (latest) {
-        latest.pending = undefined
-      }
-    })
+  return notification
+}
 
-  const pending = shouldAwaitReadSync
-    ? runSync()
-    : new Promise<void>((resolve) => {
-      setTimeout(() => {
-        runSync().then(resolve)
-      }, notificationReadSyncDelayMs)
-    })
+async function markNotificationPersonalRead(notification: Notification, userId: string, timestamp = new Date().toISOString()) {
+  await upsertUserNotificationState(userId, notification.id, { is_read: true, read_at: timestamp })
+  clearNotificationFastCaches()
+  clearAttentionSummaryCache()
+}
 
-  entry.pending = pending
-  notificationReadSyncCache.set(projectId, entry)
-  if (shouldAwaitReadSync) {
-    await pending
-  }
+async function acknowledgeNotificationPersonally(notification: Notification, userId: string, timestamp = new Date().toISOString()) {
+  await upsertUserNotificationState(userId, notification.id, { is_read: true, is_acknowledged: true, read_at: timestamp, acknowledged_at: timestamp })
+  clearNotificationFastCaches()
+  clearAttentionSummaryCache()
+}
+
+async function muteNotificationPersonally(
+  notification: Notification,
+  userId: string,
+  options: { mutedUntil: string; muteHours: number; muteDuration: string; timestamp?: string },
+) {
+  const timestamp = options.timestamp ?? new Date().toISOString()
+  await upsertUserNotificationState(userId, notification.id, { is_muted: true, muted_at: timestamp, muted_until: options.mutedUntil })
+  clearNotificationFastCaches()
+  clearAttentionSummaryCache()
 }
 
 /**
@@ -450,22 +771,107 @@ router.get('/', validate(notificationsQuerySchema, 'query'), asyncHandler(async 
   const unreadOnly = ['1', 'true', 'yes', 'on'].includes(
     String(req.query.unreadOnly ?? req.query.unread_only ?? '').trim().toLowerCase(),
   )
+  const requestedTouchpointType = String(req.query.touchpointType ?? req.query.touchpoint_type ?? 'persistent').trim()
+  const touchpointType = requestedTouchpointType && requestedTouchpointType !== 'all' ? requestedTouchpointType : undefined
 
-  logger.info('Fetching notifications', { projectId, userId, limit, offset, unreadOnly })
+  logger.info('Fetching notifications', { projectId, userId, limit, offset, unreadOnly, touchpointType })
 
-  await syncNotificationStateForRead(projectId)
-  const persistedNotifications = await listPersistedNotificationsForScope(projectId)
-  const notifications = applyNotificationFilters(persistedNotifications, {
-    projectId,
-    userId,
-    unreadOnly,
-    limit,
-    offset,
-  })
+  const userFilter = await resolveNotificationUserFilter(req, res, userId)
+  if (userFilter === null) return
+
+  const category = String(req.query.category ?? '').trim() || undefined
+  const type = String(req.query.type ?? '').trim() || undefined
+  const rawTypes = req.query.types
+  const types = Array.isArray(rawTypes)
+    ? rawTypes.map((item) => String(item ?? '').trim()).filter(Boolean)
+    : String(rawTypes ?? '')
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean)
+
+  if (projectId && req.user?.id && !userFilter) {
+    const canReadProject = await canAccessProject(req.user.id, projectId, getRequestCompanyId(req))
+    if (!canReadProject) {
+      return res.status(403).json({
+        success: false,
+        error: { code: 'FORBIDDEN', message: '当前账号不能查看此项目提醒' },
+        timestamp: new Date().toISOString(),
+      })
+    }
+  }
+
+  if (!projectId && req.user?.id && (!userFilter || userFilter === req.user.id)) {
+    try {
+      const fastRows = await listVisibleNotificationsFast({
+        req,
+        touchpointType,
+        category,
+        type,
+        types,
+        limit: unreadOnly || userFilter ? undefined : limit,
+        offset: unreadOnly || userFilter ? undefined : offset,
+      })
+      if (fastRows) {
+        const effectiveUserId = userFilter ?? req.user.id
+        const userStates = await fetchUserNotificationStates(effectiveUserId, fastRows.map((n) => n.id))
+        const rowsWithState = applyPersonalStatesToNotifications(fastRows, effectiveUserId, userStates)
+        const notifications = unreadOnly || userFilter
+          ? applyNotificationFilters(rowsWithState, {
+            projectId,
+            userId: userFilter,
+            unreadOnly,
+            limit,
+            offset,
+          })
+          : rowsWithState
+
+        return res.json({
+          success: true,
+          data: notifications.map((item) => serializeNotification(item)),
+          timestamp: new Date().toISOString(),
+        } satisfies ApiResponse<Array<Notification & { message: string; body: string }>>)
+      }
+    } catch (error) {
+      logger.warn('[notifications] fast list path failed, falling back to store path', { error })
+    }
+  }
+
+  let notifications: Notification[]
+  try {
+    const persistedNotifications = await listPersistedNotificationsForScope(req, projectId, touchpointType)
+    const visibleNotifications = await filterVisibleNotifications(req, persistedNotifications)
+    notifications = applyNotificationFilters(visibleNotifications, {
+      projectId,
+      userId: userFilter,
+      unreadOnly,
+      limit,
+      offset,
+    })
+  } catch (error) {
+    logger.error('[notifications] store list path failed', {
+      message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    })
+    throw error
+  }
+
+  // v1.4.13: pre-fetch notification_user_states to enrich serialized output
+  const effectiveUserId = userFilter ?? req.user?.id
+  const userStates = effectiveUserId ? await fetchUserNotificationStates(effectiveUserId, notifications.map((n) => n.id)) : new Map()
+  const notificationsWithState = applyPersonalStatesToNotifications(notifications, effectiveUserId, userStates)
 
   const response: ApiResponse<Array<Notification & { message: string; body: string }>> = {
     success: true,
-    data: notifications.map(serializeNotification),
+    data: notificationsWithState.map((item) => {
+      const serialized = serializeNotification(item)
+      const state = effectiveUserId ? userStates.get(item.id) : undefined
+      if (state) {
+        serialized.is_read = state.is_read ? true : serialized.is_read
+        if (state.is_muted) serialized.status = 'muted'
+        else if (state.is_read) serialized.status = 'read'
+      }
+      return serialized
+    }),
     timestamp: new Date().toISOString(),
   }
 
@@ -482,11 +888,24 @@ router.get('/unread', validate(notificationsQuerySchema, 'query'), asyncHandler(
 
   logger.info('Fetching unread count', { projectId, userId })
 
-  await syncNotificationStateForRead(projectId)
-  const notifications = await listPersistedNotificationsForScope(projectId)
-  const count = notifications
+  const userFilter = await resolveNotificationUserFilter(req, res, userId)
+  if (userFilter === null) return
+
+  const notifications = await listPersistedNotificationsForScope(req, projectId)
+  const visibleNotifications = await filterVisibleNotifications(req, notifications)
+  const effectiveUserId = userFilter ?? req.user?.id
+  const userStates = effectiveUserId
+    ? await fetchUserNotificationStates(effectiveUserId, visibleNotifications.map((item) => item.id))
+    : new Map<string, PersonalNotificationState>()
+  const visibleNotificationsWithState = applyPersonalStatesToNotifications(
+    visibleNotifications,
+    effectiveUserId,
+    userStates,
+  )
+  // eslint-disable-next-line -- route-level-aggregation-approved; endpoint-owned scoped unread count after visibility and recipient checks
+  const count = visibleNotificationsWithState
     .filter((item) => !projectId || item.project_id === projectId)
-    .filter((item) => matchesNotificationRecipient(item, userId))
+    .filter((item) => matchesNotificationRecipient(item, userFilter))
     .filter((item) => isUnreadCountCandidate(item))
     .length
 
@@ -509,11 +928,45 @@ router.get('/summary', validate(notificationSummaryQuerySchema, 'query'), asyncH
 
   logger.info('Fetching notification summary', { projectId, userId })
 
-  await syncNotificationStateForRead(projectId)
-  const notifications = await listPersistedNotificationsForScope(projectId)
+  const userFilter = await resolveNotificationUserFilter(req, res, userId)
+  if (userFilter === null) return
+
+  if (projectId) {
+    syncProjectGovernanceNotificationsForRead(projectId).catch((error) => {
+      logger.warn('[notifications] governance notification background sync failed', { projectId, error })
+    })
+  }
+
+  if (req.user?.id && (!userFilter || userFilter === req.user.id)) {
+    try {
+      const fastRows = await listVisibleNotificationsFast({ req, projectId })
+      if (fastRows) {
+        const effectiveUserId = userFilter ?? req.user.id
+        const userStates = await fetchUserNotificationStates(effectiveUserId, fastRows.map((n) => n.id))
+        const rowsWithState = applyPersonalStatesToNotifications(fastRows, effectiveUserId, userStates)
+        const summary = buildNotificationSummary(
+          rowsWithState.filter((item) => matchesNotificationRecipient(item, userFilter)),
+        )
+
+        return res.json({
+          success: true,
+          data: summary,
+          timestamp: new Date().toISOString(),
+        } satisfies ApiResponse<NotificationSummary>)
+      }
+    } catch (error) {
+      logger.warn('[notifications] fast summary path failed, falling back to store path', { error })
+    }
+  }
+
+  const notifications = await listPersistedNotificationsForScope(req, projectId)
+  const visibleNotifications = await filterVisibleNotifications(req, notifications)
+  const effectiveUserId = userFilter ?? req.user?.id
+  const userStates = effectiveUserId ? await fetchUserNotificationStates(effectiveUserId, visibleNotifications.map((n) => n.id)) : new Map()
+  const visibleNotificationsWithState = applyPersonalStatesToNotifications(visibleNotifications, effectiveUserId, userStates)
   const summary = buildNotificationSummary(
-    notifications.filter((item) => !projectId || item.project_id === projectId)
-      .filter((item) => matchesNotificationRecipient(item, userId)),
+    visibleNotificationsWithState.filter((item) => !projectId || item.project_id === projectId)
+      .filter((item) => matchesNotificationRecipient(item, userFilter)),
   )
 
   const response: ApiResponse<NotificationSummary> = {
@@ -526,6 +979,115 @@ router.get('/summary', validate(notificationSummaryQuerySchema, 'query'), asyncH
 }))
 
 /**
+ * 获取触达分析后台摘要
+ * GET /api/notifications/analytics?projectId=xxx&since=2026-05-01
+ */
+router.get('/analytics', validate(notificationAnalyticsQuerySchema, 'query'), asyncHandler(async (req, res) => {
+  const userId = req.user?.id
+  if (!userId) {
+    return res.status(401).json({
+      success: false,
+      error: { code: 'UNAUTHORIZED', message: '请先登录' },
+      timestamp: new Date().toISOString(),
+    })
+  }
+
+  const projectId = String(req.query.projectId ?? req.query.project_id ?? '').trim() || null
+  const requestedCompanyId = getRequestCompanyId(req)
+  const membership = await getCurrentCompanyMembership(userId, requestedCompanyId)
+  const effectiveCompanyId = membership?.companyId ?? requestedCompanyId ?? null
+
+  if (projectId) {
+    const allowed = await canAccessProject(userId, projectId, effectiveCompanyId)
+    if (!allowed) {
+      return res.status(403).json({
+        success: false,
+        error: { code: 'FORBIDDEN', message: '无权查看该项目触达分析' },
+        timestamp: new Date().toISOString(),
+      })
+    }
+  } else if (!effectiveCompanyId || !membership) {
+    return res.status(403).json({
+      success: false,
+      error: { code: 'FORBIDDEN', message: '无可用公司上下文' },
+      timestamp: new Date().toISOString(),
+    })
+  }
+
+  const limit = Math.min(Math.max(parseInt(String(req.query.limit ?? '5000'), 10), 1), 10000)
+  const analytics = await getNotificationAnalytics({
+    companyId: projectId ? null : effectiveCompanyId,
+    projectId,
+    since: String(req.query.since ?? '').trim() || null,
+    until: String(req.query.until ?? '').trim() || null,
+    limit,
+  })
+
+  res.json({
+    success: true,
+    data: analytics,
+    timestamp: new Date().toISOString(),
+  } satisfies ApiResponse)
+}))
+
+/**
+ * 获取通知触点治理诊断
+ * GET /api/notifications/diagnostics?projectId=xxx&since=2026-05-01
+ */
+router.get('/diagnostics', validate(notificationAnalyticsQuerySchema, 'query'), asyncHandler(async (req, res) => {
+  const userId = req.user?.id
+  if (!userId) {
+    return res.status(401).json({
+      success: false,
+      error: { code: 'UNAUTHORIZED', message: '请先登录' },
+      timestamp: new Date().toISOString(),
+    })
+  }
+
+  const projectId = String(req.query.projectId ?? req.query.project_id ?? '').trim() || null
+  const requestedCompanyId = getRequestCompanyId(req)
+  const membership = await getCurrentCompanyMembership(userId, requestedCompanyId)
+  const effectiveCompanyId = membership?.companyId ?? requestedCompanyId ?? null
+
+  if (projectId) {
+    const allowed = await canAccessProject(userId, projectId, effectiveCompanyId)
+    if (!allowed) {
+      return res.status(403).json({
+        success: false,
+        error: { code: 'FORBIDDEN', message: '无权查看该项目通知治理诊断' },
+        timestamp: new Date().toISOString(),
+      })
+    }
+  } else if (!effectiveCompanyId || !membership) {
+    return res.status(403).json({
+      success: false,
+      error: { code: 'FORBIDDEN', message: '无可用公司上下文' },
+      timestamp: new Date().toISOString(),
+    })
+  }
+
+  const limit = Math.min(Math.max(parseInt(String(req.query.limit ?? '5000'), 10), 1), 10000)
+  const analytics = await getNotificationAnalytics({
+    companyId: projectId ? null : effectiveCompanyId,
+    projectId,
+    since: String(req.query.since ?? '').trim() || null,
+    until: String(req.query.until ?? '').trim() || null,
+    limit,
+  })
+
+  res.json({
+    success: true,
+    data: {
+      analytics,
+      producerAudit: getNotificationProducerAudit(process.cwd()),
+      reconciliationCoverage: getNotificationReconciliationCoverageMatrix(),
+      deliveryGovernance: getNotificationDeliveryGovernanceDiagnostics(),
+    },
+    timestamp: new Date().toISOString(),
+  } satisfies ApiResponse)
+}))
+
+/**
  * 标记单个通知已读
  * PUT /api/notifications/:id/read
  */
@@ -534,7 +1096,10 @@ router.put('/:id/read', validate(notificationIdParamSchema, 'params'), asyncHand
 
   logger.info('Marking notification as read', { id })
 
-  await updateNotificationById(id, { status: 'read', is_read: true })
+  const notification = await loadNotificationForPersonalAction(req, res, id)
+  if (!notification) return
+
+  await markNotificationPersonalRead(notification, req.user!.id)
 
   const response: ApiResponse<{ message: string }> = {
     success: true,
@@ -554,16 +1119,10 @@ router.put('/:id/acknowledge', validate(notificationIdParamSchema, 'params'), as
 
   logger.info('Acknowledging notification', { id })
 
-  const notification = await findNotification({ id })
-  if (notification?.source_entity_type === 'warning') {
-    await acknowledgeWarningNotification(id, req.user?.id ?? null)
-  } else {
-    await updateNotificationById(id, {
-      status: 'acknowledged',
-      is_read: true,
-      acknowledged_at: new Date().toISOString(),
-    })
-  }
+  const notification = await loadNotificationForPersonalAction(req, res, id)
+  if (!notification) return
+
+  await acknowledgeNotificationPersonally(notification, req.user!.id)
 
   const response: ApiResponse<{ message: string }> = {
     success: true,
@@ -615,23 +1174,28 @@ router.put('/acknowledge-group', validate(acknowledgeGroupBodySchema), asyncHand
     },
     async () => {
       const notifications = await listNotifications({ ids })
-      const warningIds = notifications
-        .filter((item) => item.source_entity_type === 'warning')
-        .map((item) => item.id)
-      const regularIds = notifications
-        .filter((item) => item.source_entity_type !== 'warning')
-        .map((item) => item.id)
+      const foundIds = new Set(notifications.map((item) => item.id))
+      const missingIds = ids.filter((id) => !foundIds.has(id))
+      if (missingIds.length > 0) {
+        const error = new Error(`通知不存在: ${missingIds.join(', ')}`)
+        ;(error as Error & { statusCode?: number; code?: string }).statusCode = 404
+        ;(error as Error & { statusCode?: number; code?: string }).code = 'NOT_FOUND'
+        throw error
+      }
 
-      await Promise.all([
-        ...warningIds.map((id) => acknowledgeWarningNotification(id, req.user?.id ?? null)),
-        regularIds.length > 0
-          ? updateNotificationsByIds(regularIds, {
-            status: 'acknowledged',
-            is_read: true,
-            acknowledged_at: new Date().toISOString(),
-          })
-          : Promise.resolve(),
-      ])
+      for (const notification of notifications) {
+        if (!await canHandleNotification(req, notification)) {
+          const error = new Error('当前账号不能处理该通知')
+          ;(error as Error & { statusCode?: number; code?: string }).statusCode = 403
+          ;(error as Error & { statusCode?: number; code?: string }).code = 'FORBIDDEN'
+          throw error
+        }
+      }
+
+      const timestamp = new Date().toISOString()
+      await Promise.all(
+        notifications.map((notification) => acknowledgeNotificationPersonally(notification, req.user!.id, timestamp)),
+      )
     },
   )
 
@@ -667,27 +1231,14 @@ router.put('/:id/mute', validate(notificationIdParamSchema, 'params'), validate(
 
   logger.info('Muting notification', { id, mutedUntil, muteHours })
 
-  const currentNotification = await findNotification({ id })
-  if (currentNotification?.source_entity_type === 'warning') {
-    await muteWarningNotification(id, muteHours, req.user?.id ?? null)
-  } else {
-    const currentMetadata =
-      currentNotification && typeof currentNotification.metadata === 'object' && currentNotification.metadata !== null
-        ? currentNotification.metadata
-        : {}
+  const currentNotification = await loadNotificationForPersonalAction(req, res, id)
+  if (!currentNotification) return
 
-    await updateNotificationById(id, {
-      status: 'muted',
-      is_read: false,
-      muted_until: mutedUntil,
-      metadata: {
-        ...currentMetadata,
-        muted_until: mutedUntil,
-        muted_hours: muteHours,
-        mute_duration: muteMeta.label,
-      },
-    })
-  }
+  await muteNotificationPersonally(currentNotification, req.user!.id, {
+    mutedUntil,
+    muteHours,
+    muteDuration: muteMeta.label,
+  })
 
   const response: ApiResponse<{ message: string }> = {
     success: true,
@@ -704,20 +1255,25 @@ router.put('/:id/mute', validate(notificationIdParamSchema, 'params'), validate(
  */
 router.put('/read-all', validate(notificationsQuerySchema, 'query'), asyncHandler(async (req, res) => {
   const projectId = String(req.query.projectId ?? req.query.project_id ?? '').trim() || undefined
-  const userId = String(req.query.userId ?? req.query.user_id ?? '').trim() || undefined
+  const userId = req.user?.id
 
   logger.info('Marking all notifications as read', { projectId, userId })
 
-  const notifications = await listPersistedNotificationsForScope(projectId)
-  const targetIds = notifications
-    .filter((item) => !projectId || item.project_id === projectId)
-    .filter((item) => matchesNotificationRecipient(item, userId))
-    .filter((item) => isUnreadCountCandidate(item))
-    .map((item) => item.id)
-
-  if (targetIds.length > 0) {
-    await updateNotificationsByIds(targetIds, { status: 'read', is_read: true })
+  const notifications = await listPersistedNotificationsForScope(req, projectId)
+  const userStates = userId
+    ? await fetchUserNotificationStates(userId, notifications.map((item) => item.id))
+    : new Map<string, PersonalNotificationState>()
+  const notificationsWithState = applyPersonalStatesToNotifications(notifications, userId, userStates)
+  const targetNotifications = []
+  for (const item of notificationsWithState) {
+    if (projectId && item.project_id !== projectId) continue
+    if (!isUnreadCountCandidate(item)) continue
+    if (!await canHandleNotification(req, item)) continue
+    targetNotifications.push(item)
   }
+
+  const timestamp = new Date().toISOString()
+  await Promise.all(targetNotifications.map((item) => markNotificationPersonalRead(item, userId!, timestamp)))
 
   const response: ApiResponse<{ message: string }> = {
     success: true,
@@ -733,6 +1289,16 @@ router.put('/read-all', validate(notificationsQuerySchema, 'query'), asyncHandle
  * POST /api/notifications
  */
 router.post('/', validate(notificationCreateBodySchema), asyncHandler(async (req, res) => {
+  // v1.4.12: notification creation is internal-only (service token / job / governance service)
+  // Normal frontend users should not create notifications directly
+  if (!isInternalNotificationMutation(req)) {
+    return res.status(403).json({
+      success: false,
+      error: { code: 'FORBIDDEN', message: '通知创建仅限内部服务调用' },
+      timestamp: new Date().toISOString(),
+    })
+  }
+
   const notificationData = req.body
 
   logger.info('Creating notification', notificationData)
@@ -742,6 +1308,8 @@ router.post('/', validate(notificationCreateBodySchema), asyncHandler(async (req
     is_read: notificationData.is_read ?? false,
     is_broadcast: notificationData.is_broadcast ?? false,
   })
+  clearNotificationFastCaches()
+  clearAttentionSummaryCache()
 
   const response: ApiResponse<Notification> = {
     success: true,
@@ -761,15 +1329,97 @@ router.delete('/:id', validate(notificationIdParamSchema, 'params'), asyncHandle
 
   logger.info('Deleting notification', { id })
 
-  await deleteNotificationById(id)
+  if (!isInternalNotificationMutation(req)) {
+    return res.status(403).json({
+      success: false,
+      error: { code: 'FORBIDDEN', message: '通知删除仅限内部治理服务处理' },
+      timestamp: new Date().toISOString(),
+    })
+  }
+
+  // v1.4.12: upgrade chain protection — cannot physically delete escalated/chain-linked warnings
+  const notification = await findNotification({ id })
+  if (notification?.source_entity_type === 'warning') {
+    if (notification.is_escalated || notification.escalated_to_risk_id) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'UPGRADE_CHAIN_PROTECTED',
+          message: '该预警已进入升级链，请改为关闭',
+        },
+        timestamp: new Date().toISOString(),
+      })
+    }
+  }
+
+  // v1.4.15: notifications are hidden/resolved, not physically deleted by
+  // ordinary lifecycle handling.
+  const { enforceRetentionOrBlock, buildRetentionBlockedApiError, buildRetentionBlockedHttpStatus } = await import('../services/deletionRetentionGovernanceService.js')
+  const retention = await enforceRetentionOrBlock({
+    entityType: 'notification',
+    entityId: id,
+    projectId: notification?.project_id ?? null,
+    userId: req.user?.id ?? null,
+    userAction: 'hide',
+  })
+  if (retention.blocked) {
+    return res.status(buildRetentionBlockedHttpStatus(retention.result)).json({
+      success: false,
+      error: buildRetentionBlockedApiError(retention.reason, retention.result),
+      timestamp: new Date().toISOString(),
+    })
+  }
+
+  await updateNotificationById(id, {
+    status: 'hidden',
+    resolved_at: new Date().toISOString(),
+    resolved_source: 'user_hide',
+    updated_at: new Date().toISOString(),
+  } as Partial<Notification>, notification as Notification)
+  clearNotificationFastCaches()
+  clearAttentionSummaryCache()
 
   const response: ApiResponse<{ message: string }> = {
     success: true,
-    data: { message: '通知已删除' },
+    data: { message: '通知已隐藏' },
     timestamp: new Date().toISOString(),
   }
 
   res.json(response)
 }))
+
+// ============================================================
+// v1.4.13: Unified attention summary for Header, Sidebar, Dashboard
+// GET /api/notifications/attention-summary?projectId=&companyId=
+// ============================================================
+router.get(
+  '/attention-summary',
+  asyncHandler(async (req, res) => {
+    const projectId = String(req.query.projectId ?? req.query.project_id ?? '').trim() || null
+    const userId = req.user?.id ?? null
+
+    if (projectId && userId && !await canAccessProject(userId, projectId, getRequestCompanyId(req))) {
+      return res.status(403).json({
+        success: false,
+        error: { code: 'FORBIDDEN', message: '当前账号不能查看该项目提醒摘要' },
+        timestamp: new Date().toISOString(),
+      })
+    }
+
+    const membership = !projectId && userId
+      ? await getCurrentCompanyMembership(userId, getRequestCompanyId(req))
+      : null
+    const companyId = projectId ? null : membership?.companyId ?? null
+
+    const { buildAttentionSummary } = await import('../services/todoTouchpointService.js')
+    const summary = await buildAttentionSummary(projectId, companyId, userId)
+
+    res.json({
+      success: true,
+      data: summary,
+      timestamp: new Date().toISOString(),
+    })
+  }),
+)
 
 export default router

@@ -1,6 +1,8 @@
 ﻿import type { ReactNode } from 'react'
 
 import { act } from 'react'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { createRoot, type Root } from 'react-dom/client'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -53,6 +55,23 @@ let consoleErrorSpy: ReturnType<typeof vi.spyOn> | null = null
 
 function flush() {
   return new Promise((resolve) => setTimeout(resolve, 0))
+}
+
+function readRiskManagementSource() {
+  const candidates = [
+    join(process.cwd(), 'src/pages/RiskManagement.tsx'),
+    join(process.cwd(), 'client/src/pages/RiskManagement.tsx'),
+  ]
+
+  for (const candidate of candidates) {
+    try {
+      return readFileSync(candidate, 'utf8')
+    } catch {
+      // Try the next workspace root.
+    }
+  }
+
+  throw new Error(`Unable to locate RiskManagement.tsx in: ${candidates.join(', ')}`)
 }
 
 async function waitForCondition(condition: () => boolean, container?: HTMLElement) {
@@ -282,7 +301,6 @@ describe('RiskManagement', () => {
       if (url.includes('/api/issues')) return issuesData as never
       if (url.includes('/api/risks')) return risksData as never
       if (url.includes('/api/task-obstacles')) return obstaclesData as never
-      if (url.includes('/api/change-logs')) return [] as never
       throw new Error(`Unexpected url: ${url}`)
     })
 
@@ -319,6 +337,29 @@ describe('RiskManagement', () => {
     container.remove()
     consoleErrorSpy?.mockRestore()
     consoleErrorSpy = null
+  })
+
+  it('keeps retention confirmation as a second explicit step for risk and issue deletes', () => {
+    const source = readRiskManagementSource()
+
+    expect(source).toContain("from '@/lib/retentionError'")
+    expect(source).toContain('parseRetentionApiError')
+    expect(source).toContain('buildRetentionDecisionDialogModel')
+    expect(source).toContain('getRetentionDecisionTokenFromError')
+    expect(source).toContain('isRetentionConfirmationError')
+    expect(source).toContain("apiPost('/api/deletion-retention/confirm'")
+    expect(source).toContain('retentionDecisionToken')
+    expect(source).toContain('retentionDialogModel.confirmLabel')
+  })
+
+  it('keeps governance and audit data out of the ordinary risk workspace', () => {
+    const source = readRiskManagementSource()
+
+    expect(source).not.toContain('/api/change-logs')
+    expect(source).not.toContain('DataQualityApiService')
+    expect(source).not.toContain('DataConfidenceBreakdown')
+    expect(source).not.toContain('showDataQualityBanner')
+    expect(source).not.toContain('linkedChangeLogs')
   })
 
   it('renders the consolidated workspace without restoring the removed overview columns', async () => {
@@ -763,7 +804,6 @@ describe('RiskManagement', () => {
       if (url.includes('/api/risks')) return risksData as never
       if (url.includes('/api/warnings')) return [] as never
       if (url.includes('/api/task-obstacles')) return [] as never
-      if (url.includes('/api/change-logs')) return [] as never
       throw new Error(`Unexpected url: ${url}`)
     })
 
@@ -943,7 +983,7 @@ describe('RiskManagement', () => {
         Boolean(document.body.querySelector('[data-testid="risk-detail-dialog"]')) &&
         document.body.textContent?.includes('记录详情') &&
         document.body.textContent?.includes('塔楼结构进度风险') &&
-        document.body.textContent?.includes('chain-summary-1'),
+        document.body.textContent?.includes('查看关联过程'),
       document.body,
     )
   })

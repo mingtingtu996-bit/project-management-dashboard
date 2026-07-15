@@ -1,6 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Download, FileBadge2, Plus, RefreshCw, Search, Upload } from 'lucide-react'
+import {
+  ArrowLeft,
+  Building2,
+  CheckCircle2,
+  Download,
+  FileBadge2,
+  Layers3,
+  ListChecks,
+  PackagePlus,
+  Plus,
+  RefreshCw,
+  Search,
+  ShieldCheck,
+  Upload,
+} from 'lucide-react'
 
 import { Breadcrumb } from '@/components/Breadcrumb'
 import { ConfirmActionDialog } from '@/components/ConfirmActionDialog'
@@ -55,10 +69,12 @@ import type {
   DrawingLedgerRow,
   DrawingPackageCard,
   DrawingPackageDetailView,
+  DrawingPackageTemplatePreview,
   DrawingSignalView,
   DrawingsBoardResponse,
   DrawingsLedgerResponse,
   DrawingVersionView,
+  ApplyDrawingPackageTemplateResult,
   ReviewMode,
 } from './types'
 
@@ -244,6 +260,59 @@ function getFocusViewLabel(mode: DrawingFocusViewMode) {
   return '概览'
 }
 
+function getTemplateBusinessSourceLabel(source: DrawingPackageTemplatePreview['businessProfile']['source']) {
+  if (source === 'project_generation_facts') return '项目画像'
+  if (source === 'project_metadata') return '项目元数据'
+  if (source === 'project_field') return '项目字段'
+  return '通用默认'
+}
+
+function getTemplateActionLabel(action: 'will_create' | 'will_skip_existing') {
+  return action === 'will_create' ? '将创建' : '已存在'
+}
+
+function getTemplateScopeLabel(scope: DrawingPackageTemplatePreview['packages'][number]['scopeLevel'] | null | undefined) {
+  if (scope === 'project') return '项目级'
+  if (scope === 'building') return '单体级'
+  if (scope === 'specialty') return '专项级'
+  return '包级'
+}
+
+function getTemplateRoleLabel(role: DrawingPackageTemplatePreview['packages'][number]['deliverableRole'] | null | undefined) {
+  if (role === 'site_and_building_execution_base') return '施工执行底图'
+  if (role === 'statutory_review_package') return '法定审查包'
+  if (role === 'specialty_execution_package') return '专项执行包'
+  if (role === 'completion_archive_package') return '竣工归档包'
+  return '包级成果'
+}
+
+function getTemplateStageLabel(stage: string | null | undefined) {
+  const labels: Record<string, string> = {
+    completion_handover_archive: '竣工移交归档',
+    design_review_and_preconstruction_clearance: '设计审查 / 开工前置',
+    foundation_and_structure_execution: '基础与主体施工',
+    mep_installation_and_commissioning: '机电安装与调试',
+    site_interface_and_external_works: '场地接口与室外工程',
+    construction_execution: '施工执行',
+  }
+  if (!stage) return '施工执行 / 交付准备'
+  return labels[stage] ?? stage
+}
+
+function getTemplateAcceptancePurposeLabel(purpose: string | null | undefined) {
+  const labels: Record<string, string> = {
+    as_built_archive_and_delivery_handover: '竣工归档与交付移交',
+    statutory_specialty_acceptance_basis: '专项验收依据',
+    fire_acceptance_basis: '消防验收依据',
+    civil_defense_acceptance_basis: '人防验收依据',
+    environmental_acceptance_basis: '环保验收依据',
+    energy_saving_and_green_building_check_basis: '节能 / 绿建检查依据',
+    construction_quality_and_completion_acceptance_basis: '质量与竣工验收依据',
+  }
+  if (!purpose) return '施工图纸交付依据'
+  return labels[purpose] ?? purpose
+}
+
 const focusViewOptions: Array<{ value: DrawingFocusViewMode; label: string; description: string }> = [
   { value: 'overview', label: '概览', description: '查看全部图纸包和台账记录。' },
   { value: 'missing', label: '缺漏视图', description: '优先处理应有项未补齐的图纸包。' },
@@ -327,6 +396,25 @@ export default function Drawings() {
   const [creatingPackage, setCreatingPackage] = useState(false)
   const [createForm, setCreateForm] = useState<CreatePackageFormState>(emptyCreateForm)
   const [createFormErrors, setCreateFormErrors] = useState<CreatePackageFormErrors>({})
+  const [templateDialogOpen, setTemplateDialogOpen] = useState(false)
+  const [templatePreview, setTemplatePreview] = useState<DrawingPackageTemplatePreview | null>(null)
+  const [templateLoading, setTemplateLoading] = useState(false)
+  const [templateApplying, setTemplateApplying] = useState(false)
+  const [templateError, setTemplateError] = useState<string | null>(null)
+  const [selectedTemplatePackageCodes, setSelectedTemplatePackageCodes] = useState<string[]>([])
+  const selectableTemplatePackages = useMemo(
+    () => templatePreview?.packages.filter((pkg) => pkg.action === 'will_create') ?? [],
+    [templatePreview],
+  )
+  const selectedTemplatePackages = useMemo(
+    () => selectableTemplatePackages.filter((pkg) => selectedTemplatePackageCodes.includes(pkg.packageCode)),
+    [selectableTemplatePackages, selectedTemplatePackageCodes],
+  )
+  // eslint-disable-next-line -- frontend-bi-aggregation-approved
+  const selectedTemplateItemCount = useMemo(
+    () => selectedTemplatePackages.reduce((total, pkg) => total + pkg.items.filter((item) => item.isRequired).length, 0),
+    [selectedTemplatePackages],
+  )
   const [focusView, setFocusView] = useState<DrawingFocusViewMode>(savedFilters.focusView ?? 'overview')
   const [reviewRulesDialogOpen, setReviewRulesDialogOpen] = useState(false)
   const [reviewRulesLoading, setReviewRulesLoading] = useState(false)
@@ -485,8 +573,93 @@ export default function Drawings() {
   )
 
   const refreshAll = useCallback(async () => {
-    await Promise.all([loadBoard(), loadLedger()])
+    await loadBoard()
+    await loadLedger()
   }, [loadBoard, loadLedger])
+
+  const loadTemplatePreview = useCallback(async () => {
+    if (!id) return
+
+    setTemplateLoading(true)
+    setTemplateError(null)
+    try {
+      const result = await apiGet<DrawingPackageTemplatePreview | ApiFailureEnvelope>(
+        `${API_BASE}/api/projects/${id}/drawing-package-templates/system/preview`,
+        { cache: 'no-store' },
+      )
+
+      if (isFailureEnvelope(result)) {
+        const failureMessage = getFailureMessage(result, '系统模板预览加载失败。')
+        setTemplateError(failureMessage)
+        setTemplatePreview(null)
+        return
+      }
+
+      setTemplatePreview(result)
+      setSelectedTemplatePackageCodes(
+        result.packages.filter((pkg) => pkg.action === 'will_create').map((pkg) => pkg.packageCode),
+      )
+    } catch (error) {
+      if (!isAbortError(error)) {
+        const failureMessage = getApiErrorMessage(error, '系统模板预览加载失败，请稍后重试。')
+        setTemplateError(failureMessage)
+        setTemplatePreview(null)
+        toast({ title: '模板加载失败', description: failureMessage, variant: 'destructive' })
+      }
+    } finally {
+      setTemplateLoading(false)
+    }
+  }, [id, toast])
+
+  const openTemplateDialog = useCallback(() => {
+    setTemplateDialogOpen(true)
+    void loadTemplatePreview()
+  }, [loadTemplatePreview])
+
+  const toggleTemplatePackage = useCallback((packageCode: string, checked: boolean) => {
+    setSelectedTemplatePackageCodes((current) => {
+      if (checked) return Array.from(new Set([...current, packageCode]))
+      return current.filter((code) => code !== packageCode)
+    })
+  }, [])
+
+  const handleApplyTemplate = useCallback(async () => {
+    if (!id || !templatePreview) return
+
+    setTemplateApplying(true)
+    setTemplateError(null)
+    try {
+      const result = await apiPost<ApplyDrawingPackageTemplateResult | ApiFailureEnvelope>(
+        `${API_BASE}/api/projects/${id}/drawing-package-templates/system/apply`,
+        {
+          templateCode: templatePreview.templateCode,
+          seedVersion: templatePreview.seedVersion,
+          selectedPackageCodes: selectedTemplatePackageCodes,
+          duplicatePolicy: 'skip_existing',
+        },
+      )
+
+      if (isFailureEnvelope(result)) {
+        const failureMessage = getFailureMessage(result, '系统模板应用失败。')
+        setTemplateError(failureMessage)
+        toast({ title: '模板应用失败', description: failureMessage, variant: 'destructive' })
+        return
+      }
+
+      toast({
+        title: '系统模板已应用',
+        description: `已生成 ${result.createdPackageIds.length} 个图纸包、${result.createdItemIds.length} 个目录项。`,
+      })
+      setTemplateDialogOpen(false)
+      await refreshAll()
+    } catch (error) {
+      const failureMessage = getApiErrorMessage(error, '系统模板应用失败，请稍后重试。')
+      setTemplateError(failureMessage)
+      toast({ title: '模板应用失败', description: failureMessage, variant: 'destructive' })
+    } finally {
+      setTemplateApplying(false)
+    }
+  }, [id, refreshAll, selectedTemplatePackageCodes, templatePreview, toast])
 
   const loadReviewRules = useCallback(async () => {
     if (!id) return
@@ -726,14 +899,18 @@ export default function Drawings() {
   const packageGroups = useMemo(() => groupPackagesByDiscipline(focusedPackages), [focusedPackages])
   const readinessMetrics = useMemo<DrawingReadinessMetrics>(() => {
     const packageRows = board?.packages ?? []
+    // eslint-disable-next-line -- frontend-bi-aggregation-approved
     const drawingTotalFallback = packageRows.reduce((total, pkg) => total + (pkg.drawingsCount || 0), 0)
     const totalDrawings = ledgerRows.length || drawingTotalFallback || summary.totalPackages
+    // eslint-disable-next-line -- frontend-bi-aggregation-approved
     const approvedDrawings = ledgerRows.length
       ? ledgerRows.filter(isApprovedDrawing).length
       : packageRows.filter((pkg) => pkg.isReadyForConstruction || pkg.isReadyForAcceptance).length
+    // eslint-disable-next-line -- frontend-bi-aggregation-approved
     const pendingReviewDrawings = ledgerRows.length
       ? ledgerRows.filter((row) => row.requiresReview && !isApprovedDrawing(row)).length
       : summary.reviewingPackages
+    // eslint-disable-next-line -- frontend-bi-aggregation-approved
     const overdueDrawings = ledgerRows.length
       ? ledgerRows.filter(isOverdueDrawing).length
       : summary.scheduleImpactCount
@@ -782,6 +959,7 @@ export default function Drawings() {
 
   const boardTitle = getFocusViewLabel(focusView)
   const boardSubtitle = ''
+  const activeFocusViewOption = focusViewOptions.find((option) => option.value === focusView) ?? focusViewOptions[0]
 
   const handleExportLedger = useCallback(() => {
     const header = ['图纸名称', '图纸编号', '专业', '版本', '状态', '审批人', '日期']
@@ -1246,6 +1424,12 @@ export default function Drawings() {
           返回前期证照
         </Button>
         <DisabledReasonTooltip reason={!canEdit ? READ_ONLY_ACTION_REASON : null}>
+          <Button variant="outline" size="sm" onClick={openTemplateDialog} disabled={!canEdit}>
+            <Layers3 className="mr-2 h-4 w-4" />
+            系统模板
+          </Button>
+        </DisabledReasonTooltip>
+        <DisabledReasonTooltip reason={!canEdit ? READ_ONLY_ACTION_REASON : null}>
           <Button variant="outline" size="sm" onClick={() => setCreateDialogOpen(true)} disabled={!canEdit}>
             <Plus className="mr-2 h-4 w-4" />
             新建图纸包
@@ -1365,19 +1549,17 @@ export default function Drawings() {
                   </Label>
                   <Select value={focusView} onValueChange={(value) => setFocusView(value as DrawingFocusViewMode)}>
                     <SelectTrigger id="focus-view-filter" data-testid="drawing-focus-select">
-                      <SelectValue placeholder="选择视图" />
+                      <span className="truncate">{activeFocusViewOption.label}</span>
                     </SelectTrigger>
                     <SelectContent align="start" side="bottom" className="w-72">
                       {focusViewOptions.map((option) => (
                         <SelectItem key={option.value} value={option.value} textValue={option.label} className="py-2">
-                          <span className="flex flex-col items-start gap-0.5">
-                            <span>{option.label}</span>
-                            <span className="text-xs text-slate-500">{option.description}</span>
-                          </span>
+                          {option.label}
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
+                  <p className="text-xs leading-5 text-slate-500">{activeFocusViewOption.description}</p>
                 </div>
 
                 <div className="space-y-2 lg:col-span-5">
@@ -1745,6 +1927,230 @@ export default function Drawings() {
               </CardContent>
             </Card>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={templateDialogOpen}
+        onOpenChange={(open) => {
+          setTemplateDialogOpen(open)
+          if (!open) {
+            setTemplateError(null)
+          }
+        }}
+      >
+        <DialogContent className="max-h-[90vh] max-w-[min(78rem,calc(100vw-2rem))] overflow-hidden border-slate-200">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-slate-900">
+              <PackagePlus className="h-5 w-5 text-blue-600" />
+              系统施工图纸包模板
+            </DialogTitle>
+            <DialogDescription className="text-slate-500">
+              按项目业态生成图纸包工作台；正式图纸版本、审查状态、缺图判断和任务联动仍在施工图纸主页面维护。
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="min-h-0 space-y-4 overflow-y-auto pr-1">
+            {templateLoading ? (
+              <div className="space-y-3">
+                <Skeleton className="h-20 w-full rounded-xl" />
+                <Skeleton className="h-64 w-full rounded-xl" />
+              </div>
+            ) : templatePreview ? (
+              <>
+                <div className="grid gap-3 md:grid-cols-4">
+                  <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+                    <div className="flex items-center gap-2 text-xs font-medium text-slate-500">
+                      <Building2 className="h-4 w-4 text-blue-600" />
+                      识别业态
+                    </div>
+                    <p className="mt-2 text-sm font-semibold text-slate-900">{templatePreview.businessProfile.businessTypeName}</p>
+                    <p className="mt-1 text-xs text-slate-500">{getTemplateBusinessSourceLabel(templatePreview.businessProfile.source)}</p>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+                    <div className="flex items-center gap-2 text-xs font-medium text-slate-500">
+                      <Layers3 className="h-4 w-4 text-blue-600" />
+                      本次应用
+                    </div>
+                    <p className="mt-2 text-2xl font-semibold tabular-nums text-slate-900">{selectedTemplatePackageCodes.length}</p>
+                    <p className="mt-1 text-xs text-slate-500">可创建 {templatePreview.summary.packageCreateCount} 个，已存在 {templatePreview.summary.packageSkipExistingCount} 个</p>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+                    <div className="flex items-center gap-2 text-xs font-medium text-slate-500">
+                      <ListChecks className="h-4 w-4 text-blue-600" />
+                      包内目录项
+                    </div>
+                    <p className="mt-2 text-2xl font-semibold tabular-nums text-slate-900">{selectedTemplateItemCount}</p>
+                    <p className="mt-1 text-xs text-slate-500">只生成目录项，不生成单张图纸版本</p>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+                    <div className="flex items-center gap-2 text-xs font-medium text-slate-500">
+                      <ShieldCheck className="h-4 w-4 text-blue-600" />
+                      应用边界
+                    </div>
+                    <p className="mt-1 text-sm font-semibold text-slate-900">{templatePreview.seedVersion}</p>
+                    <p className="mt-1 text-xs text-slate-500">跳过已有包，保留主页面状态</p>
+                  </div>
+                </div>
+
+                <Alert className="border-blue-200 bg-blue-50 text-blue-900">
+                  <CheckCircle2 className="h-4 w-4" />
+                  <AlertDescription>
+                    模板只创建缺失图纸包；不会覆盖已有图纸包、不会写入单张图纸、不会改变图纸版本或审查状态。
+                  </AlertDescription>
+                </Alert>
+
+                <div className="grid min-h-0 gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(22rem,0.85fr)]">
+                  <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3">
+                      <div>
+                        <p className="text-sm font-semibold text-slate-900">图纸包生成范围</p>
+                        <p className="mt-1 text-xs text-slate-500">选择要写入施工图纸主页面的包级资产。</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setSelectedTemplatePackageCodes(selectableTemplatePackages.map((pkg) => pkg.packageCode))}
+                          disabled={templateApplying || selectableTemplatePackages.length === 0}
+                        >
+                          全选可创建
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setSelectedTemplatePackageCodes([])}
+                          disabled={templateApplying || selectedTemplatePackageCodes.length === 0}
+                        >
+                          清空
+                        </Button>
+                      </div>
+                    </div>
+                    <div className="max-h-[28rem] divide-y divide-slate-200 overflow-y-auto">
+                      {templatePreview.packages.map((pkg) => {
+                        const canSelect = pkg.action === 'will_create'
+                        const checked = selectedTemplatePackageCodes.includes(pkg.packageCode)
+                        return (
+                          <label
+                            key={pkg.packageCode}
+                            className={cn(
+                              'grid cursor-pointer grid-cols-[2rem_minmax(0,1fr)] gap-3 px-4 py-4 text-sm transition-colors',
+                              canSelect ? 'bg-white hover:bg-blue-50/50' : 'cursor-default bg-slate-50 text-slate-500',
+                            )}
+                          >
+                            <Checkbox
+                              checked={checked}
+                              disabled={!canSelect}
+                              onCheckedChange={(checkedValue) => toggleTemplatePackage(pkg.packageCode, checkedValue === true)}
+                              aria-label={`选择${pkg.packageName}`}
+                              className="mt-1"
+                            />
+                            <div className="min-w-0 space-y-2">
+                              <div className="flex flex-wrap items-start justify-between gap-2">
+                                <div className="min-w-0">
+                                  <p className={cn('font-semibold', canSelect ? 'text-slate-900' : 'text-slate-500')}>{pkg.packageName}</p>
+                                  <p className="mt-1 text-xs leading-5 text-slate-500">{pkg.reviewBasis}</p>
+                                </div>
+                                <Badge variant={canSelect ? 'default' : 'secondary'} className="shrink-0">
+                                  {getTemplateActionLabel(pkg.action)}
+                                </Badge>
+                              </div>
+                              <div className="flex flex-wrap gap-2 text-xs">
+                                <Badge variant="outline">{getTemplateRoleLabel(pkg.deliverableRole)}</Badge>
+                                <Badge variant="outline">{getTemplateScopeLabel(pkg.scopeLevel)}</Badge>
+                                <Badge variant="outline">{DRAWING_REVIEW_MODE_LABELS[pkg.reviewMode as ReviewMode] ?? pkg.reviewMode}</Badge>
+                                <span className="rounded-lg bg-slate-100 px-2 py-1 text-slate-600">{pkg.disciplineType}</span>
+                                <span className="rounded-lg bg-slate-100 px-2 py-1 text-slate-600">{pkg.items.length} 项目录</span>
+                              </div>
+                              <div className="grid gap-2 text-xs text-slate-600 md:grid-cols-2">
+                                <span>施工阶段：{getTemplateStageLabel(pkg.linkedConstructionStage)}</span>
+                                <span>交付用途：{getTemplateAcceptancePurposeLabel(pkg.linkedAcceptancePurpose)}</span>
+                              </div>
+                            </div>
+                          </label>
+                        )
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+                    <div className="border-b border-slate-200 bg-slate-50 px-4 py-3">
+                      <p className="text-sm font-semibold text-slate-900">模板应用明细</p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        已选 {selectedTemplatePackages.length} 个图纸包，{selectedTemplateItemCount} 个目录项。
+                      </p>
+                    </div>
+                    <div className="max-h-[28rem] space-y-3 overflow-y-auto p-4">
+                      {selectedTemplatePackages.length === 0 ? (
+                        <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+                          选择左侧图纸包后，这里会展示将写入的包内目录项。
+                        </div>
+                      ) : (
+                        selectedTemplatePackages.map((pkg) => (
+                          <div key={pkg.packageCode} className="rounded-xl border border-slate-200 bg-white p-3">
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="font-medium text-slate-900">{pkg.packageName}</p>
+                                <p className="mt-1 text-xs text-slate-500">
+                                  {getTemplateStageLabel(pkg.linkedConstructionStage)} · {getTemplateAcceptancePurposeLabel(pkg.linkedAcceptancePurpose)}
+                                </p>
+                              </div>
+                              <Badge variant="outline" className="shrink-0">{pkg.items.length} 项</Badge>
+                            </div>
+                            <div className="mt-3 space-y-2">
+                              {pkg.items.slice(0, 5).map((item) => (
+                                <div key={item.itemCode} className="flex items-start gap-2 text-xs text-slate-600">
+                                  <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-blue-600" />
+                                  <span>{item.itemName}</span>
+                                </div>
+                              ))}
+                              {pkg.items.length > 5 ? (
+                                <p className="pl-5 text-xs text-slate-500">另有 {pkg.items.length - 5} 项目录将在应用后写入。</p>
+                              ) : null}
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-6 text-sm text-slate-600">
+                暂无可展示的系统模板预览。
+              </div>
+            )}
+
+            {templateError ? (
+              <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                {templateError}
+              </p>
+            ) : null}
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setTemplateDialogOpen(false)} disabled={templateApplying}>
+              取消
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => void loadTemplatePreview()}
+              disabled={templateLoading || templateApplying}
+            >
+              <RefreshCw className="mr-2 h-4 w-4" />
+              重新预览
+            </Button>
+            <Button
+              onClick={() => void handleApplyTemplate()}
+              loading={templateApplying}
+              disabled={!canEdit || templateLoading || selectedTemplatePackageCodes.length === 0}
+            >
+              <PackagePlus className="mr-2 h-4 w-4" />
+              应用 {selectedTemplatePackageCodes.length} 个图纸包
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+
 import { describe, expect, it } from 'vitest'
 
 import {
@@ -7,6 +10,12 @@ import {
   executeAlgorithmAssetLearnableParameterRuntimeRollback,
   persistAlgorithmAssetLearnableParameterRuntimePublication,
 } from '../services/algorithmAssetLearnableParameterReleaseExecutionService.js'
+
+function migrationPath(fileName: string) {
+  const cwd = process.cwd().replace(/\\/g, '/')
+  const repoRoot = cwd.endsWith('/server') ? resolve(process.cwd(), '..') : process.cwd()
+  return resolve(repoRoot, 'server/migrations', fileName)
+}
 
 function createRecordingQueryExec() {
   const calls: Array<{ sql: string, params: unknown[] }> = []
@@ -96,6 +105,68 @@ describe('algorithmAssetLearnableParameterReleaseExecutionService', () => {
     expect(sql).not.toContain('algorithm_seed_versions')
     expect(sql).not.toContain('algorithm_seed_overrides')
     expect(sql).not.toContain('standard_work_duration')
+  })
+
+  it('supersedes prior active publications for the same scoped parameter before inserting the new one', async () => {
+    const { calls, queryExec } = createRecordingQueryExec()
+
+    const result = await persistAlgorithmAssetLearnableParameterRuntimePublication({
+      releaseExit: readyParameterRelease(),
+      queryExec,
+      executedAt: '2026-06-14T06:00:00.000Z',
+    })
+
+    expect(calls[0].sql.toLowerCase()).toContain('update public.algorithm_learnable_parameter_runtime_publications')
+    expect(calls[0].sql.toLowerCase()).toContain("publication_status = 'rolled_back'")
+    expect(calls[0].sql.toLowerCase()).toContain('parameter_key = $1')
+    expect(calls[0].sql.toLowerCase()).toContain('target_surface = $6')
+    expect(calls[0].params).toEqual([
+      'duration.benchmark_blend_weight',
+      result.runtimePublication?.ownerAlgorithm,
+      'company',
+      'company-a',
+      null,
+      'company_override',
+      '2026-06-14T06:00:00.000Z',
+      result.runtimePublication?.publicationKey,
+    ])
+  })
+
+  it('ships a database single-active key for scoped learnable parameter runtime publications', () => {
+    const migration = readFileSync(
+      migrationPath('221_v14231_learnable_parameter_runtime_active_key.sql'),
+      'utf8',
+    )
+
+    expect(migration).toMatch(/CREATE\s+UNIQUE\s+INDEX\s+IF\s+NOT\s+EXISTS\s+uq_algorithm_learnable_parameter_runtime_active_scope/i)
+    expect(migration).toContain('COALESCE(owner_algorithm')
+    expect(migration).toContain('COALESCE(company_id')
+    expect(migration).toContain('COALESCE(project_id')
+    expect(migration).toMatch(/WHERE\s+publication_status\s+IN\s*\(\s*'published'\s*,\s*'canary'\s*\)/i)
+  })
+
+  it('uses operation effect keys to make publication rows and release events retry-idempotent', async () => {
+    const { calls, queryExec } = createRecordingQueryExec()
+
+    await persistAlgorithmAssetLearnableParameterRuntimePublication({
+      releaseExit: readyParameterRelease(),
+      queryExec,
+      idempotencyKey: 'operation-1:runtime_publication:proposal-1:stable',
+    })
+
+    const publicationInsert = calls.find((call) => call.sql.includes('algorithm_learnable_parameter_runtime_publications ('))
+    const eventInsert = calls.find((call) => call.sql.includes('algorithm_learnable_parameter_release_events'))
+    expect(publicationInsert?.sql.toLowerCase()).toContain('on conflict (publication_key) do nothing')
+    expect(eventInsert?.sql.toLowerCase()).toContain('idempotency_key')
+    expect(eventInsert?.sql.toLowerCase()).toContain('on conflict (idempotency_key)')
+    expect(eventInsert?.params).toContain('operation-1:runtime_publication:proposal-1:stable:publication_event')
+
+    const migration = readFileSync(
+      migrationPath('282_v14231_learnable_parameter_release_event_idempotency.sql'),
+      'utf8',
+    )
+    expect(migration).toContain('ADD COLUMN IF NOT EXISTS idempotency_key')
+    expect(migration).toContain('uq_algorithm_learnable_parameter_release_event_idempotency')
   })
 
   it('blocks non-ready parameter handoff packages without writing runtime tables', async () => {

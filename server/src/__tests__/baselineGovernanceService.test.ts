@@ -13,11 +13,12 @@ const mocks = vi.hoisted(() => {
   const buildQuery = (table: string) => {
     let mode: 'select' | 'update' = 'select'
     let payload: any = null
-    const filters: Array<{ kind: 'eq' | 'in'; column: string; value: any }> = []
+    const filters: Array<{ kind: 'eq' | 'in' | 'neq'; column: string; value: any }> = []
 
     const matches = (row: Row) =>
       filters.every((filter) => {
         if (filter.kind === 'eq') return row[filter.column] === filter.value
+        if (filter.kind === 'neq') return row[filter.column] !== filter.value
         return Array.isArray(filter.value) ? filter.value.includes(row[filter.column]) : false
       })
 
@@ -30,6 +31,10 @@ const mocks = vi.hoisted(() => {
       },
       eq: (column: string, value: any) => {
         filters.push({ kind: 'eq', column, value })
+        return builder
+      },
+      neq: (column: string, value: any) => {
+        filters.push({ kind: 'neq', column, value })
         return builder
       },
       in: (column: string, value: any[]) => {
@@ -75,9 +80,25 @@ const mocks = vi.hoisted(() => {
       }
       return []
     }),
+    rawQuery: vi.fn(async (sql: string, params: any[] = []) => {
+      if (sql.includes('WITH critical_updates AS')) {
+        const [baselineId, projectId, ids, values, updatedAt] = params as [string, string, string[], boolean[], string]
+        const updatedRows: Row[] = []
+        tables.task_baseline_items = tables.task_baseline_items.map((row) => {
+          const index = ids.indexOf(String(row.id))
+          if (row.baseline_version_id !== baselineId || row.project_id !== projectId || index < 0) return row
+          const next = { ...row, is_baseline_critical: values[index], updated_at: updatedAt }
+          updatedRows.push(next)
+          return next
+        })
+        return { rows: updatedRows, rowCount: updatedRows.length }
+      }
+      return { rows: [], rowCount: 0 }
+    }),
     writeLog: vi.fn(async () => undefined),
     listActiveProjectIds: vi.fn(async () => ['project-1']),
     evaluateProjectBaselineValidity: vi.fn(),
+    getCriticalPathTaskIds: vi.fn(async () => new Set<string>()),
     getProjectCriticalPathSnapshot: vi.fn(async () => ({
       displayTaskIds: [],
       allTaskIds: [],
@@ -98,6 +119,10 @@ vi.mock('../services/dbService.js', () => ({
   executeSQL: mocks.executeSQL,
 }))
 
+vi.mock('../database.js', () => ({
+  query: mocks.rawQuery,
+}))
+
 vi.mock('../services/changeLogs.js', () => ({
   writeLog: mocks.writeLog,
 }))
@@ -110,12 +135,17 @@ vi.mock('../services/planningRevisionPoolService.js', () => ({
   evaluateProjectBaselineValidity: mocks.evaluateProjectBaselineValidity,
 }))
 
+vi.mock('../services/criticalPathHelpers.js', () => ({
+  getCriticalPathTaskIds: mocks.getCriticalPathTaskIds,
+}))
+
 vi.mock('../services/projectCriticalPathService.js', () => ({
   getProjectCriticalPathSnapshot: mocks.getProjectCriticalPathSnapshot,
 }))
 
 const {
   annotateBaselineCriticalItems,
+  markBaselinePendingRealign,
   resolveMonthlyPlanGenerationSource,
   scanProjectBaselineValidity,
   scanAllProjectBaselineValidity,
@@ -140,6 +170,7 @@ describe('baseline governance service', () => {
       state: 'valid',
       isValid: true,
     })
+    mocks.getCriticalPathTaskIds.mockResolvedValue(new Set<string>())
     mocks.getProjectCriticalPathSnapshot.mockResolvedValue({
       displayTaskIds: [],
       allTaskIds: [],
@@ -187,6 +218,45 @@ describe('baseline governance service', () => {
     })
   })
 
+  it('ignores newer baseline drafts when resolving the monthly plan source', async () => {
+    mocks.tables.task_baselines.push(
+      {
+        id: 'baseline-current',
+        project_id: 'project-1',
+        version: 6,
+        status: 'confirmed',
+        confirmed_at: '2026-04-15T00:00:00.000Z',
+      },
+      {
+        id: 'baseline-draft',
+        project_id: 'project-1',
+        version: null,
+        status: 'revising',
+        updated_at: '2026-04-20T00:00:00.000Z',
+      },
+    )
+    mocks.tables.task_baseline_items.push({
+      id: 'baseline-item-current',
+      project_id: 'project-1',
+      baseline_version_id: 'baseline-current',
+      source_task_id: 'task-1',
+      title: '主体结构',
+      planned_start_date: '2026-04-01',
+      planned_end_date: '2026-04-10',
+      sort_order: 1,
+      is_milestone: false,
+      is_critical: true,
+      notes: null,
+    })
+
+    const source = await resolveMonthlyPlanGenerationSource('project-1')
+
+    expect(source.mode).toBe('baseline')
+    expect(source.baselineVersionId).toBe('baseline-current')
+    expect(source.sourceVersionLabel).toBe('基线 v6')
+    expect(source.autoSwitched).toBe(false)
+  })
+
   it('auto switches monthly plan generation to schedule when baseline needs realignment', async () => {
     mocks.tables.task_baselines.push({
       id: 'baseline-2',
@@ -194,6 +264,7 @@ describe('baseline governance service', () => {
       version: 7,
       status: 'pending_realign',
     })
+    mocks.getCriticalPathTaskIds.mockResolvedValue(new Set(['task-live-1']))
     mocks.getProjectCriticalPathSnapshot.mockResolvedValue({
       displayTaskIds: ['task-live-1'],
       allTaskIds: ['task-live-1'],
@@ -231,7 +302,53 @@ describe('baseline governance service', () => {
     })
   })
 
-  it('syncs confirmed baseline critical flags back to task truth', async () => {
+  it('filters monthly plan generation by month and estimates target progress', async () => {
+    mocks.tables.task_baselines.push({
+      id: 'baseline-month',
+      project_id: 'project-1',
+      version: 8,
+      status: 'confirmed',
+    })
+    mocks.tables.task_baseline_items.push(
+      {
+        id: 'baseline-item-in-month',
+        project_id: 'project-1',
+        baseline_version_id: 'baseline-month',
+        source_task_id: 'task-1',
+        title: '主体结构',
+        planned_start_date: '2026-05-10',
+        planned_end_date: '2026-06-08',
+        sort_order: 1,
+        is_milestone: false,
+        is_critical: true,
+        notes: null,
+      },
+      {
+        id: 'baseline-item-future',
+        project_id: 'project-1',
+        baseline_version_id: 'baseline-month',
+        source_task_id: 'task-2',
+        title: '远期工程',
+        planned_start_date: '2026-07-01',
+        planned_end_date: '2026-07-20',
+        sort_order: 2,
+        is_milestone: false,
+        is_critical: false,
+        notes: null,
+      },
+    )
+
+    const source = await resolveMonthlyPlanGenerationSource('project-1', '2026-05')
+
+    expect(source.mode).toBe('baseline')
+    expect(source.items).toHaveLength(1)
+    expect(source.items[0]).toMatchObject({
+      baseline_item_id: 'baseline-item-in-month',
+      target_progress: 62,
+    })
+  })
+
+  it('does not copy baseline critical flags back into current task truth', async () => {
     mocks.tables.tasks.push(
       {
         id: 'task-1',
@@ -259,13 +376,11 @@ describe('baseline governance service', () => {
       } as any,
     ], 'user-1')
 
-    expect(updated).toBe(1)
-    expect(mocks.tables.tasks.find((row) => row.id === 'task-1')?.is_critical).toBe(true)
-    expect(mocks.writeLog).toHaveBeenCalledWith(expect.objectContaining({
+    expect(updated).toBe(0)
+    expect(mocks.tables.tasks.find((row) => row.id === 'task-1')?.is_critical).toBe(false)
+    expect(mocks.writeLog).not.toHaveBeenCalledWith(expect.objectContaining({
       entity_type: 'task',
-      entity_id: 'task-1',
       field_name: 'is_critical',
-      new_value: true,
     }))
   })
 
@@ -296,18 +411,7 @@ describe('baseline governance service', () => {
         updated_at: '2026-04-18T00:00:00.000Z',
       },
     )
-    mocks.getProjectCriticalPathSnapshot.mockResolvedValue({
-      displayTaskIds: ['task-1'],
-      allTaskIds: ['task-1', 'task-2'],
-      manualTaskIds: [],
-      insertedTaskIds: [],
-      pathTaskIds: ['task-1'],
-      startTaskIds: ['task-1'],
-      endTaskIds: ['task-1'],
-      segmentCount: 1,
-      totalFloatDays: 0,
-      summary: null,
-    })
+    mocks.getCriticalPathTaskIds.mockResolvedValue(new Set(['task-1']))
 
     const items = await annotateBaselineCriticalItems(
       {
@@ -318,13 +422,17 @@ describe('baseline governance service', () => {
       mocks.tables.task_baseline_items as any,
     )
 
-    expect(mocks.getProjectCriticalPathSnapshot).toHaveBeenCalledWith('project-1')
+    expect(mocks.getCriticalPathTaskIds).toHaveBeenCalledWith('project-1')
     expect(items.map((item) => ({ id: item.id, is_baseline_critical: item.is_baseline_critical }))).toEqual([
       { id: 'baseline-item-1', is_baseline_critical: true },
       { id: 'baseline-item-2', is_baseline_critical: false },
     ])
     expect(mocks.tables.task_baseline_items.find((row) => row.id === 'baseline-item-1')?.is_baseline_critical).toBe(true)
     expect(mocks.tables.task_baseline_items.find((row) => row.id === 'baseline-item-2')?.is_baseline_critical).toBe(false)
+    expect(mocks.rawQuery).toHaveBeenCalledWith(
+      expect.stringMatching(/UPDATE public\.task_baseline_items[\s\S]+baseline_version_id = \$1[\s\S]+project_id = \$2/i),
+      expect.arrayContaining(['baseline-1', 'project-1']),
+    )
   })
 
   it('queues the latest confirmed baseline into pending realign during scheduled scans', async () => {
@@ -391,5 +499,40 @@ describe('baseline governance service', () => {
 
     expect(reports).toHaveLength(1)
     expect(mocks.listActiveProjectIds).toHaveBeenCalled()
+  })
+
+  it('marks a confirmed baseline pending realign once under concurrent retries', async () => {
+    const baseline = {
+      id: 'baseline-stable-impact',
+      project_id: 'project-1',
+      version: 4,
+      status: 'confirmed' as const,
+      title: 'Execution baseline v4',
+      source_type: 'current_schedule' as const,
+      created_at: '2026-07-01T00:00:00.000Z',
+      updated_at: '2026-07-01T00:00:00.000Z',
+    }
+    mocks.tables.task_baselines.push({ ...baseline })
+
+    const first = await markBaselinePendingRealign({
+      baseline,
+      reason: 'stable_duration_publication_material_diff',
+      sourceReference: 'publication-stable-1',
+    })
+    const retried = await markBaselinePendingRealign({
+      baseline,
+      reason: 'stable_duration_publication_material_diff',
+      sourceReference: 'publication-stable-1',
+    })
+
+    expect(first).toEqual({ changed: true, status: 'pending_realign' })
+    expect(retried).toEqual({ changed: false, status: 'pending_realign' })
+    expect(mocks.writeLog).toHaveBeenCalledTimes(1)
+    expect(mocks.writeLog).toHaveBeenCalledWith(expect.objectContaining({
+      entity_id: baseline.id,
+      old_value: 'confirmed',
+      new_value: 'pending_realign',
+      change_source: 'system_auto',
+    }))
   })
 })

@@ -6,6 +6,7 @@ process.env.SUPABASE_SERVICE_KEY = 'test-service-key'
 
 const state = vi.hoisted(() => {
   const acceptancePlans: Array<Record<string, unknown>> = []
+  const projectEntityLinks: Array<Record<string, unknown>> = []
   const issues: Array<Record<string, unknown>> = []
   const selectCalls: string[] = []
   const createIssue = vi.fn(async (input: Record<string, unknown>) => ({
@@ -40,7 +41,11 @@ const state = vi.hoisted(() => {
       }),
       order: vi.fn(() => query),
       then: (resolve: (value: { data: Record<string, unknown>[]; error: null }) => unknown) => {
-        const source = table === 'acceptance_plans' ? acceptancePlans : issues
+        const source = table === 'acceptance_plans'
+          ? acceptancePlans
+          : table === 'project_entity_links'
+            ? projectEntityLinks
+            : issues
         return Promise.resolve(resolve({
           data: source.filter((row) => filters.every((filter) => filter(row))),
           error: null,
@@ -53,6 +58,7 @@ const state = vi.hoisted(() => {
 
   return {
     acceptancePlans,
+    projectEntityLinks,
     issues,
     selectCalls,
     createIssue,
@@ -85,6 +91,7 @@ import { syncAcceptanceExpiredIssues } from '../services/upgradeChainService.js'
 describe('upgradeChainService acceptance expired sync', () => {
   beforeEach(() => {
     state.acceptancePlans.splice(0, state.acceptancePlans.length)
+    state.projectEntityLinks.splice(0, state.projectEntityLinks.length)
     state.issues.splice(0, state.issues.length)
     state.selectCalls.splice(0, state.selectCalls.length)
     vi.clearAllMocks()
@@ -94,11 +101,19 @@ describe('upgradeChainService acceptance expired sync', () => {
     state.acceptancePlans.push({
       id: 'plan-1',
       project_id: 'project-1',
-      task_id: 'task-1',
       acceptance_name: '消防专项验收',
       acceptance_type: '消防验收',
       planned_date: '2026-04-10',
       status: 'submitted',
+    })
+    state.projectEntityLinks.push({
+      project_id: 'project-1',
+      source_entity_type: 'acceptance_plan',
+      source_entity_id: 'plan-1',
+      target_entity_type: 'task',
+      target_entity_id: 'task-1',
+      relation_type: 'covers_task',
+      status: 'active',
     })
 
     const created = await syncAcceptanceExpiredIssues('project-1')
@@ -107,7 +122,6 @@ describe('upgradeChainService acceptance expired sync', () => {
     expect(state.createIssue).toHaveBeenCalledTimes(1)
     expect(state.createIssue).toHaveBeenCalledWith(expect.objectContaining({
       project_id: 'project-1',
-      task_id: 'task-1',
       title: '验收已逾期：消防专项验收',
       source_type: 'condition_expired',
       source_entity_type: 'acceptance_plan',

@@ -9,6 +9,7 @@ import {
 } from '@/hooks/useStore'
 import type { RealtimeEventRecord } from '@/hooks/useStore'
 import { safeJsonParse } from '@/lib/browserStorage'
+import { getAuthToken } from '@/lib/apiClient'
 import { buildRealtimeWebSocketUrl } from '@/lib/realtime'
 
 const RECONNECT_BASE_DELAY_MS = 1000
@@ -17,6 +18,7 @@ const RECONNECT_MAX_DELAY_MS = 15000
 interface UseRealtimeConnectionOptions {
   enabled?: boolean
   authenticatedUserId?: string | null
+  currentCompanyId?: string | null
 }
 
 function getReconnectDelay(attempt: number) {
@@ -31,6 +33,7 @@ export function useRealtimeConnection(options: UseRealtimeConnectionOptions = {}
   const setLastRealtimeEvent = useSetLastRealtimeEvent()
   const enabled = options.enabled ?? true
   const userId = options.authenticatedUserId ?? currentUser?.id ?? null
+  const companyId = options.currentCompanyId ?? null
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -68,6 +71,7 @@ export function useRealtimeConnection(options: UseRealtimeConnectionOptions = {}
       try {
         socket = new window.WebSocket(
           buildRealtimeWebSocketUrl({
+            companyId,
             projectId: currentProject?.id ?? null,
             userId,
           }),
@@ -83,6 +87,11 @@ export function useRealtimeConnection(options: UseRealtimeConnectionOptions = {}
 
       socket.onopen = () => {
         reconnectAttempt = 0
+        // v1.4.20 SEC-5: send auth token as first message
+        const token = getAuthToken()
+        if (token && socket && socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: 'auth', token }))
+        }
         setRealtimeConnectionState('connected')
       }
 
@@ -152,6 +161,7 @@ export function useRealtimeConnection(options: UseRealtimeConnectionOptions = {}
   }, [
     connectionMode,
     currentProject?.id,
+    companyId,
     enabled,
     setLastRealtimeEvent,
     setRealtimeConnectionState,

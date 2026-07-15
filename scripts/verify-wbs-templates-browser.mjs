@@ -1,14 +1,20 @@
 ﻿import { spawn } from 'node:child_process'
 import { access, mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { chromium } from 'playwright'
+import {
+  isIgnorableBrowserConsoleError,
+  primeBrowserAuth,
+  readFullAppTestManifest,
+} from './browser-auth-fixture.mjs'
+import { recordApiFailure, resolveGanttProjectId } from './verify-gantt-browser.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const scriptsDir = dirname(__filename)
 const repoRoot = join(scriptsDir, '..')
-const outputDir = join(repoRoot, 'artifacts', 'browser-checks')
+const outputDir = join(repoRoot, 'project-testing', 'artifacts', 'browser-checks')
 const previewScript = join(repoRoot, 'scripts', 'serve-client-dist.mjs')
 const distIndexFile = join(repoRoot, 'client', 'dist', 'index.html')
 
@@ -17,9 +23,8 @@ const apiBaseUrl = process.env.API_BASE_URL || 'http://127.0.0.1:3001'
 const shouldUseMockApi = process.env.MOCK_API !== 'false'
 const shouldStartPreview = process.env.START_PREVIEW !== 'false'
 
-const projectId = process.env.PROJECT_ID || '422ba093-7a94-4e91-a47a-c1b865185e86'
+let projectId = process.env.PROJECT_ID || '422ba093-7a94-4e91-a47a-c1b865185e86'
 const now = new Date().toISOString()
-const onboardingSeenKey = `planning:wbs:onboarding:seen:${projectId}`
 
 const mockProject = {
   id: projectId,
@@ -120,6 +125,22 @@ function assert(condition, message) {
   }
 }
 
+export function resolveWbsTemplatesProjectId({
+  envProjectId = process.env.PROJECT_ID,
+  mockApi = shouldUseMockApi,
+  currentProjectId = projectId,
+  manifest,
+} = {}) {
+  return resolveGanttProjectId({ envProjectId, mockApi, currentProjectId, manifest })
+}
+
+async function resolveProjectId() {
+  if (process.env.PROJECT_ID || shouldUseMockApi) return projectId
+  const manifest = await readFullAppTestManifest()
+  projectId = resolveWbsTemplatesProjectId({ manifest })
+  return projectId
+}
+
 function json(body, status = 200) {
   return {
     status,
@@ -189,6 +210,24 @@ function buildMockResponse(urlString, method) {
     return json({ success: true, data: mockProject })
   }
 
+  if (pathname === `/api/projects/${projectId}/critical-path`) {
+    return json({
+      success: true,
+      data: {
+        projectId,
+        autoTaskIds: [],
+        manualAttentionTaskIds: [],
+        manualInsertedTaskIds: [],
+        primaryChain: null,
+        alternateChains: [],
+        displayTaskIds: [],
+        edges: [],
+        tasks: [],
+        projectDurationDays: 0,
+      },
+    })
+  }
+
   if (pathname === '/api/planning/wbs-templates') {
     return json({ success: true, data: templates })
   }
@@ -198,10 +237,10 @@ function buildMockResponse(urlString, method) {
       success: true,
       data: {
         guide: {
-          mode: 'completed_project_to_template',
+          mode: 'template_to_baseline',
           project_id: projectId,
           title: '计划编制启用与 WBS 模板',
-          subtitle: '把已跑通的项目沉淀成可复用模板资产。',
+          subtitle: '选择显式默认主计划入口模板，生成需复核的项目候选基线。',
           quickActions: [],
           checklist: [],
           learnMore: { title: '四层时间线', sections: [] },
@@ -237,7 +276,6 @@ function buildMockResponse(urlString, method) {
     || pathname === '/api/task-obstacles'
     || pathname === '/api/warnings'
     || pathname === '/api/issues'
-    || pathname === '/api/delay-requests'
     || pathname === '/api/change-logs'
     || pathname === '/api/tasks/progress-snapshots'
   ) {
@@ -254,6 +292,7 @@ function buildMockResponse(urlString, method) {
 async function main() {
   await mkdir(outputDir, { recursive: true })
   await ensureDistExists()
+  await resolveProjectId()
 
   let previewProcess = null
   const previewAlreadyReady = await isHttpReady(baseUrl)
@@ -270,18 +309,25 @@ async function main() {
   const consoleErrors = []
   const pageErrors = []
   const apiFailures = []
+  let page = null
+  let pageBodyText = null
+  let failureScreenshot = null
 
   try {
-    const page = await browser.newPage({ viewport: { width: 1440, height: 1800 } })
+    page = await browser.newPage({ viewport: { width: 1440, height: 1800 } })
     page.setDefaultTimeout(30000)
+    await primeBrowserAuth(page)
 
     await page.addInitScript((seenKey) => {
       window.localStorage.setItem(seenKey, '1')
-    }, onboardingSeenKey)
+    }, `planning:wbs:onboarding:seen:${projectId}`)
 
     page.on('console', (message) => {
       if (message.type() === 'error') {
-        consoleErrors.push(message.text())
+        const text = message.text()
+        if (!isIgnorableBrowserConsoleError(text)) {
+          consoleErrors.push(text)
+        }
       }
     })
 
@@ -301,10 +347,20 @@ async function main() {
       const forwardUrl = requestUrl.replace(baseUrl, apiBaseUrl)
       try {
         const response = await route.fetch({ url: forwardUrl })
-        await route.fulfill({ response })
+        const responseBody = response.status() >= 400 ? await response.text() : undefined
+        if (response.status() >= 400) {
+          recordApiFailure(apiFailures, {
+            type: 'proxy-response',
+            url: forwardUrl,
+            status: response.status(),
+            statusText: response.statusText(),
+            body: responseBody ? responseBody.slice(0, 2000) : '',
+          })
+        }
+        await route.fulfill(responseBody === undefined ? { response } : { response, body: responseBody })
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
-        apiFailures.push({ url: forwardUrl, message })
+        recordApiFailure(apiFailures, { type: 'proxy-error', url: forwardUrl, message })
         await route.fulfill(json({
           success: false,
           error: {
@@ -315,23 +371,17 @@ async function main() {
       }
     })
 
-    const targetUrl = `${baseUrl}/#/projects/${projectId}/planning/wbs-templates`
+    const targetUrl = `${baseUrl}/#/projects/${projectId}/gantt`
     await page.goto(targetUrl, { waitUntil: 'domcontentloaded' })
-    await page.getByTestId('wbs-templates-page').waitFor({ state: 'visible', timeout: 20000 })
-    await page.getByTestId('wbs-template-list').waitFor({ state: 'visible', timeout: 20000 })
-    await page.getByTestId('wbs-template-quality-panel').waitFor({ state: 'visible', timeout: 20000 })
-    await page.getByTestId('wbs-template-card-template-public').waitFor({ state: 'visible', timeout: 20000 })
+    await page.getByTestId('task-workspace-layer-l2').waitFor({ state: 'visible', timeout: 20000 })
+    await page.getByTestId('task-list-generate-tasks').waitFor({ state: 'visible', timeout: 20000 })
 
     const initialUrl = page.url()
-    await page.screenshot({ path: join(outputDir, 'wbs-templates-page.png'), fullPage: true })
-
-    const commercialCard = page.getByTestId('wbs-template-card-template-commercial')
-    await commercialCard.click()
-    await commercialCard.getByRole('heading', { name: '商业办公综合体（塔楼+裙房）WBS模板' }).waitFor({ state: 'visible', timeout: 10000 })
-    await page.getByTestId('wbs-template-selected-suggestion-count').getByText('已选 1 / 1').waitFor({ state: 'visible', timeout: 10000 })
-    await page.getByTestId('wbs-template-apply-feedback').click()
-    await page.getByRole('status').filter({ hasText: '已确认采纳建议' }).first().waitFor({ state: 'visible', timeout: 10000 })
-    await page.screenshot({ path: join(outputDir, 'wbs-templates-quality-panel.png'), fullPage: true })
+    await page.screenshot({ path: join(outputDir, 'embedded-template-entry.png'), fullPage: true })
+    await page.getByTestId('task-list-generate-tasks').click()
+    await page.getByTestId('planning-modeling-workbench-dialog').waitFor({ state: 'visible', timeout: 20000 })
+    await page.getByRole('heading', { name: '新建项目' }).waitFor({ state: 'visible', timeout: 20000 })
+    await page.screenshot({ path: join(outputDir, 'embedded-template-modeling-workbench.png'), fullPage: true })
 
     assert(apiFailures.length === 0, `API proxy failures detected: ${JSON.stringify(apiFailures)}`)
     assert(pageErrors.length === 0, `Browser page errors detected: ${pageErrors.join(' | ')}`)
@@ -339,24 +389,43 @@ async function main() {
 
     const result = {
       mode: shouldUseMockApi ? 'mock-api' : 'proxy-api',
+      projectId,
       initialUrl,
-      qualityPanelVisible: true,
-      feedbackApplied: true,
+      canonicalTaskListRouteActive: initialUrl.includes(`/projects/${projectId}/gantt`),
+      embeddedTemplateEntryVisible: true,
+      modelingWorkbenchVisible: true,
+      modelingWizardVisible: true,
       apiFailures,
       consoleErrors,
       pageErrors,
       screenshots: {
-        page: join(outputDir, 'wbs-templates-page.png'),
-        qualityPanel: join(outputDir, 'wbs-templates-quality-panel.png'),
+        entry: join(outputDir, 'embedded-template-entry.png'),
+        modelingWorkbench: join(outputDir, 'embedded-template-modeling-workbench.png'),
       },
     }
 
     await writeFile(join(outputDir, 'wbs-templates-browser-check.json'), `${JSON.stringify(result, null, 2)}\n`, 'utf8')
     console.log(JSON.stringify(result, null, 2))
   } catch (error) {
+    if (page) {
+      try {
+        pageBodyText = await page.locator('body').innerText({ timeout: 2000 })
+      } catch {
+        pageBodyText = null
+      }
+      try {
+        failureScreenshot = join(outputDir, 'wbs-templates-failure.png')
+        await page.screenshot({ path: failureScreenshot, fullPage: true })
+      } catch {
+        failureScreenshot = null
+      }
+    }
     const failurePayload = {
       mode: shouldUseMockApi ? 'mock-api' : 'proxy-api',
       error: error instanceof Error ? error.message : String(error),
+      projectId,
+      pageBodyText,
+      failureScreenshot,
       apiFailures,
       consoleErrors,
       pageErrors,
@@ -366,13 +435,15 @@ async function main() {
     throw error
   } finally {
     await browser.close()
-    if (previewProcess) {
+    if (previewProcess && !previewProcess.killed) {
       previewProcess.kill()
     }
   }
 }
 
-main().catch((error) => {
-  console.error(error)
-  process.exitCode = 1
-})
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => {
+    console.error(error)
+    process.exitCode = 1
+  })
+}

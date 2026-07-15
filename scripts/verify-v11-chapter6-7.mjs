@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs'
+﻿import { existsSync, readFileSync } from 'node:fs'
 import { mkdir, readdir, stat, writeFile } from 'node:fs/promises'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -48,11 +48,11 @@ const ACCOUNTS = {
     email: 'v11_chapter67_owner@example.com',
     globalRole: 'regular',
   },
-  viewer: {
-    username: 'v11_chapter67_viewer',
+  outsider: {
+    username: 'v11_chapter67_outsider',
     password: 'StrongPass123!',
-    displayName: 'v1.1 第6/7章只读成员',
-    email: 'v11_chapter67_viewer@example.com',
+    displayName: 'v1.1 第6/7章非项目成员',
+    email: 'v11_chapter67_outsider@example.com',
     globalRole: 'regular',
   },
 }
@@ -257,7 +257,7 @@ async function ensureTasks(projectId, ownerId) {
       id: randomUUID(),
       project_id: projectId,
       title: `CH6 大数据任务 ${String(index + 1).padStart(4, '0')}`,
-      description: 'v1.1 第6章大数据量性能样本',
+      description: 'v1.1 章大数据量性能样本',
       status: completed ? 'completed' : index % 5 === 0 ? 'in_progress' : 'todo',
       priority: index % 11 === 0 ? 'high' : 'medium',
       progress: completed ? 100 : index % 5 === 0 ? 45 : 0,
@@ -266,7 +266,6 @@ async function ensureTasks(projectId, ownerId) {
       planned_start_date: `2026-04-${String(day).padStart(2, '0')}`,
       planned_end_date: `2026-07-${String(day).padStart(2, '0')}`,
       assignee_name: ['CH6 负责人A', 'CH6 负责人B', 'CH6 负责人C'][index % 3],
-      assignee_unit: ['总包', '机电分包', '幕墙分包'][index % 3],
       specialty_type: ['土建', '机电', '装饰', '幕墙'][index % 4],
       created_by: ownerId,
       sort_order: index + 1,
@@ -306,7 +305,7 @@ async function ensureMonthlyPlanItems(projectId, taskIds) {
         month: MONTHLY_MONTH,
         version: 1,
         status: 'draft',
-        title: `${MONTHLY_MONTH} 第6章500+月计划条目`,
+        title: `${MONTHLY_MONTH} 第6章 500+ 月计划条目`,
         description: 'v1.1 第6章大数据量月度计划样本',
       })
       .select('id, month, version, title')
@@ -342,7 +341,7 @@ async function ensureMonthlyPlanItems(projectId, taskIds) {
       is_milestone: index % 25 === 0,
       is_critical: index % 20 === 0,
       commitment_status: index % 7 === 0 ? 'carried_over' : 'planned',
-      notes: 'v1.1 第6章500+月计划条目样本',
+      notes: 'v1.1 第6章 500+ 月计划条目样本',
     })
   }
   while (rows.length) {
@@ -353,8 +352,8 @@ async function ensureMonthlyPlanItems(projectId, taskIds) {
   return { plan, count: 520 }
 }
 
-async function ensureMilestones(projectId) {
-  const currentCount = await countRows('milestones', projectId)
+async function ensureMilestones(projectId, ownerId) {
+  const currentCount = await countRows('tasks', projectId, { is_milestone: true })
   if (currentCount >= 100) return currentCount
   const rows = []
   for (let index = currentCount; index < 120; index += 1) {
@@ -363,17 +362,27 @@ async function ensureMilestones(projectId) {
       id: randomUUID(),
       project_id: projectId,
       title: `CH6 里程碑 ${String(index + 1).padStart(3, '0')}`,
-      description: 'v1.1 第6章100+里程碑样本',
-      target_date: `2026-08-${String(day).padStart(2, '0')}`,
-      status: index % 6 === 0 ? 'completed' : 'pending',
-      baseline_date: `2026-08-${String(day).padStart(2, '0')}`,
-      current_plan_date: `2026-08-${String(Math.min(day + (index % 4), 28)).padStart(2, '0')}`,
-      actual_date: index % 6 === 0 ? `2026-08-${String(day).padStart(2, '0')}` : null,
+      description: 'v1.1 第6章 100+ 里程碑样本',
+      status: index % 6 === 0 ? 'completed' : 'todo',
+      progress: index % 6 === 0 ? 100 : 0,
+      is_milestone: true,
+      milestone_level: 1,
+      milestone_order: index + 1,
+      start_date: `2026-08-${String(day).padStart(2, '0')}`,
+      end_date: `2026-08-${String(Math.min(day + (index % 4), 28)).padStart(2, '0')}`,
+      planned_start_date: `2026-08-${String(day).padStart(2, '0')}`,
+      planned_end_date: `2026-08-${String(Math.min(day + (index % 4), 28)).padStart(2, '0')}`,
+      baseline_end: `2026-08-${String(day).padStart(2, '0')}`,
+      actual_end_date: index % 6 === 0 ? `2026-08-${String(day).padStart(2, '0')}` : null,
+      created_by: ownerId,
+      sort_order: 2000 + index,
+      wbs_level: 1,
+      wbs_code: `CH6-M-${String(index + 1).padStart(3, '0')}`,
     })
   }
   while (rows.length) {
     const batch = rows.splice(0, 100)
-    const { error } = await supabase.from('milestones').insert(batch)
+    const { error } = await supabase.from('tasks').insert(batch)
     if (error) throw error
   }
   return 120
@@ -389,13 +398,13 @@ async function ensureRisks(projectId, taskIds) {
       project_id: projectId,
       task_id: taskIds[index % taskIds.length]?.id ?? null,
       title: `CH6 风险 ${String(index + 1).padStart(3, '0')}`,
-      description: 'v1.1 第6章100+风险样本',
+      description: 'v1.1 00+风险样本',
       level: index % 10 === 0 ? 'critical' : index % 3 === 0 ? 'high' : 'medium',
       status: index % 5 === 0 ? 'monitoring' : 'identified',
       probability: 40 + (index % 5) * 10,
       impact: 45 + (index % 4) * 10,
       risk_category: 'progress',
-      mitigation: '第6章性能样本持续跟踪',
+      mitigation: '章性能样本持续跟踪',
     })
   }
   while (rows.length) {
@@ -416,7 +425,7 @@ async function ensureIssues(projectId, taskIds) {
       project_id: projectId,
       task_id: taskIds[index % taskIds.length]?.id ?? null,
       title: `CH6 问题 ${String(index + 1).padStart(3, '0')}`,
-      description: 'v1.1 第6章100+问题样本',
+      description: 'v1.1 00+问题样本',
       source_type: 'manual',
       severity: index % 9 === 0 ? 'critical' : index % 3 === 0 ? 'high' : 'medium',
       priority: 50 + (index % 5),
@@ -446,7 +455,7 @@ async function ensureObstacles(projectId, taskIds, ownerId) {
       severity: index % 9 === 0 ? '高' : '中',
       status: index % 5 === 0 ? '处理中' : '待处理',
       estimated_resolve_date: `2026-09-${String((index % 28) + 1).padStart(2, '0')}`,
-      notes: 'v1.1 第6章100+阻碍样本',
+      notes: 'v1.1 00+阻碍样本',
       created_by: ownerId,
     })
   }
@@ -462,7 +471,7 @@ async function ensureChapter6Data(projectId, ownerId) {
   const taskCount = await ensureTasks(projectId, ownerId)
   const tasks = await fetchTaskIds(projectId, 600)
   const monthly = await ensureMonthlyPlanItems(projectId, tasks)
-  const milestoneCount = await ensureMilestones(projectId)
+  const milestoneCount = await ensureMilestones(projectId, ownerId)
   const riskCount = await ensureRisks(projectId, tasks)
   const issueCount = await ensureIssues(projectId, tasks)
   const obstacleCount = await ensureObstacles(projectId, tasks, ownerId)
@@ -608,7 +617,7 @@ async function runBrowserChecks(summary, sessions, project, data) {
         }
         batchResponse = await batchResponsePromise
         feedbackVisible = await page
-          .getByText(/批量更新已提交|批量更新已受理|已处理 \d+ 个任务/)
+          .getByText(/批量更新已提交|批量更新已受理|已处理\s*\d+\s*个任务/)
           .first()
           .waitFor({ state: 'visible', timeout: 5000 })
           .then(() => true)
@@ -719,10 +728,10 @@ async function runBrowserChecks(summary, sessions, project, data) {
 
     const unauthorized = await apiRequest('/api/tasks', {
       method: 'POST',
-      token: sessions.viewer.token,
+      token: sessions.outsider.token,
       body: {
         project_id: project.id,
-        title: 'CH6 viewer forbidden write',
+        title: 'CH6 outsider forbidden write',
         status: 'todo',
         progress: 0,
         start_date: '2026-10-01',
@@ -732,7 +741,7 @@ async function runBrowserChecks(summary, sessions, project, data) {
       },
       allowFailure: true,
     })
-    checks.viewerWriteForbidden = unauthorized.response.status === 403
+    checks.outsiderWriteForbidden = unauthorized.response.status === 403
       ? pass({ status: unauthorized.response.status, body: unauthorized.json })
       : fail({ status: unauthorized.response.status, body: unauthorized.json })
 
@@ -850,7 +859,7 @@ function classifyGitStatusLine(line) {
 }
 
 async function createDbSnapshot(summary) {
-  const tables = ['projects', 'tasks', 'monthly_plans', 'monthly_plan_items', 'milestones', 'risks', 'issues', 'task_obstacles', 'schema_migrations']
+  const tables = ['projects', 'tasks', 'monthly_plans', 'monthly_plan_items', 'risks', 'issues', 'task_obstacles', 'schema_migrations']
   const rowCounts = {}
   for (const table of tables) {
     const { count, error } = await supabase.from(table).select('*', { count: 'exact', head: true })
@@ -910,7 +919,7 @@ async function runChapter7Checks(summary) {
   const envText = readFileSync(join(outputDir, 'chapter7-env-status.log'), 'utf8')
   const migrateText = readFileSync(join(outputDir, 'chapter7-migrate-plan.log'), 'utf8')
   const supabaseConfigured = Boolean(SUPABASE_URL && (process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY))
-  const databaseConnectionVerified = migratePlan.code === 0 && /待执行 migration:\s*0/.test(migrateText)
+  const databaseConnectionVerified = migratePlan.code === 0 && /待执行\s*migration:\s*0/.test(migrateText)
 
   summary.chapter7.commands = {
     envStatus,
@@ -925,7 +934,7 @@ async function runChapter7Checks(summary) {
     reviewRequired,
   }
   summary.chapter7.migrationOrder = {
-    pass: migratePlan.code === 0 && /待执行 migration:\s*0/.test(migrateText),
+    pass: migratePlan.code === 0 && /待执行\s*migration:\s*0/.test(migrateText),
     evidence: migratePlan.log,
   }
   summary.chapter7.environment = {
@@ -980,11 +989,10 @@ async function main() {
   }
 
   const ownerSession = await ensureAccount(ACCOUNTS.owner)
-  const viewerSession = await ensureAccount(ACCOUNTS.viewer)
+  const outsiderSession = await ensureAccount(ACCOUNTS.outsider)
   log('accounts ready')
   const project = await ensureProject(ownerSession)
   await ensureProjectMember(project.id, ownerSession, 'owner')
-  await ensureProjectMember(project.id, viewerSession, 'viewer')
   log('project ready', project.id)
 
   const data = await ensureChapter6Data(project.id, ownerSession.user.id)
@@ -1009,7 +1017,7 @@ async function main() {
 
   await runApiStabilityChecks(summary, ownerSession.token, project.id)
   log('api stability checks done')
-  await runBrowserChecks(summary, { owner: ownerSession, viewer: viewerSession }, project, data)
+  await runBrowserChecks(summary, { owner: ownerSession, outsider: outsiderSession }, project, data)
   log('browser checks done')
   await runChapter7Checks(summary)
   log('chapter 7 checks done')

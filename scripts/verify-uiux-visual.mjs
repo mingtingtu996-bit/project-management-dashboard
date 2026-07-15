@@ -1,4 +1,4 @@
-import { access, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+﻿import { access, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { dirname, join, relative } from 'node:path'
@@ -11,13 +11,14 @@ const scriptsDir = dirname(__filename)
 const repoRoot = join(scriptsDir, '..')
 const distIndex = join(repoRoot, 'client', 'dist', 'index.html')
 const manifestPath = join(repoRoot, '.tmp', 'full-app-test-env', 'manifest.json')
-const outputDir = join(repoRoot, process.env.UIUX_VISUAL_OUTPUT_DIR || 'artifacts/uiux-visual')
+const outputDir = join(repoRoot, process.env.UIUX_VISUAL_OUTPUT_DIR || 'project-ui/artifacts/uiux-visual')
 const manifestOutPath = join(outputDir, 'visual-manifest.json')
 
 const port = Number(process.env.PORT || 4173)
 const baseUrl = process.env.BASE_URL || `http://127.0.0.1:${port}`
 const apiBaseUrl = process.env.API_BASE_URL || 'http://127.0.0.1:3001'
 const shouldStartPreview = process.env.VISUAL_START_PREVIEW !== 'false'
+const shouldRewriteApiOrigin = process.env.UIUX_VISUAL_DIRECT_API_ORIGIN === 'true'
 const currentMonth = process.env.UIUX_VISUAL_MONTH || new Date().toISOString().slice(0, 7)
 
 function parseFilter(value) {
@@ -117,6 +118,30 @@ async function isHttpReady(url) {
   }
 }
 
+async function readText(url) {
+  const response = await fetch(url)
+  if (!response.ok) {
+    throw new Error(`${url} returned ${response.status}`)
+  }
+  return response.text()
+}
+
+async function assertPreviewSupportsSelectedStates(states) {
+  const needsOnboarding = states.some((state) => state.onboardingComplete === false)
+  if (!needsOnboarding) return
+
+  const html = await readText(baseUrl)
+  const injectedCompletedKeys = [
+    'onboarding_project_completed", "true"',
+    "onboarding_project_completed', 'true'",
+  ]
+
+  assert(
+    !injectedCompletedKeys.some((needle) => html.includes(needle)),
+    `Preview server at ${baseUrl} injects completed onboarding state. Stop the stale preview server or run this gate on an isolated PORT.`,
+  )
+}
+
 async function waitForHttpOk(url, timeoutMs = 30000) {
   const startedAt = Date.now()
   while (Date.now() - startedAt < timeoutMs) {
@@ -163,7 +188,13 @@ function isIgnorableConsoleError(message) {
   )
 }
 
+function isIgnorableRequestFailure(request) {
+  return request.failure()?.errorText === 'net::ERR_ABORTED'
+}
+
 function attachDiagnostics(page, diagnostics) {
+  diagnostics.pendingApiFailureDetails = []
+
   function describeRequest(request) {
     const headers = request.headers()
     const postData = request.postData()
@@ -187,6 +218,7 @@ function attachDiagnostics(page, diagnostics) {
 
   page.on('requestfailed', (request) => {
     if (!request.url().includes('/api/')) return
+    if (isIgnorableRequestFailure(request)) return
     diagnostics.apiFailures.push({
       type: 'requestfailed',
       url: request.url(),
@@ -199,13 +231,27 @@ function attachDiagnostics(page, diagnostics) {
     if (!response.url().includes('/api/')) return
     if (response.status() < 400) return
     const request = response.request()
-    diagnostics.apiFailures.push({
+    const failure = {
       type: 'response',
       url: response.url(),
       status: response.status(),
       request: describeRequest(request),
-    })
+    }
+    diagnostics.apiFailures.push(failure)
+    diagnostics.pendingApiFailureDetails.push((async () => {
+      try {
+        failure.responseText = (await response.text()).slice(0, 1000)
+      } catch (error) {
+        failure.responseTextReadError = error instanceof Error ? error.message : String(error)
+      }
+    })())
   })
+}
+
+async function settlePendingApiFailureDetails(diagnostics) {
+  const pending = diagnostics.pendingApiFailureDetails || []
+  await Promise.allSettled(pending)
+  delete diagnostics.pendingApiFailureDetails
 }
 
 async function newContext(browser, token, viewport, { onboardingComplete = true } = {}) {
@@ -215,17 +261,68 @@ async function newContext(browser, token, viewport, { onboardingComplete = true 
     locale: 'zh-CN',
   })
 
-  await context.addInitScript(({ authToken, completeOnboarding }) => {
+  await context.route(`${baseUrl}/api/**`, async (route) => {
+    const requestUrl = route.request().url()
+    const forwardUrl = requestUrl.replace(baseUrl, apiBaseUrl)
+    let fulfilled = false
+    try {
+      const response = await route.fetch({ url: forwardUrl })
+      await route.fulfill({ response })
+      fulfilled = true
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (fulfilled || message.includes('Route is already handled')) return
+      try {
+        await route.fulfill({
+          status: 502,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            success: false,
+            error: {
+              code: 'BROWSER_PROXY_ERROR',
+              message,
+            },
+          }),
+        })
+      } catch (fulfillError) {
+        const fulfillMessage = fulfillError instanceof Error ? fulfillError.message : String(fulfillError)
+        if (fulfillMessage.includes('Route is already handled')) return
+        throw fulfillError
+      }
+    }
+  })
+
+  await context.addInitScript(({ authToken, completeOnboarding, apiOrigin, rewriteApiOrigin }) => {
+    if (rewriteApiOrigin) {
+      const nativeFetch = window.fetch.bind(window)
+      window.fetch = (input, init) => {
+        if (typeof input === 'string' && input.startsWith('/api/')) {
+          return nativeFetch(`${apiOrigin}${input}`, init)
+        }
+
+        if (input instanceof Request) {
+          const requestUrl = new URL(input.url)
+          if (requestUrl.origin === window.location.origin && requestUrl.pathname.startsWith('/api/')) {
+            return nativeFetch(new Request(`${apiOrigin}${requestUrl.pathname}${requestUrl.search}`, input), init)
+          }
+        }
+
+        return nativeFetch(input, init)
+      }
+    }
+
     window.localStorage.setItem('auth_token', authToken)
     window.localStorage.setItem('access_token', authToken)
     if (completeOnboarding) {
-      window.localStorage.setItem('onboarding_completed', 'true')
+      window.localStorage.setItem('onboarding_workspace_completed', 'true')
+      window.localStorage.setItem('onboarding_project_completed', 'true')
       window.localStorage.setItem('onboarding_daily_workflow_dismissed', 'true')
     } else {
-      window.localStorage.removeItem('onboarding_completed')
+      window.localStorage.removeItem('onboarding_workspace_completed')
+      window.localStorage.removeItem('onboarding_project_completed')
       window.localStorage.removeItem('onboarding_daily_workflow_dismissed')
     }
-  }, { authToken: token, completeOnboarding: onboardingComplete })
+  }, { authToken: token, completeOnboarding: onboardingComplete, apiOrigin: apiBaseUrl, rewriteApiOrigin: shouldRewriteApiOrigin })
 
   return context
 }
@@ -354,17 +451,26 @@ function mainPages(projectId) {
       session: 'admin',
       path: '/company',
       any: ['[data-testid="company-cockpit-page"]'],
-      must: ['[data-testid="company-project-grid"]'],
     },
     {
       key: 'dashboard',
       name: 'Dashboard',
       path: projectRoute(projectId, '/dashboard'),
       any: ['[data-testid="dashboard-page"]'],
-      must: ['[data-testid="dashboard-hero-cards"]', '[data-testid="dashboard-live-panel"]'],
+      must: [
+        '[data-testid="dashboard-decision-overview"]',
+        '[data-testid="dashboard-health-weakness-panel"]',
+        '[data-testid="dashboard-action-panel"]',
+        '[data-testid="dashboard-snapshot-panel"]',
+      ],
       check: async (page) => {
-        const count = await page.locator('[data-testid^="dashboard-hero-card-"]').count()
-        assert(count === 4, `Dashboard expected 4 metric cards, got ${count}`)
+        const oldMetricCardCount = await page.locator('[data-testid^="dashboard-hero-card-"]').count()
+        assert(oldMetricCardCount === 0, `Dashboard old four-card metric wall is still mounted: ${oldMetricCardCount}`)
+        const supportText = await page.getByTestId('dashboard-snapshot-panel').innerText()
+        assert(supportText.includes('预测详情'), `Dashboard support area missing forecast tab: ${supportText}`)
+        assert(supportText.includes('趋势与周报'), `Dashboard support area missing trend tab: ${supportText}`)
+        assert(supportText.includes('执行明细'), `Dashboard support area missing execution tab: ${supportText}`)
+        assert(!supportText.includes('摘要指标'), `Dashboard support area still exposes old summary tab: ${supportText}`)
       },
     },
     {
@@ -389,18 +495,11 @@ function mainPages(projectId) {
       must: ['[data-testid="gantt-task-rows"]'],
     },
     {
-      key: 'planning-workspace',
-      name: 'PlanningWorkspace',
-      path: projectRoute(projectId, '/planning'),
-      any: ['[data-testid="planning-shared-shell"]'],
-      must: ['[data-testid="planning-page-tabs"]'],
-    },
-    {
       key: 'planning-baseline',
       name: 'Baseline',
       path: projectRoute(projectId, '/planning/baseline'),
       any: ['[data-testid="planning-shared-shell"]'],
-      must: ['[data-testid="planning-page-tabs"]'],
+      must: ['[data-testid="baseline-version-bar"]', '[data-testid="baseline-tree-editor"]'],
     },
     {
       key: 'planning-monthly',
@@ -412,7 +511,7 @@ function mainPages(projectId) {
     {
       key: 'planning-closeout',
       name: 'Closeout',
-      path: projectRoute(projectId, `/tasks/closeout?month=${currentMonth}`),
+      path: projectRoute(projectId, `/planning/monthly?view=closeout&month=${currentMonth}`),
       any: ['[data-testid="closeout-filter-bar"]', '[data-testid="closeout-escalation-ladder"]', '[data-testid="closeout-empty-state"]'],
       must: ['[data-testid="planning-page-tabs"]'],
     },
@@ -489,8 +588,9 @@ function overlayStates(projectId) {
       path: projectRoute(projectId, '/gantt'),
       any: ['[data-testid="task-workspace-layer-l2"]'],
       action: async (page) => {
-        await page.getByTestId('gantt-open-scope-dimensions').click()
-        await page.getByTestId('gantt-scope-dimensions-dialog').waitFor({ state: 'visible', timeout: 20000 })
+        await page.getByTestId('gantt-generation-template-menu').click()
+        await page.getByTestId('gantt-open-engineering-objects').click()
+        await page.getByTestId('gantt-engineering-objects-dialog').waitFor({ state: 'visible', timeout: 20000 })
       },
     },
     {
@@ -499,7 +599,7 @@ function overlayStates(projectId) {
       path: projectRoute(projectId, '/gantt'),
       any: ['[data-testid="task-workspace-layer-l2"]'],
       action: async (page) => {
-        await page.getByTestId('gantt-open-critical-path-dialog').click()
+        await page.getByTestId('gantt-critical-path-summary-chip').click()
         await page.getByTestId('critical-path-dialog').waitFor({ state: 'visible', timeout: 20000 })
       },
     },
@@ -519,20 +619,32 @@ function overlayStates(projectId) {
       path: projectRoute(projectId, `/planning/monthly?month=${currentMonth}`),
       any: ['[data-testid="monthly-plan-header"]', '[data-testid="monthly-plan-info-bar"]'],
       action: async (page) => {
-        await page.getByTestId('monthly-plan-standard-confirm-entry').click()
+        await page.getByTestId('monthly-plan-confirm-draft-header').waitFor({ state: 'visible', timeout: 20000 })
+        await page.waitForFunction(() => {
+          const confirmButton = document.querySelector('[data-testid="monthly-plan-confirm-draft-header"]')
+          return confirmButton instanceof HTMLButtonElement && !confirmButton.disabled
+        }, null, { timeout: 10000 })
+        await page.getByTestId('monthly-plan-confirm-draft-header').click()
         await page.getByTestId('monthly-plan-confirm-dialog').waitFor({ state: 'visible', timeout: 20000 })
       },
     },
     {
-      key: 'closeout-more-actions-dropdown',
-      name: 'Closeout more actions Dropdown',
-      path: projectRoute(projectId, `/tasks/closeout?month=${currentMonth}`),
+      key: 'closeout-detail-process-entry',
+      name: 'Closeout detail process Entry',
+      path: projectRoute(projectId, `/planning/monthly?view=closeout&month=${currentMonth}`),
       any: ['[data-testid="closeout-filter-bar"]', '[data-testid="closeout-escalation-ladder"]', '[data-testid="closeout-empty-state"]'],
       action: async (page) => {
-        const moreActions = page.getByTestId('closeout-more-actions').first()
-        await moreActions.waitFor({ state: 'visible', timeout: 20000 })
-        await moreActions.click()
-        await page.getByTestId('closeout-force-close-entry').first().waitFor({ state: 'visible', timeout: 20000 })
+        const openItem = page.locator('[data-testid^="closeout-item-open-"]').first()
+        if (await openItem.count()) {
+          await openItem.waitFor({ state: 'visible', timeout: 20000 })
+          await openItem.click()
+          await page.getByTestId('closeout-detail-drawer').waitFor({ state: 'visible', timeout: 20000 })
+          await page.getByTestId('closeout-single-process-entry').waitFor({ state: 'visible', timeout: 20000 })
+        } else {
+          await page.getByTestId('closeout-empty-state').waitFor({ state: 'visible', timeout: 20000 })
+        }
+        const legacyForceCloseCount = await page.locator('[data-testid*="force-close"]').count()
+        assert(legacyForceCloseCount === 0, `Closeout surface exposed ${legacyForceCloseCount} legacy force-close controls`)
       },
     },
   ]
@@ -561,6 +673,7 @@ async function captureState(browser, sessions, viewport, state) {
       await state.check(page)
     }
     await page.waitForTimeout(250)
+    await settlePendingApiFailureDetails(diagnostics)
 
     const visual = await runVisualChecks(page)
     assert(visual.horizontalOverflowPx <= 2, `${state.key} has document horizontal overflow ${visual.horizontalOverflowPx}px at ${viewport.key}`)
@@ -587,6 +700,7 @@ async function captureState(browser, sessions, viewport, state) {
       status: 'passed',
     }
   } catch (error) {
+    await settlePendingApiFailureDetails(diagnostics)
     const failurePath = join(outputDir, viewport.key, `${state.key}.failure.png`)
     await mkdir(dirname(failurePath), { recursive: true })
     await page.screenshot({ path: failurePath, fullPage: true }).catch(() => {})
@@ -614,8 +728,8 @@ async function main() {
   const projectId = manifest.projects?.standard?.id
   assert(projectId, `Missing standard project id in ${rel(manifestPath)}`)
 
-  const apiReady = await isHttpReady(`${apiBaseUrl}/api/health`)
-  assert(apiReady, `API is not reachable at ${apiBaseUrl}/api/health`)
+  const apiReady = await isHttpReady(`${apiBaseUrl}/api/readyz`)
+  assert(apiReady, `API is not ready at ${apiBaseUrl}/api/readyz`)
 
   let previewProcess = null
   const previewAlreadyReady = await isHttpReady(baseUrl)
@@ -640,6 +754,7 @@ async function main() {
     ? allStates.filter((state) => stateFilter.has(state.key))
     : allStates
   assert(states.length > 0, `No visual states matched filter: ${process.env.UIUX_VISUAL_STATES}`)
+  await assertPreviewSupportsSelectedStates(states)
 
   const browser = await chromium.launch({ headless: true })
   const runs = []

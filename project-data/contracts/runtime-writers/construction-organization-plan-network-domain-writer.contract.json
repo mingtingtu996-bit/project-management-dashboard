@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "workbuddy-runtime-writer-contract/v1",
+  "writerId": "construction_organization_plan_network_domain_writer",
+  "mutationBoundary": "contract_only_no_db_mutation_no_runtime_write",
+  "allowedMode": "manual_review_release_handoff_required",
+  "requiresUnlock": true,
+  "mayWriteBusinessFacts": true,
+  "mayWriteRuntimeAssets": true,
+  "productionAllowed": false,
+  "allowedTables": [
+    "task_dependencies",
+    "runtime_publication_tables"
+  ],
+  "forbiddenTables": [
+    "tasks",
+    "task_baselines",
+    "monthly_plans",
+    "monthly_plan_items",
+    "duration_experience_samples",
+    "actual_duration_outcomes",
+    "critical_path",
+    "production_seed_rows"
+  ],
+  "requiredEvidence": [
+    "manual_review_approval",
+    "release_exit_handoff",
+    "release_record_target",
+    "rollback_target",
+    "consumer_observation",
+    "impact_monitoring"
+  ]
+}

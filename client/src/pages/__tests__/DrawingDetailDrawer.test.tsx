@@ -79,7 +79,7 @@ describe('DrawingDetailDrawer linkage', () => {
     linkedTasks: [
       {
         id: 'task-1',
-        name: 'Task A',
+        title: 'Task A',
         status: 'in_progress',
         drawingConditionCount: 2,
         openConditionCount: 1,

@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+﻿import { spawn } from 'node:child_process'
 import { access, mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -8,7 +8,7 @@ import { chromium } from 'playwright'
 const __filename = fileURLToPath(import.meta.url)
 const scriptsDir = dirname(__filename)
 const repoRoot = join(scriptsDir, '..')
-const outputDir = join(repoRoot, 'artifacts', 'browser-checks')
+const outputDir = join(repoRoot, 'project-testing', 'artifacts', 'browser-checks')
 const previewScript = join(repoRoot, 'scripts', 'serve-client-dist.mjs')
 const distIndexFile = join(repoRoot, 'client', 'dist', 'index.html')
 
@@ -78,7 +78,7 @@ function buildMockResponse(urlString) {
       user: {
         id: 'user-1',
         username: 'zhangsan',
-        display_name: '张三',
+        display_name: '寮犱笁',
         globalRole: 'company_admin',
       },
     })

@@ -1,0 +1,390 @@
+{
+  "schemaVersion": "workbuddy-ui-moved-files.v1",
+  "generatedAt": "2026-06-29T00:00:00.000Z",
+  "entries": [
+    {
+      "id": "figma-design-data",
+      "status": "moved",
+      "movedAt": "2026-06-29T00:00:00.000Z",
+      "oldPath": "artifacts/figma-design-data",
+      "newPath": "project-ui/artifacts/figma-design-data",
+      "reason": "Generated Figma/browser design extraction output belongs under the UI center."
+    },
+    {
+      "id": "uiux-a11y",
+      "status": "moved",
+      "movedAt": "2026-06-29T00:00:00.000Z",
+      "oldPath": "artifacts/uiux-a11y",
+      "newPath": "project-ui/artifacts/uiux-a11y",
+      "reason": "Generated UI accessibility evidence belongs under the UI center."
+    },
+    {
+      "id": "uiux-browser",
+      "status": "moved",
+      "movedAt": "2026-06-29T00:00:00.000Z",
+      "oldPath": "artifacts/uiux-browser",
+      "newPath": "project-ui/artifacts/uiux-browser",
+      "reason": "Historical UI browser-suite evidence belongs under the UI center."
+    },
+    {
+      "id": "uiux-overlap",
+      "status": "moved",
+      "movedAt": "2026-06-29T00:00:00.000Z",
+      "oldPath": "artifacts/uiux-overlap",
+      "newPath": "project-ui/artifacts/uiux-overlap",
+      "reason": "Generated UI overlap evidence belongs under the UI center."
+    },
+    {
+      "id": "uiux-overlap-combined",
+      "status": "moved",
+      "movedAt": "2026-06-29T00:00:00.000Z",
+      "oldPath": "artifacts/uiux-overlap-combined",
+      "newPath": "project-ui/artifacts/uiux-overlap-combined",
+      "reason": "Generated UI overlap evidence belongs under the UI center."
+    },
+    {
+      "id": "uiux-overlap-dashboard",
+      "status": "moved",
+      "movedAt": "2026-06-29T00:00:00.000Z",
+      "oldPath": "artifacts/uiux-overlap-dashboard",
+      "newPath": "project-ui/artifacts/uiux-overlap-dashboard",
+      "reason": "Generated UI overlap evidence belongs under the UI center."
+    },
+    {
+      "id": "uiux-overlap-gantt",
+      "status": "moved",
+      "movedAt": "2026-06-29T00:00:00.000Z",
+      "oldPath": "artifacts/uiux-overlap-gantt",
+      "newPath": "project-ui/artifacts/uiux-overlap-gantt",
+      "reason": "Generated UI overlap evidence belongs under the UI center."
+    },
+    {
+      "id": "uiux-overlap-large-gantt",
+      "status": "moved",
+      "movedAt": "2026-06-29T00:00:00.000Z",
+      "oldPath": "artifacts/uiux-overlap-large-gantt",
+      "newPath": "project-ui/artifacts/uiux-overlap-large-gantt",
+      "reason": "Generated UI overlap evidence belongs under the UI center."
+    },
+    {
+      "id": "uiux-overlap-materials",
+      "status": "moved",
+      "movedAt": "2026-06-29T00:00:00.000Z",
+      "oldPath": "artifacts/uiux-overlap-materials",
+      "newPath": "project-ui/artifacts/uiux-overlap-materials",
+      "reason": "Generated UI overlap evidence belongs under the UI center."
+    },
+    {
+      "id": "uiux-overlap-planning-baseline",
+      "status": "moved",
+      "movedAt": "2026-06-29T00:00:00.000Z",
+      "oldPath": "artifacts/uiux-overlap-planning-baseline",
+      "newPath": "project-ui/artifacts/uiux-overlap-planning-baseline",
+      "reason": "Generated UI overlap evidence belongs under the UI center."
+    },
+    {
+      "id": "uiux-overlap-v133-combined",
+      "status": "moved",
+      "movedAt": "2026-06-29T00:00:00.000Z",
+      "oldPath": "artifacts/uiux-overlap-v133-combined",
+      "newPath": "project-ui/artifacts/uiux-overlap-v133-combined",
+      "reason": "Generated UI v1.3.3 overlap evidence belongs under the UI center."
+    },
+    {
+      "id": "uiux-overlap-v133-dashboard",
+      "status": "moved",
+      "movedAt": "2026-06-29T00:00:00.000Z",
+      "oldPath": "artifacts/uiux-overlap-v133-dashboard",
+      "newPath": "project-ui/artifacts/uiux-overlap-v133-dashboard",
+      "reason": "Generated UI v1.3.3 overlap evidence belongs under the UI center."
+    },
+    {
+      "id": "uiux-overlap-v133-dialogs",
+      "status": "moved",
+      "movedAt": "2026-06-29T00:00:00.000Z",
+      "oldPath": "artifacts/uiux-overlap-v133-dialogs",
+      "newPath": "project-ui/artifacts/uiux-overlap-v133-dialogs",
+      "reason": "Generated UI v1.3.3 overlap evidence belongs under the UI center."
+    },
+    {
+      "id": "uiux-overlap-v133-gantt",
+      "status": "moved",
+      "movedAt": "2026-06-29T00:00:00.000Z",
+      "oldPath": "artifacts/uiux-overlap-v133-gantt",
+      "newPath": "project-ui/artifacts/uiux-overlap-v133-gantt",
+      "reason": "Generated UI v1.3.3 overlap evidence belongs under the UI center."
+    },
+    {
+      "id": "uiux-overlap-v133-large-gantt",
+      "status": "moved",
+      "movedAt": "2026-06-29T00:00:00.000Z",
+      "oldPath": "artifacts/uiux-overlap-v133-large-gantt",
+      "newPath": "project-ui/artifacts/uiux-overlap-v133-large-gantt",
+      "reason": "Generated UI v1.3.3 overlap evidence belongs under the UI center."
+    },
+    {
+      "id": "uiux-overlap-v133-materials",
+      "status": "moved",
+      "movedAt": "2026-06-29T00:00:00.000Z",
+      "oldPath": "artifacts/uiux-overlap-v133-materials",
+      "newPath": "project-ui/artifacts/uiux-overlap-v133-materials",
+      "reason": "Generated UI v1.3.3 overlap evidence belongs under the UI center."
+    },
+    {
+      "id": "uiux-overlap-v133-p1p2-combined",
+      "status": "moved",
+      "movedAt": "2026-06-29T00:00:00.000Z",
+      "oldPath": "artifacts/uiux-overlap-v133-p1p2-combined",
+      "newPath": "project-ui/artifacts/uiux-overlap-v133-p1p2-combined",
+      "reason": "Generated UI v1.3.3 overlap evidence belongs under the UI center."
+    },
+    {
+      "id": "uiux-overlap-v133-p1p2-dashboard",
+      "status": "moved",
+      "movedAt": "2026-06-29T00:00:00.000Z",
+      "oldPath": "artifacts/uiux-overlap-v133-p1p2-dashboard",
+      "newPath": "project-ui/artifacts/uiux-overlap-v133-p1p2-dashboard",
+      "reason": "Generated UI v1.3.3 overlap evidence belongs under the UI center."
+    },
+    {
+      "id": "uiux-overlap-v133-p1p2-gantt",
+      "status": "moved",
+      "movedAt": "2026-06-29T00:00:00.000Z",
+      "oldPath": "artifacts/uiux-overlap-v133-p1p2-gantt",
+      "newPath": "project-ui/artifacts/uiux-overlap-v133-p1p2-gantt",
+      "reason": "Generated UI v1.3.3 overlap evidence belongs under the UI center."
+    },
+    {
+      "id": "uiux-overlap-v133-p1p2-large-gantt",
+      "status": "moved",
+      "movedAt": "2026-06-29T00:00:00.000Z",
+      "oldPath": "artifacts/uiux-overlap-v133-p1p2-large-gantt",
+      "newPath": "project-ui/artifacts/uiux-overlap-v133-p1p2-large-gantt",
+      "reason": "Generated UI v1.3.3 overlap evidence belongs under the UI center."
+    },
+    {
+      "id": "uiux-overlap-v133-p1p2-materials",
+      "status": "moved",
+      "movedAt": "2026-06-29T00:00:00.000Z",
+      "oldPath": "artifacts/uiux-overlap-v133-p1p2-materials",
+      "newPath": "project-ui/artifacts/uiux-overlap-v133-p1p2-materials",
+      "reason": "Generated UI v1.3.3 overlap evidence belongs under the UI center."
+    },
+    {
+      "id": "uiux-overlap-v133-p1p2-planning-baseline",
+      "status": "moved",
+      "movedAt": "2026-06-29T00:00:00.000Z",
+      "oldPath": "artifacts/uiux-overlap-v133-p1p2-planning-baseline",
+      "newPath": "project-ui/artifacts/uiux-overlap-v133-p1p2-planning-baseline",
+      "reason": "Generated UI v1.3.3 overlap evidence belongs under the UI center."
+    },
+    {
+      "id": "uiux-overlap-v133-planning-baseline",
+      "status": "moved",
+      "movedAt": "2026-06-29T00:00:00.000Z",
+      "oldPath": "artifacts/uiux-overlap-v133-planning-baseline",
+      "newPath": "project-ui/artifacts/uiux-overlap-v133-planning-baseline",
+      "reason": "Generated UI v1.3.3 overlap evidence belongs under the UI center."
+    },
+    {
+      "id": "uiux-overlap-v133-sweep",
+      "status": "moved",
+      "movedAt": "2026-06-29T00:00:00.000Z",
+      "oldPath": "artifacts/uiux-overlap-v133-sweep",
+      "newPath": "project-ui/artifacts/uiux-overlap-v133-sweep",
+      "reason": "Generated UI v1.3.3 overlap evidence belongs under the UI center."
+    },
+    {
+      "id": "uiux-performance",
+      "status": "moved",
+      "movedAt": "2026-06-29T00:00:00.000Z",
+      "oldPath": "artifacts/uiux-performance",
+      "newPath": "project-ui/artifacts/uiux-performance",
+      "reason": "Generated UI performance evidence belongs under the UI center."
+    },
+    {
+      "id": "uiux-predeploy-gates",
+      "status": "moved",
+      "movedAt": "2026-06-29T00:00:00.000Z",
+      "oldPath": "artifacts/uiux-predeploy-gates",
+      "newPath": "project-ui/artifacts/uiux-predeploy-gates",
+      "reason": "Generated UI predeploy gate evidence belongs under the UI center."
+    },
+    {
+      "id": "uiux-release-smoke",
+      "status": "moved",
+      "movedAt": "2026-06-29T00:00:00.000Z",
+      "oldPath": "artifacts/uiux-release-smoke",
+      "newPath": "project-ui/artifacts/uiux-release-smoke",
+      "reason": "Generated UI release-smoke evidence belongs under the UI center."
+    },
+    {
+      "id": "uiux-visual",
+      "status": "moved",
+      "movedAt": "2026-06-29T00:00:00.000Z",
+      "oldPath": "artifacts/uiux-visual",
+      "newPath": "project-ui/artifacts/uiux-visual",
+      "reason": "Generated UI visual evidence belongs under the UI center."
+    },
+    {
+      "id": "uiux-visual-20260505",
+      "status": "moved",
+      "movedAt": "2026-06-29T00:00:00.000Z",
+      "oldPath": "artifacts/uiux-visual-20260505",
+      "newPath": "project-ui/artifacts/uiux-visual-20260505",
+      "reason": "Historical generated UI visual evidence belongs under the UI center."
+    },
+    {
+      "id": "uiux-visual-batches",
+      "status": "moved",
+      "movedAt": "2026-06-29T00:00:00.000Z",
+      "oldPath": "artifacts/uiux-visual-batches",
+      "newPath": "project-ui/artifacts/uiux-visual-batches",
+      "reason": "Generated UI visual batch evidence belongs under the UI center."
+    },
+    {
+      "id": "uiux-visual-v132-17fix",
+      "status": "moved",
+      "movedAt": "2026-06-29T00:00:00.000Z",
+      "oldPath": "artifacts/uiux-visual-v132-17fix",
+      "newPath": "project-ui/artifacts/uiux-visual-v132-17fix",
+      "reason": "Historical generated UI v1.3.2 visual evidence belongs under the UI center."
+    },
+    {
+      "id": "uiux-visual-v132-final-gate",
+      "status": "moved",
+      "movedAt": "2026-06-29T00:00:00.000Z",
+      "oldPath": "artifacts/uiux-visual-v132-final-gate",
+      "newPath": "project-ui/artifacts/uiux-visual-v132-final-gate",
+      "reason": "Historical generated UI v1.3.2 visual evidence belongs under the UI center."
+    },
+    {
+      "id": "visual-check",
+      "status": "moved",
+      "movedAt": "2026-06-29T00:00:00.000Z",
+      "oldPath": "client/visual-check",
+      "newPath": "project-ui/artifacts/visual-check",
+      "reason": "Ad hoc frontend screenshots are UI artifacts, not client source."
+    },
+    {
+      "id": "v13-audit",
+      "status": "moved-with-junction",
+      "movedAt": "2026-06-29T13:30:00+08:00",
+      "oldPath": "artifacts/v13-audit",
+      "newPath": "project-ui/artifacts/v13-audit",
+      "reason": "Historical v1.3.2 UI audit evidence belongs under the UI center."
+    },
+    {
+      "id": "baseline-timeline-overlap",
+      "status": "moved-with-junction",
+      "movedAt": "2026-06-29T13:30:00+08:00",
+      "oldPath": "artifacts/baseline-timeline-overlap",
+      "newPath": "project-ui/artifacts/baseline-timeline-overlap",
+      "reason": "Generated baseline timeline overlap evidence belongs under the UI center."
+    },
+    {
+      "id": "demo-overlap-live",
+      "status": "moved-with-junction",
+      "movedAt": "2026-06-29T13:30:00+08:00",
+      "oldPath": "artifacts/demo-overlap-live",
+      "newPath": "project-ui/artifacts/demo-overlap-live",
+      "reason": "Generated demo overlap evidence belongs under the UI center."
+    },
+    {
+      "id": "demo-overlap-live-admin",
+      "status": "moved-with-junction",
+      "movedAt": "2026-06-29T13:30:00+08:00",
+      "oldPath": "artifacts/demo-overlap-live-admin",
+      "newPath": "project-ui/artifacts/demo-overlap-live-admin",
+      "reason": "Generated demo overlap evidence belongs under the UI center."
+    },
+    {
+      "id": "demo-overlap-live-admin-after-gantt-row-fix",
+      "status": "moved-with-junction",
+      "movedAt": "2026-06-29T13:30:00+08:00",
+      "oldPath": "artifacts/demo-overlap-live-admin-after-gantt-row-fix",
+      "newPath": "project-ui/artifacts/demo-overlap-live-admin-after-gantt-row-fix",
+      "reason": "Generated demo overlap evidence belongs under the UI center."
+    },
+    {
+      "id": "demo-overlap-live-admin-after-header-sidebar-fix",
+      "status": "moved-with-junction",
+      "movedAt": "2026-06-29T13:30:00+08:00",
+      "oldPath": "artifacts/demo-overlap-live-admin-after-header-sidebar-fix",
+      "newPath": "project-ui/artifacts/demo-overlap-live-admin-after-header-sidebar-fix",
+      "reason": "Generated demo overlap evidence belongs under the UI center."
+    },
+    {
+      "id": "demo-overlap-live-admin-after-sidebar-fix",
+      "status": "moved-with-junction",
+      "movedAt": "2026-06-29T13:30:00+08:00",
+      "oldPath": "artifacts/demo-overlap-live-admin-after-sidebar-fix",
+      "newPath": "project-ui/artifacts/demo-overlap-live-admin-after-sidebar-fix",
+      "reason": "Generated demo overlap evidence belongs under the UI center."
+    },
+    {
+      "id": "demo-overlap-live-admin-after-sidebar-fix-2",
+      "status": "moved-with-junction",
+      "movedAt": "2026-06-29T13:30:00+08:00",
+      "oldPath": "artifacts/demo-overlap-live-admin-after-sidebar-fix-2",
+      "newPath": "project-ui/artifacts/demo-overlap-live-admin-after-sidebar-fix-2",
+      "reason": "Generated demo overlap evidence belongs under the UI center."
+    },
+    {
+      "id": "design-prototypes",
+      "status": "moved-with-junction",
+      "movedAt": "2026-06-29T13:30:00+08:00",
+      "oldPath": "artifacts/design-prototypes",
+      "newPath": "project-ui/artifacts/design-prototypes",
+      "reason": "Generated UI prototype images belong under the UI center."
+    },
+    {
+      "id": "figma-reference-webpage-optimization-20260504-130803",
+      "status": "moved-with-junction",
+      "movedAt": "2026-06-29T13:30:00+08:00",
+      "oldPath": "artifacts/figma-reference-webpage-optimization-20260504-130803",
+      "newPath": "project-ui/references/figma-reference-webpage-optimization-20260504-130803",
+      "reason": "Figma reference webpage export belongs under UI references."
+    },
+    {
+      "id": "debug-screenshots",
+      "status": "moved",
+      "movedAt": "2026-06-29T13:30:00+08:00",
+      "oldPath": "artifacts/dashboard-*.png and artifacts/milestones-current-debug.png",
+      "newPath": "project-ui/artifacts/debug-screenshots",
+      "reason": "Ad hoc UI debug screenshots belong under the UI center."
+    },
+    {
+      "id": "demo-overlap-logs",
+      "status": "moved",
+      "movedAt": "2026-06-29T13:30:00+08:00",
+      "oldPath": "artifacts/demo-overlap-rerun*.log",
+      "newPath": "project-ui/artifacts/demo-overlap-logs",
+      "reason": "Generated UI overlap rerun logs belong under the UI center."
+    },
+    {
+      "id": "debug-sources",
+      "status": "moved-with-junction",
+      "movedAt": "2026-06-29T13:30:00+08:00",
+      "oldPath": "artifacts/baseline-redecoded.tmp.tsx",
+      "newPath": "project-ui/artifacts/debug-sources/baseline-redecoded.tmp.tsx",
+      "reason": "Temporary UI debug source belongs under the UI center artifacts area."
+    },
+    {
+      "id": "legacy-ui-plans",
+      "status": "moved",
+      "movedAt": "2026-06-29T13:30:00+08:00",
+      "oldPath": "artifacts/????Dashboard??????.md and artifacts/??????????_v1.3.5.2.md",
+      "newPath": "project-ui/references/legacy-plans",
+      "reason": "Legacy UI plan copies belong under UI references; authoritative plans remain in docs/plans when present."
+    },
+    {
+      "id": "ui-artifacts-moved-note",
+      "status": "moved-with-junction",
+      "movedAt": "2026-06-29T13:30:00+08:00",
+      "oldPath": "artifacts/UI_ARTIFACTS_MOVED.md",
+      "newPath": "project-ui/index/UI_ARTIFACTS_MOVED.md",
+      "reason": "UI artifact migration note belongs with the UI center index."
+    }
+  ]
+}

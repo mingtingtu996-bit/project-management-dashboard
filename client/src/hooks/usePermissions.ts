@@ -4,6 +4,7 @@ import { AuthContext } from '@/context/AuthContext'
 import { useCurrentProject } from '@/hooks/useStore'
 import { toast } from '@/hooks/use-toast'
 import { getApiErrorMessage, getAuthHeaders } from '@/lib/apiClient'
+import { isPermissionSystemDisabled } from '@/lib/permissionBypass'
 import { PROJECT_ACCESS_OVERRIDE_EVENT } from '@/lib/projectAccessEvents'
 import {
   hasAllPermissions,
@@ -13,13 +14,14 @@ import {
   PermissionLevel,
   ROLE_PERMISSIONS,
 } from '@/lib/permissions'
-import { normalizeGlobalRole, normalizeProjectPermissionLevel, type GlobalRole } from '@/lib/roleLabels'
+import { normalizeGlobalRole, normalizeProjectAccessLevel, type GlobalRole } from '@/lib/roleLabels'
 
 interface UsePermissionsOptions {
   projectId?: string
 }
 
 interface ProjectAccessSummary {
+  projectId: string | null
   permissionLevel: PermissionLevel
   globalRole: GlobalRole
   canManageTeam: boolean
@@ -32,8 +34,8 @@ const projectAccessCache = new Map<string, { value: ProjectAccessSummary; fetche
 const projectAccessInflight = new Map<string, Promise<ProjectAccessSummary>>()
 const projectAccessFailureNoticeTimestamps = new Map<string, number>()
 
-function buildProjectAccessCacheKey(projectId: string, userId: string) {
-  return `${userId}:${projectId}`
+function buildProjectAccessCacheKey(projectId: string, userId: string, companyId?: string | null) {
+  return `${userId}:${companyId || 'no-company'}:${projectId}`
 }
 
 function getCachedProjectAccess(cacheKey: string): ProjectAccessSummary | null {
@@ -52,7 +54,7 @@ function showProjectAccessFallbackNotice(projectId: string, message: string) {
   if (now - lastShownAt < PROJECT_ACCESS_FAILURE_NOTICE_DEDUPE_MS) return
   projectAccessFailureNoticeTimestamps.set(projectId, now)
   toast({
-    title: '权限检查失败，已切换为只读',
+    title: '权限检查失败，已撤销当前项目操作权限',
     description: message,
     variant: 'destructive',
   })
@@ -62,8 +64,9 @@ async function fetchProjectAccessSummary(
   projectId: string,
   userId: string,
   globalRole: GlobalRole,
+  companyId?: string | null,
 ): Promise<ProjectAccessSummary> {
-  const cacheKey = buildProjectAccessCacheKey(projectId, userId)
+  const cacheKey = buildProjectAccessCacheKey(projectId, userId, companyId)
   const cached = getCachedProjectAccess(cacheKey)
   if (cached) return cached
 
@@ -85,7 +88,8 @@ async function fetchProjectAccessSummary(
 
       const data = payload.data || {}
       const summary: ProjectAccessSummary = {
-        permissionLevel: normalizeProjectPermissionLevel(data.permissionLevel),
+        projectId,
+        permissionLevel: normalizeProjectAccessLevel(data.permissionLevel),
         globalRole: normalizeGlobalRole(data.globalRole || globalRole),
         canManageTeam: Boolean(data.canManageTeam),
         canEdit: Boolean(data.canEdit),
@@ -111,8 +115,10 @@ export function usePermissions(options: UsePermissionsOptions = {}) {
   const authContext = useContext(AuthContext)
   const isAuthenticated = authContext?.authState.isAuthenticated ?? false
   const user = authContext?.authState.user ?? null
+  const permissionSystemDisabled = isPermissionSystemDisabled()
   const [accessSummary, setAccessSummary] = useState<ProjectAccessSummary>({
-    permissionLevel: 'viewer',
+    projectId: null,
+    permissionLevel: 'none',
     globalRole: normalizeGlobalRole(user?.globalRole),
     canManageTeam: false,
     canEdit: false,
@@ -124,10 +130,25 @@ export function usePermissions(options: UsePermissionsOptions = {}) {
   useEffect(() => {
     let cancelled = false
 
+    if (permissionSystemDisabled) {
+      setAccessSummary({
+        projectId,
+        permissionLevel: 'owner',
+        globalRole: normalizeGlobalRole(user?.globalRole || 'company_admin'),
+        canManageTeam: true,
+        canEdit: true,
+      })
+      setLoading(false)
+      return () => {
+        cancelled = true
+      }
+    }
+
     const ownerFallback = currentProject?.owner_id && user?.id && currentProject.owner_id === user.id
 
     if (!authContext) {
       setAccessSummary({
+        projectId,
         permissionLevel: 'editor',
         globalRole: normalizeGlobalRole(user?.globalRole),
         canManageTeam: false,
@@ -141,7 +162,8 @@ export function usePermissions(options: UsePermissionsOptions = {}) {
 
     if (!projectId || !isAuthenticated || !user?.id) {
       setAccessSummary({
-        permissionLevel: ownerFallback ? 'owner' : 'viewer',
+        projectId,
+        permissionLevel: ownerFallback ? 'owner' : 'none',
         globalRole: normalizeGlobalRole(user?.globalRole),
         canManageTeam: Boolean(ownerFallback),
         canEdit: Boolean(ownerFallback),
@@ -154,6 +176,7 @@ export function usePermissions(options: UsePermissionsOptions = {}) {
 
     if (ownerFallback) {
       setAccessSummary({
+        projectId,
         permissionLevel: 'owner',
         globalRole: normalizeGlobalRole(user?.globalRole),
         canManageTeam: true,
@@ -167,7 +190,7 @@ export function usePermissions(options: UsePermissionsOptions = {}) {
 
     setLoading(true)
 
-    void fetchProjectAccessSummary(projectId, user.id, normalizeGlobalRole(user.globalRole))
+    void fetchProjectAccessSummary(projectId, user.id, normalizeGlobalRole(user.globalRole), user.currentCompanyId)
       .then((summary) => {
         if (cancelled) return
         setAccessSummary(summary)
@@ -176,11 +199,12 @@ export function usePermissions(options: UsePermissionsOptions = {}) {
         if (cancelled) return
         const message = getApiErrorMessage(error, '权限接口暂时不可用，请刷新后重试。')
         if (import.meta.env.DEV) {
-          console.warn('[usePermissions] fallback to readonly access', message)
+          console.warn('[usePermissions] project access unavailable', message)
         }
         showProjectAccessFallbackNotice(projectId, message)
         setAccessSummary({
-          permissionLevel: 'viewer',
+          projectId,
+          permissionLevel: 'none',
           globalRole: normalizeGlobalRole(user.globalRole),
           canManageTeam: false,
           canEdit: false,
@@ -195,10 +219,11 @@ export function usePermissions(options: UsePermissionsOptions = {}) {
     return () => {
       cancelled = true
     }
-  }, [authContext, currentProject?.owner_id, isAuthenticated, projectId, user?.globalRole, user?.id])
+  }, [authContext, currentProject?.owner_id, isAuthenticated, permissionSystemDisabled, projectId, user?.currentCompanyId, user?.globalRole, user?.id])
 
   useEffect(() => {
     if (typeof window === 'undefined' || !projectId) return undefined
+    if (permissionSystemDisabled) return undefined
 
     const handleProjectAccessOverride = (
       event: Event,
@@ -212,9 +237,10 @@ export function usePermissions(options: UsePermissionsOptions = {}) {
       if (!detail || detail.projectId !== projectId) return
 
       if (user?.id) {
-        projectAccessCache.set(buildProjectAccessCacheKey(projectId, user.id), {
+        projectAccessCache.set(buildProjectAccessCacheKey(projectId, user.id, user.currentCompanyId), {
           value: {
-            permissionLevel: normalizeProjectPermissionLevel(detail.permissionLevel),
+            projectId,
+            permissionLevel: normalizeProjectAccessLevel(detail.permissionLevel),
             globalRole: normalizeGlobalRole(user.globalRole),
             canManageTeam: Boolean(detail.canManageTeam),
             canEdit: Boolean(detail.canEdit),
@@ -225,7 +251,8 @@ export function usePermissions(options: UsePermissionsOptions = {}) {
 
       setAccessSummary((current) => ({
         ...current,
-        permissionLevel: normalizeProjectPermissionLevel(detail.permissionLevel),
+        projectId,
+        permissionLevel: normalizeProjectAccessLevel(detail.permissionLevel),
         canManageTeam: Boolean(detail.canManageTeam),
         canEdit: Boolean(detail.canEdit),
       }))
@@ -236,18 +263,18 @@ export function usePermissions(options: UsePermissionsOptions = {}) {
     return () => {
       window.removeEventListener(PROJECT_ACCESS_OVERRIDE_EVENT, handleProjectAccessOverride)
     }
-  }, [projectId, user?.globalRole, user?.id])
+  }, [permissionSystemDisabled, projectId, user?.globalRole, user?.id])
 
-  const isStaleFormerOwner = Boolean(
-    currentProject?.owner_id
-    && user?.id
-    && currentProject.owner_id !== user.id
-    && accessSummary.permissionLevel === 'owner',
+  const isStaleProjectAccess = Boolean(
+    !permissionSystemDisabled
+    && projectId
+    && accessSummary.projectId
+    && accessSummary.projectId !== projectId,
   )
 
-  const permissionLevel = isStaleFormerOwner ? 'editor' : accessSummary.permissionLevel
-  const effectiveCanManageTeam = isStaleFormerOwner ? false : accessSummary.canManageTeam
-  const effectiveCanEdit = isStaleFormerOwner ? true : accessSummary.canEdit
+  const permissionLevel = isStaleProjectAccess ? 'none' : accessSummary.permissionLevel
+  const effectiveCanManageTeam = isStaleProjectAccess ? false : accessSummary.canManageTeam
+  const effectiveCanEdit = isStaleProjectAccess ? false : accessSummary.canEdit
 
   const can = useMemo(() => {
     const check = (action: PermissionAction): boolean => {
@@ -295,7 +322,7 @@ export function usePermissions(options: UsePermissionsOptions = {}) {
     loading,
     isOwner: permissionLevel === 'owner',
     isEditor: permissionLevel === 'editor',
-    isViewer: permissionLevel === 'viewer',
+    hasProjectAccess: permissionLevel !== 'none',
     canEdit: effectiveCanEdit,
     canManageTeam: effectiveCanManageTeam,
   }

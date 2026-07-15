@@ -1,7 +1,10 @@
 import type { ReactNode } from 'react'
+import { translateSourceType } from '@/lib/lineagePresentation'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { ArrowRight, Building2, CheckCircle2, CircleAlert, ClipboardList, FileInput, FileOutput, GitBranch, Users } from 'lucide-react'
 import { EmptyState } from '@/components/EmptyState'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Separator } from '@/components/ui/separator'
@@ -18,12 +21,15 @@ import type {
   CertificateLinkedIssue,
   CertificateLinkedRisk,
   CertificateLinkedWarning,
+  CertificateTemplateMaterialEvidenceChain,
+  CertificateTemplateHandlingStep,
   ConditionFormData,
   PreMilestoneCondition,
   PreMilestone,
 } from '../types'
 import {
   getCertificateStatusThemeKey,
+  getCertificateTypeLabel,
   mapCertificateStatusLabel,
   certificateStageBadge,
 } from '../constants'
@@ -58,6 +64,8 @@ interface CertificateDetailDrawerProps {
   selectedWorkItemId?: string | null
   projectId?: string | null
   certificates?: CertificateBoardItem[]
+  handlingSteps?: CertificateTemplateHandlingStep[]
+  materialEvidenceChains?: CertificateTemplateMaterialEvidenceChain[]
   canEdit?: boolean
 }
 
@@ -105,6 +113,90 @@ const RISK_STATUS_LABEL: Record<CertificateLinkedRisk['status'], string> = {
 
 function joinFooter(parts: Array<string | null | undefined>) {
   return parts.filter((value): value is string => Boolean(value && String(value).trim())).join(' · ')
+}
+
+function blockingLevelLabel(level: CertificateTemplateHandlingStep['blockingLevel']) {
+  if (level === 'startup_gate') return '开工门槛'
+  if (level === 'certificate_gate') return '办证门槛'
+  return '配套成果'
+}
+
+type HandlingStepJudgementStatus = 'completed' | 'blocked' | 'in_progress' | 'not_generated'
+
+interface HandlingStepJudgement {
+  step: CertificateTemplateHandlingStep
+  status: HandlingStepJudgementStatus
+  statusLabel: string
+  matchedWorkItems: CertificateDetailResponse['workItems']
+  pendingMaterials: string[]
+}
+
+const HANDLING_COMPLETED_STATUSES = new Set(['completed', 'approved', 'issued'])
+const HANDLING_BLOCKED_STATUSES = new Set(['blocked', 'supplement_required', 'expired'])
+
+function resolveHandlingStepJudgement(
+  step: CertificateTemplateHandlingStep,
+  workItems: CertificateDetailResponse['workItems'],
+): HandlingStepJudgement {
+  const materialCodes = new Set(step.satisfiesMaterialCodes.map((code) => code.trim()).filter(Boolean))
+  const matchedWorkItems = workItems.filter((item) => item.item_code && materialCodes.has(item.item_code))
+  const matchedCodes = new Set(matchedWorkItems.map((item) => item.item_code).filter(Boolean))
+  const pendingMaterials = step.satisfiesMaterials.filter((_, index) => {
+    const code = step.satisfiesMaterialCodes[index]
+    return code ? !matchedCodes.has(code) : matchedWorkItems.length === 0
+  })
+
+  if (matchedWorkItems.length === 0) {
+    return {
+      step,
+      status: 'not_generated',
+      statusLabel: '未生成事项',
+      matchedWorkItems,
+      pendingMaterials,
+    }
+  }
+
+  if (matchedWorkItems.some((item) => item.is_blocked || HANDLING_BLOCKED_STATUSES.has(String(item.status)))) {
+    return {
+      step,
+      status: 'blocked',
+      statusLabel: '有阻塞',
+      matchedWorkItems,
+      pendingMaterials,
+    }
+  }
+
+  if (matchedWorkItems.every((item) => HANDLING_COMPLETED_STATUSES.has(String(item.status)))) {
+    return {
+      step,
+      status: 'completed',
+      statusLabel: '已完成',
+      matchedWorkItems,
+      pendingMaterials,
+    }
+  }
+
+  return {
+    step,
+    status: 'in_progress',
+    statusLabel: '需推进',
+    matchedWorkItems,
+    pendingMaterials,
+  }
+}
+
+function handlingJudgementBadgeClass(status: HandlingStepJudgementStatus) {
+  if (status === 'completed') return 'border-emerald-200 bg-emerald-50 text-emerald-700 ring-emerald-200'
+  if (status === 'blocked') return 'border-rose-200 bg-rose-50 text-rose-700 ring-rose-200'
+  if (status === 'not_generated') return 'border-slate-200 bg-slate-50 text-slate-600 ring-slate-200'
+  return 'border-amber-200 bg-amber-50 text-amber-700 ring-amber-200'
+}
+
+function handlingJudgementAccentClass(status: HandlingStepJudgementStatus) {
+  if (status === 'completed') return 'border-l-emerald-500'
+  if (status === 'blocked') return 'border-l-rose-500'
+  if (status === 'not_generated') return 'border-l-slate-300'
+  return 'border-l-amber-500'
 }
 
 function LinkedCard({
@@ -189,6 +281,8 @@ export function CertificateDetailDrawer({
   selectedWorkItemId,
   projectId,
   certificates = [],
+  handlingSteps = [],
+  materialEvidenceChains = [],
   canEdit = true,
 }: CertificateDetailDrawerProps) {
   useDialogFocusRestore(open)
@@ -209,6 +303,39 @@ export function CertificateDetailDrawer({
   const escalationTargetHint = selectedWorkItem
     ? '当前会把选中的办理事项软链接到问题 / 风险主链。'
     : '当前会把证照卡点软链接到问题 / 风险主链。'
+  const certificateHandlingSteps = useMemo(() => {
+    const certificateType = String(detail?.certificate.certificate_type ?? '')
+    if (!certificateType) return []
+    return handlingSteps
+      .filter((step) => step.certificateType === certificateType)
+      .sort((left, right) => left.sortOrder - right.sortOrder)
+  }, [detail?.certificate.certificate_type, handlingSteps])
+  const handlingStepJudgements = useMemo(() => {
+    if (!detail) return []
+    return certificateHandlingSteps.map((step) => resolveHandlingStepJudgement(step, detail.workItems))
+  }, [certificateHandlingSteps, detail])
+  const handlingJudgementSummary = useMemo(() => ({
+    completed: handlingStepJudgements.filter((item) => item.status === 'completed').length,
+    inProgress: handlingStepJudgements.filter((item) => item.status === 'in_progress').length,
+    blocked: handlingStepJudgements.filter((item) => item.status === 'blocked').length,
+    notGenerated: handlingStepJudgements.filter((item) => item.status === 'not_generated').length,
+  }), [handlingStepJudgements])
+  const certificateMaterialEvidenceChains = useMemo(() => {
+    const certificateType = String(detail?.certificate.certificate_type ?? '')
+    if (!certificateType) return []
+    return materialEvidenceChains.filter((chain) => chain.certificateType === certificateType)
+  }, [detail?.certificate.certificate_type, materialEvidenceChains])
+  const coveredMaterialEvidenceCount = useMemo(() => {
+    if (!detail) return 0
+    return certificateMaterialEvidenceChains.filter((chain) =>
+      detail.workItems.some((item) =>
+        item.item_code &&
+        chain.linkedWorkItemCodes.includes(item.item_code) &&
+        !item.is_blocked &&
+        HANDLING_COMPLETED_STATUSES.has(String(item.status)),
+      ),
+    ).length
+  }, [certificateMaterialEvidenceChains, detail])
   const conditionMilestone = useMemo<PreMilestone | null>(() => {
     if (!detail) return null
     const now = detail.certificate.latest_record_at || new Date().toISOString()
@@ -353,6 +480,217 @@ export function CertificateDetailDrawer({
                 )}
               </div>
             </section>
+
+            {certificateHandlingSteps.length > 0 ? (
+              <section className="rounded-xl border border-slate-100 bg-white p-5 shadow-[var(--el-1)]" data-testid="certificate-detail-handling-path">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+                      <GitBranch className="h-4 w-4 text-blue-600" />
+                      办证执行路径
+                    </div>
+                    <p className="mt-1 text-xs leading-5 text-slate-500">
+                      按资料来源、办理部门、取得成果和后续复用关系核验证照办理深度。
+                    </p>
+                  </div>
+                  <Badge variant="outline">{certificateHandlingSteps.length} 步</Badge>
+                </div>
+
+                <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3" data-testid="certificate-detail-handling-summary">
+                  <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-slate-700">
+                    <ClipboardList className="h-3.5 w-3.5 text-blue-600" />
+                    办理判断总览
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-4">
+                    <div className="rounded-lg border border-emerald-100 bg-white px-3 py-2">
+                      <div className="text-xs text-slate-500">已完成</div>
+                      <div className="mt-1 text-base font-semibold tabular-nums text-emerald-700">已完成 {handlingJudgementSummary.completed}</div>
+                    </div>
+                    <div className="rounded-lg border border-amber-100 bg-white px-3 py-2">
+                      <div className="text-xs text-slate-500">需推进</div>
+                      <div className="mt-1 text-base font-semibold tabular-nums text-amber-700">需推进 {handlingJudgementSummary.inProgress}</div>
+                    </div>
+                    <div className="rounded-lg border border-rose-100 bg-white px-3 py-2">
+                      <div className="text-xs text-slate-500">有阻塞</div>
+                      <div className="mt-1 text-base font-semibold tabular-nums text-rose-700">有阻塞 {handlingJudgementSummary.blocked}</div>
+                    </div>
+                    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                      <div className="text-xs text-slate-500">未匹配</div>
+                      <div className="mt-1 text-base font-semibold tabular-nums text-slate-700">未生成事项 {handlingJudgementSummary.notGenerated}</div>
+                    </div>
+                  </div>
+                </div>
+
+                {certificateMaterialEvidenceChains.length > 0 ? (
+                  <div className="mt-4 rounded-xl border border-blue-100 bg-blue-50/50 p-3" data-testid="certificate-detail-material-evidence-chain">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <div className="flex items-center gap-2 text-xs font-semibold text-blue-900">
+                          <FileInput className="h-3.5 w-3.5 text-blue-600" />
+                          资料证据链
+                        </div>
+                        <p className="mt-1 text-xs leading-5 text-blue-800">
+                          按资料缺口对应实际事项、办理部门、拿回成果和后续复用关系核验。
+                        </p>
+                      </div>
+                      <Badge variant="outline" className="border-blue-200 bg-white text-blue-700">
+                        资料覆盖 {coveredMaterialEvidenceCount} / {certificateMaterialEvidenceChains.length}
+                      </Badge>
+                    </div>
+                    <div className="mt-3 grid gap-2">
+                      {certificateMaterialEvidenceChains.map((chain) => (
+                        <div key={`${chain.handlingStepCode}-${chain.materialCode}`} className="rounded-lg border border-blue-100 bg-white px-3 py-2">
+                          <div className="flex flex-wrap items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="text-sm font-semibold text-slate-900">{chain.materialName}</div>
+                              <div className="mt-1 text-xs leading-5 text-slate-600">
+                                {chain.handlingStepName} · {chain.handlingAuthority}
+                              </div>
+                            </div>
+                            <Badge variant={chain.blockingLevel === 'startup_gate' ? 'default' : 'outline'}>
+                              {blockingLevelLabel(chain.blockingLevel)}
+                            </Badge>
+                          </div>
+                          <div className="mt-2 grid gap-2 text-xs leading-5 text-slate-600 md:grid-cols-2">
+                            <div>
+                              <span className="font-medium text-slate-700">对应事项：</span>
+                              {chain.linkedWorkItemNames.length > 0 ? chain.linkedWorkItemNames.join('、') : '待生成办理事项'}
+                            </div>
+                            <div>
+                              <span className="font-medium text-slate-700">资料包：</span>
+                              {chain.materialPackageNames.length > 0 ? chain.materialPackageNames.join('、') : '通用办理路径'}
+                            </div>
+                            <div>
+                              <span className="font-medium text-slate-700">拿回成果：</span>
+                              {chain.outputDocument}
+                            </div>
+                            <div>
+                              <span className="font-medium text-slate-700">后续复用：</span>
+                              {chain.reusableForCertificateTypes.length > 0
+                                ? chain.reusableForCertificateTypes.map(getCertificateTypeLabel).join('、')
+                                : '当前证照闭环'}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
+                <div className="mt-4 grid gap-3">
+                  {handlingStepJudgements.map((judgement, index) => {
+                    const { step } = judgement
+                    return (
+                    <div key={step.stepCode} className={`rounded-xl border border-l-4 border-slate-200 bg-slate-50 p-3 ${handlingJudgementAccentClass(judgement.status)}`}>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white text-xs font-semibold tabular-nums text-slate-700 ring-1 ring-inset ring-slate-200">
+                            {index + 1}
+                          </span>
+                          <div className="min-w-0 text-sm font-semibold text-slate-900">{step.stepName}</div>
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          <Badge variant="outline" className={handlingJudgementBadgeClass(judgement.status)}>
+                            {judgement.statusLabel}
+                          </Badge>
+                          <Badge variant={step.blockingLevel === 'startup_gate' ? 'default' : 'outline'}>
+                            {blockingLevelLabel(step.blockingLevel)}
+                          </Badge>
+                        </div>
+                      </div>
+
+                      <div className="mt-3 rounded-lg border border-slate-200 bg-white px-3 py-3">
+                        <div className="flex items-center gap-2 text-xs font-semibold text-slate-700">
+                          {judgement.status === 'completed' ? (
+                            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                          ) : (
+                            <CircleAlert className="h-3.5 w-3.5 text-amber-600" />
+                          )}
+                          关联事项
+                        </div>
+                        {judgement.matchedWorkItems.length > 0 ? (
+                          <div className="mt-2 grid gap-2">
+                            {judgement.matchedWorkItems.map((item) => (
+                              <div key={item.id} className="rounded-lg bg-slate-50 px-3 py-2">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <div className="text-sm font-medium text-slate-900">{item.item_name}</div>
+                                  <StatusBadge status={getCertificateStatusThemeKey(item.status)} fallbackLabel={mapCertificateStatusLabel(item.status)} className="px-2 py-0.5 text-xs">
+                                    {mapCertificateStatusLabel(item.status)}
+                                  </StatusBadge>
+                                </div>
+                                <div className="mt-1 text-xs leading-5 text-slate-500">
+                                  {item.next_action || '待补充下一动作'}
+                                  {item.block_reason ? ` · ${item.block_reason}` : ''}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-500">
+                            暂未匹配实际事项{judgement.pendingMaterials.length > 0 ? `：${judgement.pendingMaterials.join('、')}` : ''}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                        <div className="rounded-lg border border-slate-200 bg-white px-3 py-3">
+                          <div className="flex items-center gap-2 text-xs font-semibold text-slate-700">
+                            <Users className="h-3.5 w-3.5 text-slate-500" />
+                            资料来源方
+                          </div>
+                          <div className="mt-2 text-xs leading-5 text-slate-600">{step.sourceParties.join('、')}</div>
+                          <div className="mt-3 flex items-center gap-2 text-xs font-semibold text-slate-700">
+                            <FileInput className="h-3.5 w-3.5 text-slate-500" />
+                            带什么资料
+                          </div>
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            {step.submitMaterials.map((material) => (
+                              <Badge key={material} variant="secondary">
+                                {material}
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <div className="rounded-lg border border-slate-200 bg-white px-3 py-3">
+                            <div className="flex items-center gap-2 text-xs font-semibold text-slate-700">
+                              <Building2 className="h-3.5 w-3.5 text-slate-500" />
+                              跑的部门/机构
+                            </div>
+                            <div className="mt-2 text-sm font-medium leading-6 text-slate-900">{step.handlingAuthority}</div>
+                          </div>
+
+                          <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-3">
+                            <div className="flex items-center gap-2 text-xs font-semibold text-blue-700">
+                              <FileOutput className="h-3.5 w-3.5" />
+                              拿回成果
+                            </div>
+                            <div className="mt-2 text-sm font-semibold leading-6 text-blue-950">{step.outputDocument}</div>
+                          </div>
+
+                          <div className="rounded-lg border border-slate-200 bg-white px-3 py-3 sm:col-span-2">
+                            <div className="flex items-center gap-2 text-xs font-semibold text-slate-700">
+                              <ArrowRight className="h-3.5 w-3.5 text-slate-500" />
+                              满足/复用
+                            </div>
+                            <div className="mt-2 text-xs leading-5 text-slate-600">
+                              补齐：{step.satisfiesMaterials.join('、')}
+                            </div>
+                            <div className="mt-1 text-xs leading-5 text-slate-600">
+                              {step.reusableForCertificateTypes.length > 0
+                                ? `后续复用：${step.reusableForCertificateTypes.map(getCertificateTypeLabel).join('、')}`
+                                : '完成施工许可闭环'}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    )
+                  })}
+                </div>
+              </section>
+            ) : null}
 
             {siblingCertificates.length > 0 ? (
               <section className="rounded-xl border border-slate-100 bg-white p-5 shadow-[var(--el-1)]">
@@ -506,7 +844,7 @@ export function CertificateDetailDrawer({
                     )}
                   </div>
                   <div className="mt-3 rounded-xl empty-state-frame border-slate-200 bg-slate-50 p-3 text-xs text-slate-500">
-                    只复用共享 `issues / risks` 主链，通过 `source_entity` 做软链接，不在前期证照域内新增平行状态链。
+                    只复用共享问题/风险主链，通过关联记录做软链接，不在前期证照域内新增平行状态链。
                   </div>
                 </section>
 
@@ -583,8 +921,7 @@ export function CertificateDetailDrawer({
                         description={item.description}
                         footer={joinFooter([
                           item.task_id ? `任务 ${item.task_id}` : '未关联任务',
-                          item.chain_id ? `链路 ${item.chain_id}` : null,
-                          item.source_id ? `来源 ${item.source_id}` : null,
+                          item.source_type ? translateSourceType(item.source_type) : null,
                         ])}
                         badges={
                           <>
@@ -622,9 +959,9 @@ export function CertificateDetailDrawer({
                         title={item.title}
                         description={item.description}
                         footer={joinFooter([
-                          item.task_id ? `任务 ${item.task_id}` : '未关联任务',
-                          item.linked_issue_id ? `联动问题 ${item.linked_issue_id}` : null,
-                          item.chain_id ? `链路 ${item.chain_id}` : null,
+                          item.task_id ? '已关联任务' : '未关联任务',
+                          item.linked_issue_id ? '已关联问题' : null,
+                          item.source_type ? translateSourceType(item.source_type) : '人工创建',
                         ])}
                         badges={
                           <>

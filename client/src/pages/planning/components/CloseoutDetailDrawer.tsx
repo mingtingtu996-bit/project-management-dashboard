@@ -9,14 +9,14 @@ import { useDialogFocusRestore } from '@/hooks/useDialogFocusRestore'
 import { cn } from '@/lib/utils'
 import type { CloseoutItem } from './CloseoutGroupedList'
 
-export type CloseoutReasonBranch = 'system' | 'carryover' | 'close' | 'manual' | 'force'
+export type CloseoutReasonBranch = 'system' | 'carryover' | 'close' | 'manual' | 'scope_change'
 
 interface CloseoutDetailDrawerProps {
   open: boolean
   item: CloseoutItem | null
   selectedItems: CloseoutItem[]
   batchLayerOpen: boolean
-  forceCloseUnlocked: boolean
+  closeoutAttentionRequired: boolean
   reasonBranch: CloseoutReasonBranch
   reasonLeaf: string
   readOnly?: boolean
@@ -59,7 +59,7 @@ const REASON_TREE: Array<{
     leaves: ['合并到其他条目', '转移至承接项'],
   },
   {
-    branch: 'force',
+    branch: 'scope_change',
     label: '因范围变更移出',
     description: '适用于范围收缩或边界变更导致移出的事项。',
     leaves: ['按范围变更移出', '从本月清单移除'],
@@ -176,7 +176,7 @@ export function CloseoutDetailDrawer({
   item,
   selectedItems,
   batchLayerOpen,
-  forceCloseUnlocked,
+  closeoutAttentionRequired,
   reasonBranch,
   reasonLeaf,
   readOnly = false,
@@ -224,11 +224,11 @@ export function CloseoutDetailDrawer({
       <Separator />
 
       <div data-testid="closeout-detail-drawer-body" className="flex-1 space-y-4 overflow-y-auto p-4">
-        {forceCloseUnlocked ? (
+        {closeoutAttentionRequired ? (
           <div className="flex items-start gap-3 rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-800">
             <Lock className="mt-0.5 h-5 w-5 shrink-0" />
             <div className="space-y-1">
-              <div className="font-medium">第 7 日强制发起关账已解锁</div>
+              <div className="font-medium">第 7 日仍有未处理事项，请项目负责人关注关账</div>
             </div>
           </div>
         ) : null}

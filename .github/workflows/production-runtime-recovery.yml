@@ -1,0 +1,437 @@
+name: Production Runtime Recovery
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Runtime environment protected by the GitHub environment gate.
+        required: true
+        default: production
+        type: choice
+        options:
+          - production
+      target:
+        description: Existing runtime service to recover after a matching diagnosis.
+        required: true
+        default: all
+        type: choice
+        options:
+          - api
+          - web
+          - worker
+          - all
+      confirmation:
+        description: Type RESTART_PRODUCTION_RUNTIME to authorize a diagnosed manual recovery.
+        required: true
+        default: ''
+        type: string
+
+concurrency:
+  group: production-runtime-recovery
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  runtime-recovery:
+    name: Probe, Diagnose, And Recover Production Runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    environment: production
+    outputs:
+      probe_status: ${{ steps.summarize.outputs.probe_status }}
+      recovery_status: ${{ steps.summarize.outputs.recovery_status }}
+      verification_status: ${{ steps.summarize.outputs.verification_status }}
+      overall_status: ${{ steps.summarize.outputs.overall_status }}
+      selected_targets: ${{ steps.summarize.outputs.selected_targets }}
+    env:
+      OUTPUT_ROOT: project-testing/reports/production-runtime-recovery-${{ github.run_id }}-${{ github.run_attempt }}
+      RUNTIME_CONTAINERS: project-management-web,project-management-api,project-management-worker
+      DEPLOY_HOST: ${{ secrets.PRODUCTION_DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.PRODUCTION_DEPLOY_USER }}
+      DEPLOY_PORT: ${{ secrets.PRODUCTION_DEPLOY_PORT || '22' }}
+      DEPLOY_PATH: ${{ secrets.PRODUCTION_DEPLOY_PATH }}
+      DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.PRODUCTION_DEPLOY_SSH_PRIVATE_KEY }}
+      DEPLOY_KNOWN_HOSTS: ${{ secrets.PRODUCTION_DEPLOY_KNOWN_HOSTS }}
+      DEPLOY_HEALTH_URL: ${{ secrets.PRODUCTION_DEPLOY_HEALTH_URL }}
+    steps:
+      - name: Checkout recovery contract
+        uses: actions/checkout@v6
+
+      - name: Preflight environment, confirmation, target, and secrets
+        id: preflight
+        env:
+          RECOVERY_MODE: ${{ github.event_name == 'workflow_dispatch' && 'manual' || 'scheduled' }}
+          REQUESTED_ENVIRONMENT: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'production' }}
+          RECOVERY_TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.target || 'auto' }}
+          RECOVERY_CONFIRMATION: ${{ github.event_name == 'workflow_dispatch' && inputs.confirmation || '' }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUTPUT_ROOT"
+          blocked="false"
+
+          if [ "$REQUESTED_ENVIRONMENT" != "production" ]; then
+            echo "The production environment guard did not pass." >&2
+            blocked="true"
+          fi
+          case "$RECOVERY_TARGET" in
+            auto|api|web|worker|all) ;;
+            *)
+              echo "The recovery target is not allow-listed." >&2
+              blocked="true"
+              ;;
+          esac
+          if [ "$RECOVERY_MODE" = "scheduled" ] && [ "$RECOVERY_TARGET" != "auto" ]; then
+            echo "Scheduled recovery requires the auto target." >&2
+            blocked="true"
+          fi
+          if [ "$RECOVERY_MODE" = "manual" ]; then
+            if [ "$RECOVERY_TARGET" = "auto" ] || [ "$RECOVERY_CONFIRMATION" != "RESTART_PRODUCTION_RUNTIME" ]; then
+              echo "Manual recovery requires the exact confirmation and an explicit target." >&2
+              blocked="true"
+            fi
+          fi
+
+          for required_name in DEPLOY_HOST DEPLOY_USER DEPLOY_PATH DEPLOY_SSH_PRIVATE_KEY DEPLOY_KNOWN_HOSTS DEPLOY_HEALTH_URL; do
+            if [ -z "${!required_name}" ]; then
+              echo "Missing required production recovery secret: $required_name" >&2
+              blocked="true"
+            fi
+          done
+          case "$DEPLOY_PORT" in
+            ''|*[!0-9]*)
+              echo "PRODUCTION_DEPLOY_PORT must be numeric." >&2
+              blocked="true"
+              ;;
+          esac
+          case "$DEPLOY_HEALTH_URL" in
+            https://*/api/readyz) ;;
+            *)
+              echo "PRODUCTION_DEPLOY_HEALTH_URL must be an HTTPS /api/readyz endpoint." >&2
+              blocked="true"
+              ;;
+          esac
+
+          if [ "$blocked" = "true" ]; then
+            echo "passed=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "passed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Probe public runtime readiness endpoint
+        id: public_probe
+        if: ${{ steps.preflight.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          healthy="false"
+          for attempt in 1 2 3; do
+            if curl --fail --silent --show-error --max-time 15 "$DEPLOY_HEALTH_URL" >/dev/null 2>&1; then
+              healthy="true"
+              break
+            fi
+            if [ "$attempt" -lt 3 ]; then sleep 5; fi
+          done
+          echo "healthy=$healthy" >> "$GITHUB_OUTPUT"
+
+      - name: Configure pinned production SSH trust
+        if: ${{ steps.preflight.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_PRIVATE_KEY" > ~/.ssh/workbuddy-production-recovery
+          chmod 600 ~/.ssh/workbuddy-production-recovery
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Diagnose and recover existing Web, API, and worker containers
+        id: remote_recovery
+        if: ${{ steps.preflight.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          RECOVERY_MODE: ${{ github.event_name == 'workflow_dispatch' && 'manual' || 'scheduled' }}
+          RECOVERY_TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.target || 'auto' }}
+          RECOVERY_CONFIRMATION: ${{ github.event_name == 'workflow_dispatch' && inputs.confirmation || '' }}
+          PUBLIC_PROBE_HEALTHY: ${{ steps.public_probe.outputs.healthy }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUTPUT_ROOT"
+          remote_root="/tmp/workbuddy-production-runtime-recovery/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          remote_script="$remote_root/recover-production-runtime.sh"
+          remote_report="$remote_root/runtime-recovery.env"
+          local_report="$OUTPUT_ROOT/runtime-recovery.env"
+
+          cleanup_remote() {
+            ssh -i ~/.ssh/workbuddy-production-recovery -p "$DEPLOY_PORT" -o IdentitiesOnly=yes \
+              "$DEPLOY_USER@$DEPLOY_HOST" "rm -rf '$remote_root'" >/dev/null 2>&1 || true
+          }
+          trap cleanup_remote EXIT
+
+          ssh -i ~/.ssh/workbuddy-production-recovery -p "$DEPLOY_PORT" -o IdentitiesOnly=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$remote_root'"
+          scp -i ~/.ssh/workbuddy-production-recovery -P "$DEPLOY_PORT" -o IdentitiesOnly=yes \
+            scripts/recover-production-runtime.sh "$DEPLOY_USER@$DEPLOY_HOST:$remote_script"
+
+          printf -v remote_command \
+            'APP_DIR=%q REPORT_FILE=%q RECOVERY_MODE=%q RECOVERY_TARGET=%q RECOVERY_CONFIRMATION=%q DEPLOY_TARGET=%q PUBLIC_PROBE_HEALTHY=%q bash %q' \
+            "$DEPLOY_PATH" "$remote_report" "$RECOVERY_MODE" "$RECOVERY_TARGET" "$RECOVERY_CONFIRMATION" \
+            'production' "$PUBLIC_PROBE_HEALTHY" "$remote_script"
+
+          set +e
+          ssh -i ~/.ssh/workbuddy-production-recovery -p "$DEPLOY_PORT" -o IdentitiesOnly=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" "$remote_command"
+          remote_status=$?
+          set -e
+          printf '%s\n' "$remote_status" > "$OUTPUT_ROOT/remote-exit-code.txt"
+
+          if ! scp -i ~/.ssh/workbuddy-production-recovery -P "$DEPLOY_PORT" -o IdentitiesOnly=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST:$remote_report" "$local_report"; then
+            echo "The sanitized remote recovery report could not be collected." >&2
+            remote_status=5
+            printf '%s\n' "$remote_status" > "$OUTPUT_ROOT/remote-exit-code.txt"
+          fi
+          exit "$remote_status"
+
+      - name: Verify public runtime readiness after diagnosis and recovery
+        id: public_verify
+        if: ${{ always() && steps.preflight.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          healthy="false"
+          for attempt in $(seq 1 12); do
+            if curl --fail --silent --show-error --max-time 15 "$DEPLOY_HEALTH_URL" >/dev/null 2>&1; then
+              healthy="true"
+              break
+            fi
+            if [ "$attempt" -lt 12 ]; then sleep 5; fi
+          done
+          echo "healthy=$healthy" >> "$GITHUB_OUTPUT"
+
+      - name: Build sanitized runtime recovery summary
+        id: summarize
+        if: ${{ always() }}
+        env:
+          PREFLIGHT_OUTCOME: ${{ steps.preflight.outcome }}
+          PUBLIC_PROBE_BEFORE: ${{ steps.public_probe.outputs.healthy }}
+          PUBLIC_PROBE_AFTER: ${{ steps.public_verify.outputs.healthy }}
+          REMOTE_STEP_OUTCOME: ${{ steps.remote_recovery.outcome }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUTPUT_ROOT"
+          node --input-type=module <<'NODE'
+          import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+
+          const root = process.env.OUTPUT_ROOT;
+          const reportPath = `${root}/runtime-recovery.env`;
+          const meta = existsSync(reportPath)
+            ? Object.fromEntries(
+              readFileSync(reportPath, 'utf8')
+                .split(/\r?\n/u)
+                .filter(Boolean)
+                .map((line) => {
+                  const separator = line.indexOf('=');
+                  return [line.slice(0, separator), line.slice(separator + 1)];
+                }),
+            )
+            : {};
+          const preflightPassed = process.env.PREFLIGHT_OUTCOME === 'success' && meta.preflight_passed === 'true';
+          const publicProbeBeforePassed = process.env.PUBLIC_PROBE_BEFORE === 'true';
+          const publicProbeAfterPassed = process.env.PUBLIC_PROBE_AFTER === 'true';
+          const localVerificationPassed = meta.local_verification_passed === 'true';
+          const recoveryAttempted = meta.recovery_attempted === 'true';
+          const runtimeHealthy = preflightPassed && localVerificationPassed && publicProbeAfterPassed;
+          const recoverySucceeded = recoveryAttempted && meta.recovery_succeeded === 'true' && runtimeHealthy;
+          const overallStatus = runtimeHealthy ? (recoverySucceeded ? 'recovered' : 'healthy') : 'failed';
+          const probeStatus = process.env.PREFLIGHT_OUTCOME !== 'success'
+            ? 'blocked'
+            : publicProbeBeforePassed ? 'passed' : 'failed';
+          const recoveryStatus = !preflightPassed
+            ? 'blocked'
+            : recoveryAttempted ? (recoverySucceeded ? 'succeeded' : 'failed') : 'not-needed';
+          const verificationStatus = !preflightPassed ? 'blocked' : runtimeHealthy ? 'passed' : 'failed';
+          const remoteExitCodePath = `${root}/remote-exit-code.txt`;
+
+          const summary = {
+            schemaVersion: 'workbuddy-production-runtime-recovery/v1',
+            generatedAt: meta.generated_at || new Date().toISOString(),
+            runId: process.env.GITHUB_RUN_ID,
+            runAttempt: process.env.GITHUB_RUN_ATTEMPT,
+            trigger: process.env.GITHUB_EVENT_NAME,
+            releaseSha: meta.release_sha || 'unknown',
+            preflightPassed,
+            probeStatus,
+            recoveryStatus,
+            verificationStatus,
+            overallStatus,
+            publicProbeBeforePassed,
+            publicProbeAfterPassed,
+            localVerificationPassed,
+            recoveryAttempted,
+            recoverySucceeded,
+            requestedTarget: meta.requested_target || 'unknown',
+            selectedTargets: meta.selected_targets || 'none',
+            attemptedTargets: meta.attempted_targets || 'none',
+            diagnosisCodes: meta.diagnosis_codes || 'report_unavailable',
+            failureReason: meta.failure_reason || 'remote_report_unavailable',
+            remoteStepOutcome: process.env.REMOTE_STEP_OUTCOME || 'skipped',
+            remoteExitCode: existsSync(remoteExitCodePath) ? readFileSync(remoteExitCodePath, 'utf8').trim() : 'not-run',
+            services: {
+              api: {
+                statusBefore: meta.api_status_before || 'unknown',
+                healthBefore: meta.api_health_before || 'unknown',
+                readyBefore: meta.api_probe_before === 'true',
+                exitCodeBefore: meta.api_exit_code_before || 'unknown',
+                statusAfter: meta.api_status_after || 'unknown',
+                healthAfter: meta.api_health_after || 'unknown',
+                readyAfter: meta.api_probe_after === 'true',
+              },
+              web: {
+                statusBefore: meta.web_status_before || 'unknown',
+                readyBefore: meta.web_probe_before === 'true',
+                exitCodeBefore: meta.web_exit_code_before || 'unknown',
+                statusAfter: meta.web_status_after || 'unknown',
+                readyAfter: meta.web_probe_after === 'true',
+              },
+              worker: {
+                statusBefore: meta.worker_status_before || 'unknown',
+                healthBefore: meta.worker_health_before || 'unknown',
+                readyBefore: meta.worker_probe_before === 'true',
+                exitCodeBefore: meta.worker_exit_code_before || 'unknown',
+                statusAfter: meta.worker_status_after || 'unknown',
+                healthAfter: meta.worker_health_after || 'unknown',
+                readyAfter: meta.worker_probe_after === 'true',
+              },
+            },
+            historicalSignals: {
+              apiUnhealthy: meta.apiUnhealthy === 'true',
+              apiExited: meta.apiExited === 'true',
+              healthCurlFailed: meta.healthCurlFailed === 'true',
+            },
+            boundary: {
+              existingContainersOnly: true,
+              sourceMutationAllowed: false,
+              imageBuildAllowed: false,
+              databaseWriteAllowed: false,
+              secretValuesWritten: false,
+              envValuesWritten: false,
+            },
+          };
+
+          writeFileSync(`${root}/runtime-recovery-summary.json`, `${JSON.stringify(summary, null, 2)}\n`);
+          for (const [name, value] of Object.entries({
+            probe_status: probeStatus,
+            recovery_status: recoveryStatus,
+            verification_status: verificationStatus,
+            overall_status: overallStatus,
+            selected_targets: summary.selectedTargets,
+          })) {
+            appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${value}\n`);
+          }
+          NODE
+          rm -f "$OUTPUT_ROOT/runtime-recovery.env" "$OUTPUT_ROOT/remote-exit-code.txt"
+
+      - name: Publish runtime recovery summary
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE' >> "$GITHUB_STEP_SUMMARY"
+          import { readFileSync } from 'node:fs';
+          const summary = JSON.parse(readFileSync(`${process.env.OUTPUT_ROOT}/runtime-recovery-summary.json`, 'utf8'));
+          console.log('# Production Runtime Recovery');
+          console.log('');
+          console.log(`- Overall: ${summary.overallStatus}`);
+          console.log(`- Public probe before: ${summary.publicProbeBeforePassed ? 'passed' : 'failed'}`);
+          console.log(`- Recovery: ${summary.recoveryStatus} (${summary.selectedTargets})`);
+          console.log(`- Local and public verification: ${summary.verificationStatus}`);
+          console.log(`- Diagnosis: ${summary.diagnosisCodes}`);
+          NODE
+
+      - name: Upload sanitized recovery report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: production-runtime-recovery-${{ github.run_id }}-${{ github.run_attempt }}
+          path: project-testing/reports/production-runtime-recovery-${{ github.run_id }}-${{ github.run_attempt }}/runtime-recovery-summary.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove production recovery SSH key
+        if: ${{ always() }}
+        run: rm -f ~/.ssh/workbuddy-production-recovery
+
+      - name: Enforce fail-closed recovery result
+        if: ${{ always() }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          const summary = JSON.parse(readFileSync(`${process.env.OUTPUT_ROOT}/runtime-recovery-summary.json`, 'utf8'));
+          if (!['healthy', 'recovered'].includes(summary.overallStatus)) process.exit(1);
+          NODE
+
+  notify-probe:
+    name: Notify Public Probe Stage
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    needs: runtime-recovery
+    if: ${{ always() }}
+    continue-on-error: true
+    environment: production
+    steps:
+      - name: Send independent public probe notification
+        continue-on-error: true
+        env:
+          SLACK_WEBHOOK: ${{ secrets.PRODUCTION_SLACK_WEBHOOK }}
+          STAGE_STATUS: ${{ needs.runtime-recovery.outputs.probe_status }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SLACK_WEBHOOK" ]; then exit 0; fi
+          payload="$(node -e "console.log(JSON.stringify({text:'WorkBuddy production runtime probe: '+process.env.STAGE_STATUS+' (run '+process.env.GITHUB_RUN_ID+')'}))")"
+          curl --fail --silent --show-error -X POST -H 'Content-type: application/json' --data "$payload" "$SLACK_WEBHOOK" >/dev/null
+
+  notify-recovery:
+    name: Notify Recovery Stage
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    needs: runtime-recovery
+    if: ${{ always() }}
+    continue-on-error: true
+    environment: production
+    steps:
+      - name: Send independent recovery notification
+        continue-on-error: true
+        env:
+          SLACK_WEBHOOK: ${{ secrets.PRODUCTION_SLACK_WEBHOOK }}
+          STAGE_STATUS: ${{ needs.runtime-recovery.outputs.recovery_status }}
+          SELECTED_TARGETS: ${{ needs.runtime-recovery.outputs.selected_targets }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SLACK_WEBHOOK" ]; then exit 0; fi
+          payload="$(node -e "console.log(JSON.stringify({text:'WorkBuddy production runtime recovery: '+process.env.STAGE_STATUS+', targets: '+process.env.SELECTED_TARGETS+' (run '+process.env.GITHUB_RUN_ID+')'}))")"
+          curl --fail --silent --show-error -X POST -H 'Content-type: application/json' --data "$payload" "$SLACK_WEBHOOK" >/dev/null
+
+  notify-verification:
+    name: Notify Verification Stage
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    needs: runtime-recovery
+    if: ${{ always() }}
+    continue-on-error: true
+    environment: production
+    steps:
+      - name: Send independent verification notification
+        continue-on-error: true
+        env:
+          SLACK_WEBHOOK: ${{ secrets.PRODUCTION_SLACK_WEBHOOK }}
+          STAGE_STATUS: ${{ needs.runtime-recovery.outputs.verification_status }}
+          OVERALL_STATUS: ${{ needs.runtime-recovery.outputs.overall_status }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SLACK_WEBHOOK" ]; then exit 0; fi
+          payload="$(node -e "console.log(JSON.stringify({text:'WorkBuddy production runtime verification: '+process.env.STAGE_STATUS+', overall: '+process.env.OVERALL_STATUS+' (run '+process.env.GITHUB_RUN_ID+')'}))")"
+          curl --fail --silent --show-error -X POST -H 'Content-type: application/json' --data "$payload" "$SLACK_WEBHOOK" >/dev/null

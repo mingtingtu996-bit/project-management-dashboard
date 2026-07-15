@@ -1,8 +1,7 @@
 ﻿// v1.4.18 + v1.4.7.4: unified duration suggestion service.
-// New duration decisions must enter through this service; legacy AI fields are compatibility fallback only.
+// New duration decisions must enter through this service; retired legacy duration fields are not runtime fallbacks.
 
 import { getProjectCompanyId } from '../auth/access.js'
-import { query as rawQuery } from '../database.js'
 import { logger } from '../middleware/logger.js'
 import {
   applyDurationContextToDays,
@@ -12,35 +11,36 @@ import {
   type DurationContextFactorKey,
   type DurationContextSummary,
 } from './durationContextService.js'
-import { supabase } from './dbService.js'
+import { getTask, supabase } from './dbService.js'
 import {
   expandTitleWeakStandardWorkSearchTextFromResolver,
+  describeDurationContributionModeFromResolver,
+  inferTitleWeakScaleSignalFromResolver,
   inferTitleWeakStandardWorkCodesFromResolver,
+  isDurationBearingContributionModeFromResolver,
+  resolveDurationContributionModeFromResolver,
   resolveStandardWorkDurationSeed,
 } from './algorithmSeedResolver.js'
-import { buildProjectProgressVelocityLearning } from './progressVelocityLearningService.js'
+import { loadPublishedProgressVelocityRuntime } from './progressVelocityRuntimePublicationService.js'
 import { buildProjectHealthDeviationSummary } from './projectHealthDeviationSummaryService.js'
-import {
-  expandTitleWeakStandardWorkSearchText,
-  inferTitleWeakScaleSignal,
-} from '../seeds/v1472TitleWeakRecognitionSeed.js'
-import {
-  describeDurationContributionMode,
-  isDurationBearingContributionMode,
-  normalizeDurationContributionMode,
-} from '../seeds/durationContributionMode.js'
 import {
   buildProjectGenerationFactsSnapshot,
   readProjectGenerationFactsSnapshot,
   type ProjectGenerationFactsSnapshot,
 } from './projectGenerationFactsSnapshotService.js'
 import {
+  readLiveProjectGenerationContext,
+} from './projectGenerationFactsStoreService.js'
+import {
   buildAlgorithmFactContext,
   summarizeAlgorithmFactContext,
   type AlgorithmFactContextPhase,
 } from './algorithmFactContextService.js'
 import { resolvePackageChildRhythmWindow } from './packageChildRhythmWindowService.js'
-import { hydrateDurationAlgorithmInput } from './durationAlgorithmInputHydrationService.js'
+import {
+  assembleDurationInput,
+  type DurationInputAssemblerResult,
+} from './durationInputAssemblerService.js'
 import {
   getDurationOutputContract,
   type DurationOutputCode,
@@ -62,14 +62,36 @@ import {
 import {
   loadAlgorithmAssetLearnableParameterRuntimeValue,
 } from './algorithmAssetLearnableParameterRuntimeConsumptionService.js'
+import { getAlgorithmAssetLearnableParameter } from './algorithmAssetLearnableParameterRegistryService.js'
+import { resolveDurationContextPolicyRuntimeSelection } from './durationContextPolicySelectorService.js'
 import {
   recordDurationSuggestionConsumedArtifacts,
   type DurationRuntimeConsumerFacadeArtifactsResult,
 } from './durationRuntimeConsumerObservationAdapterService.js'
+import {
+  readPlanningReplayCalibrationReadback,
+  type PlanningReplayCalibrationReadback,
+} from './planningReplayCalibrationService.js'
+import {
+  evaluateDurationPlausibility,
+  type DurationPlausibilityWarning,
+} from './durationEngineeringPlausibilityGuardrailService.js'
 import type {
   DurationRuntimeConsumerObservationQueryExec,
   DurationRuntimeConsumerObservedArtifact,
 } from './durationRuntimeConsumerObservationService.js'
+import {
+  createDurationRuntimeConsumerObservationQueryExec,
+} from './durationRuntimeConsumerObservationService.js'
+import type { T2RhythmScheduleCandidatePackage } from './t2DivisionRhythmTemplateRegistryService.js'
+import type { T2RhythmScheduleCandidateNetworkPhase1Evaluation } from './t2RhythmScheduleCandidateNetworkEvaluationService.js'
+import type { T2RhythmSchedulePhase1Selection } from './t2RhythmSchedulePhase1SelectionService.js'
+import type { ConstructionOrganizationScenarioSelection } from './constructionOrganizationScenarioSelector.js'
+import {
+  mergeConstructionOrganizationLineageIntoContext,
+  readConstructionOrganizationPlanNetworkRuntimeLineage,
+  type ConstructionOrganizationPlanNetworkRuntimeLineage,
+} from './constructionOrganizationRuntimeLineageService.js'
 
 export type DurationCalibrationSource =
   | 'enterprise_override'
@@ -86,7 +108,7 @@ export type DurationCalibrationSource =
 
 export type DurationDataMaturityLevel = 'L0' | 'L1' | 'L2'
 export type DurationSuggestionPurpose = 'new_task_reference' | 'execution_reference' | 'monthly_commitment_window'
-type DurationMaturityEvidenceScope = 'project' | 'company' | 'system' | 'legacy' | 'unknown'
+type DurationMaturityEvidenceScope = 'project' | 'company' | 'system' | 'unknown'
 export type DurationQuantitySource =
   | 'explicit_task_quantity'
   | 'task_saved_quantity'
@@ -119,6 +141,7 @@ export type DurationBusinessReasonCode =
   | 'MONTHLY_COMMITMENT_WINDOW'
   | 'NON_DURATION_BEARING_STANDARD_WORK'
   | 'PACKAGE_CHILD_DURATION_WINDOW'
+  | 'PLANNING_REPLAY_CALIBRATION'
   | 'SERVICE_UNAVAILABLE'
 
 export interface DurationSuggestion {
@@ -219,9 +242,15 @@ export interface DurationSuggestionInput {
   acceptanceRequired?: boolean | null
   materialRequired?: boolean | null
   projectGenerationFacts?: Record<string, unknown> | null
+  constructionOrganizationScenario?: ConstructionOrganizationScenarioSelection | null
+  t2RhythmScheduleCandidatePackage?: T2RhythmScheduleCandidatePackage | null
+  t2RhythmScheduleCandidateNetworkEvaluation?: T2RhythmScheduleCandidateNetworkPhase1Evaluation | null
+  t2RhythmSchedulePhase1Selection?: T2RhythmSchedulePhase1Selection | null
+  durationInputAssembly?: DurationInputAssemblerResult<DurationSuggestionInput> | null
   runtimeExecutionFacts?: Record<string, unknown> | null
   workCalendar?: ConstructionCalendarContext | null
   runtimeConsumerObservationQueryExec?: DurationRuntimeConsumerObservationQueryExec | null
+  runtimeEvidenceMode?: 'record' | 'no_write'
 }
 
 export interface DurationSuggestionRuntimeArtifactPublication {
@@ -230,6 +259,13 @@ export interface DurationSuggestionRuntimeArtifactPublication {
   publicationStatus?: string | null
   sourceEvidenceRefs?: string[] | null
   observationContext?: Record<string, unknown> | null
+}
+
+function shouldRecordDurationRuntimeConsumerEvidence(input: DurationSuggestionInput) {
+  if (input.runtimeEvidenceMode === 'no_write') return false
+  if (input.runtimeEvidenceMode === 'record') return true
+  if (input.runtimeConsumerObservationQueryExec) return true
+  return process.env.NODE_ENV !== 'test'
 }
 
 export interface RecordDurationSuggestionRuntimeConsumptionInput {
@@ -271,12 +307,7 @@ type DurationOverrideRow = {
   reason?: string | null
 }
 
-type BenchmarkLookupResult = {
-  benchmark: DurationBenchmarkRow | null
-  missingCompanyColumn: boolean
-}
-
-type BenchmarkScope = 'project' | 'company' | 'system' | 'legacy'
+type BenchmarkScope = 'project' | 'company' | 'system'
 
 type DurationBenchmarkCandidate = {
   benchmark: DurationBenchmarkRow
@@ -390,13 +421,6 @@ function normalizeId(value: unknown) {
   return String(value ?? '').trim()
 }
 
-function buildDurationRuntimeConsumerObservationQueryExec(): DurationRuntimeConsumerObservationQueryExec {
-  return async <T = Record<string, unknown>>(sql: string, params: unknown[] = []) => {
-    const result = await rawQuery(sql, params as any[])
-    return result.rows as T[]
-  }
-}
-
 export function buildDurationSuggestionConsumedArtifacts(input: {
   runtimeArtifactPublications: readonly DurationSuggestionRuntimeArtifactPublication[]
   projectId?: string | null
@@ -427,7 +451,7 @@ export function buildDurationSuggestionConsumedArtifacts(input: {
 export function recordDurationSuggestionRuntimeConsumption(
   input: RecordDurationSuggestionRuntimeConsumptionInput,
 ): Promise<DurationRuntimeConsumerFacadeArtifactsResult> {
-  const queryExec = input.queryExec ?? buildDurationRuntimeConsumerObservationQueryExec()
+  const queryExec = createDurationRuntimeConsumerObservationQueryExec(input.queryExec)
   const projectId = normalizeId(input.projectId)
   const taskId = normalizeId(input.taskId)
   const standardWorkCode = normalizeId(input.standardWorkCode)
@@ -815,7 +839,7 @@ function buildRuntimeGuardSuggestion(
 }
 
 function readSeedDurationContributionMode(seed: Record<string, unknown>) {
-  return normalizeDurationContributionMode(seed.durationContributionMode ?? seed.duration_contribution_mode)
+  return resolveDurationContributionModeFromResolver(seed.durationContributionMode ?? seed.duration_contribution_mode)
 }
 
 function buildDisplaySummary(suggestion: DurationSuggestion) {
@@ -987,26 +1011,7 @@ function buildBaselineMatchText(input: DurationSuggestionInput) {
     ...trustedMethodVariantCodes(input),
     ...trustedElementVariantCodes(input),
   ].map(normalizeId).filter(Boolean).join(' ').toLowerCase()
-  return expandTitleWeakStandardWorkSearchText(raw).toLowerCase()
-}
-
-function isMissingColumnError(error: unknown, columnName: string) {
-  const code = String((error as { code?: unknown } | null)?.code ?? '')
-  const message = String((error as Error | null | undefined)?.message ?? '').toLowerCase()
-  const column = columnName.toLowerCase()
-  return code === '42703' && (
-    message.includes(column)
-    || message.includes(`column "${column}"`)
-    || message.includes(`column ${column}`)
-  )
-}
-
-function isMissingCompanyColumnError(error: unknown) {
-  return isMissingColumnError(error, 'company_id')
-}
-
-function isMissingProjectColumnError(error: unknown) {
-  return isMissingColumnError(error, 'project_id')
+  return raw
 }
 
 async function resolveCompanyId(input: DurationSuggestionInput) {
@@ -1157,21 +1162,36 @@ function enrichDurationInputFromProjectGenerationFacts(input: DurationSuggestion
   }
 }
 
-async function loadSuggestionTaskContext(taskId: string | null): Promise<SuggestionTaskContextRow | null> {
-  if (!taskId) return null
+async function loadSuggestionTaskContext(
+  taskId: string | null,
+  projectId: string | null,
+): Promise<SuggestionTaskContextRow | null> {
+  if (!taskId || !projectId) return null
 
   const { data, error } = await (supabase as any)
     .from('tasks')
     .select('id, project_id, title, planned_start_date, planned_end_date, start_date, end_date, actual_start_date, actual_end_date, progress, template_node_id, engineering_category_id, wbs_node_type, standard_work_code, standard_work_name, engineering_object_id, building_object_id, basement_object_id, floor_object_id, physical_zone_object_id, functional_area_object_id, participant_unit_id, acceptance_required, material_required, planned_quantity, quantity_unit, standard_task_metadata, parent_id')
     .eq('id', taskId)
+    .eq('project_id', projectId)
     .maybeSingle()
 
   if (error) {
     logger.warn('[durationSuggestionService] failed to load task suggestion context', { taskId, error })
-    return null
+  } else if (data) {
+    return data as SuggestionTaskContextRow
   }
 
-  return (data ?? null) as SuggestionTaskContextRow | null
+  try {
+    const task = await getTask(taskId)
+    if (!task || normalizeId(task.project_id) !== projectId) return null
+    return task as SuggestionTaskContextRow
+  } catch (fallbackError) {
+    logger.warn('[durationSuggestionService] failed to load task suggestion context through task reader', {
+      taskId,
+      error: fallbackError instanceof Error ? fallbackError.message : String(fallbackError),
+    })
+    return null
+  }
 }
 
 function normalizeParentDurationBoundaryPolicy(value: unknown): ParentDurationBoundaryPolicy | null {
@@ -1341,8 +1361,11 @@ function resolvePackageChildRhythmWindowInputFromMetadata(metadata: Record<strin
   }
 }
 
-async function loadParentDurationBoundaryContext(parentTaskId: string | null): Promise<ParentDurationBoundaryContext | null> {
-  const parent = await loadSuggestionTaskContext(parentTaskId)
+async function loadParentDurationBoundaryContext(
+  parentTaskId: string | null,
+  projectId: string | null,
+): Promise<ParentDurationBoundaryContext | null> {
+  const parent = await loadSuggestionTaskContext(parentTaskId, projectId)
   return resolveParentDurationBoundaryFromRow(parent)
 }
 
@@ -1383,15 +1406,20 @@ async function loadEngineeringObjectFeatureProfile(
   }))
 }
 
-async function countChildTasks(taskId: string | null, explicitChildTaskCount?: number | null) {
+async function countChildTasks(
+  taskId: string | null,
+  projectId: string | null,
+  explicitChildTaskCount?: number | null,
+) {
   const explicit = Number(explicitChildTaskCount ?? 0)
   if (Number.isFinite(explicit) && explicit > 0) return Math.ceil(explicit)
-  if (!taskId) return null
+  if (!taskId || !projectId) return null
 
   const { data, error } = await (supabase as any)
     .from('tasks')
     .select('id')
     .eq('parent_id', taskId)
+    .eq('project_id', projectId)
     .not('status', 'in', '(deleted,cancelled,closed)')
 
   if (error || !Array.isArray(data)) return null
@@ -1400,7 +1428,8 @@ async function countChildTasks(taskId: string | null, explicitChildTaskCount?: n
 
 async function mergeSuggestionTaskContext(input: DurationSuggestionInput): Promise<DurationSuggestionInput> {
   const taskId = normalizeId(input.taskId)
-  const task = await loadSuggestionTaskContext(taskId)
+  const requestedProjectId = normalizeId(input.projectId)
+  const task = await loadSuggestionTaskContext(taskId, requestedProjectId)
   if (!task) return input
 
   const metadata = readMetadataObject(task.standard_task_metadata)
@@ -1409,7 +1438,7 @@ async function mergeSuggestionTaskContext(input: DurationSuggestionInput): Promi
     readNestedMetadata(metadata, 'featureProfile'),
     projectGenerationFactsToDurationFeatureProfile(taskProjectGenerationFacts),
   )
-  const projectId = normalizeId(input.projectId) || normalizeId(task.project_id)
+  const projectId = requestedProjectId || normalizeId(task.project_id)
   const objectFeatureProfile = await loadEngineeringObjectFeatureProfile(projectId, [
     input.engineeringObjectId ?? task.engineering_object_id,
     input.buildingObjectId ?? task.building_object_id,
@@ -1429,12 +1458,12 @@ async function mergeSuggestionTaskContext(input: DurationSuggestionInput): Promi
     : savedQuantity
       ? 'task_saved_quantity'
       : input.taskQuantitySource ?? null
-  const childTaskCount = await countChildTasks(taskId, input.childTaskCount)
+  const childTaskCount = await countChildTasks(taskId, projectId, input.childTaskCount)
   const savedParentBoundary = resolveChildDurationBoundaryFromMetadata(metadata)
   const savedPackageChildWindow = resolvePackageChildRhythmWindowInputFromMetadata(metadata)
   const parentBoundary = normalizeParentDurationBoundaryPolicy(input.parentDurationBoundaryPolicy)
     ? null
-    : savedParentBoundary ?? await loadParentDurationBoundaryContext(normalizeId(task.parent_id) || null)
+    : savedParentBoundary ?? await loadParentDurationBoundaryContext(normalizeId(task.parent_id) || null, projectId)
   const coveredBuildingIds = normalizeCodeArray(input.coveredBuildingIds).length > 0
     ? normalizeCodeArray(input.coveredBuildingIds)
     : readMetadataArray(metadata, 'coveredBuildingIds', 'covered_building_ids')
@@ -1495,7 +1524,7 @@ async function mergeSuggestionTaskContext(input: DurationSuggestionInput): Promi
   }
 }
 
-async function findBenchmark(benchKey: string, companyId: string | null): Promise<BenchmarkLookupResult> {
+async function findBenchmark(benchKey: string, companyId: string | null): Promise<DurationBenchmarkRow | null> {
   let query = (supabase as any)
     .from('duration_benchmarks')
     .select('p50_days, p75_days, p80_days, mean_days, sample_count, variance, coefficient_of_variation, confidence_level, confidence_score, company_id, metadata')
@@ -1506,20 +1535,14 @@ async function findBenchmark(benchKey: string, companyId: string | null): Promis
   query = companyId ? query.eq('company_id', companyId) : query.is('company_id', null)
 
   const { data, error } = await query.maybeSingle()
-  if (error) {
-    if (isMissingCompanyColumnError(error)) {
-      return { benchmark: null, missingCompanyColumn: true }
-    }
-    logger.warn('[durationSuggestionService] failed to query scoped benchmark', { error })
-    return { benchmark: null, missingCompanyColumn: false }
-  }
+  if (error) throw error
 
-  return { benchmark: (data ?? null) as DurationBenchmarkRow | null, missingCompanyColumn: false }
+  return (data ?? null) as DurationBenchmarkRow | null
 }
 
-async function findProjectBenchmark(benchKey: string, projectId: string | null): Promise<BenchmarkLookupResult> {
+async function findProjectBenchmark(benchKey: string, projectId: string | null): Promise<DurationBenchmarkRow | null> {
   const normalizedProjectId = normalizeId(projectId)
-  if (!normalizedProjectId) return { benchmark: null, missingCompanyColumn: false }
+  if (!normalizedProjectId) return null
 
   const { data, error } = await (supabase as any)
     .from('duration_benchmarks')
@@ -1530,18 +1553,9 @@ async function findProjectBenchmark(benchKey: string, projectId: string | null):
     .eq('is_active', true)
     .maybeSingle()
 
-  if (error) {
-    if (isMissingProjectColumnError(error)) {
-      return { benchmark: null, missingCompanyColumn: false }
-    }
-    logger.warn('[durationSuggestionService] failed to query project benchmark', { error })
-    return { benchmark: null, missingCompanyColumn: false }
-  }
+  if (error) throw error
 
-  return {
-    benchmark: data ? { ...(data as DurationBenchmarkRow), project_id: normalizedProjectId } : null,
-    missingCompanyColumn: false,
-  }
+  return data ? { ...(data as DurationBenchmarkRow), project_id: normalizedProjectId } : null
 }
 
 function isTemplateUsableForContext(
@@ -1557,23 +1571,6 @@ function isTemplateUsableForContext(
   if (benchmarkProjectId) return benchmarkProjectId === normalizeId(input.projectId)
 
   return true
-}
-
-async function findLegacyBenchmark(benchKey: string) {
-  const { data, error } = await (supabase as any)
-    .from('duration_benchmarks')
-    .select('p50_days, p75_days, p80_days, mean_days, sample_count, variance, coefficient_of_variation, confidence_level, confidence_score, company_id, metadata')
-    .eq('benchmark_key', benchKey)
-    .eq('is_current', true)
-    .eq('is_active', true)
-    .maybeSingle()
-
-  if (error) {
-    logger.warn('[durationSuggestionService] failed to query legacy benchmark', { error })
-    return null
-  }
-
-  return (data ?? null) as DurationBenchmarkRow | null
 }
 
 function isBenchmarkCandidateScopeConsistent(
@@ -1623,24 +1620,13 @@ async function collectBenchmarkCandidates(params: {
       })
     }
 
-    const projectBenchmark = await findProjectBenchmark(benchKey, params.input.projectId ?? null)
-    addCandidate(projectBenchmark.benchmark, 'project')
+    addCandidate(await findProjectBenchmark(benchKey, params.input.projectId ?? null), 'project')
 
     if (params.companyId) {
-      const companyBenchmark = await findBenchmark(benchKey, params.companyId)
-      if (companyBenchmark.missingCompanyColumn) {
-        addCandidate(await findLegacyBenchmark(benchKey), 'legacy')
-      } else {
-        addCandidate(companyBenchmark.benchmark, 'company')
-      }
+      addCandidate(await findBenchmark(benchKey, params.companyId), 'company')
     }
 
-    const systemBenchmark = await findBenchmark(benchKey, null)
-    if (systemBenchmark.missingCompanyColumn) {
-      addCandidate(await findLegacyBenchmark(benchKey), 'legacy')
-    } else {
-      addCandidate(systemBenchmark.benchmark, 'system')
-    }
+    addCandidate(await findBenchmark(benchKey, null), 'system')
 
     if (candidates.length > 0) return candidates
   }
@@ -1664,7 +1650,7 @@ async function findDurationOverride(input: {
       .maybeSingle()
 
     if (error) {
-      logger.warn('[durationSuggestionService] failed to query project duration override', { error })
+      throw error
     } else if (data) {
       return data as DurationOverrideRow
     }
@@ -1681,9 +1667,7 @@ async function findDurationOverride(input: {
       .maybeSingle()
 
     if (error) {
-      if (!isMissingCompanyColumnError(error)) {
-        logger.warn('[durationSuggestionService] failed to query company duration override', { error })
-      }
+      throw error
     } else if (data) {
       return data as DurationOverrideRow
     }
@@ -1699,19 +1683,7 @@ async function findDurationOverride(input: {
     .maybeSingle()
 
   if (error) {
-    if (isMissingCompanyColumnError(error)) {
-      const fallback = await (supabase as any)
-        .from('duration_suggestion_overrides')
-        .select(overrideColumns)
-        .eq('template_node_id', input.templateNodeId)
-        .eq('override_status', 'active')
-        .is('project_id', null)
-        .maybeSingle()
-      return (fallback.data ?? null) as DurationOverrideRow | null
-    }
-
-    logger.warn('[durationSuggestionService] failed to query global duration override', { error })
-    return null
+    throw error
   }
 
   return (data ?? null) as DurationOverrideRow | null
@@ -2109,12 +2081,12 @@ function appendScaleConfidenceSignals(
   ]
 }
 
-function resolveScaleAdjustment(
+async function resolveScaleAdjustment(
   input: DurationSuggestionInput,
   baseDays: number | null,
   seedPayload?: Record<string, any> | null,
   factorSummary?: DurationContextSummary | null,
-): DurationScaleAdjustment {
+): Promise<DurationScaleAdjustment> {
   const days = readPositiveNumber(baseDays)
   const fixedDays = resolveScaleFixedDays(days, seedPayload)
   const variableDays = Math.max(0, Number(seedPayload?.variableDays ?? seedPayload?.variable_days ?? (days ? Math.max(0, days - fixedDays) : 0)))
@@ -2206,7 +2178,16 @@ function resolveScaleAdjustment(
 
   const coverage = coverageScaleFactor(input, seedPayload, factorSummary)
   const child = childTaskScaleFactor(input.childTaskCount)
-  const title = inferTitleWeakScaleSignal(buildBaselineMatchText(input))
+  const title = await inferTitleWeakScaleSignalFromResolver(buildBaselineMatchText(input), {
+    projectId: input.projectId,
+    companyId: input.companyId,
+    standardWorkCode: input.standardWorkCode,
+    templateNodeId: input.templateNodeId,
+    projectTypeCode: input.projectTypeCode,
+    structureTypeCode: input.structureTypeCode,
+    methodVariantCodes: trustedMethodVariantCodes(input),
+    elementVariantCodes: trustedElementVariantCodes(input),
+  })
   const combinedScope = combineScopeScaleSignals(coverage, child)
   const candidates = [
     combinedScope,
@@ -2366,7 +2347,7 @@ function resolveDataMaturity(
     && Boolean(input.taskId && Number(input.progress ?? 0) > 0)
   const factorAvailability: Record<string, boolean> = {
     standard_classification: hasCoreClassification(input),
-    project_benchmark: evidenceScope === 'project' || evidenceScope === 'legacy'
+    project_benchmark: evidenceScope === 'project'
       ? sampleSize >= 5
       : evidenceScope === 'unknown' && sampleSize >= 5,
     company_benchmark: evidenceScope === 'company' ? sampleSize >= 15 : sampleSize >= 50,
@@ -2449,7 +2430,7 @@ function isBenchmarkCandidateUsable(
   sampleSize: number,
   specificity: 'all' | 'specific',
 ) {
-  if (scope === 'project' || scope === 'company' || scope === 'legacy') return sampleSize >= 5
+  if (scope === 'project' || scope === 'company') return sampleSize >= 5
   return specificity === 'all' ? sampleSize >= 100 : sampleSize >= 50
 }
 
@@ -2703,35 +2684,79 @@ function blendBenchmarkCandidates(
 async function loadBenchmarkBlendRuntimeParameter(
   companyId: string | null | undefined,
   projectId: string | null | undefined,
+  trafficSubjectKey?: string | null,
 ): Promise<BenchmarkBlendRuntimeParameter | null> {
   if (!companyId) return null
   let benchmarkWeight: BenchmarkBlendRuntimeParameter | null = null
+  const registered = getAlgorithmAssetLearnableParameter('duration.benchmark_blend_weight')
+  const deterministicValue = typeof registered?.currentValue === 'number' ? registered.currentValue : 0.55
   try {
-    const result = await loadAlgorithmAssetLearnableParameterRuntimeValue({
+    const canary = await resolveDurationContextPolicyRuntimeSelection({
       parameterKey: 'duration.benchmark_blend_weight',
+      deterministicValue,
       companyId,
       projectId: projectId ?? null,
+      consumptionMode: 'canary',
+      canaryRuntimeBoundary: {
+        consumerKey: 'durationSuggestionService.company_benchmark_blend',
+        scopeBoundary: projectId ? 'project' : 'company',
+        stopConditionKeys: [
+          'duration_benchmark_blend_overcompensation_rate',
+          'duration_benchmark_blend_mae_regression',
+          'duration_benchmark_blend_scope_drift',
+        ],
+        monitoringWindowHours: 72,
+        trafficSubjectKey: normalizeId(trafficSubjectKey) || normalizeId(projectId),
+      },
     })
     if (
-      result.runtimeConsumable
-      && typeof result.runtimeValue === 'number'
-      && Number.isFinite(result.runtimeValue)
-      && result.runtimeValue >= 0
-      && result.runtimeValue <= 1
+      canary.runtimeApplied
+      && Number.isFinite(canary.selectedValue)
+      && canary.selectedValue >= 0
+      && canary.selectedValue <= 1
     ) {
       benchmarkWeight = {
-        weight: result.runtimeValue,
-        publicationKey: result.publicationKey,
-        publicationStatus: result.publicationStatus,
-        scopeLevel: result.scopeLevel,
+        weight: canary.selectedValue,
+        publicationKey: canary.publicationKey,
+        publicationStatus: canary.publicationStatus,
+        scopeLevel: canary.scopeLevel,
       }
     }
   } catch (error) {
-    logger.warn('[durationSuggestionService] failed to load learnable benchmark blend parameter', {
+    logger.warn('[durationSuggestionService] failed to load canary benchmark blend parameter', {
       companyId,
       projectId,
       error,
     })
+  }
+  if (!benchmarkWeight) {
+    try {
+      const stable = await resolveDurationContextPolicyRuntimeSelection({
+        parameterKey: 'duration.benchmark_blend_weight',
+        deterministicValue,
+        companyId,
+        projectId: projectId ?? null,
+      })
+      if (
+        stable.runtimeApplied
+        && Number.isFinite(stable.selectedValue)
+        && stable.selectedValue >= 0
+        && stable.selectedValue <= 1
+      ) {
+        benchmarkWeight = {
+          weight: stable.selectedValue,
+          publicationKey: stable.publicationKey,
+          publicationStatus: stable.publicationStatus,
+          scopeLevel: stable.scopeLevel,
+        }
+      }
+    } catch (error) {
+      logger.warn('[durationSuggestionService] failed to load stable benchmark blend parameter', {
+        companyId,
+        projectId,
+        error,
+      })
+    }
   }
   if (!benchmarkWeight) return null
 
@@ -3279,6 +3304,400 @@ function withDurationCalendarContext(suggestion: DurationSuggestion, input: Dura
   }
 }
 
+function readT2RhythmScheduleCandidateContext(input: DurationSuggestionInput) {
+  const candidatePackage = input.t2RhythmScheduleCandidatePackage
+  if (candidatePackage?.source !== 't2_division_rhythm_schedule_candidate_package') return null
+  const compatibility = candidatePackage.compatibility
+  const priorityAdjudication = compatibility.priorityAdjudication
+  return {
+    source: candidatePackage.source,
+    tier: candidatePackage.tier,
+    status: candidatePackage.status,
+    selectedTemplateIds: candidatePackage.selectedTemplateIds,
+    templateCount: candidatePackage.templateCount,
+    durationBearingWindowCount: candidatePackage.durationBearingWindowCount,
+    durationContextCandidateCount: candidatePackage.durationContextCandidates.length,
+    dependencyCandidateCount: candidatePackage.dependencyCandidates.length,
+    candidateDependencyEdgeCount: candidatePackage.candidateDependencyEdgeCount,
+    hardGateCount: candidatePackage.hardGateCount,
+    compatibility: {
+      status: compatibility.status,
+      compatible: compatibility.compatible,
+      conflictCount: compatibility.conflicts.length,
+      conflictCodes: compatibility.conflicts.map((conflict) => conflict.conflictCode),
+      priorityOverrideBlocked: priorityAdjudication?.priorityOverrideBlocked ?? false,
+      assemblyFeasibilityRequired: priorityAdjudication?.assemblyFeasibilityRequired ?? true,
+      selectedTemplateId: priorityAdjudication?.selectedTemplateId ?? null,
+      selectedBy: priorityAdjudication?.selectedBy ?? null,
+    },
+    scheduleTrustPolicy: candidatePackage.scheduleTrustPolicy,
+    scheduleTrustSummaries: (candidatePackage.scheduleTrustSummaries ?? []).slice(0, 8).map((summary) => ({
+      sourceTemplateId: summary.sourceTemplateId,
+      criticalPathRoles: summary.criticalPathRoles.slice(0, 6),
+      durationDrivers: summary.durationDrivers.slice(0, 8),
+      workfaceReadinessSignals: summary.workfaceReadinessSignals.slice(0, 8),
+      assemblyRiskTags: summary.assemblyRiskTags.slice(0, 8),
+      replayAdmission: summary.replayAdmission,
+    })),
+    durationContextCandidates: candidatePackage.durationContextCandidates.slice(0, 8).map((candidate) => ({
+      sourceTemplateId: candidate.sourceTemplateId,
+      windowCode: candidate.windowCode,
+      recommendedDurationDays: candidate.recommendedDurationDays,
+      planReferenceDays: candidate.planReferenceDays,
+      planDurationTruthSource: candidate.planDurationTruthSource,
+      governanceStatus: candidate.governanceStatus,
+      sourceType: candidate.sourceType,
+      autoApply: candidate.autoApply,
+    })),
+  }
+}
+
+function withT2RhythmScheduleCandidateContext(
+  suggestion: DurationSuggestion,
+  input: DurationSuggestionInput,
+): DurationSuggestion {
+  const t2Context = readT2RhythmScheduleCandidateContext(input)
+  if (!t2Context) return suggestion
+  const calculationContext = {
+    ...(suggestion.factorSummary?.calculationContext ?? {}),
+    ...(suggestion.calculationContext ?? {}),
+    t2RhythmScheduleCandidatePackage: t2Context,
+  } as DurationSuggestion['calculationContext']
+  const factorAvailability = {
+    ...(suggestion.factorAvailability ?? {}),
+    t2_rhythm_schedule_candidate_package: true,
+  }
+  const factorSummary = suggestion.factorSummary
+    ? {
+      ...suggestion.factorSummary,
+      factorAvailability: {
+        ...(suggestion.factorSummary.factorAvailability ?? {}),
+        t2_rhythm_schedule_candidate_package: true,
+      },
+      calculationContext: {
+        ...suggestion.factorSummary.calculationContext,
+        t2RhythmScheduleCandidatePackage: t2Context,
+      },
+    } as DurationContextSummary
+    : suggestion.factorSummary
+
+  return {
+    ...suggestion,
+    factorAvailability,
+    factorSummary,
+    calculationContext,
+    businessReasonParams: {
+      ...(suggestion.businessReasonParams ?? {}),
+      t2RhythmScheduleCandidatePackageStatus: t2Context.status,
+      t2RhythmScheduleCandidateAutoApply: t2Context.scheduleTrustPolicy.autoApply,
+      t2RhythmScheduleCandidateWritesTaskDependencies: t2Context.scheduleTrustPolicy.writesTaskDependencies,
+      t2RhythmScheduleCandidateWritesPlanDates: t2Context.scheduleTrustPolicy.writesPlanDates,
+      t2RhythmScheduleCandidateSelectedTemplateIds: t2Context.selectedTemplateIds,
+    },
+  }
+}
+
+function readT2RhythmScheduleCandidateNetworkEvaluationContext(input: DurationSuggestionInput) {
+  const evaluation = input.t2RhythmScheduleCandidateNetworkEvaluation
+  if (evaluation?.source !== 't2_rhythm_schedule_candidate_network_phase1_evaluation') return null
+  const selectionReceipts = Array.isArray(evaluation.selectionReceipts) ? evaluation.selectionReceipts : []
+  const selectionReceiptCount = typeof evaluation.scheduleTrustEvidence.selectionReceiptCount === 'number'
+    ? evaluation.scheduleTrustEvidence.selectionReceiptCount
+    : selectionReceipts.length
+  const selectorReceiptAuditStatus = evaluation.scheduleTrustEvidence.selectorReceiptAuditStatus
+    ?? (selectionReceiptCount > 0 ? 'ready' : 'missing')
+  const standardLibraryReadiness = evaluation.standardLibraryReadiness ?? {
+    status: evaluation.scheduleTrustEvidence.standardLibraryReadinessStatus ?? 'unknown_legacy_evaluation_without_standard_library_readiness',
+    precisionStatus: evaluation.scheduleTrustEvidence.standardLibraryPrecisionStatus ?? 'unknown',
+    breadthStatus: evaluation.scheduleTrustEvidence.standardLibraryBreadthStatus ?? 'unknown',
+    depthStatus: evaluation.scheduleTrustEvidence.standardLibraryDepthStatus ?? 'unknown',
+    canEnterC1913Phase1Selection: evaluation.canEnterC1913Phase1Selection,
+    canAutoMaterializeTaskDependencies: false,
+    canAutoPublishRuntimeExperience: false,
+    liveReplayTrustGate: null,
+    releaseBlockers: evaluation.scheduleTrustEvidence.releaseBlockers ?? [
+      'standard_library_readiness_missing_from_legacy_evaluation',
+    ],
+  }
+  const phase1PublicationGate = evaluation.phase1PublicationGate ?? {
+    status: 'blocked_pending_release_evidence',
+    canPublishRuntimeExperience: false,
+    canMaterializeTaskDependencies: false,
+    releaseBlockers: standardLibraryReadiness.releaseBlockers,
+  }
+  const scheduleTrustEvidence = evaluation.scheduleTrustEvidence
+  const liveReplayTrustGate = standardLibraryReadiness.liveReplayTrustGate ?? null
+  const standardLibraryTrustGateStatus = liveReplayTrustGate?.status
+    ?? scheduleTrustEvidence.standardLibraryTrustGateStatus
+    ?? 'missing'
+  const standardLibraryTrustBoundary = liveReplayTrustGate?.trustBoundary
+    ?? scheduleTrustEvidence.standardLibraryTrustBoundary
+    ?? null
+  const canTrustForRealScheduleCalibration = liveReplayTrustGate?.canTrustForRealScheduleCalibration
+    ?? scheduleTrustEvidence.canTrustForRealScheduleCalibration
+    ?? false
+  const standardLibraryTrustGateReleaseBlockers = liveReplayTrustGate?.releaseBlockers
+    ?? scheduleTrustEvidence.standardLibraryTrustGateReleaseBlockers
+    ?? []
+  return {
+    source: evaluation.source,
+    tier: evaluation.tier,
+    candidateId: evaluation.candidateId,
+    status: evaluation.status,
+    canEnterC1913Phase1Selection: evaluation.canEnterC1913Phase1Selection,
+    networkSpanDays: evaluation.networkSpanDays,
+    topologicalOrder: evaluation.topologicalOrder.slice(0, 16),
+    criticalNodeIds: evaluation.criticalNodeIds.slice(0, 16),
+    criticalWindowCodes: evaluation.criticalWindowCodes.slice(0, 16),
+    criticalNodeCount: evaluation.criticalNodeIds.length,
+    nodeEvaluationCount: evaluation.nodeEvaluations.length,
+    nodeEvaluations: evaluation.nodeEvaluations.slice(0, 8).map((node) => ({
+      nodeId: node.nodeId,
+      windowCode: node.windowCode,
+      role: node.role,
+      earliestStartDay: node.earliestStartDay,
+      earliestFinishDay: node.earliestFinishDay,
+      latestStartDay: node.latestStartDay,
+      latestFinishDay: node.latestFinishDay,
+      totalFloatDays: node.totalFloatDays,
+      isCritical: node.isCritical,
+    })),
+    conflictSummary: evaluation.conflictSummary,
+    scheduleTrustEvidence: {
+      selectedTemplateIds: scheduleTrustEvidence.selectedTemplateIds,
+      durationBearingNodeCount: scheduleTrustEvidence.durationBearingNodeCount,
+      dependencyEdgeCount: scheduleTrustEvidence.dependencyEdgeCount,
+      hardGateCount: scheduleTrustEvidence.hardGateCount,
+      compatibilityStatus: scheduleTrustEvidence.compatibilityStatus,
+      replayRequiredBeforePublish: scheduleTrustEvidence.replayRequiredBeforePublish,
+      standardLibraryReadinessStatus: standardLibraryReadiness.status,
+      standardLibraryPrecisionStatus: standardLibraryReadiness.precisionStatus,
+      standardLibraryBreadthStatus: standardLibraryReadiness.breadthStatus,
+      standardLibraryDepthStatus: standardLibraryReadiness.depthStatus,
+      standardLibraryTrustGateStatus,
+      standardLibraryTrustBoundary,
+      canTrustForRealScheduleCalibration,
+      standardLibraryTrustGateReleaseBlockers,
+      selectionReceiptCount,
+      selectorReceiptAuditStatus,
+      releaseBlockers: standardLibraryReadiness.releaseBlockers,
+      topologyEvaluated: scheduleTrustEvidence.topologyEvaluated,
+      floatCalculated: scheduleTrustEvidence.floatCalculated,
+      writesTaskDependencies: scheduleTrustEvidence.writesTaskDependencies,
+      writesPlanDates: scheduleTrustEvidence.writesPlanDates,
+    },
+    selectionReceipts: selectionReceipts.slice(0, 8).map((receipt) => ({
+      templateId: receipt.templateId,
+      selectionStatus: receipt.selectionStatus,
+      rank: receipt.rank,
+      selectorScore: receipt.selectorScore,
+      selectionBasis: receipt.selectionBasis,
+      unmatchedExplicitDimensions: receipt.unmatchedExplicitDimensions,
+      selectorPurity: receipt.selectorPurity,
+      mutationBoundary: receipt.mutationBoundary,
+    })),
+    standardLibraryReadiness,
+    phase1PublicationGate,
+    mutationBoundary: evaluation.mutationBoundary,
+  }
+}
+
+function withT2RhythmScheduleCandidateNetworkEvaluationContext(
+  suggestion: DurationSuggestion,
+  input: DurationSuggestionInput,
+): DurationSuggestion {
+  const evaluationContext = readT2RhythmScheduleCandidateNetworkEvaluationContext(input)
+  if (!evaluationContext) return suggestion
+  const calculationContext = {
+    ...(suggestion.factorSummary?.calculationContext ?? {}),
+    ...(suggestion.calculationContext ?? {}),
+    t2RhythmScheduleCandidateNetworkEvaluation: evaluationContext,
+  } as DurationSuggestion['calculationContext']
+  const factorAvailability = {
+    ...(suggestion.factorAvailability ?? {}),
+    t2_rhythm_schedule_candidate_network_phase1_evaluation: true,
+  }
+  const factorSummary = suggestion.factorSummary
+    ? {
+      ...suggestion.factorSummary,
+      factorAvailability: {
+        ...(suggestion.factorSummary.factorAvailability ?? {}),
+        t2_rhythm_schedule_candidate_network_phase1_evaluation: true,
+      },
+      calculationContext: {
+        ...suggestion.factorSummary.calculationContext,
+        t2RhythmScheduleCandidateNetworkEvaluation: evaluationContext,
+      },
+    } as DurationContextSummary
+    : suggestion.factorSummary
+
+  return {
+    ...suggestion,
+    factorAvailability,
+    factorSummary,
+    calculationContext,
+    businessReasonParams: {
+      ...(suggestion.businessReasonParams ?? {}),
+      t2RhythmScheduleCandidateNetworkEvaluationStatus: evaluationContext.status,
+      t2RhythmScheduleCandidateNetworkCanEnterC1913Phase1Selection: evaluationContext.canEnterC1913Phase1Selection,
+      t2RhythmScheduleCandidateNetworkSpanDays: evaluationContext.networkSpanDays,
+      t2RhythmScheduleCandidateNetworkCriticalWindowCodes: evaluationContext.criticalWindowCodes,
+      t2RhythmScheduleCandidateNetworkWritesTaskDependencies: evaluationContext.mutationBoundary.writesTaskDependencies,
+      t2RhythmScheduleCandidateNetworkWritesPlanDates: evaluationContext.mutationBoundary.writesPlanDates,
+      t2RhythmScheduleCandidateNetworkWritesCriticalPathFacts: evaluationContext.mutationBoundary.writesCriticalPathFacts,
+      t2RhythmScheduleCandidateNetworkSelectionReceiptCount: evaluationContext.scheduleTrustEvidence.selectionReceiptCount,
+      t2RhythmScheduleCandidateNetworkSelectorReceiptAuditStatus: evaluationContext.scheduleTrustEvidence.selectorReceiptAuditStatus,
+      t2RhythmScheduleCandidateNetworkStandardLibraryReadinessStatus: evaluationContext.standardLibraryReadiness.status,
+      t2RhythmScheduleCandidateNetworkStandardLibraryTrustGateStatus: evaluationContext.scheduleTrustEvidence.standardLibraryTrustGateStatus,
+      t2RhythmScheduleCandidateNetworkStandardLibraryTrustBoundary: evaluationContext.scheduleTrustEvidence.standardLibraryTrustBoundary,
+      t2RhythmScheduleCandidateNetworkCanTrustForRealScheduleCalibration: evaluationContext.scheduleTrustEvidence.canTrustForRealScheduleCalibration,
+      t2RhythmScheduleCandidateNetworkStandardLibraryTrustGateReleaseBlockers: evaluationContext.scheduleTrustEvidence.standardLibraryTrustGateReleaseBlockers,
+      t2RhythmScheduleCandidateNetworkPhase1PublicationGateStatus: evaluationContext.phase1PublicationGate.status,
+      t2RhythmScheduleCandidateNetworkCanPublishRuntimeExperience: evaluationContext.phase1PublicationGate.canPublishRuntimeExperience,
+      t2RhythmScheduleCandidateNetworkCanMaterializeTaskDependencies: evaluationContext.phase1PublicationGate.canMaterializeTaskDependencies,
+      t2RhythmScheduleCandidateNetworkReleaseBlockers: evaluationContext.phase1PublicationGate.releaseBlockers,
+    },
+  }
+}
+
+function readT2RhythmSchedulePhase1SelectionContext(input: DurationSuggestionInput) {
+  const selection = input.t2RhythmSchedulePhase1Selection
+  if (selection?.source !== 't2_rhythm_schedule_phase1_selection') return null
+  return {
+    source: selection.source,
+    selectionId: selection.selectionId,
+    status: selection.status,
+    selectedCandidateId: selection.selectedCandidateId,
+    eligibleCandidateIds: selection.eligibleCandidateIds.slice(0, 12),
+    rejectedCandidateCount: selection.rejectedCandidates.length,
+    rejectedCandidates: selection.rejectedCandidates.slice(0, 8).map((candidate) => ({
+      candidateId: candidate.candidateId,
+      status: candidate.status,
+      reasonCodes: candidate.reasonCodes,
+      conflictCodes: candidate.conflictCodes,
+      priorityOverrideBlocked: candidate.priorityOverrideBlocked,
+    })),
+    combinationConsistencyGate: selection.combinationConsistencyGate,
+    selectionBasis: selection.selectionBasis,
+    mutationBoundary: selection.mutationBoundary,
+  }
+}
+
+function withT2RhythmSchedulePhase1SelectionContext(
+  suggestion: DurationSuggestion,
+  input: DurationSuggestionInput,
+): DurationSuggestion {
+  const selectionContext = readT2RhythmSchedulePhase1SelectionContext(input)
+  if (!selectionContext) return suggestion
+  const calculationContext = {
+    ...(suggestion.factorSummary?.calculationContext ?? {}),
+    ...(suggestion.calculationContext ?? {}),
+    t2RhythmSchedulePhase1Selection: selectionContext,
+  } as DurationSuggestion['calculationContext']
+  const factorAvailability = {
+    ...(suggestion.factorAvailability ?? {}),
+    t2_rhythm_schedule_phase1_selection: true,
+  }
+  const factorSummary = suggestion.factorSummary
+    ? {
+      ...suggestion.factorSummary,
+      factorAvailability: {
+        ...(suggestion.factorSummary.factorAvailability ?? {}),
+        t2_rhythm_schedule_phase1_selection: true,
+      },
+      calculationContext: {
+        ...suggestion.factorSummary.calculationContext,
+        t2RhythmSchedulePhase1Selection: selectionContext,
+      },
+    } as DurationContextSummary
+    : suggestion.factorSummary
+
+  return {
+    ...suggestion,
+    factorAvailability,
+    factorSummary,
+    calculationContext,
+    businessReasonParams: {
+      ...(suggestion.businessReasonParams ?? {}),
+      t2RhythmSchedulePhase1SelectionStatus: selectionContext.status,
+      t2RhythmSchedulePhase1SelectedCandidateId: selectionContext.selectedCandidateId,
+      t2RhythmSchedulePhase1RejectedCandidateCount: selectionContext.rejectedCandidateCount,
+      t2RhythmSchedulePhase1WritesTaskDependencies: selectionContext.mutationBoundary.writesTaskDependencies,
+      t2RhythmSchedulePhase1WritesPlanDates: selectionContext.mutationBoundary.writesPlanDates,
+      t2RhythmSchedulePhase1LinearPriorityCanOverrideAssemblyConflict:
+        selectionContext.selectionBasis.linearPriorityCanOverrideAssemblyConflict,
+    },
+  }
+}
+
+function readDurationInputAssemblyContext(input: DurationSuggestionInput) {
+  const assembly = input.durationInputAssembly
+  if (!assembly) return null
+  return {
+    source: 'DurationInputAssembler',
+    inputChannels: assembly.inputChannels,
+    sourceLineage: assembly.sourceLineage.map((lineage) => ({
+      channel: lineage.channel,
+      source: lineage.source,
+      status: lineage.status,
+      tier: lineage.tier ?? null,
+      candidateId: lineage.candidateId ?? null,
+      selectedTemplateIds: lineage.selectedTemplateIds ?? [],
+      assetSource: lineage.assetSource ?? null,
+    })),
+    assemblyGate: assembly.assemblyGate,
+    mutationBoundary: assembly.mutationBoundary,
+  }
+}
+
+function withDurationInputAssemblyContext(
+  suggestion: DurationSuggestion,
+  input: DurationSuggestionInput,
+): DurationSuggestion {
+  const assemblyContext = readDurationInputAssemblyContext(input)
+  if (!assemblyContext) return suggestion
+  const calculationContext = {
+    ...(suggestion.factorSummary?.calculationContext ?? {}),
+    ...(suggestion.calculationContext ?? {}),
+    durationInputAssembly: assemblyContext,
+  } as DurationSuggestion['calculationContext']
+  const factorAvailability = {
+    ...(suggestion.factorAvailability ?? {}),
+    duration_input_assembler: true,
+  }
+  const factorSummary = suggestion.factorSummary
+    ? {
+      ...suggestion.factorSummary,
+      factorAvailability: {
+        ...(suggestion.factorSummary.factorAvailability ?? {}),
+        duration_input_assembler: true,
+      },
+      calculationContext: {
+        ...suggestion.factorSummary.calculationContext,
+        durationInputAssembly: assemblyContext,
+      },
+    } as DurationContextSummary
+    : suggestion.factorSummary
+
+  return {
+    ...suggestion,
+    factorAvailability,
+    factorSummary,
+    calculationContext,
+    businessReasonParams: {
+      ...(suggestion.businessReasonParams ?? {}),
+      durationInputAssemblyGateStatus: assemblyContext.assemblyGate.status,
+      durationInputAssemblyCanEnterC1913Phase1Selection: assemblyContext.assemblyGate.canEnterC1913Phase1Selection,
+      durationInputAssemblyRequiresManualReview: assemblyContext.assemblyGate.requiresManualReview,
+      durationInputAssemblyPriorityOverrideBlocked: assemblyContext.assemblyGate.priorityOverrideBlocked,
+      durationInputAssemblyConflictCodes: assemblyContext.assemblyGate.conflictCodes,
+      durationInputAssemblyWritesTaskDependencies: assemblyContext.mutationBoundary.writesTaskDependencies,
+      durationInputAssemblyWritesPlanDates: assemblyContext.mutationBoundary.writesPlanDates,
+      durationInputAssemblyWritesCriticalPathFacts: assemblyContext.mutationBoundary.writesCriticalPathFacts,
+    },
+  }
+}
+
 async function rebuildNewTaskReferenceContext(
   input: DurationSuggestionInput,
   baseDays: number | null,
@@ -3312,6 +3731,116 @@ function appendBusinessReasonCode(
 
 function appendForecastSourceSuffix(source: string, suffix: string) {
   return source.includes(suffix) ? source : `${source}+${suffix}`
+}
+
+function readSuggestionPlanningReplayAdjustmentDays(readback: PlanningReplayCalibrationReadback | null | undefined) {
+  if (!readback || readback.status !== 'ready') return null
+  if (readback.writePolicy !== 'candidate_overlay_only_no_fact_mutation') return null
+  const parsed = Number(readback.e1DurationAdjustmentDays)
+  if (!Number.isFinite(parsed) || parsed <= 0) return null
+  return Math.min(7, Math.ceil(parsed))
+}
+
+async function loadPlanningReplayCalibrationReadbackForSuggestion(input: DurationSuggestionInput) {
+  const projectId = normalizeId(input.projectId)
+  if (!projectId) return null
+  if (
+    !normalizeId(input.standardWorkCode)
+    && !normalizeId(input.standardWorkName)
+    && !normalizeId(input.engineeringCategoryId)
+  ) return null
+  try {
+    return await readPlanningReplayCalibrationReadback({
+      projectId,
+      standardWorkCode: input.standardWorkCode,
+      standardWorkName: input.standardWorkName ?? input.taskTitle,
+      engineeringCategoryId: input.engineeringCategoryId,
+    })
+  } catch (error) {
+    logger.warn('[durationSuggestionService] planning replay calibration readback unavailable', {
+      projectId,
+      taskId: input.taskId,
+      standardWorkCode: input.standardWorkCode,
+      error,
+    })
+    return null
+  }
+}
+
+async function applyPlanningReplayCalibrationReadbackToSuggestion(
+  suggestion: DurationSuggestion,
+  input: DurationSuggestionInput,
+  purpose: DurationSuggestionPurpose,
+): Promise<DurationSuggestion> {
+  if (purpose !== 'new_task_reference' && purpose !== 'execution_reference') return suggestion
+  if (suggestion.durationProvenance === 'manual_override') return suggestion
+  const recommended = readPositiveNumber(suggestion.recommendedDurationDays)
+  if (!recommended) return suggestion
+
+  const readback = await loadPlanningReplayCalibrationReadbackForSuggestion(input)
+  const adjustmentDays = readSuggestionPlanningReplayAdjustmentDays(readback)
+  if (!readback || adjustmentDays == null) return suggestion
+
+  const conservativeBase = readPositiveNumber(suggestion.conservativeDurationDays ?? suggestion.recommendedDurationDays)
+  const readbackContext = {
+    applied: true,
+    source: 'planningReplayCalibrationService',
+    writePolicy: readback.writePolicy,
+    coarseProcessKey: readback.coarseProcessKey,
+    acceptedSampleCount: readback.acceptedSampleCount,
+    originalMae: readback.originalMae,
+    replayMae: readback.replayMae,
+    maeImprovement: readback.maeImprovement,
+    overcompensationRate: readback.overcompensationRate,
+    e1DurationAdjustmentDays: adjustmentDays,
+    evidenceRefs: readback.evidenceRefs,
+  }
+  const factorSummary = suggestion.factorSummary
+    ? {
+      ...suggestion.factorSummary,
+      factorAvailability: {
+        ...(suggestion.factorSummary.factorAvailability ?? {}),
+        planning_replay_calibration_readback: true,
+      },
+      calculationContext: {
+        ...suggestion.factorSummary.calculationContext,
+        planning_replay_calibration_readback: readbackContext,
+      },
+    } as DurationContextSummary
+    : suggestion.factorSummary
+  const calculationContext = {
+    ...(suggestion.calculationContext ?? {}),
+    planning_replay_calibration_readback: readbackContext,
+  } as DurationSuggestion['calculationContext']
+
+  return {
+    ...suggestion,
+    recommendedDurationDays: recommended + adjustmentDays,
+    conservativeDurationDays: conservativeBase ? conservativeBase + adjustmentDays : recommended + adjustmentDays,
+    forecastSource: appendForecastSourceSuffix(suggestion.forecastSource, 'planning_replay_calibration'),
+    businessReason: appendReason(
+      suggestion.businessReason,
+      `回放校准显示该粗工序历史误差可补 ${adjustmentDays} 天，已按候选 overlay 方式修正参考工期`,
+    ),
+    ...appendBusinessReasonCode(suggestion, 'PLANNING_REPLAY_CALIBRATION', {
+      planningReplayCalibrationAdjustmentDays: adjustmentDays,
+      planningReplayCalibrationWritePolicy: readback.writePolicy,
+      planningReplayCalibrationEvidenceRefs: readback.evidenceRefs,
+      planningReplayCalibrationAcceptedSampleCount: readback.acceptedSampleCount,
+      planningReplayCalibrationCoarseProcessKey: readback.coarseProcessKey,
+      planningReplayCalibrationOriginalMae: readback.originalMae,
+      planningReplayCalibrationReplayMae: readback.replayMae,
+      planningReplayCalibrationMaeImprovement: readback.maeImprovement,
+      planningReplayCalibrationOvercompensationRate: readback.overcompensationRate,
+    }),
+    displaySummary: null,
+    factorAvailability: {
+      ...(suggestion.factorAvailability ?? {}),
+      planning_replay_calibration_readback: true,
+    },
+    factorSummary,
+    calculationContext,
+  }
 }
 
 function normalizeDurationBoundaryInput(input: DurationSuggestionInput): ParentDurationBoundaryContext | null {
@@ -3526,8 +4055,68 @@ function buildSuggestionSeedLineage(input: DurationSuggestionInput, suggestion: 
   }
 }
 
-function buildSuggestionNetworkLineage(input: DurationSuggestionInput) {
+type SuggestionConstructionOrganizationEvidenceLineage = ConstructionOrganizationPlanNetworkRuntimeLineage & {
+  businessType: string
+}
+
+function readSuggestionBusinessType(value: unknown) {
+  const metadata = readMetadataObject(value)
+  return normalizeId(
+    metadata.businessType
+      ?? metadata.business_type
+      ?? metadata.businessTypeCode
+      ?? metadata.business_type_code
+      ?? metadata.projectTypeCode
+      ?? metadata.project_type_code,
+  ) || null
+}
+
+async function resolveSuggestionConstructionOrganizationEvidenceLineage(
+  input: DurationSuggestionInput,
+): Promise<SuggestionConstructionOrganizationEvidenceLineage | null> {
+  let lineage =
+    readConstructionOrganizationPlanNetworkRuntimeLineage(
+      input.projectGenerationFacts,
+      'durationSuggestionService.projectGenerationFacts',
+    )
+    ?? readConstructionOrganizationPlanNetworkRuntimeLineage(
+      input.constructionOrganizationScenario,
+      'durationSuggestionService.constructionOrganizationScenario',
+    )
+  let businessType =
+    readSuggestionBusinessType(input.projectGenerationFacts)
+    || normalizeId(input.projectTypeCode)
+    || null
+
+  const projectId = normalizeId(input.projectId)
+  if ((!lineage || !businessType) && projectId) {
+    const context = await readLiveProjectGenerationContext(projectId)
+    lineage = lineage
+      ?? readConstructionOrganizationPlanNetworkRuntimeLineage(
+        context.constructionOrganizationScenario,
+        'durationSuggestionService.projectMetadata.constructionOrganizationScenario',
+      )
+      ?? readConstructionOrganizationPlanNetworkRuntimeLineage(
+        context.projectGenerationFacts,
+        'durationSuggestionService.projectMetadata.projectGenerationFacts',
+      )
+    businessType =
+      businessType
+      || readSuggestionBusinessType(context.projectGenerationFacts)
+  }
+
+  if (!lineage || !businessType) return null
   return {
+    ...lineage,
+    businessType,
+  }
+}
+
+function buildSuggestionNetworkLineage(
+  input: DurationSuggestionInput,
+  constructionOrganizationLineage?: SuggestionConstructionOrganizationEvidenceLineage | null,
+) {
+  const baseLineage = {
     wbsTemplateVersion: normalizeId(input.templateNodeId)
       ? `template-node:${normalizeId(input.templateNodeId)}`
       : normalizeId(input.templateStableCode)
@@ -3538,6 +4127,12 @@ function buildSuggestionNetworkLineage(input: DurationSuggestionInput) {
     wbsNodeType: normalizeId(input.wbsNodeType) ?? null,
     engineeringCategoryId: normalizeId(input.engineeringCategoryId) ?? null,
   }
+  const merged = mergeConstructionOrganizationLineageIntoContext(baseLineage, constructionOrganizationLineage)
+  if (!constructionOrganizationLineage) return merged
+  return {
+    ...merged,
+    businessType: constructionOrganizationLineage.businessType,
+  }
 }
 
 async function recordDurationSuggestionPredictionEvent(
@@ -3547,6 +4142,19 @@ async function recordDurationSuggestionPredictionEvent(
 ) {
   if (!suggestion.recommendedDurationDays) return
   try {
+    const constructionOrganizationLineage = await resolveSuggestionConstructionOrganizationEvidenceLineage(input)
+    const predictionContext = mergeConstructionOrganizationLineageIntoContext({
+      sourceService: 'durationSuggestionService',
+      suggestionPurpose: purpose,
+      forecastSource: suggestion.forecastSource,
+      confidenceLevel: suggestion.confidenceLevel,
+      confidenceScore: suggestion.confidenceScore,
+      conservativeDurationDays: suggestion.conservativeDurationDays,
+      benchmarkKey: suggestion.benchmarkKey,
+      businessReasonCode: suggestion.businessReasonCode ?? null,
+      durationOutputCode: suggestion.durationOutputCode ?? null,
+      calculationContext: suggestion.calculationContext ?? {},
+    }, constructionOrganizationLineage)
     await recordDurationAccuracyPrediction({
       engineCode: 'standard_duration_reference',
       outputKind: suggestionOutputKind(purpose),
@@ -3561,19 +4169,13 @@ async function recordDurationSuggestionPredictionEvent(
       predictedDurationDays: suggestion.recommendedDurationDays,
       runtimeConsumptionState: runtimeConsumptionStateForSuggestion(suggestion),
       seedLineage: buildSuggestionSeedLineage(input, suggestion),
-      networkLineage: buildSuggestionNetworkLineage(input),
-      predictionContext: {
-        sourceService: 'durationSuggestionService',
-        suggestionPurpose: purpose,
-        forecastSource: suggestion.forecastSource,
-        confidenceLevel: suggestion.confidenceLevel,
-        confidenceScore: suggestion.confidenceScore,
-        conservativeDurationDays: suggestion.conservativeDurationDays,
-        benchmarkKey: suggestion.benchmarkKey,
-        businessReasonCode: suggestion.businessReasonCode ?? null,
-        durationOutputCode: suggestion.durationOutputCode ?? null,
-        calculationContext: suggestion.calculationContext ?? {},
-      },
+      networkLineage: buildSuggestionNetworkLineage(input, constructionOrganizationLineage),
+      predictionContext: constructionOrganizationLineage
+        ? {
+          ...predictionContext,
+          businessType: constructionOrganizationLineage.businessType,
+        }
+        : predictionContext,
     })
   } catch (error) {
     logger.warn('[durationSuggestionService] failed to record duration prediction event', {
@@ -3585,89 +4187,6 @@ async function recordDurationSuggestionPredictionEvent(
   }
 }
 
-/*
-async function applyProjectExecutionContext(
-  base: DurationSuggestion,
-  input: DurationSuggestionInput,
-  purpose: DurationSuggestionPurpose,
-): Promise<DurationSuggestion> {
-  if (purpose !== 'new_task_reference') return base
-  if (base.durationProvenance === 'manual_override') return base
-  const recommended = readPositiveNumber(base.recommendedDurationDays)
-  if (!recommended || !normalizeId(input.projectId) || !hasCoreClassification(input)) return base
-
-  try {
-    const learning = await buildProjectProgressVelocityLearning({
-      projectId: input.projectId,
-      companyId: input.companyId,
-      taskId: input.taskId,
-      templateNodeId: input.templateNodeId,
-      templateStableCode: input.templateStableCode,
-      standardWorkCode: input.standardWorkCode,
-      engineeringCategoryId: input.engineeringCategoryId,
-      responsibleUnitId: input.responsibleUnitId,
-      structureTypeCode: input.structureTypeCode,
-      baseDurationDays: recommended,
-    })
-    if (!learning || learning.sampleCount < 2) return base
-
-    const multiplier = clamp(Number(learning.multiplier ?? 1), 0.75, 1.35)
-    const reason = `项目内同类已完成任务显示当前生产节奏约 ${Number(multiplier.toFixed(2))} 倍，已作为 L1 项目级沉淀上下文`
-    `
-    const canApplyRecommended = learning.confidenceLevel === 'high' && learning.actionPolicy === 'auto_apply'
-    const canAdjustConservative = canApplyRecommended || learning.confidenceLevel === 'medium' || learning.actionPolicy === 'candidate_only'
-    const conservativeBase = readPositiveNumber(base.conservativeDurationDays ?? base.recommendedDurationDays)
-    const adjustedRecommended = canApplyRecommended
-      ? Math.max(1, Math.ceil(recommended * multiplier))
-      : recommended
-    const adjustedConservative = conservativeBase && canAdjustConservative
-      ? Math.max(conservativeBase, Math.ceil(conservativeBase * Math.max(1, multiplier)), Math.ceil(adjustedRecommended * Math.max(1.15, multiplier)))
-      : conservativeBase
-    const scoreDelta = canApplyRecommended ? 4 : learning.confidenceLevel === 'medium' ? 0 : -5
-    const confidenceScore = clamp(Number(base.confidenceScore ?? 50) + scoreDelta, 10, 95)
-
-    return {
-      ...base,
-      recommendedDurationDays: adjustedRecommended,
-      conservativeDurationDays: adjustedConservative,
-      confidenceScore,
-      confidenceLevel: scoreToDurationConfidenceLevel(confidenceScore),
-      forecastSource: `${base.forecastSource}+project_execution_context`,
-      businessReason: appendReason(base.businessReason, reason),
-      displaySummary: null,
-      dataMaturity: base.dataMaturity === 'L2' ? 'L2' : 'L1',
-      dataMaturityReasons: Array.from(new Set([...(base.dataMaturityReasons ?? []), 'project-level completed-task rhythm is available'])),
-      factorAvailability: {
-        ...(base.factorAvailability ?? {}),
-        project_execution_context: true,
-      },
-      factorSummary: base.factorSummary
-        ? {
-          ...base.factorSummary,
-          dataMaturity: base.dataMaturity === 'L2' ? 'L2' : 'L1',
-          factorAvailability: {
-            ...(base.factorSummary.factorAvailability ?? {}),
-            project_execution_context: true,
-          },
-          projectExecutionContext: {
-            source: 'progressVelocityLearningService',
-            confidenceLevel: learning.confidenceLevel,
-            confidenceScore: learning.confidenceScore,
-            actionPolicy: learning.actionPolicy,
-            sampleCount: learning.sampleCount,
-            multiplier,
-            groupKey: learning.groupKey,
-          },
-        } as DurationContextSummary
-        : base.factorSummary,
-    }
-  } catch (error) {
-    logger.warn('[durationSuggestionService] project execution context unavailable', { error })
-    return base
-  }
-}
-
-*/
 async function applyProjectExecutionEnvironment(
   base: DurationSuggestion,
   input: DurationSuggestionInput,
@@ -3685,19 +4204,16 @@ async function applyProjectExecutionEnvironment(
   let changed = false
 
   try {
-    const learning = await buildProjectProgressVelocityLearning({
-      projectId: input.projectId,
-      taskId: input.taskId,
-      templateNodeId: input.templateNodeId,
-      templateStableCode: input.templateStableCode,
-      standardWorkCode: input.standardWorkCode,
-      engineeringCategoryId: input.engineeringCategoryId,
-      responsibleUnitId: input.responsibleUnitId,
-      structureTypeCode: input.structureTypeCode,
-    })
+    const learning = hasProjectBaselineCalibrationContext(next.factorSummary)
+      ? null
+      : await loadPublishedProgressVelocityRuntime({
+        projectId: input.projectId,
+        companyId: input.companyId,
+        consumerKey: 'durationSuggestionService.similar_task_rhythm',
+      })
     if (learning && learning.sampleCount >= 1) {
       const multiplier = clamp(Number(learning.multiplier ?? 1), 0.75, 1.35)
-      const reason = `本项目同类已完成任务显示当前生产节奏约 ${Number(multiplier.toFixed(2))} 倍，已作为 L1 同类任务节奏`
+      const reason = `本项目已发布的同类任务节奏参数约为 ${Number(multiplier.toFixed(2))} 倍，已作为受控 L1 运行参数`
       const canApplyRecommended = learning.confidenceLevel === 'high' && learning.actionPolicy === 'auto_apply'
       const canPartialApplyRecommended = !canApplyRecommended
         && learning.confidenceLevel === 'medium'
@@ -3743,7 +4259,7 @@ async function applyProjectExecutionEnvironment(
       contextAvailability.similar_task_rhythm = true
       maturityReasons.push('project-level similar-task rhythm is available')
       contextDetails.similarTaskRhythm = {
-        source: 'progressVelocityLearningService',
+        source: 'progressVelocityRuntimePublicationService',
         confidenceLevel: learning.confidenceLevel,
         confidenceScore: learning.confidenceScore,
         actionPolicy: learning.actionPolicy,
@@ -3886,15 +4402,23 @@ async function finalizeSuggestion(
 ) {
   const contextualSuggestion = await applyProjectExecutionEnvironment(suggestion, input, purpose)
   const boundedSuggestion = withParentDurationBoundaryContext(contextualSuggestion, input)
+  const replayCalibratedSuggestion = await applyPlanningReplayCalibrationReadbackToSuggestion(boundedSuggestion, input, purpose)
+  const plausibleSuggestion = withEngineeringPlausibilityGuardrails(replayCalibratedSuggestion, input)
   const finalSuggestion = withDisplaySummary(
     purpose === 'monthly_commitment_window'
-      ? buildMonthlyCommitmentWindowSuggestion(boundedSuggestion, input)
-      : boundedSuggestion,
+      ? buildMonthlyCommitmentWindowSuggestion(plausibleSuggestion, input)
+      : plausibleSuggestion,
   )
-  const calendarAwareSuggestion = withDurationCalendarContext(finalSuggestion, input)
+  const t2ContextualSuggestion = withT2RhythmScheduleCandidateContext(finalSuggestion, input)
+  const t2NetworkEvaluationSuggestion = withT2RhythmScheduleCandidateNetworkEvaluationContext(t2ContextualSuggestion, input)
+  const t2Phase1SelectionSuggestion = withT2RhythmSchedulePhase1SelectionContext(t2NetworkEvaluationSuggestion, input)
+  const assembledInputSuggestion = withDurationInputAssemblyContext(t2Phase1SelectionSuggestion, input)
+  const calendarAwareSuggestion = withDurationCalendarContext(assembledInputSuggestion, input)
   const governedSuggestion = withDurationOutputContract(calendarAwareSuggestion)
   logDurationSuggestionRun(input, purpose, governedSuggestion)
-  await recordDurationSuggestionPredictionEvent(input, purpose, governedSuggestion)
+  if (input.runtimeEvidenceMode !== 'no_write') {
+    await recordDurationSuggestionPredictionEvent(input, purpose, governedSuggestion)
+  }
   return governedSuggestion
 }
 
@@ -3935,9 +4459,77 @@ function withDurationOutputContract(suggestion: DurationSuggestion): DurationSug
   }
 }
 
+function withEngineeringPlausibilityGuardrails(
+  suggestion: DurationSuggestion,
+  input: DurationSuggestionInput,
+): DurationSuggestion {
+  const recommended = readPositiveNumber(suggestion.recommendedDurationDays)
+  if (!recommended) return suggestion
+  const conservative = readPositiveNumber(suggestion.conservativeDurationDays ?? suggestion.recommendedDurationDays)
+  const recommendedGuard = evaluateDurationPlausibility({
+    engineCode: 'duration_suggestion',
+    durationDays: recommended,
+    title: input.taskTitle ?? input.standardWorkName,
+    standardWorkCode: input.standardWorkCode ?? input.templateStableCode,
+    standardWorkName: input.standardWorkName,
+    taskId: input.taskId,
+    clamp: true,
+  })
+  const conservativeGuard = conservative
+    ? evaluateDurationPlausibility({
+      engineCode: 'duration_suggestion',
+      durationDays: conservative,
+      title: input.taskTitle ?? input.standardWorkName,
+      standardWorkCode: input.standardWorkCode ?? input.templateStableCode,
+      standardWorkName: input.standardWorkName,
+      taskId: input.taskId,
+      clamp: true,
+    })
+    : { durationDays: null, warnings: [] as DurationPlausibilityWarning[] }
+  const warnings = [...recommendedGuard.warnings, ...conservativeGuard.warnings]
+  if (warnings.length === 0) return suggestion
+  const nextRecommended = recommendedGuard.durationDays ?? recommended
+  const nextConservative = Math.max(
+    nextRecommended,
+    conservativeGuard.durationDays ?? conservative ?? nextRecommended,
+  )
+  const calculationContext = {
+    ...(suggestion.calculationContext ?? {}),
+    durationPlausibilityWarnings: [
+      ...(((suggestion.calculationContext as any)?.durationPlausibilityWarnings ?? []) as DurationPlausibilityWarning[]),
+      ...warnings,
+    ],
+  } as DurationSuggestion['calculationContext']
+  const factorSummary = suggestion.factorSummary
+    ? {
+      ...suggestion.factorSummary,
+      calculationContext: {
+        ...suggestion.factorSummary.calculationContext,
+        durationPlausibilityWarnings: [
+          ...(((suggestion.factorSummary.calculationContext as any)?.durationPlausibilityWarnings ?? []) as DurationPlausibilityWarning[]),
+          ...warnings,
+        ],
+      },
+    } as DurationContextSummary
+    : suggestion.factorSummary
+  return {
+    ...suggestion,
+    recommendedDurationDays: nextRecommended,
+    conservativeDurationDays: nextConservative,
+    calculationContext,
+    factorSummary,
+    businessReason: appendReason(suggestion.businessReason, '已通过工程合理性护栏校验参考工期'),
+    businessReasonParams: {
+      ...(suggestion.businessReasonParams ?? {}),
+      durationPlausibilityWarnings: warnings,
+    },
+    displaySummary: null,
+  }
+}
+
 export async function getTaskDurationSuggestion(input: DurationSuggestionInput): Promise<DurationSuggestion> {
   let normalizedInput: DurationSuggestionInput = input
-  const hydratedInput = await hydrateDurationAlgorithmInput(input, {
+  const assembledInput = await assembleDurationInput(input, {
     purpose: input.suggestionPurpose === 'execution_reference'
       ? 'execution_reference'
       : input.suggestionPurpose === 'monthly_commitment_window'
@@ -3945,6 +4537,10 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
         : 'new_task_reference',
     allowLiveProjectReread: input.suggestionPurpose === 'execution_reference',
   })
+  const hydratedInput = {
+    ...assembledInput,
+    durationInputAssembly: assembledInput as DurationInputAssemblerResult<DurationSuggestionInput>,
+  }
   const taskMergedInput = await mergeSuggestionTaskContext(enrichDurationInputFromProjectGenerationFacts(hydratedInput))
   const wbsNodeType = taskMergedInput.wbsNodeType ?? 'process'
   const projectId = normalizeId(taskMergedInput.projectId) || null
@@ -3980,24 +4576,28 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
       runtimeArtifactPublications: readonly DurationSuggestionRuntimeArtifactPublication[],
     ) => {
       const governedSuggestion = await finalizeSuggestion(suggestion, normalizedInput, suggestionPurpose)
+      if (!shouldRecordDurationRuntimeConsumerEvidence(normalizedInput)) return governedSuggestion
       const artifacts = buildDurationSuggestionConsumedArtifacts({
         runtimeArtifactPublications,
         projectId: normalizedInput.projectId,
         taskId: normalizedInput.taskId,
         standardWorkCode: normalizedInput.standardWorkCode,
       })
-      if (artifacts.length === 0) return governedSuggestion
       try {
         const projectIdForEvidence = normalizeId(normalizedInput.projectId)
         const taskIdForEvidence = normalizeId(normalizedInput.taskId)
         const standardWorkCodeForEvidence = normalizeId(normalizedInput.standardWorkCode)
         await recordDurationSuggestionConsumedArtifacts({
-          queryExec: normalizedInput.runtimeConsumerObservationQueryExec ?? buildDurationRuntimeConsumerObservationQueryExec(),
+          queryExec: createDurationRuntimeConsumerObservationQueryExec(
+            normalizedInput.runtimeConsumerObservationQueryExec,
+          ),
           callContext: {
             projectId: projectIdForEvidence || null,
             taskId: taskIdForEvidence || null,
             standardWorkCode: standardWorkCodeForEvidence || null,
             runtimeConsumer: 'durationSuggestionService',
+            runtimeAssetMode: artifacts.length > 0 ? 'published_artifact' : 'no_published_artifact',
+            runtimeArtifactCount: artifacts.length,
           },
           sourceEvidenceRefs: [
             [
@@ -4114,7 +4714,7 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
     const benchmarkSpecificity = primaryBenchmarkCandidate?.specificity ?? benchmarkContextSpecificity(matchedBenchmarkContextKey)
     const benchmarkUsable = benchmarkCandidates.length > 0
     const broadSystemBenchmark = benchmarkCandidates.length === 0
-      ? (await findBenchmark([benchmarkIdentity, wbsNodeType, 'all'].join(':'), null)).benchmark
+      ? await findBenchmark([benchmarkIdentity, wbsNodeType, 'all'].join(':'), null)
       : null
     const benchmarkGeneralizationSkipped = Boolean(
       broadSystemBenchmark
@@ -4174,7 +4774,7 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
         )
       }
       const durationContributionMode = readSeedDurationContributionMode(standardSeed as Record<string, unknown>)
-      if (durationContributionMode && !isDurationBearingContributionMode(durationContributionMode)) {
+      if (durationContributionMode && !isDurationBearingContributionModeFromResolver(durationContributionMode)) {
         const seedEvidenceScope = resolveSeedEvidenceScope(standardSeed as any)
         const seedSampleSize = readSeedGovernanceSampleSize(standardSeed as any, seedEvidenceScope)
         const maturity = resolveDataMaturity(normalizedInput, seedSampleSize, suggestionPurpose, seedEvidenceScope)
@@ -4186,13 +4786,13 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
           forecastSource: 'standard_work_duration_seed:non_duration_bearing',
           durationCalibrationSource: 'standard_work_duration_seed',
           durationProvenance: 'unavailable',
-          businessReason: `该标准工序为${describeDurationContributionMode(durationContributionMode)}，不生成独立参考工期`,
+          businessReason: `该标准工序为${describeDurationContributionModeFromResolver(durationContributionMode)}，不生成独立参考工期`,
           businessReasonCode: 'NON_DURATION_BEARING_STANDARD_WORK',
           businessReasonCodes: ['NON_DURATION_BEARING_STANDARD_WORK'],
           businessReasonParams: {
             seedSource: (standardSeed as any).__resolverSource ?? 'standard_work_duration_seed',
             durationContributionMode,
-            durationContributionModeLabel: describeDurationContributionMode(durationContributionMode),
+            durationContributionModeLabel: describeDurationContributionModeFromResolver(durationContributionMode),
           },
           benchmarkKey: `standard_work_duration:${(standardSeed as any).__stableCode ?? (standardSeed as any).stableCode}`,
           sampleSize: 0,
@@ -4246,7 +4846,11 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
         && (suggestionPurpose === 'new_task_reference' || suggestionPurpose === 'execution_reference')
       const benchmarkBlendRuntimeParameter = companyBenchmarkCandidate
         && canBlendBenchmark
-        ? await loadBenchmarkBlendRuntimeParameter(companyId, normalizedInput.projectId ?? null)
+        ? await loadBenchmarkBlendRuntimeParameter(
+            companyId,
+            normalizedInput.projectId ?? null,
+            normalizeId(normalizedInput.taskId) || normalizeId(normalizedInput.standardWorkCode),
+          )
         : null
       const benchmarkBlend = canBlendBenchmark
         ? blendBenchmarkCandidates(coldStartBaseDays, coldStartP80, benchmarkCandidates, benchmarkBlendRuntimeParameter)
@@ -4278,7 +4882,7 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
       const seedEvidenceScope = resolveSeedEvidenceScope(standardSeed as any)
       const seedSampleSize = readSeedGovernanceSampleSize(standardSeed as any, seedEvidenceScope)
       const maturity = resolveDataMaturity(normalizedInput, seedSampleSize, suggestionPurpose, seedEvidenceScope)
-      const scale = resolveScaleAdjustment(normalizedInput, effectiveBaseDays, standardSeed as any, factorSummary)
+      const scale = await resolveScaleAdjustment(normalizedInput, effectiveBaseDays, standardSeed as any, factorSummary)
       const scaledRecommended = applyScaleToDays(effectiveBaseDays, scale)
       const scaledConservative = applyScaleToDays(sanitizedP80.conservativeDays, scale)
       const baseConfidenceScore = (standardSeed as any).confidence === 'high' ? 74 : (standardSeed as any).confidence === 'low' ? 42 : 60

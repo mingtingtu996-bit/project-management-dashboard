@@ -208,4 +208,45 @@ describe('durationRuntimeConsumerObservationRuntimeCallAuditService', () => {
       evidenceRef: 'runtime_consumer_runtime_calls:runtime-call-duration-suggestion-seed',
     }])
   })
+
+  it('keeps coverage not ready when rejected runtime-call evidence is present even if required calls are covered', async () => {
+    const {
+      evaluateDurationRuntimeConsumerObservationRuntimeCallCoverage,
+      listDurationRuntimeConsumerObservationRequiredRuntimeCalls,
+    } = await import('../services/durationRuntimeConsumerObservationRuntimeCallAuditService.js')
+
+    const requiredRuntimeCalls = listDurationRuntimeConsumerObservationRequiredRuntimeCalls()
+    const runtimeCallEvidence = requiredRuntimeCalls.map((runtimeCall) => ({
+      ...runtimeCall,
+      evidenceRef: `runtime_consumer_runtime_calls:runtime-call-${runtimeCall.consumerKey}`,
+      sourceEvidenceRefs: [runtimeSourceRef(runtimeCall.consumerKey)],
+    }))
+    const observedConsumerObservations = requiredRuntimeCalls.map((runtimeCall) => ({
+      consumerKey: runtimeCall.consumerKey,
+      sourceEvidenceRefs: [runtimeSourceRef(runtimeCall.consumerKey)],
+    }))
+
+    const audit = evaluateDurationRuntimeConsumerObservationRuntimeCallCoverage({
+      runtimeCallEvidence: [
+        ...runtimeCallEvidence,
+        {
+          consumerKey: 'unknownDurationConsumer',
+          runtimeEntryRef: 'unknown:entry',
+          evidenceRef: 'runtime_consumer_runtime_calls:runtime-call-unknown',
+          sourceEvidenceRefs: ['runtime-consumption:unknownDurationConsumer:live-path'],
+        },
+      ],
+      observedConsumerObservations,
+    })
+
+    expect(audit.missingRuntimeCalls).toEqual([])
+    expect(audit.unlinkedConsumerObservations).toEqual([])
+    expect(audit.rejectedRuntimeCalls).toEqual([{
+      consumerKey: 'unknownDurationConsumer',
+      runtimeEntryRef: 'unknown:entry',
+      evidenceRef: 'runtime_consumer_runtime_calls:runtime-call-unknown',
+      reason: 'runtime_consumer_observation_facade_consumer_not_declared',
+    }])
+    expect(audit.status).toBe('runtime_consumer_observation_runtime_calls_not_ready')
+  })
 })

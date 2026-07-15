@@ -1,14 +1,25 @@
-﻿type TaskLike = {
+﻿import { delayDayDelta } from './durationDays'
+
+type TaskLike = {
   id?: string | null
   status?: string | null
   progress?: number | null
-  planned_start_date?: string | null
   planned_end_date?: string | null
   end_date?: string | null
   parent_id?: string | null
-  is_critical?: boolean | null
   lagLevel?: 'none' | 'mild' | 'moderate' | 'severe' | null
   lagStatus?: '正常' | '轻度滞后' | '中度滞后' | '严重滞后' | null
+  businessStatus?: {
+    status?: string | null
+    label?: string | null
+  } | null
+  statusDerivation?: {
+    businessStatus?: {
+      status?: string | null
+      label?: string | null
+    } | null
+  } | null
+  displayStatus?: string | null
 }
 
 type TaskConditionLike = {
@@ -42,6 +53,9 @@ export type TaskBusinessStatusCode =
   | 'lagging_moderate'
   | 'lagging_mild'
   | 'pending_conditions'
+  | 'progress_warning'
+  | 'partial_blocked'
+  | 'blocked_by_obstacle'
   | 'ready'
   | 'in_progress'
   | 'pending'
@@ -95,6 +109,21 @@ export const TASK_STATUS_THEME = {
     code: 'pending_conditions',
     label: '\u5f85\u5f00\u5de5',
     cls: 'bg-orange-100 text-orange-700 border border-orange-200',
+  },
+  progress_warning: {
+    code: 'progress_warning',
+    label: '执行预警',
+    cls: 'bg-amber-50 text-amber-700 border border-amber-200',
+  },
+  partial_blocked: {
+    code: 'partial_blocked',
+    label: '部分受影响',
+    cls: 'bg-amber-100 text-amber-700 border border-amber-200',
+  },
+  blocked_by_obstacle: {
+    code: 'blocked_by_obstacle',
+    label: '受阻',
+    cls: 'bg-red-100 text-red-700 border border-red-200',
   },
   ready: {
     code: 'ready',
@@ -219,36 +248,6 @@ function normalizeLagStatus(value: unknown): TaskLagStatus | null {
   }
 }
 
-function calculateLegacyLagLevel(task: TaskLike): TaskLagLevel | null {
-  const status = normalizeStatus(task.status)
-  if (status !== 'in_progress' && status !== 'blocked') return null
-  if (!task.planned_start_date || !task.planned_end_date) return null
-
-  const start = new Date(task.planned_start_date).getTime()
-  const end = new Date(task.planned_end_date).getTime()
-  if (Number.isNaN(start) || Number.isNaN(end)) return null
-
-  const duration = Math.round((end - start) / 86400000)
-  if (duration <= 3) return null
-
-  const now = Date.now()
-  if (now >= end) return null
-
-  const elapsed = Math.max(0, Math.round((now - start) / 86400000))
-  const timeRatio = elapsed / duration
-  if (timeRatio <= 0) return null
-
-  const progress = Number(task.progress ?? 0)
-  const biasRatio = (progress / 100) / timeRatio
-  const remaining = Math.round((end - now) / 86400000)
-  const threshold = task.is_critical ? 0.8 : 0.7
-
-  if (biasRatio < 0.5 && remaining < 3) return 'severe'
-  if (biasRatio < 0.5) return 'moderate'
-  if (biasRatio < threshold) return 'mild'
-  return null
-}
-
 export function getTaskLagLevel(task: TaskLike): TaskLagLevel | null {
   const explicitLagLevel = normalizeLagLevel(task.lagLevel)
   if (explicitLagLevel !== null) {
@@ -269,7 +268,7 @@ export function getTaskLagLevel(task: TaskLike): TaskLagLevel | null {
     }
   }
 
-  return calculateLegacyLagLevel(task)
+  return null
 }
 
 export function getTaskLagStatus(task: TaskLike): TaskLagStatus {
@@ -303,10 +302,8 @@ export function isDelayedTask(task: TaskLike): boolean {
   const plannedEnd = task.planned_end_date || task.end_date
   if (!plannedEnd) return false
 
-  const plannedEndTime = new Date(plannedEnd).getTime()
-  if (Number.isNaN(plannedEndTime)) return false
-
-  return plannedEndTime < Date.now()
+  const delayDays = delayDayDelta(plannedEnd, new Date(Date.now()))
+  return delayDays !== null && delayDays > 0
 }
 
 export function buildTaskConditionSummary(
@@ -368,6 +365,10 @@ export function getTaskBusinessStatus(
   } = {},
 ): TaskBusinessStatus {
   const conditionSummary = options.conditionSummary ?? { total: 0, satisfied: 0 }
+  const backendStatus = normalizeStatus(task.statusDerivation?.businessStatus?.status ?? task.businessStatus?.status)
+  if (backendStatus && backendStatus in TASK_STATUS_THEME) {
+    return TASK_STATUS_THEME[backendStatus as TaskBusinessStatusCode]
+  }
 
   if (isCompletedTask(task)) {
     return TASK_STATUS_THEME.completed
@@ -426,10 +427,7 @@ export function buildProjectTaskProgressSnapshot(
     const plannedEnd = task.planned_end_date || task.end_date
     if (!plannedEnd) continue
 
-    const plannedEndTime = new Date(plannedEnd).getTime()
-    if (Number.isNaN(plannedEndTime)) continue
-
-    delayDays += Math.ceil((Date.now() - plannedEndTime) / 86400000)
+    delayDays += Math.max(0, delayDayDelta(plannedEnd, new Date(Date.now())) ?? 0)
   }
 
   const totalProgress = leafTasks.reduce((sum, task) => sum + Number(task.progress ?? 0), 0)
@@ -464,33 +462,3 @@ export function buildProjectTaskProgressSnapshot(
     obstacleCountMap,
   }
 }
-
-export function calculateProjectHealthScore(input: {
-  completedTaskCount: number
-  completedMilestones: number
-  delayDays: number
-  activeRisks: RiskLike[]
-}): number {
-  const riskPenalty = input.activeRisks.reduce((total, risk) => {
-    switch (normalizeStatus(risk.level)) {
-      case 'critical':
-      case 'high':
-        return total - 10
-      case 'medium':
-        return total - 5
-      case 'low':
-        return total - 2
-      default:
-        return total
-    }
-  }, 0)
-
-  return Math.max(
-    0,
-    Math.min(
-      100,
-      50 + input.completedTaskCount * 2 + input.completedMilestones * 5 - Math.min(input.delayDays, 30) + riskPenalty,
-    ),
-  )
-}
-

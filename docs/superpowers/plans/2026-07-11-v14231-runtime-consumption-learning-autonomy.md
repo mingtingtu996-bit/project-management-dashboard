@@ -277,7 +277,7 @@ Write the failing recovery test first, then persist an idempotent pending state 
 
 - [ ] **Step 7: Run raw date-math guard and replace business day arithmetic**
 
-Run: `npm run guard:server-raw-date-math --workspace=server`
+Run: `npm run guard:raw-date-math --workspace=server`
 
 Replace violations owned by the duration/default-master-plan chain with `constructionCalendar`, `inclusiveDurationDays`, or the established calendar/date utility. Add DST/timezone, parallel-chain, deleted-task, and failed-cache regression assertions.
 

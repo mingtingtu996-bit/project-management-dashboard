@@ -22,7 +22,7 @@ describe('milestone overview', () => {
           mapping_pending: false,
           merged_into: null,
           merged_into_name: null,
-          non_base_labels: ['执行层已关闭'],
+          non_base_labels: ['数据不完整'],
         },
       ],
       stats: {
@@ -39,14 +39,6 @@ describe('milestone overview', () => {
         dueSoon30dCount: 0,
         highRiskCount: 0,
       },
-      healthSummary: {
-        status: 'normal',
-        needsAttentionCount: 0,
-        mappingPendingCount: 0,
-        mergedCount: 0,
-        excessiveDeviationCount: 0,
-        incompleteDataCount: 0,
-      },
     })
 
     expect(overview.items).toHaveLength(1)
@@ -60,7 +52,7 @@ describe('milestone overview', () => {
       completionRate: 100,
     })
     expect(overview.summaryStats?.shiftedCount).toBe(1)
-    expect(overview.healthSummary?.status).toBe('normal')
+    expect(overview.items[0].non_base_labels).toEqual(['数据不完整'])
   })
 
   it('creates an empty overview for missing payloads', () => {

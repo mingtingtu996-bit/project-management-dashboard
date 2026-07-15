@@ -1,4 +1,5 @@
 import type { BusinessSubtypeCode, BusinessTypeCode, MethodVariantCode } from './projectTypeRecommendations.js'
+import { FORMAL_BUSINESS_TYPE_CODES } from './businessTypeRegistryService.js'
 import {
   isLowRiseMultiBuildingParallelScenario as resolveLowRiseMultiBuildingParallelScenario,
   resolveBuildingPatternExecutionArchetypeProfile,
@@ -22,19 +23,7 @@ export type {
 
 export const PROJECT_SCENARIO_TAXONOMY_VERSION = 'v1.4.22.1-project-scenario-taxonomy-20260529'
 
-export const PRODUCT_BUSINESS_TYPE_CODES = [
-  'general_civil',
-  'hotel',
-  'hospital',
-  'school',
-  'industrial',
-  'data_center',
-  'transportation_hub',
-  'sports_culture',
-  'tod_upper_cover',
-  'renovation',
-  'modular_building',
-] as const satisfies readonly BusinessTypeCode[]
+export const PRODUCT_BUSINESS_TYPE_CODES = FORMAL_BUSINESS_TYPE_CODES satisfies readonly BusinessTypeCode[]
 
 export type WbsTemplateProjectRecommendationKey =
   | 'residential'

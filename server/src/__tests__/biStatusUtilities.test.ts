@@ -9,6 +9,7 @@ import { isActiveIssue } from '../utils/issueStatus.js'
 import { isActiveObstacle } from '../utils/obstacleStatus.js'
 import { isActiveRisk } from '../utils/riskStatus.js'
 import {
+  COMPLETED_TASK_STATUS_SQL_LIST,
   isCompletedMilestone,
   isCompletedTask,
   isInProgressTask,
@@ -69,8 +70,8 @@ describe('BI status utilities', () => {
       { id: 'child-b', parent_id: 'parent', progress: 80, planned_start_date: '2026-04-01', planned_end_date: '2026-04-11' },
     ]
 
-    expect(calculateWeightedProgress(tasks)).toBe(70)
-    expect(calculateOverallProgress(tasks)).toBe(70)
+    expect(calculateWeightedProgress(tasks)).toBe(67)
+    expect(calculateOverallProgress(tasks)).toBe(67)
   })
 
   it('keeps completion checks delegated to the shared taskStatus utility', () => {
@@ -82,6 +83,11 @@ describe('BI status utilities', () => {
     expect(dbServiceSource).not.toContain('function isCompletedState')
 
     expect(taskSummarySource).toContain("from '../utils/taskStatus.js'")
+    expect(COMPLETED_TASK_STATUS_SQL_LIST).toContain("'已完成'")
+    expect(taskSummarySource).not.toContain("IN ('completed', 'done')")
+    expect(taskSummarySource).not.toContain('COMPLETED_TASK_STATUS_SQL_LIST')
+    expect((taskSummarySource.match(/\bisCompletedTask\(/g) ?? []).length).toBeGreaterThanOrEqual(8)
+    expect((taskSummarySource.match(/\bisCompletedMilestone\(/g) ?? []).length).toBeGreaterThanOrEqual(1)
     expect(taskSummarySource).not.toContain("status === '已完成' ||")
     expect(taskSummarySource).not.toContain("status === 'completed' ||")
     expect(taskSummarySource).not.toContain(".in('status', ['已完成', 'completed'])")

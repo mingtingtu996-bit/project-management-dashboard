@@ -1,0 +1,342 @@
+[
+    {
+        "filename":  "002_add_phase1_tables.sql",
+        "version":  "002",
+        "currentFileChecksum":  "0a39a3c82162e0bb4929f9aa629d5c7c717756512ddd50b557081333f8978c3a",
+        "appliedLedgerChecksum":  "8edfef3e44a0a42d84d945f91fb43fc71c2f6ec847bf9af75ea708f662803881",
+        "reviewedAt":  "2026-06-20T15:00:00+08:00",
+        "reviewedBy":  "codex-current-worktree-audit",
+        "evidence":  "docs/reports/v14232c_checksum_reconciliation_20260620.md#002-add-phase1-tables-sql",
+        "basis":  "exact historical SQL was not found in current git history or sibling WorkBuddy migration snapshots; current file hash and live ledger hash are recorded to keep the difference explicit and invalidate this reconciliation if either side changes"
+    },
+    {
+        "filename":  "028_add_tasks_missing_columns.sql",
+        "version":  "028",
+        "currentFileChecksum":  "9681c830b8b20436bb9eeb1d93fca57e04ee8e6f09d41a9fcf4a5d3c5bfb121d",
+        "appliedLedgerChecksum":  "dcf9dbdc2fb73791c11677f453381132af230e1e72efc8f023beb9fa6f0343ff",
+        "reviewedAt":  "2026-06-28T12:58:00+08:00",
+        "reviewedBy":  "codex-current-live-migration-governance",
+        "evidence":  "docs/reports/v14231_current_live_migration_governance_20260628.md#028-add-tasks-missing-columns-sql",
+        "basis":  "current file intentionally removes retired task duration cache columns while live public.tasks readback shows reference_duration, ai_duration, planned_duration, standard_duration, and ai_adjusted_duration are absent; do not restore old columns or replay historical DDL"
+    },
+    {
+        "filename":  "031_fix_bug2_missing_columns.sql",
+        "version":  "031",
+        "currentFileChecksum":  "060313d3971bd55acad4c77c41255f3fcdf00b8b42bc8c4f45746da23ba6393f",
+        "appliedLedgerChecksum":  "f0b60618636abcfdaadb4cc9fc3b660903e13c3502c3aa49c4e720036be32e33",
+        "reviewedAt":  "2026-06-28T12:58:00+08:00",
+        "reviewedBy":  "codex-current-live-migration-governance",
+        "evidence":  "docs/reports/v14231_current_live_migration_governance_20260628.md#031-fix-bug2-missing-columns-sql",
+        "basis":  "current file intentionally removes retired task duration cache columns while live public.tasks readback shows reference_duration, ai_duration, planned_duration, standard_duration, and ai_adjusted_duration are absent; do not restore old columns or replay historical DDL"
+    },
+    {
+        "filename":  "035_add_wbs_task_fields.sql",
+        "version":  "035",
+        "currentFileChecksum":  "e6960b1021659dd22081abda2238eb2e869b4a691d7a4a71f54cd900c815f6e0",
+        "appliedLedgerChecksum":  "6a8fd42b5cd9b2019e60bf27aa723e100952994ffb6845e839dcae264de45342",
+        "reviewedAt":  "2026-06-28T12:58:00+08:00",
+        "reviewedBy":  "codex-current-live-migration-governance",
+        "evidence":  "docs/reports/v14231_current_live_migration_governance_20260628.md#035-add-wbs-task-fields-sql",
+        "basis":  "current file intentionally removes retired task duration cache columns while live public.tasks readback shows reference_duration, ai_duration, planned_duration, standard_duration, and ai_adjusted_duration are absent; do not restore old columns or replay historical DDL"
+    },
+    {
+        "filename":  "068_normalize_acceptance_flow_model.sql",
+        "version":  "068",
+        "currentFileChecksum":  "6023995c8b2725a476974fd8cb5c477bce8fd7ce207f33874b533fede07b3274",
+        "appliedLedgerChecksum":  "ca9258f12f2916946a361e81be8f64fcdb144d9339d71339e5f4a0cd2bd74a9a",
+        "reviewedAt":  "2026-06-20T15:00:00+08:00",
+        "reviewedBy":  "codex-current-worktree-audit",
+        "evidence":  "docs/reports/v14232c_checksum_reconciliation_20260620.md#068-normalize-acceptance-flow-model-sql",
+        "basis":  "exact historical SQL was not found in current git history or sibling WorkBuddy migration snapshots; current file hash and live ledger hash are recorded to keep the difference explicit and invalidate this reconciliation if either side changes"
+    },
+    {
+        "filename":  "084a_reconcile_live_schema_after_baseline_adoption.sql",
+        "version":  "084a",
+        "currentFileChecksum":  "2511a6da6aaa0bbfef1663a3d927dbe5d4f9c204866f3b146e07f6d51b28b6fd",
+        "appliedLedgerChecksum":  "631230277d6db3b81ae6538c13bc4529e643930f05f9aae969d9d79d7615b43b",
+        "reviewedAt":  "2026-06-20T15:00:00+08:00",
+        "reviewedBy":  "codex-current-worktree-audit",
+        "evidence":  "docs/reports/v14232c_checksum_reconciliation_20260620.md#084a-reconcile-live-schema-after-baseline-adoption-sql",
+        "basis":  "exact historical SQL was not found in current git history or sibling WorkBuddy migration snapshots; current file hash and live ledger hash are recorded to keep the difference explicit and invalidate this reconciliation if either side changes"
+    },
+    {
+        "filename":  "103_patch_schema_gaps_e4.sql",
+        "version":  "103",
+        "currentFileChecksum":  "f31540277ba81216aaaeba84d6212f77db5c524bdb8e28fc1c45a83d4a64d106",
+        "appliedLedgerChecksum":  "1619eb5fc544f0e38be18021a2e39883b502625d5e18a0f5523c842f1d37f9c9",
+        "reviewedAt":  "2026-06-20T15:00:00+08:00",
+        "reviewedBy":  "codex-current-worktree-audit",
+        "evidence":  "docs/reports/v14232c_checksum_reconciliation_20260620.md#103-patch-schema-gaps-e4-sql",
+        "basis":  "exact historical SQL was not found in current git history or sibling WorkBuddy migration snapshots; current file hash and live ledger hash are recorded to keep the difference explicit and invalidate this reconciliation if either side changes"
+    },
+    {
+        "filename":  "120_create_engineering_objects.sql",
+        "version":  "120",
+        "currentFileChecksum":  "1e25699dfa98e912d0a37dddb822a205b11de2458d2b029ce6787d9c8f6fbe8a",
+        "appliedLedgerChecksum":  "fe336f426fab90bee2b246cc43286e12123036aaddd3f18274bf1e6fe6d0d553",
+        "reviewedAt":  "2026-06-20T15:00:00+08:00",
+        "reviewedBy":  "codex-current-worktree-audit",
+        "evidence":  "docs/reports/v14232c_checksum_reconciliation_20260620.md#120-create-engineering-objects-sql",
+        "basis":  "exact historical SQL was not found in current git history or sibling WorkBuddy migration snapshots; current file hash and live ledger hash are recorded to keep the difference explicit and invalidate this reconciliation if either side changes"
+    },
+    {
+        "filename":  "121_add_wbs_engineering_categories.sql",
+        "version":  "121",
+        "currentFileChecksum":  "c783d0e3e88a5e123bea93002c180e70a2b722292abf2a0244d1ea274fb7b551",
+        "appliedLedgerChecksum":  "09e621fa427ca7f045ae5ddffced2b03fd35cf2693b8fc47e683f98ead1faac6",
+        "reviewedAt":  "2026-06-20T15:00:00+08:00",
+        "reviewedBy":  "codex-current-worktree-audit",
+        "evidence":  "docs/reports/v14232c_checksum_reconciliation_20260620.md#121-add-wbs-engineering-categories-sql",
+        "basis":  "exact historical SQL was not found in current git history or sibling WorkBuddy migration snapshots; current file hash and live ledger hash are recorded to keep the difference explicit and invalidate this reconciliation if either side changes"
+    },
+    {
+        "filename":  "122_create_construction_task_standard_model.sql",
+        "version":  "122",
+        "currentFileChecksum":  "fd3158a76b14d27626afbe40cead9c29a1ceedbd9668adf279b28b6d9b27f9d7",
+        "appliedLedgerChecksum":  "5bea9322437e83b6c240b8f235ddd64e6f0e6a76196d262faefe8fa6f1a11d88",
+        "reviewedAt":  "2026-06-20T15:00:00+08:00",
+        "reviewedBy":  "codex-current-worktree-audit",
+        "evidence":  "docs/reports/v14232c_checksum_reconciliation_20260620.md#122-create-construction-task-standard-model-sql",
+        "basis":  "exact historical SQL was not found in current git history or sibling WorkBuddy migration snapshots; current file hash and live ledger hash are recorded to keep the difference explicit and invalidate this reconciliation if either side changes"
+    },
+    {
+        "filename":  "123_create_task_code_rules.sql",
+        "version":  "123",
+        "currentFileChecksum":  "c5b49d577043e9b7afb21bdc1c3f0c6c9a335edb870539819d9f4fbf4d285c35",
+        "appliedLedgerChecksum":  "0513a76f67446d6d30b99bf056696c4db0a06c7b94eb6cde9cb55923056d3ea5",
+        "reviewedAt":  "2026-06-20T15:00:00+08:00",
+        "reviewedBy":  "codex-current-worktree-audit",
+        "evidence":  "docs/reports/v14232c_checksum_reconciliation_20260620.md#123-create-task-code-rules-sql",
+        "basis":  "exact historical SQL was not found in current git history or sibling WorkBuddy migration snapshots; current file hash and live ledger hash are recorded to keep the difference explicit and invalidate this reconciliation if either side changes"
+    },
+    {
+        "filename":  "136_v1472_wbs_template_generation.sql",
+        "version":  "136",
+        "currentFileChecksum":  "664df41d47e7f1269c7249f45b9b27d6ccbce76bc8eca06b546309c2ad7062a5",
+        "appliedLedgerChecksum":  "004e60516bd5b1b47941e7c0acf9303818f49923158d0cb3f7d536e162c36899",
+        "reviewedAt":  "2026-06-20T15:00:00+08:00",
+        "reviewedBy":  "codex-current-worktree-audit",
+        "evidence":  "docs/reports/v14232c_checksum_reconciliation_20260620.md#136-v1472-wbs-template-generation-sql",
+        "basis":  "exact historical SQL was not found in current git history or sibling WorkBuddy migration snapshots; current file hash and live ledger hash are recorded to keep the difference explicit and invalidate this reconciliation if either side changes"
+    },
+    {
+        "filename":  "136a_v1472_wbs_template_candidates.sql",
+        "version":  "136a",
+        "currentFileChecksum":  "7a0087c0cffec1ecdd6c63860c60e6d24be86054bf21e78e1182282e633268fa",
+        "appliedLedgerChecksum":  "12da8e3649021dbcfe42abcdfa8ef5bd67750f9ef25f6abf2a1e74a6e4dcedbb",
+        "reviewedAt":  "2026-06-20T15:00:00+08:00",
+        "reviewedBy":  "codex-current-worktree-audit",
+        "evidence":  "docs/reports/v14232c_checksum_reconciliation_20260620.md#136a-v1472-wbs-template-candidates-sql",
+        "basis":  "exact historical SQL was not found in current git history or sibling WorkBuddy migration snapshots; current file hash and live ledger hash are recorded to keep the difference explicit and invalidate this reconciliation if either side changes"
+    },
+    {
+        "filename":  "137_company_workspace_isolation.sql",
+        "version":  "137",
+        "currentFileChecksum":  "7941fa867534c7f9b5e4519fa64485f692939ab07f176aebed5067658e8debde",
+        "appliedLedgerChecksum":  "e16204fdf87c4d685cfb830635fd117c05ed24a7938178919c5889a3a9325c5f",
+        "reviewedAt":  "2026-06-20T15:00:00+08:00",
+        "reviewedBy":  "codex-current-worktree-audit",
+        "evidence":  "docs/reports/v14232c_checksum_reconciliation_20260620.md#137-company-workspace-isolation-sql",
+        "basis":  "exact historical SQL was not found in current git history or sibling WorkBuddy migration snapshots; current file hash and live ledger hash are recorded to keep the difference explicit and invalidate this reconciliation if either side changes"
+    },
+    {
+        "filename":  "139a_v1421_material_lifecycle_fields.sql",
+        "version":  "139a",
+        "currentFileChecksum":  "30350c0f395544d8e29846f3dc2bd8acba5c11e7bd10e8de2e8fb12459493a39",
+        "appliedLedgerChecksum":  "4f7dada50cf30d6286e92ed9bf224bec72414dcda5fcf66bb720d90f97399612",
+        "reviewedAt":  "2026-06-20T15:00:00+08:00",
+        "reviewedBy":  "codex-current-worktree-audit",
+        "evidence":  "docs/reports/v14232c_checksum_reconciliation_20260620.md#139a-v1421-material-lifecycle-fields-sql",
+        "basis":  "exact historical SQL was not found in current git history or sibling WorkBuddy migration snapshots; current file hash and live ledger hash are recorded to keep the difference explicit and invalidate this reconciliation if either side changes"
+    },
+    {
+        "filename":  "140_v1418_duration_experience_tables.sql",
+        "version":  "140",
+        "currentFileChecksum":  "a13c89ae2fd57f1f792e2600afaadfa062d9af2a5f0695b8012f0dbe8cf30ca4",
+        "appliedLedgerChecksum":  "f32534c63c018e51a3c67641c19a982618c145b99f0eff00ad81a7b0977f25e3",
+        "reviewedAt":  "2026-06-20T15:00:00+08:00",
+        "reviewedBy":  "codex-current-worktree-audit",
+        "evidence":  "docs/reports/v14232c_checksum_reconciliation_20260620.md#140-v1418-duration-experience-tables-sql",
+        "basis":  "exact historical SQL was not found in current git history or sibling WorkBuddy migration snapshots; current file hash and live ledger hash are recorded to keep the difference explicit and invalidate this reconciliation if either side changes"
+    },
+    {
+        "filename":  "143_v1420_workspace_tables.sql",
+        "version":  "143",
+        "currentFileChecksum":  "c16fc91b447464a3186e56c9f2e75feaff9b5313e339fc1fd0cbd976ff6cde6e",
+        "appliedLedgerChecksum":  "d24a45e4d0bcdb63013eb246bb1306b55699d8f87daf7ade975a8365b617db4f",
+        "reviewedAt":  "2026-06-20T15:00:00+08:00",
+        "reviewedBy":  "codex-current-worktree-audit",
+        "evidence":  "docs/reports/v14232c_checksum_reconciliation_20260620.md#143-v1420-workspace-tables-sql",
+        "basis":  "exact historical SQL was not found in current git history or sibling WorkBuddy migration snapshots; current file hash and live ledger hash are recorded to keep the difference explicit and invalidate this reconciliation if either side changes"
+    },
+    {
+        "filename":  "214_v14225_recommendation_actions.sql",
+        "version":  "214",
+        "currentFileChecksum":  "25fe38942a3c044a67fe01dacfeb2ee2a16781a05486082197d7faa4e4c537ac",
+        "appliedLedgerChecksum":  "53469e66a51d287a7fc026169310508288ef8db106aff4a898a440ab2a66df02",
+        "reviewedAt":  "2026-06-22T23:14:00+08:00",
+        "reviewedBy":  "codex-c18-l09-live-rls-audit",
+        "evidence":  "docs/reports/v14231_c18_l09_checksum_reconciliation_20260622.md#214-v14225-recommendation-actions-sql",
+        "basis":  "migration safety diagnosis on 2026-06-22 found this as the only unreconciled historical checksum mismatch while applying the forward-only C-18.L09 runtime RLS fix; current file hash and live ledger hash are recorded so future drift still blocks"
+    },
+    {
+        "filename":  "009_add_job_execution_logs.sql",
+        "version":  "009",
+        "currentFileChecksum":  "a0cd4b42d3a75bc25b31819f188f2d70a813d08d08ea6e7fc2e57002f413c7d4",
+        "appliedLedgerChecksum":  "7057f24d7a977d293abbafc081c2ff16085587ccde2b040bbc0ae08fe0a001b4",
+        "reviewedAt":  "2026-06-30T21:45:00+08:00",
+        "reviewedBy":  "codex-local-migration-governance",
+        "evidence":  "project-testing/reports/migration-governance-local-20260630/README.md#009_add_job_execution_logssql",
+        "basis":  "local MG-01/MG-06 readback confirmed public.schema_migrations stores the historical applied checksum while the current file retains the canonical forward-compatible SQL; job_execution_logs and cleanup_old_job_logs are present, so the difference is explicit reconciliation, not replay permission"
+    },
+    {
+        "filename":  "010_add_missing_tables.sql",
+        "version":  "010",
+        "currentFileChecksum":  "0f1a57d222c7dbd2bf8740ebf379a3173c96705e6b76f076f327194b1b9514c7",
+        "appliedLedgerChecksum":  "eb263747dcd3be654c20ef0328d2d10acbc5209c2a646423e58062d1fe149c37",
+        "reviewedAt":  "2026-06-30T21:45:00+08:00",
+        "reviewedBy":  "codex-local-migration-governance",
+        "evidence":  "project-testing/reports/migration-governance-local-20260630/README.md#010_add_missing_tablessql",
+        "basis":  "local readback confirmed representative 010 tables and columns exist; the applied ledger hash remains historical and the current file hash is pinned so future edits still block"
+    },
+    {
+        "filename":  "012_fix_wbs_templates.sql",
+        "version":  "012",
+        "currentFileChecksum":  "f1a4803a243a125a5b0f28fb5b64ab8c955702a8a108fcdd884448eabb9e69e3",
+        "appliedLedgerChecksum":  "e4bd48c552fecc5a6e0cdaf2b7dca0a8629efd56ee011af7e74e23e53a94273d",
+        "reviewedAt":  "2026-06-30T21:45:00+08:00",
+        "reviewedBy":  "codex-local-migration-governance",
+        "evidence":  "project-testing/reports/migration-governance-local-20260630/README.md#012_fix_wbs_templatessql",
+        "basis":  "wbs_templates deleted_at/template_data and wbs_nodes read back from the current local catalog; the checksum difference is recorded as historical migration text drift with later canonical schema coverage"
+    },
+    {
+        "filename":  "014_add_project_health_details.sql",
+        "version":  "014",
+        "currentFileChecksum":  "eca25810c39532c1359078b8150617ef668680c5375a89ce77a4d91cedbc50c6",
+        "appliedLedgerChecksum":  "6de6ff7cb3fdc1fa0eb85b66257e8ab737c03220c1867b119b073cb00c372889",
+        "reviewedAt":  "2026-06-30T21:45:00+08:00",
+        "reviewedBy":  "codex-local-migration-governance",
+        "evidence":  "project-testing/reports/migration-governance-local-20260630/README.md#014_add_project_health_detailssql",
+        "basis":  "project_health_details is intentionally absent because 165_project_health_algorithm_signal_cleanup.sql and CLEAN_MIGRATION_V4 retire it; tasks milestone columns still read back, so this is superseded historical checksum drift rather than a table to recreate"
+    },
+    {
+        "filename":  "021_add_task_preceding_relations.sql",
+        "version":  "021",
+        "currentFileChecksum":  "1ae0ed5bff803a3fca82fb93bdda104c4cd456a4d60baa285b02ec3d8f721588",
+        "appliedLedgerChecksum":  "78e022ec95bf2012b8eebac0213467dbefbe0d64f024e3f6328efaef9d2f7557",
+        "reviewedAt":  "2026-06-30T21:45:00+08:00",
+        "reviewedBy":  "codex-local-migration-governance",
+        "evidence":  "project-testing/reports/migration-governance-local-20260630/README.md#021_add_task_preceding_relationssql",
+        "basis":  "task_preceding_relations exists with no duplicate condition/task pairs; 225 intentionally replaces the old uk_condition_task constraint with uk_task_preceding_relations_condition_task, so the historical hash difference is reconciled against the later canonical index"
+    },
+    {
+        "filename":  "038_fix_projects_rls.sql",
+        "version":  "038",
+        "currentFileChecksum":  "44a75634b87e9dc5f5d56a7c378992b614b1b772930418b7b03a4083aca76513",
+        "appliedLedgerChecksum":  "79150cec609256496c597dc685f520ee0bd8e94075f08508b6f0f9cfdd647344",
+        "reviewedAt":  "2026-06-30T21:45:00+08:00",
+        "reviewedBy":  "codex-local-migration-governance",
+        "evidence":  "project-testing/reports/migration-governance-local-20260630/README.md#038_fix_projects_rlssql",
+        "basis":  "projects RLS readback shows relrowsecurity=true, relforcerowsecurity=true, and policy_count=3; later RLS migrations own the current policy surface, so this historical checksum mismatch is recorded without replaying old auth.uid policy DDL"
+    },
+    {
+        "filename":  "071_create_atomic_certificate_work_item.sql",
+        "version":  "071",
+        "currentFileChecksum":  "4fc77ff214acfb812c3af2b3d0221327350dc74be55a553141ba0072b02bab24",
+        "appliedLedgerChecksum":  "18dac9424b5ac0b3476ce1931f0c25977f3af6ca5622dd4d29d1ad4adf540fee",
+        "reviewedAt":  "2026-06-30T21:45:00+08:00",
+        "reviewedBy":  "codex-local-migration-governance",
+        "evidence":  "project-testing/reports/migration-governance-local-20260630/README.md#071_create_atomic_certificate_work_itemsql",
+        "basis":  "git history contains the applied ledger hash, while the current file only schema-qualifies the return row type for replay stability; create_certificate_work_item_atomic and certificate_work_items read back from the local catalog"
+    },
+    {
+        "filename":  "077_add_acceptance_requirement_drawing_package_link.sql",
+        "version":  "077",
+        "currentFileChecksum":  "7fc18d4440e197ce5368c93214e19d4d814f573dfbd854f0cb2b8bed2ec98395",
+        "appliedLedgerChecksum":  "cb40a5d760d728a2fbdfdba322169e25e045173fa218252e05ae465dc7199eaf",
+        "reviewedAt":  "2026-06-30T21:45:00+08:00",
+        "reviewedBy":  "codex-local-migration-governance",
+        "evidence":  "project-testing/reports/migration-governance-local-20260630/README.md#077_add_acceptance_requirement_drawing_package_linksql",
+        "basis":  "git history contains the applied ledger hash, while the current file casts UUID/text joins for clean replay; drawing_package_id, its index, and foreign key read back from public.acceptance_requirements"
+    },
+    {
+        "filename":  "084_align_p0_contract_gaps.sql",
+        "version":  "084",
+        "currentFileChecksum":  "31c83af8d2db2682b3de21659928c34a56f2347ccc47c2aa3d428df5b2804e85",
+        "appliedLedgerChecksum":  "01d0d1825ce2558644242e767697a630b9eea53772486862a04f4846f92696bd",
+        "reviewedAt":  "2026-06-30T21:45:00+08:00",
+        "reviewedBy":  "codex-local-migration-governance",
+        "evidence":  "project-testing/reports/migration-governance-local-20260630/README.md#084_align_p0_contract_gapssql",
+        "basis":  "git history contains the applied ledger hash, while the current file narrows participant-unit backfill to unambiguous project scope; participant_units columns and idx_participant_units_project_id read back locally"
+    },
+    {
+        "filename":  "225_v14232c_schema_drift_reconciliation.sql",
+        "version":  "225",
+        "currentFileChecksum":  "8429357664e486af099e6d69f0f024ef3b04341c7e2f3a03cc8a627bad66b13c",
+        "appliedLedgerChecksum":  "41b3c5f2d00e4a59c140740c98eb32fcfc18f8ddc0cf3d5fb300864aef8befc5",
+        "reviewedAt":  "2026-06-30T21:45:00+08:00",
+        "reviewedBy":  "codex-local-migration-governance",
+        "evidence":  "project-testing/reports/migration-governance-local-20260630/README.md#225_v14232c_schema_drift_reconciliationsql",
+        "basis":  "225 is already ledgered in the local DB and its key reconciliation outcomes read back, including tasks.preceding_task_id, acceptance_requirements.drawing_package_id, task_preceding_relations indexes, and retired project_health_details absence; current file hash is pinned as an explicit local reconciliation baseline"
+    },
+    {
+        "filename":  "006_add_task_completion_reports.sql",
+        "version":  "006",
+        "currentFileChecksum":  "319613b46744574a93e55b11faae6d0477f9c5eb671dfafb3e62a8b2877b5e45",
+        "appliedLedgerChecksum":  "674fd49413accf058656f411ef95a3b048408985a5d9985a5fa692bc16c8b6e9",
+        "reviewedAt":  "2026-07-15T03:47:14+08:00",
+        "reviewedBy":  "codex-default-master-plan-staging-preflight",
+        "evidence":  "project-testing/reports/default-master-plan-production-readiness/310-staging-preflight-20260715.json",
+        "basis":  "staging readback confirms task_completion_reports and task_progress_snapshots exist; successor migrations 063, 086a, 094a, 105, and 157 are ledgered; the final snapshot schema has non-null event_type/event_source, the daily-event unique index, and the progress trigger while the interim daily_snapshot constraint is retired. The current checksum is pinned only for cold-start SQL repair and must never be replayed over staging."
+    },
+    {
+        "filename":  "006a_reconcile_phase1_rls_prerequisites.sql",
+        "version":  "006a",
+        "currentFileChecksum":  "655b2eb145365f5d746710d21d2722b09aa6d2c2913ffe2569aa941a3db0098e",
+        "appliedLedgerChecksum":  "f228ed848724cc55a121cb227af5b50ab3d0aa3f58ff3fd89ffd2a53f87f530a",
+        "reviewedAt":  "2026-07-04T16:45:00+08:00",
+        "reviewedBy":  "codex-20260704-runtime-boundary",
+        "evidence":  "project-testing/reports/production-migration-governance/006a-checksum-reconciliation-20260704.md",
+        "basis":  "current 006a is the replay-safe form that guards the retired task_delay_history table with to_regclass before ALTER TABLE; the applied ledger hash is retained as historical state and this reconciliation is invalidated if either hash changes"
+    },
+    {
+        "filename":  "003a_reconcile_phase1_dashboard_prerequisites.sql",
+        "version":  "003a",
+        "currentFileChecksum":  "efcb41551e025703dbc7d4a1c7e99259b3cca589af98c9d5e8a5a67544145191",
+        "appliedLedgerChecksum":  "1923e0c994855798ead1220b806a618cb0f6445773f95e8fd4da8d6532492312",
+        "reviewedAt":  "2026-07-15T16:42:37+08:00",
+        "reviewedBy":  "codex-release-tree-migration-audit",
+        "evidence":  "docs/reports/v14231_staging_checksum_reconciliation_20260715.md#003a-reconcile-phase1-dashboard-prerequisites",
+        "basis":  "staging readback confirms the current projects dashboard fields, task planned dates, and task condition status columns exist; the historical ledger hash and current replay-safe file hash are pinned without replaying early DDL"
+    },
+    {
+        "filename":  "006b_reconcile_phase1_rls_existing_table_columns.sql",
+        "version":  "006b",
+        "currentFileChecksum":  "e8d4c857512dd2dc9eef33085cc5ed297b195d548ef1b65dddf767c61c1fe7b2",
+        "appliedLedgerChecksum":  "f05d90278849a37378354840e4fcd73549be0e968b012b581e4bc102235b1078",
+        "reviewedAt":  "2026-07-15T16:42:37+08:00",
+        "reviewedBy":  "codex-release-tree-migration-audit",
+        "evidence":  "docs/reports/v14231_staging_checksum_reconciliation_20260715.md#006b-reconcile-phase1-rls-existing-table-columns",
+        "basis":  "staging readback confirms acceptance_nodes plan_id/created_by and pre_milestone_conditions.created_by with their foreign keys; wbs_task_links is intentionally absent after ledgered migration 304, so the early compatibility DDL must not be replayed"
+    },
+    {
+        "filename":  "008a_reconcile_job_execution_logs_phase1_columns.sql",
+        "version":  "008a",
+        "currentFileChecksum":  "8240ac53c1f1433f838d0ec84dd308e82637d8ad9e3fc14b384d6ecae38dc76b",
+        "appliedLedgerChecksum":  "89b8295e4db0e4a534eef1efd1c6786b9e03afba98109a3938b623d447f3c70d",
+        "reviewedAt":  "2026-07-15T16:42:37+08:00",
+        "reviewedBy":  "codex-release-tree-migration-audit",
+        "evidence":  "docs/reports/v14231_staging_checksum_reconciliation_20260715.md#008a-reconcile-job-execution-logs-phase1-columns",
+        "basis":  "staging readback confirms job_execution_logs completed_at, result, job_id, and triggered_by are present; the current cold-start SQL is pinned against the historical applied checksum and is not replay permission"
+    },
+    {
+        "filename":  "010a_reconcile_phase2_soft_delete_columns.sql",
+        "version":  "010a",
+        "currentFileChecksum":  "c02df556b6b40527a650eacebeb00b937746c28ab96d2883b8364e38446886d3",
+        "appliedLedgerChecksum":  "3d41413c00dbd6f3c25404b80819e1c5cee3e49eecd0c88a8f5fcf4add564cd6",
+        "reviewedAt":  "2026-07-15T16:42:37+08:00",
+        "reviewedBy":  "codex-release-tree-migration-audit",
+        "evidence":  "docs/reports/v14231_staging_checksum_reconciliation_20260715.md#010a-reconcile-phase2-soft-delete-columns",
+        "basis":  "staging readback confirms projects.deleted_at and wbs_templates.deleted_at are present; the historical ledger hash and current replay-safe file hash are pinned without replaying early soft-delete DDL"
+    }
+]

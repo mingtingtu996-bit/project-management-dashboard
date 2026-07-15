@@ -7,8 +7,9 @@ import {
   V1475_EXPLICIT_BUSINESS_GATE_SOURCE_ID,
   V1475_EXPLICIT_BUSINESS_GATE_TEMPLATES,
 } from '../seeds/v1475DependencyIntentTemplates.js'
-import { signedDurationDayDelta } from '../utils/durationDays.js'
+import { delayDayDelta } from '../utils/durationDays.js'
 import { logger } from '../middleware/logger.js'
+import type { ConstructionCalendarContext } from './constructionCalendar.js'
 import { createAndPersistAlgorithmAssetCandidateEvent } from './algorithmAssetCandidateEventAdapterService.js'
 import type { AlgorithmAssetGovernanceQueryExec } from './algorithmAssetGovernancePersistenceService.js'
 import {
@@ -150,6 +151,7 @@ export interface CollectConstructionDependencyReplayCalibrationOptions {
   projectIds?: string[]
   maxSamples?: number
   zeroLagReviewThresholdDays?: number
+  constructionCalendar?: ConstructionCalendarContext | null
   queryRows?: QueryRows
 }
 
@@ -510,17 +512,21 @@ function findL4Template(row: ConstructionDependencyReplayRow) {
   return null
 }
 
-function observedWaitDays(row: ConstructionDependencyReplayRow, dependencyType: ConstructionDependencyReplayItem['dependencyType']) {
+function observedWaitDays(
+  row: ConstructionDependencyReplayRow,
+  dependencyType: ConstructionDependencyReplayItem['dependencyType'],
+  constructionCalendar?: ConstructionCalendarContext | null,
+) {
   if (dependencyType === 'SS') {
-    return signedDurationDayDelta(row.predecessor_actual_start_date, row.successor_actual_start_date)
+    return delayDayDelta(row.predecessor_actual_start_date, row.successor_actual_start_date, constructionCalendar)
   }
   if (dependencyType === 'FF') {
-    return signedDurationDayDelta(row.predecessor_actual_end_date, row.successor_actual_end_date)
+    return delayDayDelta(row.predecessor_actual_end_date, row.successor_actual_end_date, constructionCalendar)
   }
   if (dependencyType === 'SF') {
-    return signedDurationDayDelta(row.predecessor_actual_start_date, row.successor_actual_end_date)
+    return delayDayDelta(row.predecessor_actual_start_date, row.successor_actual_end_date, constructionCalendar)
   }
-  return signedDurationDayDelta(row.predecessor_actual_end_date, row.successor_actual_start_date)
+  return delayDayDelta(row.predecessor_actual_end_date, row.successor_actual_start_date, constructionCalendar)
 }
 
 function classifyReplay(params: {
@@ -649,7 +655,10 @@ function buildCalibrationQueues(items: ConstructionDependencyReplayItem[]) {
 
 function buildReplayItem(
   row: ConstructionDependencyReplayRow,
-  options: { zeroLagReviewThresholdDays: number },
+  options: {
+    zeroLagReviewThresholdDays: number
+    constructionCalendar?: ConstructionCalendarContext | null
+  },
 ): ConstructionDependencyReplayItem {
   const dependencyType = normalizeDependencyType(row.dependency_type)
   const l4Match = findL4Template(row)
@@ -661,7 +670,7 @@ function buildReplayItem(
       : 'unmatched'
   const seedLagDays = l4Match?.template.lagDays ?? l3Match?.rule.lagDays ?? null
   const dependencyLagDays = normalizeLagDays(row.lag_days)
-  const waitDays = observedWaitDays(row, dependencyType)
+  const waitDays = observedWaitDays(row, dependencyType, options.constructionCalendar)
   const replay = classifyReplay({
     matchedLayer,
     observedWaitDays: waitDays,
@@ -712,7 +721,10 @@ function buildReplayItem(
 
 function buildReport(
   rows: ConstructionDependencyReplayRow[],
-  options: { zeroLagReviewThresholdDays: number },
+  options: {
+    zeroLagReviewThresholdDays: number
+    constructionCalendar?: ConstructionCalendarContext | null
+  },
 ): ConstructionDependencyReplayCalibrationReport {
   const items = rows.map((row) => buildReplayItem(row, options))
   const calibrationQueues = buildCalibrationQueues(items)
@@ -739,13 +751,6 @@ function buildReport(
     },
     calibrationQueues,
     items,
-  }
-}
-
-function buildDefaultQueryRows(): QueryRows {
-  return async <T = Record<string, unknown>>(sql: string, params: unknown[] = []) => {
-    const result = await rawQuery(sql, params as any[])
-    return result.rows as T[]
   }
 }
 
@@ -789,17 +794,61 @@ async function loadDependencyReplayRows(
   return queryRows<ConstructionDependencyReplayRow>(sql, [projectIds.length > 0 ? projectIds : null, options.maxSamples])
 }
 
+async function loadDependencyReplayRowsDirect(
+  options: { projectIds: string[]; maxSamples: number },
+) {
+  const projectIds = options.projectIds.map(normalizeText).filter(Boolean)
+  const result = await rawQuery(`
+    SELECT
+      dependency.id,
+      dependency.project_id,
+      dependency.dependency_type,
+      dependency.lag_days,
+      dependency.source_type,
+      dependency.metadata,
+      dependency.dependency_task_id AS predecessor_task_id,
+      dependency.task_id AS successor_task_id,
+      dependency_task.task_code AS predecessor_task_code,
+      dependency_task.standard_work_code AS predecessor_standard_work_code,
+      dependency_task.template_node_id AS predecessor_template_node_id,
+      dependency_task.title AS predecessor_title,
+      dependency_task.standard_task_metadata AS predecessor_standard_task_metadata,
+      dependency_task.actual_start_date AS predecessor_actual_start_date,
+      dependency_task.actual_end_date AS predecessor_actual_end_date,
+      successor_task.task_code AS successor_task_code,
+      successor_task.standard_work_code AS successor_standard_work_code,
+      successor_task.template_node_id AS successor_template_node_id,
+      successor_task.title AS successor_title,
+      successor_task.standard_task_metadata AS successor_standard_task_metadata,
+      successor_task.actual_start_date AS successor_actual_start_date,
+      successor_task.actual_end_date AS successor_actual_end_date
+    FROM task_dependencies dependency
+    JOIN tasks dependency_task ON dependency_task.id = dependency.dependency_task_id
+    JOIN tasks successor_task ON successor_task.id = dependency.task_id
+    WHERE dependency.status = 'active'
+      AND ($1::uuid[] IS NULL OR dependency.project_id = ANY($1::uuid[]))
+    ORDER BY dependency.updated_at DESC NULLS LAST, dependency.created_at DESC NULLS LAST
+    LIMIT $2
+  `, [projectIds.length > 0 ? projectIds : null, options.maxSamples] as any[])
+  return result.rows as ConstructionDependencyReplayRow[]
+}
+
 export async function collectConstructionDependencyReplayCalibrationReport(
   options: CollectConstructionDependencyReplayCalibrationOptions = {},
 ): Promise<ConstructionDependencyReplayCalibrationReport> {
   const maxSamples = Math.max(1, Math.floor(options.maxSamples ?? DEFAULT_MAX_SAMPLES))
   const zeroLagReviewThresholdDays = Math.max(1, Math.floor(options.zeroLagReviewThresholdDays ?? DEFAULT_ZERO_LAG_REVIEW_THRESHOLD_DAYS))
-  const queryRows = options.queryRows ?? buildDefaultQueryRows()
-  const rows = await loadDependencyReplayRows(queryRows, {
+  const queryOptions = {
     projectIds: options.projectIds ?? [],
     maxSamples,
+  }
+  const rows = options.queryRows
+    ? await loadDependencyReplayRows(options.queryRows, queryOptions)
+    : await loadDependencyReplayRowsDirect(queryOptions)
+  return buildReport(rows, {
+    zeroLagReviewThresholdDays,
+    constructionCalendar: options.constructionCalendar,
   })
-  return buildReport(rows, { zeroLagReviewThresholdDays })
 }
 
 function flattenCalibrationQueueCandidates(report: ConstructionDependencyReplayCalibrationReport) {
@@ -808,6 +857,15 @@ function flattenCalibrationQueueCandidates(report: ConstructionDependencyReplayC
     ...report.calibrationQueues.l4ConflictQuarantineCandidates,
     ...report.calibrationQueues.evidenceCollectionCandidates,
   ]
+}
+
+function buildDependencyReplayExperienceGroupKeys(queueItem: ConstructionDependencyReplayQueueItem) {
+  return Array.from(new Set([
+    'T1:dependency_order',
+    `T1:dependency_layer:${queueItem.matchedLayer}`,
+    `T1:dependency_seed:${queueItem.matchedSeedCode}`,
+    ...queueItem.projectIds.map((projectId) => `project:${projectId}`),
+  ].map(normalizeText).filter(Boolean)))
 }
 
 function dependencyRuleOutcomeStatus(queueItem: ConstructionDependencyReplayQueueItem): 'accepted' | 'weak' | null {
@@ -838,11 +896,13 @@ function buildDependencyRuleOutcomeId(
 
 async function recordDependencyRulePlanNetworkOutcomes(
   report: ConstructionDependencyReplayCalibrationReport,
-  options: Pick<CollectAndPersistConstructionDependencyReplayCalibrationCandidatesOptions, 'companyId' | 'queryExec'>,
+  options: Pick<CollectAndPersistConstructionDependencyReplayCalibrationCandidatesOptions, 'companyId' | 'queryExec' | 'constructionCalendar'>,
 ) {
-  const queryExec = options.queryExec ?? buildDefaultQueryRows()
   const companyId = normalizeNullableText(options.companyId)
   const queueItems = flattenCalibrationQueueCandidates(report)
+  const durationDayUnit = options.constructionCalendar?.basis === 'official_construction_calendar_seed'
+    ? 'construction_production_day'
+    : 'calendar_day_no_construction_calendar_context'
 
   for (const queueItem of queueItems) {
     const outcomeStatus = dependencyRuleOutcomeStatus(queueItem)
@@ -860,6 +920,10 @@ async function recordDependencyRulePlanNetworkOutcomes(
       seed_lag_days: queueItem.seedLagDays,
       median_observed_wait_days: queueItem.medianObservedWaitDays,
       suggested_lag_days: queueItem.suggestedLagDays,
+      duration_day_unit: durationDayUnit,
+      durationDayUnit,
+      construction_calendar: options.constructionCalendar ?? null,
+      constructionCalendar: options.constructionCalendar ?? null,
       queue_status: queueItem.queueStatus,
       recommendation: queueItem.recommendation,
       sample_dependency_ids: queueItem.sampleDependencyIds,
@@ -870,8 +934,21 @@ async function recordDependencyRulePlanNetworkOutcomes(
     }
 
     try {
-      await queryExec(
-        `INSERT INTO public.duration_plan_network_outcomes (
+      const params = [
+        buildDependencyRuleOutcomeId(queueItem, companyId, projectId),
+        DEPENDENCY_RULE_CANDIDATE_ASSET_KEY,
+        outcomeStatus,
+        `${report.reportCode}:${queueItem.matchedLayer}:${queueItem.matchedSeedCode}`,
+        'project',
+        'project_business_outcome_writer',
+        companyId,
+        projectId,
+        null,
+        metadata,
+        false,
+        false,
+      ]
+      const sql = `INSERT INTO public.duration_plan_network_outcomes (
           id,
           asset_key,
           outcome_status,
@@ -896,22 +973,37 @@ async function recordDependencyRulePlanNetworkOutcomes(
           observed_at = now(),
           metadata = EXCLUDED.metadata,
           writes_runtime_directly = false,
-          writes_fact_directly = false`,
-        [
-          buildDependencyRuleOutcomeId(queueItem, companyId, projectId),
-          DEPENDENCY_RULE_CANDIDATE_ASSET_KEY,
-          outcomeStatus,
-          `${report.reportCode}:${queueItem.matchedLayer}:${queueItem.matchedSeedCode}`,
-          'project',
-          'project_business_outcome_writer',
-          companyId,
-          projectId,
-          null,
+          writes_fact_directly = false`
+      if (options.queryExec) {
+        await options.queryExec(sql, params)
+      } else {
+        await rawQuery(`INSERT INTO public.duration_plan_network_outcomes (
+          id,
+          asset_key,
+          outcome_status,
+          outcome_ref,
+          learning_scope,
+          learning_scope_source,
+          company_id,
+          project_id,
+          publication_key,
           metadata,
-          false,
-          false,
-        ],
-      )
+          writes_runtime_directly,
+          writes_fact_directly
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        ON CONFLICT (id) DO UPDATE SET
+          outcome_status = EXCLUDED.outcome_status,
+          outcome_ref = EXCLUDED.outcome_ref,
+          learning_scope = EXCLUDED.learning_scope,
+          learning_scope_source = EXCLUDED.learning_scope_source,
+          company_id = EXCLUDED.company_id,
+          project_id = EXCLUDED.project_id,
+          publication_key = EXCLUDED.publication_key,
+          observed_at = now(),
+          metadata = EXCLUDED.metadata,
+          writes_runtime_directly = false,
+          writes_fact_directly = false`, params as any[])
+      }
     } catch (error) {
       logger.warn('[construction-dependency-replay] failed to record dependency rule network outcome', {
         companyId,
@@ -941,6 +1033,20 @@ export async function collectAndPersistConstructionDependencyReplayCalibrationCa
       candidatePayload: {
         reportCode: report.reportCode,
         generatedAt: report.generatedAt,
+        experienceTier: 'T1',
+        reuseScope: 'project',
+        learningScope: 'project',
+        wbsNodeTypes: ['process', 'activity_step', 'task'],
+        experienceAssetType: 'dependency_order',
+        experienceGroupKeys: buildDependencyReplayExperienceGroupKeys(queueItem),
+        experienceTierRegistryCandidate: {
+          tier: 'T1',
+          reusableAtNodeTypes: ['process', 'activity_step', 'task'],
+          groupKeyStrategy: 'dependency_order_seed_rule',
+          prohibitsCrossTierBucketMixing: true,
+          requiredRegistry: 'experienceTierRegistry',
+          registryStatus: 'candidate_payload_ready_pending_registry_materialization',
+        },
         queueStatus: queueItem.queueStatus,
         recommendation: queueItem.recommendation,
         promotionPolicy: queueItem.promotionPolicy,

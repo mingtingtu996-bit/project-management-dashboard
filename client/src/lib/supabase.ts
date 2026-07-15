@@ -6,13 +6,49 @@ const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || ''
 export const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
 // 类型定义 - 与数据库表结构匹配
+
+// v1.4 Engineering objects master data
+export const ENGINEERING_OBJECT_TYPES = [
+  'phase', 'section', 'building', 'basement', 'floor', 'physical_zone', 'functional_area',
+] as const
+
+export type EngineeringObjectType = typeof ENGINEERING_OBJECT_TYPES[number]
+
+export type EngineeringObjectFloorUsage =
+  | 'standard'
+  | 'ground_pilotis'
+  | 'refuge'
+  | 'mechanical'
+  | 'transfer'
+  | 'roof'
+  | 'mezzanine'
+  | 'podium_roof'
+  | 'canopy'
+
+export interface EngineeringObjectMetadata {
+  floorUsage?: EngineeringObjectFloorUsage
+  [key: string]: unknown
+}
+
+export interface EngineeringObject {
+  id: string;
+  projectId: string;
+  objectType: EngineeringObjectType;
+  objectCode: string;
+  objectName: string;
+  parentId: string | null;
+  path: string;
+  level: number;
+  sortOrder: number;
+  status: 'active' | 'inactive';
+  metadata: EngineeringObjectMetadata;
+}
+
 export interface User {
   id: string
   username?: string
   email?: string | null
-  role?: string
   global_role?: 'company_admin' | 'regular'
-  device_id?: string
   display_name?: string
   avatar_url?: string
   joined_at?: string
@@ -50,12 +86,56 @@ export interface Project {
   health_score?: number
   health_status?: string
   current_phase?: string
+  metadata?: Record<string, unknown> | null
+}
+
+export type TaskStatusAxisEvidence = {
+  ruleVersion?: string | null
+  ruleKey?: string | null
+  ruleSource?: string | null
+  sourceFields?: string[]
+  [key: string]: unknown
+}
+
+export type TaskDerivedStatusDto = {
+  status?: string | null
+  label?: string | null
+  reason?: string | null
+  evidence?: TaskStatusAxisEvidence | null
+  sourceFields?: string[]
+}
+
+export type TaskDueStatusDto = TaskDerivedStatusDto & {
+  status?: 'normal' | 'approaching' | 'urgent' | 'overdue' | string | null
+  daysUntilDue?: number | null
+}
+
+export type TaskReadinessStatusDto = {
+  ready?: boolean | null
+  dependencyStatus?: string | null
+  conditionStatus?: string | null
+  obstacleStatus?: string | null
+  progressImpactLevel?: string | null
+  blockedForProgress?: boolean | null
+  summary?: unknown
+  evidence?: TaskStatusAxisEvidence | null
+}
+
+export type TaskStatusDerivationDto = {
+  lifecycleStatus?: string | null
+  businessStatus?: TaskDerivedStatusDto | null
+  displayStatus?: string | null
+  dueStatus?: TaskDueStatusDto | null
+  lagLevel?: 'none' | 'mild' | 'moderate' | 'severe' | string | null
+  lagStatus?: string | null
+  lagStatusEvidence?: TaskStatusAxisEvidence | null
+  readinessStatus?: TaskReadinessStatusDto | null
+  ruleVersion?: string | null
 }
 
 export interface Task {
   id?: string
   project_id?: string
-  name?: string
   title?: string
   description?: string
   status?: string
@@ -72,9 +152,9 @@ export interface Task {
   assignee_id?: string
   assignee_user_id?: string | null
   assignee?: string
-  assignee_unit?: string
   assignee_name?: string
-  responsible_unit?: string
+  participant_unit_id?: string | null
+  participant_unit_name?: string | null
   created_at?: string
   updated_at?: string
   version?: number
@@ -82,6 +162,8 @@ export interface Task {
   milestone_level?: number
   milestone_order?: number
   is_critical?: boolean
+  total_float_days?: number | string | null
+  free_float_days?: number | string | null
   baseline_start?: string | null
   baseline_end?: string | null
   baseline_is_critical?: boolean | null
@@ -94,14 +176,99 @@ export interface Task {
   wbs_code?: string
   wbs_level?: number
   updated_by?: string
-  ai_duration?: number | null
   first_progress_at?: string | null
   // 2026-03-29 新增字段（数据库迁移 019）
   specialty_type?: string | null   // 专项工程分类（#12 筛选）
-  reference_duration?: number | null  // 参考/计划工期（天）（#7 工期对比）
+  delay_days?: number | string | null
   delay_reason?: string | null     // 延期原因
   lagLevel?: 'none' | 'mild' | 'moderate' | 'severe'
   lagStatus?: '正常' | '轻度滞后' | '中度滞后' | '严重滞后'
+  // v1.4.5 status DTO flat fields (backend-computed)
+  statusDomain?: string
+  statusKey?: string
+  statusLabel?: string
+  visualTone?: string
+  semanticTone?: string
+  dictionaryVersion?: string
+  businessStatus?: TaskDerivedStatusDto | null
+  displayStatus?: string
+  dueStatus?: TaskDueStatusDto | null
+  statusDerivation?: TaskStatusDerivationDto | null
+  // v1.4.1 engineering object references (7 scope dimensions)
+  engineering_object_id?: string | null
+  phase_object_id?: string | null
+  section_object_id?: string | null
+  building_object_id?: string | null
+  basement_object_id?: string | null
+  floor_object_id?: string | null
+  physical_zone_object_id?: string | null
+  functional_area_object_id?: string | null
+  // v1.4.2 WBS semantic fields
+  engineering_category_id?: string | null
+  engineering_category_type?: string | null
+  engineering_category_name?: string | null
+  wbs_node_type?: string | null
+  wbs_path?: string | null
+  is_leaf?: boolean | null
+  is_wbs_summary?: boolean | null
+  is_executable?: boolean | null
+  template_node_id?: string | null
+  standard_work_code?: string | null
+  standard_work_name?: string | null
+  // v1.4.3 task standard fields
+  progress_method?: string
+  planned_quantity?: number | null
+  completed_quantity?: number | null
+  quantity_unit?: string | null
+  progress_weight?: number
+  completion_rule?: string
+  drawing_required?: boolean
+  material_required?: boolean
+  acceptance_required?: boolean
+  quality_required?: boolean
+  standard_task_metadata?: Record<string, unknown> | null
+  duration_risk_p20_days?: number | null
+  duration_risk_p50_days?: number | null
+  duration_risk_p80_days?: number | null
+  duration_risk_range?: ({
+    p20_days?: number | null
+    p50_days?: number | null
+    p80_days?: number | null
+    p20Days?: number | null
+    p50Days?: number | null
+    p80Days?: number | null
+  } & Record<string, unknown>) | null
+}
+
+// v1.4.2 Engineering category
+export interface EngineeringCategory {
+  id: string
+  project_id?: string | null
+  parent_id?: string | null
+  category_name: string
+  category_type: 'division' | 'sub_division' | 'item_work' | 'process' | 'activity_step' | 'custom'
+  category_level: number
+  category_path: string
+  sort_order: number
+  enabled: boolean
+  metadata: Record<string, unknown>
+  created_at?: string
+  updated_at?: string
+}
+
+// v1.4.3 Task dependency
+export interface TaskDependency {
+  id?: string
+  project_id: string
+  task_id: string
+  dependency_task_id: string
+  dependency_type: 'FS' | 'SS' | 'FF' | 'SF'
+  lag_days: number
+  required_for_start: boolean
+  source_type: string
+  source_ref_id?: string | null
+  created_at?: string
+  updated_at?: string
 }
 
 export interface Risk {
@@ -160,42 +327,13 @@ export interface Issue {
   version?: number
 }
 
-/**
- * @deprecated 旧版独立里程碑表结构。
- * 新方案：里程碑从 tasks 表中通过 is_milestone=true 标记，
- * 使用 milestone_level（1/2/3）和 milestone_order 字段管理层级。
- * 参见 Milestones.tsx 中的 MilestoneTask 接口。
- * 此接口保留用于后端 storageService / localDb 的历史兼容，新代码禁止使用。
- */
-export interface Milestone {
-  id?: string
-  project_id?: string
-  name?: string
-  title?: string
-  description?: string
-  target_date?: string
-  completed_at?: string
-  status?: string
-  created_at?: string
-  updated_at?: string
-  version?: number
-  related_task_ids?: string[]
-  // Dashboard.tsx 使用的扩展字段
-  assignee?: string
-  owner?: string
-  related_tasks?: number
-  task_count?: number
-  actual_date?: string
-  planned_end_date?: string
-}
+export type Milestone = Task
 
 export interface Invitation {
   id?: string
   project_id?: string
   projectId?: string
-  invite_code?: string
   invitation_code?: string
-  role?: string
   permission_level?: string
   permissionLevel?: string
   max_uses?: number
@@ -218,7 +356,6 @@ export interface ProjectMember {
   projectId?: string
   user_id?: string
   userId?: string
-  role?: string
   permission_level?: string
   permissionLevel?: string
   username?: string
@@ -292,26 +429,6 @@ export interface TaskDelayHistory {
   created_at?: string
 }
 
-export interface DelayRequest {
-  id?: string
-  task_id?: string
-  project_id?: string | null
-  baseline_version_id?: string | null
-  original_date?: string | null
-  delayed_date?: string | null
-  delay_days?: number | null
-  reason?: string | null
-  delay_reason?: string | null
-  status?: 'pending' | 'approved' | 'rejected' | 'withdrawn'
-  requested_by?: string | null
-  requested_at?: string | null
-  reviewed_at?: string | null
-  withdrawn_at?: string | null
-  chain_id?: string | null
-  created_at?: string | null
-  updated_at?: string | null
-}
-
 export interface ChangeLogRecord {
   id?: string
   project_id?: string | null
@@ -353,9 +470,28 @@ export interface AcceptancePlan {
   actual_date?: string
   status?: 'draft' | 'preparing' | 'ready_to_submit' | 'submitted' | 'inspecting' | 'rectifying' | 'passed' | 'archived'
   parallel_group_id?: string | null
+  building_id?: string | null
+  building_object_id?: string | null
   documents?: any[]
   notes?: string
   created_by?: string
+  created_at?: string
+  updated_at?: string
+}
+
+export interface ProjectMaterial {
+  id?: string
+  project_id?: string
+  participant_unit_id?: string | null
+  material_name?: string
+  specialty_type?: string | null
+  requires_sample_confirmation?: boolean
+  sample_confirmed?: boolean
+  expected_arrival_date?: string
+  actual_arrival_date?: string | null
+  requires_inspection?: boolean
+  inspection_done?: boolean
+  version?: number
   created_at?: string
   updated_at?: string
 }
@@ -407,10 +543,3 @@ export interface PreMilestone {
   created_at?: string
   updated_at?: string
 }
-
-
-
-
-
-
-

@@ -1,3 +1,5 @@
+import { signedDurationDayDelta } from '../utils/durationDays.js'
+
 // 通用到期状态服务 - 统一处理所有到期日期计算逻辑
 // 适用于：任务、里程碑、证照、验收计划、开工条件等
 
@@ -38,6 +40,38 @@ export const DUE_CONFIG = {
   }
 }
 
+const DEFAULT_DUE_STATUS_TIME_ZONE = 'Asia/Shanghai'
+const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/
+
+function toBusinessDateKey(
+  value: string | Date | null | undefined,
+  timeZone: string,
+): string | null {
+  if (!value) return null
+
+  if (typeof value === 'string') {
+    const text = value.trim()
+    if (!text) return null
+    if (DATE_ONLY_PATTERN.test(text)) return text
+    const parsed = new Date(text)
+    if (Number.isNaN(parsed.getTime())) return null
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(parsed)
+  }
+
+  if (Number.isNaN(value.getTime())) return null
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(value)
+}
+
 /**
  * 通用到期状态计算器
  * @param endDate 截止日期（ISO字符串或Date对象）
@@ -52,6 +86,8 @@ export function calculateDueStatus(
     overdueLabel?: string      // 已延期标签前缀（默认"已延期"）
     dueLabel?: string          // 到期标签前缀（默认"天后到期"）
     todayLabel?: string        // 今天到期标签（默认"今天到期"）
+    asOfDate?: string | Date   // 计算基准日；未传时使用系统当天
+    timeZone?: string          // 业务日期时区（默认 Asia/Shanghai）
   }
 ): DueStatusResult {
   // 如果没有截止日期，返回正常状态
@@ -70,17 +106,12 @@ export function calculateDueStatus(
     overdueLabel: options?.overdueLabel ?? '已延期',
     dueLabel: options?.dueLabel ?? '天后到期',
     todayLabel: options?.todayLabel ?? '今天到期',
+    timeZone: options?.timeZone ?? DEFAULT_DUE_STATUS_TIME_ZONE,
   }
 
-  const now = new Date()
-  now.setHours(0, 0, 0, 0)  // 重置时间为当天开始
-
-  const targetDate = new Date(endDate)
-  targetDate.setHours(0, 0, 0, 0)
-
-  // 计算剩余天数（向上取整）
-  const diffTime = targetDate.getTime() - now.getTime()
-  const daysUntilDue = Math.ceil(diffTime / (1000 * 60 * 60 * 24))
+  const asOfDate = toBusinessDateKey(options?.asOfDate ?? new Date(), config.timeZone)
+  const targetDate = toBusinessDateKey(endDate, config.timeZone)
+  const daysUntilDue = signedDurationDayDelta(asOfDate, targetDate) ?? 0
 
   let status: DueStatus
   let label: string

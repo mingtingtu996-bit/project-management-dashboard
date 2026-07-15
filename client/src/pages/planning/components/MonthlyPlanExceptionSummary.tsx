@@ -74,7 +74,7 @@ export function MonthlyPlanExceptionSummary({
           <div className="text-sm font-medium text-slate-900">条件 / 阻碍 / 延期摘要</div>
         </div>
         <Badge variant={canQuickConfirm ? 'secondary' : 'outline'} className="text-xs">
-          {canQuickConfirm ? '快速确认可用' : '建议走标准路径'}
+          {canQuickConfirm ? '快速确认可用' : '需补齐后确认'}
         </Badge>
       </div>
 

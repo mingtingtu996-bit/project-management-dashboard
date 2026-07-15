@@ -1,15 +1,21 @@
 ﻿import { spawn } from 'node:child_process'
 import { access, mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { chromium } from 'playwright'
-import { maybeBuildMockAuthResponse, primeBrowserAuth } from './browser-auth-fixture.mjs'
+import {
+  maybeBuildMockAuthResponse,
+  primeBrowserAuth,
+  readFullAppTestManifest,
+  resolveBrowserVerifyAuthToken,
+} from './browser-auth-fixture.mjs'
+import { recordApiFailure, resolveGanttProjectId } from './verify-gantt-browser.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const scriptsDir = dirname(__filename)
 const repoRoot = join(scriptsDir, '..')
-const outputDir = join(repoRoot, 'artifacts', 'browser-checks')
+const outputDir = join(repoRoot, 'project-testing', 'artifacts', 'browser-checks')
 const previewScript = join(repoRoot, 'scripts', 'serve-client-dist.mjs')
 const distIndexFile = join(repoRoot, 'client', 'dist', 'index.html')
 
@@ -18,12 +24,12 @@ const apiBaseUrl = process.env.API_BASE_URL || 'http://127.0.0.1:3001'
 const shouldUseMockApi = process.env.MOCK_API !== 'false'
 const shouldStartPreview = process.env.START_PREVIEW !== 'false'
 
-const projectId = process.env.PROJECT_ID || '422ba093-7a94-4e91-a47a-c1b865185e86'
+let projectId = process.env.PROJECT_ID || '422ba093-7a94-4e91-a47a-c1b865185e86'
 const now = new Date().toISOString()
 
 const mockProject = {
   id: projectId,
-  name: '楠屾敹鏃堕棿杞磋仈璋冮」鐩?',
+  name: '验收时间轴联调项',
   description: 'Acceptance timeline browser verification fixture project',
   status: 'active',
   current_phase: 'construction',
@@ -39,15 +45,15 @@ const mockPlans = [
     project_id: projectId,
     task_id: 'task-1',
     type_id: 'pre_acceptance',
-    type_name: '鍦板熀涓庡熀纭€楠屾敹',
+    type_name: '地基与基础验收',
     type_color: '#2563eb',
     acceptance_type: 'pre_acceptance',
-    acceptance_name: '鍦板熀涓庡熀纭€楠屾敹',
-    plan_name: '鍦板熀涓庡熀纭€楠屾敹',
-    description: '鍩虹鍒嗛儴楠屾敹鍑嗗灏辩华',
+    acceptance_name: '地基与基础验收',
+    plan_name: '地基与基础验收',
+    description: '基础分部验收准备就绪',
     planned_date: '2026-05-12',
     actual_date: null,
-    building_id: '1#妤?',
+    building_id: '1#楼',
     scope_level: 'building',
     participant_unit_id: 'unit-1',
     status: 'preparing',
@@ -63,8 +69,8 @@ const mockPlans = [
     can_submit: false,
     is_overdue: false,
     days_to_due: 14,
-    display_badges: ['璧勬枡缂哄け'],
-    overlay_tags: ['璧勬枡缂哄け'],
+    display_badges: ['资料缺失'],
+    overlay_tags: ['资料缺失'],
     is_blocked: false,
     block_reason_summary: null,
     warning_level: 'warning',
@@ -81,15 +87,15 @@ const mockPlans = [
     project_id: projectId,
     task_id: 'task-2',
     type_id: 'completion_record',
-    type_name: '绔ｅ伐楠屾敹澶囨',
+    type_name: '竣工验收备案',
     type_color: '#16a34a',
     acceptance_type: 'completion_record',
-    acceptance_name: '绔ｅ伐楠屾敹澶囨',
-    plan_name: '绔ｅ伐楠屾敹澶囨',
-    description: '鏈€缁堝妗堥樁娈?',
+    acceptance_name: '竣工验收备案',
+    plan_name: '竣工验收备案',
+    description: '最终备案阶',
     planned_date: '2026-08-20',
     actual_date: null,
-    building_id: '1#妤?',
+    building_id: '1#楼',
     scope_level: 'project',
     participant_unit_id: 'unit-1',
     status: 'not_started',
@@ -105,10 +111,10 @@ const mockPlans = [
     can_submit: false,
     is_overdue: false,
     days_to_due: 60,
-    display_badges: ['鍓嶇疆鏈弧瓒?'],
-    overlay_tags: ['鍓嶇疆鏈弧瓒?'],
+    display_badges: ['前置未满'],
+    overlay_tags: ['前置未满'],
     is_blocked: true,
-    block_reason_summary: '绛夊緟鍓嶅簭楠屾敹瀹屾垚',
+    block_reason_summary: '等待前序验收完成',
     warning_level: 'info',
     is_custom: false,
     documents: [],
@@ -127,7 +133,7 @@ const mockRequirements = [
     requirement_type: 'external',
     source_entity_type: 'task_condition',
     source_entity_id: 'cond-1',
-    description: '瀹屾垚楠屾敹璧勬枡鐩栫珷',
+    description: '完成验收资料盖章',
     status: 'open',
     created_at: now,
     updated_at: now,
@@ -152,8 +158,8 @@ const mockRecords = [
     id: 'record-1',
     plan_id: 'plan-1',
     record_type: 'note',
-    content: '鐩戠悊宸插畬鎴愮幇鍦烘鏌?',
-    operator: '椤圭洰缁忕悊',
+    content: '监理已完成现场检',
+    operator: '项目经理',
     record_date: '2026-04-18',
     attachments: [],
     created_at: now,
@@ -168,8 +174,8 @@ const mockWarnings = [
     warning_signature: 'acceptance-warning-1',
     warning_type: 'acceptance',
     warning_level: 'warning',
-    title: '楠屾敹璧勬枡鏈綈',
-    description: '璧勬枡鍑嗗搴︿笉瓒筹紝闇€琛ラ綈鐩栫珷鏂囦欢',
+    title: '验收资料未齐',
+    description: '资料准备度不足，需补齐盖章文件',
     is_acknowledged: false,
     status: 'open',
     source_entity_type: 'acceptance_plan',
@@ -190,6 +196,61 @@ function json(body, status = 200) {
     contentType: 'application/json; charset=utf-8',
     body: JSON.stringify(body),
   }
+}
+
+export function resolveAcceptanceProjectId({
+  envProjectId = process.env.PROJECT_ID,
+  mockApi = shouldUseMockApi,
+  currentProjectId = projectId,
+  manifest,
+} = {}) {
+  return resolveGanttProjectId({ envProjectId, mockApi, currentProjectId, manifest })
+}
+
+async function resolveProjectId() {
+  if (process.env.PROJECT_ID || shouldUseMockApi) return projectId
+  const manifest = await readFullAppTestManifest()
+  projectId = resolveAcceptanceProjectId({ manifest })
+  return projectId
+}
+
+export function extractAcceptanceListRowTitle(rowText) {
+  const ignored = new Set([
+    '责任单位',
+    '并行组',
+    '阻塞数',
+    '草稿',
+    '准备中',
+    '进行中',
+    '已通过',
+    '未开始',
+    '已排期',
+    '系统项',
+    '自定义',
+    '专项',
+    '施工验收',
+    '标记通过',
+    '—',
+    '验',
+  ])
+  const lines = String(rowText ?? '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+
+  const metadataIndex = lines.findIndex((line) => line.includes(' · '))
+  if (metadataIndex > 0) {
+    const titleBeforeMetadata = lines[metadataIndex - 1]
+    if (!/^\d+$/.test(titleBeforeMetadata)) {
+      return titleBeforeMetadata
+    }
+  }
+
+  return lines.find((line) => (
+    !ignored.has(line)
+    && !/^\d+$/.test(line)
+    && !line.includes(' · ')
+  )) ?? ''
 }
 
 async function isHttpReady(url) {
@@ -245,13 +306,28 @@ function buildMockResponse(urlString) {
     return json({ success: true, data: mockProject })
   }
 
+  if (pathname === `/api/projects/${projectId}/bootstrap`) {
+    return json({
+      success: true,
+      data: {
+        project: mockProject,
+        tasks: [],
+        risks: [],
+        conditions: [],
+        obstacles: [],
+        warnings: mockWarnings,
+        issues: [],
+        taskProgressSnapshots: [],
+      },
+    })
+  }
+
   if (
     pathname === '/api/tasks'
     || pathname === '/api/task-conditions'
     || pathname === '/api/task-obstacles'
     || pathname === '/api/change-logs'
     || pathname === '/api/tasks/progress-snapshots'
-    || pathname === '/api/delay-requests'
   ) {
     return json({ success: true, data: [] })
   }
@@ -311,6 +387,8 @@ function buildMockResponse(urlString) {
 async function main() {
   await mkdir(outputDir, { recursive: true })
   await ensureDistExists()
+  await resolveProjectId()
+  const authToken = shouldUseMockApi ? null : await resolveBrowserVerifyAuthToken()
 
   let previewProcess = null
   const previewAlreadyReady = await isHttpReady(baseUrl)
@@ -327,11 +405,14 @@ async function main() {
   const consoleErrors = []
   const pageErrors = []
   const apiFailures = []
+  let page = null
+  let pageBodyText = null
+  let failureScreenshot = null
 
   try {
-    const page = await browser.newPage({ viewport: { width: 1440, height: 1800 } })
+    page = await browser.newPage({ viewport: { width: 1440, height: 1800 } })
     page.setDefaultTimeout(30000)
-    await primeBrowserAuth(page)
+    await primeBrowserAuth(page, authToken)
 
     page.on('console', (message) => {
       if (message.type() === 'error') {
@@ -354,10 +435,18 @@ async function main() {
       const forwardUrl = requestUrl.replace(baseUrl, apiBaseUrl)
       try {
         const response = await route.fetch({ url: forwardUrl })
+        if (response.status() >= 400) {
+          recordApiFailure(apiFailures, {
+            type: 'proxy-response',
+            url: forwardUrl,
+            status: response.status(),
+            statusText: response.statusText(),
+          })
+        }
         await route.fulfill({ response })
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
-        apiFailures.push({ url: forwardUrl, message })
+        recordApiFailure(apiFailures, { type: 'proxy-error', url: forwardUrl, message })
         await route.fulfill(json({
           success: false,
           error: {
@@ -380,13 +469,17 @@ async function main() {
     await page.screenshot({ path: join(outputDir, 'acceptance-page-graph.png'), fullPage: true })
 
     await page.getByTestId('acceptance-view-list').click()
-    await page.getByTestId('acceptance-list-row-plan-1').waitFor({ state: 'visible', timeout: 10000 })
+    const firstListRow = page.locator('[data-testid^="acceptance-list-row-"]').first()
+    await firstListRow.waitFor({ state: 'visible', timeout: 10000 })
+    const selectedPlanRowText = await firstListRow.innerText()
+    const selectedPlanTitle = extractAcceptanceListRowTitle(selectedPlanRowText)
+    assert(selectedPlanTitle, `Unable to resolve acceptance plan title from first row: ${JSON.stringify(selectedPlanRowText)}`)
     await page.screenshot({ path: join(outputDir, 'acceptance-page-list.png'), fullPage: true })
 
-    await page.getByTestId('acceptance-list-row-plan-1').click()
+    await firstListRow.click()
     await page.getByTestId('acceptance-detail-drawer').waitFor({ state: 'visible', timeout: 10000 })
     const drawerText = await page.getByTestId('acceptance-detail-drawer').innerText()
-    assert(drawerText.includes('鍦板熀涓庡熀纭€楠屾敹'), 'Acceptance detail drawer missing selected plan title')
+    assert(drawerText.includes(selectedPlanTitle), `Acceptance detail drawer missing selected plan title: ${selectedPlanTitle}`)
     await page.screenshot({ path: join(outputDir, 'acceptance-page-detail.png'), fullPage: true })
 
     assert(apiFailures.length === 0, `API proxy failures detected: ${JSON.stringify(apiFailures)}`)
@@ -396,6 +489,7 @@ async function main() {
     const result = {
       mode: shouldUseMockApi ? 'mock-api' : 'proxy-api',
       initialUrl,
+      selectedPlanTitle,
       listViewVisible: true,
       detailDrawerVisible: true,
       apiFailures,
@@ -411,9 +505,25 @@ async function main() {
     await writeFile(join(outputDir, 'acceptance-browser-check.json'), `${JSON.stringify(result, null, 2)}\n`, 'utf8')
     console.log(JSON.stringify(result, null, 2))
   } catch (error) {
+    if (page) {
+      try {
+        pageBodyText = await page.locator('body').innerText()
+      } catch {}
+
+      try {
+        failureScreenshot = join(outputDir, 'acceptance-page-failure.png')
+        await page.screenshot({ path: failureScreenshot, fullPage: true })
+      } catch {
+        failureScreenshot = null
+      }
+    }
+
     const failurePayload = {
       mode: shouldUseMockApi ? 'mock-api' : 'proxy-api',
       error: error instanceof Error ? error.message : String(error),
+      projectId,
+      pageBodyText,
+      failureScreenshot,
       apiFailures,
       consoleErrors,
       pageErrors,
@@ -429,7 +539,9 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(error)
-  process.exitCode = 1
-})
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => {
+    console.error(error)
+    process.exitCode = 1
+  })
+}

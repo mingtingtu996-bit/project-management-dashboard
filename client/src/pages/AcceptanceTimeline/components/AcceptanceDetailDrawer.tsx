@@ -47,8 +47,6 @@ interface AcceptanceDetailDrawerProps {
     nodeId: string,
     input: {
       requirement_type: string
-      source_entity_type: string
-      source_entity_id: string
       description?: string | null
       status?: string | null
     },
@@ -94,8 +92,6 @@ function canTransition(from: string, to: string): boolean {
 function createEmptyRequirementDraft() {
   return {
     requirement_type: 'external',
-    source_entity_type: 'task_condition',
-    source_entity_id: '',
     description: '',
     status: 'open',
   }
@@ -112,11 +108,9 @@ function createEmptyRecordDraft() {
 
 function formatRequirementBlockLabel(requirement: {
   description?: string | null
-  source_entity_id: string
   requirement_type: string
 }) {
   return requirement.description?.trim()
-    || requirement.source_entity_id.trim()
     || requirement.requirement_type.trim()
     || '未命名条件'
 }
@@ -267,10 +261,9 @@ export default function AcceptanceDetailDrawer({
     }
   }
 
+  // v1.4.6: source derived by backend from acceptance plan context
   const canCreateRequirement = Boolean(
-    requirementDraft.requirement_type.trim()
-    && requirementDraft.source_entity_type.trim()
-    && requirementDraft.source_entity_id.trim(),
+    requirementDraft.requirement_type.trim(),
   )
   const canCreateRecord = Boolean(recordDraft.record_type.trim() && recordDraft.content.trim())
 
@@ -366,10 +359,9 @@ export default function AcceptanceDetailDrawer({
     if (!canCreateRequirement) return
     setCreatingRequirement(true)
     try {
+      // v1.4.6: source derived by backend from acceptance plan context
       await onRequirementCreate(currentNodeId, {
         requirement_type: requirementDraft.requirement_type.trim(),
-        source_entity_type: requirementDraft.source_entity_type.trim(),
-        source_entity_id: requirementDraft.source_entity_id.trim(),
         description: requirementDraft.description.trim() || null,
         status: requirementDraft.status.trim() || null,
       })
@@ -505,9 +497,9 @@ export default function AcceptanceDetailDrawer({
             {planRow?.building_id && (
               <InfoTile label="楼栋" value={planRow.building_id} />
             )}
-            {planRow?.milestone_id && (
-              <InfoTile label="关联里程碑" value={planRow.milestone_id} />
-            )}
+            {planRow?.covered_task_ids.length ? (
+              <InfoTile label="关联任务" value={planRow.covered_task_ids.join('、')} />
+            ) : null}
             {planRow?.predecessor_plan_ids && planRow.predecessor_plan_ids.length > 0 && (
               <InfoTile label="前置验收项数" value={String(planRow.predecessor_plan_ids.length)} />
             )}
@@ -518,7 +510,7 @@ export default function AcceptanceDetailDrawer({
           <h4 className="mb-2 text-sm font-semibold text-slate-900">任务联动</h4>
           <div className="grid gap-4 md:grid-cols-3">
             <CompactMetric label="楼栋归属" value={planRow?.building_id || '项目级'} />
-            <CompactMetric label="里程碑挂靠" value={planRow?.milestone_id ? '已挂靠' : '未挂靠'} />
+            <CompactMetric label="关联任务" value={String(planRow?.covered_task_ids.length ?? 0)} />
             <CompactMetric label="前置验收项" value={String(planRow?.predecessor_plan_ids?.length ?? 0)} />
           </div>
           {(detailContext?.linkedTasks ?? []).length > 0 && (
@@ -579,28 +571,6 @@ export default function AcceptanceDetailDrawer({
                     className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
                     placeholder="external / drawing / task_condition"
                     data-testid="acceptance-requirement-type-input"
-                  />
-                </label>
-                <label className="grid gap-1 text-xs text-slate-500">
-                  来源类型
-                  <input
-                    value={requirementDraft.source_entity_type}
-                    onChange={(event) => setRequirementDraft((current) => ({ ...current, source_entity_type: event.target.value }))}
-                    disabled={!canMutate}
-                    className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
-                    placeholder="task_condition"
-                    data-testid="acceptance-requirement-source-type-input"
-                  />
-                </label>
-                <label className="grid gap-1 text-xs text-slate-500">
-                  来源 ID
-                  <input
-                    value={requirementDraft.source_entity_id}
-                    onChange={(event) => setRequirementDraft((current) => ({ ...current, source_entity_id: event.target.value }))}
-                    disabled={!canMutate}
-                    className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
-                    placeholder="condition-1"
-                    data-testid="acceptance-requirement-source-id-input"
                   />
                 </label>
                 <label className="grid gap-1 text-xs text-slate-500">
@@ -667,7 +637,7 @@ export default function AcceptanceDetailDrawer({
                       <FileCheck2 className={`mt-0.5 h-4 w-4 shrink-0 ${isSatisfied ? 'text-emerald-600' : isBlocked ? 'text-amber-600' : 'text-slate-500'}`} />
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
-                          <span className="text-xs font-semibold text-slate-800 truncate">{item.description || item.source_entity_id}</span>
+                          <span className="text-xs font-semibold text-slate-800 truncate">{item.description || item.requirement_type}</span>
                           <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-xs font-medium ${isSatisfied ? 'bg-emerald-100 text-emerald-700' : isBlocked ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-700'}`}>
                             {isSatisfied ? '已满足' : isBlocked ? '阻塞' : '待确认'}
                           </span>
@@ -688,7 +658,7 @@ export default function AcceptanceDetailDrawer({
                       <FileBadge2 className={`mt-0.5 h-4 w-4 shrink-0 ${isSatisfied ? 'text-emerald-600' : 'text-amber-600'}`} />
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
-                          <span className="text-xs font-semibold text-slate-800 truncate">{item.description || item.source_entity_id}</span>
+                          <span className="text-xs font-semibold text-slate-800 truncate">{item.description || item.requirement_type}</span>
                           <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-xs font-medium ${isSatisfied ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
                             {isSatisfied ? '已获取' : '待取得'}
                           </span>
@@ -703,7 +673,6 @@ export default function AcceptanceDetailDrawer({
                   <LinkedRow
                     key={item.id}
                     title={item.requirement_type}
-                    subtitle={[item.source_entity_type, item.source_entity_id].filter(Boolean).join(' / ')}
                     description={item.description || undefined}
                     meta={formatLinkedStatus(item.status)}
                   />
@@ -1158,7 +1127,7 @@ function normalizeLookupValue(value?: string | null) {
 function getAcceptancePlanLookup(plan: AcceptanceNode, allPlans: AcceptancePlan[]) {
   const planRow = allPlans.find((item) => item.id === plan.id)
   const taskKeys = new Set(
-    [plan.id, planRow?.milestone_id]
+    (planRow?.covered_task_ids ?? [])
       .map((item) => String(item ?? '').trim())
       .filter(Boolean),
   )

@@ -273,7 +273,10 @@ describe('algorithmAssetForecastResidualOverlayService', () => {
     expect(calls[0]?.params[14]).toEqual(expect.objectContaining({
       sampleCount: 3,
       minAcceptedSamples: 3,
+      residualCorrectionDays: expect.any(Number),
+      confidenceAdjustment: expect.any(Number),
       candidatePayload: expect.objectContaining({
+        residualCorrectionDays: expect.any(Number),
         sampleCount: 3,
         minAcceptedSamples: 3,
       }),

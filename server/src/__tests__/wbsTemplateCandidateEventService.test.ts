@@ -131,6 +131,111 @@ describe('wbsTemplateCandidateEventService', () => {
     ]))
   })
 
+  it('bridges untrusted generation depth schedule trust gates into governed rule candidates without writing runtime facts', async () => {
+    await recordWbsTemplateCandidateEvent({
+      companyId: '10000000-0000-4000-8000-000000000001',
+      projectId: '00000000-0000-4000-8000-000000000001',
+      surface: 'task_list',
+      generationBatchId: 'batch-generation-depth-review',
+      templateId: 'china-mep-coordination',
+      selectedNodeIds: ['MEP-01-01'],
+      scope: { building_object_id: 'building-1', project_type_code: 'commercial' },
+      generatedEntityIds: ['task-1', 'task-2'],
+      generatedRowCount: 2,
+      retainedRowCount: 2,
+      actorId: '00000000-0000-4000-8000-000000000002',
+      metadata: {
+        source: 'task_list_commit',
+        templateGroup: 'mep',
+        packType: 'specialty',
+      },
+      scheduleTrustGate: {
+        source: 'generation_depth_policy',
+        generationDepth: 'sub_division',
+        status: 'review_required',
+        trustedForScheduling: false,
+        totalScheduleRows: 2,
+        durationBearingScheduleRows: 2,
+        fallbackPolicyRowCount: 1,
+        descendantRollupRequiredRowCount: 1,
+        descendantRollupAppliedRowCount: 0,
+        missingDescendantRollupRowCount: 1,
+        rowsMissingReferenceDuration: 0,
+        policyConfidenceCounts: { high: 1, medium: 0, low: 1 },
+        reviewReasons: [
+          'generation_depth_policy_fallback',
+          'missing_descendant_duration_rollup',
+        ],
+        reviewRows: [{
+          stableCode: 'MEP-01-01',
+          title: '机电综合天花预留预埋',
+          reasons: [
+            'generation_depth_policy_fallback',
+            'missing_descendant_duration_rollup',
+          ],
+          policyId: 'fallback-subdivision-managed-frontier',
+          confidence: 'low',
+        }],
+      },
+    } as any)
+
+    const sql = mocks.rawQuery.mock.calls.map((call) => String(call[0])).join('\n').toLowerCase()
+    expect(sql).toContain('insert into public.algorithm_asset_candidate_events')
+    expect(sql).not.toContain('task_dependencies')
+    expect(sql).not.toContain('algorithm_seed_records')
+    expect(sql).not.toContain('algorithm_seed_versions')
+    expect(sql).not.toContain('task_baselines')
+
+    const generationDepthInsert = mocks.rawQuery.mock.calls.find((call) => {
+      const params = call[1] as unknown[]
+      return params?.includes('generation_depth_policy.china-mep-coordination.task_list')
+    })
+
+    expect(generationDepthInsert).toBeTruthy()
+    expect(generationDepthInsert?.[1]).toEqual(expect.arrayContaining([
+      'generation_depth_policy.china-mep-coordination.task_list',
+      'wbsTemplateCandidateEventService',
+      'project',
+      '10000000-0000-4000-8000-000000000001',
+      '00000000-0000-4000-8000-000000000001',
+      'template_structure',
+      'governed_candidate',
+      'manual_governance_required',
+      'manual_required',
+      'review_required',
+      'candidate_only',
+    ]))
+    expect(generationDepthInsert?.[1]).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        assetType: 'generation_depth_policy',
+        source: 'schedule_trust_gate',
+        templateId: 'china-mep-coordination',
+        templateGroup: 'mep',
+        packType: 'specialty',
+        generationBatchId: 'batch-generation-depth-review',
+        status: 'review_required',
+        trustedForScheduling: false,
+        reviewReasons: [
+          'generation_depth_policy_fallback',
+          'missing_descendant_duration_rollup',
+        ],
+        reviewRows: [expect.objectContaining({
+          stableCode: 'MEP-01-01',
+          policyId: 'fallback-subdivision-managed-frontier',
+          confidence: 'low',
+        })],
+        candidatePolicy: 'candidate_only_no_runtime_mutation',
+        releasePolicy: 'high_impact_structural_rule_manual_or_batch_review_required',
+        replayRequirements: expect.arrayContaining([
+          'row_count_within_generation_budget',
+          'schedule_trust_gate_improves_or_stays_trusted',
+          'dependency_anchors_stable',
+          'no_parent_child_duration_conflict',
+        ]),
+      }),
+    ]))
+  })
+
   it('records template generate events and updates the monthly aggregation', async () => {
     await recordWbsTemplateCandidateEvent({
       projectId: '00000000-0000-4000-8000-000000000001',

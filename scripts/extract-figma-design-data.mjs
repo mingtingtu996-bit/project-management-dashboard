@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+﻿import { createHash } from 'node:crypto'
 import { constants } from 'node:fs'
 import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
@@ -12,7 +12,7 @@ const scriptsDir = dirname(__filename)
 const repoRoot = join(scriptsDir, '..')
 const manifestPath = join(repoRoot, '.tmp', 'full-app-test-env', 'manifest.json')
 const distIndex = join(repoRoot, 'client', 'dist', 'index.html')
-const outputRoot = join(repoRoot, 'artifacts', 'figma-design-data')
+const outputRoot = join(repoRoot, process.env.FIGMA_DESIGN_DATA_OUTPUT_ROOT || 'project-ui/artifacts/figma-design-data')
 
 const defaultProjectId = '422ba093-7a94-4e91-a47a-c1b865185e86'
 const defaultMonth = '2026-04'
@@ -174,9 +174,7 @@ function buildRoutes(projectId, month) {
     { key: 'milestones', path: projectRoute(projectId, '/milestones'), section: 'project', suggestedFrameName: 'Milestones' },
     { key: 'planning-baseline', path: projectRoute(projectId, '/planning/baseline'), section: 'planning', suggestedFrameName: 'Planning Baseline' },
     { key: 'planning-monthly', path: projectRoute(projectId, `/planning/monthly?month=${month}`), section: 'planning', suggestedFrameName: 'Planning Monthly' },
-    { key: 'planning-wbs-templates', path: projectRoute(projectId, '/planning/wbs-templates'), section: 'planning', suggestedFrameName: 'WBS Templates' },
-    { key: 'planning-closeout', path: projectRoute(projectId, '/tasks/closeout'), section: 'planning', suggestedFrameName: 'Planning Closeout' },
-    { key: 'planning-revision-pool', path: projectRoute(projectId, '/planning/revision-pool'), section: 'planning', suggestedFrameName: 'Planning Revision Pool' },
+    { key: 'planning-closeout', path: projectRoute(projectId, '/planning/monthly?view=closeout'), section: 'planning', suggestedFrameName: 'Planning Closeout' },
     { key: 'gantt', path: projectRoute(projectId, '/gantt'), section: 'tasks', suggestedFrameName: 'Task Gantt Workspace' },
     { key: 'task-summary', path: projectRoute(projectId, '/task-summary'), section: 'tasks', suggestedFrameName: 'Task Summary' },
     { key: 'responsibility', path: projectRoute(projectId, '/responsibility'), section: 'tasks', suggestedFrameName: 'Responsibility View' },
@@ -835,7 +833,8 @@ async function captureRouteInFreshBrowser({ route, viewport, baseUrl, runDir, se
         window.localStorage.setItem('auth_token', token)
         window.localStorage.setItem('access_token', token)
       }
-      window.localStorage.setItem('onboarding_completed', 'true')
+      window.localStorage.setItem('onboarding_workspace_completed', 'true')
+      window.localStorage.setItem('onboarding_project_completed', 'true')
       window.localStorage.setItem('onboarding_daily_workflow_dismissed', 'true')
       window.localStorage.setItem('workbuddy_sidebar_open', 'true')
     }, { token: session.token })
@@ -914,7 +913,8 @@ async function main() {
               window.localStorage.setItem('auth_token', token)
               window.localStorage.setItem('access_token', token)
             }
-            window.localStorage.setItem('onboarding_completed', 'true')
+            window.localStorage.setItem('onboarding_workspace_completed', 'true')
+            window.localStorage.setItem('onboarding_project_completed', 'true')
             window.localStorage.setItem('onboarding_daily_workflow_dismissed', 'true')
             window.localStorage.setItem('workbuddy_sidebar_open', 'true')
           }, { token: session.token })

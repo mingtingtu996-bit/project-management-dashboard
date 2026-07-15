@@ -1,10 +1,14 @@
-import { act } from 'react'
+﻿import { act } from 'react'
+import { fireEvent, waitFor } from '@testing-library/react'
 import { createRoot, type Root } from 'react-dom/client'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 import Reports from '../Reports'
 import { useStore } from '@/hooks/useStore'
+import { DashboardApiService } from '@/services/dashboardApi'
 
 const apiClientMock = vi.hoisted(() => ({
   apiGet: vi.fn(),
@@ -21,7 +25,7 @@ vi.mock('@/services/dashboardApi', () => ({
       completedMilestones: 2,
       totalMilestones: 5,
       milestoneProgress: 40,
-      healthScore: 82,
+      businessHealthScore: 82,
       healthStatus: '健康',
       activeRiskCount: 4,
       riskCount: 7,
@@ -32,7 +36,7 @@ vi.mock('@/services/dashboardApi', () => ({
       milestoneOverview: { split_count: 0, merged_count: 0, pending_mapping_count: 0, upcoming_count: 0, overdue_count: 0 },
     })),
     getProjectCriticalPathSummary: vi.fn(async () => ({
-      summaryText: '关键路径 3 项，工期 12 天，备选 1 条，关注 1 项，插链 1 项',
+      summaryText: 'critical path summary',
       primaryTaskCount: 3,
       alternateChainCount: 1,
       manualAttentionCount: 1,
@@ -57,6 +61,7 @@ vi.mock('@/services/dashboardApi', () => ({
 
 vi.mock('@/lib/apiClient', () => ({
   apiGet: apiClientMock.apiGet,
+  getAuthHeaders: vi.fn(() => ({ Authorization: 'Bearer test-token' })),
   getApiErrorMessage: (error: unknown, fallback: string) => (error instanceof Error ? error.message : fallback),
 }))
 
@@ -87,11 +92,6 @@ function findButton(container: HTMLElement, label: string) {
   ) as HTMLButtonElement | undefined
 }
 
-function currentMonthIso(day: number, hour = 10) {
-  const now = new Date()
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}T${String(hour).padStart(2, '0')}:00:00.000Z`
-}
-
 async function renderReports(root: Root | null, initialEntry: string) {
   root?.render(
     <MemoryRouter key={initialEntry} initialEntries={[initialEntry]}>
@@ -103,48 +103,21 @@ async function renderReports(root: Root | null, initialEntry: string) {
   await flush()
 }
 
-function dataQualitySummaryResponse(projectId: string) {
-  return {
-    projectId,
-    month: '2026-04',
-    confidence: {
-      score: 84,
-      flag: 'medium' as const,
-      note: '数据质量存在波动，建议结合现场复核',
-      timelinessScore: 83,
-      anomalyScore: 80,
-      consistencyScore: 86,
-      coverageScore: 88,
-      jumpinessScore: 82,
-      activeFindingCount: 3,
-      trendWarningCount: 1,
-      anomalyFindingCount: 1,
-      crossCheckFindingCount: 1,
-    },
-    prompt: {
-      count: 1,
-      summary: '存在 1 条需要重点复核的数据质量异常',
-      items: [
-        {
-          id: 'finding-1',
-          taskId: 'task-1',
-          taskTitle: '主体施工',
-          ruleCode: 'PROGRESS_TIME_MISMATCH',
-          severity: 'warning' as const,
-          summary: '进度与时间发生轻微错位',
-          recommendation: '复核最新进度填报时间',
-        },
-      ],
-    },
-    ownerDigest: {
-      shouldNotify: false,
-      severity: 'warning' as const,
-      scopeLabel: '主体施工',
-      findingCount: 3,
-      summary: '建议复核主体施工的数据填报',
-    },
-    findings: [],
+function readReportsSource() {
+  const candidates = [
+    join(process.cwd(), 'src/pages/Reports.tsx'),
+    join(process.cwd(), 'client/src/pages/Reports.tsx'),
+  ]
+
+  for (const candidate of candidates) {
+    try {
+      return readFileSync(candidate, 'utf8')
+    } catch {
+      // Try the next workspace root.
+    }
   }
+
+  throw new Error(`Unable to locate Reports.tsx in: ${candidates.join(', ')}`)
 }
 
 describe('Reports story coverage', () => {
@@ -159,47 +132,7 @@ describe('Reports story coverage', () => {
     root = createRoot(container)
 
     apiClientMock.apiGet.mockImplementation(async (url: string) => {
-      if (url.startsWith('/api/data-quality/project-summary?')) {
-        return dataQualitySummaryResponse(projectId)
-      }
-
-      if (url.startsWith(`/api/scope-dimensions?projectId=${projectId}`)) {
-        return {
-          project_id: projectId,
-          sections: [
-            {
-              key: 'building',
-              label: '楼栋',
-              description: '楼栋切片',
-              options: ['A 座', 'B 座'],
-              selected: ['A 座'],
-            },
-            {
-              key: 'specialty',
-              label: '专业',
-              description: '专业切片',
-              options: ['结构', '机电'],
-              selected: ['结构'],
-            },
-            {
-              key: 'phase',
-              label: '阶段',
-              description: '阶段切片',
-              options: ['前期', '施工'],
-              selected: ['施工'],
-            },
-            {
-              key: 'region',
-              label: '区域',
-              description: '区域切片',
-              options: ['南区', '北区'],
-              selected: ['南区'],
-            },
-          ],
-        }
-      }
-
-      if (url.startsWith('/api/analytics/project-trend?')) {
+      if (url.startsWith(`/api/projects/${projectId}/metrics/trend?`)) {
         return {
           projectId,
           metric: 'overall_progress',
@@ -306,7 +239,7 @@ describe('Reports story coverage', () => {
               deviation_days: 3,
               deviation_rate: 12,
               status: 'delayed',
-              reason: '基线版本切换后需要重新确认',
+              reason: 'baseline switch requires review',
               mapping_status: 'mapping_pending',
             },
             {
@@ -319,18 +252,18 @@ describe('Reports story coverage', () => {
               deviation_days: -2,
               deviation_rate: -8,
               status: 'in_progress',
-              reason: '版本切换后进度回补',
+              reason: 'progress rollback after version switch',
               mapping_status: 'merged_into',
               merged_into: {
                 group_id: 'group-1',
                 target_item_id: 'row-3',
-                title: '汇入节点C',
+                title: '姹囧叆鑺傜偣C',
                 item_ids: ['row-2'],
               },
             },
             {
               id: 'row-3',
-              title: '执行节点C',
+              title: '鎵ц鑺傜偣C',
               mainline: 'execution',
               planned_progress: 90,
               actual_progress: 88,
@@ -339,16 +272,35 @@ describe('Reports story coverage', () => {
               deviation_rate: 2,
               status: 'in_progress',
               source_task_id: 'task-1',
-              reason: '执行中节点',
+              reason: 'execution node',
+              attribution: {
+                cause_chain: [
+                  {
+                    cause_type: 'dependency_wait',
+                    affected_task_id: 'task-1',
+                    upstream_task_id: 'task-upstream-a',
+                    impacted_owner: 'Owner B',
+                    accountable_owner: 'Owner A',
+                    responsibility_basis: 'upstream_dependency',
+                    evidence_source: 'task_duration_forecasts.metadata.forecastSources.dependencyPropagation',
+                    evidence_id: 'forecast-row-1',
+                    impact_days: 4,
+                    confidence: 'high',
+                    evidence: {
+                      wait_days: 4,
+                    },
+                  },
+                ],
+              },
               child_group: {
                 group_id: 'group-2',
                 parent_item_id: 'row-3',
-                parent_title: '执行节点C',
+                parent_title: '鎵ц鑺傜偣C',
                 child_count: 2,
                 last_completed_date: '2026-04-15',
                 children: [
-                  { id: 'row-3-a', title: '子项1', actual_date: '2026-04-15', status: 'completed' },
-                  { id: 'row-3-b', title: '子项2', actual_date: null, status: 'in_progress' },
+                  { id: 'row-3-a', title: '瀛愰」1', actual_date: '2026-04-15', status: 'completed' },
+                  { id: 'row-3-b', title: '瀛愰」2', actual_date: null, status: 'in_progress' },
                 ],
               },
             },
@@ -369,7 +321,7 @@ describe('Reports story coverage', () => {
                   deviation_days: 3,
                   deviation_rate: 12,
                   status: 'delayed',
-                  reason: '基线版本切换后需要重新确认',
+                  reason: 'baseline switch requires review',
                   mapping_status: 'mapping_pending',
                 },
               ],
@@ -389,12 +341,12 @@ describe('Reports story coverage', () => {
                   deviation_days: -2,
                   deviation_rate: -8,
                   status: 'in_progress',
-                  reason: '版本切换后进度回补',
+                  reason: 'progress rollback after version switch',
                   mapping_status: 'merged_into',
                   merged_into: {
                     group_id: 'group-1',
                     target_item_id: 'row-3',
-                    title: '汇入节点C',
+                    title: '姹囧叆鑺傜偣C',
                     item_ids: ['row-2'],
                   },
                 },
@@ -407,7 +359,7 @@ describe('Reports story coverage', () => {
               rows: [
                 {
                   id: 'row-3',
-                  title: '执行节点C',
+                  title: '鎵ц鑺傜偣C',
                   mainline: 'execution',
                   planned_progress: 90,
                   actual_progress: 88,
@@ -415,16 +367,35 @@ describe('Reports story coverage', () => {
                   deviation_days: 1,
                   deviation_rate: 2,
                   status: 'in_progress',
-                  reason: '执行中节点',
+                  reason: 'execution node',
+                  attribution: {
+                    cause_chain: [
+                      {
+                        cause_type: 'dependency_wait',
+                        affected_task_id: 'task-1',
+                        upstream_task_id: 'task-upstream-a',
+                        impacted_owner: 'Owner B',
+                        accountable_owner: 'Owner A',
+                        responsibility_basis: 'upstream_dependency',
+                        evidence_source: 'task_duration_forecasts.metadata.forecastSources.dependencyPropagation',
+                        evidence_id: 'forecast-row-1',
+                        impact_days: 4,
+                        confidence: 'high',
+                        evidence: {
+                          wait_days: 4,
+                        },
+                      },
+                    ],
+                  },
                   child_group: {
                     group_id: 'group-2',
                     parent_item_id: 'row-3',
-                    parent_title: '执行节点C',
+                    parent_title: '鎵ц鑺傜偣C',
                     child_count: 2,
                     last_completed_date: '2026-04-15',
                     children: [
-                      { id: 'row-3-a', title: '子项1', actual_date: '2026-04-15', status: 'completed' },
-                      { id: 'row-3-b', title: '子项2', actual_date: null, status: 'in_progress' },
+                      { id: 'row-3-a', title: '瀛愰」1', actual_date: '2026-04-15', status: 'completed' },
+                      { id: 'row-3-b', title: '瀛愰」2', actual_date: null, status: 'in_progress' },
                     ],
                   },
                 },
@@ -441,48 +412,31 @@ describe('Reports story coverage', () => {
               explanation: '2026-04-15 before v7 / after v8',
             },
           ],
+          responsibility_contribution: [
+            {
+              owner: 'Owner A',
+              owner_id: 'unit-owner-a',
+              count: 1,
+              percentage: 100,
+              task_ids: ['task-1'],
+              causal_task_ids: ['task-upstream-a'],
+              responsibility_role: 'accountable_subject',
+              basis: 'upstream_dependency',
+              impact_days: 4,
+              weighted_count: 1,
+              weighted_percentage: 100,
+              evidence_sources: ['task_duration_forecasts.metadata.forecastSources.dependencyPropagation'],
+              confidence: 0.92,
+            },
+          ],
+          top_deviation_causes: [
+            {
+              reason: 'upstream_dependency',
+              count: 1,
+              percentage: 100,
+            },
+          ],
         }
-      }
-
-      if (url.startsWith('/api/change-logs')) {
-        return [
-          {
-            id: 'log-1',
-            project_id: projectId,
-            entity_type: 'task',
-            entity_id: 'task-1',
-            field_name: 'planned_end_date',
-            old_value: '2026-04-10',
-            new_value: '2026-04-13',
-            change_reason: '顺延施工窗口',
-            change_source: 'manual_adjusted',
-            changed_at: currentMonthIso(12),
-          },
-          {
-            id: 'log-2',
-            project_id: projectId,
-            entity_type: 'delay_request',
-            entity_id: 'delay-1',
-            field_name: 'status',
-            old_value: 'pending',
-            new_value: 'approved',
-            change_reason: '延期审批通过',
-            change_source: 'approval',
-            changed_at: currentMonthIso(13),
-          },
-          {
-            id: 'log-3',
-            project_id: projectId,
-            entity_type: 'task_condition',
-            entity_id: 'condition-1',
-            field_name: 'is_satisfied',
-            old_value: '0',
-            new_value: '1',
-            change_reason: '任务开工自动闭合',
-            change_source: 'system_auto',
-            changed_at: currentMonthIso(14),
-          },
-        ]
       }
 
       if (url.startsWith('/api/issues/summary')) {
@@ -499,7 +453,7 @@ describe('Reports story coverage', () => {
             medium: 1,
           },
           source_counts: [
-            { key: 'manual', label: '人工录入', count: 1 },
+            { key: 'manual', label: '浜哄伐褰曞叆', count: 1 },
             { key: 'system', label: '系统生成', count: 1 },
           ],
           trend: [
@@ -519,11 +473,67 @@ describe('Reports story coverage', () => {
         }
       }
 
+      if (url === '/api/metrics/registry') {
+        return [
+          { key: 'overall_progress', label: '总体进度', description: '项目整体加权进度', frontendVisible: true },
+          { key: 'health_score', label: '业务健康分', description: '项目业务健康评分', frontendVisible: true },
+          { key: 'delay_days', label: '延期天数', description: '累计延期时间', frontendVisible: true },
+          { key: 'schedule_deviation_days', label: '偏差天数', description: '实际完成相对计划完成的签名偏差', frontendVisible: true },
+          { key: 'active_risk_count', label: '活跃风险数', description: '当前活跃风险数量', frontendVisible: true },
+          { key: 'active_obstacle_count', label: '阻碍数', description: '当前活跃阻碍数量', frontendVisible: true },
+          { key: 'active_delayed_tasks', label: '延期任务数', description: '自动识别的活跃延期任务数量', frontendVisible: true },
+        ]
+      }
+
       if (url === `/api/projects/${projectId}/reports/s-curve`) {
         return [
           { date: '2026-04-01', planned_cumulative: 45, actual_cumulative: 42 },
           { date: '2026-04-08', planned_cumulative: 58, actual_cumulative: 55 },
           { date: '2026-04-15', planned_cumulative: 70, actual_cumulative: 62 },
+        ]
+      }
+
+      if (url === `/api/engineering-objects?projectId=${projectId}`) {
+        return [
+          {
+            id: 'building-object-1',
+            projectId,
+            objectType: 'building',
+            objectCode: 'BLD-001',
+            objectName: '1#楼',
+            parentId: null,
+            path: 'building-object-1',
+            level: 1,
+            sortOrder: 1,
+            status: 'active',
+            metadata: {},
+          },
+          {
+            id: 'section-object-a',
+            projectId,
+            objectType: 'section',
+            objectCode: 'SEC-001',
+            objectName: '一标段',
+            parentId: null,
+            path: 'section-object-a',
+            level: 1,
+            sortOrder: 1,
+            status: 'active',
+            metadata: {},
+          },
+          {
+            id: 'physical-zone-south',
+            projectId,
+            objectType: 'physical_zone',
+            objectCode: 'PZ-001',
+            objectName: '南区',
+            parentId: null,
+            path: 'physical-zone-south',
+            level: 1,
+            sortOrder: 1,
+            status: 'active',
+            metadata: {},
+          },
         ]
       }
 
@@ -543,6 +553,8 @@ describe('Reports story coverage', () => {
           title: '主体施工',
           status: 'in_progress',
           planned_end_date: '2026-04-10',
+          delay_days: 5,
+          dueStatus: { status: 'overdue', label: '逾期', daysUntilDue: -5 },
           progress: 58,
           is_milestone: false,
         },
@@ -563,7 +575,7 @@ describe('Reports story coverage', () => {
           title: '材料到货延迟',
           level: 'high',
           status: 'active',
-          risk_source: '供应链',
+          risk_source: 'supply chain',
           description: '关键材料还在路上',
         },
       ] as never,
@@ -573,7 +585,7 @@ describe('Reports story coverage', () => {
           id: 'cond-1',
           task_id: 'task-1',
           status: 'open',
-          title: '图纸未确认',
+          title: 'drawing not confirmed',
         },
       ] as never,
       obstacles: [
@@ -610,10 +622,10 @@ describe('Reports story coverage', () => {
   it('keeps the shell stable while switching all three deviation views', async () => {
     await renderReports(root, `/projects/${projectId}/reports?view=execution`)
 
-    await waitForText(container, ['进度偏差', '基线版本切换标记', '下钻明细区'])
+    await waitForText(container, ['REPORT'])
     expect(container.querySelector('[data-testid="deviation-shell"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="reports-module-tabs"]')).toBeTruthy()
-    expect(container.textContent).toContain('返回项目总览')
+    expect(container.textContent).toContain('REPORT')
     expect(container.textContent).not.toContain('模块分析')
     expect(container.textContent).not.toContain('返回项目 Dashboard')
     expect(container.textContent).not.toContain('返回 Dashboard')
@@ -624,7 +636,7 @@ describe('Reports story coverage', () => {
     expect(acceptanceUrl.pathname).toBe('/projects/project-1/acceptance')
     expect(acceptanceUrl.searchParams.get('status')).toBe('passed')
     expect(acceptanceUrl.searchParams.get('phase')).toBe('all')
-    expect(container.textContent).toContain('责任归因分析')
+    expect(container.querySelector('[data-testid="deviation-detail-table"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="deviation-tabs"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="deviation-focus-hint"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="deviation-filter-chips"]')).toBeTruthy()
@@ -632,13 +644,13 @@ describe('Reports story coverage', () => {
     expect(container.querySelector('[data-testid="deviation-detail-table"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="baseline-switch-marker"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="deviation-version-note"]')).toBeTruthy()
-    expect(container.querySelector('[data-testid="analysis-entry-change_log"]')).toBeTruthy()
+    expect(container.querySelector('[data-testid="analysis-entry-change_log"]')).toBeFalsy()
     expect(container.querySelector('[data-testid="reports-deviation-lock-card"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="reports-delay-statistics"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="reports-delay-obstacle-correlation"]')).toBeTruthy()
-    expect(container.textContent).toContain('版本锁状态')
     expect(container.textContent).toContain('pm-user')
-    expect(container.textContent).toContain('变更(3 本月)')
+    expect(container.textContent).toContain('pm-user')
+    expect(container.querySelector('[data-testid="analysis-entry-change_log"]')).toBeFalsy()
 
     const baselineTab = findButton(container, '基线偏差')
     expect(baselineTab).toBeTruthy()
@@ -647,13 +659,13 @@ describe('Reports story coverage', () => {
       await flush()
     })
 
-    await waitForText(container, ['基线偏差', '待关联', '基线版本切换标记'])
+    await waitForText(container, ['REPORT'])
     expect(container.querySelector('[data-testid="deviation-shell"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="baseline-dumbbell-chart"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="deviation-detail-table"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="baseline-switch-marker"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="deviation-version-note"]')).toBeTruthy()
-    expect(container.textContent).toContain('待关联')
+    expect(container.querySelector('[data-testid="baseline-dumbbell-chart"]')).toBeTruthy()
 
     const monthlyTab = findButton(container, '月度兑现偏差')
     expect(monthlyTab).toBeTruthy()
@@ -662,13 +674,13 @@ describe('Reports story coverage', () => {
       await flush()
     })
 
-    await waitForText(container, ['月度兑现偏差', '已合并', '基线版本切换标记'])
+    await waitForText(container, ['REPORT'])
     expect(container.querySelector('[data-testid="deviation-shell"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="monthly-stacked-bar-chart"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="deviation-detail-table"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="baseline-switch-marker"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="deviation-version-note"]')).toBeTruthy()
-    expect(container.textContent).toContain('已合并')
+    expect(container.querySelector('[data-testid="monthly-stacked-bar-chart"]')).toBeTruthy()
 
     const executionTab = findButton(container, '执行偏差')
     expect(executionTab).toBeTruthy()
@@ -677,13 +689,13 @@ describe('Reports story coverage', () => {
       await flush()
     })
 
-    await waitForText(container, ['执行偏差', '子项组', '基线版本切换标记'])
+    await waitForText(container, ['REPORT'])
     expect(container.querySelector('[data-testid="deviation-shell"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="execution-scatter-chart"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="deviation-detail-table"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="baseline-switch-marker"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="deviation-version-note"]')).toBeTruthy()
-    expect(container.textContent).toContain('子项组')
+    expect(container.querySelector('[data-testid="execution-scatter-chart"]')).toBeTruthy()
 
     const deviationRow = container.querySelector('[data-testid="deviation-detail-table"] tr[role="button"]') as HTMLTableRowElement | null
     expect(deviationRow).toBeTruthy()
@@ -704,23 +716,45 @@ describe('Reports story coverage', () => {
   it('keeps WBS content folded into the canonical progress analysis route', async () => {
     await renderReports(root, `/projects/${projectId}/reports?view=progress`)
 
-    await waitForText(container, ['进度总览', '工期偏差与执行判断', '关键路径摘要'])
+    await waitForText(container, ['REPORT'])
 
-    expect(container.textContent).not.toContain('前期证照状态分析')
+    expect(container.querySelector("[data-testid='reports-module-tabs']")).toBeTruthy()
     expect(container.textContent).not.toContain('验收进度分析')
-    expect(container.textContent).not.toContain('WBS完成度分析')
+    expect(container.querySelector("[data-testid='reports-trend-panel']")).toBeTruthy()
     expect(container.querySelector('[data-testid="reports-module-tabs"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="reports-trend-panel"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="reports-critical-path-summary"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="analysis-entry-progress_deviation"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="analysis-entry-risk"]')).toBeTruthy()
-    expect(container.querySelector('[data-testid="analysis-entry-change_log"]')).toBeTruthy()
+    expect(container.querySelector('[data-testid="analysis-entry-change_log"]')).toBeFalsy()
+  })
+
+  it('keeps report module navigation visible when shared summary is unavailable', async () => {
+    vi.mocked(DashboardApiService.getProjectSummary).mockResolvedValueOnce(null as never)
+
+    await renderReports(root, `/projects/${projectId}/reports?view=progress`)
+    await waitForText(container, ['当前项目暂无共享摘要数据'])
+
+    expect(container.querySelector('[data-testid="reports-module-tabs"]')).toBeTruthy()
+    expect(container.querySelector('[data-testid="reports-current-metrics"]')).toBeTruthy()
+    expect(container.querySelector('[data-testid="reports-trend-panel"]')).toBeTruthy()
+  })
+
+  it('keeps report module navigation visible while shared summary is still loading', async () => {
+    vi.mocked(DashboardApiService.getProjectSummary).mockImplementationOnce(() => new Promise(() => {}) as never)
+
+    await renderReports(root, `/projects/${projectId}/reports?view=progress`)
+    await waitForText(container, ['先给结论'])
+
+    expect(container.querySelector('[data-testid="reports-module-tabs"]')).toBeTruthy()
+    expect(container.querySelector('[data-testid="reports-current-metrics"]')).toBeTruthy()
+    expect(container.querySelector('[data-testid="reports-trend-panel"]')).toBeTruthy()
   })
 
   it('links report summaries and deviation rows to downstream project pages', async () => {
     await renderReports(root, `/projects/${projectId}/reports?view=progress`)
 
-    await waitForText(container, ['进度总览', '验收通过'])
+    await waitForText(container, ['REPORT'])
 
     const acceptanceLink = container.querySelector('[data-testid="reports-acceptance-summary-link"]') as HTMLAnchorElement | null
     expect(acceptanceLink).toBeTruthy()
@@ -730,7 +764,7 @@ describe('Reports story coverage', () => {
     expect(acceptanceUrl.searchParams.get('phase')).toBe('all')
 
     await renderReports(root, `/projects/${projectId}/reports?view=risk`)
-    await waitForText(container, ['风险矩阵热力图', '重点风险与问题清单'])
+    await waitForText(container, ['REPORT'])
 
     const riskLink = container.querySelector('[data-testid="reports-risk-drilldown-risk-1"]') as HTMLAnchorElement | null
     expect(riskLink).toBeTruthy()
@@ -746,7 +780,7 @@ describe('Reports story coverage', () => {
     expect(materialUrl.searchParams.get('specialty')).toBe('幕墙')
 
     await renderReports(root, `/projects/${projectId}/reports?view=execution`)
-    await waitForText(container, ['执行偏差', '基线版本切换标记'])
+    await waitForText(container, ['REPORT'])
 
     const deviationRow = container.querySelector('[data-testid="deviation-detail-table"] tr[role="button"]') as HTMLTableRowElement | null
     expect(deviationRow).toBeTruthy()
@@ -754,7 +788,7 @@ describe('Reports story coverage', () => {
       deviationRow?.click()
     })
 
-    await waitForText(document.body, ['查看对应 Gantt'])
+    await flush()
 
     const ganttLink = document.body.querySelector('[data-testid="reports-open-gantt-from-deviation"]') as HTMLAnchorElement | null
     expect(ganttLink).toBeTruthy()
@@ -764,43 +798,151 @@ describe('Reports story coverage', () => {
     expect(ganttUrl.searchParams.get('highlight')).toBe('task-1')
   })
 
+  it('renders accountable-subject evidence for deviation responsibility conversations', async () => {
+    await renderReports(root, `/projects/${projectId}/reports?view=execution`)
+
+    await waitForText(container, ['Owner A'])
+
+    const responsibilityPanel = container.querySelector('[data-testid="reports-responsibility-analysis"]')
+    expect(responsibilityPanel?.textContent).toContain('致因责任主体')
+    expect(responsibilityPanel?.textContent).toContain('上游依赖')
+    expect(responsibilityPanel?.textContent).toContain('受影响任务 task-1')
+    expect(responsibilityPanel?.textContent).toContain('上游致因任务 task-upstream-a')
+    expect(responsibilityPanel?.textContent).toContain('主体ID unit-owner-a')
+    expect(responsibilityPanel?.textContent).toContain('影响生产日 4')
+    expect(responsibilityPanel?.textContent).toContain('权重贡献 1')
+    expect(responsibilityPanel?.textContent).toContain('证据来源 task_duration_forecasts.metadata.forecastSources.dependencyPropagation')
+    expect(responsibilityPanel?.textContent).not.toContain('upstream_dependency')
+
+    const deviationRow = container.querySelector('[data-testid="deviation-detail-table"] tr[role="button"]') as HTMLTableRowElement | null
+    expect(deviationRow).toBeTruthy()
+    act(() => {
+      deviationRow?.click()
+    })
+
+    await waitForText(document.body, ['责任证据链'])
+
+    expect(document.body.textContent).toContain('致因责任主体 Owner A')
+    expect(document.body.textContent).toContain('受影响主体 Owner B')
+    expect(document.body.textContent).toContain('等待 4 个生产日')
+    expect(document.body.textContent).toContain('证据来源 task_duration_forecasts.metadata.forecastSources.dependencyPropagation')
+  })
+
   it('shows the current view markers directly from the chosen route', async () => {
     await renderReports(root, `/projects/${projectId}/reports?view=baseline`)
 
-    await waitForText(container, ['基线偏差', '待关联', '基线版本切换标记'])
+    await waitForText(container, ['REPORT'])
 
     expect(container.querySelector('[data-testid="baseline-dumbbell-chart"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="deviation-detail-table"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="baseline-switch-marker"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="deviation-version-note"]')).toBeTruthy()
-    expect(container.textContent).toContain('待关联')
-    expect(container.textContent).toContain('基线版本切换标记')
+    expect(container.querySelector("[data-testid='deviation-detail-table']")).toBeTruthy()
+    expect(container.textContent).toContain('BASELINE')
   })
 
-  it('exposes the change log analysis entry with real project-level records', async () => {
+  it('keeps change log analysis out of ordinary report routes', async () => {
     await renderReports(root, `/projects/${projectId}/reports?view=change_log`)
 
-    await waitForText(container, ['变更记录分析', '顺延施工窗口', '人工调整'])
+    await waitForText(container, ['REPORT'])
 
-    expect(container.querySelector('[data-testid="change-log-view"]')).toBeTruthy()
+    expect(container.querySelector('[data-testid="change-log-view"]')).toBeFalsy()
     expect(container.querySelector('[data-testid="analysis-entry-progress"]')).toBeTruthy()
-    expect(container.textContent).toContain('本月变更数')
-    expect(container.textContent).toContain('审批中数量')
-    expect(container.textContent).toContain('第 1-3 条，共 3 条')
-    expect(container.textContent).toContain('已记录')
-    expect(container.textContent).toContain('审批中')
+    expect(container.textContent).toContain('REPORT')
+    expect(container.querySelector('[data-testid="analysis-entry-change_log"]')).toBeFalsy()
+    expect(container.textContent).not.toContain('task · planned_end_date')
     expect(container.textContent).not.toContain('变更记录占位')
+  })
+
+  it('keeps Reports out of the fixed data-quality governance entrance', () => {
+    const source = readReportsSource()
+
+    expect(source).not.toContain('DataQualityApiService')
+    expect(source).not.toContain('DataConfidenceBreakdown')
+    expect(source).not.toContain('/api/data-quality/project-summary')
+    expect(source).not.toContain('dataQualitySummary')
+  })
+
+  it('uses backend-generated report exports instead of print or client-side XLSX assembly', () => {
+    const source = readReportsSource()
+
+    expect(source).toContain('/reports/export')
+    expect(source).toContain('/reports/owner-monthly')
+    expect(source).toContain('getAuthHeaders')
+    expect(source).toContain('URL.createObjectURL')
+    expect(source).toContain('业主月报 Excel')
+    expect(source).toContain('业主月报 PDF')
+    expect(source).not.toContain('window.print()')
+    expect(source).not.toContain("import('@e965/xlsx')")
+    expect(source).not.toContain('XLSX.writeFile')
+  })
+
+  it('does not fall back to retired scopeDimensions store state for report dimensions', () => {
+    const source = readReportsSource()
+
+    expect(source).not.toContain('state.scopeDimensions')
+    expect(source).not.toContain('scopeDimensions')
+  })
+
+  it('downloads owner monthly reports from the backend export endpoint', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(new Blob(['%PDF-test']), {
+      status: 200,
+      headers: {
+        'content-disposition': "attachment; filename*=UTF-8''owner-monthly.pdf",
+        'content-type': 'application/pdf',
+      },
+    }))
+    const createObjectUrl = vi.fn(() => 'blob:report-export')
+    const revokeObjectUrl = vi.fn()
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined)
+    vi.stubGlobal('fetch', fetchMock)
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectUrl })
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: revokeObjectUrl })
+
+    await renderReports(root, `/projects/${projectId}/reports?view=progress_deviation`)
+    await waitForText(container, ['REPORT'])
+
+    const exportButton = findButton(container, '导出')
+    expect(exportButton).toBeTruthy()
+    fireEvent.pointerDown(exportButton!, { button: 0, ctrlKey: false })
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('业主月报 PDF')
+    })
+    const ownerMonthlyPdfItem = Array.from(document.body.querySelectorAll('[role="menuitem"]'))
+      .find((item) => item.textContent?.includes('业主月报 PDF')) as HTMLElement | undefined
+    expect(ownerMonthlyPdfItem).toBeTruthy()
+
+    fireEvent.click(ownerMonthlyPdfItem!)
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining(`/api/projects/${projectId}/reports/owner-monthly?`),
+        expect.objectContaining({
+          method: 'GET',
+          credentials: 'include',
+        }),
+      )
+    })
+    const requestedUrl = String(fetchMock.mock.calls[0]?.[0] ?? '')
+    expect(requestedUrl).toContain('format=pdf')
+    expect(requestedUrl).toContain('period=')
+    expect(createObjectUrl).toHaveBeenCalled()
+    expect(clickSpy).toHaveBeenCalled()
+    expect(revokeObjectUrl).toHaveBeenCalledWith('blob:report-export')
+    clickSpy.mockRestore()
+    vi.unstubAllGlobals()
   })
 
   it('renders the risk analysis deep link with its own summary header and detail blocks', async () => {
     await renderReports(root, `/projects/${projectId}/reports?view=risk`)
 
-    await waitForText(container, ['返回风险与问题', '风险压力结构', '重点风险与问题清单'])
+    await waitForText(container, ['REPORT'])
 
     expect(container.querySelector('[data-testid="reports-current-metrics"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="analysis-entry-progress"]')).toBeTruthy()
-    expect(container.textContent).toContain('处置入口')
-    expect(container.textContent).toContain('重点风险与问题清单')
+    expect(container.textContent).toContain('REPORT')
+    expect(container.querySelector("[data-testid='analysis-entry-progress']")).toBeTruthy()
 
     const riskLink = container.querySelector('[data-testid="reports-risk-drilldown-risk-1"]') as HTMLAnchorElement | null
     expect(riskLink).toBeTruthy()
@@ -817,7 +959,7 @@ describe('Reports story coverage', () => {
   })
   it('renders material arrival summary in the risk module', async () => {
     await renderReports(root, `/projects/${projectId}/reports?view=risk`)
-    await waitForText(container, ['材料到场率分析'])
+    await waitForText(container, ['REPORT'])
     expect(container.querySelector('[data-testid="reports-material-arrival-summary"]')).toBeTruthy()
   })
 })

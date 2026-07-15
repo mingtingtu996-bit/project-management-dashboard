@@ -1,4 +1,5 @@
 import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
 
 interface SegmentedControlProps {
   options: { value: string; label: string; disabled?: boolean; testId?: string }[]
@@ -15,22 +16,22 @@ export function SegmentedControl({ options, value, onChange, className, activeCl
       {options.map((option) => {
         const active = option.value === value
         return (
-          <button
+          <Button unstyled
             key={option.value}
             type="button"
             data-testid={option.testId}
             className={cn(
-              'h-7 rounded-md px-2.5 transition-colors duration-200',
-              option.disabled && 'cursor-not-allowed opacity-50',
+              'h-7 rounded-md px-2.5 text-xs font-medium outline-none transition-all duration-150 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white',
+              option.disabled && 'cursor-not-allowed opacity-40',
               active
                 ? cn('bg-white text-slate-900 shadow-[0_1px_2px_rgba(15,23,42,0.06)]', activeClassName)
-                : cn('text-slate-500 hover:text-slate-900', inactiveClassName),
+                : cn('text-slate-500 hover:text-slate-700', inactiveClassName),
             )}
             disabled={option.disabled}
             onClick={() => onChange(option.value)}
           >
             {option.label}
-          </button>
+          </Button>
         )
       })}
     </div>

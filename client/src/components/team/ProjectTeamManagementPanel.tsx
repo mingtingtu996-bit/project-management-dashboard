@@ -20,12 +20,12 @@ import { useUpdateProject } from '@/hooks/useStore'
 import { getApiErrorMessage, getAuthHeaders } from '@/lib/apiClient'
 import { dispatchProjectAccessOverride } from '@/lib/projectAccessEvents'
 import { toast } from '@/hooks/use-toast'
-import { getGlobalRoleLabel, getProjectRoleLabel, normalizeGlobalRole, normalizeProjectPermissionLevel, type GlobalRole, type ProjectPermissionLevel } from '@/lib/roleLabels'
+import { getGlobalRoleLabel, getProjectRoleLabel, normalizeGlobalRole, normalizeProjectAccessLevel, normalizeProjectPermissionLevel, type GlobalRole, type ProjectAccessLevel, type ProjectPermissionLevel } from '@/lib/roleLabels'
 import { CheckCircle2, Copy, Crown, KeyRound, Link2, Trash2, UserPlus, Users } from 'lucide-react'
 
 interface AccessSummary {
   projectId: string
-  permissionLevel: ProjectPermissionLevel
+  permissionLevel: ProjectAccessLevel
   globalRole: GlobalRole
   canManageTeam: boolean
   canEdit: boolean
@@ -89,7 +89,7 @@ function readInvitationCode(item: InvitationInfo) {
 }
 
 function readInvitationPermission(item: InvitationInfo) {
-  return normalizeProjectPermissionLevel(item.permissionLevel || item.permission_level)
+  return normalizeProjectAccessLevel(item.permissionLevel || item.permission_level)
 }
 
 function readInvitationRevoked(item: InvitationInfo) {
@@ -163,7 +163,7 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
       const accessResponse = await requestJson<{ success: boolean; data: AccessSummary }>(`/api/members/${projectId}/me`)
       const nextAccess = {
         ...accessResponse.data,
-        permissionLevel: normalizeProjectPermissionLevel(accessResponse.data.permissionLevel),
+        permissionLevel: normalizeProjectAccessLevel(accessResponse.data.permissionLevel),
         globalRole: normalizeGlobalRole(accessResponse.data.globalRole),
       }
       setAccess(nextAccess)
@@ -171,7 +171,7 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
       const membersResponse = await requestJson<{ success: boolean; members: MemberInfo[] }>(`/api/members/${projectId}`)
       const nextMembers = (membersResponse.members || []).map((item) => ({
         ...item,
-        permissionLevel: normalizeProjectPermissionLevel(item.permissionLevel),
+        permissionLevel: normalizeProjectAccessLevel(item.permissionLevel),
         globalRole: normalizeGlobalRole(item.globalRole),
       }))
       setMembers(nextMembers)
@@ -486,7 +486,7 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
                   className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 py-10"
                 />
               ) : members.map((member) => {
-                const memberPermission = normalizeProjectPermissionLevel(member.permissionLevel)
+                const memberPermission = normalizeProjectAccessLevel(member.permissionLevel)
                 const rowBusyPrefix = `member:${member.userId}`
 
                 return (
@@ -520,11 +520,9 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
                               设为编辑
                             </Button>
                           ) : null}
-                          {memberPermission !== 'viewer' ? (
-                            <Button variant="outline" size="sm" loading={busyKey === `${rowBusyPrefix}:permission`} onClick={() => updateMemberPermission(member, 'viewer')}>
-                              设为只读
-                            </Button>
-                          ) : null}
+                          <Button variant="outline" size="sm" loading={busyKey === `${rowBusyPrefix}:permission`} onClick={() => updateMemberPermission(member, 'owner')}>
+                            设为负责人
+                          </Button>
                           <Button variant="outline" size="sm" loading={busyKey === `${rowBusyPrefix}:transfer`} onClick={() => transferOwner(member)}>
                             <Crown className="h-4 w-4" />
                             转让负责人
@@ -684,11 +682,11 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
             </div>
             <div className="space-y-2">
               <Label>项目角色</Label>
-              <Select value={memberForm.permissionLevel} onValueChange={(value) => setMemberForm((current) => ({ ...current, permissionLevel: normalizeProjectPermissionLevel(value) }))}>
+              <Select value={memberForm.permissionLevel} onValueChange={(value) => setMemberForm((current) => ({ ...current, permissionLevel: normalizeProjectPermissionLevel(value) ?? current.permissionLevel }))}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="editor">编辑成员</SelectItem>
-                  <SelectItem value="viewer">只读成员</SelectItem>
+                  <SelectItem value="owner">项目负责人</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -709,11 +707,10 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
           <div className="space-y-4 py-2">
             <div className="space-y-2">
               <Label>项目角色</Label>
-              <Select value={invitationForm.permissionLevel} onValueChange={(value) => setInvitationForm((current) => ({ ...current, permissionLevel: normalizeProjectPermissionLevel(value) }))}>
+              <Select value={invitationForm.permissionLevel} onValueChange={(value) => setInvitationForm((current) => ({ ...current, permissionLevel: normalizeProjectPermissionLevel(value) ?? current.permissionLevel }))}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="editor">编辑成员</SelectItem>
-                  <SelectItem value="viewer">只读成员</SelectItem>
                 </SelectContent>
               </Select>
             </div>

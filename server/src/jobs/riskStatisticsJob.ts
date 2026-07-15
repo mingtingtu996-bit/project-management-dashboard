@@ -2,10 +2,11 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 
 import { logger } from '../middleware/logger.js'
 import { runJobWithRetry } from '../services/jobRuntime.js'
+import { PersistentWallClockJobTimer } from '../services/persistentJobScheduleService.js'
 import { riskStatisticsService } from '../services/riskStatisticsService.js'
 import { isProjectActiveStatus } from '../utils/projectStatus.js'
 
-const DAY_IN_MS = 24 * 60 * 60 * 1000
+const DEFAULT_SCHEDULE = '0 2 * * *'
 
 function createSupabaseClient(): SupabaseClient {
   const url = process.env.SUPABASE_URL
@@ -24,64 +25,57 @@ function createJobId() {
 
 class RiskStatisticsJob {
   private isRunning = false
-  private intervalTimer: NodeJS.Timeout | null = null
-  private startTimer: NodeJS.Timeout | null = null
   private lastRun: Date | null = null
   private nextRun: Date | null = null
+  private wallClockTimer = new PersistentWallClockJobTimer({
+    jobName: 'riskStatisticsJob',
+    schedule: { kind: 'daily', hour: 2, minute: 0 },
+    execute: () => this.execute('scheduler'),
+    onScheduled: ({ nextRun, delayMs }) => {
+      this.nextRun = nextRun
+      logger.info('riskStatisticsJob scheduled', {
+        schedule: DEFAULT_SCHEDULE,
+        nextRun: nextRun.toISOString(),
+        delay: delayMs,
+      })
+    },
+    onError: (error) => logger.error('riskStatisticsJob scheduler failed', {
+      error: error instanceof Error ? error.message : String(error),
+    }),
+  })
 
-  start(schedule = '0 2 * * *') {
-    if (this.intervalTimer || this.startTimer) {
-      logger.warn('riskStatisticsJob is already running')
-      return
+  start(schedule = DEFAULT_SCHEDULE) {
+    if (schedule !== DEFAULT_SCHEDULE) {
+      logger.warn('riskStatisticsJob ignores unsupported custom schedule', {
+        requestedSchedule: schedule,
+        effectiveSchedule: DEFAULT_SCHEDULE,
+      })
     }
-
-    this.nextRun = this.getNextRunTime(schedule)
-    const delay = Math.max(this.nextRun.getTime() - Date.now(), 0)
-
-    logger.info('riskStatisticsJob scheduled', {
-      schedule,
-      nextRun: this.nextRun.toISOString(),
-      delay,
-    })
-
-    this.startTimer = setTimeout(() => {
-      this.startTimer = null
-      void this.execute('scheduler')
-      this.intervalTimer = setInterval(() => {
-        void this.execute('scheduler')
-      }, DAY_IN_MS)
-    }, delay)
+    if (!this.wallClockTimer.start()) {
+      logger.warn('riskStatisticsJob is already running')
+    }
   }
 
   stop() {
-    if (this.startTimer) {
-      clearTimeout(this.startTimer)
-      this.startTimer = null
-    }
-
-    if (this.intervalTimer) {
-      clearInterval(this.intervalTimer)
-      this.intervalTimer = null
-    }
-
+    this.wallClockTimer.stop()
     this.nextRun = null
     logger.info('riskStatisticsJob stopped')
   }
 
-  async executeNow(): Promise<{ success: number; failed: number; total: number }> {
-    return this.execute('manual')
+  async executeNow(projectIds?: string[] | null): Promise<{ success: number; failed: number; total: number }> {
+    return this.execute('manual', projectIds)
   }
 
   getStatus() {
     return {
       isRunning: this.isRunning,
-      isScheduled: this.startTimer !== null || this.intervalTimer !== null,
+      isScheduled: this.wallClockTimer.getStatus().isScheduled,
       lastRun: this.lastRun ? this.lastRun.toISOString() : null,
       nextRun: this.nextRun ? this.nextRun.toISOString() : null,
     }
   }
 
-  private async execute(triggeredBy: 'scheduler' | 'manual' = 'scheduler') {
+  private async execute(triggeredBy: 'scheduler' | 'manual' = 'scheduler', projectIds?: string[] | null) {
     if (this.isRunning) {
       logger.warn('riskStatisticsJob is already running, skip tick', { triggeredBy })
       return { success: 0, failed: 0, total: 0 }
@@ -101,15 +95,11 @@ class RiskStatisticsJob {
           triggeredBy,
           jobId,
         },
-        async () => this.generateSnapshotsForAllProjects(),
+        async () => this.generateSnapshotsForAllProjects(projectIds),
       )
 
       const durationMs = Date.now() - startedAtMs
       this.lastRun = startedAt
-
-      if (triggeredBy === 'scheduler') {
-        this.nextRun = new Date(startedAt.getTime() + DAY_IN_MS)
-      }
 
       logger.info('riskStatisticsJob completed', {
         triggeredBy,
@@ -154,13 +144,21 @@ class RiskStatisticsJob {
         jobId,
       })
 
+      if (triggeredBy === 'scheduler') throw error
       return { success: 0, failed: 0, total: 0 }
     } finally {
       this.isRunning = false
     }
   }
 
-  private async generateSnapshotsForAllProjects() {
+  private async generateSnapshotsForAllProjects(projectIds?: string[] | null) {
+    const scopedProjectIds = Array.isArray(projectIds)
+      ? new Set(projectIds.map((projectId) => String(projectId ?? '').trim()).filter(Boolean))
+      : null
+    if (scopedProjectIds && scopedProjectIds.size === 0) {
+      return { success: 0, failed: 0, total: 0 }
+    }
+
     const supabase = createSupabaseClient()
     const { data: projects, error } = await supabase
       .from('projects')
@@ -172,7 +170,7 @@ class RiskStatisticsJob {
 
     const activeProjects = ((projects ?? []) as Array<{ id: string; name?: string | null; status?: string | null }>).filter(
       (project) => isProjectActiveStatus(project.status),
-    )
+    ).filter((project) => !scopedProjectIds || scopedProjectIds.has(String(project.id)))
 
     if (activeProjects.length === 0) {
       logger.info('riskStatisticsJob skipped because there are no active projects')
@@ -201,23 +199,17 @@ class RiskStatisticsJob {
       }
     }
 
+    if (failed > 0) {
+      throw new Error(
+        `Risk statistics snapshot generation failed for ${failed} of ${activeProjects.length} projects`,
+      )
+    }
+
     return {
       success,
       failed,
       total: activeProjects.length,
     }
-  }
-
-  private getNextRunTime(_schedule: string) {
-    const now = new Date()
-    const next = new Date(now)
-    next.setHours(2, 0, 0, 0)
-
-    if (next <= now) {
-      next.setDate(next.getDate() + 1)
-    }
-
-    return next
   }
 
   private async logExecution(params: {

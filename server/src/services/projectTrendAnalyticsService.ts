@@ -1,13 +1,31 @@
+import { query as rawQuery } from '../database.js'
 import { supabase } from './dbService.js'
 import {
   getMetricRegistryEntry,
   type MetricGranularity,
   type MetricGroupBy,
   type MetricKey,
-} from '../analytics/metricRegistry.js'
+} from './metricRegistryService.js'
 
 const TREND_GRANULARITIES: MetricGranularity[] = ['day', 'week', 'month']
-const TREND_GROUP_BY_VALUES: MetricGroupBy[] = ['none', 'building', 'specialty', 'phase', 'region']
+const TREND_GROUP_BY_VALUES: MetricGroupBy[] = [
+  'none',
+  'building',
+  'basement',
+  'floor',
+  'physical_zone',
+  'functional_area',
+  'section',
+  'specialty',
+  'phase',
+  'division',
+  'subdivision',
+  'engineering_object',
+  'wbs_node_type',
+  'participant_unit',
+  'assignee',
+  'severity',
+]
 
 type TrendSnapshotRow = {
   project_id: string
@@ -21,7 +39,7 @@ type TrendSnapshotRow = {
   active_risk_count: number | null
   pending_condition_count: number | null
   active_obstacle_count: number | null
-  active_delay_requests: number | null
+  active_delayed_tasks: number | null
   monthly_close_status: string | null
   attention_required: boolean | null
   highest_warning_level: string | null
@@ -29,16 +47,18 @@ type TrendSnapshotRow = {
   critical_path_affected_tasks: number | null
 }
 
+type MetricValueTrendRow = {
+  project_id: string
+  snapshot_date: string
+  metric_value: number | string | null
+  value_text: string | null
+}
+
 type ProjectMetadataRow = {
   id: string
   building_type?: string | null
   structure_type?: string | null
   current_phase?: string | null
-}
-
-type ProjectScopeDimensionRow = {
-  dimension_key: 'building' | 'specialty' | 'phase' | 'region'
-  scope_dimension_label: string | null
 }
 
 type TrendAggregateBucket = {
@@ -79,6 +99,12 @@ const MONTHLY_CLOSE_STATUS_SCORE: Record<string, number> = {
   in_progress: 1,
   completed: 2,
   overdue: 3,
+}
+
+const PLANNING_ALIGNMENT_STATUS_SCORE: Record<string, number> = {
+  aligned: 0,
+  temporary_without_baseline: 1,
+  needs_realign: 2,
 }
 
 const PHASE_LABELS: Record<string, string> = {
@@ -221,6 +247,18 @@ function getMonthlyCloseStatusScore(value: unknown) {
   return MONTHLY_CLOSE_STATUS_SCORE[normalized] ?? MONTHLY_CLOSE_STATUS_SCORE[normalized.toLowerCase()] ?? null
 }
 
+function getMetricValueSnapshotScore(row: MetricValueTrendRow, metric: MetricKey): number | null {
+  const numericValue = toNumber(row.metric_value)
+  if (numericValue !== null) return numericValue
+
+  if (metric === 'planning_alignment_status') {
+    const status = normalizeText(row.value_text).toLowerCase()
+    return PLANNING_ALIGNMENT_STATUS_SCORE[status] ?? null
+  }
+
+  return null
+}
+
 export function normalizeTrendGranularity(value: unknown): MetricGranularity | null {
   const normalized = normalizeText(value).toLowerCase()
   return TREND_GRANULARITIES.includes(normalized as MetricGranularity)
@@ -267,8 +305,8 @@ export function resolveTrendMetricValue(row: TrendSnapshotRow, metric: MetricKey
       return toNumber(row.pending_condition_count)
     case 'active_obstacle_count':
       return toNumber(row.active_obstacle_count)
-    case 'active_delay_requests':
-      return toNumber(row.active_delay_requests)
+    case 'active_delayed_tasks':
+      return toNumber(row.active_delayed_tasks)
     case 'monthly_close_status':
       return getMonthlyCloseStatusScore(row.monthly_close_status)
     case 'attention_required':
@@ -284,14 +322,122 @@ export function resolveTrendMetricValue(row: TrendSnapshotRow, metric: MetricKey
   }
 }
 
+function normalizeSnapshotDate(value: unknown) {
+  if (value instanceof Date) {
+    return formatDateKey(value)
+  }
+  const normalized = normalizeText(value)
+  return normalized.length >= 10 ? normalized.slice(0, 10) : normalized
+}
+
+function normalizeTrendSnapshotRows(rows: TrendSnapshotRow[]) {
+  return rows.map((row) => ({
+    ...row,
+    snapshot_date: normalizeSnapshotDate(row.snapshot_date),
+  }))
+}
+
+function normalizeMetricValueTrendRows(rows: MetricValueTrendRow[]) {
+  return rows.map((row) => ({
+    ...row,
+    snapshot_date: normalizeSnapshotDate(row.snapshot_date),
+  }))
+}
+
+async function loadTrendSnapshotRowsDirect(options: {
+  projectId?: string
+  projectIds?: string[]
+  from: string
+  to: string
+}): Promise<TrendSnapshotRow[]> {
+  if (options.projectId) {
+    const result = await rawQuery(
+      `
+        SELECT project_id,
+               snapshot_date,
+               health_score,
+               health_status,
+               overall_progress,
+               task_progress,
+               delay_days,
+               delay_count,
+               active_risk_count,
+               pending_condition_count,
+               active_obstacle_count,
+               active_delayed_tasks,
+               monthly_close_status,
+               attention_required,
+               highest_warning_level,
+               shifted_milestone_count,
+               critical_path_affected_tasks
+          FROM public.project_daily_snapshot
+         WHERE snapshot_date >= $1
+           AND snapshot_date <= $2
+           AND project_id = $3
+         ORDER BY snapshot_date ASC, project_id ASC
+      `,
+      [options.from, options.to, options.projectId],
+    )
+    return normalizeTrendSnapshotRows((result.rows ?? []) as TrendSnapshotRow[])
+  }
+
+  if (options.projectIds && options.projectIds.length > 0) {
+    const result = await rawQuery(
+      `
+        SELECT project_id,
+               snapshot_date,
+               health_score,
+               health_status,
+               overall_progress,
+               task_progress,
+               delay_days,
+               delay_count,
+               active_risk_count,
+               pending_condition_count,
+               active_obstacle_count,
+               active_delayed_tasks,
+               monthly_close_status,
+               attention_required,
+               highest_warning_level,
+               shifted_milestone_count,
+               critical_path_affected_tasks
+          FROM public.project_daily_snapshot
+         WHERE snapshot_date >= $1
+           AND snapshot_date <= $2
+           AND project_id = ANY($3::uuid[])
+         ORDER BY snapshot_date ASC, project_id ASC
+      `,
+      [options.from, options.to, options.projectIds],
+    )
+    return normalizeTrendSnapshotRows((result.rows ?? []) as TrendSnapshotRow[])
+  }
+
+  return []
+}
+
 export async function loadTrendSnapshotRows(options: {
   projectId?: string
   projectIds?: string[]
   from: string
   to: string
 }): Promise<TrendSnapshotRow[]> {
+  if (!options.projectId && !options.projectIds) {
+    throw new Error('PROJECT_SCOPE_REQUIRED')
+  }
   if (options.projectIds && options.projectIds.length === 0) {
     return []
+  }
+
+  if (process.env.NODE_ENV !== 'test') {
+    try {
+      return await loadTrendSnapshotRowsDirect(options)
+    } catch (error) {
+      console.warn('[projectTrendAnalyticsService] direct snapshot trend read failed, falling back to Supabase REST', {
+        projectId: options.projectId,
+        projectIds: options.projectIds?.length ?? null,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
   }
 
   let query = supabase
@@ -308,7 +454,7 @@ export async function loadTrendSnapshotRows(options: {
       active_risk_count,
       pending_condition_count,
       active_obstacle_count,
-      active_delay_requests,
+      active_delayed_tasks,
       monthly_close_status,
       attention_required,
       highest_warning_level,
@@ -330,12 +476,11 @@ export async function loadTrendSnapshotRows(options: {
 
   const { data, error } = await query
   if (error) {
-    throw new Error(`读取 project_daily_snapshot 失败: ${error.message}`)
+    throw new Error(`Failed to read project_daily_snapshot: ${error.message}`)
   }
 
-  return (data ?? []) as TrendSnapshotRow[]
+  return normalizeTrendSnapshotRows((data ?? []) as TrendSnapshotRow[])
 }
-
 function aggregateTrendRows(rows: TrendSnapshotRow[], metric: MetricKey, granularity: MetricGranularity) {
   const aggregates = new Map<string, TrendAggregateBucket>()
 
@@ -344,6 +489,125 @@ function aggregateTrendRows(rows: TrendSnapshotRow[], metric: MetricKey, granula
     if (value === null) {
       continue
     }
+
+    const bucketKey = bucketDate(row.snapshot_date, granularity)
+    const current = aggregates.get(bucketKey) ?? {
+      sum: 0,
+      count: 0,
+      projectIds: new Set<string>(),
+    }
+
+    current.sum += value
+    current.count += 1
+    current.projectIds.add(row.project_id)
+    aggregates.set(bucketKey, current)
+  }
+
+  return aggregates
+}
+
+async function loadMetricValueTrendRowsDirect(options: {
+  projectId?: string
+  projectIds?: string[]
+  metric: MetricKey
+  from: string
+  to: string
+}): Promise<MetricValueTrendRow[]> {
+  if (options.projectId) {
+    const result = await rawQuery(
+      `
+        SELECT project_id, snapshot_date, metric_value, value_text
+          FROM public.metric_value_snapshots
+         WHERE metric_key = $1
+           AND group_by = 'project'
+           AND snapshot_date >= $2
+           AND snapshot_date <= $3
+           AND project_id = $4
+         ORDER BY snapshot_date ASC, project_id ASC
+      `,
+      [options.metric, options.from, options.to, options.projectId],
+    )
+    return normalizeMetricValueTrendRows((result.rows ?? []) as MetricValueTrendRow[])
+  }
+
+  if (options.projectIds && options.projectIds.length > 0) {
+    const result = await rawQuery(
+      `
+        SELECT project_id, snapshot_date, metric_value, value_text
+          FROM public.metric_value_snapshots
+         WHERE metric_key = $1
+           AND group_by = 'project'
+           AND snapshot_date >= $2
+           AND snapshot_date <= $3
+           AND project_id = ANY($4::uuid[])
+         ORDER BY snapshot_date ASC, project_id ASC
+      `,
+      [options.metric, options.from, options.to, options.projectIds],
+    )
+    return normalizeMetricValueTrendRows((result.rows ?? []) as MetricValueTrendRow[])
+  }
+
+  return []
+}
+
+export async function loadMetricValueTrendRows(options: {
+  projectId?: string
+  projectIds?: string[]
+  metric: MetricKey
+  from: string
+  to: string
+}): Promise<MetricValueTrendRow[]> {
+  if (!options.projectId && !options.projectIds) {
+    throw new Error('PROJECT_SCOPE_REQUIRED')
+  }
+  if (options.projectIds && options.projectIds.length === 0) {
+    return []
+  }
+
+  if (process.env.NODE_ENV !== 'test') {
+    try {
+      return await loadMetricValueTrendRowsDirect(options)
+    } catch (error) {
+      console.warn('[projectTrendAnalyticsService] direct metric trend read failed, falling back to Supabase REST', {
+        metric: options.metric,
+        projectId: options.projectId,
+        projectIds: options.projectIds?.length ?? null,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
+  let query = supabase
+    .from('metric_value_snapshots')
+    .select('project_id, snapshot_date, metric_value, value_text')
+    .eq('metric_key', options.metric)
+    .eq('group_by', 'project')
+    .gte('snapshot_date', options.from)
+    .lte('snapshot_date', options.to)
+    .order('snapshot_date', { ascending: true })
+    .order('project_id', { ascending: true })
+
+  if (options.projectId) {
+    query = query.eq('project_id', options.projectId)
+  }
+
+  if (options.projectIds && options.projectIds.length > 0) {
+    query = query.in('project_id', options.projectIds)
+  }
+
+  const { data, error } = await query
+  if (error) {
+    throw new Error(`Failed to read metric_value_snapshots: ${error.message}`)
+  }
+
+  return normalizeMetricValueTrendRows((data ?? []) as MetricValueTrendRow[])
+}
+function aggregateMetricValueRows(rows: MetricValueTrendRow[], metric: MetricKey, granularity: MetricGranularity) {
+  const aggregates = new Map<string, TrendAggregateBucket>()
+
+  for (const row of rows) {
+    const value = getMetricValueSnapshotScore(row, metric)
+    if (value === null) continue
 
     const bucketKey = bucketDate(row.snapshot_date, granularity)
     const current = aggregates.get(bucketKey) ?? {
@@ -374,6 +638,26 @@ function buildTrendPoints(
 }
 
 async function loadProjectMetadata(projectId: string): Promise<ProjectMetadataRow | null> {
+  if (process.env.NODE_ENV !== 'test') {
+    try {
+      const result = await rawQuery(
+        `
+          SELECT id, building_type, structure_type, current_phase
+            FROM public.projects
+           WHERE id = $1
+           LIMIT 1
+        `,
+        [projectId],
+      )
+      return (result.rows?.[0] ?? null) as ProjectMetadataRow | null
+    } catch (error) {
+      console.warn('[projectTrendAnalyticsService] direct project metadata read failed, falling back to Supabase REST', {
+        projectId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
   const { data, error } = await supabase
     .from('projects')
     .select('id, building_type, structure_type, current_phase')
@@ -388,13 +672,15 @@ async function loadProjectMetadata(projectId: string): Promise<ProjectMetadataRo
 }
 
 async function loadProjectScopeDimensions(projectId: string) {
-  const { data, error } = await supabase
-    .from('project_scope_dimensions')
-    .select('dimension_key, scope_dimension_label')
+  const { data: eoData, error: eoError } = await supabase
+    .from('engineering_objects')
+    .select('object_type, object_name')
     .eq('project_id', projectId)
+    .eq('status', 'active')
+    .in('object_type', ['phase', 'section', 'building', 'basement', 'floor', 'physical_zone', 'functional_area'])
 
-  if (error) {
-    throw new Error(`读取项目维度绑定失败: ${error.message}`)
+  if (eoError) {
+    throw new Error(`读取项目工程对象失败: ${eoError.message}`)
   }
 
   const labels = new Map<MetricGroupBy, string[]>()
@@ -402,15 +688,20 @@ async function loadProjectScopeDimensions(projectId: string) {
     labels.set(key, [])
   }
 
-  for (const row of (data ?? []) as ProjectScopeDimensionRow[]) {
-    const key = normalizeText(row.dimension_key) as MetricGroupBy
-    if (!labels.has(key)) {
-      continue
+  const typeToDim: Record<string, string> = {
+    phase: 'phase',
+    section: 'section',
+    building: 'building',
+    basement: 'basement',
+    floor: 'floor',
+    physical_zone: 'physical_zone',
+    functional_area: 'functional_area',
+  }
+  for (const row of eoData ?? []) {
+    const dimKey = typeToDim[(row as any).object_type] as MetricGroupBy
+    if (dimKey && labels.has(dimKey)) {
+      labels.get(dimKey)!.push(normalizeText((row as any).object_name))
     }
-
-    const current = labels.get(key) ?? []
-    current.push(normalizeText(row.scope_dimension_label))
-    labels.set(key, current)
   }
 
   return labels
@@ -471,7 +762,11 @@ export async function getProjectTrendAnalytics(
     throw new Error('PROJECT_NOT_FOUND')
   }
 
-  const aggregates = aggregateTrendRows(rows, metric, granularity)
+  let aggregates = aggregateTrendRows(rows, metric, granularity)
+  if (aggregates.size === 0) {
+    const metricRows = await loadMetricValueTrendRows({ projectId, metric, from: dateRange.from, to: dateRange.to })
+    aggregates = aggregateMetricValueRows(metricRows, metric, granularity)
+  }
   const groupLabel = groupBy === 'none' ? null : resolveProjectGroupLabel(project, scopeLabels, groupBy)
   const points = buildTrendPoints(aggregates).map((point) => (
     groupLabel
@@ -496,8 +791,8 @@ export async function getCompanyTrendAnalytics(
     from?: unknown
     to?: unknown
     granularity?: MetricGranularity
-    projectIds?: string[] | null
-  } = {},
+    projectIds: string[]
+  },
 ): Promise<CompanyTrendResponse> {
   const entry = getMetricRegistryEntry(metric)
   const dateRange = resolveTrendDateRange(options.from, options.to)
@@ -506,10 +801,19 @@ export async function getCompanyTrendAnalytics(
   const rows = await loadTrendSnapshotRows({
     from: dateRange.from,
     to: dateRange.to,
-    projectIds: options.projectIds ?? undefined,
+    projectIds: options.projectIds,
   })
 
-  const aggregates = aggregateTrendRows(rows, metric, granularity)
+  let aggregates = aggregateTrendRows(rows, metric, granularity)
+  if (aggregates.size === 0) {
+    const metricRows = await loadMetricValueTrendRows({
+      metric,
+      from: dateRange.from,
+      to: dateRange.to,
+      projectIds: options.projectIds,
+    })
+    aggregates = aggregateMetricValueRows(metricRows, metric, granularity)
+  }
   const points = buildTrendPoints(aggregates).map((point) => ({
     date: point.date,
     value: point.value,

@@ -1,11 +1,37 @@
-import { readFile, writeFile } from 'node:fs/promises'
+﻿import { readFile, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { dirname, extname, join } from 'node:path'
 
-const latestManifestPath = 'artifacts/figma-design-data/latest-manifest.json'
+const latestManifestPath = process.env.FIGMA_DESIGN_DATA_LATEST_MANIFEST || 'project-ui/artifacts/figma-design-data/latest-manifest.json'
+const legacyFigmaRoot = 'artifacts/figma-design-data'
+const currentFigmaRoot = 'project-ui/artifacts/figma-design-data'
 
 async function readJson(filePath) {
   return JSON.parse(await readFile(filePath, 'utf8'))
+}
+
+function resolveMovedPath(value) {
+  if (typeof value !== 'string') return value
+  if (existsSync(value)) return value
+  if (value.startsWith(legacyFigmaRoot)) {
+    const current = value.replace(legacyFigmaRoot, currentFigmaRoot)
+    if (existsSync(current)) return current
+  }
+  return value
+}
+
+function normalizeManifestPaths(manifest) {
+  return {
+    ...manifest,
+    outputDir: resolveMovedPath(manifest.outputDir),
+    tokenFile: resolveMovedPath(manifest.tokenFile),
+    assetFile: resolveMovedPath(manifest.assetFile),
+    captures: (manifest.captures || []).map((capture) => ({
+      ...capture,
+      pageData: resolveMovedPath(capture.pageData),
+      screenshot: resolveMovedPath(capture.screenshot),
+    })),
+  }
 }
 
 function mimeFromExt(filePath) {
@@ -30,7 +56,7 @@ async function fileToDataUrl(filePath) {
 }
 
 async function buildBundle({ includeScreenshots }) {
-  const manifest = await readJson(latestManifestPath)
+  const manifest = normalizeManifestPaths(await readJson(latestManifestPath))
   const outputDir = manifest.outputDir
   const replaySpec = await readJson(join(outputDir, 'figma-replay-spec.json'))
   const tokens = await readJson(join(outputDir, 'tokens.json'))
@@ -174,7 +200,7 @@ async function writeBundle(filePath, bundle) {
 }
 
 async function main() {
-  const manifest = await readJson(latestManifestPath)
+  const manifest = normalizeManifestPaths(await readJson(latestManifestPath))
   const outputDir = manifest.outputDir
   const bundleDir = join(outputDir, 'bundle')
 

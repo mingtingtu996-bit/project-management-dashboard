@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 process.env.NODE_ENV = 'test'
 process.env.SUPABASE_URL = 'http://127.0.0.1:54321'
 process.env.SUPABASE_SERVICE_KEY = 'test-service-key'
+process.env.DB_SQL_EXECUTION_MODE = 'rest'
 
 type DeleteBuilder = {
   delete: ReturnType<typeof vi.fn>
@@ -55,7 +56,7 @@ vi.mock('../middleware/logger.js', () => ({
 
 const { deleteTask } = await import('../services/dbService.js')
 
-describe('dbService.deleteTask fallback', () => {
+describe('dbService.deleteTask canonical RPC', () => {
   beforeEach(() => {
     mocks.builders.length = 0
     mocks.from.mockClear()
@@ -63,23 +64,21 @@ describe('dbService.deleteTask fallback', () => {
     mocks.logger.warn.mockClear()
   })
 
-  it('falls back to direct task deletion when the delete RPC references a missing task_preceding_relations table', async () => {
+  it('fails closed when the delete RPC references a missing canonical relation table', async () => {
     mocks.rpc.mockResolvedValueOnce({
       data: null,
       error: { message: 'relation \"public.task_preceding_relations\" does not exist' },
     })
 
-    await deleteTask('task-1')
+    await expect(deleteTask('task-1')).rejects.toThrow('task_preceding_relations')
 
     expect(mocks.rpc).toHaveBeenCalledWith('delete_task_with_source_backfill_atomic', {
       p_task_id: 'task-1',
     })
-    expect(mocks.from).toHaveBeenCalledWith('tasks')
-    expect(mocks.builders[0]?.delete).toHaveBeenCalled()
-    expect(mocks.builders[0]?.eq).toHaveBeenCalledWith('id', 'task-1')
-    expect(mocks.logger.warn).toHaveBeenCalledWith(
-      'Falling back to direct task delete because task_preceding_relations is missing inside delete RPC',
-      { id: 'task-1' },
+    expect(mocks.builders.some((builder) => builder.delete.mock.calls.length > 0)).toBe(false)
+    expect(mocks.logger.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining('Falling back to direct task delete'),
+      expect.anything(),
     )
   })
 
@@ -90,6 +89,7 @@ describe('dbService.deleteTask fallback', () => {
     })
 
     await expect(deleteTask('task-2')).rejects.toThrow('permission denied')
-    expect(mocks.from).not.toHaveBeenCalled()
+    expect(mocks.from).toHaveBeenCalledWith('tasks')
+    expect(mocks.builders.some((builder) => builder.delete.mock.calls.length > 0)).toBe(false)
   })
 })

@@ -1,0 +1,131 @@
+{
+  "schemaVersion": "workbuddy-data-quality-rules/v1",
+  "mutationBoundary": "quality_catalog_only_no_db_mutation_no_runtime_write",
+  "rules": [
+    {
+      "id": "project_id_required",
+      "severity": "error",
+      "description": "Project-scoped business rows must have project_id."
+    },
+    {
+      "id": "company_id_required",
+      "severity": "error",
+      "description": "Company-scoped business rows must have company_id."
+    },
+    {
+      "id": "progress_range_0_100",
+      "severity": "error",
+      "description": "Progress values must stay within 0..100."
+    },
+    {
+      "id": "actual_dates_controlled_by_task_lifecycle",
+      "severity": "error",
+      "description": "Task actual start/end dates must be controlled by task lifecycle services, not external knowledge or candidate asset writes."
+    },
+    {
+      "id": "one_snapshot_per_project_per_day",
+      "severity": "error",
+      "description": "project_daily_snapshot should have at most one row per project/date."
+    },
+    {
+      "id": "snapshot_date_required",
+      "severity": "error",
+      "description": "Snapshot fact rows must include snapshot_date."
+    },
+    {
+      "id": "baseline_version_required",
+      "severity": "error",
+      "description": "Business baseline rows must include a durable baseline_version; draft/revising working-copy rows may keep version null until confirmed."
+    },
+    {
+      "id": "baseline_dates_required_for_published_baseline",
+      "severity": "error",
+      "description": "Published baseline task rows must include planned start and planned end dates."
+    },
+    {
+      "id": "monthly_plan_month_required",
+      "severity": "error",
+      "description": "Monthly plan rows must include the governed month or planning period."
+    },
+    {
+      "id": "monthly_plan_status_required",
+      "severity": "error",
+      "description": "Monthly plan rows must include an explicit workflow status."
+    },
+    {
+      "id": "monthly_plan_item_plan_ref_required",
+      "severity": "error",
+      "description": "Monthly plan item rows must reference their parent monthly plan or monthly plan version."
+    },
+    {
+      "id": "monthly_plan_item_task_or_title_required",
+      "severity": "error",
+      "description": "Monthly plan item rows must include either a task reference or a durable work item title."
+    },
+    {
+      "id": "dependency_endpoints_required",
+      "severity": "error",
+      "description": "Dependency rows must include predecessor and successor task endpoints."
+    },
+    {
+      "id": "dependency_no_self_loop",
+      "severity": "error",
+      "description": "Dependency rows must not point a task to itself."
+    },
+    {
+      "id": "duration_sample_source_required",
+      "severity": "error",
+      "description": "Duration experience samples must include a governed source type or source reference."
+    },
+    {
+      "id": "duration_days_non_negative",
+      "severity": "error",
+      "description": "Duration experience sample durations must be zero or positive."
+    },
+    {
+      "id": "duration_sample_status_required",
+      "severity": "error",
+      "description": "Duration experience samples must include an explicit sample status."
+    },
+    {
+      "id": "source_key_required",
+      "severity": "error",
+      "description": "External knowledge source rows must include a durable source_key."
+    },
+    {
+      "id": "source_url_or_locator_required",
+      "severity": "error",
+      "description": "External knowledge sources need a URL or durable source locator."
+    },
+    {
+      "id": "trust_level_required",
+      "severity": "error",
+      "description": "External knowledge sources must carry an explicit trust_level before candidate review."
+    },
+    {
+      "id": "hash_required_when_downloaded",
+      "severity": "error",
+      "description": "Downloaded external source artifacts must have a content hash."
+    },
+    {
+      "id": "source_governance_status_required",
+      "severity": "error",
+      "description": "External knowledge sources must carry an explicit governance_status."
+    },
+    {
+      "id": "document_key_required",
+      "severity": "error",
+      "description": "External knowledge documents must include a durable document_key."
+    },
+    {
+      "id": "document_type_required",
+      "severity": "error",
+      "description": "External knowledge documents must include a governed document_type."
+    },
+    {
+      "id": "extraction_status_required",
+      "severity": "error",
+      "description": "External knowledge documents must include extraction_status for OCR/table review governance."
+    }
+  ]
+}

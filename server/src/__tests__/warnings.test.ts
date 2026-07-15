@@ -34,6 +34,22 @@ const mocks = vi.hoisted(() => {
       ...delayExceededWarnings,
       ...preMilestoneWarnings,
     ]),
+    readActiveWarnings: vi.fn(async () => [
+      ...conditionWarnings,
+      ...obstacleWarnings,
+      ...acceptanceWarnings,
+      ...delayExceededWarnings,
+      ...preMilestoneWarnings,
+    ]),
+    buildImpactSignalWarningDebugReports: vi.fn(async (projectId: string) => ({
+      projectId,
+      coverage: { taskCount: 1, readinessSummaryCount: 1, forecastSummaryCount: 1, uncoveredTaskCount: 0 },
+      reports: [{ taskId: 'task-1', source: 'duration_forecast' }],
+    })),
+    buildDelayWarningReplayGovernanceReportFromHistory: vi.fn(async () => ({
+      sampleCount: 1,
+      warningPolicy: { policy: 'confirmed_or_weighted_risk_score_at_least_threshold' },
+    })),
     generateNotifications: vi.fn(async () => []),
   }
 
@@ -86,6 +102,8 @@ vi.mock('../services/warningService.js', () => ({
 }))
 
 vi.mock('../services/dbService.js', () => ({
+  registerDbServiceBusinessSideEffectAdapters: vi.fn(),
+  assertDbServiceBusinessSideEffectAdaptersRegistered: vi.fn(),
   supabase: {
     from: vi.fn(() => {
       const filters = new Map<string, unknown>()
@@ -150,11 +168,25 @@ vi.mock('../services/dbService.js', () => ({
   validateInvitation: vi.fn(),
 }))
 
+vi.mock('../services/riskIssueWarningGovernanceService.js', () => ({
+  buildWarningSignature: vi.fn(() => 'test-signature'),
+  governanceAcknowledgeWarning: vi.fn(async () => true),
+  governanceMuteWarning: vi.fn(async () => true),
+  confirmWarningAsRisk: vi.fn(async () => null),
+  upsertWarningLifecycle: vi.fn(async () => null),
+  markSourceResolved: vi.fn(async () => undefined),
+  markSourceDeleted: vi.fn(async () => undefined),
+}))
+
 vi.mock('../services/upgradeChainService.js', () => ({
   applyWarningAcknowledgments: mocks.upgradeChain.applyWarningAcknowledgments,
   isProtectedWarning: mocks.upgradeChain.isProtectedWarning,
   loadAcknowledgedWarningsForUser: mocks.upgradeChain.loadAcknowledgedWarningsForUser,
   closeWarningNotification: mocks.upgradeChain.closeWarningNotification,
+}))
+
+vi.mock('../services/deletionRetentionGovernanceService.js', () => ({
+  executeRetention: vi.fn(async () => ({ action: 'close' })),
 }))
 
 vi.mock('../middleware/logger.js', () => ({
@@ -217,8 +249,10 @@ describe('warnings route merge', () => {
       warning_type: 'permit_expiry',
       task_id: 'pre-1',
     })
-    expect(mocks.warningServiceInstance.syncActiveWarnings).toHaveBeenCalledWith(projectId)
-    expect(mocks.warningServiceInstance.syncAcceptanceExpiredIssues).toHaveBeenCalledWith(projectId)
+    // v1.4.12: GET is read-only, uses readActiveWarnings instead of sync
+    expect(mocks.warningServiceInstance.readActiveWarnings).toHaveBeenCalledWith(projectId)
+    expect(mocks.warningServiceInstance.syncAcceptanceExpiredIssues).not.toHaveBeenCalled()
+    expect(mocks.warningServiceInstance.syncActiveWarnings).not.toHaveBeenCalled()
   })
 
   it('exposes a dedicated pre-milestone warning endpoint', async () => {
@@ -270,7 +304,7 @@ describe('warnings route merge', () => {
     expect(res.status).toBe(200)
     expect(res.body.success).toBe(true)
     expect(res.body.data).toHaveLength(1)
-    expect(mocks.warningServiceInstance.syncActiveWarnings).toHaveBeenCalledWith(projectId)
+    expect(mocks.warningServiceInstance.readActiveWarnings).toHaveBeenCalledWith(projectId)
   })
 
   it('rejects unsupported mute durations before calling the warning service', async () => {
@@ -320,6 +354,30 @@ describe('warnings route merge', () => {
     const res = await request.delete('/api/warnings/warning-close-1')
 
     expect(res.status).toBe(200)
-    expect(mocks.upgradeChain.closeWarningNotification).toHaveBeenCalledWith('warning-close-1')
+    expect(mocks.upgradeChain.closeWarningNotification).toHaveBeenCalledWith('project-1', 'warning-close-1')
+  })
+
+  it('exposes impact signal debug reports through warning service without route-level aggregation', async () => {
+    const res = await request.get(`/api/warnings/impact-signals/debug?projectId=${projectId}`)
+
+    expect(res.status).toBe(200)
+    expect(res.body.success).toBe(true)
+    expect(res.body.data).toMatchObject({
+      projectId,
+      coverage: { taskCount: 1, uncoveredTaskCount: 0 },
+    })
+    expect(mocks.warningServiceInstance.buildImpactSignalWarningDebugReports).toHaveBeenCalledWith(projectId)
+  })
+
+  it('exposes delay replay governance report through warning service', async () => {
+    const res = await request.get(`/api/warnings/delay-replay/governance?project_id=${projectId}`)
+
+    expect(res.status).toBe(200)
+    expect(res.body.success).toBe(true)
+    expect(res.body.data).toMatchObject({
+      sampleCount: 1,
+      warningPolicy: { policy: 'confirmed_or_weighted_risk_score_at_least_threshold' },
+    })
+    expect(mocks.warningServiceInstance.buildDelayWarningReplayGovernanceReportFromHistory).toHaveBeenCalledWith(projectId)
   })
 })

@@ -7,12 +7,55 @@ import {
 } from '@/lib/criticalPath'
 export type { CriticalPathSummaryModel } from '@/lib/criticalPath'
 
-export interface NextMilestoneSummary {
-  id: string
-  name: string
-  targetDate: string
-  status: string
-  daysRemaining: number
+export interface ProjectKpiComparisonMetric {
+  current: number
+  previous: number | null
+  delta: number | null
+  periodLabel: '较上周' | '较上月'
+  status: 'ready' | 'insufficient_history'
+  sparkline?: number[]
+}
+
+export interface ProjectKpiComparisons {
+  weekly: {
+    progress: ProjectKpiComparisonMetric
+    deviation: ProjectKpiComparisonMetric
+    risks: ProjectKpiComparisonMetric
+    todos: ProjectKpiComparisonMetric
+  }
+}
+
+export type ProductivitySampleMaturity = 'none' | 'low' | 'medium' | 'high'
+
+export interface MonthlyProductivityRepresentativeness {
+  sampleCount: number
+  maturity: ProductivitySampleMaturity
+  buildingGroupCount: number
+  specialtyGroupCount: number
+  criticalPathSampleCount: number
+}
+
+export interface MonthlyProductivityDistribution {
+  monthlyAverageP: number | null
+  monthlyMaxP: number | null
+  monthlyMinP: number | null
+  monthlyP90: number | null
+  accelerationCaseRatio: number | null
+  monthlyProductivityCaseCount: number
+  sampleMaturity: ProductivitySampleMaturity
+  representativeness: MonthlyProductivityRepresentativeness
+}
+
+export interface KeyNodeSummary {
+  total: number
+  milestoneCount: number
+  criticalPathCount: number
+  monthlyControlCount: number
+  baselineControlCount: number
+  dueSoonCount: number
+  shiftedCount: number
+  blockedCount: number
+  highRiskCount: number
 }
 
 export interface ProjectSummary {
@@ -20,16 +63,24 @@ export interface ProjectSummary {
   name: string
   status: string
   statusLabel: string
+  plannedStartDate?: string | null
   plannedEndDate: string | null
   daysUntilPlannedEnd: number | null
   totalTasks: number
   leafTaskCount: number
+  planPhaseCount?: number
   completedTaskCount: number
   inProgressTaskCount: number
   delayedTaskCount: number
+  overdueTaskCount?: number
+  laggedTaskCount?: number
   delayDays: number
   delayCount: number
-  overallProgress: number
+  overallProgress: number | null
+  plannedProgress?: number | null
+  progressDeviation?: number | null
+  progressGap?: number | null
+  summaryAsOf?: string | null
   taskProgress: number
   totalMilestones: number
   completedMilestones: number
@@ -41,6 +92,8 @@ export interface ProjectSummary {
   pendingConditionTaskCount: number
   activeObstacleCount: number
   activeObstacleTaskCount: number
+  todayTodoCount?: number
+  projectTodayActionCount?: number
   preMilestoneCount: number
   completedPreMilestoneCount: number
   activePreMilestoneCount: number
@@ -54,7 +107,7 @@ export interface ProjectSummary {
   reviewingConstructionDrawingCount: number
   attentionRequired?: boolean
   scheduleVarianceDays?: number
-  activeDelayRequests?: number
+  activeDelayedTasks?: number
   activeObstacles?: number
   monthlyCloseStatus?: '未开始' | '进行中' | '已完成' | '已超期'
   closeoutOverdueDays?: number
@@ -63,20 +116,35 @@ export interface ProjectSummary {
   highestWarningSummary?: string | null
   shiftedMilestoneCount?: number
   criticalPathAffectedTasks?: number
-  healthScore: number
-  healthStatus: '健康' | '亚健康' | '预警' | '危险'
-  nextMilestone: NextMilestoneSummary | null
+  baselineDeviationRate?: number | null
+  monthlyPlanFulfillmentRate?: number | null
+  monthlyProductivityDistribution?: MonthlyProductivityDistribution
+  planningAlignmentStatus?: 'aligned' | 'needs_realign' | 'temporary_without_baseline'
+  temporaryWithoutBaselineCount?: number
+  planningPendingRealignCount?: number
+  businessHealthScore: number | null
+  reliabilityScore?: number | null
+  healthConfidenceScore?: number | null
+  healthConfidenceFlag?: string | null
+  progressDeliveryScore?: number | null
+  executionStabilityScore?: number | null
+  criticalTargetScore?: number | null
+  businessExceptionScore?: number | null
+  planGovernanceScore?: number | null
+  healthStatus: '健康' | '亚健康' | '预警' | '危险' | '待完善'
   milestoneOverview: MilestoneOverview
+  keyNodeSummary?: KeyNodeSummary
+  kpiComparisons?: ProjectKpiComparisons
   planningGovernance?: {
     activeCount: number
     closeoutOverdueSignalCount: number
-    closeoutForceUnlockCount: number
+    closeoutOwnerAttentionCount: number
     reorderReminderCount: number
     reorderEscalationCount: number
     reorderSummaryCount: number
     adHocReminderCount: number
     dashboardCloseoutOverdue: boolean
-    dashboardForceUnlockAvailable: boolean
+    dashboardCloseoutOwnerAttentionRequired: boolean
     hasActiveGovernanceSignal: boolean
     governancePhase?: 'free_edit' | 'monthly_pending' | 'formal_execution' | 'pending_realign' | 'reordering' | 'closeout'
   }
@@ -95,24 +163,28 @@ export interface CompanySummaryHealthHistory {
 }
 
 export interface CompanySummaryStatusCounts {
-  total: number
-  inProgress: number
-  completed: number
-  paused: number
-  notStarted: number
+  total: number | null
+  inProgress: number | null
+  completed: number | null
+  paused: number | null
+  notStarted: number | null
 }
 
 export interface CompanySummaryResponse {
-  projectCount: number
+  projectCount: number | null
   statusCounts: CompanySummaryStatusCounts
-  averageHealth: number
-  averageProgress: number
-  attentionProjectCount: number
-  lowHealthProjectCount: number
-  overdueMilestoneProjectCount: number
+  averageHealth: number | null
+  averageProgress: number | null
+  attentionProjectCount: number | null
+  totalUnreadWarningCount: number | null
+  totalDelayedTaskCount: number | null
+  lowHealthProjectCount: number | null
+  overdueMilestoneProjectCount: number | null
   healthHistory: CompanySummaryHealthHistory
-  ranking: ProjectSummary[]
+  ranking: ProjectSummary[] | null
 }
+
+export type ProjectSummaryRequestOptions = RequestInit
 
 export interface MilestoneSummary {
   projectId: string
@@ -137,66 +209,26 @@ function normalizeArray<T>(value: T[] | null | undefined): T[] {
   return Array.isArray(value) ? value : []
 }
 
-function normalizeNumber(value: unknown, fallback = 0): number {
-  return typeof value === 'number' && Number.isFinite(value) ? value : fallback
-}
-
-function mapSummaryStatusToBucket(summary: ProjectSummary): keyof Omit<CompanySummaryStatusCounts, 'total'> {
-  switch (String(summary.statusLabel || summary.status || '').trim()) {
-    case '已完成':
-    case 'completed':
-      return 'completed'
-    case '已暂停':
-    case 'paused':
-    case 'archived':
-      return 'paused'
-    case '进行中':
-    case 'active':
-    case 'in_progress':
-      return 'inProgress'
-    default:
-      return 'notStarted'
-  }
-}
-
-function buildStatusCountsFromRanking(
-  ranking: ProjectSummary[],
-  fallbackTotal: number,
-): CompanySummaryStatusCounts {
-  const statusCounts: CompanySummaryStatusCounts = {
-    total: ranking.length > 0 ? ranking.length : fallbackTotal,
-    inProgress: 0,
-    completed: 0,
-    paused: 0,
-    notStarted: 0,
-  }
-
-  for (const summary of ranking) {
-    statusCounts[mapSummaryStatusToBucket(summary)] += 1
-  }
-
-  return statusCounts
+function normalizeNullableNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
 function normalizeStatusCounts(
   value: Partial<CompanySummaryStatusCounts> | null | undefined,
-  ranking: ProjectSummary[],
-  fallbackTotal: number,
 ): CompanySummaryStatusCounts {
-  const fallback = buildStatusCountsFromRanking(ranking, fallbackTotal)
   return {
-    total: normalizeNumber(value?.total, fallback.total),
-    inProgress: normalizeNumber(value?.inProgress, fallback.inProgress),
-    completed: normalizeNumber(value?.completed, fallback.completed),
-    paused: normalizeNumber(value?.paused, fallback.paused),
-    notStarted: normalizeNumber(value?.notStarted, fallback.notStarted),
+    total: normalizeNullableNumber(value?.total),
+    inProgress: normalizeNullableNumber(value?.inProgress),
+    completed: normalizeNullableNumber(value?.completed),
+    paused: normalizeNullableNumber(value?.paused),
+    notStarted: normalizeNullableNumber(value?.notStarted),
   }
 }
 
 function normalizeCompanySummary(value: CompanySummaryResponse | null | undefined): CompanySummaryResponse {
   const raw = (value ?? {}) as Partial<CompanySummaryResponse>
-  const ranking = normalizeArray(raw.ranking)
-  const projectCount = normalizeNumber(raw.projectCount, ranking.length)
+  const ranking = Array.isArray(raw.ranking) ? raw.ranking : null
+  const projectCount = normalizeNullableNumber(raw.projectCount)
   const healthHistory = raw.healthHistory ?? {
     thisMonth: null,
     lastMonth: null,
@@ -208,12 +240,14 @@ function normalizeCompanySummary(value: CompanySummaryResponse | null | undefine
 
   return {
     projectCount,
-    statusCounts: normalizeStatusCounts(raw.statusCounts, ranking, projectCount),
-    averageHealth: normalizeNumber(raw.averageHealth),
-    averageProgress: normalizeNumber(raw.averageProgress),
-    attentionProjectCount: normalizeNumber(raw.attentionProjectCount),
-    lowHealthProjectCount: normalizeNumber(raw.lowHealthProjectCount),
-    overdueMilestoneProjectCount: normalizeNumber(raw.overdueMilestoneProjectCount),
+    statusCounts: normalizeStatusCounts(raw.statusCounts),
+    averageHealth: normalizeNullableNumber(raw.averageHealth),
+    averageProgress: normalizeNullableNumber(raw.averageProgress),
+    attentionProjectCount: normalizeNullableNumber(raw.attentionProjectCount),
+    totalUnreadWarningCount: normalizeNullableNumber(raw.totalUnreadWarningCount),
+    totalDelayedTaskCount: normalizeNullableNumber(raw.totalDelayedTaskCount),
+    lowHealthProjectCount: normalizeNullableNumber(raw.lowHealthProjectCount),
+    overdueMilestoneProjectCount: normalizeNullableNumber(raw.overdueMilestoneProjectCount),
     healthHistory: {
       thisMonth: typeof healthHistory.thisMonth === 'number' ? healthHistory.thisMonth : null,
       lastMonth: typeof healthHistory.lastMonth === 'number' ? healthHistory.lastMonth : null,
@@ -250,7 +284,7 @@ function withFreshSummaryOptions(options?: RequestInit): RequestInit {
 export class DashboardApiService {
   static async getAllProjectsSummary(options?: RequestInit): Promise<ProjectSummary[]> {
     const data = await apiGet<ProjectSummary[]>(
-      '/api/dashboard/projects-summary',
+      '/api/company/dashboard/projects-summary',
       withFreshSummaryOptions(options),
     )
     return normalizeArray(data)
@@ -258,18 +292,18 @@ export class DashboardApiService {
 
   static async getCompanySummary(options?: RequestInit): Promise<CompanySummaryResponse> {
     const data = await apiGet<CompanySummaryResponse>(
-      '/api/dashboard/company-summary',
+      '/api/company/dashboard/company-summary',
       withFreshSummaryOptions(options),
     )
     return normalizeCompanySummary(data)
   }
 
-  static async getProjectSummary(projectId: string, options?: RequestInit): Promise<ProjectSummary | null> {
+  static async getProjectSummary(projectId: string, options?: ProjectSummaryRequestOptions): Promise<ProjectSummary | null> {
     if (!projectId) return null
 
     try {
       const data = await apiGet<ProjectSummary>(
-        `/api/dashboard/project-summary?projectId=${encodeURIComponent(projectId)}`,
+        `/api/projects/${encodeURIComponent(projectId)}/dashboard/project-summary`,
         withFreshSummaryOptions(options),
       )
       return data ?? null
@@ -295,29 +329,6 @@ export class DashboardApiService {
       console.error('[DashboardApiService] Failed to fetch project critical path summary:', error)
       return null
     }
-  }
-
-  static async getMilestonesSummary(): Promise<MilestoneSummary[]> {
-    const summaries = await this.getAllProjectsSummary()
-
-    return summaries
-      .filter((summary) => summary.nextMilestone)
-      .map((summary) => {
-        const nextMilestone = summary.nextMilestone as NextMilestoneSummary
-        const deviationDays = nextMilestone.daysRemaining < 0 ? Math.abs(nextMilestone.daysRemaining) : 0
-
-        return {
-          projectId: summary.id,
-          projectName: summary.name,
-          milestoneId: nextMilestone.id,
-          milestoneName: nextMilestone.name,
-          plannedEnd: nextMilestone.targetDate,
-          actualEnd: null,
-          deviationDays,
-          status: normalizeSummaryStatus(nextMilestone.status),
-        }
-      })
-      .sort((left, right) => new Date(left.plannedEnd).getTime() - new Date(right.plannedEnd).getTime())
   }
 
   static async getAllRisks(): Promise<any[]> {
@@ -355,6 +366,6 @@ export class DashboardApiService {
 
   static async getProjectRanking(): Promise<ProjectSummary[]> {
     const summaries = await this.getAllProjectsSummary()
-    return [...summaries].sort((left, right) => right.healthScore - left.healthScore)
+    return summaries
   }
 }

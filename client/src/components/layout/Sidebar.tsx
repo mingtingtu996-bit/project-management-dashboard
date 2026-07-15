@@ -1,11 +1,14 @@
-import { useMemo, useState } from 'react'
-import { Link, useLocation } from 'react-router-dom'
+import { useMemo, useState, type MouseEvent } from 'react'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useStore } from '@/hooks/useStore'
+import { useAttentionSummary } from '@/hooks/useAttentionSummary'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { buildProjectAttentionSnapshot } from '@/lib/projectAttention'
+import { getProjectDisplayDescription, getProjectDisplayName } from '@/lib/projectDisplay'
+import { getRouteProjectId, isProjectRoutePath } from '@/lib/projectRouteGuards'
 import { COMPANY_NAVIGATION, PROJECT_NAVIGATION, PROJECT_NAVIGATION_LABELS, type NavigationItem } from '@/config/navigation'
 import {
   ArrowLeft,
@@ -17,6 +20,7 @@ import {
   X,
 } from 'lucide-react'
 import { usePermissions } from '@/hooks/usePermissions'
+import { useCurrentCompanyRole } from '@/hooks/useCurrentCompanyRole'
 
 type NavItem = NavigationItem
 const NAV_GROUP_LABELS: Record<NonNullable<NavigationItem['group']>, string> = {
@@ -37,11 +41,13 @@ function getOnboardingTarget(key: string) {
   if (key === 'planning' || key === 'planning-baseline') return 'planning-nav'
   if (key === 'tasks' || key === 'gantt') return 'gantt-nav'
   if (key === 'reports') return 'reports-nav'
+  if (key === 'notifications') return 'notifications-nav'
   return undefined
 }
 
 export default function Sidebar() {
   const location = useLocation()
+  const navigate = useNavigate()
   const {
     sidebarOpen,
     setSidebarOpen,
@@ -54,7 +60,10 @@ export default function Sidebar() {
   } = useStore()
   const [mobileOpen, setMobileOpen] = useState(false)
   const { can } = usePermissions()
+  const currentCompanyRole = useCurrentCompanyRole()
 
+  // v1.4.13: unified attention summary preferred; local snapshot as fallback
+  const { summary: unifiedAttention, loaded: unifiedAttentionLoaded } = useAttentionSummary(currentProject?.id)
   const attentionSnapshot = useMemo(
     () => buildProjectAttentionSnapshot(currentProject?.id, tasks, risks, conditions, obstacles, acceptancePlans),
     [acceptancePlans, conditions, currentProject?.id, obstacles, risks, tasks],
@@ -64,10 +73,15 @@ export default function Sidebar() {
     [acceptancePlans, conditions, obstacles, risks, tasks],
   )
 
-  const isProjectPage = /\/projects\/[^/]+/.test(location.pathname)
-  const routeProjectId = location.pathname.match(/^\/projects\/([^/]+)/)?.[1] ?? null
+  const isProjectPage = isProjectRoutePath(location.pathname)
+  const routeProjectId = getRouteProjectId(location.pathname)
   const navigationProjectId = currentProject?.id ?? routeProjectId
-  const navigation = isProjectPage ? PROJECT_NAVIGATION : COMPANY_NAVIGATION
+  const isCurrentCompanyAdmin = currentCompanyRole === 'company_admin'
+  const navigation = isProjectPage
+    ? PROJECT_NAVIGATION
+    : COMPANY_NAVIGATION.filter((item) => item.key !== 'company' || isCurrentCompanyAdmin)
+  const projectDisplayName = getProjectDisplayName(currentProject?.name)
+  const projectDisplayDescription = getProjectDisplayDescription(currentProject?.description, PROJECT_NAVIGATION_LABELS.projectHome)
 
   const filteredNavigation = navigation.filter((item) => !item.permission || can.check(item.permission))
   const groupedNavigation = useMemo(() => {
@@ -93,11 +107,27 @@ export default function Sidebar() {
     const badgeCount =
       item.key === 'notifications'
         ? isProjectPage
-          ? attentionSnapshot.totalAttentionCount
+          ? (unifiedAttentionLoaded ? unifiedAttention.totalAttentionCount : attentionSnapshot.totalAttentionCount)
           : companyAttentionSnapshot.totalAttentionCount
         : item.key === 'risks'
           ? attentionSnapshot.activeRiskCount
           : 0
+
+    const handleNavigate = (event: MouseEvent<HTMLAnchorElement>) => {
+      setMobileOpen(false)
+      if (
+        event.defaultPrevented
+        || event.button !== 0
+        || event.metaKey
+        || event.altKey
+        || event.ctrlKey
+        || event.shiftKey
+      ) {
+        return
+      }
+      event.preventDefault()
+      navigate(target)
+    }
 
     const topLink = (
       <Link
@@ -106,10 +136,10 @@ export default function Sidebar() {
         className={cn(
           'group flex cursor-pointer items-center gap-3 rounded-xl border-l-2 px-3 py-2.5 text-sm font-medium outline-none transition-all duration-200 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950',
           isCurrent
-            ? 'border-blue-500 bg-blue-500/15 text-blue-300'
-            : 'border-transparent text-slate-300 hover:bg-slate-800 hover:text-white',
+            ? 'border-blue-600 bg-blue-600/15 text-blue-300'
+            : 'border-transparent text-slate-200 hover:bg-slate-800 hover:text-white',
         )}
-        onClick={() => setMobileOpen(false)}
+        onClick={handleNavigate}
       >
         <item.icon className="h-5 w-5 flex-shrink-0" />
         {sidebarOpen && <span className="flex-1">{item.label}</span>}
@@ -150,9 +180,23 @@ export default function Sidebar() {
                         'nav-item-text flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950',
                         childActive
                           ? 'bg-slate-800 text-white'
-                          : 'text-slate-500 hover:bg-slate-800 hover:text-white',
+                          : 'text-slate-300 hover:bg-slate-800 hover:text-white',
                       )}
-                      onClick={() => setMobileOpen(false)}
+                      onClick={(event) => {
+                        setMobileOpen(false)
+                        if (
+                          event.defaultPrevented
+                          || event.button !== 0
+                          || event.metaKey
+                          || event.altKey
+                          || event.ctrlKey
+                          || event.shiftKey
+                        ) {
+                          return
+                        }
+                        event.preventDefault()
+                        navigate(childTarget)
+                      }}
                     >
                       <span className={cn('h-2 w-2 rounded-full', childActive ? 'bg-blue-400' : 'bg-slate-600')} />
                       <span className="truncate">{child.label}</span>
@@ -181,7 +225,7 @@ export default function Sidebar() {
       </Button>
 
       {mobileOpen && (
-        <button
+        <Button unstyled
           type="button"
           aria-label="关闭导航遮罩"
           className="fixed left-0 top-0 z-40 h-screen w-screen bg-slate-950/45 p-0 lg:hidden"
@@ -193,7 +237,7 @@ export default function Sidebar() {
         id="app-sidebar"
         data-onboarding-target="sidebar"
         className={cn(
-          'fixed inset-y-0 left-0 z-50 flex flex-col overflow-hidden border-r border-slate-700/50 bg-slate-900 text-slate-100 antialiased transition-[transform,width] duration-300 ease-out lg:relative lg:translate-x-0',
+          'fixed inset-y-0 left-0 z-50 flex h-screen max-h-screen flex-col overflow-hidden border-r border-slate-700/50 bg-slate-900 text-slate-100 antialiased transition-[transform,width] duration-300 ease-out lg:relative lg:translate-x-0',
           sidebarOpen ? 'w-64' : 'w-[var(--sidebar-collapsed-width)]',
           mobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0',
         )}
@@ -217,7 +261,7 @@ export default function Sidebar() {
         >
           {sidebarOpen ? (
             <Link
-              to="/company"
+              to="/workspace"
               className="flex min-w-0 items-center gap-3 rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950"
             >
               <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-600 shadow-[var(--el-2)]">
@@ -225,15 +269,15 @@ export default function Sidebar() {
               </div>
               <div className="min-w-0">
                 <div className="truncate text-sm font-semibold tracking-wide text-white">{'\u5de5\u7a0b\u7ba1\u7406\u7cfb\u7edf'}</div>
-                <div className="text-xs text-slate-500">
+                <div className="text-xs text-slate-300">
                   {PROJECT_NAVIGATION_LABELS.company} / {PROJECT_NAVIGATION_LABELS.projectHome}
                 </div>
               </div>
             </Link>
           ) : (
             <Link
-              to="/company"
-              aria-label="返回公司驾驶舱"
+              to="/workspace"
+              aria-label="返回工作台"
               className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-600 shadow-[var(--el-2)] outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950"
             >
               <Building2 className="h-5 w-5 text-white" />
@@ -254,12 +298,12 @@ export default function Sidebar() {
         </div>
         <Separator className="shrink-0 border-slate-700/50" />
 
-        <nav className="min-h-0 flex-1 overflow-y-auto px-3 py-4 pb-6">
+        <nav className="min-h-0 flex-1 overflow-y-auto px-3 py-4">
           <div className="space-y-5">
             {groupedNavigation.map((group) => (
               <div key={group.key}>
                 {sidebarOpen && group.label ? (
-                  <div className="meta-text mb-2 px-3 font-medium uppercase tracking-wider">{group.label}</div>
+                  <div className="mb-2 px-3 text-xs font-medium uppercase tracking-wider text-slate-300">{group.label}</div>
                 ) : null}
                 <ul className="space-y-2">
                   {group.items.map(renderTopNavItem)}
@@ -267,28 +311,26 @@ export default function Sidebar() {
               </div>
             ))}
           </div>
-
-          {sidebarOpen && currentProject && isProjectPage && (
-            <div className="mt-6 rounded-xl border border-slate-700/50 bg-slate-800 p-3 [@media(max-height:820px)]:mt-4">
-              <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-300">{'\u5f53\u524d\u9879\u76ee'}</div>
-                <div className="truncate text-sm font-semibold text-white">{currentProject.name}</div>
-              <div className="mt-1 text-xs text-slate-500 [@media(max-height:820px)]:hidden">{currentProject.description || PROJECT_NAVIGATION_LABELS.projectHome}</div>
-              <Link
-                to="/company"
-                className="mt-3 inline-flex items-center gap-1 rounded-lg text-xs font-medium text-slate-300 outline-none transition-colors hover:text-white focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950 [@media(max-height:820px)]:hidden"
-              >
-                <ArrowLeft className="h-3.5 w-3.5" />
-                {'\u8fd4\u56de\u516c\u53f8\u9a71\u9a76\u8231'}
-              </Link>
-            </div>
-          )}
-
         </nav>
 
         <Separator className="shrink-0 border-slate-700/50" />
-        <div className="shrink-0 p-4">
+        <div className="shrink-0 space-y-3 p-4">
+          {sidebarOpen && currentProject && isProjectPage && (
+            <div className="rounded-xl border border-slate-700/50 bg-slate-800 p-3 [@media(max-height:820px)]:hidden">
+              <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-300">{'\u5f53\u524d\u9879\u76ee'}</div>
+              <div className="truncate text-sm font-semibold text-white">{projectDisplayName}</div>
+              <div className="mt-1 text-xs text-slate-300 [@media(max-height:820px)]:hidden">{projectDisplayDescription}</div>
+              <Link
+                to="/workspace"
+                className="mt-3 inline-flex items-center gap-1 rounded-lg text-xs font-medium text-slate-300 outline-none transition-colors hover:text-white focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950 [@media(max-height:820px)]:hidden"
+              >
+                <ArrowLeft className="h-3.5 w-3.5" />
+                返回工作台
+              </Link>
+            </div>
+          )}
           <Link
-            to="/company?create=1"
+            to="/workspace"
             className={cn(
               'flex items-center justify-center gap-2 rounded-xl bg-blue-600 text-white outline-none transition-all duration-200 hover:bg-[var(--brand-primary-hover)] hover:shadow-[var(--el-2)] focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950',
               sidebarOpen ? 'w-full px-3 py-3 text-sm font-medium' : 'p-3',

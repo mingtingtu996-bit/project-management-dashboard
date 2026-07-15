@@ -11,6 +11,31 @@ const __dirname = dirname(__filename)
 const repoRoot = join(__dirname, '..')
 const outputDir = join(repoRoot, '.tmp', 'full-app-test-env')
 
+function parseArgs(argv) {
+  const args = {
+    envFile: join(repoRoot, 'server', '.env'),
+    printConfig: false,
+  }
+
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index]
+    if (arg === '--env-file') {
+      const value = argv[index + 1]
+      if (!value) {
+        throw new Error('--env-file requires a path')
+      }
+      args.envFile = value
+      index += 1
+    } else if (arg === '--print-config') {
+      args.printConfig = true
+    }
+  }
+
+  return args
+}
+
+const args = parseArgs(process.argv.slice(2))
+
 function loadEnv(filePath) {
   const content = readFileSync(filePath, 'utf8')
   for (const line of content.split(/\r?\n/)) {
@@ -26,7 +51,7 @@ function loadEnv(filePath) {
   }
 }
 
-loadEnv(join(repoRoot, 'server', '.env'))
+loadEnv(args.envFile)
 
 const WEB_BASE = process.env.BASE_URL || 'http://127.0.0.1:5173'
 const API_BASE = process.env.API_BASE_URL || 'http://127.0.0.1:3001'
@@ -40,31 +65,42 @@ if (!SERVICE_URL || !SERVICE_KEY) {
   throw new Error('Missing SUPABASE_URL or SUPABASE_SERVICE_KEY')
 }
 
+if (args.printConfig) {
+  console.log(JSON.stringify({
+    envFile: args.envFile,
+    baseUrl: WEB_BASE,
+    apiBaseUrl: API_BASE,
+    supabaseUrlConfigured: Boolean(SERVICE_URL),
+    supabaseServiceKeyConfigured: Boolean(SERVICE_KEY),
+  }, null, 2))
+  process.exit(0)
+}
+
 const supabase = createClient(SERVICE_URL, SERVICE_KEY)
 
 const ACCOUNTS = {
   admin: {
     username: `fullapp_admin_${FIXTURE_DATE}`,
-    displayName: '全应用测试-公司管理员',
+    displayName: '全应用测试公司管理员',
     email: `fullapp_admin_${FIXTURE_DATE}@example.com`,
     globalRole: 'company_admin',
   },
   owner: {
     username: `fullapp_owner_${FIXTURE_DATE}`,
-    displayName: '全应用测试-项目负责人',
+    displayName: '全应用测试项目负责人',
     email: `fullapp_owner_${FIXTURE_DATE}@example.com`,
     globalRole: 'regular',
   },
   editor: {
     username: `fullapp_editor_${FIXTURE_DATE}`,
-    displayName: '全应用测试-编辑成员',
+    displayName: '全应用测编辑成员',
     email: `fullapp_editor_${FIXTURE_DATE}@example.com`,
     globalRole: 'regular',
   },
-  viewer: {
-    username: `fullapp_viewer_${FIXTURE_DATE}`,
-    displayName: '全应用测试-只读成员',
-    email: `fullapp_viewer_${FIXTURE_DATE}@example.com`,
+  outsider: {
+    username: `fullapp_outsider_${FIXTURE_DATE}`,
+    displayName: '全应用测同公司非项目成员',
+    email: `fullapp_outsider_${FIXTURE_DATE}@example.com`,
     globalRole: 'regular',
   },
 }
@@ -82,7 +118,7 @@ const PROJECTS = {
   },
   large: {
     name: `FULLAPP-LARGE-${FIXTURE_DATE}`,
-    description: '全应用测试大项目样本（1000+任务）',
+    description: '全应用测试大项目样本，1000+ 任务',
     status: '进行中',
   },
 }
@@ -137,10 +173,12 @@ async function apiRequest(pathname, { method = 'GET', token, body, allowFailure 
   })
 
   if (!allowFailure && (!response.ok || json?.success === false)) {
+    const detail = json?.error?.details || json?.details || json?.error?.code || json?.code
+    const baseMessage = json?.error?.message || json?.message || 'API request failed'
+    const detailText = typeof detail === 'string' ? detail : detail ? JSON.stringify(detail) : ''
+    const suffix = detailText ? ` (${detailText})` : ''
     throw new Error(
-      json?.error?.message
-      || json?.message
-      || `API ${method} ${pathname} failed with ${response.status}`,
+      `API ${method} ${pathname} failed with ${response.status}: ${baseMessage}${suffix}`,
     )
   }
 
@@ -150,11 +188,11 @@ async function apiRequest(pathname, { method = 'GET', token, body, allowFailure 
 async function ensureHealth() {
   const [{ response: web }, { response: api }] = await Promise.all([
     fetchJson(WEB_BASE),
-    fetchJson(`${API_BASE}/api/health`),
+    fetchJson(`${API_BASE}/api/readyz`),
   ])
 
   assert(web.ok, `Frontend unavailable: ${WEB_BASE}`)
-  assert(api.ok, `Backend unavailable: ${API_BASE}/api/health`)
+  assert(api.ok, `Backend unavailable: ${API_BASE}/api/readyz`)
 }
 
 async function login(username, password) {
@@ -242,6 +280,50 @@ async function ensureProject(ownerToken, projectSpec) {
   return data
 }
 
+async function ensureCompanyMembership(companyId, session, role) {
+  assert(companyId, `Project for ${session.user.username} is missing company_id`)
+
+  const existing = await supabase
+    .from('company_members')
+    .select('company_id, user_id, role, status')
+    .eq('company_id', companyId)
+    .eq('user_id', session.user.id)
+    .limit(1)
+    .maybeSingle()
+
+  if (existing.error) {
+    throw existing.error
+  }
+
+  if (existing.data) {
+    const update = await supabase
+      .from('company_members')
+      .update({ role, status: 'active' })
+      .eq('company_id', companyId)
+      .eq('user_id', session.user.id)
+
+    if (update.error) throw update.error
+  } else {
+    const insert = await supabase
+      .from('company_members')
+      .insert({
+        company_id: companyId,
+        user_id: session.user.id,
+        role,
+        status: 'active',
+      })
+
+    if (insert.error) throw insert.error
+  }
+
+  const userUpdate = await supabase
+    .from('users')
+    .update({ last_active_company_id: companyId })
+    .eq('id', session.user.id)
+
+  if (userUpdate.error) throw userUpdate.error
+}
+
 async function ensureParticipantUnit(projectId, unitName, unitType = '分包') {
   const { data, error } = await supabase
     .from('participant_units')
@@ -269,6 +351,37 @@ async function ensureParticipantUnit(projectId, unitName, unitType = '分包') {
   }
 
   return insertResult.data
+}
+
+async function ensureFixtureEngineeringObject(projectId, ownerToken, objectName) {
+  const existing = await supabase
+    .from('engineering_objects')
+    .select('id, object_name, object_type')
+    .eq('project_id', projectId)
+    .eq('object_name', objectName)
+    .limit(1)
+    .maybeSingle()
+
+  if (existing.error) throw existing.error
+  if (existing.data?.id) return existing.data
+
+  const { data } = await apiRequest('/api/engineering-objects', {
+    method: 'POST',
+    token: ownerToken,
+    body: {
+      projectId,
+      objectType: 'functional_area',
+      objectName,
+      parentId: null,
+      sortOrder: 1,
+      metadata: {
+        fixture: 'full-app-test-env',
+        scope: 'v1424-uiux',
+      },
+    },
+  })
+
+  return data
 }
 
 async function ensureMember(projectId, session, permissionLevel, ownerToken) {
@@ -322,9 +435,9 @@ async function createTask(ownerToken, projectId, input) {
       planned_start_date: input.startDate,
       planned_end_date: input.endDate,
       assignee_name: input.assigneeName ?? null,
-      assignee_unit: input.assigneeUnit ?? null,
       specialty_type: input.specialtyType ?? null,
       participant_unit_id: input.participantUnitId ?? null,
+      engineering_object_id: input.engineeringObjectId,
       is_milestone: input.isMilestone ?? false,
       milestone_level: input.milestoneLevel ?? null,
       is_critical: input.isCritical ?? false,
@@ -334,7 +447,7 @@ async function createTask(ownerToken, projectId, input) {
   return data
 }
 
-async function ensureStandardTasks(ownerToken, projectId, participantUnitId) {
+async function ensureStandardTasks(ownerToken, projectId, participantUnitId, engineeringObjectId) {
   const { data, error } = await supabase
     .from('tasks')
     .select('id, title, status, planned_start_date, planned_end_date')
@@ -345,14 +458,14 @@ async function ensureStandardTasks(ownerToken, projectId, participantUnitId) {
   if ((data?.length ?? 0) >= 8) return data
 
   const seedTasks = [
-    { title: '总平面方案确认', status: 'completed', progress: 100, startDate: '2026-04-01', endDate: '2026-04-05', assigneeName: '标准项目负责人', specialtyType: '设计', isCritical: true },
-    { title: '地下室结构施工', status: 'in_progress', progress: 55, startDate: '2026-04-06', endDate: '2026-04-28', assigneeUnit: '土建分包', specialtyType: '土建', participantUnitId, isCritical: true },
-    { title: '机电深化出图', status: 'in_progress', progress: 35, startDate: '2026-04-10', endDate: '2026-05-02', assigneeUnit: '机电分包', specialtyType: '机电', participantUnitId },
-    { title: '钢筋材料进场', status: 'todo', progress: 0, startDate: '2026-04-22', endDate: '2026-04-24', assigneeUnit: '机电分包', specialtyType: '材料', participantUnitId },
-    { title: '主体结构封顶', status: 'todo', progress: 0, startDate: '2026-05-03', endDate: '2026-06-15', assigneeName: '标准项目负责人', specialtyType: '土建', isMilestone: true, milestoneLevel: 1, isCritical: true },
-    { title: '幕墙样板确认', status: 'todo', progress: 0, startDate: '2026-05-10', endDate: '2026-05-18', assigneeUnit: '幕墙分包', specialtyType: '幕墙' },
-    { title: '精装样板间施工', status: 'todo', progress: 0, startDate: '2026-05-20', endDate: '2026-06-08', assigneeUnit: '精装分包', specialtyType: '装饰' },
-    { title: '专项验收准备', status: 'todo', progress: 0, startDate: '2026-06-01', endDate: '2026-06-20', assigneeName: '标准项目负责人', specialtyType: '验收' },
+    { title: '总平面方案确认', status: 'completed', progress: 100, startDate: '2026-04-01', endDate: '2026-04-05', assigneeName: '标准项目负责人', specialtyType: '设计', engineeringObjectId, isCritical: true },
+    { title: '地下室结构施工', status: 'in_progress', progress: 55, startDate: '2026-04-06', endDate: '2026-04-28', assigneeUnit: '土建分包', specialtyType: '土建', participantUnitId, engineeringObjectId, isCritical: true },
+    { title: '机电深化出图', status: 'in_progress', progress: 35, startDate: '2026-04-10', endDate: '2026-05-02', assigneeUnit: '机电分包', specialtyType: '机电', participantUnitId, engineeringObjectId },
+    { title: '钢筋材料进场', status: 'todo', progress: 0, startDate: '2026-04-22', endDate: '2026-04-24', assigneeUnit: '机电分包', specialtyType: '材料', participantUnitId, engineeringObjectId },
+    { title: '主体结构封顶', status: 'todo', progress: 0, startDate: '2026-05-03', endDate: '2026-06-15', assigneeName: '标准项目负责人', specialtyType: '土建', engineeringObjectId, isMilestone: true, milestoneLevel: 1, isCritical: true },
+    { title: '幕墙样板确认', status: 'todo', progress: 0, startDate: '2026-05-10', endDate: '2026-05-18', assigneeUnit: '幕墙分包', specialtyType: '幕墙', engineeringObjectId },
+    { title: '精装样板间施工', status: 'todo', progress: 0, startDate: '2026-05-20', endDate: '2026-06-08', assigneeUnit: '精装分包', specialtyType: '装饰', engineeringObjectId },
+    { title: '专项验收准备', status: 'todo', progress: 0, startDate: '2026-06-01', endDate: '2026-06-20', assigneeName: '标准项目负责人', specialtyType: '验收', engineeringObjectId },
   ]
 
   const created = []
@@ -365,12 +478,11 @@ async function ensureStandardTasks(ownerToken, projectId, participantUnitId) {
 async function ensureStandardRisks(projectId) {
   const existing = await supabase
     .from('risks')
-    .select('id')
+    .select('id, title')
     .eq('project_id', projectId)
-    .limit(1)
 
   if (existing.error) throw existing.error
-  if ((existing.data?.length ?? 0) > 0) return
+  const existingTitles = new Set((existing.data ?? []).map((row) => row.title))
 
   const rows = [
     {
@@ -395,9 +507,26 @@ async function ensureStandardRisks(projectId) {
       impact: 55,
       mitigation: '组织周例会复盘',
     },
+    {
+      id: randomUUID(),
+      project_id: projectId,
+      title: '标准项目-待人工关闭风险',
+      description: '用于风险保护弹窗测试的待人工确认关闭风险样本',
+      level: 'medium',
+      status: 'mitigating',
+      probability: 50,
+      impact: 60,
+      mitigation: '等待责任人确认关闭',
+      source_type: 'source_deleted',
+      pending_manual_close: true,
+      version: 1,
+    },
   ]
 
-  const { error } = await supabase.from('risks').insert(rows)
+  const missingRows = rows.filter((row) => !existingTitles.has(row.title))
+  if (missingRows.length === 0) return
+
+  const { error } = await supabase.from('risks').insert(missingRows)
   if (error) throw error
 }
 
@@ -495,23 +624,56 @@ async function ensureStandardAcceptance(ownerToken, projectId, taskId) {
 }
 
 async function ensureBaselineAndMonthly(ownerToken, projectId, tasks) {
-  const obstacleSnapshot = await supabase
-    .from('task_obstacles')
-    .select('id, status')
-    .eq('project_id', projectId)
+  const [conditionSnapshot, obstacleSnapshot] = await Promise.all([
+    supabase
+      .from('task_conditions')
+      .select('id, is_satisfied, status, satisfied_reason, satisfied_reason_note, satisfied_at, confirmed_at')
+      .eq('project_id', projectId),
+    supabase
+      .from('task_obstacles')
+      .select('id, status')
+      .eq('project_id', projectId),
+  ])
 
+  if (conditionSnapshot.error) throw conditionSnapshot.error
   if (obstacleSnapshot.error) throw obstacleSnapshot.error
+
+  const pendingConditions = (conditionSnapshot.data ?? []).filter((row) => {
+    if (row.is_satisfied !== null && row.is_satisfied !== undefined) {
+      return !Boolean(row.is_satisfied)
+    }
+    const status = String(row.status ?? '').trim().toLowerCase()
+    return !['completed', 'satisfied', 'confirmed', '已完成', '已满足', '已确认'].includes(status)
+  })
 
   const activeObstacles = (obstacleSnapshot.data ?? []).filter((row) => {
     const status = String(row.status ?? '').trim().toLowerCase()
-    return status && !['resolved', 'closed', '已解决'].includes(status)
+    return !['resolved', 'closed', '已解决'].includes(status)
   })
+
+  if (pendingConditions.length > 0) {
+    for (const condition of pendingConditions) {
+      const { error } = await supabase
+        .from('task_conditions')
+        .update({
+          is_satisfied: true,
+          status: 'satisfied',
+          satisfied_reason: condition.satisfied_reason ?? 'fixture_confirmed',
+          satisfied_reason_note: condition.satisfied_reason_note ?? 'Temporarily satisfied for full-app visual fixture preparation.',
+          satisfied_at: condition.satisfied_at ?? new Date().toISOString(),
+          confirmed_at: condition.confirmed_at ?? new Date().toISOString(),
+        })
+        .eq('id', condition.id)
+
+      if (error) throw error
+    }
+  }
 
   if (activeObstacles.length > 0) {
     for (const obstacle of activeObstacles) {
       const { error } = await supabase
         .from('task_obstacles')
-        .update({ status: '已解决' })
+        .update({ status: 'resolved' })
         .eq('id', obstacle.id)
 
       if (error) throw error
@@ -519,83 +681,104 @@ async function ensureBaselineAndMonthly(ownerToken, projectId, tasks) {
   }
 
   try {
-  const baselineExisting = await supabase
-    .from('task_baselines')
-    .select('id, version, status')
-    .eq('project_id', projectId)
-    .order('version', { ascending: false })
-    .limit(1)
+    const baselineExisting = await supabase
+      .from('task_baselines')
+      .select('id, version, status')
+      .eq('project_id', projectId)
+      .order('version', { ascending: false })
+      .limit(1)
 
-  if (baselineExisting.error) throw baselineExisting.error
-  let baseline = baselineExisting.data?.[0] ?? null
+    if (baselineExisting.error) throw baselineExisting.error
+    let baseline = baselineExisting.data?.[0] ?? null
 
-  if (!baseline) {
-    const created = await apiRequest('/api/task-baselines', {
-      method: 'POST',
-      token: ownerToken,
-      body: {
-        project_id: projectId,
-        title: '标准项目测试基线 V1',
-        items: tasks.map((task, index) => ({
-          source_task_id: task.id,
-          title: task.title,
-          planned_start_date: task.planned_start_date ?? task.start_date,
-          planned_end_date: task.planned_end_date ?? task.end_date,
-          sort_order: index,
-          mapping_status: 'mapped',
-          is_critical: Boolean(task.is_critical),
-          is_baseline_critical: Boolean(task.is_critical),
-        })),
-      },
-    })
-    baseline = created.data
-  }
+    if (!baseline) {
+      const created = await apiRequest('/api/task-baselines', {
+        method: 'POST',
+        token: ownerToken,
+        body: {
+          project_id: projectId,
+          title: '标准项目测试基线 V1',
+          items: tasks.map((task, index) => ({
+            source_task_id: task.id,
+            title: task.title,
+            planned_start_date: task.planned_start_date ?? task.start_date,
+            planned_end_date: task.planned_end_date ?? task.end_date,
+            sort_order: index,
+            mapping_status: 'mapped',
+            is_critical: Boolean(task.is_critical),
+            is_baseline_critical: Boolean(task.is_critical),
+          })),
+        },
+      })
+      baseline = created.data
+    }
 
-  if (baseline?.status === 'draft') {
-    await apiRequest(`/api/task-baselines/${baseline.id}/confirm`, {
-      method: 'POST',
-      token: ownerToken,
-      body: { version: baseline.version },
-    })
-  }
+    if (baseline?.status === 'draft') {
+      await apiRequest(`/api/task-baselines/${baseline.id}/confirm`, {
+        method: 'POST',
+        token: ownerToken,
+        body: { project_id: projectId, version: baseline.version },
+      })
+    }
 
-  const month = new Date().toISOString().slice(0, 7)
-  const monthlyExisting = await supabase
-    .from('monthly_plans')
-    .select('id, version, status, month')
-    .eq('project_id', projectId)
-    .eq('month', month)
-    .order('version', { ascending: false })
-    .limit(1)
+    const month = new Date().toISOString().slice(0, 7)
+    const monthlyExisting = await supabase
+      .from('monthly_plans')
+      .select('id, version, status, month')
+      .eq('project_id', projectId)
+      .eq('month', month)
+      .order('version', { ascending: false })
+      .limit(1)
 
-  if (monthlyExisting.error) throw monthlyExisting.error
-  let monthly = monthlyExisting.data?.[0] ?? null
+    if (monthlyExisting.error) throw monthlyExisting.error
+    let monthly = monthlyExisting.data?.[0] ?? null
 
-  if (!monthly) {
-    const created = await apiRequest('/api/monthly-plans', {
-      method: 'POST',
-      token: ownerToken,
-      body: {
-        project_id: projectId,
-        month,
-        title: `${month} 标准项目月计划`,
-      },
-    })
-    monthly = created.data
-  }
+    if (!monthly) {
+      const created = await apiRequest('/api/monthly-plans', {
+        method: 'POST',
+        token: ownerToken,
+        body: {
+          project_id: projectId,
+          month,
+          title: `${month} 标准项目月计划`,
+        },
+      })
+      monthly = created.data
+    }
 
-  if (monthly?.status === 'draft') {
-    await apiRequest(`/api/monthly-plans/${monthly.id}/confirm`, {
-      method: 'POST',
-      token: ownerToken,
-      body: {
-        version: monthly.version,
-        month,
-      },
-      allowFailure: true,
-    })
-  }
+    if (monthly?.status !== 'draft') {
+      const created = await apiRequest('/api/monthly-plans', {
+        method: 'POST',
+        token: ownerToken,
+        body: {
+          project_id: projectId,
+          month,
+          title: `${month} 标准项目月计划视觉验证草稿`,
+        },
+      })
+      monthly = created.data
+    }
+
+    assert(monthly?.status === 'draft', '当前月计划必须保留 draft 状态，用于 monthly-confirm-dialog 视觉验证')
   } finally {
+    if (pendingConditions.length > 0) {
+      for (const condition of pendingConditions) {
+        const { error } = await supabase
+          .from('task_conditions')
+          .update({
+            is_satisfied: condition.is_satisfied,
+            status: condition.status,
+            satisfied_reason: condition.satisfied_reason,
+            satisfied_reason_note: condition.satisfied_reason_note,
+            satisfied_at: condition.satisfied_at,
+            confirmed_at: condition.confirmed_at,
+          })
+          .eq('id', condition.id)
+
+        if (error) throw error
+      }
+    }
+
     if (activeObstacles.length > 0) {
       for (const obstacle of activeObstacles) {
         const { error } = await supabase
@@ -609,7 +792,7 @@ async function ensureBaselineAndMonthly(ownerToken, projectId, tasks) {
   }
 }
 
-async function ensureLargeProjectData(projectId, ownerUserId) {
+async function ensureLargeProjectData(projectId, ownerUserId, engineeringObjectId) {
   const taskCountResult = await supabase
     .from('tasks')
     .select('id', { count: 'exact', head: true })
@@ -643,6 +826,7 @@ async function ensureLargeProjectData(projectId, ownerUserId) {
       is_milestone: false,
       is_critical: index % 20 === 0,
       specialty_type: ['土建', '机电', '装饰', '幕墙'][index % 4],
+      engineering_object_id: engineeringObjectId,
       assignee_name: ['大项目负责人', '工程一部', '工程二部'][index % 3],
       created_by: ownerUserId,
       sort_order: index,
@@ -683,7 +867,7 @@ async function ensureLargeProjectData(projectId, ownerUserId) {
 }
 
 async function runApiSmoke() {
-  const commandUrl = `${API_BASE}/api/health`
+  const commandUrl = `${API_BASE}/api/readyz`
   const { response } = await fetchJson(commandUrl)
   assert(response.ok, 'API smoke failed after preparing environment')
 }
@@ -691,39 +875,51 @@ async function runApiSmoke() {
 async function main() {
   await ensureDir(outputDir)
   await ensureHealth()
+  const warnings = []
 
   log('accounts', 'ensuring login users')
   const adminSession = await ensureAccount(ACCOUNTS.admin)
   const ownerSession = await ensureAccount(ACCOUNTS.owner)
   const editorSession = await ensureAccount(ACCOUNTS.editor)
-  const viewerSession = await ensureAccount(ACCOUNTS.viewer)
+  const outsiderSession = await ensureAccount(ACCOUNTS.outsider)
 
   await setGlobalRole(adminSession.user.id, ACCOUNTS.admin.globalRole)
   await setGlobalRole(ownerSession.user.id, ACCOUNTS.owner.globalRole)
   await setGlobalRole(editorSession.user.id, ACCOUNTS.editor.globalRole)
-  await setGlobalRole(viewerSession.user.id, ACCOUNTS.viewer.globalRole)
+  await setGlobalRole(outsiderSession.user.id, ACCOUNTS.outsider.globalRole)
 
   log('projects', 'ensuring empty / standard / large fixtures')
   const emptyProject = await ensureProject(ownerSession.token, PROJECTS.empty)
   const standardProject = await ensureProject(ownerSession.token, PROJECTS.standard)
   const largeProject = await ensureProject(ownerSession.token, PROJECTS.large)
 
+  await ensureCompanyMembership(standardProject.company_id, adminSession, 'company_admin')
+  await ensureCompanyMembership(standardProject.company_id, ownerSession, 'regular')
+  await ensureCompanyMembership(standardProject.company_id, editorSession, 'regular')
+  await ensureCompanyMembership(standardProject.company_id, outsiderSession, 'regular')
+
   await ensureMember(standardProject.id, editorSession, 'editor', ownerSession.token)
-  await ensureMember(standardProject.id, viewerSession, 'viewer', ownerSession.token)
   await ensureMember(largeProject.id, editorSession, 'editor', ownerSession.token)
-  await ensureMember(largeProject.id, viewerSession, 'viewer', ownerSession.token)
 
   log('standard', 'seeding standard project feature data')
-  const participantUnit = await ensureParticipantUnit(standardProject.id, '全应用测试-机电分包')
-  const standardTasks = await ensureStandardTasks(ownerSession.token, standardProject.id, participantUnit.id)
+  const participantUnit = await ensureParticipantUnit(standardProject.id, '全应用测机电分包')
+  const standardEngineeringObject = await ensureFixtureEngineeringObject(standardProject.id, ownerSession.token, '全应用测试标准施工面')
+  const standardTasks = await ensureStandardTasks(ownerSession.token, standardProject.id, participantUnit.id, standardEngineeringObject.id)
   await ensureStandardRisks(standardProject.id)
   await ensureStandardMaterials(ownerSession.token, standardProject.id, participantUnit.id)
   await ensureStandardObstacle(ownerSession.token, standardProject.id, standardTasks[1]?.id ?? standardTasks[0]?.id)
   await ensureStandardAcceptance(ownerSession.token, standardProject.id, standardTasks[0]?.id)
-  await ensureBaselineAndMonthly(ownerSession.token, standardProject.id, standardTasks)
+  try {
+    await ensureBaselineAndMonthly(ownerSession.token, standardProject.id, standardTasks)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    warnings.push({ step: 'baseline-and-monthly', message })
+    log('warning', `baseline-and-monthly fixture incomplete: ${message}`)
+  }
 
   log('large', 'seeding 1000+ task fixture')
-  const largeTaskCount = await ensureLargeProjectData(largeProject.id, ownerSession.user.id)
+  const largeEngineeringObject = await ensureFixtureEngineeringObject(largeProject.id, ownerSession.token, '全应用测试大项目施工面')
+  const largeTaskCount = await ensureLargeProjectData(largeProject.id, ownerSession.user.id, largeEngineeringObject.id)
 
   await runApiSmoke()
 
@@ -747,10 +943,10 @@ async function main() {
         password: FIXTURE_PASSWORD,
         projectRole: 'editor',
       },
-      viewer: {
-        username: ACCOUNTS.viewer.username,
+      outsider: {
+        username: ACCOUNTS.outsider.username,
         password: FIXTURE_PASSWORD,
-        projectRole: 'viewer',
+        projectRole: 'none',
       },
     },
     projects: {
@@ -769,10 +965,11 @@ async function main() {
       },
     },
     notes: [
-      'standard 项目已补 owner/editor/viewer 三类成员',
-      'standard 项目已包含任务、风险、材料、阻碍、验收、基线、月计划样本',
+      'standard 项目已补 owner/editor 项目成员；outsider 仅加入公司，不具备项目成员身份',
+      'standard 项目已包含任务、风险、材料、阻碍、验收样本；基线/月计划 fixture 以 warnings 字段为准',
       'large 项目已补 1000+ 任务，用于性能与列表极限验证',
     ],
+    warnings,
   }
 
   const manifestPath = join(outputDir, 'manifest.json')

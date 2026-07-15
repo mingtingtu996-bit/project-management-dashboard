@@ -1,4 +1,4 @@
-import { fileURLToPath } from 'node:url'
+﻿import { fileURLToPath } from 'node:url'
 
 const SUMMARY_PATH = '/api/performance-reports/summary'
 
@@ -9,8 +9,8 @@ export function buildSummaryUrl(input) {
   }
 
   const url = new URL(text)
-  if (url.pathname.endsWith('/api/health')) {
-    url.pathname = url.pathname.slice(0, -'/api/health'.length) + SUMMARY_PATH
+  if (url.pathname.endsWith('/api/readyz')) {
+    url.pathname = url.pathname.slice(0, -'/api/readyz'.length) + SUMMARY_PATH
     url.search = ''
     url.hash = ''
     return url.toString()

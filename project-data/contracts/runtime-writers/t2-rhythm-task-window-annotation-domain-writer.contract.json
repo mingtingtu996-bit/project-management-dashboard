@@ -1,0 +1,33 @@
+{
+  "schemaVersion": "workbuddy-runtime-writer-contract/v1",
+  "writerId": "t2_rhythm_task_window_annotation_domain_writer",
+  "mutationBoundary": "contract_only_no_db_mutation_no_runtime_write",
+  "allowedMode": "manual_review_release_handoff_required",
+  "requiresUnlock": true,
+  "mayWriteBusinessFacts": true,
+  "mayWriteRuntimeAssets": true,
+  "productionAllowed": false,
+  "allowedTables": [
+    "tasks",
+    "runtime_publication_tables"
+  ],
+  "forbiddenTables": [
+    "task_baselines",
+    "monthly_plans",
+    "monthly_plan_items",
+    "task_dependencies",
+    "duration_experience_samples",
+    "actual_duration_outcomes",
+    "critical_path",
+    "production_seed_rows"
+  ],
+  "requiredEvidence": [
+    "manual_review_approval",
+    "release_exit_handoff",
+    "release_record_target",
+    "rollback_target",
+    "consumer_verification_refs",
+    "impact_monitoring_refs",
+    "rollback_writer_refs"
+  ]
+}

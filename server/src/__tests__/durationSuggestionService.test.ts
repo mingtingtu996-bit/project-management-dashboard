@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => {
@@ -7,16 +10,20 @@ const mocks = vi.hoisted(() => {
     projectsData: [] as any[],
     taskRows: [] as any[],
     coldStartBaselinesData: [] as any[],
+    insertCalls: [] as Array<{ table: string; row: Record<string, unknown> }>,
     currentFilters: [] as Array<{ op: 'eq' | 'is'; key: string; value: unknown }>,
+    queryFilters: [] as Array<{ table: string; op: 'eq' | 'is'; key: string; value: unknown }>,
   }
   const query: any = {
     select: vi.fn(() => query),
     eq: vi.fn((key: string, value: unknown) => {
       state.currentFilters.push({ op: 'eq', key, value })
+      state.queryFilters.push({ table: currentTable, op: 'eq', key, value })
       return query
     }),
     is: vi.fn((key: string, value: unknown) => {
       state.currentFilters.push({ op: 'is', key, value })
+      state.queryFilters.push({ table: currentTable, op: 'is', key, value })
       return query
     }),
     in: vi.fn(() => query),
@@ -27,6 +34,10 @@ const mocks = vi.hoisted(() => {
         : null,
       error: null,
     })),
+    insert: vi.fn(async (row: Record<string, unknown>) => {
+      state.insertCalls.push({ table: currentTable, row })
+      return { data: [row], error: null }
+    }),
     then: vi.fn((resolve: (value: unknown) => unknown) => Promise.resolve({
       data: currentTable === 'engineering_objects'
         ? state.engineeringObjectsData
@@ -48,14 +59,48 @@ const mocks = vi.hoisted(() => {
     }),
     buildDurationContext: vi.fn(),
     expandTitleWeakStandardWorkSearchTextFromResolver: vi.fn(async (text: string) => text),
+    describeDurationContributionModeFromResolver: vi.fn((mode: string) => {
+      const labels: Record<string, string> = {
+        embedded_check: '内嵌检查项，不单独承载施工工期',
+        quality_gate: '质量门禁项，不按普通施工工期排期',
+        external_wait: '外部等待项，等待周期由约束或验收规则处理',
+        record_only: '资料记录项，不独立贡献计划工期',
+        handover_marker: '移交节点项，作为节点或条件而非普通工期',
+        duration_bearing: '施工承载工序，参与参考工期计算',
+      }
+      return labels[mode] ?? labels.duration_bearing
+    }),
+    inferTitleWeakScaleSignalFromResolver: vi.fn(async (text: string) => {
+      if (/1\s*#.*3\s*#/.test(text)) {
+        return { factor: 1.15, reason: '标题显示覆盖约 3 栋楼', source: 'title', confidence: 'low', signals: ['buildingRange=3'] }
+      }
+      return { factor: 1, reason: null, source: 'title', confidence: 'low', signals: [] }
+    }),
     inferTitleWeakStandardWorkCodesFromResolver: vi.fn(async () => []),
+    isDurationBearingContributionModeFromResolver: vi.fn((value: unknown) => {
+      const normalized = String(value ?? '').trim().toLowerCase()
+      return !normalized || normalized === 'duration_bearing'
+    }),
+    resolveDurationContributionModeFromResolver: vi.fn((value: unknown) => {
+      const normalized = String(value ?? '').trim().toLowerCase()
+      return [
+        'duration_bearing',
+        'embedded_check',
+        'quality_gate',
+        'external_wait',
+        'record_only',
+        'handover_marker',
+      ].includes(normalized) ? normalized : null
+    }),
     resolveStandardWorkDurationSeed: vi.fn(),
-    buildProjectProgressVelocityLearning: vi.fn(),
+    loadPublishedProgressVelocityRuntime: vi.fn(),
     buildProjectHealthDeviationSummary: vi.fn(),
     getProjectCompanyId: vi.fn(),
     recordDurationAccuracyPrediction: vi.fn(),
     loadAlgorithmAssetLearnableParameterRuntimeValue: vi.fn(),
+    readPlanningReplayCalibrationReadback: vi.fn(),
     rawQuery: vi.fn(async () => ({ rows: [] })),
+    getTask: vi.fn(),
   }
 })
 
@@ -67,6 +112,7 @@ vi.mock('../services/dbService.js', () => ({
   supabase: {
     from: mocks.from,
   },
+  getTask: mocks.getTask,
 }))
 
 vi.mock('../auth/access.js', () => ({
@@ -91,12 +137,16 @@ vi.mock('../services/durationContextService.js', async () => {
 
 vi.mock('../services/algorithmSeedResolver.js', () => ({
   expandTitleWeakStandardWorkSearchTextFromResolver: mocks.expandTitleWeakStandardWorkSearchTextFromResolver,
+  describeDurationContributionModeFromResolver: mocks.describeDurationContributionModeFromResolver,
+  inferTitleWeakScaleSignalFromResolver: mocks.inferTitleWeakScaleSignalFromResolver,
   inferTitleWeakStandardWorkCodesFromResolver: mocks.inferTitleWeakStandardWorkCodesFromResolver,
+  isDurationBearingContributionModeFromResolver: mocks.isDurationBearingContributionModeFromResolver,
+  resolveDurationContributionModeFromResolver: mocks.resolveDurationContributionModeFromResolver,
   resolveStandardWorkDurationSeed: mocks.resolveStandardWorkDurationSeed,
 }))
 
-vi.mock('../services/progressVelocityLearningService.js', () => ({
-  buildProjectProgressVelocityLearning: mocks.buildProjectProgressVelocityLearning,
+vi.mock('../services/progressVelocityRuntimePublicationService.js', () => ({
+  loadPublishedProgressVelocityRuntime: mocks.loadPublishedProgressVelocityRuntime,
 }))
 
 vi.mock('../services/projectHealthDeviationSummaryService.js', () => ({
@@ -109,6 +159,10 @@ vi.mock('../services/durationAlgorithmAccuracyService.js', () => ({
 
 vi.mock('../services/algorithmAssetLearnableParameterRuntimeConsumptionService.js', () => ({
   loadAlgorithmAssetLearnableParameterRuntimeValue: mocks.loadAlgorithmAssetLearnableParameterRuntimeValue,
+}))
+
+vi.mock('../services/planningReplayCalibrationService.js', () => ({
+  readPlanningReplayCalibrationReadback: mocks.readPlanningReplayCalibrationReadback,
 }))
 
 const {
@@ -174,6 +228,8 @@ function isSystemBenchmarkScope() {
     && !mocks.state.currentFilters.some((filter) => filter.key === 'project_id')
 }
 
+const serviceSourcePath = fileURLToPath(new URL('../services/durationSuggestionService.ts', import.meta.url))
+
 describe('durationSuggestionService', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -188,11 +244,19 @@ describe('durationSuggestionService', () => {
     mocks.state.projectsData = []
     mocks.state.taskRows = []
     mocks.state.coldStartBaselinesData = []
+    mocks.state.insertCalls = []
+    mocks.state.queryFilters = []
     mocks.buildDurationContext.mockResolvedValue(emptyContext())
     mocks.expandTitleWeakStandardWorkSearchTextFromResolver.mockImplementation(async (text: string) => text)
+    mocks.inferTitleWeakScaleSignalFromResolver.mockImplementation(async (text: string) => {
+      if (/1\s*#.*3\s*#/.test(text)) {
+        return { factor: 1.15, reason: '标题显示覆盖约 3 栋楼', source: 'title', confidence: 'low', signals: ['buildingRange=3'] }
+      }
+      return { factor: 1, reason: null, source: 'title', confidence: 'low', signals: [] }
+    })
     mocks.inferTitleWeakStandardWorkCodesFromResolver.mockResolvedValue([])
     mocks.resolveStandardWorkDurationSeed.mockResolvedValue(null)
-    mocks.buildProjectProgressVelocityLearning.mockResolvedValue(null)
+    mocks.loadPublishedProgressVelocityRuntime.mockResolvedValue(null)
     mocks.buildProjectHealthDeviationSummary.mockResolvedValue({
       projectId: 'project-1',
       healthScore: null,
@@ -219,7 +283,17 @@ describe('durationSuggestionService', () => {
       reasons: ['runtime_parameter_publication_not_found'],
       writesSeedRuntimeDirectly: false,
     })
+    mocks.readPlanningReplayCalibrationReadback.mockResolvedValue(null)
     mocks.getProjectCompanyId.mockResolvedValue(null)
+    mocks.getTask.mockResolvedValue(null)
+  })
+
+  it('keeps runtime consumer evidence production persistence on a fixed SQL executor', () => {
+    const source = readFileSync(serviceSourcePath, 'utf8')
+
+    expect(source).not.toContain('buildDurationRuntimeConsumerObservationQueryExec')
+    expect(source).not.toContain("import { query as rawQuery } from '../database.js'")
+    expect(source).toContain('createDurationRuntimeConsumerObservationQueryExec')
   })
 
   it('returns unavailable instead of a default 7-day guess when core classification is missing', async () => {
@@ -439,6 +513,267 @@ describe('durationSuggestionService', () => {
     }))
   })
 
+  it('scopes persisted task context reads to the requested project', async () => {
+    await getTaskDurationSuggestion({
+      projectId: 'project-1',
+      taskId: 'task-1',
+      standardWorkCode: '02-01-03-P04',
+      taskTitle: 'main structure package',
+      wbsNodeType: 'process',
+    })
+
+    expect(mocks.state.queryFilters).toContainEqual({
+      table: 'tasks',
+      op: 'eq',
+      key: 'project_id',
+      value: 'project-1',
+    })
+  })
+
+  it('hydrates persisted task identity through the environment-aware task reader when REST has no row', async () => {
+    mocks.getTask.mockResolvedValue({
+      id: 'task-1',
+      project_id: 'project-1',
+      title: 'active standard task',
+      status: 'in_progress',
+      progress: 30,
+      wbs_node_type: 'process',
+      standard_work_code: '02-01-03-P04',
+      standard_work_name: 'main structure',
+    })
+    mocks.resolveStandardWorkDurationSeed.mockResolvedValue({
+      __stableCode: 'process_duration:02-01-03-P04',
+      __resolverSource: 'ts_seed_fallback',
+      __seedVersion: 'v1.4.22-standard-duration-seed',
+      stableCode: 'process_duration:02-01-03-P04',
+      standardWorkCodes: ['02-01-03-P04'],
+      defaultDaysP50: 8,
+      defaultDaysP80: 12,
+      fixedDays: 1,
+      variableDays: 7,
+      confidence: 'medium',
+      benchmarkBasis: 'Main structure baseline.',
+    })
+
+    const suggestion = await getTaskDurationSuggestion({
+      projectId: 'project-1',
+      taskId: 'task-1',
+      suggestionPurpose: 'new_task_reference',
+      runtimeEvidenceMode: 'no_write',
+    })
+
+    expect(mocks.getTask).toHaveBeenCalledWith('task-1')
+    expect(mocks.resolveStandardWorkDurationSeed).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        standardWorkCode: '02-01-03-P04',
+      }),
+    )
+    expect(suggestion.durationCalibrationSource).toBe('standard_work_duration_seed')
+    expect(suggestion.recommendedDurationDays).toBeGreaterThan(0)
+  })
+
+  it('keeps baseline impact recalculation no-write by suppressing prediction and runtime evidence writes', async () => {
+    const { calls, queryExec } = createRecordingQueryExec()
+    mocks.resolveStandardWorkDurationSeed.mockResolvedValue({
+      __stableCode: 'plastering_wall_ceiling',
+      __resolverSource: 'ts_seed_fallback',
+      __seedVersion: 'v1.4.22-standard-duration-seed',
+      stableCode: 'plastering_wall_ceiling',
+      standardWorkCodes: ['plastering_wall_ceiling'],
+      defaultDaysP50: 8,
+      defaultDaysP80: 14,
+      fixedDays: 1,
+      variableDays: 7,
+      confidence: 'medium',
+      benchmarkBasis: 'Plastering default per work face.',
+    })
+
+    const suggestion = await getTaskDurationSuggestion({
+      projectId: 'project-1',
+      taskId: 'task-1',
+      standardWorkCode: 'plastering_wall_ceiling',
+      taskTitle: 'plastering',
+      wbsNodeType: 'process',
+      runtimeEvidenceMode: 'no_write',
+      runtimeConsumerObservationQueryExec: queryExec,
+    })
+
+    expect(suggestion.recommendedDurationDays).toBe(10)
+    expect(mocks.recordDurationAccuracyPrediction).not.toHaveBeenCalled()
+    expect(calls).toHaveLength(0)
+  })
+
+  it('records construction organization plan-network publication lineage on E1 reference prediction events', async () => {
+    mocks.resolveStandardWorkDurationSeed.mockResolvedValue({
+      __stableCode: 'plastering_wall_ceiling',
+      __resolverSource: 'ts_seed_fallback',
+      __seedVersion: 'v1.4.22-standard-duration-seed',
+      stableCode: 'plastering_wall_ceiling',
+      standardWorkCodes: ['plastering_wall_ceiling'],
+      defaultDaysP50: 8,
+      defaultDaysP80: 14,
+      fixedDays: 1,
+      variableDays: 7,
+      confidence: 'medium',
+      benchmarkBasis: 'Plastering default per work face.',
+    })
+
+    await getTaskDurationSuggestion({
+      projectId: 'project-1',
+      taskId: 'task-1',
+      standardWorkCode: 'plastering_wall_ceiling',
+      taskTitle: '外墙抹灰',
+      wbsNodeType: 'process',
+      templateNodeId: 'template-node-1',
+      projectGenerationFacts: {
+        businessType: 'residential',
+        constructionOrganizationScenario: {
+          source: 'construction_organization_scenario_selector',
+          planNetworkPublication: {
+            assetKey: 'construction_organization_plan_network',
+            publicationKey: 'construction-org-plan-network-release:project-1',
+          },
+        },
+      },
+    })
+
+    expect(mocks.recordDurationAccuracyPrediction).toHaveBeenCalledWith(expect.objectContaining({
+      engineCode: 'standard_duration_reference',
+      predictionContext: expect.objectContaining({
+        assetKey: 'construction_organization_plan_network',
+        publicationKey: 'construction-org-plan-network-release:project-1',
+        runtimePublicationKey: 'construction-org-plan-network-release:project-1',
+        constructionOrganizationPlanNetwork: expect.objectContaining({
+          assetKey: 'construction_organization_plan_network',
+          publicationKey: 'construction-org-plan-network-release:project-1',
+        }),
+      }),
+      networkLineage: expect.objectContaining({
+        assetKey: 'construction_organization_plan_network',
+        publicationKey: 'construction-org-plan-network-release:project-1',
+      }),
+    }))
+  })
+
+  it('records project-metadata construction organization lineage for ordinary task-scoped E1 references', async () => {
+    mocks.state.projectsData = [{
+      id: 'project-1',
+      metadata: {
+        projectGenerationFacts: {
+          businessType: 'residential',
+          structureTypeCode: 'shear_wall',
+        },
+        constructionOrganizationScenario: {
+          source: 'construction_organization_scenario_selector',
+          planNetworkPublication: {
+            assetKey: 'construction_organization_plan_network',
+            publicationKey: 'construction-org-plan-network-release:project-1',
+          },
+        },
+      },
+    }]
+    mocks.resolveStandardWorkDurationSeed.mockResolvedValue({
+      __stableCode: 'plastering_wall_ceiling',
+      __resolverSource: 'ts_seed_fallback',
+      __seedVersion: 'v1.4.22-standard-duration-seed',
+      stableCode: 'plastering_wall_ceiling',
+      standardWorkCodes: ['plastering_wall_ceiling'],
+      defaultDaysP50: 8,
+      defaultDaysP80: 14,
+      fixedDays: 1,
+      variableDays: 7,
+      confidence: 'medium',
+      benchmarkBasis: 'Plastering default per work face.',
+    })
+
+    await getTaskDurationSuggestion({
+      projectId: 'project-1',
+      taskId: 'task-1',
+      standardWorkCode: 'plastering_wall_ceiling',
+      taskTitle: '外墙抹灰',
+      wbsNodeType: 'process',
+      templateNodeId: 'template-node-1',
+    })
+
+    expect(mocks.recordDurationAccuracyPrediction).toHaveBeenCalledWith(expect.objectContaining({
+      engineCode: 'standard_duration_reference',
+      predictionContext: expect.objectContaining({
+        assetKey: 'construction_organization_plan_network',
+        publicationKey: 'construction-org-plan-network-release:project-1',
+        runtimePublicationKey: 'construction-org-plan-network-release:project-1',
+        businessType: 'residential',
+      }),
+      networkLineage: expect.objectContaining({
+        assetKey: 'construction_organization_plan_network',
+        publicationKey: 'construction-org-plan-network-release:project-1',
+        businessType: 'residential',
+      }),
+    }))
+  })
+
+  it('applies planning replay calibration readback to E1 reference durations as candidate-only overlay', async () => {
+    mocks.resolveStandardWorkDurationSeed.mockResolvedValue({
+      __stableCode: 'plastering_wall_ceiling',
+      stableCode: 'plastering_wall_ceiling',
+      standardWorkCodes: ['plastering_wall_ceiling'],
+      defaultDaysP50: 8,
+      defaultDaysP80: 12,
+      fixedDays: 1,
+      variableDays: 7,
+      confidence: 'medium',
+      benchmarkBasis: 'Plastering default per work face.',
+    })
+    mocks.readPlanningReplayCalibrationReadback.mockResolvedValue({
+      status: 'ready',
+      coarseProcessKey: 'plastering_wall_ceiling',
+      evidenceRefs: ['planning_replay_calibration_events:event-1'],
+      writePolicy: 'candidate_overlay_only_no_fact_mutation',
+      acceptedSampleCount: 18,
+      originalMae: 5.2,
+      replayMae: 3.7,
+      maeImprovement: 1.5,
+      overcompensationRate: 0.08,
+      e1DurationAdjustmentDays: 3,
+      e2ResidualCorrectionDays: null,
+      capacityBudgetFactor: null,
+      priorityWeightAdjustment: null,
+      e2TargetDiscountFactor: null,
+      rejectedEvidence: [],
+    })
+
+    const suggestion = await getTaskDurationSuggestion({
+      suggestionPurpose: 'new_task_reference',
+      projectId: 'project-1',
+      taskId: 'task-1',
+      standardWorkCode: 'plastering_wall_ceiling',
+      standardWorkName: '墙顶抹灰',
+      taskTitle: '墙顶抹灰',
+      wbsNodeType: 'process',
+    })
+
+    expect(mocks.readPlanningReplayCalibrationReadback).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: 'project-1',
+      standardWorkCode: 'plastering_wall_ceiling',
+      standardWorkName: '墙顶抹灰',
+    }))
+    expect(suggestion.recommendedDurationDays).toBe(13)
+    expect(suggestion.conservativeDurationDays).toBe(16)
+    expect(suggestion.forecastSource).toContain('planning_replay_calibration')
+    expect(suggestion.factorAvailability?.planning_replay_calibration_readback).toBe(true)
+    expect(suggestion.businessReasonParams).toMatchObject({
+      planningReplayCalibrationAdjustmentDays: 3,
+      planningReplayCalibrationWritePolicy: 'candidate_overlay_only_no_fact_mutation',
+      planningReplayCalibrationEvidenceRefs: ['planning_replay_calibration_events:event-1'],
+    })
+    expect((suggestion.factorSummary?.calculationContext as any)?.planning_replay_calibration_readback).toMatchObject({
+      applied: true,
+      e1DurationAdjustmentDays: 3,
+      writePolicy: 'candidate_overlay_only_no_fact_mutation',
+      acceptedSampleCount: 18,
+    })
+  })
+
   it('defaults undeclared fixed days to a preparation slice before scale proxy', async () => {
     mocks.resolveStandardWorkDurationSeed.mockResolvedValue({
       __stableCode: 'large_area_finishing',
@@ -632,7 +967,7 @@ describe('durationSuggestionService', () => {
       durationContributionMode: 'duration_bearing',
     })
 
-    const suggestion = await getTaskDurationSuggestion({ taskId: 'task-1' })
+    const suggestion = await getTaskDurationSuggestion({ projectId: 'project-1', taskId: 'task-1' })
 
     expect(suggestion.recommendedDurationDays).toBe(5)
     expect(suggestion.businessReasonCodes).toEqual(expect.arrayContaining(['STANDARD_SEED_REFERENCE']))
@@ -686,7 +1021,7 @@ describe('durationSuggestionService', () => {
       durationContributionMode: 'duration_bearing',
     })
 
-    const suggestion = await getTaskDurationSuggestion({ taskId: 'task-1' })
+    const suggestion = await getTaskDurationSuggestion({ projectId: 'project-1', taskId: 'task-1' })
 
     expect(suggestion.businessReasonCode).toBe('PACKAGE_CHILD_DURATION_WINDOW')
     expect(suggestion.businessReasonParams).toEqual(expect.objectContaining({
@@ -739,7 +1074,7 @@ describe('durationSuggestionService', () => {
       durationContributionMode: 'duration_bearing',
     })
 
-    const suggestion = await getTaskDurationSuggestion({ taskId: 'task-1' })
+    const suggestion = await getTaskDurationSuggestion({ projectId: 'project-1', taskId: 'task-1' })
 
     expect(suggestion.recommendedDurationDays).toBe(5)
     expect(suggestion.businessReasonCode).not.toBe('PACKAGE_CHILD_DURATION_WINDOW')
@@ -799,6 +1134,813 @@ describe('durationSuggestionService', () => {
       package_child_duration_window: true,
       parent_package_window_plan_truth: true,
       package_child_rhythm_window: true,
+    }))
+  })
+
+  it('surfaces T2 rhythm schedule candidate packages as read-only explanation context without overriding E1 days', async () => {
+    mocks.state.projectsData = [{
+      id: 'project-1',
+      metadata: {
+        projectGenerationFacts: {
+          businessType: 'residential',
+          structureTypeCode: 'shear_wall',
+          buildingCount: 2,
+        },
+        t2RhythmScheduleCandidatePackage: {
+          source: 't2_division_rhythm_schedule_candidate_package',
+          tier: 'T2',
+          status: 'schedulable_candidate',
+          selectedTemplateIds: ['t2-residential-standard-floor-structure-rhythm-v1'],
+          templateCount: 1,
+          durationBearingWindowCount: 4,
+          candidateDependencyEdgeCount: 6,
+          hardGateCount: 2,
+          durationContextCandidates: [{
+            sourceTemplateId: 't2-residential-standard-floor-structure-rhythm-v1',
+            windowCode: 'wall_column_rebar',
+            recommendedDurationDays: 2,
+            planReferenceDays: 2,
+            planDurationTruthSource: 'parent_package_rhythm_window',
+            tier: 'T2',
+            governanceStatus: 'candidate_seeded',
+            sourceType: 'system_standard_library',
+            autoApply: false,
+          }],
+          dependencyCandidates: [{
+            fromWindowCode: 'wall_column_rebar',
+            toWindowCode: 'wall_column_formwork',
+            relation: 'FS',
+            lagDays: 0,
+            sourceTemplateId: 't2-residential-standard-floor-structure-rhythm-v1',
+            tier: 'T2',
+            autoApply: false,
+          }],
+          hardGates: [{
+            gateCode: 'floor_handover_checked',
+            description: 'Floor handover checked.',
+            requiredBeforeWindowCode: 'wall_column_rebar',
+            sourceTemplateId: 't2-residential-standard-floor-structure-rhythm-v1',
+            tier: 'T2',
+            autoApply: false,
+          }],
+          scheduleTrustSummaries: [{
+            sourceTemplateId: 't2-residential-standard-floor-structure-rhythm-v1',
+            criticalPathRoles: ['wall_column_rebar', 'wall_column_formwork'],
+            durationDrivers: ['aluminum_formwork', 'workface_unit:floor', 'overlap_policy:sequential_with_controlled_overlap'],
+            workfaceReadinessSignals: ['hasOrderedFloors', 'hasBasementHandover'],
+            assemblyRiskTags: ['tower_first_without_basement_handover', 'scope_dimension:floor'],
+            replayAdmission: {
+              minimumComparableWorkfaceWindows: 12,
+              p80CaptureThreshold: 0.72,
+              maxMedianAbsoluteErrorDays: 2,
+            },
+          }],
+          compatibility: {
+            compatible: true,
+            status: 'compatible_candidate',
+            conflicts: [],
+            templateIds: ['t2-residential-standard-floor-structure-rhythm-v1'],
+            priorityAdjudication: {
+              selectedTemplateId: 't2-residential-standard-floor-structure-rhythm-v1',
+              selectedBy: 'project_experience',
+              priorityRank: ['project_experience', 'system_standard_library', 'external_knowledge_candidate'],
+              assemblyFeasibilityRequired: true,
+              priorityOverrideBlocked: false,
+            },
+          },
+          scheduleTrustPolicy: {
+            autoApply: false,
+            writesTaskDependencies: false,
+            writesPlanDates: false,
+            writesSeed: false,
+            writesBaseline: false,
+            requiresAssemblyCompatibility: true,
+            requiresL5Publication: true,
+            downstreamConsumer: 'DurationInputAssembler_or_C19_13_phase1_candidate_network',
+          },
+        },
+      },
+    }]
+    mocks.resolveStandardWorkDurationSeed.mockResolvedValue({
+      __stableCode: 'standard_floor_rebar_binding',
+      stableCode: 'standard_floor_rebar_binding',
+      standardWorkCodes: ['03-02-01-P02'],
+      defaultDaysP50: 7,
+      defaultDaysP80: 10,
+      fixedDays: 1,
+      variableDays: 6,
+      confidence: 'medium',
+      benchmarkBasis: 'Standard floor rebar binding baseline.',
+      durationContributionMode: 'duration_bearing',
+    })
+
+    const suggestion = await getTaskDurationSuggestion({
+      suggestionPurpose: 'execution_reference',
+      projectId: 'project-1',
+      standardWorkCode: '03-02-01-P02',
+      taskTitle: 'standard floor rebar binding',
+      wbsNodeType: 'process',
+    })
+
+    expect(suggestion.recommendedDurationDays).toBe(8)
+    expect(suggestion.conservativeDurationDays).toBe(10)
+    expect(suggestion.businessReasonCode).not.toBe('PACKAGE_CHILD_DURATION_WINDOW')
+    expect(suggestion.planDurationTruthSource ?? null).toBeNull()
+    expect(suggestion.factorAvailability).toEqual(expect.objectContaining({
+      t2_rhythm_schedule_candidate_package: true,
+    }))
+    expect((suggestion.calculationContext as any)?.t2RhythmScheduleCandidatePackage).toEqual(expect.objectContaining({
+      source: 't2_division_rhythm_schedule_candidate_package',
+      tier: 'T2',
+      status: 'schedulable_candidate',
+      selectedTemplateIds: ['t2-residential-standard-floor-structure-rhythm-v1'],
+      durationContextCandidateCount: 1,
+      dependencyCandidateCount: 1,
+      hardGateCount: 2,
+      compatibility: expect.objectContaining({
+        status: 'compatible_candidate',
+        compatible: true,
+        conflictCount: 0,
+        priorityOverrideBlocked: false,
+      }),
+      scheduleTrustPolicy: expect.objectContaining({
+        autoApply: false,
+        writesTaskDependencies: false,
+        writesPlanDates: false,
+        requiresAssemblyCompatibility: true,
+        requiresL5Publication: true,
+      }),
+      scheduleTrustSummaries: [
+        expect.objectContaining({
+          sourceTemplateId: 't2-residential-standard-floor-structure-rhythm-v1',
+          criticalPathRoles: ['wall_column_rebar', 'wall_column_formwork'],
+          replayAdmission: expect.objectContaining({
+            minimumComparableWorkfaceWindows: 12,
+            p80CaptureThreshold: 0.72,
+          }),
+        }),
+      ],
+    }))
+    expect((suggestion.calculationContext as any)?.t2RhythmScheduleCandidatePackage?.durationContextCandidates).toEqual([
+      expect.objectContaining({
+        sourceTemplateId: 't2-residential-standard-floor-structure-rhythm-v1',
+        windowCode: 'wall_column_rebar',
+        recommendedDurationDays: 2,
+        planDurationTruthSource: 'parent_package_rhythm_window',
+        autoApply: false,
+      }),
+    ])
+    expect((suggestion.factorSummary?.calculationContext as any)?.t2RhythmScheduleCandidatePackage).toEqual(
+      (suggestion.calculationContext as any)?.t2RhythmScheduleCandidatePackage,
+    )
+  })
+
+  it('surfaces T2 phase-1 network evaluation as read-only explanation context without selecting or writing schedule facts', async () => {
+    mocks.state.projectsData = [{
+      id: 'project-1',
+      metadata: {
+        projectGenerationFacts: {
+          businessType: 'residential',
+          structureTypeCode: 'shear_wall',
+          buildingCount: 2,
+        },
+        t2RhythmScheduleCandidateNetworkEvaluation: {
+          source: 't2_rhythm_schedule_candidate_network_phase1_evaluation',
+          candidateId: 'c19-13-t2-standard-floor-option',
+          tier: 'T2',
+          status: 'phase1_readonly_evaluation_ready',
+          canEnterC1913Phase1Selection: true,
+          networkSpanDays: 18,
+          topologicalOrder: ['node-a', 'node-b', 'node-c'],
+          criticalNodeIds: ['node-a', 'node-b'],
+          criticalWindowCodes: [
+            'wall_column_rebar',
+            'wall_column_formwork',
+            'slab_rebar_mep_embed',
+          ],
+          selectionReceipts: [{
+            templateId: 't2-residential-standard-floor-structure-rhythm-v1',
+            selectionStatus: 'selected_explicit_match',
+            rank: 1,
+            selectorScore: 100,
+            selectionBasis: 'explicit_selector_match_and_score_rank',
+            requestedDimensions: {
+              businessTypeCode: 'residential',
+              phaseWindow: 'superstructure',
+              divisionFamily: 'superstructure',
+              subdivisionFamily: 'standard_floor_handover',
+              methodVariantCodes: ['aluminum_formwork'],
+              structureTypeCodes: [],
+              scopeDimensions: ['building', 'floor'],
+            },
+            matchedDimensions: {
+              businessTypeCode: 'residential',
+              phaseWindow: 'superstructure',
+              divisionFamily: 'superstructure',
+              subdivisionFamily: 'standard_floor_handover',
+              methodVariantCodes: ['aluminum_formwork'],
+              structureTypeCodes: [],
+              scopeDimensions: ['building', 'floor'],
+            },
+            unmatchedExplicitDimensions: [],
+            selectorPurity: {
+              allExplicitDimensionsMatched: true,
+              noT1T3Leakage: true,
+              exactPhaseWindowMatch: true,
+              exactDivisionFamilyMatch: true,
+              exactSubdivisionFamilyMatch: true,
+            },
+            mutationBoundary: {
+              writesTaskDependencies: false,
+              writesPlanDates: false,
+              writesCriticalPathFacts: false,
+              writesSeed: false,
+              writesBaseline: false,
+              writesRuntimePublications: false,
+            },
+          }],
+          nodeEvaluations: [
+            {
+              nodeId: 'node-a',
+              windowCode: 'wall_column_rebar',
+              role: 'wall_column_rebar',
+              earliestStartDay: 1,
+              earliestFinishDay: 2,
+              latestStartDay: 1,
+              latestFinishDay: 2,
+              totalFloatDays: 0,
+              isCritical: true,
+            },
+            {
+              nodeId: 'node-b',
+              windowCode: 'wall_column_formwork',
+              role: 'wall_column_formwork',
+              earliestStartDay: 3,
+              earliestFinishDay: 4,
+              latestStartDay: 3,
+              latestFinishDay: 4,
+              totalFloatDays: 0,
+              isCritical: true,
+            },
+          ],
+          conflictSummary: {
+            conflictCount: 0,
+            conflictCodes: [],
+            priorityOverrideBlocked: false,
+          },
+          scheduleTrustEvidence: {
+            selectedTemplateIds: ['t2-residential-standard-floor-structure-rhythm-v1'],
+            durationBearingNodeCount: 4,
+            dependencyEdgeCount: 6,
+            hardGateCount: 2,
+            compatibilityStatus: 'compatible_candidate',
+            replayRequiredBeforePublish: true,
+            standardLibraryReadinessStatus: 'shadow_candidate_ready_not_publishable',
+            standardLibraryPrecisionStatus: 'ready',
+            standardLibraryBreadthStatus: 'ready',
+            standardLibraryDepthStatus: 'ready',
+            standardLibraryTrustGateStatus: 'shadow_replay_ready_not_publishable',
+            standardLibraryTrustBoundary: 'archived_live_shadow_replay_only',
+            canTrustForRealScheduleCalibration: true,
+            standardLibraryTrustGateReleaseBlockers: [
+              'l5_canary_publish_rollback_required',
+              'c19_13_phase1_multinetwork_selection_required',
+              'manual_publication_approval_required',
+            ],
+            selectionReceiptCount: 1,
+            selectorReceiptAuditStatus: 'ready',
+            releaseBlockers: [
+              'l5_canary_publish_rollback_required',
+              'c19_13_phase1_multinetwork_selection_required',
+              'manual_publication_approval_required',
+            ],
+            topologyEvaluated: true,
+            floatCalculated: true,
+            writesTaskDependencies: false,
+            writesPlanDates: false,
+          },
+          standardLibraryReadiness: {
+            status: 'shadow_candidate_ready_not_publishable',
+            precisionStatus: 'ready',
+            breadthStatus: 'ready',
+            depthStatus: 'ready',
+            canEnterC1913Phase1Selection: true,
+            canAutoMaterializeTaskDependencies: false,
+            canAutoPublishRuntimeExperience: false,
+            liveReplayTrustGate: {
+              source: 't2_rhythm_standard_library_live_replay_trust_gate',
+              status: 'shadow_replay_ready_not_publishable',
+              canTrustForRealScheduleCalibration: true,
+              canEnterC1913Phase1Selection: true,
+              canAutoMaterializeTaskDependencies: false,
+              canAutoPublishRuntimeExperience: false,
+              trustBoundary: 'archived_live_shadow_replay_only',
+              passedGateCodes: [
+                'archived_json_present',
+                'live_evidence_metadata_present',
+                'readiness_pass',
+                't2_replay_sample_available',
+                'duration_bearing_window_replay_coverage_passed',
+                'shadow_replay_acceptance_passed',
+              ],
+              blockingReasons: [],
+              releaseBlockers: [
+                'l5_canary_publish_rollback_required',
+                'c19_13_phase1_multinetwork_selection_required',
+                'manual_publication_approval_required',
+              ],
+              mutationBoundary: {
+                writesTaskDependencies: false,
+                writesPlanDates: false,
+                writesCriticalPathFacts: false,
+                writesSeed: false,
+                writesBaseline: false,
+                writesRuntimePublications: false,
+              },
+            },
+            releaseBlockers: [
+              'l5_canary_publish_rollback_required',
+              'c19_13_phase1_multinetwork_selection_required',
+              'manual_publication_approval_required',
+            ],
+          },
+          phase1PublicationGate: {
+            status: 'blocked_pending_release_evidence',
+            canPublishRuntimeExperience: false,
+            canMaterializeTaskDependencies: false,
+            releaseBlockers: [
+              'l5_canary_publish_rollback_required',
+              'c19_13_phase1_multinetwork_selection_required',
+              'manual_publication_approval_required',
+            ],
+          },
+          mutationBoundary: {
+            writesTaskDependencies: false,
+            writesPlanDates: false,
+            writesCriticalPathFacts: false,
+            writesSeed: false,
+            writesBaseline: false,
+          },
+        },
+      },
+    }]
+    mocks.resolveStandardWorkDurationSeed.mockResolvedValue({
+      __stableCode: 'standard_floor_rebar_binding',
+      stableCode: 'standard_floor_rebar_binding',
+      standardWorkCodes: ['03-02-01-P02'],
+      defaultDaysP50: 7,
+      defaultDaysP80: 10,
+      fixedDays: 1,
+      variableDays: 6,
+      confidence: 'medium',
+      benchmarkBasis: 'Standard floor rebar binding baseline.',
+      durationContributionMode: 'duration_bearing',
+    })
+
+    const suggestion = await getTaskDurationSuggestion({
+      suggestionPurpose: 'execution_reference',
+      projectId: 'project-1',
+      standardWorkCode: '03-02-01-P02',
+      taskTitle: 'standard floor rebar binding',
+      wbsNodeType: 'process',
+    })
+
+    expect(suggestion.recommendedDurationDays).toBe(8)
+    expect(suggestion.conservativeDurationDays).toBe(10)
+    expect(suggestion.planDurationTruthSource ?? null).toBeNull()
+    expect(suggestion.factorAvailability).toEqual(expect.objectContaining({
+      t2_rhythm_schedule_candidate_network_phase1_evaluation: true,
+    }))
+    expect((suggestion.calculationContext as any)?.t2RhythmScheduleCandidateNetworkEvaluation).toEqual(expect.objectContaining({
+      source: 't2_rhythm_schedule_candidate_network_phase1_evaluation',
+      tier: 'T2',
+      status: 'phase1_readonly_evaluation_ready',
+      candidateId: 'c19-13-t2-standard-floor-option',
+      canEnterC1913Phase1Selection: true,
+      networkSpanDays: 18,
+      criticalWindowCodes: [
+        'wall_column_rebar',
+        'wall_column_formwork',
+        'slab_rebar_mep_embed',
+      ],
+      criticalNodeCount: 2,
+      nodeEvaluationCount: 2,
+      scheduleTrustEvidence: expect.objectContaining({
+        selectedTemplateIds: ['t2-residential-standard-floor-structure-rhythm-v1'],
+        selectionReceiptCount: 1,
+        selectorReceiptAuditStatus: 'ready',
+        standardLibraryReadinessStatus: 'shadow_candidate_ready_not_publishable',
+        standardLibraryPrecisionStatus: 'ready',
+        standardLibraryBreadthStatus: 'ready',
+        standardLibraryDepthStatus: 'ready',
+        standardLibraryTrustGateStatus: 'shadow_replay_ready_not_publishable',
+        standardLibraryTrustBoundary: 'archived_live_shadow_replay_only',
+        canTrustForRealScheduleCalibration: true,
+        standardLibraryTrustGateReleaseBlockers: expect.arrayContaining([
+          'l5_canary_publish_rollback_required',
+          'c19_13_phase1_multinetwork_selection_required',
+          'manual_publication_approval_required',
+        ]),
+        releaseBlockers: expect.arrayContaining([
+          'l5_canary_publish_rollback_required',
+          'c19_13_phase1_multinetwork_selection_required',
+          'manual_publication_approval_required',
+        ]),
+        topologyEvaluated: true,
+        floatCalculated: true,
+        writesTaskDependencies: false,
+        writesPlanDates: false,
+      }),
+      selectionReceipts: [expect.objectContaining({
+        templateId: 't2-residential-standard-floor-structure-rhythm-v1',
+        selectionStatus: 'selected_explicit_match',
+        rank: 1,
+        selectorScore: 100,
+        selectorPurity: expect.objectContaining({
+          allExplicitDimensionsMatched: true,
+          noT1T3Leakage: true,
+        }),
+      })],
+      standardLibraryReadiness: expect.objectContaining({
+        status: 'shadow_candidate_ready_not_publishable',
+        precisionStatus: 'ready',
+        breadthStatus: 'ready',
+        depthStatus: 'ready',
+        liveReplayTrustGate: expect.objectContaining({
+          status: 'shadow_replay_ready_not_publishable',
+          trustBoundary: 'archived_live_shadow_replay_only',
+          canTrustForRealScheduleCalibration: true,
+        }),
+      }),
+      phase1PublicationGate: expect.objectContaining({
+        status: 'blocked_pending_release_evidence',
+        canPublishRuntimeExperience: false,
+        canMaterializeTaskDependencies: false,
+        releaseBlockers: expect.arrayContaining([
+          'l5_canary_publish_rollback_required',
+          'c19_13_phase1_multinetwork_selection_required',
+          'manual_publication_approval_required',
+        ]),
+      }),
+      mutationBoundary: expect.objectContaining({
+        writesTaskDependencies: false,
+        writesPlanDates: false,
+        writesCriticalPathFacts: false,
+        writesSeed: false,
+        writesBaseline: false,
+      }),
+    }))
+    expect((suggestion.factorSummary?.calculationContext as any)?.t2RhythmScheduleCandidateNetworkEvaluation).toEqual(
+      (suggestion.calculationContext as any)?.t2RhythmScheduleCandidateNetworkEvaluation,
+    )
+    expect(suggestion.businessReasonParams).toEqual(expect.objectContaining({
+      t2RhythmScheduleCandidateNetworkEvaluationStatus: 'phase1_readonly_evaluation_ready',
+      t2RhythmScheduleCandidateNetworkCanEnterC1913Phase1Selection: true,
+      t2RhythmScheduleCandidateNetworkWritesTaskDependencies: false,
+      t2RhythmScheduleCandidateNetworkWritesPlanDates: false,
+      t2RhythmScheduleCandidateNetworkSelectionReceiptCount: 1,
+      t2RhythmScheduleCandidateNetworkSelectorReceiptAuditStatus: 'ready',
+      t2RhythmScheduleCandidateNetworkStandardLibraryReadinessStatus: 'shadow_candidate_ready_not_publishable',
+      t2RhythmScheduleCandidateNetworkStandardLibraryTrustGateStatus: 'shadow_replay_ready_not_publishable',
+      t2RhythmScheduleCandidateNetworkStandardLibraryTrustBoundary: 'archived_live_shadow_replay_only',
+      t2RhythmScheduleCandidateNetworkCanTrustForRealScheduleCalibration: true,
+      t2RhythmScheduleCandidateNetworkStandardLibraryTrustGateReleaseBlockers: expect.arrayContaining([
+        'l5_canary_publish_rollback_required',
+        'c19_13_phase1_multinetwork_selection_required',
+        'manual_publication_approval_required',
+      ]),
+      t2RhythmScheduleCandidateNetworkPhase1PublicationGateStatus: 'blocked_pending_release_evidence',
+      t2RhythmScheduleCandidateNetworkCanPublishRuntimeExperience: false,
+      t2RhythmScheduleCandidateNetworkCanMaterializeTaskDependencies: false,
+      t2RhythmScheduleCandidateNetworkReleaseBlockers: expect.arrayContaining([
+        'l5_canary_publish_rollback_required',
+        'c19_13_phase1_multinetwork_selection_required',
+        'manual_publication_approval_required',
+      ]),
+    }))
+  })
+
+  it('surfaces C-19.13 T2 phase-1 selection as read-only explanation context without mutating duration outputs', async () => {
+    mocks.state.projectsData = [{
+      id: 'project-1',
+      metadata: {
+        projectGenerationFacts: {
+          businessType: 'residential',
+          structureTypeCode: 'shear_wall',
+          buildingCount: 2,
+        },
+        t2RhythmSchedulePhase1Selection: {
+          source: 't2_rhythm_schedule_phase1_selection',
+          selectionId: 'c19-13-phase1-residential-options',
+          status: 'phase1_selection_ready',
+          selectedCandidateId: 'c19-13-t2-standard-floor-option',
+          eligibleCandidateIds: ['c19-13-t2-standard-floor-option'],
+          rejectedCandidates: [{
+            candidateId: 'tower-first-high-priority-conflict',
+            status: 'candidate_conflict',
+            reasonCodes: ['template_assembly_conflict', 'priority_override_blocked'],
+            conflictCodes: ['t2_candidate_conflict'],
+            priorityOverrideBlocked: true,
+          }],
+          combinationConsistencyGate: {
+            receiptRequired: true,
+            status: 'pass_with_manual_review_rejections',
+            rejectedConflictCandidateCount: 1,
+            rejectedMissingReceiptCandidateCount: 0,
+          },
+          selectionBasis: {
+            strategy: 'assembly_compatible_then_shorter_span',
+            assemblyFeasibilityRequired: true,
+            linearPriorityCanOverrideAssemblyConflict: false,
+            rankSignals: [
+              'template_assembly_compatibility_receipt',
+              'can_enter_c19_13_phase1_selection',
+              'network_span_days',
+            ],
+          },
+          mutationBoundary: {
+            writesTaskDependencies: false,
+            writesPlanDates: false,
+            writesCriticalPathFacts: false,
+            writesSeed: false,
+            writesBaseline: false,
+            writesRuntimePublications: false,
+          },
+        },
+      },
+    }]
+    mocks.resolveStandardWorkDurationSeed.mockResolvedValue({
+      __stableCode: 'standard_floor_rebar_binding',
+      stableCode: 'standard_floor_rebar_binding',
+      standardWorkCodes: ['03-02-01-P02'],
+      defaultDaysP50: 7,
+      defaultDaysP80: 10,
+      fixedDays: 1,
+      variableDays: 6,
+      confidence: 'medium',
+      benchmarkBasis: 'Standard floor rebar binding baseline.',
+      durationContributionMode: 'duration_bearing',
+    })
+
+    const suggestion = await getTaskDurationSuggestion({
+      suggestionPurpose: 'execution_reference',
+      projectId: 'project-1',
+      standardWorkCode: '03-02-01-P02',
+      taskTitle: 'standard floor rebar binding',
+      wbsNodeType: 'process',
+    })
+
+    expect(suggestion.recommendedDurationDays).toBe(8)
+    expect(suggestion.conservativeDurationDays).toBe(10)
+    expect(suggestion.planDurationTruthSource ?? null).toBeNull()
+    expect(suggestion.factorAvailability).toEqual(expect.objectContaining({
+      t2_rhythm_schedule_phase1_selection: true,
+    }))
+    expect((suggestion.calculationContext as any)?.t2RhythmSchedulePhase1Selection).toEqual(expect.objectContaining({
+      source: 't2_rhythm_schedule_phase1_selection',
+      selectionId: 'c19-13-phase1-residential-options',
+      status: 'phase1_selection_ready',
+      selectedCandidateId: 'c19-13-t2-standard-floor-option',
+      eligibleCandidateIds: ['c19-13-t2-standard-floor-option'],
+      rejectedCandidateCount: 1,
+      rejectedCandidates: [expect.objectContaining({
+        candidateId: 'tower-first-high-priority-conflict',
+        reasonCodes: ['template_assembly_conflict', 'priority_override_blocked'],
+      })],
+      combinationConsistencyGate: expect.objectContaining({
+        receiptRequired: true,
+        status: 'pass_with_manual_review_rejections',
+        rejectedConflictCandidateCount: 1,
+      }),
+      selectionBasis: expect.objectContaining({
+        strategy: 'assembly_compatible_then_shorter_span',
+        assemblyFeasibilityRequired: true,
+        linearPriorityCanOverrideAssemblyConflict: false,
+      }),
+      mutationBoundary: expect.objectContaining({
+        writesTaskDependencies: false,
+        writesPlanDates: false,
+        writesCriticalPathFacts: false,
+        writesSeed: false,
+        writesBaseline: false,
+        writesRuntimePublications: false,
+      }),
+    }))
+    expect((suggestion.factorSummary?.calculationContext as any)?.t2RhythmSchedulePhase1Selection).toEqual(
+      (suggestion.calculationContext as any)?.t2RhythmSchedulePhase1Selection,
+    )
+    expect(suggestion.businessReasonParams).toEqual(expect.objectContaining({
+      t2RhythmSchedulePhase1SelectionStatus: 'phase1_selection_ready',
+      t2RhythmSchedulePhase1SelectedCandidateId: 'c19-13-t2-standard-floor-option',
+      t2RhythmSchedulePhase1RejectedCandidateCount: 1,
+      t2RhythmSchedulePhase1WritesTaskDependencies: false,
+      t2RhythmSchedulePhase1WritesPlanDates: false,
+      t2RhythmSchedulePhase1LinearPriorityCanOverrideAssemblyConflict: false,
+    }))
+  })
+
+  it('surfaces the L3 duration input assembly gate without letting T2 candidates mutate E1 duration outputs', async () => {
+    mocks.state.projectsData = [{
+      id: 'project-1',
+      metadata: {
+        projectGenerationFacts: {
+          businessType: 'residential',
+          structureTypeCode: 'shear_wall',
+          buildingCount: 2,
+        },
+        t2RhythmScheduleCandidatePackage: {
+          source: 't2_division_rhythm_schedule_candidate_package',
+          tier: 'T2',
+          status: 'schedulable_candidate',
+          selectedTemplateIds: ['t2-residential-standard-floor-structure-rhythm-v1'],
+          templateCount: 1,
+          durationBearingWindowCount: 4,
+          candidateDependencyEdgeCount: 6,
+          hardGateCount: 2,
+          durationContextCandidates: [],
+          dependencyCandidates: [],
+          hardGates: [],
+          scheduleTrustSummaries: [],
+          compatibility: {
+            compatible: true,
+            status: 'compatible_candidate',
+            conflicts: [],
+            templateIds: ['t2-residential-standard-floor-structure-rhythm-v1'],
+          },
+          scheduleTrustPolicy: {
+            autoApply: false,
+            writesTaskDependencies: false,
+            writesPlanDates: false,
+            writesSeed: false,
+            writesBaseline: false,
+            requiresAssemblyCompatibility: true,
+            requiresL5Publication: true,
+            downstreamConsumer: 'DurationInputAssembler_or_C19_13_phase1_candidate_network',
+          },
+        },
+        t2RhythmScheduleCandidateNetwork: {
+          source: 't2_rhythm_schedule_candidate_network',
+          candidateId: 'c19-13-t2-standard-floor-option',
+          tier: 'T2',
+          status: 'candidate_conflict',
+          canEnterC1913Phase1Selection: false,
+          requiresManualReview: true,
+          selectedTemplateIds: ['t2-residential-standard-floor-structure-rhythm-v1'],
+          nodes: [],
+          edges: [],
+          gates: [],
+          assemblyCompatibility: {
+            candidateId: 'c19-13-t2-standard-floor-option',
+            status: 'candidate_conflict',
+            canEnterAutomaticSelection: false,
+            canWriteTaskDependencies: false,
+            canWritePlanDates: false,
+            priorityOverrideBlocked: true,
+            conflicts: [{
+              conflictCode: 'construction_organization_t2_assumption_conflict',
+              source: 'construction_organization',
+              templateId: 't2-residential-standard-floor-structure-rhythm-v1',
+              detail: 'Tower-first organization conflicts with selected T2 rhythm.',
+            }],
+          },
+          conflictSummary: {
+            conflictCount: 1,
+            conflictCodes: ['construction_organization_t2_assumption_conflict'],
+            priorityOverrideBlocked: true,
+          },
+          scheduleTrustEvidence: {
+            selectedTemplateIds: ['t2-residential-standard-floor-structure-rhythm-v1'],
+            durationBearingNodeCount: 4,
+            dependencyEdgeCount: 6,
+            hardGateCount: 2,
+            compatibilityStatus: 'candidate_conflict',
+            replayRequiredBeforePublish: true,
+          },
+          mutationBoundary: {
+            writesTaskDependencies: false,
+            writesPlanDates: false,
+            writesCriticalPathFacts: false,
+            writesSeed: false,
+            writesBaseline: false,
+          },
+        },
+        t2RhythmScheduleCandidateNetworkEvaluation: {
+          source: 't2_rhythm_schedule_candidate_network_phase1_evaluation',
+          candidateId: 'c19-13-t2-standard-floor-option',
+          tier: 'T2',
+          status: 'candidate_conflict',
+          canEnterC1913Phase1Selection: false,
+          networkSpanDays: 0,
+          topologicalOrder: [],
+          criticalNodeIds: [],
+          criticalWindowCodes: [],
+          nodeEvaluations: [],
+          conflictSummary: {
+            conflictCount: 1,
+            conflictCodes: ['construction_organization_t2_assumption_conflict'],
+            priorityOverrideBlocked: true,
+          },
+          scheduleTrustEvidence: {
+            selectedTemplateIds: ['t2-residential-standard-floor-structure-rhythm-v1'],
+            durationBearingNodeCount: 4,
+            dependencyEdgeCount: 6,
+            hardGateCount: 2,
+            compatibilityStatus: 'candidate_conflict',
+            replayRequiredBeforePublish: true,
+            topologyEvaluated: false,
+            floatCalculated: false,
+            writesTaskDependencies: false,
+            writesPlanDates: false,
+          },
+          mutationBoundary: {
+            writesTaskDependencies: false,
+            writesPlanDates: false,
+            writesCriticalPathFacts: false,
+            writesSeed: false,
+            writesBaseline: false,
+          },
+        },
+      },
+    }]
+    mocks.resolveStandardWorkDurationSeed.mockResolvedValue({
+      __stableCode: 'standard_floor_rebar_binding',
+      stableCode: 'standard_floor_rebar_binding',
+      standardWorkCodes: ['03-02-01-P02'],
+      defaultDaysP50: 7,
+      defaultDaysP80: 10,
+      fixedDays: 1,
+      variableDays: 6,
+      confidence: 'medium',
+      benchmarkBasis: 'Standard floor rebar binding baseline.',
+      durationContributionMode: 'duration_bearing',
+    })
+
+    const suggestion = await getTaskDurationSuggestion({
+      suggestionPurpose: 'execution_reference',
+      projectId: 'project-1',
+      standardWorkCode: '03-02-01-P02',
+      taskTitle: 'standard floor rebar binding',
+      wbsNodeType: 'process',
+    })
+
+    expect(suggestion.recommendedDurationDays).toBe(8)
+    expect(suggestion.conservativeDurationDays).toBe(10)
+    expect(suggestion.planDurationTruthSource ?? null).toBeNull()
+    expect(suggestion.factorAvailability).toEqual(expect.objectContaining({
+      duration_input_assembler: true,
+    }))
+    expect((suggestion.calculationContext as any)?.durationInputAssembly).toEqual(expect.objectContaining({
+      source: 'DurationInputAssembler',
+      assemblyGate: expect.objectContaining({
+        status: 'candidate_conflict',
+        canEnterC1913Phase1Selection: false,
+        requiresManualReview: true,
+        priorityOverrideBlocked: true,
+        conflictCodes: [
+          'construction_organization_t2_assumption_conflict',
+          'production_capacity_evidence_missing',
+          't2_standard_library_live_replay_trust_gate_missing',
+        ],
+        productionCapacityEvidenceStatus: null,
+        productionCapacityMissingEvidenceCodes: ['production_capacity_evidence_missing'],
+        standardLibraryTrustGateStatus: 'missing',
+        standardLibraryTrustBoundary: 'blocked_live_replay_evidence',
+        standardLibraryTrustBlockingReasons: [
+          't2_standard_library_live_replay_trust_gate_missing',
+          'archived_live_replay_required',
+        ],
+      }),
+      mutationBoundary: expect.objectContaining({
+        writesTaskDependencies: false,
+        writesPlanDates: false,
+        writesCriticalPathFacts: false,
+        writesSeed: false,
+        writesBaseline: false,
+        writesRuntimePublications: false,
+      }),
+    }))
+    expect((suggestion.calculationContext as any)?.durationInputAssembly?.sourceLineage).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        channel: 't2RhythmScheduleCandidateNetwork',
+        source: 'project_metadata',
+        status: 'candidate_conflict',
+      }),
+      expect.objectContaining({
+        channel: 't2RhythmScheduleCandidateNetworkEvaluation',
+        source: 'project_metadata',
+        status: 'candidate_conflict',
+      }),
+    ]))
+    expect(suggestion.businessReasonParams).toEqual(expect.objectContaining({
+      durationInputAssemblyGateStatus: 'candidate_conflict',
+      durationInputAssemblyCanEnterC1913Phase1Selection: false,
+      durationInputAssemblyConflictCodes: [
+        'construction_organization_t2_assumption_conflict',
+        'production_capacity_evidence_missing',
+        't2_standard_library_live_replay_trust_gate_missing',
+      ],
+      durationInputAssemblyWritesTaskDependencies: false,
+      durationInputAssemblyWritesPlanDates: false,
     }))
   })
 
@@ -969,20 +2111,39 @@ describe('durationSuggestionService', () => {
 
   it('uses a published learnable parameter runtime weight for company benchmark blending', async () => {
     mocks.getProjectCompanyId.mockResolvedValue('company-1')
-    mocks.loadAlgorithmAssetLearnableParameterRuntimeValue.mockResolvedValueOnce({
-      status: 'runtime_parameter_consumable',
-      runtimeConsumable: true,
-      parameterKey: 'duration.benchmark_blend_weight',
-      runtimeValue: 0.6,
-      publicationKey: 'learnable-parameter-runtime:duration-blend:company_override',
-      publicationStatus: 'published',
-      scopeLevel: 'company',
-      companyId: 'company-1',
-      projectId: null,
-      rollbackTarget: 'duration.benchmark_blend_weight.default',
-      reasons: [],
-      writesSeedRuntimeDirectly: false,
-    })
+    mocks.loadAlgorithmAssetLearnableParameterRuntimeValue.mockImplementation(async (input: any) => (
+      input.parameterKey === 'duration.benchmark_blend_weight' && input.consumptionMode === 'stable'
+        ? {
+            status: 'runtime_parameter_consumable',
+            runtimeConsumable: true,
+            parameterKey: 'duration.benchmark_blend_weight',
+            runtimeValue: 0.6,
+            consumptionMode: 'stable',
+            publicationKey: 'learnable-parameter-runtime:duration-blend:company_override',
+            publicationStatus: 'published',
+            scopeLevel: 'company',
+            companyId: 'company-1',
+            projectId: null,
+            rollbackTarget: 'duration.benchmark_blend_weight.default',
+            reasons: [],
+            writesSeedRuntimeDirectly: false,
+          }
+        : {
+            status: 'runtime_parameter_not_found',
+            runtimeConsumable: false,
+            parameterKey: input.parameterKey,
+            runtimeValue: null,
+            consumptionMode: input.consumptionMode ?? 'stable',
+            publicationKey: null,
+            publicationStatus: null,
+            scopeLevel: null,
+            companyId: null,
+            projectId: null,
+            rollbackTarget: null,
+            reasons: ['runtime_parameter_publication_not_found'],
+            writesSeedRuntimeDirectly: false,
+          }
+    ))
     mocks.query.maybeSingle.mockImplementation(async () => {
       if (isCompanyBenchmarkScope('company-1')) {
         return {
@@ -1019,11 +2180,12 @@ describe('durationSuggestionService', () => {
       wbsNodeType: 'process',
     })
 
-    expect(mocks.loadAlgorithmAssetLearnableParameterRuntimeValue).toHaveBeenCalledWith({
+    expect(mocks.loadAlgorithmAssetLearnableParameterRuntimeValue).toHaveBeenCalledWith(expect.objectContaining({
       parameterKey: 'duration.benchmark_blend_weight',
       companyId: 'company-1',
       projectId: 'project-1',
-    })
+      consumptionMode: 'stable',
+    }))
     expect(suggestion.recommendedDurationDays).toBe(9)
     expect(suggestion.businessReasonParams).toEqual(expect.objectContaining({
       companyBenchmarkBlendWeight: 0.6,
@@ -1037,11 +2199,29 @@ describe('durationSuggestionService', () => {
     mocks.getProjectCompanyId.mockResolvedValue('company-1')
     mocks.loadAlgorithmAssetLearnableParameterRuntimeValue.mockImplementation(async (input: any) => {
       if (input.parameterKey === 'duration.benchmark_blend_weight') {
+        if (input.consumptionMode === 'canary') {
+          return {
+            status: 'runtime_parameter_not_found',
+            runtimeConsumable: false,
+            parameterKey: input.parameterKey,
+            runtimeValue: null,
+            consumptionMode: 'canary',
+            publicationKey: null,
+            publicationStatus: null,
+            scopeLevel: null,
+            companyId: null,
+            projectId: null,
+            rollbackTarget: null,
+            reasons: ['runtime_parameter_publication_not_found'],
+            writesSeedRuntimeDirectly: false,
+          }
+        }
         return {
           status: 'runtime_parameter_consumable',
           runtimeConsumable: true,
           parameterKey: 'duration.benchmark_blend_weight',
           runtimeValue: 0.5,
+          consumptionMode: 'stable',
           publicationKey: 'learnable-parameter-runtime:duration-blend:company_override',
           publicationStatus: 'published',
           scopeLevel: 'company',
@@ -1750,6 +2930,36 @@ describe('durationSuggestionService', () => {
     }))
   })
 
+  it('surfaces curing plausibility warnings without overwriting approved early-strength E1 reference durations', async () => {
+    mocks.resolveStandardWorkDurationSeed.mockResolvedValue({
+      __stableCode: 'concrete_curing_normal_minimum',
+      stableCode: 'concrete_curing_normal_minimum',
+      defaultDaysP50: 5,
+      defaultDaysP80: 6,
+      confidence: 'medium',
+      benchmarkBasis: 'Approved early-strength curing reference.',
+    })
+
+    const suggestion = await getTaskDurationSuggestion({
+      standardWorkCode: 'concrete_curing_normal_minimum',
+      standardWorkName: 'concrete curing',
+      taskTitle: 'concrete curing and test block retention',
+      wbsNodeType: 'process',
+    })
+
+    expect(suggestion.recommendedDurationDays).toBe(6)
+    expect(suggestion.conservativeDurationDays).toBe(6)
+    expect(suggestion.recommendedDurationDays).toBeLessThan(7)
+    expect((suggestion.calculationContext as any).durationPlausibilityWarnings).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        ruleId: 'duration.min.concrete_curing_normal',
+        severity: 'warning',
+        originalDays: 6,
+        adjustedDays: 6,
+      }),
+    ]))
+  })
+
   it('uses manual override P50 and P80 symmetrically when both are governed', async () => {
     mocks.query.maybeSingle.mockImplementation(async () => {
       const tableName = mocks.from.mock.calls.at(-1)?.[0]
@@ -2100,7 +3310,7 @@ describe('durationSuggestionService', () => {
       confidence: 'medium',
       benchmarkBasis: 'Plastering default per work face.',
     })
-    mocks.buildProjectProgressVelocityLearning.mockResolvedValue({
+    mocks.loadPublishedProgressVelocityRuntime.mockResolvedValue({
       durationRatio: 1.25,
       multiplier: 1.25,
       confidenceLevel: 'medium',
@@ -2141,7 +3351,7 @@ describe('durationSuggestionService', () => {
       confidence: 'medium',
       benchmarkBasis: 'Plastering default per work face.',
     })
-    mocks.buildProjectProgressVelocityLearning.mockResolvedValue({
+    mocks.loadPublishedProgressVelocityRuntime.mockResolvedValue({
       durationRatio: 1.25,
       multiplier: 1.25,
       confidenceLevel: 'high',
@@ -2285,7 +3495,7 @@ describe('durationSuggestionService', () => {
       confidence: 'medium',
       benchmarkBasis: 'Large area finishing default.',
     })
-    mocks.buildProjectProgressVelocityLearning.mockResolvedValue({
+    mocks.loadPublishedProgressVelocityRuntime.mockResolvedValue({
       durationRatio: 1.2,
       multiplier: 1.2,
       confidenceLevel: 'high',
@@ -2400,7 +3610,7 @@ describe('durationSuggestionService', () => {
       confidence: 'medium',
       benchmarkBasis: 'Plastering default per work face.',
     })
-    mocks.buildProjectProgressVelocityLearning.mockResolvedValue({
+    mocks.loadPublishedProgressVelocityRuntime.mockResolvedValue({
       durationRatio: 1.24,
       multiplier: 1.24,
       confidenceLevel: 'medium',
@@ -2433,6 +3643,65 @@ describe('durationSuggestionService', () => {
     expect((suggestion.factorSummary as any)?.projectExecutionContext?.similarTaskRhythm).toEqual(expect.objectContaining({
       sampleCount: 6,
       learningScope: 'project_plus_company',
+    }))
+  })
+
+  it('does not let a single thin similar-task rhythm sample change reference duration values', async () => {
+    mocks.resolveStandardWorkDurationSeed.mockResolvedValue({
+      __stableCode: 'plastering_wall_ceiling',
+      stableCode: 'plastering_wall_ceiling',
+      defaultDaysP50: 10,
+      defaultDaysP80: 12,
+      fixedDays: 1,
+      variableDays: 9,
+      confidence: 'medium',
+      benchmarkBasis: 'Plastering default per work face.',
+    })
+    mocks.loadPublishedProgressVelocityRuntime.mockResolvedValue(null)
+
+    const baseline = await getTaskDurationSuggestion({
+      projectId: 'project-1',
+      companyId: 'company-1',
+      engineeringCategoryId: 'cat-1',
+      standardWorkCode: 'plastering_wall_ceiling',
+      taskTitle: 'wall plastering',
+      wbsNodeType: 'process',
+    })
+
+    mocks.loadPublishedProgressVelocityRuntime.mockResolvedValue({
+      durationRatio: 1.8,
+      multiplier: 1.8,
+      confidenceLevel: 'low',
+      confidenceScore: 32,
+      actionPolicy: 'observe_only',
+      sampleCount: 1,
+      variance: 0.4,
+      groupKey: 'template:thin-sample',
+      excludedAnomalyTaskCount: 0,
+      reason: 'Only one completed similar-task sample is available.',
+      metadata: { learningScope: 'project' },
+    })
+
+    const suggestion = await getTaskDurationSuggestion({
+      projectId: 'project-1',
+      companyId: 'company-1',
+      engineeringCategoryId: 'cat-1',
+      standardWorkCode: 'plastering_wall_ceiling',
+      taskTitle: 'wall plastering',
+      wbsNodeType: 'process',
+    })
+
+    expect(suggestion.recommendedDurationDays).toBe(baseline.recommendedDurationDays)
+    expect(suggestion.conservativeDurationDays).toBe(baseline.conservativeDurationDays)
+    expect(suggestion.businessReasonParams).toEqual(expect.objectContaining({
+      similarTaskRecommendedAdjusted: false,
+      similarTaskRecommendedAdjustmentMode: 'none',
+      similarTaskRecommendedMultiplier: 1,
+    }))
+    expect((suggestion.factorSummary as any)?.projectExecutionContext?.similarTaskRhythm).toEqual(expect.objectContaining({
+      sampleCount: 1,
+      actionPolicy: 'observe_only',
+      learningScope: 'project',
     }))
   })
 
@@ -2576,7 +3845,7 @@ describe('durationSuggestionService', () => {
 
   it('applies project rhythm and health environment to execution reference suggestions', async () => {
     mocks.buildDurationContext.mockResolvedValueOnce(emptyContext())
-    mocks.buildProjectProgressVelocityLearning.mockResolvedValueOnce({
+    mocks.loadPublishedProgressVelocityRuntime.mockResolvedValueOnce({
       projectId: 'project-1',
       groupKey: 'standard_work:plastering_wall_ceiling',
       multiplier: 1.2,
@@ -2955,7 +4224,7 @@ describe('durationSuggestionService', () => {
       benchmarkBasis: 'Steel structure installation default.',
     })
 
-    const suggestion = await getTaskDurationSuggestion({ taskId: 'task-1' })
+    const suggestion = await getTaskDurationSuggestion({ projectId: 'project-1', taskId: 'task-1' })
 
     expect(suggestion.recommendedDurationDays).toBe(14)
     expect(mocks.resolveStandardWorkDurationSeed).toHaveBeenCalledWith(
@@ -3027,7 +4296,7 @@ describe('durationSuggestionService', () => {
       benchmarkBasis: 'Cleanroom HVAC commissioning default.',
     })
 
-    const suggestion = await getTaskDurationSuggestion({ taskId: 'task-1' })
+    const suggestion = await getTaskDurationSuggestion({ projectId: 'project-1', taskId: 'task-1' })
 
     expect(suggestion.recommendedDurationDays).toBe(20)
     expect(mocks.resolveStandardWorkDurationSeed).toHaveBeenCalledWith(
@@ -3411,10 +4680,26 @@ describe('durationSuggestionService', () => {
     })
     mocks.loadAlgorithmAssetLearnableParameterRuntimeValue
       .mockResolvedValueOnce({
+        status: 'runtime_parameter_not_found',
+        runtimeConsumable: false,
+        parameterKey: 'duration.benchmark_blend_weight',
+        runtimeValue: null,
+        consumptionMode: 'canary',
+        publicationKey: null,
+        publicationStatus: null,
+        scopeLevel: null,
+        companyId: null,
+        projectId: null,
+        rollbackTarget: null,
+        reasons: ['runtime_parameter_publication_not_found'],
+        writesSeedRuntimeDirectly: false,
+      })
+      .mockResolvedValueOnce({
         status: 'runtime_parameter_consumable',
         runtimeConsumable: true,
         parameterKey: 'duration.benchmark_blend_weight',
         runtimeValue: 0.5,
+        consumptionMode: 'stable',
         publicationKey: 'duration_benchmark_runtime:benchmark-blend-v2',
         publicationStatus: 'published',
         scopeLevel: 'company',
@@ -3465,6 +4750,57 @@ describe('durationSuggestionService', () => {
         'duration_suggestion',
       ],
     ])
+  })
+
+  it('keeps implicit runtime consumer evidence writes out of test runs without an injected writer', async () => {
+    mocks.resolveStandardWorkDurationSeed.mockResolvedValue({
+      __resolverSource: 'company_override',
+      __seedVersion: 'company-override-v1',
+      __stableCode: 'rebar_installation',
+      stableCode: 'rebar_installation',
+      defaultDaysP50: 10,
+      defaultDaysP80: 14,
+      fixedDays: 1,
+      variableDays: 9,
+      confidence: 'medium',
+      benchmarkBasis: 'Company override reference.',
+    })
+
+    await getTaskDurationSuggestion({
+      projectId: 'project-1',
+      companyId: 'company-1',
+      standardWorkCode: 'rebar_installation',
+      taskTitle: 'rebar installation',
+      wbsNodeType: 'process',
+    } as any)
+
+    expect(mocks.rawQuery).not.toHaveBeenCalled()
+  })
+
+  it('allows an explicit record mode to exercise the default runtime evidence writer in tests', async () => {
+    mocks.resolveStandardWorkDurationSeed.mockResolvedValue({
+      __resolverSource: 'company_override',
+      __seedVersion: 'company-override-v1',
+      __stableCode: 'rebar_installation',
+      stableCode: 'rebar_installation',
+      defaultDaysP50: 10,
+      defaultDaysP80: 14,
+      fixedDays: 1,
+      variableDays: 9,
+      confidence: 'medium',
+      benchmarkBasis: 'Company override reference.',
+    })
+
+    await getTaskDurationSuggestion({
+      projectId: 'project-1',
+      companyId: 'company-1',
+      standardWorkCode: 'rebar_installation',
+      taskTitle: 'rebar installation',
+      wbsNodeType: 'process',
+      runtimeEvidenceMode: 'record',
+    } as any)
+
+    expect(mocks.rawQuery).toHaveBeenCalledTimes(1)
   })
 
   it('records runtime consumer evidence for shared cold-start baselines consumed by getTaskDurationSuggestion', async () => {
@@ -3528,7 +4864,7 @@ describe('durationSuggestionService', () => {
     ])
   })
 
-  it('does not record company override seeds as algorithm seed runtime publications', async () => {
+  it('records a call but does not treat company override seeds as algorithm seed runtime publications', async () => {
     const { calls, queryExec } = createRecordingQueryExec()
     mocks.resolveStandardWorkDurationSeed.mockResolvedValue({
       __resolverSource: 'company_override',
@@ -3553,8 +4889,14 @@ describe('durationSuggestionService', () => {
     } as any)
 
     expect(suggestion.durationCalibrationSource).toBe('standard_work_duration_seed')
-    expect(callsForTable(calls, 'runtime_consumer_runtime_calls')).toHaveLength(0)
+    expect(callsForTable(calls, 'runtime_consumer_runtime_calls')).toHaveLength(1)
     expect(callsForTable(calls, 'runtime_consumer_observations')).toHaveLength(0)
+    const runtimeCall = callsForTable(calls, 'runtime_consumer_runtime_calls')[0]
+    expect(runtimeCall?.sql).toContain('$4::jsonb')
+    expect(JSON.parse(String(runtimeCall?.params[3]))).toEqual(expect.objectContaining({
+      runtimeAssetMode: 'no_published_artifact',
+      runtimeArtifactCount: 0,
+    }))
   })
 
   it('records v1.4.22.5 runtime consumer evidence for duration suggestion artifacts', async () => {
@@ -3571,21 +4913,25 @@ describe('durationSuggestionService', () => {
           assetKey: 'base_duration_benchmark',
           publicationKey: 'duration_benchmark_runtime:base-v1',
           publicationStatus: 'published',
+          sourceEvidenceRefs: ['duration_benchmarks:base-v1'],
         },
         {
           assetKey: 'duration_cold_start_baseline',
           publicationKey: 'cold_start_baseline_runtime:segment-v1',
           publicationStatus: 'canary',
+          sourceEvidenceRefs: ['algorithm_cold_start_baselines:segment-v1'],
         },
         {
           assetKey: 'standard_work_duration_seed',
           publicationKey: 'algorithm_seed_versions:standard-v1',
           publicationStatus: 'runtime_published',
+          sourceEvidenceRefs: ['algorithm_seed_versions:standard-v1'],
         },
         {
           assetKey: 'special_work_duration_seed',
           publicationKey: 'wbs_template_runtime:special-v1',
           publicationStatus: 'published',
+          sourceEvidenceRefs: ['wbs_template_runtime:special-v1'],
         },
         {
           assetKey: 'forecast_residual_overlay',
@@ -3632,5 +4978,31 @@ describe('durationSuggestionService', () => {
         'duration_suggestion',
       ],
     ])
+  })
+
+  it('records duration suggestion runtime consumption through the fixed runtime consumer tables', async () => {
+    const { calls, queryExec } = createRecordingQueryExec()
+
+    const result = await recordDurationSuggestionRuntimeConsumption({
+      queryExec,
+      projectId: 'project-1',
+      taskId: 'task-1',
+      standardWorkCode: 'rebar_installation',
+      observedAt: '2026-06-15T10:00:00.000Z',
+      runtimeArtifactPublications: [
+        {
+          assetKey: 'base_duration_benchmark',
+          publicationKey: 'duration_benchmark_runtime:base-v1',
+          publicationStatus: 'published',
+          sourceEvidenceRefs: ['duration_benchmarks:base-v1'],
+        },
+      ],
+    })
+
+    expect(result.status).toBe('runtime_consumer_observations_recorded')
+    expect(callsForTable(calls, 'runtime_consumer_runtime_calls')).toHaveLength(1)
+    expect(callsForTable(calls, 'runtime_consumer_observations')).toHaveLength(1)
+    expect(callsForTable(calls, 'runtime_consumer_runtime_calls')[0].sql).toContain('insert into public.runtime_consumer_runtime_calls')
+    expect(callsForTable(calls, 'runtime_consumer_observations')[0].sql).toContain('insert into public.runtime_consumer_observations')
   })
 })

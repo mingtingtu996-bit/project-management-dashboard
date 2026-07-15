@@ -1,4 +1,5 @@
 # UI/UX 商业级优化 — 完整需求清单
+> **2026-07-13 现行覆盖**：本清单保留历史需求编号，但 PlanningWorkspace、CompanyProjectTemplateLibrary 和独立 WBSTemplates 页面相关条目不得进入当前路由、页面清单、原型或派工；WBS 能力只在 Gantt 新建/导入计划流程中消费。
 
 > 从 `UI_UX商业级全面优化方案_v1.3.md` 逐条提取，共 **295 条**需求。
 > 每条标注：需求ID | Phase | 描述 | 目标文件/范围 | 对应执行步骤

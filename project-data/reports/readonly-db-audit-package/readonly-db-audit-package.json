@@ -1,0 +1,195 @@
+{
+  "schemaVersion": "workbuddy-readonly-db-audit-package/v1",
+  "generatedAt": "2026-07-07T15:31:39.065Z",
+  "mutationBoundary": "readonly_db_audit_package_only_no_db_connection_no_db_mutation",
+  "summary": {
+    "tableCount": 16,
+    "physicalTableAuditCount": 14,
+    "tableContractCount": 10,
+    "runtimeContractCount": 8,
+    "writerCount": 44,
+    "qualityRuleCount": 25
+  },
+  "requiredEnvironment": [
+    "SUPABASE_ACCESS_TOKEN",
+    "WORKBUDDY_SUPABASE_PROJECT_REF",
+    "WORKBUDDY_PG_HOST",
+    "WORKBUDDY_PG_PORT",
+    "WORKBUDDY_PG_DATABASE",
+    "WORKBUDDY_PG_USER",
+    "WORKBUDDY_PG_PASSWORD"
+  ],
+  "preflightCommand": "npm run data:readonly-preflight",
+  "readonlySql": {
+    "schemaInventory": "SELECT table_schema, table_name, column_name, data_type, is_nullable\nFROM information_schema.columns\nWHERE table_schema = 'public'\nORDER BY table_schema, table_name, ordinal_position",
+    "catalogTablePresence": "SELECT expected.table_id, expected.table_schema, expected.table_name, to_regclass(expected.table_schema || '.' || expected.table_name) IS NOT NULL AS table_exists\nFROM (VALUES\n    ('public', 'tasks', 'tasks'),\n    ('public', 'task_baselines', 'task_baselines'),\n    ('public', 'task_baseline_items', 'task_baseline_items'),\n    ('public', 'monthly_plans', 'monthly_plans'),\n    ('public', 'monthly_plan_items', 'monthly_plan_items'),\n    ('public', 'task_dependencies', 'task_dependencies'),\n    ('public', 'project_daily_snapshot', 'project_daily_snapshot'),\n    ('public', 'duration_experience_samples', 'duration_experience_samples'),\n    ('public', 'progress_knowledge_sources', 'progress_knowledge_sources'),\n    ('public', 'progress_knowledge_documents', 'progress_knowledge_documents'),\n    ('public', 'progress_asset_candidates', 'progress_asset_candidates'),\n    ('public', 'progress_asset_calibration_runs', 'progress_asset_calibration_runs'),\n    ('public', 'progress_asset_calibration_results', 'progress_asset_calibration_results'),\n    ('public', 'progress_asset_publication_readiness', 'progress_asset_publication_readiness')\n) AS expected(table_schema, table_name, table_id)\nORDER BY expected.table_id;",
+    "contractColumnPresence": "SELECT expected.table_name, expected.column_name, columns.column_name IS NOT NULL AS column_exists\nFROM (VALUES\n    ('tasks', 'id'),\n    ('tasks', 'project_id'),\n    ('tasks', 'title'),\n    ('tasks', 'status'),\n    ('tasks', 'planned_start_date'),\n    ('tasks', 'planned_end_date'),\n    ('tasks', 'actual_start_date'),\n    ('tasks', 'actual_end_date'),\n    ('tasks', 'progress'),\n    ('task_baselines', 'id'),\n    ('task_baselines', 'project_id'),\n    ('task_baselines', 'version'),\n    ('task_baselines', 'status'),\n    ('task_baselines', 'title'),\n    ('task_baselines', 'created_at'),\n    ('task_baselines', 'updated_at'),\n    ('task_baseline_items', 'id'),\n    ('task_baseline_items', 'project_id'),\n    ('task_baseline_items', 'baseline_version_id'),\n    ('task_baseline_items', 'source_task_id'),\n    ('task_baseline_items', 'title'),\n    ('task_baseline_items', 'planned_start_date'),\n    ('task_baseline_items', 'planned_end_date'),\n    ('monthly_plans', 'id'),\n    ('monthly_plans', 'project_id'),\n    ('monthly_plans', 'month'),\n    ('monthly_plans', 'status'),\n    ('monthly_plans', 'created_at'),\n    ('monthly_plans', 'updated_at'),\n    ('monthly_plan_items', 'id'),\n    ('monthly_plan_items', 'project_id'),\n    ('monthly_plan_items', 'monthly_plan_version_id'),\n    ('monthly_plan_items', 'source_task_id'),\n    ('monthly_plan_items', 'title'),\n    ('monthly_plan_items', 'planned_start_date'),\n    ('monthly_plan_items', 'planned_end_date'),\n    ('task_dependencies', 'id'),\n    ('task_dependencies', 'project_id'),\n    ('task_dependencies', 'task_id'),\n    ('task_dependencies', 'dependency_task_id'),\n    ('task_dependencies', 'dependency_type'),\n    ('project_daily_snapshot', 'project_id'),\n    ('project_daily_snapshot', 'snapshot_date'),\n    ('project_daily_snapshot', 'overall_progress'),\n    ('project_daily_snapshot', 'task_progress'),\n    ('project_daily_snapshot', 'planned_cumulative'),\n    ('project_daily_snapshot', 'health_score'),\n    ('duration_experience_samples', 'id'),\n    ('duration_experience_samples', 'project_id'),\n    ('duration_experience_samples', 'source_type'),\n    ('duration_experience_samples', 'planned_duration'),\n    ('duration_experience_samples', 'actual_duration'),\n    ('duration_experience_samples', 'sample_status'),\n    ('duration_experience_samples', 'created_at'),\n    ('progress_knowledge_sources', 'source_key'),\n    ('progress_knowledge_sources', 'source_name'),\n    ('progress_knowledge_sources', 'source_url'),\n    ('progress_knowledge_sources', 'connector_type'),\n    ('progress_knowledge_sources', 'access_level'),\n    ('progress_knowledge_sources', 'source_trust_level'),\n    ('progress_knowledge_sources', 'governance_status'),\n    ('progress_knowledge_sources', 'source_metadata'),\n    ('progress_knowledge_documents', 'id'),\n    ('progress_knowledge_documents', 'source_id'),\n    ('progress_knowledge_documents', 'document_key'),\n    ('progress_knowledge_documents', 'title'),\n    ('progress_knowledge_documents', 'document_type'),\n    ('progress_knowledge_documents', 'document_url'),\n    ('progress_knowledge_documents', 'storage_path'),\n    ('progress_knowledge_documents', 'content_hash'),\n    ('progress_knowledge_documents', 'extraction_status'),\n    ('progress_knowledge_documents', 'extraction_quality')\n) AS expected(table_name, column_name)\nLEFT JOIN information_schema.columns columns\n  ON columns.table_schema = 'public'\n AND columns.table_name = expected.table_name\n AND columns.column_name = expected.column_name\nORDER BY expected.table_name, expected.column_name;",
+    "qualityChecks": [
+      {
+        "id": "tasks.project_id_required",
+        "ruleId": "project_id_required",
+        "sql": "SELECT count(*)::int AS missing_project_id FROM public.tasks WHERE project_id IS NULL;"
+      },
+      {
+        "id": "tasks.progress_range_0_100",
+        "ruleId": "progress_range_0_100",
+        "sql": "SELECT count(*)::int AS invalid_progress FROM public.tasks WHERE progress IS NOT NULL AND (progress < 0 OR progress > 100);"
+      },
+      {
+        "id": "task_baselines.project_id_required",
+        "ruleId": "project_id_required",
+        "sql": "SELECT count(*)::int AS missing_project_id FROM public.task_baselines WHERE project_id IS NULL;"
+      },
+      {
+        "id": "task_baselines.baseline_version_required",
+        "ruleId": "baseline_version_required",
+        "sql": "SELECT count(*)::int AS missing_baseline_version\nFROM public.task_baselines\nWHERE status IN ('confirmed', 'pending_realign', 'archived', 'closed')\n  AND version IS NULL;"
+      },
+      {
+        "id": "task_baseline_items.project_id_required",
+        "ruleId": "project_id_required",
+        "sql": "SELECT count(*)::int AS missing_project_id FROM public.task_baseline_items WHERE project_id IS NULL;"
+      },
+      {
+        "id": "task_baseline_items.baseline_version_required",
+        "ruleId": "baseline_version_required",
+        "sql": "SELECT count(*)::int AS missing_baseline_version_id FROM public.task_baseline_items WHERE baseline_version_id IS NULL;"
+      },
+      {
+        "id": "task_baseline_items.baseline_dates_required_for_published_baseline",
+        "ruleId": "baseline_dates_required_for_published_baseline",
+        "sql": "SELECT count(*)::int AS published_items_missing_dates\nFROM public.task_baseline_items item\nJOIN public.task_baselines baseline\n  ON baseline.id = item.baseline_version_id\nWHERE baseline.status IN ('confirmed', 'closed')\n  AND (item.planned_start_date IS NULL OR item.planned_end_date IS NULL);"
+      },
+      {
+        "id": "monthly_plans.project_id_required",
+        "ruleId": "project_id_required",
+        "sql": "SELECT count(*)::int AS missing_project_id FROM public.monthly_plans WHERE project_id IS NULL;"
+      },
+      {
+        "id": "monthly_plans.monthly_plan_month_required",
+        "ruleId": "monthly_plan_month_required",
+        "sql": "SELECT count(*)::int AS missing_month FROM public.monthly_plans WHERE month IS NULL OR trim(month) = '';"
+      },
+      {
+        "id": "monthly_plans.monthly_plan_status_required",
+        "ruleId": "monthly_plan_status_required",
+        "sql": "SELECT count(*)::int AS missing_status FROM public.monthly_plans WHERE status IS NULL OR trim(status) = '';"
+      },
+      {
+        "id": "monthly_plan_items.project_id_required",
+        "ruleId": "project_id_required",
+        "sql": "SELECT count(*)::int AS missing_project_id FROM public.monthly_plan_items WHERE project_id IS NULL;"
+      },
+      {
+        "id": "monthly_plan_items.monthly_plan_item_plan_ref_required",
+        "ruleId": "monthly_plan_item_plan_ref_required",
+        "sql": "SELECT count(*)::int AS missing_monthly_plan_version_id FROM public.monthly_plan_items WHERE monthly_plan_version_id IS NULL;"
+      },
+      {
+        "id": "monthly_plan_items.monthly_plan_item_task_or_title_required",
+        "ruleId": "monthly_plan_item_task_or_title_required",
+        "sql": "SELECT count(*)::int AS missing_task_or_title FROM public.monthly_plan_items WHERE source_task_id IS NULL AND (title IS NULL OR trim(title) = '');"
+      },
+      {
+        "id": "task_dependencies.project_id_required",
+        "ruleId": "project_id_required",
+        "sql": "SELECT count(*)::int AS missing_project_id FROM public.task_dependencies WHERE project_id IS NULL;"
+      },
+      {
+        "id": "task_dependencies.dependency_endpoints_required",
+        "ruleId": "dependency_endpoints_required",
+        "sql": "SELECT count(*)::int AS missing_dependency_endpoint FROM public.task_dependencies WHERE task_id IS NULL OR dependency_task_id IS NULL;"
+      },
+      {
+        "id": "task_dependencies.dependency_no_self_loop",
+        "ruleId": "dependency_no_self_loop",
+        "sql": "SELECT count(*)::int AS self_loop_count FROM public.task_dependencies WHERE task_id = dependency_task_id;"
+      },
+      {
+        "id": "project_daily_snapshot.project_id_required",
+        "ruleId": "project_id_required",
+        "sql": "SELECT count(*)::int AS missing_project_id FROM public.project_daily_snapshot WHERE project_id IS NULL;"
+      },
+      {
+        "id": "project_daily_snapshot.progress_range_0_100",
+        "ruleId": "progress_range_0_100",
+        "sql": "SELECT count(*)::int AS invalid_progress\nFROM public.project_daily_snapshot\nWHERE (overall_progress IS NOT NULL AND (overall_progress < 0 OR overall_progress > 100))\n   OR (task_progress IS NOT NULL AND (task_progress < 0 OR task_progress > 100))\n   OR (planned_cumulative IS NOT NULL AND (planned_cumulative < 0 OR planned_cumulative > 100));"
+      },
+      {
+        "id": "project_daily_snapshot.snapshot_date_required",
+        "ruleId": "snapshot_date_required",
+        "sql": "SELECT count(*)::int AS missing_snapshot_date FROM public.project_daily_snapshot WHERE snapshot_date IS NULL;"
+      },
+      {
+        "id": "project_daily_snapshot.one_snapshot_per_project_per_day",
+        "ruleId": "one_snapshot_per_project_per_day",
+        "sql": "SELECT project_id, snapshot_date, count(*)::int AS row_count\nFROM public.project_daily_snapshot\nGROUP BY project_id, snapshot_date\nHAVING count(*) > 1\nORDER BY row_count DESC, project_id, snapshot_date;"
+      },
+      {
+        "id": "duration_experience_samples.project_id_required",
+        "ruleId": "project_id_required",
+        "sql": "SELECT count(*)::int AS missing_project_id FROM public.duration_experience_samples WHERE project_id IS NULL;"
+      },
+      {
+        "id": "duration_experience_samples.duration_sample_source_required",
+        "ruleId": "duration_sample_source_required",
+        "sql": "SELECT count(*)::int AS missing_source_type FROM public.duration_experience_samples WHERE source_type IS NULL OR trim(source_type) = '';"
+      },
+      {
+        "id": "duration_experience_samples.duration_days_non_negative",
+        "ruleId": "duration_days_non_negative",
+        "sql": "SELECT count(*)::int AS negative_duration_count\nFROM public.duration_experience_samples\nWHERE planned_duration < 0\n   OR actual_duration < 0;"
+      },
+      {
+        "id": "duration_experience_samples.duration_sample_status_required",
+        "ruleId": "duration_sample_status_required",
+        "sql": "SELECT count(*)::int AS missing_sample_status FROM public.duration_experience_samples WHERE sample_status IS NULL OR trim(sample_status) = '';"
+      },
+      {
+        "id": "progress_knowledge_sources.source_key_required",
+        "ruleId": "source_key_required",
+        "sql": "SELECT count(*)::int AS missing_source_key FROM public.progress_knowledge_sources WHERE source_key IS NULL OR trim(source_key) = '';"
+      },
+      {
+        "id": "progress_knowledge_sources.source_url_or_locator_required",
+        "ruleId": "source_url_or_locator_required",
+        "sql": "SELECT count(*)::int AS missing_source_locator\nFROM public.progress_knowledge_sources\nWHERE coalesce(source_url, '') = ''\n  AND (source_metadata IS NULL OR source_metadata = '{}'::jsonb);"
+      },
+      {
+        "id": "progress_knowledge_sources.trust_level_required",
+        "ruleId": "trust_level_required",
+        "sql": "SELECT count(*)::int AS missing_trust_level FROM public.progress_knowledge_sources WHERE source_trust_level IS NULL OR trim(source_trust_level) = '';"
+      },
+      {
+        "id": "progress_knowledge_sources.source_governance_status_required",
+        "ruleId": "source_governance_status_required",
+        "sql": "SELECT count(*)::int AS missing_governance_status FROM public.progress_knowledge_sources WHERE governance_status IS NULL OR trim(governance_status) = '';"
+      },
+      {
+        "id": "progress_knowledge_documents.document_key_required",
+        "ruleId": "document_key_required",
+        "sql": "SELECT count(*)::int AS missing_document_key FROM public.progress_knowledge_documents WHERE document_key IS NULL OR trim(document_key) = '';"
+      },
+      {
+        "id": "progress_knowledge_documents.document_type_required",
+        "ruleId": "document_type_required",
+        "sql": "SELECT count(*)::int AS missing_document_type FROM public.progress_knowledge_documents WHERE document_type IS NULL OR trim(document_type) = '';"
+      },
+      {
+        "id": "progress_knowledge_documents.extraction_status_required",
+        "ruleId": "extraction_status_required",
+        "sql": "SELECT count(*)::int AS missing_extraction_status FROM public.progress_knowledge_documents WHERE extraction_status IS NULL OR trim(extraction_status) = '';"
+      },
+      {
+        "id": "progress_knowledge_documents.hash_required_when_downloaded",
+        "ruleId": "hash_required_when_downloaded",
+        "sql": "SELECT count(*)::int AS downloaded_without_hash FROM public.progress_knowledge_documents WHERE coalesce(storage_path, '') <> '' AND coalesce(content_hash, '') = '';"
+      }
+    ]
+  },
+  "outputFiles": [
+    "readonly-db-audit-package.json",
+    "readonly-db-audit-package.md",
+    "readonly-db-audit.sql"
+  ]
+}

@@ -16,7 +16,7 @@ describe('warning chain escalation boundaries', () => {
     ).toBe(true)
   })
 
-  it('downgrades pending delay warnings to info while the request is pending', () => {
+  it('downgrades active delay warnings to info while the signal is being tracked', () => {
     expect(
       resolvePendingDelayWarningSeverity({
         warning_level: 'critical',
@@ -24,7 +24,7 @@ describe('warning chain escalation boundaries', () => {
       }),
     ).toEqual({
       severity: 'info',
-      note: '延期审批中',
+      note: '延期信号跟踪中',
       escalated: false,
     })
   })

@@ -1,3 +1,7 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
@@ -979,5 +983,21 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
     expect(audit.runtimeConsumerBusinessPathIntegrationCoverage.status)
       .toBe('runtime_consumer_business_path_integration_ready')
     expect(audit.runtimeConsumerBusinessPathIntegrationCoverage.missingIntegrations).toEqual([])
+  })
+
+  it('keeps the canonical DB reader on fixed rawQuery branches instead of a generated SQL executor', () => {
+    const sourcePath = resolve(
+      fileURLToPath(new URL('..', import.meta.url)),
+      'services',
+      'durationLiveLearningProductionEvidenceReaderService.ts',
+    )
+    const source = readFileSync(sourcePath, 'utf8')
+
+    expect(source).not.toContain('async function defaultQueryExec')
+    expect(source).not.toContain('rawQuery(sql')
+    expect(source).not.toContain('queryExec ?? defaultQueryExec')
+    expect(source).toContain('async function queryCanonicalSourceTableRows')
+    expect(source).toContain('from public.duration_experience_samples')
+    expect(source).toContain('from public.runtime_consumer_runtime_calls')
   })
 })

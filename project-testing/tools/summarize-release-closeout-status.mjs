@@ -12,6 +12,7 @@ const DEFAULT_REPORT_ROOT = path.join(REPO_ROOT, 'project-testing/reports');
 export function parseArgs(argv = process.argv.slice(2)) {
   const options = {
     reportRoot: DEFAULT_REPORT_ROOT,
+    currentReleaseDir: null,
     handoffPackPath: null,
     handoffReadinessPath: null,
     closeoutDecisionPath: null,
@@ -32,6 +33,8 @@ export function parseArgs(argv = process.argv.slice(2)) {
 
     if (arg === '--report-root') {
       options.reportRoot = path.resolve(nextValue());
+    } else if (arg === '--current-release-dir') {
+      options.currentReleaseDir = path.resolve(nextValue());
     } else if (arg === '--handoff-pack') {
       options.handoffPackPath = path.resolve(nextValue());
     } else if (arg === '--handoff-readiness') {
@@ -52,34 +55,51 @@ export function parseArgs(argv = process.argv.slice(2)) {
 
 export async function summarizeReleaseCloseoutStatus({
   reportRoot = DEFAULT_REPORT_ROOT,
+  currentReleaseDir = null,
   handoffPackPath = null,
   handoffReadinessPath = null,
   closeoutDecisionPath = null,
   now = new Date(),
 } = {}) {
   const root = path.resolve(reportRoot);
+  const scopedReleaseDir = currentReleaseDir ? path.resolve(currentReleaseDir) : null;
   const files = await listFiles(root);
+  const selectedHandoffPackPath = handoffPackPath ?? latestByBasename(files, 'handoff-plan.json');
+  const selectedHandoffReadinessPath = handoffReadinessPath
+    ?? (
+      scopedReleaseDir && selectedHandoffPackPath
+        ? path.join(path.dirname(selectedHandoffPackPath), 'handoff-readiness.json')
+        : await latestJsonByBasenamePattern(files, /^handoff-readiness(?:\.[\w-]+)?\.json$/u, [
+          'evaluatedAt',
+          'generatedAt',
+          'checkedAt',
+          'validatedAt',
+        ])
+    );
   const inputs = {
-    handoffPack: await readOptionalJson(handoffPackPath ?? latestByBasename(files, 'handoff-plan.json')),
-    handoffReadiness: await readOptionalJson(
-      handoffReadinessPath ?? await latestJsonByBasenamePattern(files, /^handoff-readiness(?:\.[\w-]+)?\.json$/u, [
-        'evaluatedAt',
-        'generatedAt',
-        'checkedAt',
-        'validatedAt',
-      ]),
-    ),
+    handoffPack: await readOptionalJson(selectedHandoffPackPath),
+    handoffReadiness: await readOptionalJson(selectedHandoffReadinessPath),
     closeoutDecision: await readOptionalJson(
-      closeoutDecisionPath ?? await latestJsonByBasename(files, 'closeout-decision.json', [
-        'evaluatedAt',
-        'generatedAt',
-        'validatedAt',
-      ]),
+      closeoutDecisionPath
+        ?? (
+          scopedReleaseDir
+            ? path.join(scopedReleaseDir, 'closeout-decision.json')
+            : await latestJsonByBasename(files, 'closeout-decision.json', [
+              'evaluatedAt',
+              'generatedAt',
+              'validatedAt',
+            ])
+        ),
     ),
   };
   const stages = buildStages(inputs);
   const openGateIds = collectOpenGateIds(inputs);
-  const consistencyIssues = collectConsistencyIssues({ stages, inputs });
+  const consistencyIssues = collectConsistencyIssues({
+    stages,
+    inputs,
+    currentReleaseDir: scopedReleaseDir,
+    selectedHandoffPackPath,
+  });
   const mayCloseAll = stages.handoffReadiness.status === 'pass' && stages.closeoutDecision.status === 'pass';
   const nextActions = deriveNextActions({
     stages,
@@ -90,7 +110,16 @@ export async function summarizeReleaseCloseoutStatus({
 
   return {
     schemaVersion: 'workbuddy-release-closeout-status-index/v1',
+    decisionScope: 'closeout-status-index',
+    decisionAuthority: {
+      level: 'closeout-index',
+      authoritativeForCloseout: false,
+      authoritativeForRelease: false,
+      authoritativeForProduction: false,
+      releaseDecisionArtifact: 'v1424-release-decision.json',
+    },
     reportRoot: root,
+    currentReleaseDir: scopedReleaseDir,
     generatedAt: now.toISOString(),
     overallStatus: deriveOverallStatus(stages, openGateIds),
     mayRunLiveOrDb: stages.handoffReadiness.status === 'pass',
@@ -140,15 +169,18 @@ function buildStages(inputs) {
 }
 
 function collectOpenGateIds(inputs) {
+  const closeoutOpenGateIds = Array.isArray(inputs.closeoutDecision.document?.decision?.openGateIds)
+    ? inputs.closeoutDecision.document.decision.openGateIds
+    : [];
+
   if (inputs.handoffReadiness.document?.status !== 'pass' && Array.isArray(inputs.handoffReadiness.document?.gates)) {
-    return inputs.handoffReadiness.document.gates
+    const handoffBlockedGateIds = inputs.handoffReadiness.document.gates
       .filter((gate) => gate.readyToRun === false)
       .map((gate) => gate.id);
+    return unique([...handoffBlockedGateIds, ...closeoutOpenGateIds]);
   }
 
-  if (Array.isArray(inputs.closeoutDecision.document?.decision?.openGateIds)) {
-    return inputs.closeoutDecision.document.decision.openGateIds;
-  }
+  if (closeoutOpenGateIds.length > 0) return closeoutOpenGateIds;
 
   if (Array.isArray(inputs.handoffReadiness.document?.gates)) {
     return inputs.handoffReadiness.document.gates
@@ -157,6 +189,10 @@ function collectOpenGateIds(inputs) {
   }
 
   return [];
+}
+
+function unique(values) {
+  return Array.from(new Set(values.filter(Boolean)));
 }
 
 function deriveOverallStatus(stages, openGateIds) {
@@ -172,10 +208,19 @@ function deriveOverallStatus(stages, openGateIds) {
     return 'closeout-ready';
   }
 
+  if (stages.closeoutDecision.status === 'fail') {
+    return 'open';
+  }
+
   return 'ready-for-live-db-execution';
 }
 
-function collectConsistencyIssues({ stages, inputs }) {
+function collectConsistencyIssues({
+  stages,
+  inputs,
+  currentReleaseDir = null,
+  selectedHandoffPackPath = null,
+}) {
   const issues = [];
 
   if (stages.handoffReadiness.status !== 'pass' && stages.closeoutDecision.status === 'pass') {
@@ -185,6 +230,26 @@ function collectConsistencyIssues({ stages, inputs }) {
       detail: 'A passing closeout decision exists, but the selected handoff readiness is not pass. Do not use archived or cross-environment closeout evidence as the current live/DB execution pass.',
       handoffReadinessPath: inputs.handoffReadiness.path,
       closeoutDecisionPath: inputs.closeoutDecision.path,
+    });
+  }
+
+  if (currentReleaseDir && !inputs.closeoutDecision.document) {
+    issues.push({
+      code: 'current-release-closeout-decision-missing',
+      severity: 'blocking',
+      detail: 'The selected current release directory has no closeout-decision.json. Do not reuse archived closeout decisions from another release directory for this run.',
+      currentReleaseDir,
+      expectedCloseoutDecisionPath: inputs.closeoutDecision.path,
+    });
+  }
+
+  if (currentReleaseDir && selectedHandoffPackPath && !inputs.handoffReadiness.document) {
+    issues.push({
+      code: 'current-handoff-readiness-missing',
+      severity: 'blocking',
+      detail: 'The selected handoff pack has no matching handoff-readiness.json. Do not reuse an older readiness report from another handoff or CI run.',
+      handoffPackPath: selectedHandoffPackPath,
+      expectedHandoffReadinessPath: inputs.handoffReadiness.path,
     });
   }
 
@@ -414,6 +479,9 @@ function renderMarkdown(index) {
   const lines = [
     '# WorkBuddy Release Closeout Status Index',
     '',
+    '- Decision scope: closeout evidence index only',
+    '- Release authority: no; see v1424-release-decision.json',
+    '- Production-ready authority: no',
     `- Overall status: ${index.overallStatus}`,
     `- May run live/DB: ${index.mayRunLiveOrDb ? 'yes' : 'no'}`,
     `- May close all: ${index.mayCloseAll ? 'yes' : 'no'}`,

@@ -5,6 +5,8 @@ import { logger } from '../middleware/logger.js'
 import type { DurationContextFactorKey, DurationContextSummary } from './durationContextService.js'
 import { summarizeEffectiveDurationContextContributions } from './durationContextService.js'
 import { getTaskDurationSuggestion } from './durationSuggestionService.js'
+import { assembleDurationInput } from './durationInputAssemblerService.js'
+import type { DurationAlgorithmHydratableInput } from './durationAlgorithmInputHydrationService.js'
 import { supabase } from './dbService.js'
 import { query as rawQuery } from '../database.js'
 import {
@@ -13,9 +15,9 @@ import {
   type ProgressAnomalySnapshot,
 } from './progressAnomalyService.js'
 import {
-  buildProjectProgressVelocityLearning,
   type ProgressVelocityLearningResult,
 } from './progressVelocityLearningService.js'
+import { loadPublishedProgressVelocityRuntime } from './progressVelocityRuntimePublicationService.js'
 import {
   resolveAlgorithmSeedRecords,
   type ResolvedAlgorithmSeedRecord,
@@ -31,7 +33,7 @@ import {
   type ConstructionCalendarContext,
   type ConstructionCalendarWindow,
 } from './constructionCalendar.js'
-import { delayDayDelta, signedDurationDayDelta } from '../utils/durationDays.js'
+import { delayDayDelta, normalizeDateOnlyText, signedDurationDayDelta } from '../utils/durationDays.js'
 import {
   buildAcceptancePlanImpactSignals,
   buildConditionImpactSignals,
@@ -62,11 +64,24 @@ import {
   recordTaskDurationForecastConsumedArtifacts,
   type DurationRuntimeConsumerFacadeArtifactsResult,
 } from './durationRuntimeConsumerObservationAdapterService.js'
+import {
+  readPlanningReplayCalibrationReadback,
+  type PlanningReplayCalibrationReadback,
+} from './planningReplayCalibrationService.js'
+import {
+  capDurationRelativeToBaseline,
+  orderDurationBand,
+  type DurationPlausibilityWarning,
+} from './durationEngineeringPlausibilityGuardrailService.js'
 import type {
   DurationRuntimeConsumerObservationQueryExec,
   DurationRuntimeConsumerObservedArtifact,
 } from './durationRuntimeConsumerObservationService.js'
+import {
+  createDurationRuntimeConsumerObservationQueryExec,
+} from './durationRuntimeConsumerObservationService.js'
 import { resolveLiveTaskCriticalityProjection } from './taskCriticalityProjectionService.js'
+import { listAcceptancePlanIdsCoveringTask } from './acceptancePlanTaskLinkService.js'
 
 export interface TaskDurationForecast {
   taskId: string
@@ -124,6 +139,7 @@ export interface DurationProbabilityWindow {
   variance: number | null
   standardDeviationDays: number | null
   confidenceBandWidthDays: number
+  plausibilityWarnings?: DurationPlausibilityWarning[]
 }
 
 type ForecastTaskRow = {
@@ -401,6 +417,7 @@ type ForecastResidualOverlayRow = {
 
 const RESIDUAL_OVERLAY_MIN_PROJECT_SAMPLE_COUNT = 5
 const RESIDUAL_OVERLAY_MIN_COMPANY_SAMPLE_COUNT = 10
+const PROJECT_FORECAST_OVERLAY_MIN_SAMPLE_COUNT = 5
 
 type ForecastModelProfile = {
   id: string | null
@@ -443,6 +460,8 @@ type ForecastPrecisionLevel = 'fast' | 'balanced' | 'accurate'
 type ForecastWritePolicy = 'insert_history' | 'update_current' | 'read_only'
 
 export type ForecastTaskDurationOptions = {
+  projectId?: string | null
+  visibleProjectIds?: string[] | null
   triggerContext?: ForecastTriggerContext
   precisionLevel?: ForecastPrecisionLevel
   useCache?: boolean
@@ -452,12 +471,19 @@ export type ForecastTaskDurationOptions = {
 }
 
 type NormalizedForecastOptions = {
+  projectId: string | null
+  visibleProjectIds: string[]
   triggerContext: ForecastTriggerContext
   precisionLevel: ForecastPrecisionLevel
   useCache: boolean
   writePolicy: ForecastWritePolicy
   dependencyDepth: number
   runtimeConsumerObservationQueryExec?: DurationRuntimeConsumerObservationQueryExec | null
+}
+
+type TaskForecastWorkspaceScope = {
+  projectId?: string | null
+  visibleProjectIds?: string[] | null
 }
 
 type DurationSuggestionResult = Awaited<ReturnType<typeof getTaskDurationSuggestion>>
@@ -635,6 +661,8 @@ const DEFAULT_EARLIEST_START_RULE_POLICY: EarliestStartRulePolicy = {
 }
 
 const DEFAULT_FORECAST_OPTIONS: NormalizedForecastOptions = {
+  projectId: null,
+  visibleProjectIds: [],
   triggerContext: 'api_request',
   precisionLevel: 'balanced',
   useCache: false,
@@ -713,6 +741,10 @@ function normalizeForecastOptions(options?: ForecastTaskDurationOptions): Normal
   ) || 1)))
 
   return {
+    projectId: normalizeId(options?.projectId) || null,
+    visibleProjectIds: [...new Set((options?.visibleProjectIds ?? [])
+      .map(normalizeId)
+      .filter((projectId): projectId is string => Boolean(projectId)))],
     triggerContext,
     precisionLevel: FORECAST_PRECISION_LEVELS.has(rawPrecision)
       ? rawPrecision
@@ -729,9 +761,7 @@ function normalizeForecastOptions(options?: ForecastTaskDurationOptions): Normal
 }
 
 function normalizeDate(value: unknown) {
-  const text = String(value ?? '').trim()
-  if (!text) return null
-  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : text.slice(0, 10)
+  return normalizeDateOnlyText(typeof value === 'string' || value instanceof Date ? value : null)
 }
 
 function parseDate(value: unknown) {
@@ -762,13 +792,6 @@ function normalizeId(value: unknown) {
 
 function normalizeText(value: unknown) {
   return String(value ?? '').trim()
-}
-
-function buildTaskDurationForecastRuntimeConsumerObservationQueryExec(): DurationRuntimeConsumerObservationQueryExec {
-  return async <T = Record<string, unknown>>(sql: string, params: unknown[] = []) => {
-    const result = await rawQuery(sql, params as any[])
-    return result.rows as T[]
-  }
 }
 
 export function buildTaskDurationForecastConsumedArtifacts(input: {
@@ -802,7 +825,7 @@ export function buildTaskDurationForecastConsumedArtifacts(input: {
 export function recordTaskDurationForecastRuntimeConsumption(
   input: RecordTaskDurationForecastRuntimeConsumptionInput,
 ): Promise<DurationRuntimeConsumerFacadeArtifactsResult> {
-  const queryExec = input.queryExec ?? buildTaskDurationForecastRuntimeConsumerObservationQueryExec()
+  const queryExec = createDurationRuntimeConsumerObservationQueryExec(input.queryExec)
   const projectId = normalizeText(input.projectId)
   const taskId = normalizeText(input.taskId || input.forecast.taskId)
   return recordTaskDurationForecastConsumedArtifacts({
@@ -1013,6 +1036,37 @@ function candidateDays(value: number | null | undefined) {
   return Math.max(1, Math.min(365, Math.ceil(Number(value))))
 }
 
+function remainingForecastRelativeBaselineDays(
+  task: ForecastTaskRow | null,
+  calendar: WorkCalendarContext,
+  referenceTotal: number | null,
+) {
+  return plannedProductionDurationDays(task, calendar)
+    ?? positiveCeil(referenceTotal)
+    ?? null
+}
+
+function capTaskRemainingForecastDays(params: {
+  days: number | null
+  baselineDays: number | null
+  task: ForecastTaskRow | null
+  ruleId: string
+}): { days: number | null, warnings: DurationPlausibilityWarning[] } {
+  const capped = capDurationRelativeToBaseline({
+    engineCode: 'task_remaining_forecast',
+    durationDays: params.days,
+    baselineDays: params.baselineDays,
+    multiplier: 10,
+    minCapDays: 30,
+    ruleId: params.ruleId,
+    message: 'Task remaining forecast exceeds 10x the planned/reference duration and was clamped for forecast stability.',
+    taskId: params.task?.id ?? null,
+    title: params.task?.title ?? null,
+    standardWorkCode: params.task?.standard_work_code ?? null,
+  })
+  return { days: capped.durationDays, warnings: capped.warnings }
+}
+
 function smoothStep(value: number) {
   const x = clamp(value, 0, 1)
   return x * x * (3 - 2 * x)
@@ -1164,7 +1218,16 @@ function buildProbabilityDurationWindow(params: {
   const derivedP20 = variance !== null
     ? Math.max(1, Math.floor(p50 * (1 - clamp(variance, 0.02, 0.45) * 2.5)))
     : Math.max(1, Math.floor(p50 - Math.max(1, p80 - p50) * 0.75))
-  const p20 = Math.min(p50, explicitP20 ?? derivedP20)
+  const rawP20 = explicitP20 ?? derivedP20
+  const orderedBand = orderDurationBand({
+    engineCode: 'task_remaining_forecast',
+    p20Days: rawP20,
+    p50Days: p50,
+    p80Days: Math.max(p50, p80),
+  })
+  const p20 = orderedBand.band.p20Days ?? Math.min(p50, rawP20)
+  const orderedP50 = orderedBand.band.p50Days ?? p50
+  const orderedP80 = orderedBand.band.p80Days ?? Math.max(p50, p80)
   const remainingRatio = remainingEffortRatioForCurve(params.progressCurveType ?? 'linear', params.progress)
   if (remainingRatio <= 0) return null
   const curveMultiplierValue = Math.max(0.1, Number(params.progressCurveMultiplier ?? 1) || 1)
@@ -1173,8 +1236,8 @@ function buildProbabilityDurationWindow(params: {
     return curveAwareBase === null ? 0 : candidateDays(curveAwareBase * curveMultiplierValue) ?? 0
   }
   const p20RemainingDays = toRemainingDays(p20)
-  const p50RemainingDays = toRemainingDays(p50)
-  const p80RemainingDays = Math.max(p50RemainingDays, toRemainingDays(Math.max(p50, p80)))
+  const p50RemainingDays = toRemainingDays(orderedP50)
+  const p80RemainingDays = Math.max(p50RemainingDays, toRemainingDays(orderedP80))
   if (p20RemainingDays <= 0 || p50RemainingDays <= 0 || p80RemainingDays <= 0) return null
   const expectedRemainingDays = Math.max(
     1,
@@ -1194,6 +1257,7 @@ function buildProbabilityDurationWindow(params: {
     variance: variance === null ? null : round(variance, 4),
     standardDeviationDays,
     confidenceBandWidthDays: Math.max(0, p80RemainingDays - p20RemainingDays),
+    plausibilityWarnings: orderedBand.warnings,
   }
 }
 
@@ -1297,11 +1361,31 @@ function resolveTaskGateStatusDateSemantic(task: ForecastTaskRow | null | undefi
   }
 }
 
-async function loadTask(taskId: string): Promise<ForecastTaskRow | null> {
-  const { data, error } = await (supabase as any)
+function taskForecastWorkspaceProjectIds(workspaceScope: TaskForecastWorkspaceScope) {
+  const projectId = normalizeId(workspaceScope.projectId)
+  if (projectId) return [projectId]
+  return [...new Set((workspaceScope.visibleProjectIds ?? [])
+    .map(normalizeId)
+    .filter((value): value is string => Boolean(value)))]
+}
+
+function applyTaskForecastWorkspaceScope(query: any, workspaceScope: TaskForecastWorkspaceScope) {
+  const projectIds = taskForecastWorkspaceProjectIds(workspaceScope)
+  if (projectIds.length === 0) throw new Error('TASK_DURATION_FORECAST_PROJECT_SCOPE_REQUIRED')
+  return projectIds.length === 1
+    ? query.eq('project_id', projectIds[0])
+    : query.in('project_id', projectIds)
+}
+
+async function loadTask(
+  taskId: string,
+  workspaceScope: TaskForecastWorkspaceScope,
+): Promise<ForecastTaskRow | null> {
+  const query = (supabase as any)
     .from('tasks')
     .select('id, project_id, template_node_id, wbs_node_type, engineering_category_id, standard_work_code, standard_work_name, title, planned_start_date, planned_end_date, start_date, end_date, actual_start_date, actual_end_date, status, progress, ready_for_start, dependency_status, condition_status, obstacle_status, progress_impact_level, blocked_for_progress, readiness_summary, building_object_id, basement_object_id, floor_object_id, physical_zone_object_id, functional_area_object_id, participant_unit_id, is_critical, total_float_days, free_float_days, successor_count, milestone_distance_days, downstream_milestone_distance_days, criticality_weight, acceptance_required, material_required, standard_task_metadata')
     .eq('id', taskId)
+  const { data, error } = await applyTaskForecastWorkspaceScope(query, workspaceScope)
     .maybeSingle()
 
   if (error) {
@@ -1309,7 +1393,8 @@ async function loadTask(taskId: string): Promise<ForecastTaskRow | null> {
     return null
   }
 
-  return (data ?? null) as ForecastTaskRow | null
+  if (!data) throw new Error('TASK_DURATION_FORECAST_PROJECT_SCOPE_MISMATCH')
+  return data as ForecastTaskRow
 }
 
 async function buildForecastProjectGenerationFactInput(task: ForecastTaskRow | null) {
@@ -1413,12 +1498,16 @@ async function loadActiveDependencies(taskId: string, projectId?: string | null)
   }
 }
 
-async function loadDependencyTasks(taskIds: string[]): Promise<Map<string, ForecastTaskRow>> {
+async function loadDependencyTasks(
+  taskIds: string[],
+  projectId: string,
+): Promise<Map<string, ForecastTaskRow>> {
   if (taskIds.length === 0) return new Map()
   const { data, error } = await (supabase as any)
     .from('tasks')
     .select('id, project_id, title, planned_start_date, planned_end_date, start_date, end_date, actual_start_date, actual_end_date, status, progress, ready_for_start, dependency_status, condition_status, obstacle_status, progress_impact_level, blocked_for_progress, readiness_summary')
     .in('id', taskIds)
+    .eq('project_id', projectId)
 
   if (error) {
     logger.warn('[taskDurationForecastService] failed to load dependency tasks', { taskIds, error })
@@ -1428,13 +1517,17 @@ async function loadDependencyTasks(taskIds: string[]): Promise<Map<string, Forec
   return new Map((Array.isArray(data) ? data : []).map((task: ForecastTaskRow) => [String(task.id ?? ''), task]))
 }
 
-async function loadCurrentDependencyForecasts(taskIds: string[]): Promise<Map<string, ForecastDependencyForecastRow>> {
+async function loadCurrentDependencyForecasts(
+  taskIds: string[],
+  projectId: string,
+): Promise<Map<string, ForecastDependencyForecastRow>> {
   if (taskIds.length === 0) return new Map()
   try {
     const { data, error } = await (supabase as any)
       .from('task_duration_forecasts')
       .select('task_id, forecast_finish_date, remaining_duration_days, forecast_delay_days, created_at')
       .in('task_id', taskIds)
+      .eq('project_id', projectId)
       .eq('is_current', true)
     if (error) throw error
     return new Map((Array.isArray(data) ? data : [])
@@ -1445,13 +1538,17 @@ async function loadCurrentDependencyForecasts(taskIds: string[]): Promise<Map<st
   }
 }
 
-async function loadCurrentForecast(taskId: string): Promise<ForecastDependencyForecastRow | null> {
+async function loadCurrentForecast(
+  taskId: string,
+  workspaceScope: TaskForecastWorkspaceScope,
+): Promise<ForecastDependencyForecastRow | null> {
   try {
-    const { data, error } = await (supabase as any)
+    const query = (supabase as any)
       .from('task_duration_forecasts')
       .select('id, project_id, task_id, recommended_duration_days, execution_reference_days, conservative_duration_days, remaining_duration_days, forecast_finish_date, forecast_delay_days, confidence_level, confidence_score, forecast_source, duration_calibration_source, duration_provenance, business_reason, factor_summary, calculation_context, delay_risk_index, model_version, generated_at, created_at, metadata')
       .eq('task_id', taskId)
       .eq('is_current', true)
+    const { data, error } = await applyTaskForecastWorkspaceScope(query, workspaceScope)
       .maybeSingle()
     if (error) throw error
     return data ?? null
@@ -1461,9 +1558,14 @@ async function loadCurrentForecast(taskId: string): Promise<ForecastDependencyFo
   }
 }
 
-async function loadCurrentForecasts(taskIds: string[]): Promise<Map<string, ForecastDependencyForecastRow>> {
+async function loadCurrentForecasts(
+  taskIds: string[],
+  workspaceScope: TaskForecastWorkspaceScope,
+): Promise<Map<string, ForecastDependencyForecastRow>> {
   const uniqueTaskIds = [...new Set(taskIds.map(normalizeId).filter((id): id is string => Boolean(id)))]
   if (uniqueTaskIds.length === 0) return new Map()
+  const visibleProjectIds = taskForecastWorkspaceProjectIds(workspaceScope)
+  if (visibleProjectIds.length === 0) throw new Error('TASK_DURATION_FORECAST_PROJECT_SCOPE_REQUIRED')
 
   if (process.env.NODE_ENV !== 'test' && process.env.VITEST !== 'true') {
     try {
@@ -1490,10 +1592,11 @@ async function loadCurrentForecasts(taskIds: string[]): Promise<Map<string, Fore
                 generated_at,
                 created_at,
                 metadata
-           FROM public.task_duration_forecasts
-          WHERE task_id = ANY($1::uuid[])
+          FROM public.task_duration_forecasts
+          WHERE project_id = ANY($1::uuid[])
+            AND task_id = ANY($2::uuid[])
             AND is_current = true`,
-        [uniqueTaskIds],
+        [visibleProjectIds, uniqueTaskIds],
       )
       return new Map((result.rows as ForecastDependencyForecastRow[])
         .map((forecast) => [normalizeId(forecast.task_id), forecast] as const)
@@ -1504,11 +1607,12 @@ async function loadCurrentForecasts(taskIds: string[]): Promise<Map<string, Fore
   }
 
   try {
-    const { data, error } = await (supabase as any)
+    const query = (supabase as any)
       .from('task_duration_forecasts')
       .select('id, project_id, task_id, recommended_duration_days, execution_reference_days, conservative_duration_days, remaining_duration_days, forecast_finish_date, forecast_delay_days, confidence_level, confidence_score, forecast_source, duration_calibration_source, duration_provenance, business_reason, factor_summary, calculation_context, delay_risk_index, model_version, generated_at, created_at, metadata')
       .in('task_id', uniqueTaskIds)
       .eq('is_current', true)
+    const { data, error } = await applyTaskForecastWorkspaceScope(query, workspaceScope)
     if (error) throw error
     return new Map((Array.isArray(data) ? data : [])
       .map((forecast: ForecastDependencyForecastRow) => [normalizeId(forecast.task_id), forecast] as const)
@@ -1632,6 +1736,11 @@ function taskRemainingForecastRuntimeConsumptionState(forecastDates: ForecastMod
     : 'runtime_snapshot'
 }
 
+function taskRemainingForecastDedupeDateKey(value: string) {
+  const normalized = normalizeDate(value)
+  return normalized ?? value.slice(0, 10)
+}
+
 async function recordTaskRemainingForecastPredictionEvent(params: {
   taskId: string
   task: ForecastTaskRow | null
@@ -1653,7 +1762,7 @@ async function recordTaskRemainingForecastPredictionEvent(params: {
         params.taskId,
         'remaining_duration_forecast',
         params.options.triggerContext,
-        params.generatedAt,
+        taskRemainingForecastDedupeDateKey(params.generatedAt),
       ].join(':'),
       predictionBasis: params.suggestion.forecastSource,
       predictionSource: 'taskDurationForecastService',
@@ -1871,6 +1980,7 @@ async function loadDependencyContext(
   maxDepth = 1,
 ): Promise<ForecastDependencyContext> {
   const normalizedProjectId = normalizeId(task?.project_id)
+  if (!normalizedProjectId) throw new Error('TASK_DURATION_FORECAST_PROJECT_SCOPE_REQUIRED')
   const dependencyDepth = Math.max(1, Math.min(5, Math.round(maxDepth || 1)))
   const dependencies: ForecastDependencyRow[] = []
   const visitedTaskIds = new Set<string>([taskId])
@@ -1925,8 +2035,8 @@ async function loadDependencyContext(
     .map((dependency) => normalizeId(dependency.dependency_task_id))
     .filter((id): id is string => Boolean(id && id !== taskId))))
   const [dependencyTasks, dependencyForecasts] = await Promise.all([
-    loadDependencyTasks(dependencyTaskIds),
-    loadCurrentDependencyForecasts(dependencyTaskIds),
+    loadDependencyTasks(dependencyTaskIds, normalizedProjectId),
+    loadCurrentDependencyForecasts(dependencyTaskIds, normalizedProjectId),
   ])
 
   return {
@@ -1942,7 +2052,10 @@ async function loadDependencyContext(
   }
 }
 
-async function loadExternalReadinessContext(taskId: string): Promise<ForecastExternalReadinessContext> {
+async function loadExternalReadinessContext(
+  taskId: string,
+  projectId: string,
+): Promise<ForecastExternalReadinessContext> {
   const [conditions, materials, acceptancePlans, forecastOnlyBridges] = await Promise.all([
     (supabase as any)
       .from('task_conditions')
@@ -1956,19 +2069,13 @@ async function loadExternalReadinessContext(taskId: string): Promise<ForecastExt
       .from('project_materials')
       .select('id, actual_arrival_date, expected_arrival_date, lifecycle_status, record_status')
       .eq('linked_task_id', taskId)
+      .eq('project_id', projectId)
       .then((result: any) => Array.isArray(result.data) ? result.data as ForecastMaterialRow[] : [], (error: unknown) => {
         logger.warn('[taskDurationForecastService] failed to load linked project materials', { taskId, error })
         return []
       }),
-    (supabase as any)
-      .from('acceptance_plans')
-      .select('id, status, planned_date, actual_date, gate_type, gate_hint, requirement_ready_percent, upstream_unfinished_count, blocked_requirement_count, is_blocked, is_overdue, impact_signals, participant_unit_id')
-      .eq('task_id', taskId)
-      .then((result: any) => Array.isArray(result.data) ? result.data as ForecastAcceptancePlanRow[] : [], (error: unknown) => {
-        logger.warn('[taskDurationForecastService] failed to load linked acceptance plans', { taskId, error })
-        return []
-      }),
-    loadForecastOnlyBridgeConditions(taskId),
+    loadForecastAcceptancePlans(taskId, projectId),
+    loadForecastOnlyBridgeConditions(taskId, projectId),
   ])
 
   return {
@@ -1977,6 +2084,25 @@ async function loadExternalReadinessContext(taskId: string): Promise<ForecastExt
     acceptancePlans,
     forecastOnlyBridgeCounts: forecastOnlyBridges.counts,
     forecastOnlyBridgeSources: forecastOnlyBridges.sources,
+  }
+}
+
+async function loadForecastAcceptancePlans(taskId: string, projectId: string) {
+  try {
+    const acceptancePlanIds = await listAcceptancePlanIdsCoveringTask(projectId, taskId)
+    if (acceptancePlanIds.length === 0) return [] as ForecastAcceptancePlanRow[]
+
+    const { data, error } = await (supabase as any)
+      .from('acceptance_plans')
+      .select('id, status, planned_date, actual_date, gate_type, gate_hint, requirement_ready_percent, upstream_unfinished_count, blocked_requirement_count, is_blocked, is_overdue, impact_signals, participant_unit_id')
+      .eq('project_id', projectId)
+      .in('id', acceptancePlanIds)
+
+    if (error) throw error
+    return Array.isArray(data) ? data as ForecastAcceptancePlanRow[] : []
+  } catch (error) {
+    logger.warn('[taskDurationForecastService] failed to load linked acceptance plans', { taskId, error })
+    return []
   }
 }
 
@@ -2097,7 +2223,27 @@ function applyProjectForecastOverlay(profile: ForecastModelProfile, row: Forecas
   const metadata = row.metadata && typeof row.metadata === 'object' ? row.metadata : {}
   const confidenceWeightMultiplier = Number((overlay as any).confidenceWeightMultiplier ?? (overlay as any).confidence_weight_multiplier ?? 1)
   const candidateWeights = (overlay as any).candidateWeights ?? (overlay as any).candidate_weights
-  const sampleCount = Number(row.sample_count ?? 0)
+  const sampleCount = Math.max(0, Math.floor(Number(row.sample_count ?? 0)))
+  if (!Number.isFinite(sampleCount) || sampleCount < PROJECT_FORECAST_OVERLAY_MIN_SAMPLE_COUNT) {
+    return {
+      ...profile,
+      metadata: {
+        ...profile.metadata,
+        projectOverlay: {
+          id: row.id ?? null,
+          status: row.overlay_status ?? null,
+          runtimeApplied: false,
+          ignoredReason: 'project_forecast_overlay_sample_gate_not_met',
+          sampleCount: Number.isFinite(sampleCount) ? sampleCount : 0,
+          minSampleCount: PROJECT_FORECAST_OVERLAY_MIN_SAMPLE_COUNT,
+          meanAbsoluteErrorDays: readNullableNumber(row.mean_absolute_error_days),
+          biasErrorDays: readNullableNumber(row.bias_error_days),
+          thresholdOverlay: overlay,
+          metadata,
+        },
+      },
+    }
+  }
   const confidenceWeight = Number.isFinite(confidenceWeightMultiplier) && confidenceWeightMultiplier > 0
     ? clamp(profile.confidenceWeight * confidenceWeightMultiplier, 0.5, 1.2)
     : profile.confidenceWeight
@@ -2112,7 +2258,9 @@ function applyProjectForecastOverlay(profile: ForecastModelProfile, row: Forecas
       projectOverlay: {
         id: row.id ?? null,
         status: row.overlay_status ?? null,
+        runtimeApplied: true,
         sampleCount,
+        minSampleCount: PROJECT_FORECAST_OVERLAY_MIN_SAMPLE_COUNT,
         meanAbsoluteErrorDays: readNullableNumber(row.mean_absolute_error_days),
         biasErrorDays: readNullableNumber(row.bias_error_days),
         thresholdOverlay: overlay,
@@ -2500,8 +2648,8 @@ function chooseRuntimeResidualOverlay(rows: ForecastResidualOverlayRow[]) {
   const eligible = rows
     .filter((row) => isRuntimeConsumableResidualOverlay(row) && residualOverlayMeetsSampleGate(row))
     .sort((left, right) => {
-      const leftScopeRank = normalizeId(left.scope_level) === 'project' ? 2 : 1
-      const rightScopeRank = normalizeId(right.scope_level) === 'project' ? 2 : 1
+      const leftScopeRank = normalizeId(left.scope_level) === 'company' ? 2 : 1
+      const rightScopeRank = normalizeId(right.scope_level) === 'company' ? 2 : 1
       if (leftScopeRank !== rightScopeRank) return rightScopeRank - leftScopeRank
       const leftImprovement = readNullableNumber(left.mae_improvement_ratio) ?? 0
       const rightImprovement = readNullableNumber(right.mae_improvement_ratio) ?? 0
@@ -2623,6 +2771,305 @@ function applyForecastResidualOverlay(params: {
       remaining_duration_forecast: {
         ...(asRecord(params.forecastDates.calculationContext.remaining_duration_forecast) ?? {}),
         residualOverlay,
+      },
+    },
+  }
+}
+
+function readForecastPlanningReplayCorrectionDays(readback: PlanningReplayCalibrationReadback | null | undefined) {
+  if (!readback || readback.status !== 'ready') return null
+  if (readback.writePolicy !== 'candidate_overlay_only_no_fact_mutation') return null
+  const parsed = Number(readback.e2ResidualCorrectionDays)
+  if (!Number.isFinite(parsed) || parsed <= 0) return null
+  return Math.min(7, Math.ceil(parsed))
+}
+
+async function loadPlanningReplayCalibrationReadbackForForecast(task: ForecastTaskRow | null) {
+  const projectId = normalizeId(task?.project_id)
+  if (!projectId) return null
+  if (
+    !normalizeId(task?.standard_work_code)
+    && !normalizeId(task?.standard_work_name)
+    && !normalizeId(task?.engineering_category_id)
+  ) return null
+  try {
+    return await readPlanningReplayCalibrationReadback({
+      projectId,
+      standardWorkCode: task?.standard_work_code ?? null,
+      standardWorkName: task?.standard_work_name ?? task?.title ?? null,
+      engineeringCategoryId: task?.engineering_category_id ?? null,
+    })
+  } catch (error) {
+    logger.warn('[taskDurationForecastService] planning replay calibration readback unavailable', {
+      projectId,
+      taskId: task?.id,
+      standardWorkCode: task?.standard_work_code,
+      error,
+    })
+    return null
+  }
+}
+
+async function applyPlanningReplayCalibrationReadbackToForecast(params: {
+  forecastDates: ForecastModelResult
+  task: ForecastTaskRow | null
+  workCalendar: WorkCalendarContext
+}): Promise<ForecastModelResult> {
+  const beforeRemainingDurationDays = params.forecastDates.remainingDurationDays
+  if (beforeRemainingDurationDays == null || beforeRemainingDurationDays <= 0) return params.forecastDates
+
+  const readback = await loadPlanningReplayCalibrationReadbackForForecast(params.task)
+  const correctionDays = readForecastPlanningReplayCorrectionDays(readback)
+  if (!readback || correctionDays == null) return params.forecastDates
+
+  const afterRemainingDurationDays = Math.max(0, candidateDays(beforeRemainingDurationDays + correctionDays) ?? beforeRemainingDurationDays)
+  const today = startOfUtcDay(new Date())
+  const progress = clampProgress(params.task?.progress)
+  const plannedStart = parseDate(params.task?.planned_start_date ?? params.task?.start_date)
+  const actualStart = parseDate(params.task?.actual_start_date)
+  const startAnchor = progress > 0
+    ? today
+    : plannedStart && plannedStart > today
+      ? plannedStart
+      : actualStart ?? today
+  const plannedEnd = parseDate(params.task?.planned_end_date ?? params.task?.end_date)
+  const forecastFinish = afterRemainingDurationDays > 0
+    ? parseDate(addConstructionProductionDays(startAnchor, afterRemainingDurationDays, params.workCalendar))
+    : startAnchor
+  const forecastFinishDate = forecastFinish?.toISOString().slice(0, 10) ?? params.forecastDates.forecastFinishDate
+  const forecastDelayDays = delayProductionDaysAfter(plannedEnd, forecastFinish, params.workCalendar)
+  const delayRiskIndex = round(clamp(
+    Math.max(Number(params.forecastDates.delayRiskIndex ?? 0), forecastDelayDays / 14),
+    0,
+    1,
+  ))
+  const readbackContext = {
+    applied: true,
+    source: 'planningReplayCalibrationService',
+    writePolicy: readback.writePolicy,
+    coarseProcessKey: readback.coarseProcessKey,
+    acceptedSampleCount: readback.acceptedSampleCount,
+    evidenceRefs: readback.evidenceRefs,
+    beforeRemainingDurationDays,
+    afterRemainingDurationDays,
+    e2ResidualCorrectionDays: correctionDays,
+    originalMae: readback.originalMae,
+    replayMae: readback.replayMae,
+    maeImprovement: readback.maeImprovement,
+    overcompensationRate: readback.overcompensationRate,
+  }
+  const topFactor = `回放校准显示该粗工序历史预测误差可补 ${correctionDays} 天，已按候选 overlay 修正剩余工期。`
+
+  return {
+    ...params.forecastDates,
+    remainingDurationDays: afterRemainingDurationDays,
+    forecastFinishDate,
+    forecastDelayDays,
+    delayRiskIndex,
+    topFactors: uniqueTopFactors([
+      topFactor,
+      ...params.forecastDates.topFactors,
+    ]),
+    forecastSources: {
+      ...params.forecastDates.forecastSources,
+      planningReplayCalibrationReadback: readbackContext,
+      forecastPaths: {
+        ...(asRecord(params.forecastDates.forecastSources.forecastPaths) ?? {}),
+        recommended: {
+          ...(asRecord(asRecord(params.forecastDates.forecastSources.forecastPaths)?.recommended) ?? {}),
+          remainingDays: afterRemainingDurationDays,
+        },
+      },
+    },
+    calculationContext: {
+      ...params.forecastDates.calculationContext,
+      planning_replay_calibration_readback: readbackContext,
+      remaining_duration_forecast: {
+        ...(asRecord(params.forecastDates.calculationContext.remaining_duration_forecast) ?? {}),
+        planningReplayCalibrationReadback: readbackContext,
+      },
+    },
+  }
+}
+
+function buildT2RhythmForecastContext(calculationContext: unknown, factorSummary?: DurationContextSummary | null) {
+  const context = asRecord(calculationContext)
+  const factorContext = asRecord(factorSummary?.calculationContext)
+  const read = (key: string) => asRecord(context?.[key]) ?? asRecord(factorContext?.[key])
+  const t2Package = read('t2RhythmScheduleCandidatePackage')
+  const networkEvaluation = read('t2RhythmScheduleCandidateNetworkEvaluation')
+  const durationInputAssembly = read('durationInputAssembly')
+  const result: Record<string, unknown> = {}
+  if (t2Package) result.t2RhythmScheduleCandidatePackage = t2Package
+  if (networkEvaluation) result.t2RhythmScheduleCandidateNetworkEvaluation = networkEvaluation
+  if (durationInputAssembly) result.durationInputAssembly = durationInputAssembly
+  return Object.keys(result).length > 0 ? result : null
+}
+
+function withT2RhythmForecastContext(params: {
+  forecastDates: ForecastModelResult
+  suggestion: DurationSuggestionResult
+}): ForecastModelResult {
+  const context = buildT2RhythmForecastContext(
+    params.suggestion.calculationContext,
+    params.suggestion.factorSummary ?? null,
+  )
+  if (!context) return params.forecastDates
+
+  return {
+    ...params.forecastDates,
+    forecastSources: {
+      ...params.forecastDates.forecastSources,
+      ...context,
+    },
+    calculationContext: {
+      ...params.forecastDates.calculationContext,
+      ...context,
+      remaining_duration_forecast: {
+        ...(asRecord(params.forecastDates.calculationContext.remaining_duration_forecast) ?? {}),
+        ...context,
+      },
+    },
+  }
+}
+
+function durationInputAssemblyContextFromAssembler(
+  assembled: Awaited<ReturnType<typeof assembleDurationInput>>,
+) {
+  return {
+    source: 'duration_input_assembler',
+    inputChannels: assembled.inputChannels,
+    sourceLineage: assembled.sourceLineage.map((lineage) => ({
+      channel: lineage.channel,
+      source: lineage.source,
+      status: lineage.status,
+      tier: lineage.tier ?? null,
+      candidateId: lineage.candidateId ?? null,
+      selectedTemplateIds: lineage.selectedTemplateIds ?? [],
+      assetSource: lineage.assetSource ?? null,
+    })),
+    assemblyGate: assembled.assemblyGate,
+    mutationBoundary: assembled.mutationBoundary,
+  }
+}
+
+function mergeDurationInputAssemblyContext(
+  upstream: Record<string, unknown> | null | undefined,
+  local: Record<string, unknown> | null | undefined,
+) {
+  if (!upstream || Object.keys(upstream).length === 0) return local ?? null
+  if (!local || Object.keys(local).length === 0) return upstream
+  const upstreamChannels = asRecord(upstream.inputChannels)
+  const localChannels = asRecord(local.inputChannels)
+  const lineageByChannel = new Map<string, Record<string, unknown>>()
+  for (const lineage of [
+    ...(Array.isArray(local.sourceLineage) ? local.sourceLineage : []),
+    ...(Array.isArray(upstream.sourceLineage) ? upstream.sourceLineage : []),
+  ]) {
+    const record = asRecord(lineage)
+    const channel = normalizeText(record?.channel)
+    if (channel) lineageByChannel.set(channel, record)
+  }
+  return {
+    ...local,
+    ...upstream,
+    source: normalizeText(upstream.source) || normalizeText(local.source) || 'duration_input_assembler',
+    inputChannels: {
+      ...(localChannels ?? {}),
+      ...(upstreamChannels ?? {}),
+    },
+    sourceLineage: [...lineageByChannel.values()],
+    assemblyGate: asRecord(upstream.assemblyGate) ?? asRecord(local.assemblyGate) ?? {},
+    mutationBoundary: {
+      ...(asRecord(local.mutationBoundary) ?? {}),
+      ...(asRecord(upstream.mutationBoundary) ?? {}),
+    },
+  }
+}
+
+function hasSidecarSource(value: unknown, source: string) {
+  return asRecord(value)?.source === source
+}
+
+function readTypedSidecar<T>(value: unknown, source: string): T | undefined {
+  return hasSidecarSource(value, source) ? value as T : undefined
+}
+
+function readDurationAssemblySidecars(suggestion: DurationSuggestionResult): Partial<DurationAlgorithmHydratableInput> {
+  const context = asRecord(suggestion.calculationContext)
+  const factorContext = asRecord(suggestion.factorSummary?.calculationContext)
+  const read = (key: string) => asRecord(context?.[key]) ?? asRecord(factorContext?.[key])
+  const constructionOrganizationScenario = readTypedSidecar<
+    NonNullable<DurationAlgorithmHydratableInput['constructionOrganizationScenario']>
+  >(read('constructionOrganizationScenario'), 'construction_organization_scenario_selector')
+  const t2RhythmScheduleCandidatePackage = readTypedSidecar<
+    NonNullable<DurationAlgorithmHydratableInput['t2RhythmScheduleCandidatePackage']>
+  >(read('t2RhythmScheduleCandidatePackage'), 't2_division_rhythm_schedule_candidate_package')
+  const t2RhythmProductionCapacityEvidence = readTypedSidecar<
+    NonNullable<DurationAlgorithmHydratableInput['t2RhythmProductionCapacityEvidence']>
+  >(read('t2RhythmProductionCapacityEvidence'), 't2_rhythm_production_capacity_evidence')
+  const t2RhythmScheduleCandidateNetwork = readTypedSidecar<
+    NonNullable<DurationAlgorithmHydratableInput['t2RhythmScheduleCandidateNetwork']>
+  >(read('t2RhythmScheduleCandidateNetwork'), 't2_rhythm_schedule_candidate_network')
+  const t2RhythmScheduleCandidateNetworkEvaluation = readTypedSidecar<
+    NonNullable<DurationAlgorithmHydratableInput['t2RhythmScheduleCandidateNetworkEvaluation']>
+  >(read('t2RhythmScheduleCandidateNetworkEvaluation'), 't2_rhythm_schedule_candidate_network_phase1_evaluation')
+  const t2RhythmSchedulePhase1Selection = readTypedSidecar<
+    NonNullable<DurationAlgorithmHydratableInput['t2RhythmSchedulePhase1Selection']>
+  >(read('t2RhythmSchedulePhase1Selection'), 't2_rhythm_schedule_phase1_selection')
+  const t2RhythmStandardLibraryTrustGate = readTypedSidecar<
+    NonNullable<DurationAlgorithmHydratableInput['t2RhythmStandardLibraryTrustGate']>
+  >(read('t2RhythmStandardLibraryTrustGate'), 't2_rhythm_standard_library_live_replay_trust_gate')
+  return {
+    ...(constructionOrganizationScenario ? { constructionOrganizationScenario } : {}),
+    ...(t2RhythmScheduleCandidatePackage ? { t2RhythmScheduleCandidatePackage } : {}),
+    ...(t2RhythmProductionCapacityEvidence ? { t2RhythmProductionCapacityEvidence } : {}),
+    ...(t2RhythmScheduleCandidateNetwork ? { t2RhythmScheduleCandidateNetwork } : {}),
+    ...(t2RhythmScheduleCandidateNetworkEvaluation ? { t2RhythmScheduleCandidateNetworkEvaluation } : {}),
+    ...(t2RhythmSchedulePhase1Selection ? { t2RhythmSchedulePhase1Selection } : {}),
+    ...(t2RhythmStandardLibraryTrustGate ? { t2RhythmStandardLibraryTrustGate } : {}),
+    durationExperienceSignals: read('durationExperienceSignals'),
+    criticalPathEvidence: read('criticalPathEvidence'),
+  }
+}
+
+async function buildE2DurationInputAssemblyContext(input: Record<string, unknown>, suggestion: DurationSuggestionResult) {
+  const runtimeExecutionFacts = asRecord(input.runtimeExecutionFacts)
+  const assemblyInput: DurationAlgorithmHydratableInput & Record<string, unknown> = {
+    ...input,
+    actualExecutionFacts: {
+      source: 'runtime_execution_facts',
+      ...(runtimeExecutionFacts ?? {}),
+    },
+    ...readDurationAssemblySidecars(suggestion),
+  }
+  const assembled = await assembleDurationInput(assemblyInput, {
+    purpose: 'runtime_forecast',
+  })
+  return durationInputAssemblyContextFromAssembler(assembled)
+}
+
+function withDurationInputAssemblyForecastContext(params: {
+  forecastDates: ForecastModelResult
+  durationInputAssembly: Record<string, unknown> | null
+}): ForecastModelResult {
+  if (!params.durationInputAssembly) return params.forecastDates
+  const existing = asRecord(params.forecastDates.forecastSources.durationInputAssembly)
+    ?? asRecord(params.forecastDates.calculationContext.durationInputAssembly)
+  const durationInputAssembly = mergeDurationInputAssemblyContext(existing, params.durationInputAssembly)
+  if (!durationInputAssembly) return params.forecastDates
+  return {
+    ...params.forecastDates,
+    forecastSources: {
+      ...params.forecastDates.forecastSources,
+      durationInputAssembly,
+    },
+    calculationContext: {
+      ...params.forecastDates.calculationContext,
+      durationInputAssembly,
+      remaining_duration_forecast: {
+        ...(asRecord(params.forecastDates.calculationContext.remaining_duration_forecast) ?? {}),
+        durationInputAssembly,
       },
     },
   }
@@ -2757,6 +3204,13 @@ function buildHistoryVelocityCandidate(
     days: remaining,
     reason: `Similar completed tasks multiplier ${round(velocityLearning.multiplier)}.`,
   }
+}
+
+function hasPublishedProjectBaselineCalibration(factorSummary: DurationContextSummary | null | undefined) {
+  return Array.isArray(factorSummary?.factors) && factorSummary.factors.some((factor) => (
+    factor.key === 'project_baseline_calibration'
+    && asRecord(factor.metadata)?.runtimeAuthority === 'published_parameter_only'
+  ))
 }
 
 function readCurveFromProfileMapping(task: ForecastTaskRow | null, profile?: ForecastModelProfile | null): ProgressCurveType | null {
@@ -3980,7 +4434,7 @@ function buildCertificateBridgeConditions(rows: ForecastCertificateWorkItemRow[]
   })
 }
 
-async function loadForecastOnlyBridgeConditions(taskId: string): Promise<{
+async function loadForecastOnlyBridgeConditions(taskId: string, projectId: string): Promise<{
   conditions: ForecastConditionRow[]
   counts: NonNullable<ForecastExternalReadinessContext['forecastOnlyBridgeCounts']>
   sources: string[]
@@ -3990,6 +4444,7 @@ async function loadForecastOnlyBridgeConditions(taskId: string): Promise<{
     .select('id, project_id, source_entity_type, source_entity_id, target_entity_type, target_entity_id, relation_type, status, display_snapshot, metadata')
     .eq('target_entity_type', 'task')
     .eq('target_entity_id', taskId)
+    .eq('project_id', projectId)
     .then((result: any) => Array.isArray(result.data) ? result.data as ForecastProjectEntityLinkRow[] : [], (error: unknown) => {
       logger.warn('[taskDurationForecastService] failed to load task entity links for forecast-only readiness bridges', { taskId, error })
       return []
@@ -4633,7 +5088,15 @@ async function buildRemainingForecastModel(params: {
       stuckFloor.floorDays ? stuckFloor.floorDays + 3 : 0,
       )
 
-  const remainingDurationDays = mainRemaining == null ? null : candidateDays(mainRemaining)
+  const rawRemainingDurationDays = mainRemaining == null ? null : candidateDays(mainRemaining)
+  const relativeBaselineDays = remainingForecastRelativeBaselineDays(params.task, params.workCalendar, referenceTotal)
+  const recommendedCap = capTaskRemainingForecastDays({
+    days: rawRemainingDurationDays,
+    baselineDays: relativeBaselineDays,
+    task: params.task,
+    ruleId: 'duration.max.task_remaining_relative_to_plan',
+  })
+  const remainingDurationDays = recommendedCap.days
   const probabilityDuration = buildProbabilityDurationWindow({
     calculationContext: params.calculationContext as Record<string, unknown> | null,
     businessReasonParams: params.businessReasonParams,
@@ -4912,15 +5375,63 @@ async function buildRemainingForecastModel(params: {
       version: modelProfile.modelVersion,
       source: modelProfile.source,
       runtimeLearnableParameters: asRecord(modelProfile.metadata.runtimeLearnableParameters) ?? null,
+      projectOverlay: asRecord(modelProfile.metadata.projectOverlay) ?? null,
     },
     learnableParameterRegistry,
     learnableParameterRuntimeGate,
   }
+  const durationPlausibilityWarnings = [
+    ...(((params.calculationContext as any)?.durationPlausibilityWarnings ?? []) as DurationPlausibilityWarning[]),
+    ...(probabilityDuration?.plausibilityWarnings ?? []),
+    ...recommendedCap.warnings,
+  ]
+  const optimisticCap = capTaskRemainingForecastDays({
+    days: optimisticRemaining == null ? null : candidateDays(optimisticRemaining),
+    baselineDays: relativeBaselineDays,
+    task: params.task,
+    ruleId: 'duration.max.task_remaining_optimistic_relative_to_plan',
+  })
+  const conservativeCap = capTaskRemainingForecastDays({
+    days: conservativeRemaining == null ? null : candidateDays(conservativeRemaining),
+    baselineDays: relativeBaselineDays,
+    task: params.task,
+    ruleId: 'duration.max.task_remaining_conservative_relative_to_plan',
+  })
+  durationPlausibilityWarnings.push(...optimisticCap.warnings, ...conservativeCap.warnings)
+  const optimisticRemainingDays = optimisticCap.days == null || remainingDurationDays == null
+    ? optimisticCap.days
+    : Math.min(optimisticCap.days, remainingDurationDays)
+  const conservativeRemainingDays = conservativeCap.days == null || remainingDurationDays == null
+    ? conservativeCap.days
+    : Math.max(remainingDurationDays, conservativeCap.days)
+  if (
+    optimisticCap.days != null
+    && optimisticRemainingDays != null
+    && optimisticRemainingDays !== optimisticCap.days
+  ) {
+    durationPlausibilityWarnings.push({
+      ruleId: 'duration.forecast_paths.optimistic_order',
+      severity: 'warning',
+      engineCode: 'task_remaining_forecast',
+      message: 'Optimistic remaining forecast was ordered so it does not exceed the recommended remaining forecast.',
+      originalDays: optimisticCap.days,
+      adjustedDays: optimisticRemainingDays,
+      taskId: params.task?.id ?? params.taskId,
+      title: params.task?.title ?? null,
+      standardWorkCode: params.task?.standard_work_code ?? null,
+      metadata: {
+        recommendedRemainingDays: remainingDurationDays,
+      },
+    })
+  }
+
+  forecastSources.forecastPaths.optimistic.remainingDays = optimisticRemainingDays
+  forecastSources.forecastPaths.conservative.remainingDays = conservativeRemainingDays
 
   return {
-    optimisticRemainingDays: optimisticRemaining == null ? null : candidateDays(optimisticRemaining),
+    optimisticRemainingDays,
     remainingDurationDays,
-    conservativeRemainingDays: conservativeRemaining == null ? null : candidateDays(conservativeRemaining),
+    conservativeRemainingDays,
     forecastFinishDate,
     forecastDelayDays,
     delayRiskIndex,
@@ -4935,6 +5446,7 @@ async function buildRemainingForecastModel(params: {
       ...params.calculationContext,
       remaining_duration_forecast: forecastSources,
       probability_duration: probabilityDuration,
+      ...(durationPlausibilityWarnings.length > 0 ? { durationPlausibilityWarnings } : {}),
       delay_risk_index: delayRiskIndex,
       delay_uncertainty_index: impactSignalSummary.uncertaintyIndex,
       top_factors: topFactors,
@@ -4948,6 +5460,8 @@ async function refreshTaskDurationForecast(
   task: ForecastTaskRow | null,
   options: NormalizedForecastOptions,
 ): Promise<TaskDurationForecast> {
+  const projectId = normalizeId(task?.project_id)
+  if (!projectId) throw new Error('TASK_DURATION_FORECAST_PROJECT_SCOPE_REQUIRED')
   const factInput = await buildForecastProjectGenerationFactInput(task)
   let input = {
     suggestionPurpose: 'execution_reference' as const,
@@ -4977,30 +5491,39 @@ async function refreshTaskDurationForecast(
     runtimeExecutionFacts: buildForecastRuntimeExecutionFacts(task),
   }
 
-  const [suggestion, snapshots, obstacles, dependencyContext, externalReadiness, workCalendar, velocityLearning, modelProfile, earliestStartRule, currentForecast] = await Promise.all([
-    getTaskDurationSuggestion(input),
-    loadProgressSnapshots(taskId),
-    loadOpenObstacles(taskId),
-    loadDependencyContext(taskId, task, options.dependencyDepth),
-    loadExternalReadinessContext(taskId),
-    loadWorkCalendar(task),
-    buildProjectProgressVelocityLearning({
+  const snapshotsPromise = loadProgressSnapshots(taskId)
+  const obstaclesPromise = loadOpenObstacles(taskId)
+  const dependencyContextPromise = loadDependencyContext(taskId, task, options.dependencyDepth)
+  const externalReadinessPromise = loadExternalReadinessContext(taskId, projectId)
+  const workCalendarPromise = loadWorkCalendar(task)
+  const velocityLearningPromise = loadPublishedProgressVelocityRuntime({
       projectId: task?.project_id ?? null,
-      taskId,
-      engineeringCategoryId: task?.engineering_category_id ?? null,
-      responsibleUnitId: task?.participant_unit_id ?? null,
+      consumerKey: 'taskDurationForecastService.history_velocity',
     }).catch((error) => {
-      logger.warn('[taskDurationForecastService] progress velocity learning unavailable', { taskId, error })
+      logger.warn('[taskDurationForecastService] published progress velocity unavailable', { taskId, error })
       return null
-    }),
-    loadForecastModelProfile(task),
-    loadEarliestStartRule(task),
-    loadCurrentForecast(taskId),
-  ])
+    })
+  const modelProfilePromise = loadForecastModelProfile(task)
+  const earliestStartRulePromise = loadEarliestStartRule(task)
+  const currentForecastPromise = loadCurrentForecast(taskId, { projectId })
+  const [snapshots, obstacles] = await Promise.all([snapshotsPromise, obstaclesPromise])
   input = {
     ...input,
     runtimeExecutionFacts: buildForecastRuntimeExecutionFacts(task, snapshots, obstacles),
   }
+  const [suggestion, dependencyContext, externalReadiness, workCalendar, velocityLearning, modelProfile, earliestStartRule, currentForecast] = await Promise.all([
+    getTaskDurationSuggestion(input),
+    dependencyContextPromise,
+    externalReadinessPromise,
+    workCalendarPromise,
+    velocityLearningPromise,
+    modelProfilePromise,
+    earliestStartRulePromise,
+    currentForecastPromise,
+  ])
+  const effectiveVelocityLearning = hasPublishedProjectBaselineCalibration(suggestion.factorSummary)
+    ? null
+    : velocityLearning
   let forecastDates = await buildRemainingForecastModel({
     taskId,
     task,
@@ -5017,7 +5540,7 @@ async function refreshTaskDurationForecast(
     dependencyContext,
     externalReadiness,
     workCalendar,
-    velocityLearning,
+    velocityLearning: effectiveVelocityLearning,
     modelProfile,
     earliestStartRule,
     forecastOptions: options,
@@ -5028,6 +5551,25 @@ async function refreshTaskDurationForecast(
     task,
     overlays: residualOverlays,
     workCalendar,
+  })
+  forecastDates = await applyPlanningReplayCalibrationReadbackToForecast({
+    forecastDates,
+    task,
+    workCalendar,
+  })
+  forecastDates = withT2RhythmForecastContext({
+    forecastDates,
+    suggestion,
+  })
+  let e2DurationInputAssembly: Record<string, unknown> | null = null
+  try {
+    e2DurationInputAssembly = await buildE2DurationInputAssemblyContext(input, suggestion)
+  } catch (error) {
+    logger.warn('[taskDurationForecastService] duration input assembly unavailable for E2 remaining forecast', { taskId, error })
+  }
+  forecastDates = withDurationInputAssemblyForecastContext({
+    forecastDates,
+    durationInputAssembly: e2DurationInputAssembly,
   })
 
   await backfillForecastErrorIfCompleted(task, currentForecast, workCalendar)
@@ -5082,6 +5624,10 @@ async function refreshTaskDurationForecast(
       topFactors: forecastDates.topFactors,
       businessFactorBadges: forecastDates.businessFactorBadges,
       forecastSources: forecastDates.forecastSources,
+      planningReplayCalibrationReadback: forecastDates.forecastSources.planningReplayCalibrationReadback ?? null,
+      t2RhythmScheduleCandidatePackage: forecastDates.forecastSources.t2RhythmScheduleCandidatePackage ?? null,
+      t2RhythmScheduleCandidateNetworkEvaluation: forecastDates.forecastSources.t2RhythmScheduleCandidateNetworkEvaluation ?? null,
+      durationInputAssembly: forecastDates.forecastSources.durationInputAssembly ?? null,
       referenceConfidenceLevel: suggestion.confidenceLevel,
       referenceConfidenceScore: suggestion.confidenceScore,
       forecastOptions: options,
@@ -5154,13 +5700,13 @@ async function refreshTaskDurationForecast(
 export async function forecastTaskDuration(taskId: string, options?: ForecastTaskDurationOptions): Promise<TaskDurationForecast> {
   const normalizedOptions = normalizeForecastOptions(options)
   if (normalizedOptions.useCache) {
-    const currentForecast = await loadCurrentForecast(taskId)
+    const currentForecast = await loadCurrentForecast(taskId, normalizedOptions)
     if (isFreshCurrentForecast(currentForecast)) {
       return mapCurrentForecastToTaskDurationForecast(taskId, currentForecast)
     }
   }
 
-  const task = await loadTask(taskId)
+  const task = await loadTask(taskId, normalizedOptions)
   const forecast = await refreshTaskDurationForecast(taskId, task, normalizedOptions)
   const runtimeArtifactPublications = buildTaskDurationForecastRuntimeArtifactPublications(forecast)
   const artifacts = buildTaskDurationForecastConsumedArtifacts({
@@ -5169,38 +5715,40 @@ export async function forecastTaskDuration(taskId: string, options?: ForecastTas
     projectId: task?.project_id ?? null,
     taskId: forecast.taskId,
   })
-  if (artifacts.length > 0) {
-    try {
-      const projectIdForEvidence = normalizeText(task?.project_id)
-      const taskIdForEvidence = normalizeText(forecast.taskId)
-      await recordTaskDurationForecastConsumedArtifacts({
-        queryExec: normalizedOptions.runtimeConsumerObservationQueryExec ?? buildTaskDurationForecastRuntimeConsumerObservationQueryExec(),
-        callContext: {
-          projectId: projectIdForEvidence || null,
-          taskId: taskIdForEvidence || null,
-          forecastFinishDate: forecast.forecastFinishDate,
-          remainingDurationDays: forecast.remainingDurationDays,
-          conservativeRemainingDays: forecast.conservativeRemainingDays ?? null,
-          confidenceLevel: forecast.confidenceLevel,
-          confidenceScore: forecast.confidenceScore,
-        },
-        sourceEvidenceRefs: [
-          [
-            'task_duration_forecast',
-            projectIdForEvidence || 'no_project',
-            taskIdForEvidence || 'no_task',
-            forecast.forecastFinishDate ?? 'no_finish',
-          ].join(':'),
-        ],
-        artifacts,
-      })
-    } catch (error) {
-      logger.warn('[taskDurationForecastService] failed to record task duration runtime consumer evidence', {
-        taskId: forecast.taskId,
-        projectId: task?.project_id ?? null,
-        error,
-      })
-    }
+  try {
+    const projectIdForEvidence = normalizeText(task?.project_id)
+    const taskIdForEvidence = normalizeText(forecast.taskId)
+    await recordTaskDurationForecastConsumedArtifacts({
+      queryExec: createDurationRuntimeConsumerObservationQueryExec(
+        normalizedOptions.runtimeConsumerObservationQueryExec,
+      ),
+      callContext: {
+        projectId: projectIdForEvidence || null,
+        taskId: taskIdForEvidence || null,
+        forecastFinishDate: forecast.forecastFinishDate,
+        remainingDurationDays: forecast.remainingDurationDays,
+        conservativeRemainingDays: forecast.conservativeRemainingDays ?? null,
+        confidenceLevel: forecast.confidenceLevel,
+        confidenceScore: forecast.confidenceScore,
+        runtimeAssetMode: artifacts.length > 0 ? 'published_artifact' : 'no_published_artifact',
+        runtimeArtifactCount: artifacts.length,
+      },
+      sourceEvidenceRefs: [
+        [
+          'task_duration_forecast',
+          projectIdForEvidence || 'no_project',
+          taskIdForEvidence || 'no_task',
+          forecast.forecastFinishDate ?? 'no_finish',
+        ].join(':'),
+      ],
+      artifacts,
+    })
+  } catch (error) {
+    logger.warn('[taskDurationForecastService] failed to record task duration runtime consumer evidence', {
+      taskId: forecast.taskId,
+      projectId: task?.project_id ?? null,
+      error,
+    })
   }
   return forecast
 }
@@ -5228,10 +5776,14 @@ function toGovernedDurationForecastSignal(forecast: TaskDurationForecast) {
   }
 }
 
-export async function analyzeTaskDelayRiskWithDurationForecast(taskId: string) {
+export async function analyzeTaskDelayRiskWithDurationForecast(
+  taskId: string,
+  workspaceScope: TaskForecastWorkspaceScope,
+) {
+  const normalizedScope = normalizeForecastOptions(workspaceScope)
   const [task, forecast, obstacleCount] = await Promise.all([
-    loadTask(taskId),
-    forecastTaskDuration(taskId),
+    loadTask(taskId, normalizedScope),
+    forecastTaskDuration(taskId, normalizedScope),
     countOpenObstacles(taskId),
   ])
 
@@ -5298,9 +5850,12 @@ export async function forecastBatchTasks(taskIds: string[], options?: ForecastTa
   return results.filter((forecast): forecast is TaskDurationForecast => Boolean(forecast))
 }
 
-export async function listCurrentTaskDurationForecasts(taskIds: string[], options?: { maxAgeMs?: number | null }): Promise<TaskDurationForecast[]> {
+export async function listCurrentTaskDurationForecasts(
+  taskIds: string[],
+  options: { maxAgeMs?: number | null } & TaskForecastWorkspaceScope,
+): Promise<TaskDurationForecast[]> {
   const uniqueTaskIds = [...new Set(taskIds.map(normalizeId).filter((id): id is string => Boolean(id)))]
-  const forecastMap = await loadCurrentForecasts(uniqueTaskIds)
+  const forecastMap = await loadCurrentForecasts(uniqueTaskIds, options)
   const maxAgeMs = options?.maxAgeMs ?? null
   return uniqueTaskIds
     .map((taskId) => {
@@ -5398,6 +5953,7 @@ function emptyDailyRefreshResult(
   }
 }
 
+// workspace-isolation-system-job-approved: daily service-role scheduler scans active tasks across projects, then carries each selected project scope into forecast reads and writes.
 export async function refreshDailyActiveTaskDurationForecasts(
   options?: DailyTaskDurationForecastRefreshOptions,
 ): Promise<DailyTaskDurationForecastRefreshResult> {
@@ -5405,7 +5961,7 @@ export async function refreshDailyActiveTaskDurationForecasts(
   const params = normalizeDailyRefreshOptions(options)
   const { data, error } = await (supabase as any)
     .from('tasks')
-    .select('id')
+    .select('id, project_id')
     .in('status', ['todo', 'pending', 'in_progress', 'blocked'])
     .lt('progress', 100)
     .order('updated_at', { ascending: false })
@@ -5416,13 +5972,20 @@ export async function refreshDailyActiveTaskDurationForecasts(
     return emptyDailyRefreshResult(params, startedAtMs, { failed: 1, freshnessSloMet: false })
   }
 
-  const taskIds: string[] = [...new Set(((data ?? []) as Array<{ id?: string | null }>)
+  const taskRows = (data ?? []) as Array<{ id?: string | null, project_id?: string | null }>
+  const taskIds: string[] = [...new Set(taskRows
     .map((row: { id?: string | null }) => String(row.id ?? '').trim())
     .filter((id): id is string => Boolean(id)))]
   if (taskIds.length === 0) return emptyDailyRefreshResult(params, startedAtMs)
+  const visibleProjectIds = [...new Set(taskRows
+    .map((row) => normalizeId(row.project_id))
+    .filter((projectId): projectId is string => Boolean(projectId)))]
+  if (visibleProjectIds.length === 0) {
+    return emptyDailyRefreshResult(params, startedAtMs, { failed: taskIds.length, freshnessSloMet: false })
+  }
 
   const freshnessBefore = countFreshForecastRows(
-    await loadCurrentForecasts(taskIds),
+    await loadCurrentForecasts(taskIds, { visibleProjectIds }),
     taskIds,
     params.freshnessSloMs,
     startedAtMs,
@@ -5442,7 +6005,11 @@ export async function refreshDailyActiveTaskDurationForecasts(
     const batch = taskIds.slice(index, index + params.batchSize)
     batchesAttempted += 1
     try {
-      const forecasts = await forecastBatchTasks(batch, { triggerContext: 'daily_dashboard_refresh', useCache: false })
+      const forecasts = await forecastBatchTasks(batch, {
+        triggerContext: 'daily_dashboard_refresh',
+        useCache: false,
+        visibleProjectIds,
+      })
       refreshed += forecasts.length
       failed += Math.max(0, batch.length - forecasts.length)
     } catch (error) {
@@ -5456,7 +6023,7 @@ export async function refreshDailyActiveTaskDurationForecasts(
 
   const finishedAtMs = Date.now()
   const freshnessAfter = countFreshForecastRows(
-    await loadCurrentForecasts(taskIds),
+    await loadCurrentForecasts(taskIds, { visibleProjectIds }),
     taskIds,
     params.freshnessSloMs,
     finishedAtMs,

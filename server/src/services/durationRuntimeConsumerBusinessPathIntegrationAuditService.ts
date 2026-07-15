@@ -5,8 +5,8 @@ import {
   listDurationRuntimeConsumerObservationFacadeRegistrations,
 } from './durationRuntimeConsumerObservationAdapterService.js'
 import type {
-  DurationLiveLearningAssetKey,
-} from './durationLiveLearningClosureService.js'
+  DurationRuntimeConsumerObservedAssetKey,
+} from './durationRuntimeConsumerObservationIntegrationService.js'
 
 export interface DurationRuntimeConsumerBusinessPathSourceFile {
   sourcePath: string
@@ -25,8 +25,8 @@ export interface DurationRuntimeConsumerBusinessPathIntegration {
   sourcePath: string
   facadeFunctionName: string
   runtimeEntryRef: string
-  requiredAssetKeys?: DurationLiveLearningAssetKey[]
-  missingAssetKeys?: DurationLiveLearningAssetKey[]
+  requiredAssetKeys?: DurationRuntimeConsumerObservedAssetKey[]
+  missingAssetKeys?: DurationRuntimeConsumerObservedAssetKey[]
 }
 
 export interface DurationRuntimeConsumerObservedBusinessPathIntegration
@@ -228,12 +228,19 @@ function assetKeysRequiredByConsumerKey() {
   )
 }
 
+const SOURCE_ALIASES_BY_ASSET_KEY: Partial<Record<DurationRuntimeConsumerObservedAssetKey, string[]>> = {
+  construction_organization_plan_network: ['CONSTRUCTION_ORGANIZATION_PLAN_NETWORK_ASSET_KEY'],
+}
+
 function missingRequiredAssetKeysForSource(
   sourceText: string,
-  requiredAssetKeys: readonly DurationLiveLearningAssetKey[],
+  requiredAssetKeys: readonly DurationRuntimeConsumerObservedAssetKey[],
 ) {
   const executableSourceText = stripComments(sourceText)
-  return requiredAssetKeys.filter((assetKey) => !executableSourceText.includes(assetKey))
+  return requiredAssetKeys.filter((assetKey) => {
+    const aliases = SOURCE_ALIASES_BY_ASSET_KEY[assetKey] ?? []
+    return ![assetKey, ...aliases].some((token) => executableSourceText.includes(token))
+  })
 }
 
 function missingIntegrationForSource(

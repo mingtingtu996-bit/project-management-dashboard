@@ -2,15 +2,21 @@ import express from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import { z } from 'zod'
 
-import { getProjectPermissionLevel, isCompanyAdminRole } from '../auth/access.js'
+import { getProjectCompanyId, getProjectPermissionLevel } from '../auth/access.js'
+import { getRequestCompanyId } from '../auth/companyContext.js'
 import { authenticate } from '../middleware/auth.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
+import { logger } from '../middleware/logger.js'
 import { validate } from '../middleware/validation.js'
-import { SupabaseService } from '../services/dbService.js'
+import { executeSQL, SupabaseService, supabase } from '../services/dbService.js'
 import { writeLifecycleLog, writeLog } from '../services/changeLogs.js'
-import { buildMaterialReportSummary, listProjectMaterials } from '../services/materialReportsService.js'
+import { buildMaterialReportSummary, clearMaterialReportCache, listProjectMaterials } from '../services/materialReportsService.js'
 import type { ProjectMaterialRecord } from '../services/materialReportsService.js'
-import { autoSatisfyMaterialConditions } from '../services/taskConditionLinkageService.js'
+import { materialArrivalReminderService } from '../services/materialArrivalReminderService.js'
+import {
+  buildAndPersistBusinessCompletionSampleHealthReport,
+  buildMaterialHandoverCompletionSamples,
+} from '../services/businessCompletionSampleHealthAdapterService.js'
 
 const router = express.Router({ mergeParams: true })
 const supabaseService = new SupabaseService()
@@ -36,7 +42,8 @@ const materialMutationSchema = z.object({
   actual_arrival_date: optionalLooseString,
   requires_inspection: optionalLooseBoolean,
   inspection_done: optionalLooseBoolean,
-}).passthrough()
+  change_reason: optionalLooseString,
+}).strict()
 
 const materialCreateBodySchema = z.union([
   materialMutationSchema,
@@ -87,20 +94,12 @@ function validationError(message: string) {
   }
 }
 
-async function getAccess(projectId: string, userId?: string, globalRole?: string) {
+async function getAccess(projectId: string, userId?: string, companyId?: string | null) {
   if (!userId) {
     return { canRead: false, canWrite: false }
   }
 
-  if (isCompanyAdminRole(globalRole)) {
-    const permissionLevel = await getProjectPermissionLevel(userId, projectId)
-    return {
-      canRead: true,
-      canWrite: permissionLevel === 'owner' || permissionLevel === 'editor',
-    }
-  }
-
-  const permissionLevel = await getProjectPermissionLevel(userId, projectId)
+  const permissionLevel = await getProjectPermissionLevel(userId, projectId, companyId)
   return {
     canRead: permissionLevel !== null,
     canWrite: permissionLevel === 'owner' || permissionLevel === 'editor',
@@ -169,8 +168,20 @@ function normalizeUpdatePayload(current: Record<string, any>, body: MaterialMuta
 
 function validateMaterialPayload(record: ReturnType<typeof normalizeCreatePayload> | ReturnType<typeof normalizeUpdatePayload>) {
   if (!record.material_name) return 'material_name is required'
+  if (!record.specialty_type) return 'specialty_type is required'
   if (!record.expected_arrival_date) return 'expected_arrival_date is required'
   return ''
+}
+
+async function validateParticipantUnitForProject(projectId: string, participantUnitId?: string | null) {
+  const unitId = normalizeNullableText(participantUnitId)
+  if (!unitId) return ''
+
+  const rows = await supabaseService.query<Record<string, any>>('participant_units', {
+    id: unitId,
+    project_id: projectId,
+  })
+  return rows?.length ? '' : 'participant_unit_id must belong to the current project'
 }
 
 function buildMaterialRecordFallback(
@@ -252,9 +263,77 @@ function collectMaterialChangeLogs(
     )
 }
 
+async function recordMaterialArrivalSampleHealthEvidence(input: {
+  projectId: string
+  materialId: string
+  current: Record<string, any>
+  updates: ReturnType<typeof normalizeUpdatePayload>
+  sourceRoute: string
+}) {
+  const projectId = normalizeNullableText(input.projectId)
+  const materialId = normalizeNullableText(input.materialId)
+  const actualArrivalDate = normalizeNullableText(input.updates.actual_arrival_date)
+  if (!projectId || !materialId || !actualArrivalDate) return
+
+  try {
+    const companyId = await getProjectCompanyId(projectId)
+    if (!companyId) {
+      logger.warn('[projectMaterials] skip material arrival sample health evidence without company scope', {
+        projectId,
+        materialId,
+      })
+      return
+    }
+
+    const materialName = normalizeNullableText(input.updates.material_name)
+      ?? normalizeNullableText(input.current.material_name)
+      ?? materialId
+    const participantUnitId = input.updates.participant_unit_id ?? normalizeNullableText(input.current.participant_unit_id)
+    const specialtyType = input.updates.specialty_type ?? normalizeNullableText(input.current.specialty_type)
+
+    const samples = buildMaterialHandoverCompletionSamples([
+      {
+        companyId,
+        projectId,
+        handoverId: materialId,
+        handoverCode: materialName,
+        acceptedAt: actualArrivalDate,
+        startedAt: actualArrivalDate,
+        updatedAt: normalizeNullableText(input.updates.updated_at),
+        qualitySignal: 'verified',
+        metadata: {
+          sourceRoute: input.sourceRoute,
+          materialId,
+          materialName,
+          specialtyType,
+          participantUnitId,
+          actualArrivalDate,
+          expectedArrivalDate: normalizeNullableText(input.updates.expected_arrival_date)
+            ?? normalizeNullableText(input.current.expected_arrival_date),
+          sampleConfirmed: input.updates.sample_confirmed,
+          inspectionDone: input.updates.inspection_done,
+        },
+      },
+    ])
+
+    await buildAndPersistBusinessCompletionSampleHealthReport({
+      companyId,
+      projectId,
+      queryExec: executeSQL,
+      samples,
+    })
+  } catch (error) {
+    logger.warn('[projectMaterials] failed to record material arrival sample health evidence', {
+      projectId,
+      materialId,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
 router.get('/', validate(projectIdParamSchema, 'params'), asyncHandler(async (req, res) => {
   const projectId = normalizeText(req.params.projectId)
-  const access = await getAccess(projectId, req.user?.id, req.user?.globalRole)
+  const access = await getAccess(projectId, req.user?.id, getRequestCompanyId(req))
 
   if (!access.canRead) {
     return res.status(403).json({
@@ -264,13 +343,14 @@ router.get('/', validate(projectIdParamSchema, 'params'), asyncHandler(async (re
     })
   }
 
+  clearMaterialReportCache(projectId)
   const data = await listProjectMaterials(projectId)
   res.json({ success: true, data, timestamp: nowIso() })
 }))
 
 router.get('/summary', validate(projectIdParamSchema, 'params'), asyncHandler(async (req, res) => {
   const projectId = normalizeText(req.params.projectId)
-  const access = await getAccess(projectId, req.user?.id, req.user?.globalRole)
+  const access = await getAccess(projectId, req.user?.id, getRequestCompanyId(req))
 
   if (!access.canRead) {
     return res.status(403).json({
@@ -290,7 +370,7 @@ router.post(
   validate(materialCreateBodySchema),
   asyncHandler(async (req, res) => {
   const projectId = normalizeText(req.params.projectId)
-  const access = await getAccess(projectId, req.user?.id, req.user?.globalRole)
+  const access = await getAccess(projectId, req.user?.id, getRequestCompanyId(req))
 
   if (!access.canWrite) {
     return res.status(403).json({
@@ -312,6 +392,11 @@ router.post(
     const message = validateMaterialPayload(record)
     if (message) {
       return res.status(400).json(validationError(message))
+    }
+
+    const unitMessage = await validateParticipantUnitForProject(projectId, record.participant_unit_id)
+    if (unitMessage) {
+      return res.status(400).json(validationError(unitMessage))
     }
 
     const created = await supabaseService.create<Record<string, unknown>>('project_materials', record)
@@ -345,7 +430,7 @@ router.patch(
   asyncHandler(async (req, res) => {
   const projectId = normalizeText(req.params.projectId)
   const materialId = normalizeText(req.params.materialId)
-  const access = await getAccess(projectId, req.user?.id, req.user?.globalRole)
+  const access = await getAccess(projectId, req.user?.id, getRequestCompanyId(req))
 
   if (!access.canWrite) {
     return res.status(403).json({
@@ -371,25 +456,36 @@ router.patch(
     return res.status(400).json(validationError(message))
   }
 
-  await supabaseService.update<Record<string, unknown>>('project_materials', materialId, updates)
+  const unitMessage = await validateParticipantUnitForProject(projectId, updates.participant_unit_id)
+  if (unitMessage) {
+    return res.status(400).json(validationError(unitMessage))
+  }
+
+  const { error: updateError } = await supabase
+    .from('project_materials')
+    .update(updates)
+    .eq('id', materialId)
+    .eq('project_id', projectId)
+  if (updateError) throw new Error(updateError.message)
   const actualArrivalChanged = normalizeNullableText(current.actual_arrival_date) !== updates.actual_arrival_date
+  let conditionUnlockCount = 0
   if (actualArrivalChanged && updates.actual_arrival_date) {
     const participantUnitId = updates.participant_unit_id ?? normalizeNullableText(current.participant_unit_id)
-    let responsibleUnitName = normalizeNullableText(current.participant_unit_name)
 
-    if (!responsibleUnitName && participantUnitId) {
-      const unitRows = await supabaseService.query<Record<string, any>>('participant_units', {
-        id: participantUnitId,
-        project_id: projectId,
-      })
-      responsibleUnitName = normalizeNullableText(unitRows[0]?.unit_name)
-    }
-
-    await autoSatisfyMaterialConditions({
+    const unlockResult = await materialArrivalReminderService.handleMaterialArrived({
       projectId,
-      responsibleUnit: responsibleUnitName,
-      satisfiedAt: updates.actual_arrival_date,
-      confirmedBy: req.user?.id ?? null,
+      participantUnitId,
+      materialId,
+      arrivedAt: updates.actual_arrival_date,
+      changedBy: req.user?.id ?? null,
+    })
+    conditionUnlockCount = unlockResult.conditionUnlockCount
+    await recordMaterialArrivalSampleHealthEvidence({
+      projectId,
+      materialId,
+      current,
+      updates,
+      sourceRoute: 'project-materials.patch',
     })
   }
 
@@ -404,6 +500,7 @@ router.patch(
     ),
   ).catch(() => undefined)
 
+  clearMaterialReportCache(projectId)
   let responseData = buildMaterialRecordFallback(current, updates)
   try {
     const data = await withTimeout(listProjectMaterials(projectId), 5000)
@@ -414,7 +511,10 @@ router.patch(
 
   res.json({
     success: true,
-    data: responseData,
+    data: {
+      ...responseData,
+      condition_unlock_count: conditionUnlockCount,
+    },
     timestamp: nowIso(),
   })
 }),
@@ -423,7 +523,7 @@ router.patch(
 router.delete('/:materialId', validate(materialIdParamSchema, 'params'), asyncHandler(async (req, res) => {
   const projectId = normalizeText(req.params.projectId)
   const materialId = normalizeText(req.params.materialId)
-  const access = await getAccess(projectId, req.user?.id, req.user?.globalRole)
+  const access = await getAccess(projectId, req.user?.id, getRequestCompanyId(req))
 
   if (!access.canWrite) {
     return res.status(403).json({
@@ -450,7 +550,28 @@ router.delete('/:materialId', validate(materialIdParamSchema, 'params'), asyncHa
     changed_by: req.user?.id ?? null,
     change_reason: '材料删除',
   })
-  await supabaseService.delete('project_materials', materialId)
+  // v1.4.15: retention decision must block unsafe physical deletes.
+  const { enforceRetentionOrBlock, buildRetentionBlockedApiError, buildRetentionBlockedHttpStatus } = await import('../services/deletionRetentionGovernanceService.js')
+  const retention = await enforceRetentionOrBlock({
+    entityType: 'project_material',
+    entityId: materialId,
+    projectId,
+    userId: req.user?.id ?? null,
+    userAction: 'delete',
+  })
+  if (retention.blocked) {
+    return res.status(buildRetentionBlockedHttpStatus(retention.result)).json({ success: false, error: buildRetentionBlockedApiError(retention.reason, retention.result), timestamp: nowIso() })
+  }
+
+  // v1.4.21: soft-delete by setting record_status = inactive
+  const now = new Date().toISOString()
+  const { error: deleteError } = await supabase
+    .from('project_materials')
+    .update({ record_status: 'inactive', lifecycle_status: 'archived', deleted_at: now, deleted_by: req.user?.id ?? null, updated_at: now })
+    .eq('id', materialId)
+    .eq('project_id', projectId)
+  if (deleteError) throw new Error(deleteError.message)
+  clearMaterialReportCache(projectId)
   res.json({ success: true, timestamp: nowIso() })
 }))
 

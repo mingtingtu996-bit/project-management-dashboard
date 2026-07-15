@@ -1,4 +1,4 @@
-import express from 'express'
+﻿import express from 'express'
 import supertest from 'supertest'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -25,7 +25,7 @@ const state = vi.hoisted(() => {
   class QueryBuilder {
     private table: TableName
     private filters: Array<{ column: string; value: unknown }> = []
-    private mode: 'select' | 'update' | 'delete' = 'select'
+    private mode: 'select' | 'update' | 'upsert' | 'delete' = 'select'
     private payload: any = null
     private limitCount: number | null = null
 
@@ -57,6 +57,12 @@ const state = vi.hoisted(() => {
       return this
     }
 
+    upsert(payload: any) {
+      this.mode = 'upsert'
+      this.payload = payload
+      return this
+    }
+
     delete() {
       this.mode = 'delete'
       return this
@@ -76,6 +82,22 @@ const state = vi.hoisted(() => {
         const matched = rows.filter((row) => matchesFilters(row, this.filters))
         const updated = matched.map((row) => Object.assign(row, clone(this.payload)))
         return { data: updated.map((row) => clone(row)), error: null }
+      }
+
+      if (this.mode === 'upsert') {
+        const incoming = (Array.isArray(this.payload) ? this.payload : [this.payload]).map((row) => clone(row))
+        const touched: Row[] = []
+        for (const item of incoming) {
+          const existingIndex = rows.findIndex((row) => row.id === item.id)
+          if (existingIndex >= 0) {
+            rows[existingIndex] = { ...rows[existingIndex], ...item }
+            touched.push(rows[existingIndex])
+          } else {
+            rows.push(item)
+            touched.push(item)
+          }
+        }
+        return { data: touched.map((row) => clone(row)), error: null }
       }
 
       if (this.mode === 'delete') {
@@ -192,10 +214,6 @@ vi.mock('../services/planningDraftLockService.js', () => ({
       if (state.draftLockError) throw state.draftLockError
       return state.unlockedLock
     }
-    async forceUnlockDraftLock() {
-      if (state.draftLockError) throw state.draftLockError
-      return state.unlockedLock
-    }
     async cleanupMonthlyPlanDraft() {
       return
     }
@@ -212,7 +230,7 @@ function buildApp() {
   return app
 }
 
-describe('monthly plan force-close route', () => {
+describe('monthly plan closeout route boundaries', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     state.projectRole = 'owner'
@@ -244,68 +262,44 @@ describe('monthly plan force-close route', () => {
       id: 'plan-item-1',
       project_id: 'project-1',
       monthly_plan_version_id: 'plan-1',
-      title: '收尾事项',
+      title: '鏀跺熬浜嬮」',
       sort_order: 1,
     })
     state.tables.planning_governance_states.push({
       id: 'gov-1',
       project_id: 'project-1',
-      kind: 'closeout_force_unlock',
+      kind: 'closeout_owner_attention',
       status: 'active',
       source_entity_id: 'plan-1',
     })
   })
 
-  it('allows owners to force-close when the governance unlock is active', async () => {
+  it('does not expose a force-close route to the monthly plan frontend API', async () => {
     const response = await supertest(buildApp()).post('/api/monthly-plans/plan-1/force-close')
 
-    expect(response.status).toBe(200)
-    expect(response.body.success).toBe(true)
-    expect(response.body.data).toMatchObject({
-      id: 'plan-1',
-      status: 'closed',
-    })
-    expect(state.tables.monthly_plans[0].status).toBe('closed')
-    expect(state.writeLog).toHaveBeenCalled()
-    expect(state.scanProjectGovernance).toHaveBeenCalledWith('project-1')
+    expect(response.status).toBe(404)
+    expect(state.tables.monthly_plans[0].status).toBe('confirmed')
+    expect(state.writeLog).not.toHaveBeenCalled()
+    expect(state.scanProjectGovernance).not.toHaveBeenCalled()
   })
 
-  it('rejects force-close for non-owner users', async () => {
+  it('keeps force-close unavailable regardless of project role', async () => {
     state.projectRole = 'pm'
     state.currentUserId = 'member-1'
 
     const response = await supertest(buildApp()).post('/api/monthly-plans/plan-1/force-close')
 
-    expect(response.status).toBe(403)
-    expect(response.body.success).toBe(false)
-    expect(response.body.error.code).toBe('FORBIDDEN')
+    expect(response.status).toBe(404)
+    expect(state.tables.monthly_plans[0].status).toBe('confirmed')
   })
 
-  it('rejects force-close before the unlock threshold is reached', async () => {
-    state.tables.planning_governance_states.splice(0, state.tables.planning_governance_states.length)
-
-    const response = await supertest(buildApp()).post('/api/monthly-plans/plan-1/force-close')
-
-    expect(response.status).toBe(409)
-    expect(response.body.success).toBe(false)
-    expect(response.body.error.code).toBe('INVALID_STATE')
-  })
-
-  it('returns the current draft lock and supports force-unlock through the monthly plan routes', async () => {
+  it('returns the current draft lock without exposing force-unlock through the monthly plan routes', async () => {
     state.existingLock = {
       id: 'lock-1',
       project_id: 'project-1',
       draft_type: 'monthly_plan',
       resource_id: 'plan-1',
       is_locked: true,
-    }
-    state.unlockedLock = {
-      id: 'lock-1',
-      project_id: 'project-1',
-      draft_type: 'monthly_plan',
-      resource_id: 'plan-1',
-      is_locked: false,
-      release_reason: 'manual_release',
     }
 
     const request = supertest(buildApp())
@@ -320,16 +314,11 @@ describe('monthly plan force-close route', () => {
     const unlockResponse = await request
       .post('/api/monthly-plans/plan-1/force-unlock')
       .send({ reason: 'manual_release' })
-    expect(unlockResponse.status).toBe(200)
-    expect(unlockResponse.body.data.lock).toMatchObject({
-      id: 'lock-1',
-      is_locked: false,
-      release_reason: 'manual_release',
-    })
+    expect(unlockResponse.status).toBe(404)
   })
 
-  it('maps draft lock service conflicts and batch guard failures to validation responses', async () => {
-    state.draftLockError = new PlanningDraftLockServiceError('LOCK_HELD', '草稿锁被其他成员占用', 409)
+  it('maps draft lock service conflicts and removes legacy batch mutation endpoints', async () => {
+    state.draftLockError = new PlanningDraftLockServiceError('LOCK_HELD', 'draft lock is held by another editor', 409)
 
     const request = supertest(buildApp())
     const lockResponse = await request.post('/api/monthly-plans/plan-1/lock')
@@ -340,9 +329,7 @@ describe('monthly plan force-close route', () => {
     const batchResponse = await request
       .post('/api/monthly-plans/plan-1/items/batch-target-progress')
       .send({ target_progress: 65 })
-    expect(batchResponse.status).toBe(400)
-    expect(batchResponse.body.error.code).toBe('VALIDATION_ERROR')
-    expect(batchResponse.body.error.message).toContain('未命中任何月度计划条目')
+    expect(batchResponse.status).toBe(404)
   })
 
   it('revokes draft monthly plans through the new revoke route and removes the draft rows', async () => {
@@ -352,7 +339,7 @@ describe('monthly plan force-close route', () => {
       version: 7,
       status: 'draft',
       month: '2026-05',
-      title: '2026-05 月度计划',
+      title: '2026-05 monthly plan',
       created_at: '2026-04-10T00:00:00.000Z',
       updated_at: '2026-04-10T00:00:00.000Z',
     })
@@ -361,21 +348,21 @@ describe('monthly plan force-close route', () => {
         id: 'plan-draft-item-1',
         project_id: 'project-1',
         monthly_plan_version_id: 'plan-draft',
-        title: '临建收尾',
+        title: 'draft item 1',
         sort_order: 1,
       },
       {
         id: 'plan-draft-item-2',
         project_id: 'project-1',
         monthly_plan_version_id: 'plan-draft',
-        title: '资料补录',
+        title: 'draft item 2',
         sort_order: 2,
       },
     )
 
     const response = await supertest(buildApp())
       .post('/api/monthly-plans/plan-draft/revoke')
-      .send({ version: 7, reason: '重新生成草稿' })
+      .send({ version: 7, reason: 'regenerate draft' })
 
     expect(response.status).toBe(200)
     expect(response.body.success).toBe(true)
@@ -392,11 +379,10 @@ describe('monthly plan force-close route', () => {
         entity_id: 'plan-draft',
         old_value: 'draft',
         new_value: 'revoked',
-        change_reason: '重新生成草稿',
+        change_reason: 'regenerate draft',
       }),
     )
   })
-
   it('keeps a void alias for revoke and blocks confirmed plans from using it', async () => {
     state.tables.monthly_plans.push({
       id: 'plan-revising',

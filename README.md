@@ -61,6 +61,7 @@ PORT=3001
 SUPABASE_URL=
 SUPABASE_ANON_KEY=
 SUPABASE_MIGRATION_URL=
+DB_CONNECTION_STRING=
 SUPABASE_HOST=
 SUPABASE_PORT=
 SUPABASE_DATABASE=
@@ -108,6 +109,13 @@ npm run migrate:pending
 ```
 
 CI 中的自动迁移优先使用 `SUPABASE_MIGRATION_URL`。它应当配置为 Supabase 提供的可公网访问 pooler/session 连接串；当前直连 `db.<project>.supabase.co` 在 GitHub Hosted Runner 上通常只有 IPv6，不适合作为 CI 迁移入口。
+
+官方年度工作日历导入同样优先使用 `DB_CONNECTION_STRING` 或 `SUPABASE_MIGRATION_URL` 走 PostgreSQL 事务发布。生产验证命令：
+
+```bash
+cd server
+npm run calendar:refresh-official -- --year=2026
+```
 
 ## 发布与工程化说明
 

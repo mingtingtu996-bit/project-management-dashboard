@@ -111,7 +111,7 @@ export function BaselineDumbbellChart({
       <CardContent className="space-y-4">
         {points.length > 0 ? (
           <ChartAccessibleWrapper
-            columns={['任务', '计划日期', '实际日期', '偏差天数', '偏差率(%)', '状态']}
+            columns={['任务', '计划日期', '实际日期', '偏差生产日', '偏差率(%)', '状态']}
             rows={chartRows}
             summary="查看基线哑铃图数据"
           >

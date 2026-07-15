@@ -13,17 +13,21 @@
  *  §3.7 — 优先级分数 / change_logs priority / pendingManualClose / 通知去重
  */
 
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { resolve, sep } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
 function readServerFile(...segments: string[]) {
+  return readFileSync(serverFilePath(...segments), 'utf8')
+}
+
+function serverFilePath(...segments: string[]) {
   const serverRoot = process.cwd().endsWith(`${sep}server`)
     ? process.cwd()
     : resolve(process.cwd(), 'server')
-  return readFileSync(resolve(serverRoot, ...segments), 'utf8')
+  return resolve(serverRoot, ...segments)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -31,14 +35,22 @@ function readServerFile(...segments: string[]) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('§4.10.3 conditionAlertJob', () => {
-  it('4路并发分支单路失败不阻断其余分支（Promise.all 内独立 resolve）', () => {
+  it('runs condition and escalation scans in a bounded sequence', () => {
     const schedulerSource = readServerFile('src', 'scheduler.ts')
-    // conditionAlertJob 内部用 Promise.all 并发四路
-    expect(schedulerSource).toContain('Promise.all([')
-    expect(schedulerSource).toContain('syncConditionExpiredIssues()')
-    expect(schedulerSource).toContain('syncAcceptanceExpiredIssues()')
-    expect(schedulerSource).toContain('autoEscalateWarnings()')
-    expect(schedulerSource).toContain('autoEscalateRisksToIssues()')
+    const section = schedulerSource.slice(
+      schedulerSource.indexOf('class ConditionAlertJob'),
+      schedulerSource.indexOf('class ProjectDailySnapshotJob'),
+    )
+    const conditionIndex = section.indexOf('await this.warningService.syncConditionExpiredIssues()')
+    const acceptanceIndex = section.indexOf('await this.warningService.syncAcceptanceExpiredIssues()')
+    const warningIndex = section.indexOf('await this.warningService.autoEscalateWarnings()')
+    const issueIndex = section.indexOf('await this.warningService.autoEscalateRisksToIssues()')
+
+    expect(conditionIndex).toBeGreaterThan(-1)
+    expect(acceptanceIndex).toBeGreaterThan(conditionIndex)
+    expect(warningIndex).toBeGreaterThan(acceptanceIndex)
+    expect(issueIndex).toBeGreaterThan(warningIndex)
+    expect(section).not.toContain('Promise.all([')
   })
 
   it('自动升级链：conditionAlertJob 结果包含 autoEscalatedRisks 和 autoEscalatedIssues 计数', () => {
@@ -55,16 +67,28 @@ describe('§4.10.3 conditionAlertJob', () => {
 
   it('conditionAlertJob 按小时触发：initialDelay 对齐下一整点', () => {
     const schedulerSource = readServerFile('src', 'scheduler.ts')
-    // 小时对齐逻辑
-    expect(schedulerSource).toContain("nextHour.getHours() + 1")
-    expect(schedulerSource).toContain('setMinutes(0, 0, 0)')
-    expect(schedulerSource).toContain('HOUR_IN_MS')
+    expect(schedulerSource).toContain("schedule: { kind: 'hourly', minute: 0 }")
+    expect(schedulerSource).toContain("trigger: 'hourly_00'")
   })
 
   it('conditionAlertJob 使用 runJobWithRetry 包裹执行逻辑', () => {
     const schedulerSource = readServerFile('src', 'scheduler.ts')
     // conditionAlertJob execute 中使用 runJobWithRetry
     expect(schedulerSource).toContain("jobName: 'conditionAlertJob'")
+  })
+
+  it('conditionAlertJob has execute-level reentry protection', () => {
+    const schedulerSource = readServerFile('src', 'scheduler.ts')
+    const conditionAlertJobSource = schedulerSource.slice(
+      schedulerSource.indexOf('class ConditionAlertJob'),
+      schedulerSource.indexOf('class ProjectDailySnapshotJob'),
+    )
+
+    expect(conditionAlertJobSource).toContain('private isRunning = false')
+    expect(conditionAlertJobSource).toContain('if (this.isRunning)')
+    expect(conditionAlertJobSource).toContain('skip tick')
+    expect(conditionAlertJobSource).toContain('this.isRunning = true')
+    expect(conditionAlertJobSource).toContain('this.isRunning = false')
   })
 
   it('conditionAlertJob 结果中包含 warnings 和 reminders 字段', () => {
@@ -109,8 +133,10 @@ describe('§4.10.4 riskStatisticsJob', () => {
 
   it('nextRun 在调度器触发后更新为下一天', () => {
     const jobSource = readServerFile('src', 'jobs', 'riskStatisticsJob.ts')
-    expect(jobSource).toContain("triggeredBy === 'scheduler'")
-    expect(jobSource).toContain('this.nextRun = new Date(startedAt.getTime() + DAY_IN_MS)')
+    expect(jobSource).toContain('PersistentWallClockJobTimer')
+    expect(jobSource).toContain("schedule: { kind: 'daily', hour: 2, minute: 0 }")
+    expect(jobSource).toContain('this.nextRun = nextRun')
+    expect(jobSource).not.toContain('setInterval')
   })
 
   it('并发保护：isRunning=true 时跳过 tick', () => {
@@ -133,25 +159,28 @@ describe('§4.10.5 responsibilityAlertJob', () => {
 
   it('responsibilityAlertJob 将 syncAllProjects 结果透传到日志', () => {
     const jobSource = readServerFile('src', 'jobs', 'responsibilityAlertJob.ts')
-    expect(jobSource).toContain('responsibilityInsightService.syncAllProjects()')
+    expect(jobSource).toContain('responsibilityInsightService.syncAllProjects(projectIds)')
     expect(jobSource).toContain('...value')
   })
 
   it('getNextRunTime() 将时间对齐到 08:15', () => {
     const jobSource = readServerFile('src', 'jobs', 'responsibilityAlertJob.ts')
-    expect(jobSource).toContain('setHours(8, 15, 0, 0)')
+    expect(jobSource).toContain('PersistentWallClockJobTimer')
+    expect(jobSource).toContain("schedule: { kind: 'daily', hour: 8, minute: 15 }")
+    expect(jobSource).not.toContain('setInterval')
   })
 
   it('getNextRunTime() 跨日计算：若当前时间晚于 08:15 则推进到次日', () => {
-    const jobSource = readServerFile('src', 'jobs', 'responsibilityAlertJob.ts')
-    // next <= now 时增加一天
-    expect(jobSource).toContain('next.setDate(next.getDate() + 1)')
-    expect(jobSource).toContain('next <= now')
+    const scheduleSource = readServerFile('src', 'services', 'wallClockScheduleService.ts')
+    expect(scheduleSource).toContain('calculateNextDailyRun')
+    expect(scheduleSource).toContain('candidate <= now')
+    expect(scheduleSource).toContain('candidate.setDate(candidate.getDate() + 1)')
   })
 
   it('responsibilityAlertJob 写入 job_execution_logs', () => {
     const jobSource = readServerFile('src', 'jobs', 'responsibilityAlertJob.ts')
-    expect(jobSource).toContain("from('job_execution_logs').insert(")
+    expect(jobSource).toContain('INSERT INTO public.job_execution_logs')
+    expect(jobSource).not.toContain("from('job_execution_logs').insert(")
   })
 
   it('responsibilityAlertJob getStatus() 暴露 isRunning / isScheduled / lastRun / nextRun', () => {
@@ -164,55 +193,22 @@ describe('§4.10.5 responsibilityAlertJob', () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §4.10.6 delayRequestReminderJob
+// §4.10.6 delay request workflow removal
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('§4.10.6 delayRequestReminderJob', () => {
-  it('生成 delay_request_reminder 类通知', () => {
+describe('§4.10.6 delay request workflow removal', () => {
+  it('does not schedule delay request reminder or escalation jobs', () => {
     const schedulerSource = readServerFile('src', 'scheduler.ts')
-    expect(schedulerSource).toContain("type === 'delay_request_reminder'")
-    expect(schedulerSource).toContain('reminders:')
+    const jobsSource = readServerFile('src', 'routes', 'jobs.ts')
+
+    expect(schedulerSource).not.toContain('DelayRequestReminderJob')
+    expect(schedulerSource).not.toContain('delay_request_reminder')
+    expect(schedulerSource).not.toContain('delay_request_escalation')
+    expect(jobsSource).not.toContain('delayRequestReminderJob')
   })
 
-  it('生成 delay_request_escalation 类通知', () => {
-    const schedulerSource = readServerFile('src', 'scheduler.ts')
-    expect(schedulerSource).toContain("type === 'delay_request_escalation'")
-    expect(schedulerSource).toContain('escalations:')
-  })
-
-  it('initialDelay 对齐次日 09:00', () => {
-    const schedulerSource = readServerFile('src', 'scheduler.ts')
-    // DelayRequestReminderJob.start() 的 09:00 逻辑
-    expect(schedulerSource).toContain('setHours(9, 0, 0, 0)')
-    expect(schedulerSource).toContain("'delayRequestReminderJob'")
-  })
-
-  it('start() 立即执行一次后再等待 initialDelay', () => {
-    const schedulerSource = readServerFile('src', 'scheduler.ts')
-    // delayRequestReminderJob.start() 先调用 execute，再 setTimeout
-    const delayJobSection = schedulerSource.slice(
-      schedulerSource.indexOf('class DelayRequestReminderJob'),
-      schedulerSource.indexOf('class ProjectDailySnapshotJob'),
-    )
-    expect(delayJobSection).toContain("void this.execute('scheduler')")
-    expect(delayJobSection).toContain('setDate(nextRun.getDate() + 1)')
-  })
-
-  it('并发保护：isRunning=true 时跳过 tick', () => {
-    const schedulerSource = readServerFile('src', 'scheduler.ts')
-    const section = schedulerSource.slice(
-      schedulerSource.indexOf('class DelayRequestReminderJob'),
-      schedulerSource.indexOf('class ProjectDailySnapshotJob'),
-    )
-    expect(section).toContain('if (this.isRunning)')
-    expect(section).toContain('skip tick')
-  })
-
-  it('DelayRequestNotificationService.persistPendingDelayRequestNotifications 存在且可调用', () => {
-    const serviceSource = readServerFile('src', 'services', 'delayRequestNotificationService.ts')
-    expect(serviceSource).toContain('persistPendingDelayRequestNotifications')
-    expect(serviceSource).toContain('delay_request_reminder')
-    expect(serviceSource).toContain('delay_request_escalation')
+  it('removes the legacy delay request notification service', () => {
+    expect(existsSync(serverFilePath('src', 'services', 'delayRequestNotificationService.ts'))).toBe(false)
   })
 })
 
@@ -233,7 +229,7 @@ describe('§4.10.7 dataQualityJob', () => {
       schedulerSource.indexOf('class DataQualityJob'),
       schedulerSource.indexOf('class PlanningGovernanceJob'),
     )
-    expect(section).toContain('setHours(2, 30, 0, 0)')
+    expect(section).toContain("schedule: { kind: 'daily', hour: 2, minute: 30 }")
     expect(section).toContain("'daily_02_30'")
   })
 
@@ -292,6 +288,12 @@ describe('§4.10.12 projectDailySnapshotJob', () => {
     expect(serviceSource).not.toContain('project_health_history')
   })
 
+  it('projectHealthService does not require legacy task_obstacles.is_resolved for health inputs', () => {
+    const serviceSource = readServerFile('src', 'services', 'projectHealthService.ts')
+    expect(serviceSource).toContain("loadProjectScopedRows<ObstacleRow>('task_obstacles', projectId, 'id, task_id, status')")
+    expect(serviceSource).not.toContain("loadProjectScopedRows<ObstacleRow>('task_obstacles', projectId, 'id, task_id, is_resolved, status')")
+  })
+
   it('jobs route exposes projectDailySnapshotJob and disables the legacy healthHistorySnapshotJob schedule', () => {
     const jobsRouteSource = readServerFile('src', 'routes', 'jobs.ts')
     expect(jobsRouteSource).toContain("name: 'projectDailySnapshotJob'")
@@ -301,17 +303,30 @@ describe('§4.10.12 projectDailySnapshotJob', () => {
     expect(jobsRouteSource).toContain("status: 'disabled'")
   })
 
-  it('/api/health-score/avg-history reads from project_daily_snapshot after the BI switch', () => {
+  it('removes the retired company average health history endpoint', () => {
     const routeSource = readServerFile('src', 'routes', 'health-score.ts')
-    const avgHistorySection = routeSource.slice(
-      routeSource.indexOf("router.get('/avg-history'"),
-      routeSource.indexOf("router.post('/record-snapshot'"),
-    )
-    expect(avgHistorySection).toContain("from('project_daily_snapshot')")
-    expect(avgHistorySection).not.toContain("from('project_health_history')")
+    expect(routeSource).not.toContain("router.get('/avg-history'")
+    expect(routeSource).not.toContain('health_score.avg_history')
   })
 
-  it('durationContextPolicyLearningJob automatically runs the report-only sweep at 06:20 and stops on shutdown', () => {
+  it('criticalPathRefreshJob refreshes E3 snapshots on a guard schedule and is manually executable', () => {
+    const schedulerSource = readServerFile('src', 'scheduler.ts')
+    const jobSource = readServerFile('src', 'jobs', 'criticalPathRefreshJob.ts')
+    const jobsRouteSource = readServerFile('src', 'routes', 'jobs.ts')
+
+    expect(schedulerSource).toContain("import { criticalPathRefreshJob } from './jobs/criticalPathRefreshJob.js'")
+    expect(schedulerSource).toContain('criticalPathRefreshJob.start()')
+    expect(schedulerSource).toContain('criticalPathRefreshJob.stop()')
+    expect(jobSource).toContain('class CriticalPathRefreshJob')
+    expect(jobSource).toContain('refreshActiveProjectCriticalPathSnapshots')
+    expect(jobSource).toContain("jobName: 'criticalPathRefreshJob'")
+
+    expect(jobsRouteSource).toContain("name: 'criticalPathRefreshJob'")
+    expect(jobsRouteSource).toContain("case 'criticalPathRefreshJob'")
+    expect(jobsRouteSource).toContain("runApiJob('criticalPathRefreshJob'")
+  })
+
+  it('durationContextPolicyLearningJob runs the checkpointed learning and runtime-publication sweep at 06:20', () => {
     const schedulerSource = readServerFile('src', 'scheduler.ts')
     const jobSource = readServerFile('src', 'jobs', 'durationContextPolicyLearningJob.ts')
 
@@ -320,11 +335,26 @@ describe('§4.10.12 projectDailySnapshotJob', () => {
     expect(schedulerSource).toContain('Duration context policy learning job started (daily 06:20)')
     expect(schedulerSource).toContain('durationContextPolicyLearningJob.stop()')
 
-    expect(jobSource).toContain('nextDailyRunAt(6, 20)')
+    expect(jobSource).toContain("schedule: { kind: 'daily', hour: 6, minute: 20 }")
     expect(jobSource).toContain("trigger: 'daily_06_20'")
-    expect(jobSource).toContain("runtimeMutationPolicy: 'none_candidate_report_only'")
+    expect(jobSource).toContain("'none_runtime_or_fact_mutation_canary_registry_only'")
+    expect(jobSource).toContain("'bounded_canary_parameter_runtime_publication_with_explicit_boundary'")
+    expect(jobSource).toContain("'stable_parameter_runtime_publication_with_monitoring_and_rollback'")
+    expect(jobSource).toContain('createDatabaseDurationContextPolicyLearningCheckpointStore')
+    expect(jobSource).toContain('executeDurationContextPolicyLearningStage')
+    expect(jobSource).toContain('runDurationContextPolicyRuntimePublicationBridge')
+    expect(jobSource).toContain("runtimeMutationPolicy: 'none_candidate_report_only_dependency_missing'")
+    expect(jobSource).toContain("optionalServicePath('durationContextPolicyAutoPublishGateService')")
+    expect(jobSource).toContain('autoPublishDurationContextPolicyCandidates')
+    expect(jobSource).toContain('registry_candidate_plus_runtime_parameter_publication_bridge')
     expect(jobSource).toContain('persistDecisions: false')
-    expect(jobSource).toContain('persist: false')
+    expect(jobSource).toContain('persist: true')
+    expect(jobSource).toMatch(/learnDurationContextPolicyParameters\(\{\s*projectIds,\s*persist:\s*true,\s*\}\)/)
+    expect(jobSource).toMatch(/generateDurationContextPolicyCanaryCandidates\(\{[\s\S]*?persist:\s*true,[\s\S]*?operationId:\s*operation\.operationId,[\s\S]*?idempotencyStage:\s*'candidate_persistence'/)
+    expect(jobSource).toMatch(/autoPublishDurationContextPolicyCandidates\(\{[\s\S]*?persist:\s*true,[\s\S]*?operationId:\s*operation\.operationId,[\s\S]*?idempotencyStage:\s*'decision_persistence'/)
+    expect(jobSource).not.toMatch(/learnDurationContextPolicyParameters\(\{[\s\S]*?persist:\s*false[\s\S]*?\}\)/)
+    expect(jobSource).not.toMatch(/generateDurationContextPolicyCanaryCandidates\(\{[\s\S]*?persist:\s*false[\s\S]*?\}\)/)
+    expect(jobSource).not.toMatch(/autoPublishDurationContextPolicyCandidates\(\{[\s\S]*?persist:\s*false[\s\S]*?\}\)/)
   })
 })
 
@@ -333,16 +363,15 @@ describe('§4.10.12 projectDailySnapshotJob', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('§4.10.13 weeklyDigestJob / materialArrivalReminderJob', () => {
-  it('weeklyDigestJob 计算 initialDelay 时对齐下一个周一 09:00', () => {
+  it('weeklyDigestJob 每轮重新计算下一个周一 09:00 墙钟时刻', () => {
     const schedulerSource = readServerFile('src', 'scheduler.ts')
     const section = schedulerSource.slice(
       schedulerSource.indexOf('class WeeklyDigestJob'),
       schedulerSource.indexOf('class MaterialArrivalReminderJob'),
     )
-    expect(section).toContain('setHours(9, 0, 0, 0)')
-    // daysUntilMonday 逻辑：day===1 ? 7
-    expect(section).toContain('daysUntilMonday')
-    expect(section).toContain('WEEK_IN_MS')
+    expect(section).toContain("schedule: { kind: 'weekly', dayOfWeek: 1, hour: 9, minute: 0 }")
+    expect(section).toContain('PersistentWallClockJobTimer')
+    expect(section).not.toContain('setInterval')
   })
 
   it('weeklyDigestJob 调用 weeklyDigestService.generateForAllProjects()', () => {
@@ -364,10 +393,11 @@ describe('§4.10.13 weeklyDigestJob / materialArrivalReminderJob', () => {
     expect(serviceSource).toContain('overdueCount:')
   })
 
-  it('materialArrivalReminderJob 使用 Promise.allSettled 并发扫描各项目，单项失败不影响其余', () => {
+  it('materialArrivalReminderJob 对失败项目做 scoped retry 并传播部分失败', () => {
     const serviceSource = readServerFile('src', 'services', 'materialArrivalReminderService.ts')
-    expect(serviceSource).toContain('Promise.allSettled(')
-    expect(serviceSource).toContain("item.status === 'fulfilled'")
+    expect(serviceSource).toContain('runScopedBatch({')
+    expect(serviceSource).toContain("operationName: 'material_arrival_reminder_generation'")
+    expect(serviceSource).not.toContain('Promise.allSettled(')
   })
 })
 
@@ -383,6 +413,34 @@ describe('§4.10 顶层 — 基线有效性扫描触发 pending_realign', () => 
     expect(schedulerSource).toContain('baselinesQueuedForRealign:')
   })
 
+  it('planningGovernanceJob 在基线有效性扫描完成后运行稳定工期发布影响扫描', () => {
+    const schedulerSource = readServerFile('src', 'scheduler.ts')
+    expect(schedulerSource).toContain('scanStableDurationPublicationBaselineImpacts()')
+    const validityIndex = schedulerSource.indexOf("const baselineValidityReports = await safeRun('baselineValidity', () => scanAllProjectBaselineValidity())")
+    const impactIndex = schedulerSource.indexOf('scanStableDurationPublicationBaselineImpacts()')
+    expect(validityIndex).toBeGreaterThan(-1)
+    expect(impactIndex).toBeGreaterThan(validityIndex)
+    expect(schedulerSource).toContain('baselineRevisionDraftsCreated:')
+  })
+
+  it('runs full-project governance scans sequentially to bound database pool usage', () => {
+    const schedulerSource = readServerFile('src', 'scheduler.ts')
+    const section = schedulerSource.slice(
+      schedulerSource.indexOf('class PlanningGovernanceJob'),
+      schedulerSource.indexOf('class OperationalNotificationJob'),
+    )
+    const healthIndex = section.indexOf("await safeRun('healthScan'")
+    const integrityIndex = section.indexOf("await safeRun('integrityScan'")
+    const anomalyIndex = section.indexOf("await safeRun('anomalyScan'")
+    const notificationIndex = section.indexOf("await safeRun('governanceNotifications'")
+
+    expect(healthIndex).toBeGreaterThan(-1)
+    expect(integrityIndex).toBeGreaterThan(healthIndex)
+    expect(anomalyIndex).toBeGreaterThan(integrityIndex)
+    expect(notificationIndex).toBeGreaterThan(anomalyIndex)
+    expect(section).not.toContain('Promise.all([')
+  })
+
   it('baselineGovernanceService 将需要重整的基线状态置为 pending_realign', () => {
     const serviceSource = readServerFile('src', 'services', 'baselineGovernanceService.ts')
     expect(serviceSource).toContain("'pending_realign'")
@@ -390,11 +448,11 @@ describe('§4.10 顶层 — 基线有效性扫描触发 pending_realign', () => 
   })
 })
 
-// ──────────────────────────────────────────────────────────────────────────��──
-// §4.10 顶层 — data-quality 报表置信度面板同步
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// §4.10 顶层 data-quality 报表置信度面板同步
+// -----------------------------------------------------------------------------
 
-describe('§4.10 顶层 — data-quality 报表置信度面板同步', () => {
+describe('§4.10 顶层 data-quality 报表置信度面板同步', () => {
   it('dataQualityService.syncAllProjectsDataQuality 返回带 confidence 字段的报告', () => {
     const serviceSource = readServerFile('src', 'services', 'dataQualityService.ts')
     expect(serviceSource).toContain('confidence')
@@ -407,11 +465,11 @@ describe('§4.10 顶层 — data-quality 报表置信度面板同步', () => {
   })
 })
 
-// ─────────────────────────────────────────────────────────────────────────────
-// §4.10 顶层 — 健康度定时计算后 Dashboard 刷新
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// §4.10 健康度定时计算后 Dashboard 刷新
+// -----------------------------------------------------------------------------
 
-describe('§4.10 顶层 — 健康度定时计算后 Dashboard 刷新', () => {
+describe('§4.10 健康度定时计算后 Dashboard 刷新', () => {
   it('planningGovernanceJob 调用 PlanningHealthService.scanAllProjectHealth()', () => {
     const schedulerSource = readServerFile('src', 'scheduler.ts')
     expect(schedulerSource).toContain('new PlanningHealthService().scanAllProjectHealth()')
@@ -426,36 +484,36 @@ describe('§4.10 顶层 — 健康度定时计算后 Dashboard 刷新', () => {
   })
 })
 
-// ─────────────────────────────────────────────────────────────────────────────
-// §3.7 — 自动优先级分数：来源权重 × 严重性权重 × 时间衰减
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// §3.7 自动优先级分数展示：来源权重 * 严重性权重 * 时间衰减
+// -----------------------------------------------------------------------------
 
 describe('§3.7 自动优先级分数展示', () => {
-  it('getIssueBasePriority = ISSUE_SOURCE_WEIGHT × ISSUE_SEVERITY_WEIGHT', async () => {
+  it('getIssueBasePriority = ISSUE_SOURCE_WEIGHT * ISSUE_SEVERITY_WEIGHT', async () => {
     const { getIssueBasePriority } = await import('../services/workflowDomainPolicy.js')
 
-    // condition_expired(4) × critical(4) = 16
+    // condition_expired(4) * critical(4) = 16
     expect(getIssueBasePriority('condition_expired', 'critical')).toBe(16)
-    // obstacle_escalated(3) × high(3) = 9
+    // obstacle_escalated(3) * high(3) = 9
     expect(getIssueBasePriority('obstacle_escalated', 'high')).toBe(9)
-    // risk_converted(2) × medium(2) = 4
+    // risk_converted(2) * medium(2) = 4
     expect(getIssueBasePriority('risk_converted', 'medium')).toBe(4)
-    // manual(1) × low(1) = 1
+    // manual(1) * low(1) = 1
     expect(getIssueBasePriority('manual', 'low')).toBe(1)
   })
 
-  it('computeDynamicIssuePriority 对超过7天未处理的问题应用时间衰减上浮', async () => {
+  it('computeDynamicIssuePriority 对超过 7 天未处理的问题应用时间衰减上浮', async () => {
     const { computeDynamicIssuePriority } = await import('../services/workflowDomainPolicy.js')
 
     const now = new Date('2026-04-20T10:00:00.000Z')
     const createdAt14DaysAgo = new Date('2026-04-06T10:00:00.000Z').toISOString()
 
-    // risk_converted × medium = 2×2=4，14天=2个周期，upliftFactor=1.2 → round(4.8)=5 > 4。注意 manual×low=1 经round仍为1，改用��同，至少 > 1
+    // risk_converted * medium = 2*2=4, 14 天 = 2 个周期, upliftFactor=1.2, round(4.8)=5 > 4.
     const base = computeDynamicIssuePriority(
       { source_type: 'risk_converted', severity: 'medium', created_at: createdAt14DaysAgo, status: 'open', priority: 4 },
       { now },
     )
-    // 未衰减基础分=4，14天后应上浮为 round(4*1.2)=5
+    // 未衰减基础为 4，14 天后应上浮为 round(4*1.2)=5
     expect(base).toBeGreaterThan(4)
   })
 
@@ -469,14 +527,14 @@ describe('§3.7 自动优先级分数展示', () => {
       { source_type: 'condition_expired', severity: 'critical', created_at: createdAt, status: 'open', priority: 99 },
       { now, isLocked: true },
     )
-    // 锁定时返回 clamp(99) 而不是动态计算值
+    // 锁定时返回 clamp(99)，而不是动态计算值
     expect(locked).toBe(99)
   })
 })
 
-// ─────────────────────────────────────────────────────────────────────────────
-// §3.7 — 已锁定 issue 在 change_logs 中写入 field_name='priority'
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// §3.7 已锁定 issue 在 change_logs 中写入 field_name='priority'
+// -----------------------------------------------------------------------------
 
 describe('§3.7 已锁定 issue change_logs field_name=priority', () => {
   it('listPriorityLockedIssueIds 从 change_logs 表查询 field_name=priority', () => {
@@ -492,18 +550,18 @@ describe('§3.7 已锁定 issue change_logs field_name=priority', () => {
     expect(dbServiceSource).toContain('new_value: Number(updated.priority)')
   })
 
-  it('createIssue 时若手动指定 priority 则写入 field_name=priority change_log', () => {
+  it('createIssue 手动指定 priority 时写入 field_name=priority change_log', () => {
     const dbServiceSource = readServerFile('src', 'services', 'dbService.ts')
-    // createIssue 路径中 field_name: 'priority'
+    // createIssue 路径中存在 field_name: 'priority'
     expect(dbServiceSource).toContain("field_name: 'priority'")
-    // 同时有创建时的 p_priority 参数
+    // 同时包含创建时的 p_priority 参数
     expect(dbServiceSource).toContain('p_priority:')
   })
 })
 
-// ─────────────────────────────────────────────────────────────────────────────
-// §3.7 — pendingManualClose 筛选
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// §3.7 pendingManualClose 筛选
+// -----------------------------------------------------------------------------
 
 describe('§3.7 pendingManualClose 筛选', () => {
   it('buildIssuePendingManualClosePatch 将 pending_manual_close 置为 true', async () => {
@@ -521,16 +579,16 @@ describe('§3.7 pendingManualClose 筛选', () => {
   })
 
   it('workflowDomainPolicy.buildIssueConfirmClosePatch 返回 status=closed 且 closed_reason=manual_confirmed_close', () => {
-    const policySource = readServerFile('src', 'services', 'workflowDomainPolicy.ts')
+    const policySource = readServerFile('src', 'domain', 'riskIssueWorkflowPolicy.ts')
     expect(policySource).toContain("'manual_confirmed_close'")
     expect(policySource).toContain('pending_manual_close: false')
     expect(policySource).toContain("status: 'closed'")
   })
 })
 
-// ─────────────────────────────────────────────────────────────────────────────
-// §3.7 — 同任务同周期通知去重：critical_path_stagnation + progress_trend_delay
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// §3.7 同任务同周期通知去重：critical_path_stagnation + progress_trend_delay
+// -----------------------------------------------------------------------------
 
 describe('§3.7 同任务同周期通知去重', () => {
   it('dedupeNotifications 对相同 (type, task_id) 的通知只保留一条', async () => {
@@ -547,7 +605,6 @@ describe('§3.7 同任务同周期通知去重', () => {
         task_id: 'task-1',
         source_entity_type: 'task',
         source_entity_id: 'task-1',
-        delay_request_id: null,
         created_at: now,
       },
       {
@@ -559,7 +616,6 @@ describe('§3.7 同任务同周期通知去重', () => {
         task_id: 'task-1',
         source_entity_type: 'task',
         source_entity_id: 'task-1',
-        delay_request_id: null,
         created_at: now,
       },
     ]
@@ -576,47 +632,16 @@ describe('§3.7 同任务同周期通知去重', () => {
       {
         id: 'n1', project_id: 'p1', type: 'progress_trend_delay', warning_type: 'progress_trend_delay',
         category: 'progress_trend_delay', task_id: 'task-1', source_entity_type: 'task',
-        source_entity_id: 'task-1', delay_request_id: null, created_at: now,
+        source_entity_id: 'task-1', created_at: now,
       },
       {
         id: 'n2', project_id: 'p1', type: 'progress_trend_delay', warning_type: 'progress_trend_delay',
         category: 'progress_trend_delay', task_id: 'task-2', source_entity_type: 'task',
-        source_entity_id: 'task-2', delay_request_id: null, created_at: now,
+        source_entity_id: 'task-2', created_at: now,
       },
     ]
 
     const result = dedupeNotifications(notifications as any)
     expect(result).toHaveLength(2)
-  })
-})
-
-// ─────────────────────────────────────────────────────────────────────────────
-// §3.7 — 延期审批通知去重：delay_request_reminder 仅在 submitted 且已读未处理时发送
-// ─────────────────────────────────────────────────────────────────────────────
-
-describe('§3.7 延期审批通知去重', () => {
-  it('非 escalation 时：存在未读的 submitted 通知则跳过（不发 reminder）', () => {
-    const serviceSource = readServerFile('src', 'services', 'delayRequestNotificationService.ts')
-    // 只有 submitted 通知已读才发 reminder
-    expect(serviceSource).toContain('isNotificationRead(submittedNotification)')
-    expect(serviceSource).toContain('delay_request_submitted')
-    // 未读时 continue 跳过
-    expect(serviceSource).toContain('if (!isEscalated)')
-    expect(serviceSource).toContain('continue')
-  })
-
-  it('已存在同类型通知时跳过（source_entity_type + source_entity_id + type 去重）', () => {
-    const serviceSource = readServerFile('src', 'services', 'delayRequestNotificationService.ts')
-    expect(serviceSource).toContain('findNotification(')
-    expect(serviceSource).toContain("sourceEntityType: 'delay_request'")
-    expect(serviceSource).toContain('sourceEntityId: request.id')
-    expect(serviceSource).toContain('type: notificationType')
-  })
-
-  it('isNotificationRead 识别 is_read=true / status=acknowledged / status=resolved', () => {
-    const serviceSource = readServerFile('src', 'services', 'delayRequestNotificationService.ts')
-    expect(serviceSource).toContain("status === 'acknowledged'")
-    expect(serviceSource).toContain("status === 'resolved'")
-    expect(serviceSource).toContain('is_read')
   })
 })

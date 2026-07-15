@@ -1,15 +1,15 @@
-import { spawn } from 'node:child_process'
+﻿import { spawn } from 'node:child_process'
 import { access, mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { chromium } from 'playwright'
-import { maybeBuildMockAuthResponse, primeBrowserAuth } from './browser-auth-fixture.mjs'
+import { maybeBuildMockAuthResponse, primeBrowserAuth, readFullAppTestManifest } from './browser-auth-fixture.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const scriptsDir = dirname(__filename)
 const repoRoot = join(scriptsDir, '..')
-const outputDir = join(repoRoot, 'artifacts', 'browser-checks')
+const outputDir = join(repoRoot, 'project-testing', 'artifacts', 'browser-checks')
 const previewScript = join(repoRoot, 'scripts', 'serve-client-dist.mjs')
 const distIndexFile = join(repoRoot, 'client', 'dist', 'index.html')
 
@@ -18,7 +18,7 @@ const apiBaseUrl = process.env.API_BASE_URL || 'http://127.0.0.1:3001'
 const shouldUseMockApi = process.env.MOCK_API !== 'false'
 const shouldStartPreview = process.env.START_PREVIEW !== 'false'
 
-const projectId = process.env.PROJECT_ID || '422ba093-7a94-4e91-a47a-c1b865185e86'
+let projectId = process.env.PROJECT_ID || '422ba093-7a94-4e91-a47a-c1b865185e86'
 const now = new Date().toISOString()
 
 const TEXT = {
@@ -68,8 +68,7 @@ const mockTasks = [
     updated_at: now,
     assignee_name: TEXT.personAda,
     assignee_user_id: 'user-1',
-    assignee_unit: TEXT.unitAsade,
-    responsible_unit: TEXT.unitAsade,
+    participant_unit_name: TEXT.unitAsade,
     is_milestone: false,
   },
   {
@@ -87,8 +86,7 @@ const mockTasks = [
     updated_at: now,
     assignee_name: TEXT.personLiSi,
     assignee_user_id: 'user-2',
-    assignee_unit: TEXT.unitTest,
-    responsible_unit: TEXT.unitTest,
+    participant_unit_name: TEXT.unitTest,
     is_milestone: false,
   },
 ]
@@ -389,6 +387,22 @@ function buildMockResponse(route, requestBody) {
     return json({ success: true, data: mockProject })
   }
 
+  if (pathname === `/api/projects/${projectId}/bootstrap`) {
+    return json({
+      success: true,
+      data: {
+        project: mockProject,
+        tasks: mockTasks,
+        risks: [],
+        conditions: [],
+        obstacles: [],
+        warnings: [],
+        issues: [],
+        taskProgressSnapshots: [],
+      },
+    })
+  }
+
   if (pathname === `/api/members/${projectId}/me`) {
     return json({
       success: true,
@@ -411,7 +425,6 @@ function buildMockResponse(route, requestBody) {
     || pathname === '/api/task-obstacles'
     || pathname === '/api/warnings'
     || pathname === '/api/issues'
-    || pathname === '/api/delay-requests'
     || pathname === '/api/change-logs'
     || pathname === '/api/tasks/progress-snapshots'
   ) {
@@ -468,6 +481,74 @@ async function ensureDistExists() {
   }
 }
 
+async function resolveProjectId() {
+  if (process.env.PROJECT_ID || shouldUseMockApi) return projectId
+  const manifest = await readFullAppTestManifest()
+  const manifestProjectId = manifest.projects?.standard?.id || manifest.projects?.large?.id || manifest.projects?.empty?.id
+  assert(manifestProjectId, 'MOCK_API=false requires a project id in .tmp/full-app-test-env/manifest.json')
+  projectId = manifestProjectId
+  return projectId
+}
+
+async function apiGet(pathname, token) {
+  const response = await fetch(`${apiBaseUrl}${pathname}`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  })
+  const text = await response.text()
+  const payload = text ? JSON.parse(text) : null
+  if (!response.ok || payload?.success === false) {
+    throw new Error(payload?.error?.message || payload?.message || text || `GET ${pathname} failed with ${response.status}`)
+  }
+  return payload?.data ?? payload
+}
+
+function firstTaskValue(rows, selector) {
+  for (const row of rows) {
+    for (const task of row.tasks ?? []) {
+      const value = selector(task)
+      if (value) return value
+    }
+  }
+  return null
+}
+
+async function buildProxyExpectations(token) {
+  const data = await apiGet(`/api/projects/${projectId}/responsibility`, token)
+  const unitRows = data?.unit_rows ?? []
+  const personRows = data?.person_rows ?? []
+  assert(unitRows.length > 0, 'Proxy responsibility fixture returned no unit rows')
+  assert(personRows.length > 0, 'Proxy responsibility fixture returned no person rows')
+
+  const searchableUnit = unitRows.find((row) => row.label && row.label !== '未分配责任单位') ?? unitRows[0]
+  const actionablePerson = personRows.find((row) => (
+    (!row.watch_status || row.watch_status === 'cleared') && !row.suggest_recovery_confirmation
+  )) ?? personRows[0]
+  return {
+    strictSingleResult: false,
+    expectedInitialRows: unitRows.length,
+    searchLabel: searchableUnit.label,
+    linkedFilterLabel: firstTaskValue([searchableUnit], (task) => task.assignee) ?? firstTaskValue(unitRows, (task) => task.assignee) ?? actionablePerson.label,
+    expectedResetRows: unitRows.length,
+    personLabel: actionablePerson.label,
+    actionAfterAdd: 'any-visible-state-change',
+  }
+}
+
+async function buildExpectations(token) {
+  if (!shouldUseMockApi) return buildProxyExpectations(token)
+  return {
+    strictSingleResult: true,
+    expectedInitialRows: 2,
+    searchLabel: TEXT.unitAsade,
+    linkedFilterLabel: TEXT.personAda,
+    expectedResetRows: 2,
+    personLabel: TEXT.personAda,
+    actionAfterAdd: 'confirm-recovery',
+  }
+}
+
 function startPreviewServer() {
   return spawn(process.execPath, [previewScript], {
     cwd: repoRoot,
@@ -480,8 +561,14 @@ function countRows(page) {
   return page.getByTestId('responsibility-row').count()
 }
 
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
 function findRow(page, label) {
-  return page.getByTestId('responsibility-row').filter({ hasText: label }).first()
+  return page.getByTestId('responsibility-row').filter({
+    has: page.locator('h3.card-title-compact', { hasText: new RegExp(`^${escapeRegExp(label)}$`) }),
+  }).first()
 }
 
 async function selectFilter(page, optionText) {
@@ -489,9 +576,35 @@ async function selectFilter(page, optionText) {
   await page.getByRole('option', { name: optionText, exact: true }).click()
 }
 
+async function isVisible(locator) {
+  return locator.isVisible().catch(() => false)
+}
+
+async function ensureAddWatchState(row) {
+  const addWatch = row.getByRole('button', { name: TEXT.addWatch })
+  if (await isVisible(addWatch)) return
+
+  const confirmRecovery = row.getByRole('button', { name: TEXT.confirmRecovery })
+  if (await isVisible(confirmRecovery)) {
+    await confirmRecovery.click()
+    await addWatch.waitFor({ state: 'visible', timeout: 10000 })
+    return
+  }
+
+  const removeWatch = row.getByRole('button', { name: '移出关注' })
+  if (await isVisible(removeWatch)) {
+    await removeWatch.click()
+    await addWatch.waitFor({ state: 'visible', timeout: 10000 })
+    return
+  }
+
+  throw new Error('Responsibility row has no visible watch action button')
+}
+
 async function main() {
   await mkdir(outputDir, { recursive: true })
   await ensureDistExists()
+  await resolveProjectId()
 
   let previewProcess = null
   const previewAlreadyReady = await isHttpReady(baseUrl)
@@ -512,7 +625,8 @@ async function main() {
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1400 } })
     page.setDefaultTimeout(30000)
-    await primeBrowserAuth(page)
+    const authToken = await primeBrowserAuth(page)
+    const expectations = await buildExpectations(authToken)
 
     page.on('console', (message) => {
       if (message.type() === 'error') {
@@ -522,6 +636,15 @@ async function main() {
 
     page.on('pageerror', (error) => {
       pageErrors.push(error.message)
+    })
+
+    page.on('response', (response) => {
+      if (!response.url().includes('/api/') || response.status() < 400) return
+      apiFailures.push({
+        type: 'response',
+        url: response.url(),
+        status: response.status(),
+      })
     })
 
     await page.route(`${baseUrl}/api/**`, async (route) => {
@@ -556,32 +679,41 @@ async function main() {
     await page.goto(targetUrl, { waitUntil: 'domcontentloaded' })
     await page.getByTestId('responsibility-page').waitFor({ state: 'visible', timeout: 20000 })
     await page.getByRole('heading', { name: TEXT.responsibilityPageTitle, exact: true }).waitFor({ state: 'visible', timeout: 20000 })
+    await page.getByTestId('responsibility-row').first().waitFor({ state: 'visible', timeout: 20000 })
 
     const currentUrl = page.url()
     assert(currentUrl.includes('/responsibility'), `Unexpected browser URL after navigation: ${currentUrl}`)
 
     const initialRows = await countRows(page)
-    assert(initialRows === 2, `Expected 2 responsibility rows on initial load, got ${initialRows}`)
+    assert(initialRows === expectations.expectedInitialRows, `Expected ${expectations.expectedInitialRows} responsibility rows on initial load, got ${initialRows}`)
     await page.screenshot({ path: join(outputDir, 'responsibility-initial.png'), fullPage: true })
 
     const searchInput = page.getByLabel(TEXT.searchLabel)
-    await searchInput.fill(TEXT.unitAsade)
+    await searchInput.fill(expectations.searchLabel)
     await page.waitForTimeout(300)
 
     const searchedRows = await countRows(page)
-    assert(searchedRows === 1, `Search should reduce rows to 1, got ${searchedRows}`)
-    await findRow(page, TEXT.unitAsade).waitFor({ state: 'visible', timeout: 5000 })
+    if (expectations.strictSingleResult) {
+      assert(searchedRows === 1, `Search should reduce rows to 1, got ${searchedRows}`)
+    } else {
+      assert(searchedRows >= 1 && searchedRows <= initialRows, `Search should keep 1..${initialRows} rows, got ${searchedRows}`)
+    }
+    await findRow(page, expectations.searchLabel).waitFor({ state: 'visible', timeout: 5000 })
     await page.screenshot({ path: join(outputDir, 'responsibility-search.png'), fullPage: true })
 
     await searchInput.fill('')
     await page.waitForTimeout(300)
 
-    await selectFilter(page, TEXT.personAda)
+    await selectFilter(page, expectations.linkedFilterLabel)
     await page.waitForTimeout(300)
 
     const filteredRows = await countRows(page)
-    assert(filteredRows === 1, `Linked filter should reduce rows to 1, got ${filteredRows}`)
-    const filteredRow = findRow(page, TEXT.unitAsade)
+    if (expectations.strictSingleResult) {
+      assert(filteredRows === 1, `Linked filter should reduce rows to 1, got ${filteredRows}`)
+    } else {
+      assert(filteredRows >= 1 && filteredRows <= initialRows, `Linked filter should keep 1..${initialRows} rows, got ${filteredRows}`)
+    }
+    const filteredRow = findRow(page, expectations.searchLabel)
     await filteredRow.waitFor({ state: 'visible', timeout: 5000 })
     await page.screenshot({ path: join(outputDir, 'responsibility-linked-filter.png'), fullPage: true })
 
@@ -589,18 +721,24 @@ async function main() {
     await page.waitForTimeout(300)
 
     const resetRows = await countRows(page)
-    assert(resetRows === 2, `Resetting linked filter should restore rows to 2, got ${resetRows}`)
+    assert(resetRows === expectations.expectedResetRows, `Resetting linked filter should restore rows to ${expectations.expectedResetRows}, got ${resetRows}`)
 
     await page.goto(`${baseUrl}/#/projects/${projectId}/responsibility?dimension=person`, { waitUntil: 'domcontentloaded' })
     await page.getByTestId('responsibility-page').waitFor({ state: 'visible', timeout: 20000 })
+    await page.getByTestId('responsibility-row').first().waitFor({ state: 'visible', timeout: 20000 })
 
-    const targetRow = findRow(page, TEXT.personAda)
+    const targetRow = findRow(page, expectations.personLabel)
     await targetRow.waitFor({ state: 'visible', timeout: 5000 })
+    await ensureAddWatchState(targetRow)
     await targetRow.getByRole('button', { name: TEXT.addWatch }).click()
-    await targetRow.getByRole('button', { name: TEXT.confirmRecovery }).waitFor({ state: 'visible', timeout: 10000 })
+    if (expectations.actionAfterAdd === 'confirm-recovery') {
+      await targetRow.getByRole('button', { name: TEXT.confirmRecovery }).waitFor({ state: 'visible', timeout: 10000 })
+    } else {
+      await targetRow.getByRole('button', { name: /移出关注|确认恢复/ }).waitFor({ state: 'visible', timeout: 10000 })
+    }
     await page.screenshot({ path: join(outputDir, 'responsibility-recovery-pending.png'), fullPage: true })
 
-    await targetRow.getByRole('button', { name: TEXT.confirmRecovery }).click()
+    await targetRow.getByRole('button', { name: expectations.actionAfterAdd === 'confirm-recovery' ? TEXT.confirmRecovery : /移出关注|确认恢复/ }).click()
     await targetRow.getByRole('button', { name: TEXT.addWatch }).waitFor({ state: 'visible', timeout: 10000 })
     await page.screenshot({ path: join(outputDir, 'responsibility-recovery-cleared.png'), fullPage: true })
 

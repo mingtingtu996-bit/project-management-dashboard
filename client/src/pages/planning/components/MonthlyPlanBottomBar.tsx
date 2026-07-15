@@ -2,7 +2,7 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import type { PlanningDraftStatus } from '@/hooks/usePlanningStore'
-import { ArrowRightCircle, BadgeInfo, FileDiff, RotateCcw, RotateCw, Save, Sparkles } from 'lucide-react'
+import { ArrowRightCircle, BadgeInfo, RotateCcw, RotateCw, Save, Sparkles } from 'lucide-react'
 
 interface MonthlyPlanBottomBarProps {
   draftStatus: PlanningDraftStatus
@@ -11,7 +11,6 @@ interface MonthlyPlanBottomBarProps {
   canStandardConfirm: boolean
   selectedCount?: number
   isDirty?: boolean
-  lockRemainingLabel?: string
   canUndo?: boolean
   canRedo?: boolean
   blockingIssueCount?: number
@@ -20,7 +19,6 @@ interface MonthlyPlanBottomBarProps {
   onStandardConfirmEntry: () => void
   onUndo?: () => void
   onRedo?: () => void
-  onOpenChangeCompare?: () => void
   readOnly?: boolean
 }
 
@@ -31,7 +29,6 @@ export function MonthlyPlanBottomBar({
   canStandardConfirm,
   selectedCount = 0,
   isDirty = false,
-  lockRemainingLabel = '未持有锁',
   canUndo = false,
   canRedo = false,
   blockingIssueCount = 0,
@@ -40,7 +37,6 @@ export function MonthlyPlanBottomBar({
   onStandardConfirmEntry,
   onUndo,
   onRedo,
-  onOpenChangeCompare,
   readOnly = false,
 }: MonthlyPlanBottomBarProps) {
   const quickDisabled = readOnly || !quickAvailable
@@ -100,19 +96,6 @@ export function MonthlyPlanBottomBar({
                 </TooltipTrigger>
                 <TooltipContent>Ctrl+Y</TooltipContent>
               </Tooltip>
-              {onOpenChangeCompare ? (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  className="gap-2 rounded-lg border-amber-200 bg-amber-50 text-amber-900 hover:bg-amber-100"
-                  data-testid="monthly-plan-change-compare-toolbar"
-                  onClick={onOpenChangeCompare}
-                >
-                  <FileDiff className="h-4 w-4" />
-                  计划变更对比
-                </Button>
-              ) : null}
             </div>
 
             <div className="justify-self-center rounded-full border border-slate-700 bg-slate-900 px-4 py-2 text-sm font-medium text-slate-100">
@@ -130,7 +113,7 @@ export function MonthlyPlanBottomBar({
                 disabled={readOnly || !canSaveDraft}
               >
                 <Save className="h-4 w-4" />
-                保存草稿
+                保存
               </Button>
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -138,7 +121,7 @@ export function MonthlyPlanBottomBar({
                     <Button
                       type="button"
                       size="sm"
-                      className="gap-2 rounded-full bg-blue-500 text-slate-950 hover:bg-blue-400"
+                      className="gap-2 rounded-full bg-blue-600 text-white hover:bg-blue-700"
                       data-testid="monthly-plan-quick-confirm-entry"
                       onClick={onQuickConfirmEntry}
                       disabled={quickDisabled}
@@ -169,8 +152,7 @@ export function MonthlyPlanBottomBar({
               <Sparkles className="h-3.5 w-3.5 text-blue-300" />
               月度计划确认条
             </span>
-            <span>草稿状态 {draftStatus}</span>
-            <span>锁剩余 {lockRemainingLabel}</span>
+            <span>{String(draftStatus) === 'draft' ? '待确认' : String(draftStatus) === 'confirmed' ? '已确认' : '编辑中'}</span>
           </div>
         </div>
       </Card>

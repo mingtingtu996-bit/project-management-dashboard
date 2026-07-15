@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
 import { describe, expect, it } from 'vitest'
 import { V1475_EXPLICIT_BUSINESS_GATE_SOURCE_ID } from '../seeds/v1475DependencyIntentTemplates.js'
 import {
@@ -8,7 +11,18 @@ import {
   evaluateConstructionDependencyRuleCandidateLiveLearningEvidence,
 } from '../services/constructionDependencyReplayCalibrationService.js'
 
+const serviceSourcePath = fileURLToPath(new URL('../services/constructionDependencyReplayCalibrationService.ts', import.meta.url))
+
 describe('construction dependency replay calibration service', () => {
+  it('keeps production replay sampling and outcome writes on fixed SQL literals', () => {
+    const source = readFileSync(serviceSourcePath, 'utf8')
+
+    expect(source).not.toContain('buildDefaultQueryRows')
+    expect(source).not.toContain('rawQuery(sql')
+    expect(source).toContain('loadDependencyReplayRowsDirect')
+    expect(source).toContain('INSERT INTO public.duration_plan_network_outcomes')
+  })
+
   it('back-validates L3/L4 dependencies with actual project dates without mutating seeds or task dependencies', async () => {
     const rows = [
       {
@@ -246,12 +260,78 @@ describe('construction dependency replay calibration service', () => {
         sample_count: 2,
         project_count: 2,
         conflict_count: 0,
+        duration_day_unit: 'calendar_day_no_construction_calendar_context',
+        durationDayUnit: 'calendar_day_no_construction_calendar_context',
+        construction_calendar: null,
+        constructionCalendar: null,
         writes_runtime_directly: false,
         writes_fact_directly: false,
       }),
       false,
       false,
     ])
+  })
+
+  it('uses construction production days and records calendar provenance for dependency replay lag evidence', async () => {
+    const constructionCalendar = {
+      basis: 'official_construction_calendar_seed' as const,
+      windows: [{
+        holidayCode: 'spring_festival_2026',
+        startDate: '2026-02-16',
+        endDate: '2026-02-22',
+        countsAsConstructionShutdown: true,
+      }],
+    }
+    const rows = [
+      {
+        id: 'dep-l3-spring-festival',
+        project_id: 'project-1',
+        dependency_type: 'FS',
+        lag_days: 0,
+        source_type: 'cross_item_workflow',
+        metadata: { seedRuleId: 'prefab_factory_to_site_hoist_handoff' },
+        predecessor_task_id: 'task-prefab-factory-release',
+        predecessor_task_code: 'PFB-00-01-02-P01',
+        predecessor_title: 'prefab factory release',
+        predecessor_actual_end_date: '2026-02-15',
+        successor_task_id: 'task-prefab-site-hoist',
+        successor_task_code: 'PFB-01-01-03-P01',
+        successor_title: 'prefab site hoist start',
+        successor_actual_start_date: '2026-02-24',
+      },
+    ]
+    const queryExecCalls: Array<{ sql: string; params: unknown[] }> = []
+    const queryExec = async <T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<T[]> => {
+      queryExecCalls.push({ sql, params })
+      return [] as T[]
+    }
+
+    const result = await collectAndPersistConstructionDependencyReplayCalibrationCandidates({
+      companyId: '10000000-0000-4000-8000-000000000001',
+      projectIds: ['project-1'],
+      constructionCalendar,
+      zeroLagReviewThresholdDays: 1,
+      queryRows: async <T = Record<string, unknown>>(): Promise<T[]> => rows as T[],
+      queryExec,
+    })
+
+    expect(result.report.items).toEqual([expect.objectContaining({
+      dependencyId: 'dep-l3-spring-festival',
+      observedWaitDays: 2,
+      replayStatus: 'needs_lag_calibration',
+    })])
+
+    const outcomeInsert = queryExecCalls.find((call) =>
+      call.sql.toLowerCase().includes('insert into public.duration_plan_network_outcomes'),
+    )
+    expect(outcomeInsert?.params[9]).toEqual(expect.objectContaining({
+      duration_day_unit: 'construction_production_day',
+      durationDayUnit: 'construction_production_day',
+      construction_calendar: constructionCalendar,
+      constructionCalendar,
+      median_observed_wait_days: 2,
+      suggested_lag_days: 2,
+    }))
   })
 
   it('requires replay outcome, candidate approval, dedicated writer, lineage, and release gates before dependency rules are live-learning ready', () => {

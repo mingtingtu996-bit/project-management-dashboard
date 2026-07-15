@@ -11,11 +11,27 @@ const dbMocks = vi.hoisted(() => ({
   deleteTask: vi.fn(),
 }))
 
+const accessMocks = vi.hoisted(() => ({
+  getCurrentCompanyMembership: vi.fn(),
+  getVisibleProjectIds: vi.fn(),
+}))
+
 vi.mock('../middleware/auth.js', () => ({
   authenticate: vi.fn((req: any, _res: any, next: () => void) => {
     req.user = { id: 'user-1' }
     next()
   }),
+  requireProjectMember: vi.fn(() => (_req: any, _res: any, next: () => void) => next()),
+  requireProjectEditor: vi.fn(() => (_req: any, _res: any, next: () => void) => next()),
+}))
+
+vi.mock('../auth/access.js', () => ({
+  getCurrentCompanyMembership: accessMocks.getCurrentCompanyMembership,
+  getVisibleProjectIds: accessMocks.getVisibleProjectIds,
+}))
+
+vi.mock('../auth/companyContext.js', () => ({
+  getRequestCompanyId: vi.fn(() => null),
 }))
 
 vi.mock('../middleware/logger.js', () => ({
@@ -55,6 +71,8 @@ describe('wbs routes validation', () => {
     dbMocks.updateTask.mockResolvedValue({ id: 'task-1', title: '更新后节点' })
     dbMocks.getTask.mockResolvedValue({ id: 'task-1', version: 1 })
     dbMocks.deleteTask.mockResolvedValue(undefined)
+    accessMocks.getCurrentCompanyMembership.mockResolvedValue(null)
+    accessMocks.getVisibleProjectIds.mockResolvedValue([])
   })
 
   it('accepts project_id alias when listing nodes', async () => {
@@ -79,5 +97,23 @@ describe('wbs routes validation', () => {
     expect(response.body.success).toBe(false)
     expect(response.body.error?.code).toBe('VALIDATION_ERROR')
     expect(dbMocks.createTask).not.toHaveBeenCalled()
+  })
+
+  it('lists visible templates through fixed scope queries instead of a dynamic OR SQL shape', async () => {
+    accessMocks.getCurrentCompanyMembership.mockResolvedValue({ companyId: 'company-1' })
+    accessMocks.getVisibleProjectIds.mockResolvedValue(['project-1', 'project-2'])
+
+    const response = await request(buildApp())
+      .get('/api/wbs-nodes/templates')
+
+    expect(response.status).toBe(200)
+    const sqlTexts = dbMocks.executeSQL.mock.calls.map(([sql]) => String(sql))
+
+    expect(sqlTexts.some((sql) => sql.includes('catalog_scope IN'))).toBe(true)
+    expect(sqlTexts.some((sql) => sql.includes('is_builtin = ?'))).toBe(true)
+    expect(sqlTexts.some((sql) => sql.includes('standard_catalog_code IS NOT NULL'))).toBe(true)
+    expect(sqlTexts.some((sql) => sql.includes('company_id = ?'))).toBe(true)
+    expect(sqlTexts.filter((sql) => /\bproject_id\s*=\s*\?/.test(sql))).toHaveLength(2)
+    expect(sqlTexts.join('\n')).not.toMatch(/\bOR\b|COALESCE|WHERE 1=1|project_id IS NULL OR project_id IN/i)
   })
 })

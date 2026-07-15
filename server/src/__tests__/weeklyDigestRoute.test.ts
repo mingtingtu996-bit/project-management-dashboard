@@ -13,7 +13,7 @@ describe('weekly digest route guard', () => {
   it('requires authentication before exposing weekly digest reads', () => {
     const source = readServerFile('src', 'routes', 'weekly-digest.ts')
 
-    expect(source).toContain("import { authenticate } from '../middleware/auth.js'")
+    expect(source).toContain("import { authenticate, requireProjectMember } from '../middleware/auth.js'")
     expect(source).toContain('const router = Router()')
     expect(source).toContain('router.use(authenticate)')
     expect(source).toContain("router.get('/:id/weekly-digest/latest'")

@@ -28,9 +28,8 @@ ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
 
 RUN pnpm run build
 
-FROM nginx:alpine AS runtime
+FROM nginx:alpine AS runtime-base
 
-COPY --from=builder /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 EXPOSE 80
@@ -39,3 +38,11 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
   CMD wget --no-verbose --tries=1 --spider http://127.0.0.1:80/ || exit 1
 
 CMD ["nginx", "-g", "daemon off;"]
+
+FROM runtime-base AS runtime
+
+COPY --from=builder /app/dist /usr/share/nginx/html
+
+FROM runtime-base AS prebuilt-runtime
+
+COPY dist /usr/share/nginx/html

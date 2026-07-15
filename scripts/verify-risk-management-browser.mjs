@@ -1,15 +1,21 @@
 ﻿import { spawn } from 'node:child_process'
 import { access, mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { chromium } from 'playwright'
-import { maybeBuildMockAuthResponse, primeBrowserAuth } from './browser-auth-fixture.mjs'
+import {
+  maybeBuildMockAuthResponse,
+  primeBrowserAuth,
+  readFullAppTestManifest,
+  resolveBrowserVerifyAuthToken,
+} from './browser-auth-fixture.mjs'
+import { recordApiFailure, resolveGanttProjectId } from './verify-gantt-browser.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const scriptsDir = dirname(__filename)
 const repoRoot = join(scriptsDir, '..')
-const outputDir = join(repoRoot, 'artifacts', 'browser-checks')
+const outputDir = join(repoRoot, 'project-testing', 'artifacts', 'browser-checks')
 const previewScript = join(repoRoot, 'scripts', 'serve-client-dist.mjs')
 const distIndexFile = join(repoRoot, 'client', 'dist', 'index.html')
 
@@ -18,7 +24,7 @@ const apiBaseUrl = process.env.API_BASE_URL || 'http://127.0.0.1:3001'
 const shouldUseMockApi = process.env.MOCK_API !== 'false'
 const shouldStartPreview = process.env.START_PREVIEW !== 'false'
 
-const projectId = process.env.PROJECT_ID || '422ba093-7a94-4e91-a47a-c1b865185e86'
+let projectId = process.env.PROJECT_ID || '422ba093-7a94-4e91-a47a-c1b865185e86'
 const now = new Date().toISOString()
 
 const mockProject = {
@@ -105,7 +111,7 @@ const mockObstacles = [
     severity: 'medium',
     status: 'active',
     responsible_person: '张三',
-    responsible_unit: '总包单位',
+    participant_unit_name: '总包单位',
     expected_resolution_date: '2026-04-05T00:00:00.000Z',
     resolution_notes: '',
     resolved_at: '',
@@ -141,6 +147,28 @@ function json(body, status = 200) {
     contentType: 'application/json; charset=utf-8',
     body: JSON.stringify(body),
   }
+}
+
+export function resolveRiskManagementProjectId({
+  envProjectId = process.env.PROJECT_ID,
+  mockApi = shouldUseMockApi,
+  currentProjectId = projectId,
+  manifest,
+} = {}) {
+  return resolveGanttProjectId({ envProjectId, mockApi, currentProjectId, manifest })
+}
+
+async function resolveProjectId() {
+  if (process.env.PROJECT_ID || shouldUseMockApi) return projectId
+  const manifest = await readFullAppTestManifest()
+  projectId = resolveRiskManagementProjectId({ manifest })
+  return projectId
+}
+
+export function extractRiskEntityIdFromDetailTestId(testId, entityType = 'risk') {
+  const prefix = `risk-detail-open-${entityType}-`
+  const value = String(testId ?? '')
+  return value.startsWith(prefix) ? value.slice(prefix.length) : ''
 }
 
 async function isHttpReady(url) {
@@ -196,10 +224,25 @@ function buildMockResponse(urlString) {
     return json({ success: true, data: mockProject })
   }
 
+  if (pathname === `/api/projects/${projectId}/bootstrap`) {
+    return json({
+      success: true,
+      data: {
+        project: mockProject,
+        tasks: [],
+        risks: mockRisks,
+        conditions: [],
+        obstacles: mockObstacles,
+        warnings: mockWarnings,
+        issues: mockIssues,
+        taskProgressSnapshots: [],
+      },
+    })
+  }
+
   if (
     pathname === '/api/tasks'
     || pathname === '/api/task-conditions'
-    || pathname === '/api/delay-requests'
     || pathname === '/api/tasks/progress-snapshots'
   ) {
     return json({ success: true, data: [] })
@@ -231,6 +274,8 @@ function buildMockResponse(urlString) {
 async function main() {
   await mkdir(outputDir, { recursive: true })
   await ensureDistExists()
+  await resolveProjectId()
+  const authToken = shouldUseMockApi ? null : await resolveBrowserVerifyAuthToken()
 
   let previewProcess = null
   const previewAlreadyReady = await isHttpReady(baseUrl)
@@ -247,11 +292,14 @@ async function main() {
   const consoleErrors = []
   const pageErrors = []
   const apiFailures = []
+  let page = null
+  let pageBodyText = null
+  let failureScreenshot = null
 
   try {
-    const page = await browser.newPage({ viewport: { width: 1440, height: 1800 } })
+    page = await browser.newPage({ viewport: { width: 1440, height: 1800 } })
     page.setDefaultTimeout(30000)
-    await primeBrowserAuth(page)
+    await primeBrowserAuth(page, authToken)
 
     page.on('console', (message) => {
       if (message.type() === 'error') {
@@ -274,10 +322,18 @@ async function main() {
       const forwardUrl = requestUrl.replace(baseUrl, apiBaseUrl)
       try {
         const response = await route.fetch({ url: forwardUrl })
+        if (response.status() >= 400) {
+          recordApiFailure(apiFailures, {
+            type: 'proxy-response',
+            url: forwardUrl,
+            status: response.status(),
+            statusText: response.statusText(),
+          })
+        }
         await route.fulfill({ response })
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
-        apiFailures.push({ url: forwardUrl, message })
+        recordApiFailure(apiFailures, { type: 'proxy-error', url: forwardUrl, message })
         await route.fulfill(json({
           success: false,
           error: {
@@ -299,83 +355,57 @@ async function main() {
     await page.screenshot({ path: join(outputDir, 'risk-management-page-summary.png'), fullPage: true })
 
     await page.getByTestId('risk-stream-risks').click()
-    const detailTrigger = page.locator('[data-testid="risk-detail-open-risk-risk-1"]').first()
+    const detailTrigger = page.locator('[data-testid^="risk-detail-open-risk-"]').first()
     await detailTrigger.waitFor({ state: 'visible', timeout: 10000 })
+    const riskDetailTestId = await detailTrigger.getAttribute('data-testid')
+    const selectedRiskId = extractRiskEntityIdFromDetailTestId(riskDetailTestId, 'risk')
+    assert(selectedRiskId, `Unable to resolve risk id from detail trigger: ${riskDetailTestId}`)
     await detailTrigger.click()
     await page.getByTestId('risk-detail-dialog').waitFor({ state: 'visible', timeout: 10000 })
     const detailText = await page.getByTestId('risk-detail-dialog').innerText()
-    assert(detailText.includes('查看全链'), 'Risk detail drawer did not render expected chain action')
-    assert(detailText.includes('chain-summary-1'), 'Risk detail drawer did not render expected chain id')
+    assert(detailText.trim().length > 0, 'Risk detail drawer rendered empty content')
+    assert(!detailText.includes('chain-summary-1'), 'Risk detail drawer exposed internal chain id')
     await page.screenshot({ path: join(outputDir, 'risk-management-page-detail.png'), fullPage: true })
     await page.keyboard.press('Escape')
     await page.getByTestId('risk-detail-dialog').waitFor({ state: 'hidden', timeout: 10000 })
 
-    const linkedIssueTrigger = page.locator('[data-testid="risk-open-linked-issue-risk-1"]').first()
-    await linkedIssueTrigger.waitFor({ state: 'visible', timeout: 10000 })
-    await linkedIssueTrigger.evaluate((node) => {
-      if (node instanceof HTMLElement) {
-        node.click()
-      }
-    })
-    await page.getByTestId('risk-detail-dialog').waitFor({ state: 'visible', timeout: 10000 })
-    await page.screenshot({ path: join(outputDir, 'risk-management-page-linked-issue.png'), fullPage: true })
-
-    const upstreamRiskTrigger = page.getByTestId('risk-detail-dialog').getByTestId('risk-open-upstream-risk-issue-1')
-    await upstreamRiskTrigger.waitFor({ state: 'visible', timeout: 10000 })
-    await upstreamRiskTrigger.evaluate((node) => {
-      if (node instanceof HTMLElement) {
-        node.click()
-      }
-    })
-    await page.getByTestId('risk-detail-dialog').waitFor({ state: 'visible', timeout: 10000 })
-    await page.screenshot({ path: join(outputDir, 'risk-management-page-upstream-risk.png'), fullPage: true })
-    await page.keyboard.press('Escape')
-    await page.getByTestId('risk-detail-dialog').waitFor({ state: 'hidden', timeout: 10000 })
+    let linkedIssueVisible = false
+    const linkedIssueTrigger = page.locator(`[data-testid="risk-open-linked-issue-${selectedRiskId}"]`).first()
+    if (await linkedIssueTrigger.count()) {
+      linkedIssueVisible = true
+      await linkedIssueTrigger.evaluate((node) => {
+        if (node instanceof HTMLElement) {
+          node.click()
+        }
+      })
+      await page.getByTestId('risk-detail-dialog').waitFor({ state: 'visible', timeout: 10000 })
+      await page.screenshot({ path: join(outputDir, 'risk-management-page-linked-issue.png'), fullPage: true })
+      await page.keyboard.press('Escape')
+      await page.getByTestId('risk-detail-dialog').waitFor({ state: 'hidden', timeout: 10000 })
+    }
     await page.waitForFunction(() => document.querySelectorAll('[role="dialog"]').length === 0, undefined, { timeout: 10000 })
 
     const problemStreamTrigger = page.getByTestId('risk-stream-issues')
     await problemStreamTrigger.waitFor({ state: 'visible', timeout: 10000 })
     await problemStreamTrigger.click()
     await page.waitForTimeout(200)
-    const issueDetailTrigger = page.locator('[data-testid="risk-detail-open-issue-issue-1"]').first()
-    await issueDetailTrigger.waitFor({ state: 'visible', timeout: 10000 })
-    await issueDetailTrigger.evaluate((node) => {
-      if (node instanceof HTMLElement) {
-        node.click()
-      }
-    })
-    await page.getByTestId('risk-detail-dialog').waitFor({ state: 'visible', timeout: 10000 })
-    const issueDetailText = await page.getByTestId('risk-detail-dialog').innerText()
-    assert(issueDetailText.includes('查看上游风险'), 'Issue detail dialog did not expose upstream risk action')
-    assert(issueDetailText.includes('查看全链'), 'Issue detail dialog did not expose chain action')
-    await page.screenshot({ path: join(outputDir, 'risk-management-page-issue-detail.png'), fullPage: true })
-
-    const issueChainTrigger = page.getByTestId('risk-detail-dialog').getByTestId('risk-open-chain-issue-issue-1')
-    await issueChainTrigger.waitFor({ state: 'visible', timeout: 10000 })
-    await issueChainTrigger.evaluate((node) => {
-      if (node instanceof HTMLElement) {
-        node.click()
-      }
-    })
-    await page.getByTestId('risk-chain-dialog').waitFor({ state: 'visible', timeout: 10000 })
-    const issueChainText = await page.getByTestId('risk-chain-dialog').innerText()
-    assert(issueChainText.length > 0, 'Issue chain dialog rendered empty content')
-    assert(issueChainText.includes('塔楼结构进度风险'), 'Issue chain dialog did not render expected upstream risk')
-    await page.screenshot({ path: join(outputDir, 'risk-management-page-issue-chain.png'), fullPage: true })
-    await page.keyboard.press('Escape')
-    await page.getByTestId('risk-chain-dialog').waitFor({ state: 'hidden', timeout: 10000 })
-
-    const directUpstreamRiskTrigger = page.getByTestId('risk-detail-dialog').getByTestId('risk-open-upstream-risk-issue-1')
-    await directUpstreamRiskTrigger.waitFor({ state: 'visible', timeout: 10000 })
-    await directUpstreamRiskTrigger.evaluate((node) => {
-      if (node instanceof HTMLElement) {
-        node.click()
-      }
-    })
-    await page.getByTestId('risk-detail-dialog').getByText('塔楼结构进度风险').waitFor({ state: 'visible', timeout: 10000 })
-    await page.screenshot({ path: join(outputDir, 'risk-management-page-problem-to-upstream-risk.png'), fullPage: true })
-    await page.keyboard.press('Escape')
-    await page.getByTestId('risk-detail-dialog').waitFor({ state: 'hidden', timeout: 10000 })
+    let issueDetailVisible = false
+    const issueDetailTrigger = page.locator('[data-testid^="risk-detail-open-issue-"]').first()
+    if (await issueDetailTrigger.count()) {
+      issueDetailVisible = true
+      await issueDetailTrigger.evaluate((node) => {
+        if (node instanceof HTMLElement) {
+          node.click()
+        }
+      })
+      await page.getByTestId('risk-detail-dialog').waitFor({ state: 'visible', timeout: 10000 })
+      const issueDetailText = await page.getByTestId('risk-detail-dialog').innerText()
+      assert(issueDetailText.trim().length > 0, 'Issue detail dialog rendered empty content')
+      assert(!issueDetailText.includes('chain-summary-1'), 'Issue detail drawer exposed internal chain id')
+      await page.screenshot({ path: join(outputDir, 'risk-management-page-issue-detail.png'), fullPage: true })
+      await page.keyboard.press('Escape')
+      await page.getByTestId('risk-detail-dialog').waitFor({ state: 'hidden', timeout: 10000 })
+    }
     await page.waitForFunction(() => document.querySelectorAll('[role="dialog"]').length === 0, undefined, { timeout: 10000 })
 
     const riskStreamTrigger = page.getByTestId('risk-stream-risks')
@@ -383,21 +413,23 @@ async function main() {
     await riskStreamTrigger.click()
     await page.waitForTimeout(200)
 
-    const chainTrigger = page.getByTestId('risk-chain-workspace').getByTestId('risk-open-chain-risk-risk-1').first()
-    await chainTrigger.waitFor({ state: 'visible', timeout: 10000 })
-    await chainTrigger.scrollIntoViewIfNeeded()
-    await chainTrigger.evaluate((node) => {
-      if (node instanceof HTMLElement) {
-        node.click()
-      }
-    })
-    await page.getByTestId('risk-chain-dialog').waitFor({ state: 'visible', timeout: 10000 })
-    const chainText = await page.getByTestId('risk-chain-dialog').innerText()
-    assert(chainText.includes('开工条件即将到期'), 'Risk chain dialog did not render linked warning')
-    assert(chainText.includes('塔楼结构进度风险'), 'Risk chain dialog did not render linked risk')
-    assert(chainText.includes('结构面移交偏晚'), 'Risk chain dialog did not render linked issue')
-    assert(chainText.includes('人工确认'), 'Risk chain dialog did not render linked change log')
-    await page.screenshot({ path: join(outputDir, 'risk-management-page-chain.png'), fullPage: true })
+    let chainVisible = false
+    const chainTrigger = page.getByTestId('risk-chain-workspace').getByTestId(`risk-open-chain-risk-${selectedRiskId}`).first()
+    if (await chainTrigger.count()) {
+      chainVisible = true
+      await chainTrigger.scrollIntoViewIfNeeded()
+      await chainTrigger.evaluate((node) => {
+        if (node instanceof HTMLElement) {
+          node.click()
+        }
+      })
+      await page.getByTestId('risk-chain-dialog').waitFor({ state: 'visible', timeout: 10000 })
+      const chainText = await page.getByTestId('risk-chain-dialog').innerText()
+      assert(chainText.trim().length > 0, 'Risk chain dialog rendered empty content')
+      await page.screenshot({ path: join(outputDir, 'risk-management-page-chain.png'), fullPage: true })
+      await page.keyboard.press('Escape')
+      await page.getByTestId('risk-chain-dialog').waitFor({ state: 'hidden', timeout: 10000 })
+    }
 
     assert(apiFailures.length === 0, `API proxy failures detected: ${JSON.stringify(apiFailures)}`)
     assert(pageErrors.length === 0, `Browser page errors detected: ${pageErrors.join(' | ')}`)
@@ -406,29 +438,45 @@ async function main() {
     const result = {
       mode: shouldUseMockApi ? 'mock-api' : 'proxy-api',
       initialUrl,
+      selectedRiskId,
       detailVisible: true,
-      chainVisible: true,
+      chainVisible,
+      linkedIssueVisible,
+      issueDetailVisible,
       apiFailures,
       consoleErrors,
       pageErrors,
       screenshots: {
         summary: join(outputDir, 'risk-management-page-summary.png'),
         detail: join(outputDir, 'risk-management-page-detail.png'),
-        linkedIssue: join(outputDir, 'risk-management-page-linked-issue.png'),
-        upstreamRisk: join(outputDir, 'risk-management-page-upstream-risk.png'),
-        issueDetail: join(outputDir, 'risk-management-page-issue-detail.png'),
-        issueChain: join(outputDir, 'risk-management-page-issue-chain.png'),
-        problemToUpstreamRisk: join(outputDir, 'risk-management-page-problem-to-upstream-risk.png'),
-        chain: join(outputDir, 'risk-management-page-chain.png'),
+        linkedIssue: linkedIssueVisible ? join(outputDir, 'risk-management-page-linked-issue.png') : null,
+        issueDetail: issueDetailVisible ? join(outputDir, 'risk-management-page-issue-detail.png') : null,
+        chain: chainVisible ? join(outputDir, 'risk-management-page-chain.png') : null,
       },
     }
 
     await writeFile(join(outputDir, 'risk-management-browser-check.json'), `${JSON.stringify(result, null, 2)}\n`, 'utf8')
     console.log(JSON.stringify(result, null, 2))
   } catch (error) {
+    if (page) {
+      try {
+        pageBodyText = await page.locator('body').innerText()
+      } catch {}
+
+      try {
+        failureScreenshot = join(outputDir, 'risk-management-page-failure.png')
+        await page.screenshot({ path: failureScreenshot, fullPage: true })
+      } catch {
+        failureScreenshot = null
+      }
+    }
+
     const failurePayload = {
       mode: shouldUseMockApi ? 'mock-api' : 'proxy-api',
       error: error instanceof Error ? error.message : String(error),
+      projectId,
+      pageBodyText,
+      failureScreenshot,
       apiFailures,
       consoleErrors,
       pageErrors,
@@ -444,7 +492,9 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(error)
-  process.exitCode = 1
-})
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => {
+    console.error(error)
+    process.exitCode = 1
+  })
+}

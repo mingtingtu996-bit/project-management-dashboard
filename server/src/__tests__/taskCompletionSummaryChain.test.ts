@@ -78,6 +78,8 @@ const mocks = vi.hoisted(() => {
 })
 
 vi.mock('../services/dbService.js', () => ({
+  registerDbServiceBusinessSideEffectAdapters: vi.fn(),
+  assertDbServiceBusinessSideEffectAdaptersRegistered: vi.fn(),
   supabase: mocks.supabase,
   SupabaseService: vi.fn(),
   executeSQL: vi.fn(async () => []),
@@ -116,6 +118,18 @@ vi.mock('../services/dbService.js', () => ({
 vi.mock('../services/taskTimelineService.js', () => ({
   getProjectTimelineEvents: mocks.getProjectTimelineEvents,
   isTaskTimelineEventStoreReady: mocks.isTaskTimelineEventStoreReady,
+}))
+
+vi.mock('../auth/access.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../auth/access.js')>(),
+  getProjectPermissionLevel: vi.fn(async () => 'owner'),
+}))
+
+vi.mock('../database.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../database.js')>(),
+  query: vi.fn(async (sql: string) => ({
+    rows: /FROM public\.projects/i.test(String(sql)) ? [{ id: projectId }] : [],
+  })),
 }))
 
 vi.mock('../middleware/logger.js', () => ({
@@ -179,8 +193,8 @@ describe('task completion -> task summary chain (8.4.2)', () => {
   })
 
   it('returns total_completed = 0 when no tasks are completed', async () => {
-    const res = await request.get(`/api/task-summaries/projects/${projectId}/task-summary`)
-    expect(res.status).toBe(200)
+    const res = await request.get(`/api/task-summaries/projects/${projectId}/task-summary?date_from=2026-01-01`)
+    expect(res.status, JSON.stringify(res.body)).toBe(200)
     expect(res.body.success).toBe(true)
     expect(res.body.data.stats.total_completed).toBe(0)
     expect(Array.isArray(res.body.data.groups)).toBe(true)
@@ -205,7 +219,7 @@ describe('task completion -> task summary chain (8.4.2)', () => {
       },
     ])
 
-    const res = await request.get(`/api/task-summaries/projects/${projectId}/task-summary`)
+    const res = await request.get(`/api/task-summaries/projects/${projectId}/task-summary?date_from=2026-02-01`)
     expect(res.status).toBe(200)
     expect(res.body.success).toBe(true)
     expect(res.body.data.stats.total_completed).toBe(1)
@@ -228,7 +242,7 @@ describe('task completion -> task summary chain (8.4.2)', () => {
       },
     ])
 
-    const res = await request.get(`/api/task-summaries/projects/${projectId}/task-summary`)
+    const res = await request.get(`/api/task-summaries/projects/${projectId}/task-summary?date_from=2026-03-01`)
     expect(res.status).toBe(200)
     const { stats, groups } = res.body.data
     expect(stats.total_completed).toBe(1)
@@ -240,14 +254,31 @@ describe('task completion -> task summary chain (8.4.2)', () => {
   })
 
   it('task summary page entry remains accessible (stable response structure)', async () => {
-    const res = await request.get(`/api/task-summaries/projects/${projectId}/task-summary`)
+    mocks.setCompletedTasks([
+      {
+        id: 'task-delayed-1',
+        title: '延期完成作业',
+        status: 'completed',
+        start_date: '2026-03-15',
+        end_date: '2026-03-25',
+        actual_end_date: '2026-03-28',
+        progress: 100,
+        is_milestone: false,
+        updated_at: '2026-03-28T17:00:00.000Z',
+        project_id: projectId,
+      },
+    ])
+
+    const res = await request.get(`/api/task-summaries/projects/${projectId}/task-summary?date_from=2026-04-01`)
     expect(res.status).toBe(200)
     // 稳定结构字段
     expect(res.body).toHaveProperty('success', true)
     expect(res.body.data).toHaveProperty('stats')
     expect(res.body.data).toHaveProperty('groups')
+    expect(res.body.data).toHaveProperty('attribution_totals')
     expect(res.body.data).toHaveProperty('timeline_ready')
     expect(res.body.data).toHaveProperty('timeline_events')
+    expect(res.body.data.attribution_totals.division['division-__unassigned__'].avg_delay_days).toBe(3)
     // stats 子字段
     expect(res.body.data.stats).toHaveProperty('total_completed')
     expect(typeof res.body.data.stats.total_completed).toBe('number')

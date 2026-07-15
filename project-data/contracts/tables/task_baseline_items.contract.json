@@ -1,0 +1,36 @@
+{
+  "schemaVersion": "workbuddy-table-contract/v1",
+  "tableId": "task_baseline_items",
+  "authorityLevel": "business_fact",
+  "grain": "one row per baseline work item",
+  "owner": "planning baseline services",
+  "mutationBoundary": "contract_only_no_db_mutation_no_runtime_write",
+  "requiredConcepts": [
+    "id",
+    "project_id",
+    "baseline_version_id",
+    "source_task_id",
+    "title",
+    "planned_start_date",
+    "planned_end_date"
+  ],
+  "forbiddenDirectWriters": [
+    "project-search",
+    "external public data",
+    "candidate knowledge assets"
+  ],
+  "allowedWriterRegistryIds": [
+    "default_master_plan_candidate_baseline_materialization",
+    "default_master_plan_candidate_refresh_execution",
+    "task_baseline_route_writer",
+    "baseline_governance_service",
+    "planning_revision_pool_service",
+    "official_holiday_calendar_service",
+    "full_app_test_env_fixture_writer"
+  ],
+  "qualityRules": [
+    "project_id_required",
+    "baseline_version_required",
+    "baseline_dates_required_for_published_baseline"
+  ]
+}

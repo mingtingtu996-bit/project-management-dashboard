@@ -7,6 +7,6 @@ export {
   getRisks, getRisk, createRisk, updateRisk, deleteRisk,
   getMilestones, getMilestone, createMilestone, updateMilestone, deleteMilestone,
   getMembers, createMember, updateMember, deleteMember,
-  getInvitations, createInvitation, updateInvitation, deleteInvitation, validateInvitation,
+  getInvitations,
   executeSQL, executeSQLOne,
 } from './dbService.js'

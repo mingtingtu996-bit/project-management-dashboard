@@ -21,7 +21,6 @@ import {
   type BaselineRevisionCandidate,
 } from './BaselineRevisionCandidateList'
 import { formatDateTime } from '@/lib/formatters'
-import { cn } from '@/lib/utils'
 
 interface BaselineRevisionPoolDialogProps {
   open: boolean
@@ -80,12 +79,6 @@ export function BaselineRevisionPoolDialog({
   const [windowEndFilter, setWindowEndFilter] = useState('')
   const [criticalMilestoneOnly, setCriticalMilestoneOnly] = useState(false)
   const activeCandidate = candidates.find((item) => item.id === activeCandidateId) ?? candidates[0] ?? null
-  const currentStep = deferredReasonVisible || deferredReason.trim() ? 3 : basketItems.length > 0 ? 2 : 1
-  const steps = [
-    { index: 1, label: '选择变更' },
-    { index: 2, label: '确认已选' },
-    { index: 3, label: '标注暂缓原因' },
-  ]
   const getCandidateStatus = (candidateId: string, candidate: BaselineRevisionCandidate) => {
     if (deferredCandidateIds.includes(candidateId) || candidate.status === 'deferred') return 'deferred'
     if (candidate.status === 'accepted') return 'accepted'
@@ -138,6 +131,7 @@ export function BaselineRevisionPoolDialog({
 
     return {
       total: candidates.length,
+      // eslint-disable-next-line -- frontend-bi-aggregation-approved
       open: candidates.filter((item) => getCandidateStatus(item.id, item) === 'open').length,
       deferred: candidates.filter((item) => getCandidateStatus(item.id, item) === 'deferred').length,
       highPriority: summary?.high_priority_count ?? derivedHighPriority,
@@ -159,68 +153,65 @@ export function BaselineRevisionPoolDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent data-testid="baseline-revision-pool-dialog" className="max-w-[var(--dialog-lg-width)]">
-        <DialogHeader className="text-left">
+      <DialogContent
+        data-testid="baseline-revision-pool-dialog"
+        className="max-h-[90vh] max-w-[var(--dialog-lg-width)] overflow-hidden p-0"
+      >
+        <DialogHeader className="border-b border-slate-100 px-6 py-5 text-left">
           <div className="flex flex-wrap items-center gap-2">
-            <DialogTitle>计划修订候选</DialogTitle>
+            <DialogTitle>系统建议</DialogTitle>
             <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
               {sourceEntryLabel}
             </span>
           </div>
           <DialogDescription>
-            先看候选总览和优先级，再决定纳入修订、标记延期，或带入修订草稿继续处理。
+            系统建议用于提示可能需要调整的计划项；也可以直接进入总进度计划表自行编辑。
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-2" data-testid="baseline-revision-stepper">
-          <div className="grid gap-2 sm:grid-cols-3">
-            {steps.map((step) => (
-              <div
-                key={step.index}
-                className={cn(
-                  'rounded-xl border px-3 py-2 text-sm font-medium transition-colors',
-                  currentStep >= step.index
-                    ? 'border-blue-200 bg-blue-50 text-blue-700'
-                    : 'border-slate-200 bg-slate-50 text-slate-500',
-                )}
-              >
-                {step.index}. {step.label}
+        <div className="max-h-[calc(90vh-8rem)] space-y-5 overflow-y-auto px-6 py-5">
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3" data-testid="baseline-revision-stepper">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold text-slate-900">建议采纳范围</div>
+                <div className="mt-1 text-xs leading-5 text-slate-500">
+                  已采纳 {basketItems.length} 项，暂缓 {deferredCandidateIds.length} 项；不选择建议时也可以直接编辑计划表。
+                </div>
               </div>
-            ))}
+              <Badge variant={basketItems.length > 0 ? 'secondary' : 'outline'}>
+                {basketItems.length > 0 ? '已选择' : '可直接编辑'}
+              </Badge>
+            </div>
           </div>
-          <div className="h-1.5 overflow-hidden rounded-full bg-slate-100">
-            <div className="h-full rounded-full bg-blue-600 transition-all" style={{ width: `${(currentStep / 3) * 100}%` }} />
-          </div>
-        </div>
 
-        {errorMessage ? (
-          <Alert variant="destructive">
-            <AlertDescription>{errorMessage}</AlertDescription>
-          </Alert>
-        ) : null}
+          {errorMessage ? (
+            <Alert variant="destructive">
+              <AlertDescription>{errorMessage}</AlertDescription>
+            </Alert>
+          ) : null}
 
         <div className="grid gap-4 md:grid-cols-4">
           <Card className="border-slate-200 bg-slate-50/70 shadow-none">
             <CardContent className="space-y-1 p-5">
-              <div className="text-xs text-slate-500">高优先级候选数</div>
+              <div className="text-xs text-slate-500">建议优先处理</div>
               <div className="text-lg font-semibold text-slate-900">{overview.highPriority}</div>
             </CardContent>
           </Card>
           <Card className="border-slate-200 bg-slate-50/70 shadow-none">
             <CardContent className="space-y-1 p-5">
-              <div className="text-xs text-slate-500">连续跨月候选数</div>
+              <div className="text-xs text-slate-500">连续影响月度计划</div>
               <div className="text-lg font-semibold text-slate-900">{overview.consecutiveCrossMonth}</div>
             </CardContent>
           </Card>
           <Card className="border-slate-200 bg-slate-50/70 shadow-none">
             <CardContent className="space-y-1 p-5">
-              <div className="text-xs text-slate-500">关键路径受影响候选数</div>
+              <div className="text-xs text-slate-500">影响里程碑</div>
               <div className="text-lg font-semibold text-slate-900">{overview.criticalPath}</div>
             </CardContent>
           </Card>
           <Card className="border-slate-200 bg-slate-50/70 shadow-none">
             <CardContent className="space-y-1 p-5">
-              <div className="text-xs text-slate-500">最近一次系统评估时间</div>
+              <div className="text-xs text-slate-500">最近复核时间</div>
               <div className="text-sm font-semibold text-slate-900">
                 {formatDateTime(overview.lastEvaluatedAt, '暂无')}
               </div>
@@ -228,7 +219,7 @@ export function BaselineRevisionPoolDialog({
           </Card>
         </div>
 
-        <div className="text-xs text-slate-500">当前候选总数 {overview.total} 项</div>
+        <div className="text-xs text-slate-500">当前建议总数 {overview.total} 项</div>
 
         <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3">
           <div className="flex flex-wrap items-center gap-2">
@@ -247,7 +238,7 @@ export function BaselineRevisionPoolDialog({
                   : status === 'open'
                     ? '开放'
                     : status === 'deferred'
-                      ? '延期'
+                    ? '已暂缓'
                       : status === 'submitted'
                         ? '已提交'
                         : status === 'accepted'
@@ -341,35 +332,35 @@ export function BaselineRevisionPoolDialog({
               deferredReason={deferredReason}
               deferredReasonVisible={deferredReasonVisible}
               deferredReviewDueAt={deferredReviewDueAt}
-              canEnterDraft={canEnterDraft}
               onAddToBasket={onAddToBasket}
               onMarkDeferred={onMarkDeferred}
               onDeferredReasonChange={onDeferredReasonChange}
               onDeferredReviewDueAtChange={onDeferredReviewDueAtChange}
-              onEnterDraft={onEnterDraft}
             />
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-          <div className="text-sm text-slate-600">
-            已纳入本次修订 {new Set([...basketItems.map((item) => item.id), ...deferredCandidateIds]).size} 项 · 当前筛选 {filteredCandidates.length} 项 · 暂不处理 {deferredCandidateIds.length} 项
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={onEnterDraft}
-              disabled={!canEnterDraft}
-              className="gap-2"
-            >
-              发起基线修订
-            </Button>
-            <Button type="button" variant="ghost" size="sm" onClick={() => onOpenChange(false)} className="gap-2">
-              <X className="h-4 w-4" />
-              关闭
-            </Button>
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+            <div className="text-sm text-slate-600">
+              已采纳建议 {new Set([...basketItems.map((item) => item.id), ...deferredCandidateIds]).size} 项 · 当前筛选 {filteredCandidates.length} 项 · 暂缓 {deferredCandidateIds.length} 项
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="default"
+                size="sm"
+                onClick={onEnterDraft}
+                disabled={!canEnterDraft}
+                className="gap-2"
+                data-testid="baseline-revision-enter-draft"
+              >
+                进入计划表编辑
+              </Button>
+              <Button type="button" variant="ghost" size="sm" onClick={() => onOpenChange(false)} className="gap-2">
+                <X className="h-4 w-4" />
+                关闭
+              </Button>
+            </div>
           </div>
         </div>
       </DialogContent>

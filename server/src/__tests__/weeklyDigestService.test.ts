@@ -120,6 +120,10 @@ vi.mock('../services/criticalPathHelpers.js', () => ({
   getCriticalPathTaskIds: vi.fn(async () => new Set(['task-1', 'task-2'])),
 }))
 
+vi.mock('../services/constructionCalendar.js', () => ({
+  resolveConstructionCalendarContext: vi.fn(async () => null),
+}))
+
 import { weeklyDigestService } from '../services/weeklyDigestService.js'
 
 describe('weeklyDigestService', () => {
@@ -174,6 +178,13 @@ describe('weeklyDigestService', () => {
     )
     state.tables.responsibility_alert_states.push({
       project_id: 'project-1',
+      dimension: 'unit',
+      subject_key: 'unit:unit-1',
+      subject_label: 'General Contractor',
+      subject_user_id: null,
+      subject_unit_id: 'unit-1',
+      current_level: 'abnormal',
+      alert_type: 'responsibility_health',
       subject_id: 'unit-1',
       subject_name: '总包单位',
       subject_type: 'contractor',
@@ -223,6 +234,32 @@ describe('weeklyDigestService', () => {
       health_score: 82,
       new_risks_count: 1,
       new_obstacles_count: 3,
+      abnormal_responsibilities: [
+        {
+          subject_id: 'unit:unit-1',
+          name: 'General Contractor',
+          type: 'unit',
+        },
+      ],
     })
+  })
+
+  it('propagates project-scoped partial failures instead of reporting the batch as successful', async () => {
+    state.executeSQL.mockResolvedValueOnce([
+      { id: 'project-a', status: 'active' },
+      { id: 'project-b', status: 'active' },
+    ])
+    const generate = vi.spyOn(weeklyDigestService, 'generateForProject')
+      .mockImplementation(async (projectId) => {
+        if (projectId === 'project-b') throw new Error('digest failed')
+      })
+
+    await expect(weeklyDigestService.generateForAllProjects()).rejects.toMatchObject({
+      code: 'SCOPED_BATCH_PARTIAL_FAILURE',
+      successfulScopeIds: ['project-a'],
+      failures: [{ scopeId: 'project-b', attempts: 3, errorMessage: 'digest failed' }],
+    })
+    expect(generate.mock.calls.filter(([projectId]) => projectId === 'project-a')).toHaveLength(1)
+    expect(generate.mock.calls.filter(([projectId]) => projectId === 'project-b')).toHaveLength(3)
   })
 })

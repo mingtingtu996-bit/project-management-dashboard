@@ -25,6 +25,9 @@ const {
 const {
   validateAlgorithmSeedRuntimePayload,
 } = await import('../services/algorithmSeedValidationService.js')
+const {
+  assessExperienceTierCandidatePayload,
+} = await import('../services/experienceTierRegistryService.js')
 
 describe('standardWorkDurationSeedReplayCandidateBridgeService', () => {
   const governanceReport: StandardWorkDurationSeedReplayGovernanceReport = {
@@ -148,6 +151,34 @@ describe('standardWorkDurationSeedReplayCandidateBridgeService', () => {
     }).ok).toBe(true)
     expect(firstInput.candidatePayload.evidenceQuality).toEqual(expect.objectContaining({
       last_review_date: '2026-05-16',
+    }))
+    expect(firstInput.candidatePayload).toEqual(expect.objectContaining({
+      experienceTier: 'T1',
+      reuseScope: 'project',
+      learningScope: 'project',
+      wbsNodeTypes: ['process', 'activity_step', 'task'],
+      experienceAssetType: 'process_duration',
+      experienceGroupKeys: expect.arrayContaining([
+        'T1:standard_work:02-01-03-P07',
+        'T1:replay_context:02-01-03-P07:standard',
+        'T1:seed_candidate:process_duration:cast_in_place_concrete',
+      ]),
+      experienceTierRegistryCandidate: expect.objectContaining({
+        tier: 'T1',
+        groupKeyStrategy: 'standard_work_process_dependency',
+        prohibitsCrossTierBucketMixing: true,
+        requiredRegistry: 'experienceTierRegistry',
+        registryStatus: 'candidate_payload_ready_pending_registry_materialization',
+      }),
+    }))
+    expect(assessExperienceTierCandidatePayload(firstInput.candidatePayload)).toEqual(expect.objectContaining({
+      status: 'tier_candidate_valid',
+      tier: 'T1',
+      acceptedGroupKeys: expect.arrayContaining([
+        'T1:standard_work:02-01-03-P07',
+        'T1:replay_context:02-01-03-P07:standard',
+      ]),
+      rejectedReasons: [],
     }))
     expect(firstInput.evidenceSummary).not.toHaveProperty('replayGeneratedAt')
     expect(firstInput.evidenceSummary).not.toHaveProperty('governanceGeneratedAt')

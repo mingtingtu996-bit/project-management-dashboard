@@ -4,10 +4,12 @@ const state = vi.hoisted(() => ({
   executeSQL: vi.fn(),
   executeSQLOne: vi.fn(),
   listNotifications: vi.fn(),
+  findNotification: vi.fn(async () => null),
   insertNotification: vi.fn(async (notification: Record<string, unknown>) => notification),
   updateNotificationById: vi.fn(async () => undefined),
   scanProjectIntegrity: vi.fn(),
   syncProjectMilestoneNotifications: vi.fn(async () => []),
+  listActiveProjectIds: vi.fn(async () => ['project-1']),
   logger: {
     info: vi.fn(),
     warn: vi.fn(),
@@ -23,12 +25,13 @@ vi.mock('../services/dbService.js', () => ({
 
 vi.mock('../services/notificationStore.js', () => ({
   listNotifications: state.listNotifications,
+  findNotification: state.findNotification,
   insertNotification: state.insertNotification,
   updateNotificationById: state.updateNotificationById,
 }))
 
 vi.mock('../services/activeProjectService.js', () => ({
-  listActiveProjectIds: vi.fn(async () => ['project-1']),
+  listActiveProjectIds: state.listActiveProjectIds,
 }))
 
 vi.mock('../services/planningIntegrityService.js', () => ({
@@ -53,6 +56,7 @@ const { OperationalNotificationService } = await import('../services/operational
 describe('operational notification service', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    state.listActiveProjectIds.mockResolvedValue(['project-1'])
     state.scanProjectIntegrity.mockResolvedValue({
       project_id: 'project-1',
       milestone_integrity: {
@@ -120,11 +124,15 @@ describe('operational notification service', () => {
     const notifications = await new OperationalNotificationService().syncProjectNotifications('project-1')
 
     expect(notifications).toHaveLength(0)
+    const taskQuery = state.executeSQL.mock.calls.find(([query]) => String(query).includes('FROM tasks WHERE project_id = ?'))?.[0]
+    expect(taskQuery).not.toContain('SELECT *')
+    expect(taskQuery).toContain('planned_start_date')
+    expect(taskQuery).toContain('actual_end_date')
     expect(state.insertNotification).not.toHaveBeenCalled()
     expect(state.updateNotificationById).toHaveBeenCalledWith('notification-1', expect.objectContaining({
       status: 'resolved',
       is_read: true,
-    }))
+    }), expect.objectContaining({ id: 'notification-1', project_id: 'project-1' }))
   })
 
   it('syncs mapping-orphan and milestone integrity notifications through the all-project entrypoint', async () => {
@@ -278,5 +286,116 @@ describe('operational notification service', () => {
     expect(
       state.executeSQLOne.mock.calls.filter(([query]) => String(query).includes('FROM projects WHERE id = ?')),
     ).toHaveLength(1)
+  })
+
+  it('does not treat planned start/end fields as actual date inversion evidence', async () => {
+    state.executeSQL.mockImplementation(async (query: string) => {
+      if (query.includes('FROM tasks WHERE project_id = ?')) {
+        return [
+          {
+            id: 'task-planned-only',
+            project_id: 'project-1',
+            title: 'planned-only task',
+            status: 'pending',
+            progress: 0,
+            start_date: '2026-04-20',
+            end_date: '2026-04-01',
+            actual_start_date: null,
+            actual_end_date: null,
+          },
+        ]
+      }
+
+      if (query.includes('FROM project_members WHERE project_id = ?')) {
+        return [
+          {
+            project_id: 'project-1',
+            user_id: 'owner-1',
+            role: 'owner',
+            permission_level: 'owner',
+          },
+        ]
+      }
+
+      return []
+    })
+    state.executeSQLOne.mockImplementation(async (query: string) => {
+      if (query.includes('FROM projects WHERE id = ?')) {
+        return {
+          id: 'project-1',
+          owner_id: 'owner-1',
+        }
+      }
+
+      return null
+    })
+    state.listNotifications.mockResolvedValue([])
+
+    const notifications = await new OperationalNotificationService().syncProjectNotifications('project-1')
+
+    expect(notifications.map((item: any) => item.type)).not.toContain('date_inversion')
+    expect(state.insertNotification).not.toHaveBeenCalledWith(expect.objectContaining({
+      type: 'date_inversion',
+      metadata: expect.objectContaining({
+        actual_start_date: '2026-04-20',
+        actual_end_date: '2026-04-01',
+      }),
+    }))
+  })
+
+  it('runs cross-project and per-project notification stages sequentially', async () => {
+    const integrityReport = await state.scanProjectIntegrity('seed-project')
+    state.scanProjectIntegrity.mockClear()
+    state.listActiveProjectIds.mockResolvedValue(['project-1', 'project-2'])
+
+    let active = 0
+    let maxActive = 0
+    const track = async <T>(value: T): Promise<T> => {
+      active += 1
+      maxActive = Math.max(maxActive, active)
+      await new Promise((resolve) => setTimeout(resolve, 5))
+      active -= 1
+      return value
+    }
+    state.scanProjectIntegrity.mockImplementation(async (projectId: string) => track({
+      ...integrityReport,
+      project_id: projectId,
+    }))
+    state.syncProjectMilestoneNotifications.mockImplementation(async () => track([]))
+
+    const service = new OperationalNotificationService()
+    vi.spyOn(service, 'syncProjectNotifications').mockImplementation(async () => track([]))
+    vi.spyOn(service, 'syncMappingOrphanPointerNotifications').mockImplementation(async () => track([]))
+
+    await service.syncAllProjectNotifications()
+
+    expect(maxActive).toBe(1)
+  })
+
+  it('continues later notification stages when an earlier stage fails', async () => {
+    const service = new OperationalNotificationService()
+    vi.spyOn(service, 'syncProjectNotifications').mockRejectedValue(new Error('operational stage failed'))
+    const mappingStage = vi.spyOn(service, 'syncMappingOrphanPointerNotifications').mockResolvedValue([])
+    state.syncProjectMilestoneNotifications.mockResolvedValue([])
+
+    await service.syncAllProjectNotifications()
+
+    expect(mappingStage).toHaveBeenCalledWith(
+      'project-1',
+      expect.objectContaining({ project_id: 'project-1' }),
+      expect.any(Map),
+    )
+    expect(state.syncProjectMilestoneNotifications).toHaveBeenCalledWith(
+      'project-1',
+      expect.objectContaining({ project_id: 'project-1' }),
+    )
+    expect(state.logger.warn).toHaveBeenCalledWith(
+      '[operationalNotificationService] notification stage failed',
+      expect.objectContaining({
+        projectId: 'project-1',
+        stage: 'operational',
+        error: 'operational stage failed',
+      }),
+    )
   })
 })

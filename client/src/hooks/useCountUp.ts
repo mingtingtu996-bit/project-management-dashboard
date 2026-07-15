@@ -16,6 +16,7 @@ interface CountUpOptions {
   duration?: number
   /** 动画延迟（ms），默认 0 */
   delay?: number
+  enabled?: boolean
   /** easing 函数，默认 easeOutQuad */
   easing?: (t: number) => number
 }
@@ -28,7 +29,7 @@ export function useCountUp(
   target: number,
   options: CountUpOptions = {}
 ): number {
-  const { duration = 800, delay = 0, easing = easeOutQuad } = options
+  const { duration = 800, delay = 0, enabled = true, easing = easeOutQuad } = options
 
   const [current, setCurrent] = useState(0)
   const rafRef = useRef<number | null>(null)
@@ -36,6 +37,17 @@ export function useCountUp(
   const prevTargetRef = useRef<number>(0)
 
   useEffect(() => {
+    if (!enabled || duration <= 0) {
+      prevTargetRef.current = target
+      setCurrent(target)
+      startTimeRef.current = null
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current)
+        rafRef.current = null
+      }
+      return
+    }
+
     // 目标值未变化时不重新触发
     if (target === prevTargetRef.current) return
     prevTargetRef.current = target
@@ -78,7 +90,7 @@ export function useCountUp(
       if (delayTimer) clearTimeout(delayTimer)
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current)
     }
-  }, [target, duration, delay]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [target, duration, delay, enabled]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return current
 }

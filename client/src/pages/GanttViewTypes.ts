@@ -2,25 +2,69 @@
 // 从 GanttView.tsx 提取以避免 esbuild 解析超大文件的问题
 
 // Task类型（本地版本）
+export type TaskStatusAxisEvidence = {
+  ruleVersion?: string | null
+  ruleKey?: string | null
+  ruleSource?: string | null
+  sourceFields?: string[]
+  [key: string]: unknown
+}
+
+export type TaskDerivedStatusDto = {
+  status?: string | null
+  label?: string | null
+  reason?: string | null
+  evidence?: TaskStatusAxisEvidence | null
+  sourceFields?: string[]
+}
+
+export type TaskDueStatusDto = TaskDerivedStatusDto & {
+  status?: 'normal' | 'approaching' | 'urgent' | 'overdue' | string | null
+  daysUntilDue?: number | null
+}
+
+export type TaskReadinessStatusDto = {
+  ready?: boolean | null
+  dependencyStatus?: string | null
+  conditionStatus?: string | null
+  obstacleStatus?: string | null
+  progressImpactLevel?: string | null
+  blockedForProgress?: boolean | null
+  summary?: unknown
+  evidence?: TaskStatusAxisEvidence | null
+}
+
+export type TaskStatusDerivationDto = {
+  lifecycleStatus?: string | null
+  businessStatus?: TaskDerivedStatusDto | null
+  displayStatus?: string | null
+  dueStatus?: TaskDueStatusDto | null
+  lagLevel?: 'none' | 'mild' | 'moderate' | 'severe' | string | null
+  lagStatus?: string | null
+  lagStatusEvidence?: TaskStatusAxisEvidence | null
+  readinessStatus?: TaskReadinessStatusDto | null
+  ruleVersion?: string | null
+}
+
 export interface Task {
   id: string
   project_id: string
   title?: string
-  name?: string  // 兼容旧字段
   description?: string
   status?: string
+  statusLabel?: string
+  displayStatus?: string
   priority?: string
   start_date?: string | null
   end_date?: string | null
   planned_start_date?: string | null
   planned_end_date?: string | null
+  delay_days?: number | string | null
   delay_reason?: string | null
   progress?: number
   assignee?: string
   assignee_user_id?: string | null
   assignee_name?: string
-  assignee_unit?: string
-  responsible_unit?: string
   participant_unit_id?: string | null
   participant_unit_name?: string | null
   dependencies?: string[]
@@ -30,6 +74,8 @@ export interface Task {
   wbs_level?: number          // WBS层级
   sort_order?: number         // 同级排序
   is_critical?: boolean
+  total_float_days?: number | string | null
+  free_float_days?: number | string | null
   baseline_start?: string | null
   baseline_end?: string | null
   baseline_is_critical?: boolean | null
@@ -37,8 +83,6 @@ export interface Task {
   milestone_level?: number  // 里程碑层级：1=一级(amber)/2=二级(blue)/3=三级(gray)
   milestone_order?: number  // 同级排序
   // #7: 工期对比
-  reference_duration?: number   // 参考/计划工期（天）
-  ai_duration?: number          // AI推荐工期（天）
   // #11: 首次填报时间
   first_progress_at?: string | null
   // 实际开始/结束日期
@@ -47,7 +91,53 @@ export interface Task {
   lagLevel?: 'none' | 'mild' | 'moderate' | 'severe'
   lagStatus?: '正常' | '轻度滞后' | '中度滞后' | '严重滞后'
   // #12: 专项工程分类
+  dueStatus?: TaskDueStatusDto | null
+  businessStatus?: TaskDerivedStatusDto | null
+  statusDerivation?: TaskStatusDerivationDto | null
   specialty_type?: string | null
+  // v1.4.1 engineering object IDs
+  engineering_object_id?: string | null
+  phase_object_id?: string | null
+  section_object_id?: string | null
+  building_object_id?: string | null
+  basement_object_id?: string | null
+  floor_object_id?: string | null
+  physical_zone_object_id?: string | null
+  functional_area_object_id?: string | null
+  // v1.4.2 WBS semantic
+  engineering_category_id?: string | null
+  engineering_category_type?: string | null
+  engineering_category_name?: string | null
+  wbs_node_type?: string | null
+  category_type?: string | null
+  wbs_path?: string | null
+  is_leaf?: boolean | null
+  is_wbs_summary?: boolean | null
+  is_executable?: boolean | null
+  template_node_id?: string | null
+  standard_work_code?: string | null
+  standard_work_name?: string | null
+  // v1.4.3 task standard
+  progress_method?: string
+  completion_rule?: string
+  drawing_required?: boolean
+  material_required?: boolean
+  acceptance_required?: boolean
+  quality_required?: boolean
+  standard_task_metadata?: Record<string, unknown> | null
+  duration_risk_p20_days?: number | null
+  duration_risk_p50_days?: number | null
+  duration_risk_p80_days?: number | null
+  duration_risk_range?: ({
+    p20_days?: number | null
+    p50_days?: number | null
+    p80_days?: number | null
+    p20Days?: number | null
+    p50Days?: number | null
+    p80Days?: number | null
+  } & Record<string, unknown>) | null
+  acceptance_impact_count?: number
+  acceptance_impact_summary?: TaskAcceptanceImpactItem[]
   version?: number
   created_at: string
   updated_at: string
@@ -57,6 +147,41 @@ export interface Task {
 export interface WBSNode extends Task {
   children: WBSNode[]
   depth: number
+}
+
+const TASK_WBS_NODE_TYPES = new Set(['division', 'sub_division', 'item_work', 'process', 'activity_step', 'custom'])
+
+export function normalizeTaskWbsNodeType(value?: string | null): string | null {
+  const normalized = String(value ?? '').trim()
+  return TASK_WBS_NODE_TYPES.has(normalized) ? normalized : null
+}
+
+export function getTaskWbsNodeType(task?: Pick<Task, 'wbs_node_type' | 'engineering_category_type' | 'category_type'> | null): string | null {
+  return normalizeTaskWbsNodeType(task?.wbs_node_type)
+    ?? normalizeTaskWbsNodeType(task?.engineering_category_type)
+    ?? normalizeTaskWbsNodeType(task?.category_type)
+}
+
+const TASK_PROGRESS_METHOD_LABELS: Record<string, string> = {
+  percent: '百分比',
+  quantity: '工程量',
+  milestone: '里程碑',
+  manual_weighted: '权重规则',
+}
+
+export function normalizeTaskProgressMethod(method?: string | null): string {
+  const normalized = String(method ?? 'percent').trim()
+  return normalized || 'percent'
+}
+
+export function getTaskProgressMethodLabel(method?: string | null): string {
+  return TASK_PROGRESS_METHOD_LABELS[normalizeTaskProgressMethod(method)] ?? '系统规则'
+}
+
+export function getTaskProgressReadOnlyReason(method?: string | null): string | null {
+  const normalized = normalizeTaskProgressMethod(method)
+  if (normalized === 'percent') return null
+  return `该任务进度由${getTaskProgressMethodLabel(normalized)}自动计算`
 }
 
 // 开工条件类型枚举
@@ -115,6 +240,13 @@ export interface TaskObstacle {
   severity_escalated_at?: string | null
   severity_manually_overridden?: boolean | null
   created_at: string
+}
+
+export interface TaskAcceptanceImpactItem {
+  id: string
+  name: string
+  status?: string | null
+  statusLabel?: string | null
 }
 
 // 里程碑层级样式配置

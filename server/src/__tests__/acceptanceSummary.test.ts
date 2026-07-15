@@ -9,7 +9,7 @@ describe('acceptance project summary', () => {
         id: 'draft-1',
         project_id: 'project-1',
         status: 'draft',
-        task_id: 'milestone-1',
+        covered_task_ids: ['milestone-1'],
         days_to_due: 10,
         is_blocked: false,
       },

@@ -13,6 +13,7 @@ import {
   Trash2,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
+import { DurationBasisBadge } from '@/components/planning/DurationBasisBadge'
 import { EmptyState } from '@/components/EmptyState'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -56,7 +57,7 @@ function truncateLabel(value: string, max = 18) {
 
 function getTaskLabel(task?: Task | null, fallback = '') {
   if (!task) return fallback
-  return task.title || task.name || fallback || task.id
+  return task.title || fallback || task.id
 }
 
 function getSnapshotTaskClass(task?: CriticalPathSnapshot['tasks'][number] | null) {
@@ -210,13 +211,14 @@ function getCalculationBanner(snapshot: CriticalPathSnapshot | null | undefined)
   if (!snapshot?.calculationStatus || snapshot.calculationStatus === 'fresh') return null
 
   if (snapshot.calculationStatus === 'cached_after_failure') {
+    const lastSuccessfulAt = snapshot.lastSuccessfulCalculatedAt ?? snapshot.calculatedAt
     return {
       testId: 'critical-path-calculation-cached-banner',
       tone: 'amber' as const,
       title: '关键路径最新计算失败，当前显示最近一次成功快照',
       description: [
         snapshot.calculationFailureMessage || '最新计算失败',
-        snapshot.calculatedAt ? `快照时间 ${formatDateTime(snapshot.calculatedAt)}` : null,
+        lastSuccessfulAt ? `最近成功 ${formatDateTime(lastSuccessfulAt)}` : null,
         snapshot.calculationFailedAt ? `失败时间 ${formatDateTime(snapshot.calculationFailedAt)}` : null,
       ]
         .filter(Boolean)
@@ -854,7 +856,7 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
                         const emphasized = !hasActiveFocus || activeFocusGraph.taskIds.has(node.taskId)
                         const nodeTitle = props.onNodeNavigate ? `跳转到任务：${node.title}` : `选中任务：${node.title}`
                         const snapshotTask = snapshotTaskMap.get(node.taskId)
-                        const nodeTooltip = `${node.title}｜工期 ${snapshotTask?.durationDays ?? 0} 天｜浮动时间 ${snapshotTask?.floatDays ?? 0} 天`
+                        const nodeTooltip = `${node.title}｜计划工期 ${snapshotTask?.durationDays ?? 0} 天｜浮动时间 ${snapshotTask?.floatDays ?? 0} 天`
                         return (
                           <g
                             key={node.taskId}
@@ -936,7 +938,10 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
                       <div className="pointer-events-none sticky bottom-3 left-3 w-fit max-w-xs rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 shadow-[var(--el-2)]">
                         <div className="font-semibold text-slate-900">{getTaskLabel(hoveredTask, hoveredTaskId)}</div>
                         <div className="mt-1 flex flex-wrap gap-2">
-                          <span>工期 {hoveredSnapshotTask?.durationDays ?? 0} 天</span>
+                          <span className="inline-flex items-center gap-1.5">
+                            <DurationBasisBadge basis="plan" compact variant="outline" />
+                            计划工期 {hoveredSnapshotTask?.durationDays ?? 0} 天
+                          </span>
                           <span>浮动时间 {hoveredSnapshotTask?.floatDays ?? 0} 天</span>
                         </div>
                       </div>
@@ -1042,8 +1047,10 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
                           />
                           <div className="min-w-0">
                             <div className="truncate text-sm font-medium text-slate-900">{chain.displayLabel}</div>
-                            <div className="text-xs text-slate-500">
-                              默认折叠 · {formatCriticalPathCount(chain.taskIds.length)} · 工期 {chain.totalDurationDays} 天
+                            <div className="flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
+                              <span>默认折叠 · {formatCriticalPathCount(chain.taskIds.length)}</span>
+                              <DurationBasisBadge basis="plan" compact variant="outline" />
+                              <span>计划工期 {chain.totalDurationDays} 天</span>
                             </div>
                           </div>
                         </Button>
@@ -1153,16 +1160,20 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
                 <div className="mt-2 text-sm font-semibold text-slate-900">
                   {selectedTask ? getTaskLabel(selectedTask, selectedTask.id) : '未选择'}
                 </div>
-                <div className="mt-1 text-xs text-slate-500">
-                  {selectedSnapshotTask
-                    ? `浮动 ${selectedSnapshotTask.floatDays} 天 · 工期 ${selectedSnapshotTask.durationDays} 天`
-                    : '当前节点尚未在快照中匹配。'}
-                </div>
+                {selectedSnapshotTask ? (
+                  <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
+                    <span>浮动 {selectedSnapshotTask.floatDays} 天</span>
+                    <DurationBasisBadge basis="plan" compact variant="outline" />
+                    <span>计划工期 {selectedSnapshotTask.durationDays} 天</span>
+                  </div>
+                ) : (
+                  <div className="mt-1 text-xs text-slate-500">当前节点尚未在快照中匹配。</div>
+                )}
                 {(selectedAttentionOverride || selectedInsertOverride) && (
                   <div className="mt-2 flex flex-wrap gap-2">
                     {selectedAttentionOverride && <Badge variant="secondary">已关注</Badge>}
                     {selectedInsertOverride && <Badge variant="secondary">已插链</Badge>}
-                    {selectedInsertOverride && <Badge variant="outline">{selectedInsertOverride.anchor_type || '旧版'}</Badge>}
+                    {selectedInsertOverride && <Badge variant="outline">{selectedInsertOverride.anchor_type}</Badge>}
                   </div>
                 )}
                 {selectedTaskId && (

@@ -1,12 +1,13 @@
-import { mkdir, readdir, rename, rm, writeFile } from 'node:fs/promises'
+﻿import { mkdir, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { access, readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
 
 const __filename = fileURLToPath(import.meta.url)
 const scriptsDir = dirname(__filename)
 const repoRoot = join(scriptsDir, '..')
-const outputDir = join(repoRoot, 'artifacts', 'browser-checks')
+const outputDir = join(repoRoot, 'project-testing', 'artifacts', 'browser-checks')
 const scripts = process.argv.slice(2)
 const suiteKey = process.env.BROWSER_SUITE_KEY || process.env.npm_lifecycle_event || 'adhoc-browser-suite'
 const suiteRuns = []
@@ -31,6 +32,8 @@ async function collectScriptArtifacts(script) {
     await rename(join(outputDir, file.name), join(scriptDir, file.name))
   }
 
+  await rewriteMovedJsonArtifactPaths(scriptDir)
+
   const files = (await readdir(scriptDir, { recursive: true }))
     .filter((entry) => typeof entry === 'string')
     .sort()
@@ -39,6 +42,58 @@ async function collectScriptArtifacts(script) {
   if (run) {
     run.files = files
     run.folder = toSuiteFolderName(script)
+  }
+}
+
+function maybeRewriteMovedPath(value, scriptDir) {
+  if (typeof value !== 'string' || !value.includes(outputDir)) return value
+  const fileName = value.split(/[\\/]/).filter(Boolean).at(-1)
+  return fileName ? join(scriptDir, fileName) : value
+}
+
+function rewriteJsonValue(value, scriptDir) {
+  if (Array.isArray(value)) {
+    return value.map((item) => rewriteJsonValue(item, scriptDir))
+  }
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, nested]) => [key, rewriteJsonValue(nested, scriptDir)]),
+    )
+  }
+  return maybeRewriteMovedPath(value, scriptDir)
+}
+
+async function rewriteMovedJsonArtifactPaths(scriptDir) {
+  const entries = await readdir(scriptDir, { withFileTypes: true })
+  const jsonFiles = entries.filter((entry) => entry.isFile() && entry.name.endsWith('.json'))
+
+  for (const file of jsonFiles) {
+    const jsonPath = join(scriptDir, file.name)
+    const original = await readFile(jsonPath, 'utf8')
+    let parsed
+    try {
+      parsed = JSON.parse(original)
+    } catch {
+      continue
+    }
+
+    const rewritten = rewriteJsonValue(parsed, scriptDir)
+    const changed = JSON.stringify(parsed) !== JSON.stringify(rewritten)
+    if (!changed) continue
+
+    const referencedPaths = []
+    JSON.stringify(rewritten, (_key, value) => {
+      if (typeof value === 'string' && value.includes(scriptDir)) {
+        referencedPaths.push(value)
+      }
+      return value
+    })
+
+    for (const referencedPath of referencedPaths) {
+      await access(referencedPath)
+    }
+
+    await writeFile(jsonPath, `${JSON.stringify(rewritten, null, 2)}\n`, 'utf8')
   }
 }
 

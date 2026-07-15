@@ -23,6 +23,8 @@ describe('domainReleaseRuntimeClosureMatrixService', () => {
         'critical_path_rule_runtime',
         'metric_runtime',
         'seed_override_runtime',
+        'construction_organization_plan_network',
+        't2_rhythm_schedule_runtime',
       ],
       requiredSurfaces: [
         'asset_type_domain_writer',
@@ -38,7 +40,7 @@ describe('domainReleaseRuntimeClosureMatrixService', () => {
         'required_runtime_closure_surfaces_must_be_verified',
       ]),
     }))
-    expect(matrix.rows).toHaveLength(50)
+    expect(matrix.rows).toHaveLength(60)
     expect(matrix.rows).toEqual(expect.arrayContaining([
       expect.objectContaining({
         assetType: 'learnable_parameter',
@@ -100,6 +102,96 @@ describe('domainReleaseRuntimeClosureMatrixService', () => {
         status: 'confirmed',
         evidenceRefs: expect.arrayContaining([
           expect.stringContaining('algorithmSeedGovernanceFlow.test.ts'),
+        ]),
+        missingReasons: [],
+      }),
+      expect.objectContaining({
+        assetType: 'construction_organization_plan_network',
+        surface: 'asset_type_domain_writer',
+        status: 'confirmed',
+        evidenceRefs: expect.arrayContaining([
+          expect.stringContaining('constructionOrganizationPlanNetworkDomainWriter.ts'),
+        ]),
+        missingReasons: [],
+      }),
+      expect.objectContaining({
+        assetType: 'construction_organization_plan_network',
+        surface: 'runtime_consumer_verification',
+        status: 'confirmed',
+        evidenceRefs: expect.arrayContaining([
+          expect.stringContaining('runtime_consumer_observations'),
+        ]),
+        missingReasons: [],
+      }),
+      expect.objectContaining({
+        assetType: 'construction_organization_plan_network',
+        surface: 'impact_monitoring',
+        status: 'confirmed',
+        evidenceRefs: expect.arrayContaining([
+          expect.stringContaining('constructionOrganizationPlanNetworkRuntimeEvidenceService.ts'),
+        ]),
+        missingReasons: [],
+      }),
+      expect.objectContaining({
+        assetType: 'construction_organization_plan_network',
+        surface: 'release_record',
+        status: 'confirmed',
+        evidenceRefs: expect.arrayContaining([
+          expect.stringContaining('construction_organization_plan_network_runtime_publications'),
+        ]),
+        missingReasons: [],
+      }),
+      expect.objectContaining({
+        assetType: 'construction_organization_plan_network',
+        surface: 'rollback_writer_and_target',
+        status: 'confirmed',
+        evidenceRefs: expect.arrayContaining([
+          expect.stringContaining('rollback_execution'),
+        ]),
+        missingReasons: [],
+      }),
+      expect.objectContaining({
+        assetType: 't2_rhythm_schedule_runtime',
+        surface: 'asset_type_domain_writer',
+        status: 'confirmed',
+        evidenceRefs: expect.arrayContaining([
+          expect.stringContaining('t2RhythmScheduleRuntimePublicationService.ts'),
+        ]),
+        missingReasons: [],
+      }),
+      expect.objectContaining({
+        assetType: 't2_rhythm_schedule_runtime',
+        surface: 'runtime_consumer_verification',
+        status: 'confirmed',
+        evidenceRefs: expect.arrayContaining([
+          expect.stringContaining('projectCriticalPathService.ts'),
+        ]),
+        missingReasons: [],
+      }),
+      expect.objectContaining({
+        assetType: 't2_rhythm_schedule_runtime',
+        surface: 'impact_monitoring',
+        status: 'confirmed',
+        evidenceRefs: expect.arrayContaining([
+          expect.stringContaining('impact_monitoring'),
+        ]),
+        missingReasons: [],
+      }),
+      expect.objectContaining({
+        assetType: 't2_rhythm_schedule_runtime',
+        surface: 'release_record',
+        status: 'confirmed',
+        evidenceRefs: expect.arrayContaining([
+          expect.stringContaining('241_v14231_t2_rhythm_schedule_runtime_publications.sql'),
+        ]),
+        missingReasons: [],
+      }),
+      expect.objectContaining({
+        assetType: 't2_rhythm_schedule_runtime',
+        surface: 'rollback_writer_and_target',
+        status: 'confirmed',
+        evidenceRefs: expect.arrayContaining([
+          expect.stringContaining('restores mapped task date snapshots'),
         ]),
         missingReasons: [],
       }),

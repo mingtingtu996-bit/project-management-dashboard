@@ -6,15 +6,14 @@ import {
   getTasks,
   listTaskProgressSnapshotsByTaskIds,
 } from './dbService.js'
-import { listDelayRequests } from './delayRequests.js'
+import { query as rawQuery } from '../database.js'
+import { logger } from '../middleware/logger.js'
 import { WarningService } from './warningService.js'
 import {
   applyWarningAcknowledgments,
   loadAcknowledgedWarningsForUser,
 } from './upgradeChainService.js'
 import type {
-  ChangeLog,
-  DelayRequest,
   Issue,
   Project,
   Risk,
@@ -46,12 +45,50 @@ export type ProjectBootstrapPayload = {
   obstacles: TaskObstacle[]
   warnings: Warning[]
   issues: Issue[]
-  delayRequests: DelayRequest[]
-  changeLogs: ChangeLog[]
   taskProgressSnapshots: TaskProgressSnapshot[]
 }
 
 const warningService = new WarningService()
+const BOOTSTRAP_CACHE_TTL_MS = Number(process.env.PROJECT_BOOTSTRAP_CACHE_TTL_MS ?? 15_000)
+const bootstrapCache = new Map<string, { expiresAt: number; payload: ProjectBootstrapPayload | null }>()
+const PROJECT_BOOTSTRAP_OBSTACLE_COLUMNS = [
+  'id',
+  'task_id',
+  'project_id',
+  'description',
+  'obstacle_type',
+  'severity',
+  'status',
+  'resolution',
+  'resolved_at',
+  'resolved_by',
+  'estimated_resolve_date',
+  'notes',
+  'is_resolved',
+  'severity_escalated_at',
+  'severity_manually_overridden',
+  'created_at',
+  'updated_at',
+].join(', ')
+
+function bootstrapCacheKey(projectId: string, userId: string) {
+  return `${projectId}:${userId}`
+}
+
+export function clearProjectBootstrapCache(projectId?: string | null) {
+  const normalizedProjectId = String(projectId ?? '').trim()
+  if (!normalizedProjectId) {
+    bootstrapCache.clear()
+    return
+  }
+
+  const projectCachePrefix = `${normalizedProjectId}:`
+  for (const cacheKey of Array.from(bootstrapCache.keys())) {
+    if (cacheKey.startsWith(projectCachePrefix)) {
+      bootstrapCache.delete(cacheKey)
+    }
+  }
+}
 
 function truthyLike(value: unknown) {
   return value === true || value === 1 || value === '1'
@@ -93,36 +130,107 @@ function normalizeObstacleRecord(record: ObstacleRow): TaskObstacle {
 }
 
 async function listProjectConditions(projectId: string) {
-  const rows = await executeSQL<ConditionRow>(
-    'SELECT * FROM task_conditions WHERE project_id = ? ORDER BY created_at ASC',
-    [projectId],
-  )
+  const rows = process.env.NODE_ENV === 'test'
+    ? await executeSQL<ConditionRow>(
+      'SELECT * FROM task_conditions WHERE project_id = ? ORDER BY created_at ASC',
+      [projectId],
+    )
+    : (await rawQuery(
+      'SELECT * FROM public.task_conditions WHERE project_id = $1 ORDER BY created_at ASC',
+      [projectId],
+    )).rows as ConditionRow[]
   return (rows ?? []).map(normalizeConditionRecord)
 }
 
 async function listProjectObstacles(projectId: string) {
-  const rows = await executeSQL<ObstacleRow>(
-    'SELECT * FROM task_obstacles WHERE project_id = ? ORDER BY created_at DESC',
-    [projectId],
-  )
-  return (rows ?? []).map(normalizeObstacleRecord)
+  try {
+    const rows = process.env.NODE_ENV === 'test'
+      ? await executeSQL<ObstacleRow>(
+        `SELECT ${PROJECT_BOOTSTRAP_OBSTACLE_COLUMNS} FROM task_obstacles WHERE project_id = ? ORDER BY created_at DESC`,
+        [projectId],
+      )
+      : (await rawQuery(
+        `SELECT ${PROJECT_BOOTSTRAP_OBSTACLE_COLUMNS} FROM public.task_obstacles WHERE project_id = $1 ORDER BY created_at DESC`,
+        [projectId],
+      )).rows as ObstacleRow[]
+    return (rows ?? []).map(normalizeObstacleRecord)
+  } catch (error) {
+    logger.warn('[projectBootstrap] obstacle read skipped', {
+      projectId,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return []
+  }
 }
 
-async function listProjectChangeLogs(projectId: string, limit: number) {
-  return await executeSQL<ChangeLog>(
-    'SELECT * FROM change_logs WHERE project_id = ? ORDER BY changed_at DESC LIMIT ?',
-    [projectId, limit],
-  )
+async function listProjectTaskProgressSnapshots(taskIds: string[]) {
+  const normalizedTaskIds = [...new Set(
+    taskIds.map((taskId) => String(taskId ?? '').trim()).filter(Boolean),
+  )]
+  if (normalizedTaskIds.length === 0) return []
+
+  if (process.env.NODE_ENV === 'test') {
+    return listTaskProgressSnapshotsByTaskIds(normalizedTaskIds)
+  }
+
+  try {
+    const result = await rawQuery(
+      'SELECT * FROM public.task_progress_snapshots WHERE task_id = ANY($1::uuid[])',
+      [normalizedTaskIds],
+    )
+    return result.rows as TaskProgressSnapshot[]
+  } catch (error) {
+    logger.warn('[projectBootstrap] direct progress snapshot read failed, falling back to dbService', {
+      projectIdCount: normalizedTaskIds.length,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return listTaskProgressSnapshotsByTaskIds(normalizedTaskIds)
+  }
 }
 
 async function listProjectWarnings(projectId: string, userId: string) {
-  await warningService.syncConditionExpiredIssues(projectId)
-  await warningService.syncAcceptanceExpiredIssues(projectId)
-  await warningService.autoEscalateWarnings(projectId)
-  await warningService.autoEscalateRisksToIssues(projectId)
-  const warnings = await warningService.syncActiveWarnings(projectId)
-  const acknowledgedWarnings = await loadAcknowledgedWarningsForUser(userId, projectId)
-  return applyWarningAcknowledgments(warnings, acknowledgedWarnings)
+  try {
+    const [warnings, acknowledgedWarnings] = await Promise.all([
+      warningService.readActiveWarnings(projectId),
+      loadAcknowledgedWarningsForUser(userId, projectId),
+    ])
+    return applyWarningAcknowledgments(warnings, acknowledgedWarnings)
+  } catch (error) {
+    logger.warn('[projectBootstrap] active warning read skipped', {
+      projectId,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return []
+  }
+}
+
+async function listProjectRisks(projectId: string) {
+  try {
+    const result = await rawQuery('SELECT * FROM public.risks WHERE project_id = $1 ORDER BY created_at DESC', [projectId])
+    return (result.rows as Risk[]).map((risk: any) => ({
+      ...risk,
+      risk_category: risk.risk_category ?? risk.category,
+    })) as Risk[]
+  } catch (error) {
+    logger.warn('[projectBootstrap] direct risks read failed, falling back to dbService', {
+      projectId,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return getRisks(projectId)
+  }
+}
+
+async function listProjectIssues(projectId: string) {
+  try {
+    const result = await rawQuery('SELECT * FROM public.issues WHERE project_id = $1 ORDER BY created_at DESC', [projectId])
+    return result.rows as Issue[]
+  } catch (error) {
+    logger.warn('[projectBootstrap] direct issues read failed, falling back to dbService', {
+      projectId,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return getIssues(projectId)
+  }
 }
 
 export async function getProjectBootstrap(
@@ -130,12 +238,18 @@ export async function getProjectBootstrap(
   userId: string,
   options: { changeLogLimit?: number } = {},
 ): Promise<ProjectBootstrapPayload | null> {
+  const cacheKey = bootstrapCacheKey(projectId, userId)
+  const cached = bootstrapCache.get(cacheKey)
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.payload
+  }
+
   const project = await getProject(projectId)
   if (!project) return null
 
   const tasks = await getTasks(projectId)
   const taskIds = tasks.map((task) => task.id).filter(Boolean)
-  const changeLogLimit = Math.min(Math.max(options.changeLogLimit ?? 100, 1), 500)
+  void options
 
   const [
     risks,
@@ -143,21 +257,17 @@ export async function getProjectBootstrap(
     obstacles,
     warnings,
     issues,
-    delayRequests,
-    changeLogs,
     taskProgressSnapshots,
   ] = await Promise.all([
-    getRisks(projectId),
+    listProjectRisks(projectId),
     listProjectConditions(projectId),
     listProjectObstacles(projectId),
     listProjectWarnings(projectId, userId),
-    getIssues(projectId),
-    listDelayRequests(undefined, projectId),
-    listProjectChangeLogs(projectId, changeLogLimit),
-    listTaskProgressSnapshotsByTaskIds(taskIds),
+    listProjectIssues(projectId),
+    listProjectTaskProgressSnapshots(taskIds),
   ])
 
-  return {
+  const payload = {
     project,
     tasks,
     risks,
@@ -165,8 +275,11 @@ export async function getProjectBootstrap(
     obstacles,
     warnings,
     issues,
-    delayRequests,
-    changeLogs,
     taskProgressSnapshots,
   }
+  bootstrapCache.set(cacheKey, {
+    expiresAt: Date.now() + BOOTSTRAP_CACHE_TTL_MS,
+    payload,
+  })
+  return payload
 }

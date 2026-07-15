@@ -2,18 +2,57 @@
 
 import { Router } from 'express'
 import { SupabaseService } from '../services/supabaseService.js'
-import { confirmRiskPendingManualClose, keepRiskProcessing } from '../services/dbService.js'
+import { confirmRiskPendingManualClose, executeSQLOne, keepRiskProcessing, supabase as db } from '../services/dbService.js'
+import { enqueueProjectHealthUpdate } from '../services/projectHealthService.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import { validate, validateIdParam, riskSchema, riskUpdateSchema } from '../middleware/validation.js'
+import { getRequestCompanyId } from '../auth/companyContext.js'
 import { authenticate, requireProjectEditor, requireProjectMember } from '../middleware/auth.js'
 import { logger } from '../middleware/logger.js'
 import { isProtectedRisk } from '../services/upgradeChainService.js'
+import { assertTransition } from '../services/statusDictionaryService.js'
 import type { ApiResponse } from '../types/index.js'
 import type { Risk } from '../types/db.js'
 import { getVisibleProjectIds } from '../auth/access.js'
 
 const router = Router()
 const supabase = new SupabaseService()
+const RISK_LIST_CACHE_TTL_MS = Number(process.env.RISK_LIST_CACHE_TTL_MS ?? 120_000)
+const riskListCache = new Map<string, { expiresAt: number; data: Risk[] }>()
+const riskListInFlight = new Map<string, Promise<Risk[]>>()
+
+function clearRiskListCache() {
+  riskListCache.clear()
+  riskListInFlight.clear()
+}
+
+async function loadRisksWithCache(projectId?: string | null) {
+  const cacheKey = projectId ? `project:${projectId}` : 'all'
+  const cached = riskListCache.get(cacheKey)
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.data
+  }
+
+  const pending = riskListInFlight.get(cacheKey)
+  if (pending) return pending
+
+  const promise = supabase.getRisks(projectId ?? undefined)
+  riskListInFlight.set(cacheKey, promise)
+  try {
+    const data = await promise
+    riskListCache.set(cacheKey, {
+      expiresAt: Date.now() + RISK_LIST_CACHE_TTL_MS,
+      data,
+    })
+    return data
+  } finally {
+    riskListInFlight.delete(cacheKey)
+  }
+}
+
+export async function warmRiskListCache(projectId?: string | null) {
+  return loadRisksWithCache(projectId)
+}
 
 function parseExpectedVersion(input: unknown) {
   if (input === undefined || input === null || input === '') return undefined
@@ -44,18 +83,65 @@ function buildUpgradeChainProtectedResponse(risk: Risk): ApiResponse {
   }
 }
 
+async function validateRiskProjectReferences(projectId: string, payload: Record<string, unknown>) {
+  const taskId = String(payload.task_id ?? '').trim()
+  if (taskId) {
+    const task = await executeSQLOne<{ project_id?: string | null }>('SELECT project_id FROM tasks WHERE id = ? LIMIT 1', [taskId])
+    if (!task || String(task.project_id ?? '') !== projectId) {
+      return {
+        success: false,
+        error: {
+          code: 'TASK_PROJECT_MISMATCH',
+          message: '风险关联的任务必须属于当前项目',
+          details: { taskId, projectId },
+        },
+        timestamp: new Date().toISOString(),
+      } satisfies ApiResponse
+    }
+  }
+
+  const linkedIssueId = String(payload.linked_issue_id ?? '').trim()
+  if (linkedIssueId) {
+    const issue = await executeSQLOne<{ project_id?: string | null }>('SELECT project_id FROM issues WHERE id = ? LIMIT 1', [linkedIssueId])
+    if (!issue || String(issue.project_id ?? '') !== projectId) {
+      return {
+        success: false,
+        error: {
+          code: 'ISSUE_PROJECT_MISMATCH',
+          message: '风险关联的问题必须属于当前项目',
+          details: { issueId: linkedIssueId, projectId },
+        },
+        timestamp: new Date().toISOString(),
+      } satisfies ApiResponse
+    }
+  }
+
+  return null
+}
+
 router.get('/', asyncHandler(async (req, res) => {
   const projectId = req.query.projectId as string | undefined
   logger.info('Fetching risks', { projectId })
 
-  let risks = await supabase.getRisks(projectId)
+  let visibleProjectIds: string[] | null = null
 
-  if (!projectId && req.user?.id) {
-    const visibleProjectIds = await getVisibleProjectIds(req.user.id, req.user.globalRole)
+  if (req.user?.id) {
+    visibleProjectIds = await getVisibleProjectIds(req.user.id, req.user.globalRole, getRequestCompanyId(req))
     if (visibleProjectIds) {
-      const visibleProjectIdSet = new Set(visibleProjectIds)
-      risks = risks.filter((risk) => visibleProjectIdSet.has(risk.project_id))
+      if (projectId && !visibleProjectIds.includes(projectId)) {
+        return res.status(403).json({
+          success: false,
+          error: { code: 'FORBIDDEN', message: '您没有权限访问此项目风险' },
+          timestamp: new Date().toISOString(),
+        })
+      }
     }
+  }
+
+  let risks = await loadRisksWithCache(projectId)
+  if (!projectId && visibleProjectIds) {
+    const visibleProjectIdSet = new Set(visibleProjectIds)
+    risks = risks.filter((risk) => visibleProjectIdSet.has(risk.project_id))
   }
 
   const response: ApiResponse<Risk[]> = {
@@ -94,11 +180,15 @@ router.get('/:id', validateIdParam, requireProjectMember(async (req) => {
 
 router.post('/', requireProjectEditor(req => req.body.project_id), validate(riskSchema), asyncHandler(async (req, res) => {
   logger.info('Creating risk', req.body)
+  const projectId = String(req.body?.project_id ?? '').trim()
+  const referenceError = await validateRiskProjectReferences(projectId, req.body ?? {})
+  if (referenceError) return res.status(400).json(referenceError)
 
   const risk = await supabase.createRisk({
     ...req.body,
     version: 1,
   })
+  clearRiskListCache()
 
   const response: ApiResponse<Risk> = {
     success: true,
@@ -116,6 +206,26 @@ router.put('/:id', validateIdParam, requireProjectEditor(async (req) => {
   const { version, ...updates } = req.body
 
   logger.info('Updating risk', { id, version })
+  const existing = await supabase.getRisk(id)
+  if (!existing) {
+    const response: ApiResponse = {
+      success: false,
+      error: { code: 'RISK_NOT_FOUND', message: 'Risk not found' },
+      timestamp: new Date().toISOString(),
+    }
+    return res.status(404).json(response)
+  }
+
+  const projectId = String(updates.project_id ?? existing.project_id ?? '').trim()
+  if (updates.project_id !== undefined && projectId !== String(existing.project_id ?? '').trim()) {
+    return res.status(400).json({
+      success: false,
+      error: { code: 'PROJECT_ID_IMMUTABLE', message: '风险所属项目不能通过更新接口变更' },
+      timestamp: new Date().toISOString(),
+    } satisfies ApiResponse)
+  }
+  const referenceError = await validateRiskProjectReferences(projectId, updates)
+  if (referenceError) return res.status(400).json(referenceError)
 
   const risk = await supabase.updateRisk(id, updates, version)
 
@@ -127,6 +237,7 @@ router.put('/:id', validateIdParam, requireProjectEditor(async (req) => {
     }
     return res.status(404).json(response)
   }
+  clearRiskListCache()
 
   const response: ApiResponse<Risk> = {
     success: true,
@@ -160,6 +271,7 @@ router.post('/:id/confirm-close', validateIdParam, requireProjectEditor(async (r
     }
     return res.status(404).json(response)
   }
+  clearRiskListCache()
 
   const response: ApiResponse<Risk> = {
     success: true,
@@ -193,6 +305,7 @@ router.post('/:id/keep-processing', validateIdParam, requireProjectEditor(async 
     }
     return res.status(404).json(response)
   }
+  clearRiskListCache()
 
   const response: ApiResponse<Risk> = {
     success: true,
@@ -223,7 +336,26 @@ router.delete('/:id', validateIdParam, requireProjectEditor(async (req) => {
     return res.status(422).json(buildUpgradeChainProtectedResponse(risk))
   }
 
-  await supabase.deleteRisk(id)
+  // v1.4.15: enforce retention — close instead of physical delete when protected
+  const { enforceRetentionOrBlock, buildRetentionBlockedApiError, buildRetentionBlockedHttpStatus } = await import('../services/deletionRetentionGovernanceService.js')
+  const retention = await enforceRetentionOrBlock({
+    entityType: 'risk',
+    entityId: id,
+    projectId: risk.project_id ?? null,
+    userId: req.user?.id ?? null,
+    userAction: 'delete',
+  })
+  if (retention.blocked) {
+    return res.status(buildRetentionBlockedHttpStatus(retention.result)).json({ success: false, error: buildRetentionBlockedApiError(retention.reason, retention.result), timestamp: new Date().toISOString() })
+  }
+  if (retention.result.resolvedAction === 'close') {
+    await assertTransition('risk.lifecycle', String(risk.status ?? 'identified'), 'closed')
+    await db.from('risks').update({ status: 'closed', updated_at: new Date().toISOString() }).eq('id', id).eq('project_id', risk.project_id)
+    enqueueProjectHealthUpdate(risk.project_id, 'risk_closed_by_retention')
+  } else {
+    await supabase.deleteRisk(id)
+  }
+  clearRiskListCache()
 
   const response: ApiResponse = {
     success: true,

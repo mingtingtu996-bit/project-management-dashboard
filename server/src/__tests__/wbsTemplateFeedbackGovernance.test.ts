@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
@@ -16,6 +19,7 @@ vi.mock('../database.js', () => ({
 }))
 
 const { collectWbsTemplateFeedback } = await import('../services/wbsTemplateFeedback.js')
+const serviceSourcePath = fileURLToPath(new URL('../services/wbsTemplateFeedback.ts', import.meta.url))
 
 describe('wbsTemplateFeedback governance bridge', () => {
   beforeEach(() => {
@@ -147,5 +151,78 @@ describe('wbsTemplateFeedback governance bridge', () => {
       false,
       false,
     ])
+  })
+
+  it('marks WBS reference-days outcome samples as legacy inclusive calendar-day provenance', async () => {
+    await collectWbsTemplateFeedback('template-1', {
+      projectIds: ['project-1'],
+      companyId: '10000000-0000-4000-8000-000000000001',
+    } as any)
+
+    const outcomeInsert = mocks.rawQuery.mock.calls.find((call) =>
+      String(call[0]).toLowerCase().includes('insert into public.duration_plan_network_outcomes'),
+    )
+    const metadata = outcomeInsert?.[1]?.[9] as Record<string, unknown>
+
+    expect(metadata).toEqual(expect.objectContaining({
+      day_count_basis: 'legacy_inclusive_calendar_day',
+      reference_day_basis: 'wbs_template_reference_days',
+      construction_calendar_basis: 'not_applied',
+      production_day_conversion_applied: false,
+      provenance_gap_code: 'C-19.11',
+    }))
+    expect(metadata.nodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        dayCountBasis: 'legacy_inclusive_calendar_day',
+        productionDayConversionApplied: false,
+      }),
+    ]))
+  })
+
+  it('falls back to template-only reference-day inference when optional task feedback reads time out', async () => {
+    mocks.executeSQL.mockImplementation(async (sql: string) => {
+      if (sql.includes('FROM projects')) {
+        return [
+          { id: 'project-1', name: 'Done project', status: 'completed' },
+        ]
+      }
+      if (sql.includes('FROM tasks')) {
+        throw new Error('dbService.executeSQL SELECT tasks direct query timed out after 12000ms')
+      }
+      return []
+    })
+
+    const report = await collectWbsTemplateFeedback('template-1', {
+      projectIds: null,
+      companyId: '10000000-0000-4000-8000-000000000001',
+    } as any)
+
+    expect(report.sample_task_count).toBe(0)
+    expect(report.completed_project_count).toBe(0)
+    expect(report.nodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        title: '主体结构',
+        sample_count: 0,
+        current_reference_days: 6,
+        suggested_reference_days: 6,
+      }),
+    ]))
+    const projectRead = mocks.executeSQL.mock.calls.find((call) => String(call[0]).includes('FROM projects'))
+    const taskRead = mocks.executeSQL.mock.calls.find((call) => String(call[0]).includes('FROM tasks'))
+    expect(String(projectRead?.[0])).toContain('WHERE 1 = 0')
+    expect(String(taskRead?.[0])).toContain('WHERE 1 = 0')
+    expect(mocks.rawQuery.mock.calls.some((call) => (
+      String(call[0]).toLowerCase().includes('insert into public.duration_plan_network_outcomes')
+    ))).toBe(false)
+  })
+
+  it('keeps the default plan-network outcome writer on fixed SQL instead of dynamic rawQuery delegation', () => {
+    const source = readFileSync(serviceSourcePath, 'utf8')
+
+    expect(source).not.toContain('buildDefaultGovernanceQueryExec')
+    expect(source).not.toContain('rawQuery(sql')
+    expect(source).not.toContain('rawQuery(\n    sql')
+    expect(source).toContain('async function recordWbsReferenceDaysPlanNetworkOutcome')
+    expect(source).toContain('INSERT INTO public.duration_plan_network_outcomes')
   })
 })

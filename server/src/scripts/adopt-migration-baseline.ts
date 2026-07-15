@@ -1,4 +1,5 @@
 import { resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import pg from 'pg'
 
@@ -20,6 +21,46 @@ const migrationsDir = resolve(process.cwd(), 'migrations')
 type ScriptArgs = {
   dryRun: boolean
   throughVersion: string
+}
+
+export type BaselineLedgerEntry = {
+  filename: string
+  version: string
+  checksum: string
+}
+
+type QueryableClient = {
+  query: (text: string, values?: unknown[]) => Promise<unknown>
+}
+
+export function buildBaselineLedgerInsertQuery() {
+  return {
+    text: `
+      INSERT INTO public.schema_migrations (filename, version, checksum)
+      VALUES ($1, $2, $3)
+    `,
+    values: (filename: string, version: string, checksum: string) => [filename, version, checksum],
+  }
+}
+
+export async function insertBaselineLedgerEntries(
+  client: QueryableClient,
+  entries: BaselineLedgerEntry[],
+) {
+  const insertQuery = buildBaselineLedgerInsertQuery()
+
+  await client.query('BEGIN')
+
+  try {
+    for (const entry of entries) {
+      await client.query(insertQuery.text, insertQuery.values(entry.filename, entry.version, entry.checksum))
+    }
+
+    await client.query('COMMIT')
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined)
+    throw error
+  }
 }
 
 function parseArgs(argv: string[]): ScriptArgs {
@@ -86,35 +127,34 @@ async function main() {
       return
     }
 
-    await client.query('BEGIN')
+    const ledgerEntries: BaselineLedgerEntry[] = []
 
     for (const migration of missingBaseline) {
       const sql = await readMigrationSql(migration)
       const checksum = calculateMigrationChecksum(sql)
 
-      await client.query(
-        `
-          INSERT INTO public.schema_migrations (filename, version, checksum)
-          VALUES ($1, $2, $3)
-          ON CONFLICT (filename) DO UPDATE
-          SET version = EXCLUDED.version,
-              checksum = EXCLUDED.checksum
-        `,
-        [migration.filename, migration.version, checksum],
-      )
+      ledgerEntries.push({
+        filename: migration.filename,
+        version: migration.version,
+        checksum,
+      })
     }
 
-    await client.query('COMMIT')
+    await insertBaselineLedgerEntries(client, ledgerEntries)
     console.log(`baseline 认领完成，共写入 ${missingBaseline.length} 条 migration 记录。`)
   } catch (error) {
-    await client.query('ROLLBACK').catch(() => undefined)
     throw error
   } finally {
     await client.end()
   }
 }
 
-main().catch((error) => {
-  console.error('baseline 认领失败:', error)
-  process.exitCode = 1
-})
+const executedPath = process.argv[1] ? resolve(process.argv[1]) : ''
+const modulePath = fileURLToPath(import.meta.url)
+
+if (executedPath === modulePath) {
+  main().catch((error) => {
+    console.error('baseline 认领失败:', error)
+    process.exitCode = 1
+  })
+}

@@ -234,9 +234,18 @@ function buildCandidatePayload(
   const stableCode = buildStableCode(item)
   const evidenceSourceKeys = buildEvidenceSourceKeys(item)
   const scope = report.projectId ? 'project' : report.companyId ? 'company' : 'global'
+  const standardWorkCode = normalizeText(item.standardWorkCode)
+  const replayContextGroupKey = [standardWorkCode, normalizeText(item.replayContextKey)].filter(Boolean).join(':')
+  const experienceGroupKeys = Array.from(new Set([
+    `T1:standard_work:${standardWorkCode}`,
+    `T1:replay_context:${replayContextGroupKey}`,
+    `T1:seed_candidate:${stableCode}`,
+  ].filter(Boolean)))
 
   return normalizeAlgorithmSeedRecordPayload('standard_work_duration', {
     stableCode,
+    companyId: report.companyId ?? null,
+    projectId: report.projectId ?? null,
     seedRuleId: stableCode,
     ruleVersion: 1,
     isActive: true,
@@ -255,6 +264,20 @@ function buildCandidatePayload(
     sourceVersion: 'v1.4.18-replay-candidate-bridge',
     sourceClauseRef: 'duration_experience_samples.actual_duration',
     evidenceSourceKeys,
+    experienceTier: 'T1',
+    reuseScope: scope,
+    learningScope: scope,
+    wbsNodeTypes: ['process', 'activity_step', 'task'],
+    experienceAssetType: 'process_duration',
+    experienceGroupKeys,
+    experienceTierRegistryCandidate: {
+      tier: 'T1',
+      reusableAtNodeTypes: ['process', 'activity_step', 'task'],
+      groupKeyStrategy: 'standard_work_process_dependency',
+      prohibitsCrossTierBucketMixing: true,
+      requiredRegistry: 'experienceTierRegistry',
+      registryStatus: 'candidate_payload_ready_pending_registry_materialization',
+    },
     evidenceQuality: {
       source_type: 'enterprise_practice',
       source_doc: 'duration_experience_samples',

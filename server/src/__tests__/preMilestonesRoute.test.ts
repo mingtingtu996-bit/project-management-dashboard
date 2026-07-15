@@ -8,6 +8,9 @@ process.env.JWT_SECRET = 'test-jwt-secret'
 const state = vi.hoisted(() => {
   const executeSQL = vi.fn(async (_sql?: string, _params?: unknown[]) => [])
   const executeSQLOne = vi.fn(async (_sql?: string, _params?: unknown[]) => null)
+  const rawQuery = vi.fn(async () => {
+    throw new Error('raw database query is intentionally unavailable in this route unit test')
+  })
   const getIssues = vi.fn(async (..._args: unknown[]) => [])
   const getRisks = vi.fn(async (..._args: unknown[]) => [])
   const createIssue = vi.fn(async (..._args: unknown[]) => null)
@@ -21,6 +24,7 @@ const state = vi.hoisted(() => {
   return {
     executeSQL,
     executeSQLOne,
+    rawQuery,
     getIssues,
     getRisks,
     createIssue,
@@ -46,6 +50,10 @@ vi.mock('../middleware/auth.js', () => ({
     req.user = req.user ?? { id: 'user-1' }
     next()
   }),
+  requireProjectMember: vi.fn(() => (req: any, _res: any, next: any) => {
+    req.user = req.user ?? { id: 'user-1' }
+    next()
+  }),
 }))
 
 vi.mock('../middleware/logger.js', () => ({
@@ -66,6 +74,22 @@ vi.mock('../services/dbService.js', () => ({
   createTask: state.createTask,
 }))
 
+vi.mock('../database.js', () => ({
+  query: state.rawQuery,
+}))
+
+vi.mock('../services/taskWriteChainService.js', () => ({
+  createTaskInMainChain: vi.fn(async (task: Record<string, unknown>) => ({
+    task: await state.createTask(task, { skipSnapshotWrite: true }),
+  })),
+}))
+
+vi.mock('../services/engineeringObjectService.js', () => ({
+  createEngineeringObject: vi.fn(async () => ({
+    id: 'engineering-object-scope',
+  })),
+}))
+
 vi.mock('../services/issueWriteChainService.js', () => ({
   createIssueInMainChain: state.createIssue,
 }))
@@ -79,7 +103,7 @@ const { default: preMilestonesRouter } = await import('../routes/pre-milestones.
 function buildApp() {
   const app = express()
   app.use(express.json())
-  app.use('/api/pre-milestones', preMilestonesRouter)
+  app.use('/api/projects/:projectId/pre-milestones', preMilestonesRouter)
   app.use('/api/projects/:projectId/pre-milestones', preMilestonesRouter)
   app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     const message = err instanceof Error ? err.message : 'internal error'
@@ -118,7 +142,7 @@ describe('pre milestones detail route', () => {
     })
 
     const request = supertest(buildApp())
-    const response = await request.get('/api/pre-milestones/certificate-land_certificate/detail?projectId=project-1')
+    const response = await request.get('/api/projects/project-1/pre-milestones/certificate-land_certificate/detail')
 
     expect(response.status).toBe(200)
     expect(response.body.success).toBe(true)
@@ -139,7 +163,7 @@ describe('pre milestones detail route', () => {
     })
 
     const request = supertest(buildApp())
-    const response = await request.get('/api/pre-milestones/certificate-land_certificate/detail?projectId=project-1')
+    const response = await request.get('/api/projects/project-1/pre-milestones/certificate-land_certificate/detail')
 
     expect(response.status).toBe(200)
     expect(response.body.success).toBe(true)
@@ -149,6 +173,32 @@ describe('pre milestones detail route', () => {
       certificate_name: '土地证',
     })
     expect(state.executeSQLOne).not.toHaveBeenCalled()
+  })
+
+  it('keeps the requested synthetic certificate as the detail focus when completing the four-certificate matrix', async () => {
+    state.executeSQL.mockImplementation(async (sql: string) => {
+      if (sql.includes('FROM pre_milestones WHERE project_id = ? ORDER BY created_at ASC')) {
+        return []
+      }
+      return []
+    })
+
+    const request = supertest(buildApp())
+    const response = await request.get('/api/projects/project-1/pre-milestones/certificate-land_use_planning_permit/detail')
+
+    expect(response.status).toBe(200)
+    expect(response.body.success).toBe(true)
+    expect(response.body.data.certificate).toMatchObject({
+      id: 'certificate-land_use_planning_permit',
+      certificate_type: 'land_use_planning_permit',
+      certificate_name: '用地规划许可证',
+    })
+    expect(response.body.data.dependencyMatrix.map((row: any) => row.certificate_type)).toEqual([
+      'land_certificate',
+      'land_use_planning_permit',
+      'engineering_planning_permit',
+      'construction_permit',
+    ])
   })
 
   it('supports the project-prefixed board contract while keeping old query-based compatibility', async () => {
@@ -212,7 +262,7 @@ describe('pre milestones detail route', () => {
     })
 
     const request = supertest(buildApp())
-    const response = await request.post('/api/pre-milestones/pm-1/generate-wbs').send({})
+    const response = await request.post('/api/projects/project-1/pre-milestones/pm-1/generate-wbs').send({})
 
     expect(response.status).toBe(200)
     expect(response.body.success).toBe(true)
@@ -233,6 +283,7 @@ describe('pre milestones detail route', () => {
       }),
       expect.objectContaining({ skipSnapshotWrite: true }),
     )
+    expect(state.executeSQL.mock.calls.flatMap((call) => call).join('\n')).not.toContain('wbs_structure')
   })
 
   it('creates readable parent-child WBS task nodes when generating from a stored template', async () => {
@@ -274,7 +325,7 @@ describe('pre milestones detail route', () => {
     })
 
     const request = supertest(buildApp())
-    const response = await request.post('/api/pre-milestones/pm-1/generate-wbs').send({})
+    const response = await request.post('/api/projects/project-1/pre-milestones/pm-1/generate-wbs').send({})
 
     expect(response.status).toBe(200)
     expect(response.body.success).toBe(true)
@@ -306,6 +357,7 @@ describe('pre milestones detail route', () => {
       }),
       expect.objectContaining({ skipSnapshotWrite: true }),
     )
+    expect(state.executeSQL.mock.calls.flatMap((call) => call).join('\n')).not.toContain('wbs_structure')
   })
 
   it('normalizes legacy document_no fields to certificate_no on direct reads', async () => {
@@ -321,7 +373,7 @@ describe('pre milestones detail route', () => {
     })
 
     const request = supertest(buildApp())
-    const response = await request.get('/api/pre-milestones/uuid-land')
+    const response = await request.get('/api/projects/project-1/pre-milestones/uuid-land')
 
     expect(response.status).toBe(200)
     expect(response.body.success).toBe(true)
@@ -359,7 +411,7 @@ describe('pre milestones detail route', () => {
 
     const request = supertest(buildApp())
     const response = await request
-      .put('/api/pre-milestones/uuid-land')
+      .put('/api/projects/project-1/pre-milestones/uuid-land')
       .send({
         status: '已取得',
         certificate_no: 'CERT-002',
@@ -374,16 +426,69 @@ describe('pre milestones detail route', () => {
     })
     expect(response.body.data.document_no).toBeUndefined()
     const [updateSql, updateParams] = state.executeSQL.mock.calls[0] ?? []
-    expect(String(updateSql)).toContain('UPDATE pre_milestones SET')
-    expect(String(updateSql)).toContain('certificate_no = ?')
-    expect(String(updateSql)).not.toContain('document_no = ?')
+    const normalizedUpdateSql = String(updateSql).replace(/\s+/g, ' ')
+    expect(normalizedUpdateSql).toContain('UPDATE pre_milestones SET')
+    expect(normalizedUpdateSql).toContain('certificate_no = ?')
+    expect(normalizedUpdateSql).not.toContain('document_no = ?')
     expect(updateParams).toEqual(expect.arrayContaining(['CERT-002']))
+  })
+
+  it('uses a fixed pre_milestones update shape while keeping extra fields out of SQL', async () => {
+    state.executeSQLOne
+      .mockResolvedValueOnce({
+        id: 'uuid-land',
+        project_id: 'project-1',
+        milestone_type: 'land_certificate',
+        milestone_name: '土地证',
+        certificate_type: 'land_certificate',
+        certificate_name: '土地证',
+        status: 'preparing_documents',
+        current_stage: '资料准备',
+        certificate_no: null,
+        description: 'old action',
+        created_at: '2026-04-16T00:00:00.000Z',
+        updated_at: '2026-04-16T00:00:00.000Z',
+      })
+      .mockResolvedValueOnce({
+        id: 'uuid-land',
+        project_id: 'project-1',
+        milestone_type: 'land_certificate',
+        milestone_name: '土地证',
+        certificate_type: 'land_certificate',
+        certificate_name: '土地证',
+        status: 'preparing_documents',
+        current_stage: '资料准备',
+        certificate_no: null,
+        description: 'new action',
+        created_at: '2026-04-16T00:00:00.000Z',
+        updated_at: '2026-04-16T01:00:00.000Z',
+      })
+
+    const request = supertest(buildApp())
+    const response = await request
+      .put('/api/projects/project-1/pre-milestones/uuid-land')
+      .send({
+        description: 'new action',
+        evil_column: 'should-not-enter-sql',
+      })
+
+    expect(response.status).toBe(200)
+    const [updateSql, updateParams] = state.executeSQL.mock.calls[0] ?? []
+    const normalizedUpdateSql = String(updateSql).replace(/\s+/g, ' ')
+    expect(normalizedUpdateSql).toContain('UPDATE pre_milestones SET')
+    expect(normalizedUpdateSql).toContain('milestone_type = ?')
+    expect(normalizedUpdateSql).toContain('certificate_type = ?')
+    expect(normalizedUpdateSql).toContain('description = ?')
+    expect(normalizedUpdateSql).toContain('sort_order = ?')
+    expect(normalizedUpdateSql).not.toContain('evil_column')
+    expect(updateParams).toEqual(expect.arrayContaining(['new action']))
+    expect(updateParams).not.toContain('should-not-enter-sql')
   })
 
   it('rejects legacy document_no write aliases after contract cleanup', async () => {
     const request = supertest(buildApp())
     const createResponse = await request
-      .post('/api/pre-milestones')
+      .post('/api/projects/project-1/pre-milestones')
       .send({
         project_id: 'project-1',
         certificate_type: 'construction_permit',
@@ -397,7 +502,7 @@ describe('pre milestones detail route', () => {
     expect(String(createResponse.body.error.message)).toContain('certificate_no')
 
     const updateResponse = await request
-      .put('/api/pre-milestones/uuid-land')
+      .put('/api/projects/project-1/pre-milestones/uuid-land')
       .send({ document_no: 'CP-LEGACY-002' })
 
     expect(updateResponse.status).toBe(400)
@@ -427,7 +532,7 @@ describe('pre milestones detail route', () => {
 
     const request = supertest(buildApp())
     const response = await request
-      .post('/api/pre-milestones')
+      .post('/api/projects/project-1/pre-milestones')
       .send({
         project_id: 'project-1',
         certificate_type: 'construction_permit',
@@ -481,7 +586,7 @@ describe('pre milestones detail route', () => {
 
     const request = supertest(buildApp())
     const response = await request
-      .put('/api/pre-milestones/uuid-land')
+      .put('/api/projects/project-1/pre-milestones/uuid-land')
       .send({
         status: 'issued',
       })
@@ -503,9 +608,9 @@ describe('pre milestones detail route', () => {
         id: 'uuid-land',
         project_id: 'project-1',
         milestone_type: 'land_certificate',
-        milestone_name: '鍦熷湴璇?',
+        milestone_name: '土地',
         certificate_type: 'land_certificate',
-        certificate_name: '鍦熷湴璇?',
+        certificate_name: '土地',
         status: 'approved',
         current_stage: '澶栭儴鎶ユ壒',
         certificate_no: 'LAND-001',
@@ -517,11 +622,11 @@ describe('pre milestones detail route', () => {
         id: 'uuid-land',
         project_id: 'project-1',
         milestone_type: 'land_certificate',
-        milestone_name: '鍦熷湴璇?',
+        milestone_name: '土地',
         certificate_type: 'land_certificate',
-        certificate_name: '鍦熷湴璇?',
+        certificate_name: '土地',
         status: 'issued',
-        current_stage: '鎵瑰棰嗚瘉',
+        current_stage: '批复领证',
         certificate_no: 'LAND-001',
         issue_date: '2026-04-16',
         created_at: '2026-04-16T00:00:00.000Z',
@@ -530,7 +635,7 @@ describe('pre milestones detail route', () => {
 
     const request = supertest(buildApp())
     const response = await request
-      .put('/api/pre-milestones/uuid-land')
+      .put('/api/projects/project-1/pre-milestones/uuid-land')
       .send({
         status: 'issued',
         certificate_no: 'LAND-001',
@@ -646,7 +751,7 @@ describe('pre milestones detail route', () => {
 
     const request = supertest(buildApp())
     const response = await request
-      .post('/api/pre-milestones/certificate-land_certificate/escalate-issue?projectId=project-1')
+      .post('/api/projects/project-1/pre-milestones/certificate-land_certificate/escalate-issue')
       .send({ work_item_id: 'work-1' })
 
     expect(response.status).toBe(201)
@@ -691,7 +796,7 @@ describe('pre milestones detail route', () => {
 
     const request = supertest(buildApp())
     const response = await request
-      .post('/api/pre-milestones/certificate-land_use_planning_permit/escalate-risk?projectId=project-1')
+      .post('/api/projects/project-1/pre-milestones/certificate-land_use_planning_permit/escalate-risk')
       .send({})
 
     expect(response.status).toBe(201)

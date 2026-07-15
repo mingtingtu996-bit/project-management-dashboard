@@ -1,4 +1,4 @@
-import { access, mkdir, readFile, rm, stat } from 'node:fs/promises'
+﻿import { access, mkdir, readFile, rm, stat } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { dirname, join, relative } from 'node:path'
@@ -11,12 +11,13 @@ const scriptsDir = dirname(__filename)
 const repoRoot = join(scriptsDir, '..')
 const distIndex = join(repoRoot, 'client', 'dist', 'index.html')
 const manifestPath = join(repoRoot, '.tmp', 'full-app-test-env', 'manifest.json')
-const outputDir = join(repoRoot, process.env.UIUX_OVERLAP_OUTPUT_DIR || 'artifacts/uiux-overlap')
+const outputDir = join(repoRoot, process.env.UIUX_OVERLAP_OUTPUT_DIR || 'project-ui/artifacts/uiux-overlap')
 
 const port = Number(process.env.PORT || 4173)
 const baseUrl = process.env.BASE_URL || `http://127.0.0.1:${port}`
 const apiBaseUrl = process.env.API_BASE_URL || 'http://127.0.0.1:3001'
 const shouldStartPreview = process.env.OVERLAP_START_PREVIEW !== 'false'
+const shouldRewriteApiOrigin = process.env.UIUX_OVERLAP_DIRECT_API_ORIGIN === 'true'
 
 function parseFilter(value) {
   const items = String(value || '')
@@ -123,12 +124,31 @@ async function newContext(browser, token, viewport) {
     locale: 'zh-CN',
   })
 
-  await context.addInitScript((authToken) => {
+  await context.addInitScript(({ authToken, apiOrigin, rewriteApiOrigin }) => {
+    if (rewriteApiOrigin) {
+      const nativeFetch = window.fetch.bind(window)
+      window.fetch = (input, init) => {
+        if (typeof input === 'string' && input.startsWith('/api/')) {
+          return nativeFetch(`${apiOrigin}${input}`, init)
+        }
+
+        if (input instanceof Request) {
+          const requestUrl = new URL(input.url)
+          if (requestUrl.origin === window.location.origin && requestUrl.pathname.startsWith('/api/')) {
+            return nativeFetch(new Request(`${apiOrigin}${requestUrl.pathname}${requestUrl.search}`, input), init)
+          }
+        }
+
+        return nativeFetch(input, init)
+      }
+    }
+
     window.localStorage.setItem('auth_token', authToken)
     window.localStorage.setItem('access_token', authToken)
-    window.localStorage.setItem('onboarding_completed', 'true')
+    window.localStorage.setItem('onboarding_workspace_completed', 'true')
+    window.localStorage.setItem('onboarding_project_completed', 'true')
     window.localStorage.setItem('onboarding_daily_workflow_dismissed', 'true')
-  }, token)
+  }, { authToken: token, apiOrigin: apiBaseUrl, rewriteApiOrigin: shouldRewriteApiOrigin })
 
   return context
 }
@@ -378,7 +398,7 @@ async function main() {
   await rm(outputDir, { recursive: true, force: true })
   await mkdir(outputDir, { recursive: true })
 
-  assert(await isHttpReady(`${apiBaseUrl}/api/health`), `API is not reachable at ${apiBaseUrl}/api/health`)
+  assert(await isHttpReady(`${apiBaseUrl}/api/readyz`), `API is not ready at ${apiBaseUrl}/api/readyz`)
 
   let previewProcess = null
   const previewReady = await isHttpReady(baseUrl)

@@ -11,12 +11,13 @@ const scriptsDir = dirname(__filename)
 const repoRoot = join(scriptsDir, '..')
 const distIndex = join(repoRoot, 'client', 'dist', 'index.html')
 const manifestPath = join(repoRoot, '.tmp', 'full-app-test-env', 'manifest.json')
-const outputDir = join(repoRoot, 'artifacts', 'uiux-a11y')
+const outputDir = join(repoRoot, process.env.UIUX_A11Y_OUTPUT_DIR || 'project-ui/artifacts/uiux-a11y')
 const reportPath = join(outputDir, 'a11y-report.json')
 
 const port = Number(process.env.PORT || 4173)
 const baseUrl = process.env.BASE_URL || `http://127.0.0.1:${port}`
 const apiBaseUrl = process.env.API_BASE_URL || 'http://127.0.0.1:3001'
+const shouldRewriteApiOrigin = process.env.UIUX_A11Y_DIRECT_API_ORIGIN === 'true'
 const shouldStartPreview = process.env.A11Y_START_PREVIEW !== 'false'
 const currentMonth = process.env.UIUX_A11Y_MONTH || new Date().toISOString().slice(0, 7)
 
@@ -31,6 +32,14 @@ function assert(condition, message) {
 
 function rel(filePath) {
   return relative(repoRoot, filePath).replace(/\\/g, '/')
+}
+
+function artifactName(...parts) {
+  return parts
+    .filter(Boolean)
+    .join('-')
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
 }
 
 function route(pathname) {
@@ -169,12 +178,62 @@ async function newContext(browser, token, viewport, { reducedMotion = 'no-prefer
     reducedMotion,
   })
 
-  await context.addInitScript((authToken) => {
+  await context.route(`${baseUrl}/api/**`, async (route) => {
+    const requestUrl = route.request().url()
+    const forwardUrl = requestUrl.replace(baseUrl, apiBaseUrl)
+    let fulfilled = false
+    try {
+      const response = await route.fetch({ url: forwardUrl })
+      await route.fulfill({ response })
+      fulfilled = true
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (fulfilled || message.includes('Route is already handled')) return
+      try {
+        await route.fulfill({
+          status: 502,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            success: false,
+            error: {
+              code: 'BROWSER_PROXY_ERROR',
+              message,
+            },
+          }),
+        })
+      } catch (fulfillError) {
+        const fulfillMessage = fulfillError instanceof Error ? fulfillError.message : String(fulfillError)
+        if (fulfillMessage.includes('Route is already handled')) return
+        throw fulfillError
+      }
+    }
+  })
+
+  await context.addInitScript(({ authToken, apiOrigin, rewriteApiOrigin }) => {
+    if (rewriteApiOrigin) {
+      const nativeFetch = window.fetch.bind(window)
+      window.fetch = (input, init) => {
+        if (typeof input === 'string' && input.startsWith('/api/')) {
+          return nativeFetch(`${apiOrigin}${input}`, init)
+        }
+
+        if (input instanceof Request) {
+          const requestUrl = new URL(input.url)
+          if (requestUrl.origin === window.location.origin && requestUrl.pathname.startsWith('/api/')) {
+            return nativeFetch(new Request(`${apiOrigin}${requestUrl.pathname}${requestUrl.search}`, input), init)
+          }
+        }
+
+        return nativeFetch(input, init)
+      }
+    }
+
     window.localStorage.setItem('auth_token', authToken)
     window.localStorage.setItem('access_token', authToken)
-    window.localStorage.setItem('onboarding_completed', 'true')
+    window.localStorage.setItem('onboarding_workspace_completed', 'true')
+    window.localStorage.setItem('onboarding_project_completed', 'true')
     window.localStorage.setItem('onboarding_daily_workflow_dismissed', 'true')
-  }, token)
+  }, { authToken: token, apiOrigin: apiBaseUrl, rewriteApiOrigin: shouldRewriteApiOrigin })
 
   return context
 }
@@ -198,6 +257,40 @@ async function waitForAny(page, selectors, timeout = 30000) {
   throw new Error(`Timed out waiting for any selector: ${selectors.join(', ')}`)
 }
 
+async function captureFailureArtifact(page, viewportKey, stateKey, diagnostics) {
+  const basename = artifactName(viewportKey, stateKey, 'failure')
+  const screenshotPath = join(outputDir, `${basename}.png`)
+  let screenshot = null
+  let bodyText = ''
+  let title = ''
+
+  try {
+    await page.screenshot({ path: screenshotPath, fullPage: true })
+    screenshot = rel(screenshotPath)
+  } catch (error) {
+    diagnostics.screenshotError = error instanceof Error ? error.message : String(error)
+  }
+
+  try {
+    title = await page.title()
+  } catch {
+    title = ''
+  }
+
+  try {
+    bodyText = (await page.locator('body').innerText({ timeout: 1000 })).replace(/\s+/g, ' ').slice(0, 2000)
+  } catch (error) {
+    diagnostics.bodyTextError = error instanceof Error ? error.message : String(error)
+  }
+
+  return {
+    screenshot,
+    title,
+    bodyText,
+    currentUrl: page.url(),
+  }
+}
+
 function pages(projectId) {
   return [
     { key: 'company-cockpit', session: 'admin', path: '/company', any: ['[data-testid="company-cockpit-page"]'] },
@@ -208,7 +301,7 @@ function pages(projectId) {
     { key: 'planning-workspace', path: projectRoute(projectId, '/planning'), any: ['[data-testid="planning-shared-shell"]'] },
     { key: 'planning-baseline', path: projectRoute(projectId, '/planning/baseline'), any: ['[data-testid="planning-shared-shell"]'] },
     { key: 'planning-monthly', path: projectRoute(projectId, `/planning/monthly?month=${currentMonth}`), any: ['[data-testid="monthly-plan-header"]', '[data-testid="monthly-plan-info-bar"]'] },
-    { key: 'planning-closeout', path: projectRoute(projectId, `/tasks/closeout?month=${currentMonth}`), any: ['[data-testid="closeout-filter-bar"]', '[data-testid="closeout-empty-state"]'] },
+    { key: 'planning-closeout', path: projectRoute(projectId, `/planning/monthly?view=closeout&month=${currentMonth}`), any: ['[data-testid="closeout-filter-bar"]', '[data-testid="closeout-empty-state"]'] },
     { key: 'materials', path: projectRoute(projectId, '/materials'), any: ['[data-testid="materials-page"]'] },
     { key: 'milestones', path: projectRoute(projectId, '/milestones'), any: ['[data-testid="milestones-summary-grid"]'] },
     { key: 'acceptance-timeline', path: projectRoute(projectId, '/acceptance'), any: ['[data-testid="acceptance-summary-panel"]', '[data-testid="acceptance-flow-board"]'] },
@@ -226,9 +319,12 @@ function keyboardOverlays(projectId) {
       key: 'gantt-scope-dialog',
       path: projectRoute(projectId, '/gantt'),
       any: ['[data-testid="task-workspace-layer-l2"]'],
-      open: async (page) => page.getByTestId('gantt-open-scope-dimensions').click(),
-      target: '[data-testid="gantt-scope-dimensions-dialog"]',
-      closed: '[data-testid="gantt-scope-dimensions-dialog"]',
+      open: async (page) => {
+        await page.getByTestId('gantt-generation-template-menu').click()
+        await page.getByTestId('gantt-open-engineering-objects').click()
+      },
+      target: '[data-testid="gantt-engineering-objects-dialog"]',
+      closed: '[data-testid="gantt-engineering-objects-dialog"]',
     },
     {
       key: 'baseline-more-columns-popover',
@@ -247,12 +343,21 @@ function keyboardOverlays(projectId) {
       closed: '[data-testid="monthly-plan-confirm-dialog"]',
     },
     {
-      key: 'closeout-more-actions-dropdown',
-      path: projectRoute(projectId, `/tasks/closeout?month=${currentMonth}`),
-      any: ['[data-testid="closeout-filter-bar"]', '[data-testid="closeout-empty-state"]'],
-      open: async (page) => page.getByTestId('closeout-more-actions').first().click(),
-      target: '[data-testid="closeout-force-close-entry"]',
-      closed: '[data-testid="closeout-force-close-entry"]',
+      key: 'closeout-detail-process-entry',
+      path: projectRoute(projectId, `/planning/monthly?view=closeout&month=${currentMonth}`),
+      any: ['[data-testid="closeout-filter-bar"]', '[data-testid="closeout-escalation-ladder"]', '[data-testid="closeout-empty-state"]'],
+      open: async (page) => {
+        const openItem = page.locator('[data-testid^="closeout-item-open-"]').first()
+        if (await openItem.count()) {
+          await openItem.waitFor({ state: 'visible', timeout: 20000 })
+          await openItem.click()
+        } else {
+          await page.getByTestId('closeout-empty-state').waitFor({ state: 'visible', timeout: 20000 })
+        }
+      },
+      target: '[data-testid="closeout-single-process-entry"], [data-testid="closeout-empty-state"]',
+      closed: '[data-testid="closeout-single-process-entry"]',
+      optionalOverlay: true,
     },
   ]
 }
@@ -436,6 +541,7 @@ async function evaluateAccessibility(page) {
 
 async function checkKeyboardPath(page, stateKey) {
   const visited = []
+  let currentFocus = null
 
   await page.keyboard.press('Home').catch(() => {})
   for (let index = 0; index < 16; index += 1) {
@@ -457,9 +563,13 @@ async function checkKeyboardPath(page, stateKey) {
         outline: style.outlineStyle !== 'none' && style.outlineWidth !== '0px',
         boxShadow: style.boxShadow !== 'none',
         visible: rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none',
+        isDocumentFallback: element === document.body || element === document.documentElement,
       }
     })
-    if (active) visited.push(active)
+    if (active) {
+      currentFocus = active
+      if (!active.isDocumentFallback) visited.push(active)
+    }
   }
 
   assert(visited.length >= 3, `${stateKey} keyboard path found too few focus targets: ${visited.length}`)
@@ -468,7 +578,7 @@ async function checkKeyboardPath(page, stateKey) {
   const withoutFocusStyle = visited.find((item) => !item.outline && !item.boxShadow)
   assert(!withoutFocusStyle, `${stateKey} focused element lacks visible focus style: ${JSON.stringify(withoutFocusStyle)}`)
 
-  const beforeBack = visited[visited.length - 1]
+  const beforeBack = currentFocus ?? visited[visited.length - 1]
   await page.keyboard.press('Shift+Tab')
   await page.waitForTimeout(20)
   const afterBack = await page.evaluate(() => {
@@ -533,6 +643,7 @@ async function capturePageA11y(browser, sessions, viewport, state) {
 
   try {
     page.setDefaultTimeout(30000)
+    console.log(`[uiux-a11y] checking page ${state.key} at ${viewport.key}`)
     await page.goto(route(state.path), { waitUntil: 'domcontentloaded' })
     await waitForAny(page, state.any)
     await page.waitForTimeout(250)
@@ -544,6 +655,7 @@ async function capturePageA11y(browser, sessions, viewport, state) {
     assert(diagnostics.apiFailures.length === 0, `${state.key} API failures at ${viewport.key}: ${JSON.stringify(diagnostics.apiFailures)}`)
     assert(diagnostics.pageErrors.length === 0, `${state.key} page errors at ${viewport.key}: ${diagnostics.pageErrors.join(' | ')}`)
     assert(diagnostics.consoleErrors.length === 0, `${state.key} console errors at ${viewport.key}: ${diagnostics.consoleErrors.join(' | ')}`)
+    console.log(`[uiux-a11y] passed page ${state.key} at ${viewport.key}`)
 
     return {
       viewport: viewport.key,
@@ -555,11 +667,13 @@ async function capturePageA11y(browser, sessions, viewport, state) {
       status: 'passed',
     }
   } catch (error) {
+    const failureArtifact = await captureFailureArtifact(page, viewport.key, state.key, diagnostics)
     return {
       viewport: viewport.key,
       key: state.key,
       url: page.url(),
       diagnostics,
+      failureArtifact,
       status: 'failed',
       error: error instanceof Error ? error.message : String(error),
     }
@@ -576,10 +690,19 @@ async function checkOverlayKeyboard(browser, sessions, viewport, state) {
 
   try {
     page.setDefaultTimeout(30000)
+    console.log(`[uiux-a11y] checking overlay ${state.key} at ${viewport.key}`)
     await page.goto(route(state.path), { waitUntil: 'domcontentloaded' })
     await waitForAny(page, state.any)
     await state.open(page)
     await page.locator(state.target).first().waitFor({ state: 'visible', timeout: 20000 })
+    const legacyForceCloseCount = await page.locator('[data-testid*="force-close"]').count()
+    assert(legacyForceCloseCount === 0, `${state.key} exposed ${legacyForceCloseCount} legacy force-close controls`)
+    if (state.optionalOverlay && await page.getByTestId('closeout-empty-state').count()) {
+      assert(diagnostics.apiFailures.length === 0, `${state.key} API failures at ${viewport.key}: ${JSON.stringify(diagnostics.apiFailures)}`)
+      assert(diagnostics.pageErrors.length === 0, `${state.key} page errors at ${viewport.key}: ${diagnostics.pageErrors.join(' | ')}`)
+      assert(diagnostics.consoleErrors.length === 0, `${state.key} console errors at ${viewport.key}: ${diagnostics.consoleErrors.join(' | ')}`)
+      return { viewport: viewport.key, key: state.key, status: 'passed', diagnostics, mode: 'empty-state' }
+    }
     await page.keyboard.press('Tab')
     await page.waitForTimeout(20)
     const focusedInside = await page.evaluate((selector) => {
@@ -595,13 +718,17 @@ async function checkOverlayKeyboard(browser, sessions, viewport, state) {
     assert(diagnostics.pageErrors.length === 0, `${state.key} page errors at ${viewport.key}: ${diagnostics.pageErrors.join(' | ')}`)
     assert(diagnostics.consoleErrors.length === 0, `${state.key} console errors at ${viewport.key}: ${diagnostics.consoleErrors.join(' | ')}`)
 
+    console.log(`[uiux-a11y] passed overlay ${state.key} at ${viewport.key}`)
     return { viewport: viewport.key, key: state.key, status: 'passed', diagnostics }
   } catch (error) {
+    const failureArtifact = await captureFailureArtifact(page, viewport.key, state.key, diagnostics)
     return {
       viewport: viewport.key,
       key: state.key,
+      url: page.url(),
       status: 'failed',
       diagnostics,
+      failureArtifact,
       error: error instanceof Error ? error.message : String(error),
     }
   } finally {
@@ -617,7 +744,7 @@ async function main() {
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
   const projectId = manifest.projects?.standard?.id
   assert(projectId, `Missing standard project id in ${rel(manifestPath)}`)
-  assert(await isHttpReady(`${apiBaseUrl}/api/health`), `API is not reachable at ${apiBaseUrl}/api/health`)
+  assert(await isHttpReady(`${apiBaseUrl}/api/readyz`), `API is not ready at ${apiBaseUrl}/api/readyz`)
 
   let previewProcess = null
   const previewAlreadyReady = await isHttpReady(baseUrl)

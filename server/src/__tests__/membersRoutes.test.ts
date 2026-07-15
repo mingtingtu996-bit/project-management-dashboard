@@ -57,6 +57,8 @@ createUpdateBuilder.pendingFields = {} as Record<string, unknown>
 
 const mocks = vi.hoisted(() => ({
   getProjectPermissionLevel: vi.fn(async (userId: string) => (userId === 'user-1' ? 'owner' : 'editor')),
+  getProjectCompanyId: vi.fn(async () => null),
+  isActiveCompanyMember: vi.fn(async () => true),
   getAuthUserByUsername: vi.fn(async (username: string) => state.users.find((user) => user.username === username) ?? null),
   updateTaskRecord: vi.fn(async (taskId: string, updates: Record<string, unknown>) => {
     state.tasks = state.tasks.map((task) => (task.id === taskId ? { ...task, ...updates } : task))
@@ -72,18 +74,21 @@ vi.mock('../middleware/auth.js', () => ({
 }))
 
 vi.mock('../auth/access.js', () => ({
+  getProjectCompanyId: mocks.getProjectCompanyId,
   getProjectPermissionLevel: mocks.getProjectPermissionLevel,
+  isActiveCompanyMember: mocks.isActiveCompanyMember,
   isCompanyAdminRole: (value?: string | null) => String(value ?? '').trim().toLowerCase() === 'company_admin',
   normalizeProjectPermissionLevel: (value?: string | null) => {
     const normalized = String(value ?? '').trim().toLowerCase()
-    if (normalized === 'owner' || normalized === 'editor' || normalized === 'viewer') return normalized
-    return 'viewer'
+    if (normalized === 'owner' || normalized === 'editor') return normalized
+    return null
   },
 }))
 
 vi.mock('../auth/session.js', () => ({
   getAuthUserByUsername: mocks.getAuthUserByUsername,
   mapLegacyRoleToGlobalRole: (value?: string | null) => (value === 'company_admin' ? 'company_admin' : 'regular'),
+  normalizeGlobalRole: (value?: string | null) => (value === 'company_admin' ? 'company_admin' : 'regular'),
 }))
 
 vi.mock('../services/dbService.js', () => ({
@@ -128,6 +133,10 @@ vi.mock('../services/dbService.js', () => ({
     },
   },
   updateTask: mocks.updateTaskRecord,
+}))
+
+vi.mock('../services/taskWriteChainService.js', () => ({
+  updateTaskInMainChain: mocks.updateTaskRecord,
 }))
 
 function buildApp(router: express.Router) {
@@ -216,22 +225,26 @@ describe('members routes - assignee linking', () => {
     })
   })
 
-  it('returns viewer access for company admins outside the project', async () => {
+  it('rejects the retired viewer project permission without creating a member', async () => {
+    const { default: router } = await import('../routes/members.js')
+    const response = await request(buildApp(router))
+      .post('/api/members/project-1')
+      .send({ username: 'lisi', permission_level: 'viewer' })
+
+    expect(response.status).toBe(400)
+    expect(response.body).toMatchObject({ success: false })
+    expect(state.projectMembers).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ user_id: 'user-2' }),
+    ]))
+  })
+
+  it('blocks company admins outside the current project/company permission boundary', async () => {
     mocks.getProjectPermissionLevel.mockResolvedValueOnce(null)
 
     const { default: router } = await import('../routes/members.js')
     const response = await request(buildApp(router)).get('/api/members/project-1/me')
 
-    expect(response.status).toBe(200)
-    expect(response.body).toMatchObject({
-      success: true,
-      data: {
-        projectId: 'project-1',
-        permissionLevel: 'viewer',
-        globalRole: 'company_admin',
-        canManageTeam: false,
-        canEdit: false,
-      },
-    })
+    expect(response.status).toBe(403)
+    expect(response.body).toMatchObject({ success: false })
   })
 })

@@ -60,6 +60,44 @@ const mocks = vi.hoisted(() => {
     }),
   }
 
+  const rawQuery = vi.fn(async (sql: string, params: any[] = []) => {
+    const normalizedSql = String(sql).replace(/\s+/g, ' ').toLowerCase()
+
+    if (normalizedSql.includes('notification_user_states')) {
+      return { rows: [] }
+    }
+
+    if (normalizedSql.includes('public.notifications')) {
+      let rows = persistedNotifications.slice()
+
+      if (normalizedSql.includes('where project_id = $1')) {
+        const [projectId, touchpointType, category, type, types, limit, offset] = params
+        rows = rows.filter((row) => row.project_id === projectId)
+        if (touchpointType) rows = rows.filter((row) => (row.touchpoint_type ?? 'persistent') === touchpointType)
+        if (category) rows = rows.filter((row) => row.category === category)
+        if (type) rows = rows.filter((row) => row.type === type)
+        if (Array.isArray(types) && types.length > 0) rows = rows.filter((row) => types.includes(row.type))
+        rows = rows.sort((left, right) => String(right.created_at || '').localeCompare(String(left.created_at || '')))
+        const start = Number(offset ?? 0)
+        return { rows: rows.slice(start, start + Number(limit ?? rows.length)) }
+      }
+
+      const [, , canSeeAllProjects, projectIds, touchpointType, category, type, types, limit, offset] = params
+      if (!canSeeAllProjects && Array.isArray(projectIds)) {
+        rows = rows.filter((row) => !row.project_id || projectIds.includes(row.project_id))
+      }
+      if (touchpointType) rows = rows.filter((row) => (row.touchpoint_type ?? 'persistent') === touchpointType)
+      if (category) rows = rows.filter((row) => row.category === category)
+      if (type) rows = rows.filter((row) => row.type === type)
+      if (Array.isArray(types) && types.length > 0) rows = rows.filter((row) => types.includes(row.type))
+      rows = rows.sort((left, right) => String(right.created_at || '').localeCompare(String(left.created_at || '')))
+      const start = Number(offset ?? 0)
+      return { rows: rows.slice(start, start + Number(limit ?? rows.length)) }
+    }
+
+    return { rows: [] }
+  })
+
   return {
     get persistedNotifications() {
       return persistedNotifications
@@ -69,6 +107,7 @@ const mocks = vi.hoisted(() => {
     },
     executeSQL: vi.fn(async () => persistedNotifications),
     executeSQLOne: vi.fn(async () => ({ cnt: 0 })),
+    rawQuery,
     notificationStore,
     WarningService: vi.fn(),
     warningServiceInstance: {
@@ -91,7 +130,27 @@ const mocks = vi.hoisted(() => {
   }
 })
 
+vi.mock('../database.js', async () => {
+  const actual = await vi.importActual<typeof import('../database.js')>('../database.js')
+  return {
+    ...actual,
+    query: mocks.rawQuery,
+  }
+})
+
+vi.mock('../auth/access.js', async () => {
+  const actual = await vi.importActual<typeof import('../auth/access.js')>('../auth/access.js')
+  return {
+    ...actual,
+    canAccessProject: vi.fn(async () => true),
+    getCurrentCompanyMembership: vi.fn(async () => ({ companyId: null, role: 'company_admin' })),
+    getVisibleProjectIds: vi.fn(async () => null),
+  }
+})
+
 vi.mock('../services/dbService.js', () => ({
+  registerDbServiceBusinessSideEffectAdapters: vi.fn(),
+  assertDbServiceBusinessSideEffectAdaptersRegistered: vi.fn(),
   supabase: {
     from: vi.fn(() => ({
       select: vi.fn().mockReturnThis(),
@@ -235,7 +294,7 @@ describe('risk/issue change -> notifications chain (8.4.3)', () => {
   })
 
   it('notification center response structure is stable', async () => {
-    const res = await request.get('/api/notifications')
+    const res = await request.get(`/api/notifications?projectId=${projectId}`)
     expect(res.status).toBe(200)
     expect(res.body).toHaveProperty('success', true)
     expect(res.body).toHaveProperty('data')

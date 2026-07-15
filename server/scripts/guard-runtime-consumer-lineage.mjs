@@ -1,0 +1,166 @@
+import fs from 'node:fs'
+import path from 'node:path'
+
+const DEFAULT_ROOT = fs.existsSync(path.resolve(process.cwd(), 'server', 'src'))
+  ? path.resolve(process.cwd(), 'server')
+  : process.cwd()
+const DEFAULT_ALLOWED_WRITERS = new Set([
+  'src/services/durationRuntimeConsumerObservationService.ts',
+])
+const FORBIDDEN_WRITER_IMPORT_PATTERN =
+  /(?:RuntimePublicationService|DomainWriter|PublicationService|EvidenceWriterService)\.js$/i
+const SCAN_DIRS = [
+  'src/services',
+  'src/jobs',
+  'src/routes',
+  'src/scripts',
+]
+
+function walk(dir) {
+  if (!fs.existsSync(dir)) return []
+  const files = []
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name)
+    if (entry.isDirectory()) {
+      if (['dist', 'node_modules', '__tests__', 'tmp'].includes(entry.name)) continue
+      files.push(...walk(full))
+      continue
+    }
+    if (!entry.isFile()) continue
+    if (!full.endsWith('.ts')) continue
+    if (full.endsWith('.test.ts') || full.endsWith('.spec.ts')) continue
+    files.push(full)
+  }
+  return files
+}
+
+function stripComments(source) {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '')
+}
+
+function normalizeSqlLikeText(source) {
+  return stripComments(source)
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+}
+
+function lineFor(source, index) {
+  return source.slice(0, Math.max(0, index)).split(/\r?\n/).length
+}
+
+function normalizeRelativePath(root, filePath) {
+  return path.relative(root, filePath).replace(/\\/g, '/')
+}
+
+function isCandidateOrReviewService(relativePath) {
+  return /^src\/services\/.*(?:candidate|review).*\.ts$/i.test(relativePath)
+}
+
+function collectSqlWriteViolations(source, filePath) {
+  const normalized = normalizeSqlLikeText(source)
+  const violations = []
+  const directSqlWritePattern = /\b(?:insert\s+into|update|delete\s+from)\s+(?:public\.)?runtime_consumer_observations\b/g
+  let match
+  while ((match = directSqlWritePattern.exec(normalized)) !== null) {
+    const rawIndex = source.toLowerCase().indexOf('runtime_consumer_observations')
+    violations.push({
+      filePath,
+      line: rawIndex >= 0 ? lineFor(source, rawIndex) : 1,
+      reason: 'runtime_consumer_observation_direct_sql_write_outside_helper',
+    })
+  }
+  return violations
+}
+
+function collectSupabaseMutationViolations(source, filePath) {
+  const stripped = stripComments(source)
+  const violations = []
+  const supabaseMutationPattern =
+    /\.from\(\s*['"`](?:public\.)?runtime_consumer_observations['"`]\s*\)[\s\S]{0,500}?\.(?:insert|upsert|update|delete)\s*\(/gi
+  let match
+  while ((match = supabaseMutationPattern.exec(stripped)) !== null) {
+    violations.push({
+      filePath,
+      line: lineFor(stripped, match.index),
+      reason: 'runtime_consumer_observation_supabase_mutation_outside_helper',
+    })
+  }
+  return violations
+}
+
+function collectCandidateReviewWriterImportViolations(source, filePath, relativePath) {
+  if (!isCandidateOrReviewService(relativePath)) return []
+
+  const stripped = stripComments(source)
+  const violations = []
+  const importPatterns = [
+    /\bfrom\s+['"`]([^'"`]+)['"`]/g,
+    /\bimport\s*\(\s*['"`]([^'"`]+)['"`]\s*\)/g,
+  ]
+
+  for (const importPattern of importPatterns) {
+    let match
+    while ((match = importPattern.exec(stripped)) !== null) {
+      const specifier = match[1] ?? ''
+      if (!FORBIDDEN_WRITER_IMPORT_PATTERN.test(specifier)) continue
+      violations.push({
+        filePath,
+        line: lineFor(stripped, match.index),
+        reason: 'candidate_review_direct_writer_import',
+      })
+    }
+  }
+
+  return violations
+}
+
+function collectRuntimeConsumerLineageViolations(filePath, root, allowedWriters = DEFAULT_ALLOWED_WRITERS) {
+  const relativePath = normalizeRelativePath(root, filePath)
+  if (allowedWriters.has(relativePath)) return []
+
+  const source = fs.readFileSync(filePath, 'utf8')
+  return [
+    ...collectSqlWriteViolations(source, filePath),
+    ...collectSupabaseMutationViolations(source, filePath),
+    ...collectCandidateReviewWriterImportViolations(source, filePath, relativePath),
+  ]
+}
+
+export function evaluateRuntimeConsumerLineageGuard(root = DEFAULT_ROOT, options = {}) {
+  const serverRoot = fs.existsSync(path.join(root, 'src')) ? root : path.join(root, 'server')
+  const allowedWriters = new Set(options.allowedWriters ?? DEFAULT_ALLOWED_WRITERS)
+  const files = SCAN_DIRS.flatMap((dir) => walk(path.join(serverRoot, dir)))
+  if (files.length === 0) {
+    throw new Error(`[runtime-consumer-lineage-guard] No server files found under ${serverRoot}`)
+  }
+
+  const violations = files.flatMap((filePath) =>
+    collectRuntimeConsumerLineageViolations(filePath, serverRoot, allowedWriters),
+  )
+
+  return { files, violations, allowedWriters }
+}
+
+export function formatRuntimeConsumerLineageGuardFailure(result, cwd = process.cwd()) {
+  const lines = ['[runtime-consumer-lineage-guard] Runtime consumer lineage must use controlled writers and keep candidate/review services out of writer imports:']
+  for (const violation of result.violations) {
+    lines.push(`- ${path.relative(cwd, violation.filePath)}:${violation.line} (${violation.reason})`)
+  }
+  return lines.join('\n')
+}
+
+function pathToFileUrl(filePath) {
+  return new URL(`file://${path.resolve(filePath).replace(/\\/g, '/')}`).href
+}
+
+if (process.argv[1] && import.meta.url === pathToFileUrl(process.argv[1])) {
+  const result = evaluateRuntimeConsumerLineageGuard()
+  if (result.violations.length) {
+    console.error(formatRuntimeConsumerLineageGuardFailure(result))
+    process.exit(1)
+  }
+  console.log(`[runtime-consumer-lineage-guard] OK: scanned ${result.files.length} files; direct observation writers restricted to ${Array.from(result.allowedWriters).join(', ')}.`)
+}

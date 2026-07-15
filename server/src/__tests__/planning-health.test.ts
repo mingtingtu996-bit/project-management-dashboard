@@ -43,6 +43,99 @@ describe('planning health contract', () => {
     expect(report.summary.aligned).toBe(9)
   })
 
+  it('keeps explicit M1-M9 milestones before date fallback rows when more than nine milestones exist', () => {
+    const fallbackMilestones = Array.from({ length: 10 }, (_, index) => ({
+      id: `fallback-${index + 1}`,
+      project_id: 'project-1',
+      title: `Early fallback ${index + 1}`,
+      target_date: `2026-03-${String(index + 1).padStart(2, '0')}`,
+      baseline_date: `2026-03-${String(index + 1).padStart(2, '0')}`,
+      current_plan_date: `2026-03-${String(index + 1).padStart(2, '0')}`,
+      status: 'in_progress',
+    }))
+
+    const report = evaluateMilestoneIntegrityRows('project-1', [
+      ...fallbackMilestones,
+      {
+        id: 'explicit-m1',
+        project_id: 'project-1',
+        title: 'M1 formal start',
+        target_date: '2026-04-01',
+        baseline_date: '2026-04-01',
+        current_plan_date: '2026-04-01',
+        status: 'in_progress',
+        milestone_order: 1,
+      },
+      {
+        id: 'explicit-m9',
+        project_id: 'project-1',
+        title: 'M9 handover',
+        target_date: '2026-12-01',
+        baseline_date: '2026-12-01',
+        current_plan_date: '2026-12-01',
+        status: 'in_progress',
+        milestone_order: 9,
+      },
+    ] as any)
+
+    expect(report.items).toHaveLength(9)
+    expect(report.items.find((item) => item.milestone_key === 'M1')?.milestone_id).toBe('explicit-m1')
+    expect(report.items.find((item) => item.milestone_key === 'M9')?.milestone_id).toBe('explicit-m9')
+  })
+
+  it('keeps manual milestones without commitment anchors as confirm-level attention instead of hard blocking', () => {
+    const report = evaluateMilestoneIntegrityRows('project-1', [
+      {
+        id: 'manual-milestone',
+        project_id: 'project-1',
+        title: 'M3 manual review',
+        current_plan_date: '2026-05-01',
+        target_date: '2026-05-01',
+        status: 'in_progress',
+        milestone_order: 3,
+        source_mode: 'manual',
+      },
+    ] as any)
+
+    expect(report.items[0]).toMatchObject({
+      milestone_id: 'manual-milestone',
+      milestone_key: 'M3',
+      state: 'needs_attention',
+      gate_level: 'confirm',
+      target_surface: 'planning_governance',
+      commitment_anchor: 'manual',
+    })
+    expect(report.items[0].issues).toContain('manual milestone missing commitment anchor')
+  })
+
+  it('blocks formal or critical milestones when commitment anchors are broken', () => {
+    const report = evaluateMilestoneIntegrityRows('project-1', [
+      {
+        id: 'formal-milestone',
+        project_id: 'project-1',
+        title: 'M6 structure acceptance',
+        current_plan_date: '2026-06-01',
+        target_date: '2026-06-01',
+        status: 'in_progress',
+        milestone_order: 6,
+        source_mode: 'baseline',
+        is_critical_path: true,
+        mapping_status: 'missing',
+      },
+    ] as any)
+
+    expect(report.items[0]).toMatchObject({
+      milestone_id: 'formal-milestone',
+      state: 'blocked',
+      gate_level: 'block_save',
+      target_surface: 'baseline',
+      commitment_anchor: 'baseline',
+      critical_context: true,
+    })
+    expect(report.items[0].issues).toContain('baseline commitment anchor missing')
+    expect(report.items[0].issues).toContain('critical milestone anchor requires repair before publishing')
+  })
+
   it('keeps passive reorder detection in 3/5/7 day sliding windows with threshold-based triggers', () => {
     const report = detectPassiveReorderWindows(
       'project-1',
@@ -196,6 +289,19 @@ describe('planning health contract', () => {
     expect(health.breakdown.total_score).toBe(health.score)
     expect(['healthy', 'warning', 'critical']).toContain(health.status)
     expect(['健康', '亚健康', '危险']).toContain(health.label)
+  })
+
+  it('keeps milestone integrity policy in the rule seed instead of service-level scenario maps', () => {
+    const serviceSource = readServerFile('src', 'services', 'milestoneIntegrityService.ts')
+    const seedSource = readServerFile('src', 'seeds', 'milestoneIntegrityRuleSeed.ts')
+
+    expect(serviceSource).toContain('MILESTONE_INTEGRITY_RULE_SEED')
+    expect(serviceSource).toContain('MILESTONE_INTEGRITY_RULE_SEED.scenarioPolicies')
+    expect(serviceSource).not.toContain('MILESTONE_SCENARIO_LABELS')
+    expect(serviceSource).not.toContain('MILESTONE_SCENARIO_ACTIONS')
+    expect(seedSource).toContain("manualWithoutAnchorGateLevel: 'confirm'")
+    expect(seedSource).toContain("formalAnchorBrokenGateLevel: 'block_save'")
+    expect(seedSource).toContain("criticalAnchorBrokenGateLevel: 'block_save'")
   })
 
   it('locks the async trigger and scheduler contracts in source text', () => {
